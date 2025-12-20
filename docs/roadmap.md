@@ -22,8 +22,8 @@
 
 ### 前端
 
-- [ ] 初始化 Vite + React + TypeScript + Tailwind
-- [ ] 配置 ESLint + Prettier
+- [x] 初始化 Vite + React + TypeScript + Tailwind
+- [x] 配置 Biome（替代 ESLint + Prettier）
 
 ### 后端
 
