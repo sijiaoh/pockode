@@ -55,6 +55,26 @@ server/
 - 中间件模式：见 `middleware/auth.go`
 - 表驱动测试：见 `middleware/auth_test.go`
 
+### 解析外部输出的容错原则
+
+解析外部系统输出（如 Claude CLI 的 JSON）时，必须遵循「优雅降级」原则：
+
+```go
+// ✅ 正确：解析失败时返回原始内容作为回退
+if err := json.Unmarshal(data, &parsed); err != nil {
+    logger.Error("parse failed: %v", err)
+    return []Event{{Type: TypeText, Content: string(data)}}
+}
+
+// ❌ 错误：解析失败时返回 nil，导致用户无法看到任何内容
+if err := json.Unmarshal(data, &parsed); err != nil {
+    logger.Error("parse failed: %v", err)
+    return nil
+}
+```
+
+**理由**：外部系统的输出格式可能变化，解析失败不应导致用户完全无法使用。即使格式不正确，显示原始内容也比什么都不显示好。
+
 ## 测试
 
 - 使用标准库 `testing` + `httptest`
