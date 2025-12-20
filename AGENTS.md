@@ -20,14 +20,13 @@ Pockode 是一个移动端编程平台，核心理念是「AI 编辑为主，手
 
 ```
 pockode/
+├── server/         # Go 后端（见 server/AGENTS.md）
 ├── docs/           # 技术文档
 ├── README.md       # 项目愿景和功能介绍
 ├── LICENSE.md      # O'Saasy License
 ├── CLAUDE.md       # Claude Code 入口（指向 AGENTS.md）
 └── AGENTS.md       # AI 助手规范（本文件）
 ```
-
-> 项目处于早期阶段，源码目录将在开发过程中建立。
 
 ## 架构概览
 
