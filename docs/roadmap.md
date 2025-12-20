@@ -60,13 +60,13 @@
 
 ### 后端
 
-- [ ] Claude CLI 适配器（流式输出）
-- [ ] WebSocket 处理器
+- [x] Claude CLI 适配器（流式输出）
+- [x] WebSocket 处理器
 
 ### 前端
 
-- [ ] Chat 组件
-- [ ] WebSocket 连接管理
+- [x] Chat 组件
+- [x] WebSocket 连接管理
 
 ### 交付物
 

@@ -8,6 +8,7 @@ React 前端的 AI 编程助手指南。
 - Vite 7（构建工具）
 - Tailwind CSS 4（样式）
 - Biome（Linter + Formatter）
+- Vitest + Testing Library（测试）
 
 ## 命令
 
@@ -30,6 +31,12 @@ npm run lint
 # 格式化
 npm run format
 
+# 测试
+npm run test
+
+# 测试（监视模式）
+npm run test:watch
+
 # 预览构建结果
 npm run preview
 ```
@@ -39,11 +46,17 @@ npm run preview
 ```
 web/
 ├── src/
+│   ├── components/   # React 组件
+│   ├── hooks/        # 自定义 Hooks
+│   ├── types/        # 类型定义
+│   ├── utils/        # 工具函数
+│   ├── test/         # 测试配置
 │   ├── main.tsx      # 入口
 │   ├── App.tsx       # 根组件
 │   └── index.css     # Tailwind 导入
 ├── index.html        # HTML 模板
 ├── vite.config.ts    # Vite 配置
+├── vitest.config.ts  # Vitest 配置
 ├── biome.json        # Biome 配置
 ├── tsconfig.json     # TypeScript 配置
 ├── package.json
@@ -104,7 +117,38 @@ class Dialog extends React.Component<any> { ... }
 
 ## 测试
 
-（待添加 Vitest 配置）
+使用 Vitest + Testing Library 进行测试。
+
+### 测试文件命名
+
+- 组件测试：`ComponentName.test.tsx`
+- 工具函数测试：`utilName.test.ts`
+- 测试文件放在被测文件同目录
+
+### 测试模式
+
+```tsx
+// 组件测试示例
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import MyComponent from "./MyComponent";
+
+describe("MyComponent", () => {
+  it("renders correctly", () => {
+    render(<MyComponent />);
+    expect(screen.getByText("expected text")).toBeInTheDocument();
+  });
+
+  it("handles user interaction", async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+    render(<MyComponent onClick={onClick} />);
+    await user.click(screen.getByRole("button"));
+    expect(onClick).toHaveBeenCalled();
+  });
+});
+```
 
 ## 边界
 
@@ -112,9 +156,11 @@ class Dialog extends React.Component<any> { ... }
 
 - 运行 `npm run lint` 确认无错误
 - 运行 `npm run build` 确认构建成功
+- 运行 `npm run test` 确认测试通过
 - 使用 TypeScript 严格模式
 - 组件使用函数式写法
 - Props 必须定义类型
+- 为新组件和工具函数编写测试
 
 ### Ask First
 

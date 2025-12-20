@@ -1,0 +1,23 @@
+package agent
+
+import "encoding/json"
+
+// EventType defines the type of agent event.
+type EventType string
+
+const (
+	EventTypeText       EventType = "text"
+	EventTypeToolCall   EventType = "tool_call"
+	EventTypeToolResult EventType = "tool_result"
+	EventTypeError      EventType = "error"
+	EventTypeDone       EventType = "done"
+)
+
+// AgentEvent represents a unified event from an AI agent.
+type AgentEvent struct {
+	Type      EventType       `json:"type"`
+	Content   string          `json:"content,omitempty"`
+	ToolName  string          `json:"tool_name,omitempty"`
+	ToolInput json.RawMessage `json:"tool_input,omitempty"`
+	Error     string          `json:"error,omitempty"`
+}
