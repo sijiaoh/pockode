@@ -8,7 +8,7 @@ interface UseWebSocketOptions {
 
 interface UseWebSocketReturn {
 	status: ConnectionStatus;
-	send: (message: WSClientMessage) => void;
+	send: (message: WSClientMessage) => boolean;
 	disconnect: () => void;
 }
 

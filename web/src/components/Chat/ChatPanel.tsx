@@ -1,9 +1,17 @@
 import { useCallback, useState } from "react";
-import { useWebSocket } from "../../hooks/useWebSocket";
+import { type ConnectionStatus, useWebSocket } from "../../hooks/useWebSocket";
 import type { Message, WSServerMessage } from "../../types/message";
 import { generateUUID } from "../../utils/uuid";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
+
+const STATUS_CONFIG: Record<ConnectionStatus, { text: string; color: string }> =
+	{
+		connected: { text: "Connected", color: "text-green-400" },
+		error: { text: "Connection Error", color: "text-red-400" },
+		disconnected: { text: "Disconnected", color: "text-yellow-400" },
+		connecting: { text: "Connecting...", color: "text-yellow-400" },
+	};
 
 function ChatPanel() {
 	const [messages, setMessages] = useState<Message[]>([]);
@@ -83,30 +91,27 @@ function ChatPanel() {
 			setMessages((prev) => [...prev, userMessage, assistantMessage]);
 
 			// Send to server
-			send({
+			const sent = send({
 				type: "message",
 				id: assistantMessageId,
 				content,
 			});
+
+			// Handle send failure
+			if (!sent) {
+				setMessages((prev) =>
+					prev.map((m) =>
+						m.id === assistantMessageId
+							? { ...m, status: "error", error: "Failed to send message" }
+							: m,
+					),
+				);
+			}
 		},
 		[send],
 	);
 
-	const statusText =
-		status === "connected"
-			? "Connected"
-			: status === "error"
-				? "Connection Error"
-				: status === "disconnected"
-					? "Disconnected"
-					: "Connecting...";
-
-	const statusColor =
-		status === "connected"
-			? "text-green-400"
-			: status === "error"
-				? "text-red-400"
-				: "text-yellow-400";
+	const { text: statusText, color: statusColor } = STATUS_CONFIG[status];
 
 	return (
 		<div className="flex h-screen flex-col bg-gray-900">

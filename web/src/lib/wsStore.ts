@@ -18,7 +18,7 @@ interface WSStore {
 	// Connection management
 	connect: () => void;
 	disconnect: () => void;
-	send: (message: WSClientMessage) => void;
+	send: (message: WSClientMessage) => boolean;
 
 	// Subscriptions for useSyncExternalStore
 	subscribeStatus: (listener: StatusListener) => () => void;
@@ -86,8 +86,8 @@ function createWSStore(): WSStore {
 			try {
 				const data = JSON.parse(event.data) as WSServerMessage;
 				notifyMessageListeners(data);
-			} catch {
-				// Ignore parse errors
+			} catch (e) {
+				console.warn("Failed to parse WebSocket message:", event.data, e);
 			}
 		};
 
@@ -124,10 +124,13 @@ function createWSStore(): WSStore {
 		setStatus("disconnected");
 	};
 
-	const send = (message: WSClientMessage) => {
+	const send = (message: WSClientMessage): boolean => {
 		if (ws?.readyState === WebSocket.OPEN) {
 			ws.send(JSON.stringify(message));
+			return true;
 		}
+		console.warn("WebSocket is not connected, message not sent:", message);
+		return false;
 	};
 
 	const subscribeStatus = (listener: StatusListener) => {
