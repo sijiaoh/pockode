@@ -135,9 +135,12 @@ func TestParseLine(t *testing.T) {
 			}},
 		},
 		{
-			name:     "unknown event type",
-			input:    `{"type":"unknown_event"}`,
-			expected: nil,
+			name:  "unknown event type falls back to raw text",
+			input: `{"type":"unknown_event"}`,
+			expected: []AgentEvent{{
+				Type:    EventTypeText,
+				Content: `{"type":"unknown_event"}`,
+			}},
 		},
 	}
 

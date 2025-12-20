@@ -180,7 +180,11 @@ func (c *ClaudeAgent) parseLine(line []byte) []AgentEvent {
 		// Ignore system/init events
 		return nil
 	default:
-		return nil
+		logger.Info("parseLine: unknown event type: %s", event.Type)
+		return []AgentEvent{{
+			Type:    EventTypeText,
+			Content: string(line),
+		}}
 	}
 }
 
