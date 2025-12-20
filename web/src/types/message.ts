@@ -6,6 +6,7 @@ export type MessageStatus = "sending" | "streaming" | "complete" | "error";
 
 // Tool call
 export interface ToolCall {
+	id?: string;
 	name: string;
 	input: unknown;
 	result?: string;
@@ -36,5 +37,7 @@ export interface WSServerMessage {
 	content?: string;
 	tool_name?: string;
 	tool_input?: unknown;
+	tool_use_id?: string;
+	tool_result?: string;
 	error?: string;
 }

@@ -32,19 +32,21 @@ function ChatPanel() {
 				case "tool_call":
 					message.toolCalls = [
 						...(message.toolCalls ?? []),
-						{ name: serverMsg.tool_name ?? "", input: serverMsg.tool_input },
+						{
+							id: serverMsg.tool_use_id,
+							name: serverMsg.tool_name ?? "",
+							input: serverMsg.tool_input,
+						},
 					];
 					break;
 				case "tool_result":
-					// Update the last tool call's result (immutable update)
-					if (message.toolCalls && message.toolCalls.length > 0) {
-						const updatedToolCalls = [...message.toolCalls];
-						const lastIndex = updatedToolCalls.length - 1;
-						updatedToolCalls[lastIndex] = {
-							...updatedToolCalls[lastIndex],
-							result: serverMsg.content,
-						};
-						message.toolCalls = updatedToolCalls;
+					// Match tool result to tool call by id
+					if (message.toolCalls && serverMsg.tool_use_id) {
+						message.toolCalls = message.toolCalls.map((tc) =>
+							tc.id === serverMsg.tool_use_id
+								? { ...tc, result: serverMsg.tool_result }
+								: tc,
+						);
 					}
 					break;
 				case "done":

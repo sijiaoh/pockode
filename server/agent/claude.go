@@ -85,10 +85,10 @@ func (c *ClaudeAgent) Run(ctx context.Context, prompt string, workDir string) (<
 				continue
 			}
 
-			event := c.parseLine(line)
-			if event != nil {
+			parsedEvents := c.parseLine(line)
+			for _, event := range parsedEvents {
 				select {
-				case events <- *event:
+				case events <- event:
 				case <-timeoutCtx.Done():
 					return
 				}
@@ -142,15 +142,18 @@ type cliMessage struct {
 
 // cliContentBlock represents a content block in the message.
 type cliContentBlock struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text,omitempty"`
-	ID    string          `json:"id,omitempty"`
-	Name  string          `json:"name,omitempty"`
-	Input json.RawMessage `json:"input,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"` // for tool_result
+	Content   string          `json:"content,omitempty"`     // for tool_result
 }
 
 // parseLine parses a single line of Claude CLI verbose stream-json output.
-func (c *ClaudeAgent) parseLine(line []byte) *AgentEvent {
+// Returns a slice of events since one message can contain multiple content blocks.
+func (c *ClaudeAgent) parseLine(line []byte) []AgentEvent {
 	if len(line) == 0 {
 		return nil
 	}
@@ -159,15 +162,17 @@ func (c *ClaudeAgent) parseLine(line []byte) *AgentEvent {
 	if err := json.Unmarshal(line, &event); err != nil {
 		logger.Error("parseLine: failed to parse JSON: %v, line: %s", err, logger.Truncate(string(line), 100))
 		// Fallback: send raw content as text to ensure minimum usability
-		return &AgentEvent{
+		return []AgentEvent{{
 			Type:    EventTypeText,
 			Content: string(line),
-		}
+		}}
 	}
 
 	switch event.Type {
 	case "assistant":
 		return c.parseAssistantEvent(event)
+	case "user":
+		return c.parseUserEvent(event)
 	case "result":
 		// Result event means completion, we'll send done in the main loop
 		return nil
@@ -180,7 +185,8 @@ func (c *ClaudeAgent) parseLine(line []byte) *AgentEvent {
 }
 
 // parseAssistantEvent handles assistant message events.
-func (c *ClaudeAgent) parseAssistantEvent(event cliEvent) *AgentEvent {
+// Returns multiple events when message contains multiple content blocks.
+func (c *ClaudeAgent) parseAssistantEvent(event cliEvent) []AgentEvent {
 	if event.Message == nil {
 		logger.Error("parseAssistantEvent: message is nil, subtype: %s", event.Subtype)
 		return nil
@@ -190,14 +196,15 @@ func (c *ClaudeAgent) parseAssistantEvent(event cliEvent) *AgentEvent {
 	if err := json.Unmarshal(event.Message, &msg); err != nil {
 		logger.Error("parseAssistantEvent: failed to parse message: %v", err)
 		// Fallback: send raw message as text
-		return &AgentEvent{
+		return []AgentEvent{{
 			Type:    EventTypeText,
 			Content: string(event.Message),
-		}
+		}}
 	}
 
-	// Collect all text content
+	var events []AgentEvent
 	var textParts []string
+
 	for _, block := range msg.Content {
 		switch block.Type {
 		case "text":
@@ -205,20 +212,57 @@ func (c *ClaudeAgent) parseAssistantEvent(event cliEvent) *AgentEvent {
 				textParts = append(textParts, block.Text)
 			}
 		case "tool_use":
-			return &AgentEvent{
+			// Flush accumulated text before tool_use
+			if len(textParts) > 0 {
+				events = append(events, AgentEvent{
+					Type:    EventTypeText,
+					Content: strings.Join(textParts, ""),
+				})
+				textParts = nil
+			}
+			events = append(events, AgentEvent{
 				Type:      EventTypeToolCall,
+				ToolUseID: block.ID,
 				ToolName:  block.Name,
 				ToolInput: block.Input,
-			}
+			})
 		}
 	}
 
+	// Flush remaining text
 	if len(textParts) > 0 {
-		return &AgentEvent{
+		events = append(events, AgentEvent{
 			Type:    EventTypeText,
 			Content: strings.Join(textParts, ""),
+		})
+	}
+
+	return events
+}
+
+// parseUserEvent handles user message events (contains tool_result).
+// Returns multiple events when message contains multiple tool results.
+func (c *ClaudeAgent) parseUserEvent(event cliEvent) []AgentEvent {
+	if event.Message == nil {
+		return nil
+	}
+
+	var msg cliMessage
+	if err := json.Unmarshal(event.Message, &msg); err != nil {
+		logger.Error("parseUserEvent: failed to parse message: %v", err)
+		return nil
+	}
+
+	var events []AgentEvent
+	for _, block := range msg.Content {
+		if block.Type == "tool_result" {
+			events = append(events, AgentEvent{
+				Type:       EventTypeToolResult,
+				ToolUseID:  block.ToolUseID,
+				ToolResult: block.Content,
+			})
 		}
 	}
 
-	return nil
+	return events
 }

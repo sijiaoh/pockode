@@ -15,9 +15,11 @@ const (
 
 // AgentEvent represents a unified event from an AI agent.
 type AgentEvent struct {
-	Type      EventType       `json:"type"`
-	Content   string          `json:"content,omitempty"`
-	ToolName  string          `json:"tool_name,omitempty"`
-	ToolInput json.RawMessage `json:"tool_input,omitempty"`
-	Error     string          `json:"error,omitempty"`
+	Type       EventType       `json:"type"`
+	Content    string          `json:"content,omitempty"`
+	ToolName   string          `json:"tool_name,omitempty"`
+	ToolInput  json.RawMessage `json:"tool_input,omitempty"`
+	ToolUseID  string          `json:"tool_use_id,omitempty"`
+	ToolResult string          `json:"tool_result,omitempty"`
+	Error      string          `json:"error,omitempty"`
 }

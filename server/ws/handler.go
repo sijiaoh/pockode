@@ -169,12 +169,14 @@ func (h *Handler) handleMessage(ctx context.Context, conn *websocket.Conn, msg C
 		logger.Debug("event: type=%s", event.Type)
 
 		serverMsg := ServerMessage{
-			Type:      string(event.Type),
-			MessageID: msg.ID,
-			Content:   event.Content,
-			ToolName:  event.ToolName,
-			ToolInput: event.ToolInput,
-			Error:     event.Error,
+			Type:       string(event.Type),
+			MessageID:  msg.ID,
+			Content:    event.Content,
+			ToolName:   event.ToolName,
+			ToolInput:  event.ToolInput,
+			ToolUseID:  event.ToolUseID,
+			ToolResult: event.ToolResult,
+			Error:      event.Error,
 		}
 
 		if err := h.send(ctx, conn, serverMsg); err != nil {
