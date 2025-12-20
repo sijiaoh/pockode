@@ -29,7 +29,6 @@
 
 - [ ] 初始化 Go module
 - [ ] 基础 HTTP 服务器 + Token 认证
-- [ ] Dockerfile
 
 ### 交付物
 
