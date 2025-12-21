@@ -1,37 +1,39 @@
 //go:build integration
 
-package agent
+package claude
 
 import (
 	"context"
 	"os/exec"
 	"testing"
 	"time"
+
+	"github.com/pockode/server/agent"
 )
 
 // Integration tests for Claude CLI.
 // These tests call real Claude CLI and consume API tokens.
 //
-// Run manually with: go test -tags=integration ./agent -v -run Integration
+// Run manually with: go test -tags=integration ./agent/claude -v -run Integration
 //
 // Prerequisites:
 //   - claude CLI installed and in PATH
 //   - Valid API credentials configured
 
 func TestIntegration_ClaudeCliAvailable(t *testing.T) {
-	_, err := exec.LookPath(ClaudeBinary)
+	_, err := exec.LookPath(Binary)
 	if err != nil {
 		t.Fatalf("claude CLI not found in PATH: %v", err)
 	}
 }
 
 func TestIntegration_SimplePrompt(t *testing.T) {
-	agent := NewClaudeAgent()
+	a := New()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	session, err := agent.Start(ctx, t.TempDir(), "")
+	session, err := a.Start(ctx, t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -47,21 +49,21 @@ func TestIntegration_SimplePrompt(t *testing.T) {
 eventLoop:
 	for {
 		select {
-		case event, ok := <-session.Events:
+		case event, ok := <-session.Events():
 			if !ok {
 				break eventLoop
 			}
 			switch event.Type {
-			case EventTypeSession:
+			case agent.EventTypeSession:
 				sessionEvents++
 				t.Logf("session: %s", event.SessionID)
-			case EventTypeText:
+			case agent.EventTypeText:
 				textEvents++
 				t.Logf("text: %s", event.Content)
-			case EventTypeDone:
+			case agent.EventTypeDone:
 				doneEvents++
 				break eventLoop // Message complete, exit loop
-			case EventTypeError:
+			case agent.EventTypeError:
 				t.Errorf("error event: %s", event.Error)
 			}
 		case <-ctx.Done():
@@ -81,12 +83,12 @@ eventLoop:
 }
 
 func TestIntegration_PermissionFlow(t *testing.T) {
-	agent := NewClaudeAgent()
+	a := New()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	session, err := agent.Start(ctx, t.TempDir(), "")
+	session, err := a.Start(ctx, t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -103,18 +105,18 @@ func TestIntegration_PermissionFlow(t *testing.T) {
 eventLoop:
 	for {
 		select {
-		case event, ok := <-session.Events:
+		case event, ok := <-session.Events():
 			if !ok {
 				break eventLoop
 			}
 			switch event.Type {
-			case EventTypeToolCall:
+			case agent.EventTypeToolCall:
 				toolCalls++
 				t.Logf("tool_call: %s (id=%s)", event.ToolName, event.ToolUseID)
-			case EventTypeToolResult:
+			case agent.EventTypeToolResult:
 				toolResults++
 				t.Logf("tool_result: id=%s, content=%s", event.ToolUseID, event.ToolResult[:min(100, len(event.ToolResult))])
-			case EventTypePermissionRequest:
+			case agent.EventTypePermissionRequest:
 				permissionRequests++
 				t.Logf("permission_request: %s (request_id=%s)", event.ToolName, event.RequestID)
 				if event.RequestID == "" {
@@ -124,18 +126,15 @@ eventLoop:
 					t.Error("permission_request missing ToolName")
 				}
 				// Auto-approve for integration test
-				if err := session.SendPermissionResponse(PermissionResponse{
-					RequestID: event.RequestID,
-					Allow:     true,
-				}); err != nil {
+				if err := session.SendPermissionResponse(event.RequestID, true); err != nil {
 					t.Errorf("failed to send permission response: %v", err)
 				}
-			case EventTypeError:
+			case agent.EventTypeError:
 				errorEvents++
 				t.Logf("error: %s", event.Error)
-			case EventTypeText:
+			case agent.EventTypeText:
 				t.Logf("text: %s", event.Content[:min(100, len(event.Content))])
-			case EventTypeDone:
+			case agent.EventTypeDone:
 				break eventLoop // Message complete
 			}
 		case <-ctx.Done():

@@ -15,8 +15,48 @@ import (
 	"github.com/pockode/server/agent"
 )
 
+// mockSession implements agent.Session for testing.
+type mockSession struct {
+	events          chan agent.AgentEvent
+	messageQueue    chan string
+	pendingRequests *sync.Map
+	ctx             context.Context
+	closed          bool
+	closeMu         sync.Mutex
+}
+
+func (s *mockSession) Events() <-chan agent.AgentEvent {
+	return s.events
+}
+
+func (s *mockSession) SendMessage(prompt string) error {
+	select {
+	case s.messageQueue <- prompt:
+		return nil
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+}
+
+func (s *mockSession) SendPermissionResponse(requestID string, allow bool) error {
+	_, ok := s.pendingRequests.LoadAndDelete(requestID)
+	if !ok {
+		return fmt.Errorf("no pending request for id: %s", requestID)
+	}
+	return nil
+}
+
+func (s *mockSession) Close() {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	close(s.messageQueue)
+}
+
 // mockAgent implements agent.Agent for testing.
-// It simulates a persistent process that can receive multiple messages.
 type mockAgent struct {
 	events    []agent.AgentEvent // events to send for each message
 	startErr  error              // error to return from Start
@@ -25,18 +65,17 @@ type mockAgent struct {
 	mu                sync.Mutex
 	messages          []string            // record of all messages sent
 	messagesBySession map[string][]string // messages grouped by sessionID
-	pendingRequests   sync.Map            // pending permission requests
 }
 
-func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string) (*agent.Session, error) {
+func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string) (agent.Session, error) {
 	if m.startErr != nil {
 		return nil, m.startErr
 	}
 
 	eventsChan := make(chan agent.AgentEvent, 100)
 	messageQueue := make(chan string, 10)
+	pendingRequests := &sync.Map{}
 
-	// Use provided sessionID, fall back to mock's configured sessionID, then default
 	effectiveSessionID := sessionID
 	if effectiveSessionID == "" {
 		effectiveSessionID = m.sessionID
@@ -45,7 +84,13 @@ func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string)
 		effectiveSessionID = "mock-session-default"
 	}
 
-	// Goroutine to handle messages and send events
+	sess := &mockSession{
+		events:          eventsChan,
+		messageQueue:    messageQueue,
+		pendingRequests: pendingRequests,
+		ctx:             ctx,
+	}
+
 	go func() {
 		defer close(eventsChan)
 
@@ -56,7 +101,6 @@ func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string)
 					return
 				}
 
-				// Record the message
 				m.mu.Lock()
 				m.messages = append(m.messages, prompt)
 				if m.messagesBySession == nil {
@@ -65,18 +109,15 @@ func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string)
 				m.messagesBySession[effectiveSessionID] = append(m.messagesBySession[effectiveSessionID], prompt)
 				m.mu.Unlock()
 
-				// Send session event
 				select {
 				case eventsChan <- agent.AgentEvent{Type: agent.EventTypeSession, SessionID: effectiveSessionID}:
 				case <-ctx.Done():
 					return
 				}
 
-				// Send configured events
 				for _, event := range m.events {
-					// Track permission requests
 					if event.Type == agent.EventTypePermissionRequest {
-						m.pendingRequests.Store(event.RequestID, true)
+						pendingRequests.Store(event.RequestID, true)
 					}
 					select {
 					case eventsChan <- event:
@@ -85,7 +126,6 @@ func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string)
 					}
 				}
 
-				// Send done event if not already in events
 				hasDone := false
 				for _, e := range m.events {
 					if e.Type == agent.EventTypeDone {
@@ -107,26 +147,7 @@ func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string)
 		}
 	}()
 
-	sendMessage := func(prompt string) error {
-		select {
-		case messageQueue <- prompt:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-
-	sendPermission := func(resp agent.PermissionResponse) error {
-		_, ok := m.pendingRequests.LoadAndDelete(resp.RequestID)
-		if !ok {
-			return fmt.Errorf("no pending request for id: %s", resp.RequestID)
-		}
-		return nil
-	}
-
-	return agent.NewSession(eventsChan, sendMessage, sendPermission, func() {
-		close(messageQueue)
-	}), nil
+	return sess, nil
 }
 
 func (m *mockAgent) getMessages() []string {
@@ -201,7 +222,6 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	// Send a message
 	msg := ClientMessage{
 		Type:    "message",
 		ID:      "test-123",
@@ -212,7 +232,6 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 		t.Fatalf("failed to write: %v", err)
 	}
 
-	// Read responses (session + text + done = 3)
 	var responses []ServerMessage
 	for i := 0; i < 3; i++ {
 		_, data, err := conn.Read(ctx)
@@ -226,7 +245,6 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 		responses = append(responses, resp)
 	}
 
-	// Verify responses
 	if len(responses) != 3 {
 		t.Fatalf("expected 3 responses, got %d", len(responses))
 	}
@@ -242,7 +260,6 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 	if responses[2].Type != "done" {
 		t.Errorf("unexpected third response: %+v", responses[2])
 	}
-
 }
 
 func TestHandler_MultipleMessages(t *testing.T) {
@@ -269,14 +286,12 @@ func TestHandler_MultipleMessages(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	// Send first message
 	msg1 := ClientMessage{Type: "message", ID: "msg-1", Content: "First message"}
 	msgData, _ := json.Marshal(msg1)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write first message: %v", err)
 	}
 
-	// Read all responses for first message (session + text + done = 3)
 	for i := 0; i < 3; i++ {
 		_, _, err := conn.Read(ctx)
 		if err != nil {
@@ -284,14 +299,12 @@ func TestHandler_MultipleMessages(t *testing.T) {
 		}
 	}
 
-	// Send second message
 	msg2 := ClientMessage{Type: "message", ID: "msg-2", Content: "Second message"}
 	msgData, _ = json.Marshal(msg2)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write second message: %v", err)
 	}
 
-	// Read all responses for second message
 	for i := 0; i < 3; i++ {
 		_, _, err := conn.Read(ctx)
 		if err != nil {
@@ -299,7 +312,6 @@ func TestHandler_MultipleMessages(t *testing.T) {
 		}
 	}
 
-	// Verify both messages were sent to the same session (persistent process)
 	messages := mock.getMessages()
 	if len(messages) != 2 {
 		t.Fatalf("expected 2 messages, got %d", len(messages))
@@ -337,14 +349,12 @@ func TestHandler_MultipleSessions(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	// Send message to session A
 	msgA := ClientMessage{Type: "message", ID: "msg-a", SessionID: "session-A", Content: "Hello from A"}
 	msgData, _ := json.Marshal(msgA)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write message A: %v", err)
 	}
 
-	// Read responses for session A (session + text + done = 3)
 	for i := 0; i < 3; i++ {
 		_, _, err := conn.Read(ctx)
 		if err != nil {
@@ -352,14 +362,12 @@ func TestHandler_MultipleSessions(t *testing.T) {
 		}
 	}
 
-	// Send message to session B
 	msgB := ClientMessage{Type: "message", ID: "msg-b", SessionID: "session-B", Content: "Hello from B"}
 	msgData, _ = json.Marshal(msgB)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write message B: %v", err)
 	}
 
-	// Read responses for session B
 	for i := 0; i < 3; i++ {
 		_, _, err := conn.Read(ctx)
 		if err != nil {
@@ -367,14 +375,12 @@ func TestHandler_MultipleSessions(t *testing.T) {
 		}
 	}
 
-	// Send another message to session A
 	msgA2 := ClientMessage{Type: "message", ID: "msg-a2", SessionID: "session-A", Content: "Second from A"}
 	msgData, _ = json.Marshal(msgA2)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write message A2: %v", err)
 	}
 
-	// Read responses for session A (second message)
 	for i := 0; i < 3; i++ {
 		_, _, err := conn.Read(ctx)
 		if err != nil {
@@ -382,7 +388,6 @@ func TestHandler_MultipleSessions(t *testing.T) {
 		}
 	}
 
-	// Verify messages were routed to correct sessions
 	messagesA := mock.getMessagesBySession("session-A")
 	if len(messagesA) != 2 {
 		t.Fatalf("expected 2 messages for session A, got %d", len(messagesA))
@@ -430,7 +435,6 @@ func TestHandler_PermissionRequest(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	// Send a message
 	msg := ClientMessage{
 		Type:    "message",
 		ID:      "test-perm-123",
@@ -441,7 +445,6 @@ func TestHandler_PermissionRequest(t *testing.T) {
 		t.Fatalf("failed to write: %v", err)
 	}
 
-	// Read responses (session + permission_request + done = 3)
 	var responses []ServerMessage
 	for i := 0; i < 3; i++ {
 		_, data, err := conn.Read(ctx)
@@ -455,7 +458,6 @@ func TestHandler_PermissionRequest(t *testing.T) {
 		responses = append(responses, resp)
 	}
 
-	// Verify permission_request message
 	if responses[1].Type != "permission_request" {
 		t.Errorf("expected second response to be permission_request, got %+v", responses[1])
 	}
@@ -486,7 +488,6 @@ func TestHandler_PermissionResponseInvalidSessionID(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	// Send permission_response with non-existent session_id
 	msg := ClientMessage{
 		Type:      "permission_response",
 		SessionID: "non-existent-session",
@@ -498,7 +499,6 @@ func TestHandler_PermissionResponseInvalidSessionID(t *testing.T) {
 		t.Fatalf("failed to write: %v", err)
 	}
 
-	// Should receive error response
 	_, data, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatalf("failed to read: %v", err)
@@ -519,7 +519,6 @@ func TestHandler_PermissionResponseInvalidSessionID(t *testing.T) {
 }
 
 func TestHandler_PermissionResponseInvalidRequestID(t *testing.T) {
-	// Session exists but request_id was never valid
 	events := []agent.AgentEvent{
 		{Type: agent.EventTypeText, Content: "Hello"},
 		{Type: agent.EventTypeDone},
@@ -540,14 +539,12 @@ func TestHandler_PermissionResponseInvalidRequestID(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	// First create a valid session by sending a message
 	msg := ClientMessage{Type: "message", ID: "msg-1", SessionID: "valid-session", Content: "hello"}
 	msgData, _ := json.Marshal(msg)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write: %v", err)
 	}
 
-	// Read responses (session + text + done = 3)
 	for i := 0; i < 3; i++ {
 		_, _, err := conn.Read(ctx)
 		if err != nil {
@@ -555,7 +552,6 @@ func TestHandler_PermissionResponseInvalidRequestID(t *testing.T) {
 		}
 	}
 
-	// Send permission_response with valid session but invalid request_id
 	permResp := ClientMessage{
 		Type:      "permission_response",
 		SessionID: "valid-session",
@@ -567,7 +563,6 @@ func TestHandler_PermissionResponseInvalidRequestID(t *testing.T) {
 		t.Fatalf("failed to write: %v", err)
 	}
 
-	// Should receive error response
 	_, data, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatalf("failed to read: %v", err)
@@ -607,14 +602,12 @@ func TestHandler_AgentStartError(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	// Send a message - agent.Start() will fail
 	msg := ClientMessage{Type: "message", ID: "msg-1", Content: "hello"}
 	msgData, _ := json.Marshal(msg)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write: %v", err)
 	}
 
-	// Should receive error response
 	_, data, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatalf("failed to read: %v", err)
@@ -631,6 +624,118 @@ func TestHandler_AgentStartError(t *testing.T) {
 
 	if !strings.Contains(resp.Error, "failed to start claude CLI") {
 		t.Errorf("expected error about failed to start, got %q", resp.Error)
+	}
+}
+
+func TestHandler_Cancel(t *testing.T) {
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			{Type: agent.EventTypeText, Content: "Response"},
+			{Type: agent.EventTypeDone},
+		},
+	}
+	h := NewHandler("test-token", mock, "/tmp", true)
+
+	server := httptest.NewServer(h)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	// Create a session first
+	msg := ClientMessage{Type: "message", ID: "msg-1", SessionID: "cancel-test-session", Content: "hello"}
+	msgData, _ := json.Marshal(msg)
+	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+
+	// Read responses (session, text, done)
+	for i := 0; i < 3; i++ {
+		_, _, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("failed to read response %d: %v", i, err)
+		}
+	}
+
+	// Cancel the session
+	cancelMsg := ClientMessage{Type: "cancel", SessionID: "cancel-test-session"}
+	msgData, _ = json.Marshal(cancelMsg)
+	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
+		t.Fatalf("failed to write cancel: %v", err)
+	}
+
+	// Try to send message to cancelled session - should get error
+	msg2 := ClientMessage{Type: "message", ID: "msg-2", SessionID: "cancel-test-session", Content: "should create new"}
+	msgData, _ = json.Marshal(msg2)
+	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+
+	// Should receive session event for the new session (cancel removes old one)
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	var resp ServerMessage
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	// New session should be created
+	if resp.Type != "session" {
+		t.Errorf("expected session event after cancel, got %+v", resp)
+	}
+}
+
+func TestHandler_CancelInvalidSession(t *testing.T) {
+	h := NewHandler("test-token", &mockAgent{}, "/tmp", true)
+
+	server := httptest.NewServer(h)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	// Try to cancel non-existent session
+	cancelMsg := ClientMessage{Type: "cancel", SessionID: "non-existent"}
+	msgData, _ := json.Marshal(cancelMsg)
+	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	var resp ServerMessage
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if resp.Type != "error" {
+		t.Errorf("expected error response, got %+v", resp)
+	}
+
+	if !strings.Contains(resp.Error, "session not found") {
+		t.Errorf("expected error about session not found, got %q", resp.Error)
 	}
 }
 
@@ -661,14 +766,12 @@ func TestHandler_PermissionResponseDuplicate(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	// Send a message to trigger permission request
 	msg := ClientMessage{Type: "message", ID: "msg-1", SessionID: "test-session", Content: "test"}
 	msgData, _ := json.Marshal(msg)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write: %v", err)
 	}
 
-	// Read responses until we get permission_request (session + permission_request + done = 3)
 	for i := 0; i < 3; i++ {
 		_, _, err := conn.Read(ctx)
 		if err != nil {
@@ -676,7 +779,6 @@ func TestHandler_PermissionResponseDuplicate(t *testing.T) {
 		}
 	}
 
-	// Send first permission response (should succeed, no response expected)
 	permResp1 := ClientMessage{
 		Type:      "permission_response",
 		ID:        "perm-1",
@@ -689,7 +791,6 @@ func TestHandler_PermissionResponseDuplicate(t *testing.T) {
 		t.Fatalf("failed to write first permission response: %v", err)
 	}
 
-	// Send duplicate permission response (should fail because LoadAndDelete already removed it)
 	permResp2 := ClientMessage{
 		Type:      "permission_response",
 		ID:        "perm-2",
@@ -702,7 +803,6 @@ func TestHandler_PermissionResponseDuplicate(t *testing.T) {
 		t.Fatalf("failed to write duplicate permission response: %v", err)
 	}
 
-	// Should receive error for duplicate
 	_, data, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatalf("failed to read error response: %v", err)

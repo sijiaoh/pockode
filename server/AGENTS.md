@@ -6,7 +6,7 @@ Go 后端服务的 AI 编程助手指南。
 
 - Go 1.25
 - 标准库 HTTP 服务器（`net/http`）
-- 无外部依赖
+- WebSocket: `github.com/coder/websocket`
 
 ## 命令
 
@@ -35,11 +35,23 @@ AUTH_TOKEN=your-token go run .
 
 ```
 server/
-├── main.go           # 入口 + 路由
-├── main_test.go      # 端点测试
+├── main.go              # 入口 + 路由 + graceful shutdown
+├── main_test.go         # 端点测试
+├── agent/
+│   ├── agent.go         # Agent/Session 接口定义
+│   ├── event.go         # 事件类型定义
+│   └── claude/
+│       ├── claude.go    # Claude CLI 实现
+│       └── claude_test.go
+├── ws/
+│   ├── handler.go       # WebSocket 连接处理
+│   ├── message.go       # 消息类型定义
+│   └── handler_test.go
 ├── middleware/
-│   ├── auth.go       # Token 认证中间件
+│   ├── auth.go          # Token 认证中间件
 │   └── auth_test.go
+├── logger/
+│   └── logger.go        # 日志工具
 └── go.mod
 ```
 
@@ -53,7 +65,8 @@ server/
 ### 示例模式
 
 - 中间件模式：见 `middleware/auth.go`
-- 表驱动测试：见 `middleware/auth_test.go`
+- 接口设计：见 `agent/agent.go`（小接口原则，Agent 只有一个方法）
+- 表驱动测试：见 `middleware/auth_test.go`、`agent/claude/claude_test.go`
 
 ### 解析外部输出的容错原则
 
@@ -87,11 +100,11 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 
 ```bash
 # 手动执行（需要 claude CLI + API 凭证）
-go test -tags=integration ./agent -v -run Integration
+go test -tags=integration ./agent/claude -v -run Integration
 ```
 
 ⚠️ 会消耗 API token，仅在以下情况手动执行：
-- 修改了 `agent/claude.go` 的解析逻辑
+- 修改了 `agent/claude/claude.go` 的解析逻辑
 - 升级 Claude CLI 版本后
 
 ## 边界

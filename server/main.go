@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pockode/server/agent"
+	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/ws"
@@ -28,7 +28,7 @@ func newHandler(token, workDir string, devMode bool) http.Handler {
 	})
 
 	// WebSocket endpoint (handles its own auth via query param)
-	wsHandler := ws.NewHandler(token, agent.NewClaudeAgent(), workDir, devMode)
+	wsHandler := ws.NewHandler(token, claude.New(), workDir, devMode)
 	mux.Handle("GET /ws", wsHandler)
 
 	return middleware.Auth(token)(mux)

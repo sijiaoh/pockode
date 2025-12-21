@@ -28,9 +28,3 @@ type AgentEvent struct {
 	// Permission request fields
 	RequestID string `json:"request_id,omitempty"`
 }
-
-// PermissionResponse represents a response to a permission request.
-type PermissionResponse struct {
-	RequestID string `json:"request_id"`
-	Allow     bool   `json:"allow"`
-}
