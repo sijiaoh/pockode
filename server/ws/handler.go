@@ -64,7 +64,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // connectionState holds the state for a WebSocket connection.
-// A single WebSocket connection can manage multiple agent sessions.
+//
+// # Design: Connection-Scoped Sessions
+//
+// Sessions are scoped to individual WebSocket connections, not global.
+// Each connection maintains its own session map and Claude processes.
+//
+// Behavior:
+//   - Same sessionID on different connections → separate Claude processes
+//   - Page refresh → new connection → new process (conversation restored via --resume)
+//   - Multiple tabs → independent processes, no cross-tab sync
+//
+// Trade-offs:
+//   - Pro: Simple architecture, no cross-connection synchronization needed
+//   - Pro: Each tab operates independently, predictable behavior
+//   - Pro: Connection close cleanly terminates its processes
+//   - Con: Same sessionID may run multiple concurrent processes (resource waste)
+//   - Con: No real-time sync between tabs viewing the same session
+//
+// Future consideration: If real-time multi-device sync becomes important,
+// promote sessions to Handler level with subscriber pattern for event broadcast.
 type connectionState struct {
 	mu       sync.Mutex
 	sessions map[string]agent.Session // sessionID -> session
@@ -139,19 +158,17 @@ func (h *Handler) handleConnection(ctx context.Context, conn *websocket.Conn) {
 func (h *Handler) handleMessage(ctx context.Context, conn *websocket.Conn, msg ClientMessage, state *connectionState) error {
 	state.mu.Lock()
 	sess, exists := state.sessions[msg.SessionID]
+	state.mu.Unlock()
 
 	if !exists {
-		// Create new session (or resume if sessionID is provided).
-		// When sessionID is empty, Claude CLI creates a new conversation.
-		// When sessionID is provided, Claude CLI resumes that conversation via --resume flag.
-		// Hold lock during creation to prevent duplicate sessions.
+		// Create new session (or resume conversation history if sessionID is provided).
 		var err error
 		sess, err = h.agent.Start(ctx, h.workDir, msg.SessionID)
 		if err != nil {
-			state.mu.Unlock()
 			return err
 		}
 
+		state.mu.Lock()
 		state.sessions[msg.SessionID] = sess
 		state.mu.Unlock()
 
@@ -160,8 +177,6 @@ func (h *Handler) handleMessage(ctx context.Context, conn *websocket.Conn, msg C
 		go h.streamEvents(ctx, conn, msg.SessionID, sess, state)
 
 		logger.Info("handleMessage: created session %s", msg.SessionID)
-	} else {
-		state.mu.Unlock()
 	}
 
 	logger.Info("handleMessage: prompt=%q, sessionID=%s", logger.Truncate(msg.Content, promptLogMaxLen), msg.SessionID)
