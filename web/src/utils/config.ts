@@ -12,7 +12,13 @@ export function getWebSocketUrl(): string {
 }
 
 export function getToken(): string {
-	return (
-		import.meta.env.VITE_AUTH_TOKEN ?? localStorage.getItem("auth_token") ?? ""
-	);
+	return localStorage.getItem("auth_token") ?? "";
+}
+
+export function saveToken(token: string): void {
+	localStorage.setItem("auth_token", token);
+}
+
+export function clearToken(): void {
+	localStorage.removeItem("auth_token");
 }

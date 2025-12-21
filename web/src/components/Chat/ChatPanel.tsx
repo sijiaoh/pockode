@@ -10,6 +10,10 @@ import InputBar from "./InputBar";
 import MessageList from "./MessageList";
 import PermissionDialog from "./PermissionDialog";
 
+interface Props {
+	onLogout?: () => void;
+}
+
 const STATUS_CONFIG: Record<ConnectionStatus, { text: string; color: string }> =
 	{
 		connected: { text: "Connected", color: "text-green-400" },
@@ -18,7 +22,7 @@ const STATUS_CONFIG: Record<ConnectionStatus, { text: string; color: string }> =
 		connecting: { text: "Connecting...", color: "text-yellow-400" },
 	};
 
-function ChatPanel() {
+function ChatPanel({ onLogout }: Props) {
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [sessionId, setSessionId] = useState<string | null>(null);
 	const [permissionRequest, setPermissionRequest] =
@@ -182,7 +186,18 @@ function ChatPanel() {
 		<div className="flex h-screen flex-col bg-gray-900">
 			<header className="flex items-center justify-between border-b border-gray-700 p-4">
 				<h1 className="text-xl font-bold text-white">Pockode</h1>
-				<span className={`text-sm ${statusColor}`}>{statusText}</span>
+				<div className="flex items-center gap-4">
+					<span className={`text-sm ${statusColor}`}>{statusText}</span>
+					{onLogout && (
+						<button
+							type="button"
+							onClick={onLogout}
+							className="text-sm text-gray-400 hover:text-white"
+						>
+							Logout
+						</button>
+					)}
+				</div>
 			</header>
 			<MessageList messages={messages} />
 			<InputBar onSend={handleSend} disabled={status !== "connected"} />

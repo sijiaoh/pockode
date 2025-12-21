@@ -10,7 +10,6 @@ export PORT="${PORT:-8080}"
 export DEV_MODE="${DEV_MODE:-true}"
 export DEBUG="${DEBUG:-true}"
 export VITE_API_BASE_URL="${VITE_API_BASE_URL:-http://localhost:$PORT}"
-export VITE_AUTH_TOKEN="${VITE_AUTH_TOKEN:-$AUTH_TOKEN}"
 
 # Cleanup on exit
 cleanup() {
@@ -45,6 +44,7 @@ echo ""
 echo "Services started:"
 echo "  Backend:  http://localhost:$PORT"
 echo "  Frontend: http://localhost:5173"
+echo "  Token:    $AUTH_TOKEN"
 echo ""
 echo "Press Ctrl+C to stop."
 wait
