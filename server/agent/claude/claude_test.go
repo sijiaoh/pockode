@@ -198,6 +198,11 @@ func TestParseLine(t *testing.T) {
 			input:    `{"type":"user"}`,
 			expected: nil,
 		},
+		{
+			name:     "control_response ignored",
+			input:    `{"type":"control_response","response":{"subtype":"success","request_id":"abc123"}}`,
+			expected: nil,
+		},
 	}
 
 	for _, tt := range tests {

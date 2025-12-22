@@ -395,6 +395,9 @@ func parseLine(line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
 		return nil
 	case "control_request":
 		return parseControlRequest(line, pendingRequests)
+	case "control_response":
+		// Ignore echoed responses from our own control messages
+		return nil
 	default:
 		logger.Info("parseLine: unknown event type: %s", event.Type)
 		return []agent.AgentEvent{{
