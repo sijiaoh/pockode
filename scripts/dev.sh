@@ -20,15 +20,9 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Install air if not available
-if ! command -v air &> /dev/null; then
-    echo "Installing air for hot reload..."
-    go install github.com/air-verse/air@latest
-fi
-
-# Start backend with hot reload
+# Start backend
 echo "Starting backend (port $PORT, workDir: $WORK_DIR)..."
-(cd "$PROJECT_DIR/server" && air) &
+(cd "$PROJECT_DIR/server" && go run .) &
 SERVER_PID=$!
 
 # Wait for backend to be ready
