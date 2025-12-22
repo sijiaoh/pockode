@@ -16,6 +16,9 @@ const (
 )
 
 // AgentEvent represents a unified event from an AI agent.
+//
+// For required fields per event type, see requireFields() in
+// agent/claude/claude_integration_test.go (serves as schema documentation).
 type AgentEvent struct {
 	Type       EventType       `json:"type"`
 	Content    string          `json:"content,omitempty"`

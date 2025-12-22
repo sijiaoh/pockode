@@ -13,7 +13,7 @@ import (
 
 // requireFields validates that expected fields are non-empty for each event type.
 // This ensures Claude CLI's JSON schema matches our parsing expectations.
-// Must be manually maintained when AgentEvent fields change.
+// Also serves as documentation for AgentEvent's required fields per type.
 func requireFields(t *testing.T, event agent.AgentEvent) {
 	t.Helper()
 	switch event.Type {
