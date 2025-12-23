@@ -46,7 +46,6 @@ export interface PermissionRequest {
 export type WSClientMessage =
 	| {
 			type: "message";
-			id: string;
 			content: string;
 			session_id: string;
 	  }

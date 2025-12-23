@@ -242,7 +242,6 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 
 	msg := ClientMessage{
 		Type:    "message",
-		ID:      "test-123",
 		Content: "Hello AI",
 	}
 	msgData, _ := json.Marshal(msg)
@@ -300,7 +299,7 @@ func TestHandler_MultipleMessages(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	msg1 := ClientMessage{Type: "message", ID: "msg-1", Content: "First message"}
+	msg1 := ClientMessage{Type: "message", Content: "First message"}
 	msgData, _ := json.Marshal(msg1)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write first message: %v", err)
@@ -313,7 +312,7 @@ func TestHandler_MultipleMessages(t *testing.T) {
 		}
 	}
 
-	msg2 := ClientMessage{Type: "message", ID: "msg-2", Content: "Second message"}
+	msg2 := ClientMessage{Type: "message", Content: "Second message"}
 	msgData, _ = json.Marshal(msg2)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write second message: %v", err)
@@ -363,7 +362,7 @@ func TestHandler_MultipleSessions(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	msgA := ClientMessage{Type: "message", ID: "msg-a", SessionID: "session-A", Content: "Hello from A"}
+	msgA := ClientMessage{Type: "message", SessionID: "session-A", Content: "Hello from A"}
 	msgData, _ := json.Marshal(msgA)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write message A: %v", err)
@@ -376,7 +375,7 @@ func TestHandler_MultipleSessions(t *testing.T) {
 		}
 	}
 
-	msgB := ClientMessage{Type: "message", ID: "msg-b", SessionID: "session-B", Content: "Hello from B"}
+	msgB := ClientMessage{Type: "message", SessionID: "session-B", Content: "Hello from B"}
 	msgData, _ = json.Marshal(msgB)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write message B: %v", err)
@@ -389,7 +388,7 @@ func TestHandler_MultipleSessions(t *testing.T) {
 		}
 	}
 
-	msgA2 := ClientMessage{Type: "message", ID: "msg-a2", SessionID: "session-A", Content: "Second from A"}
+	msgA2 := ClientMessage{Type: "message", SessionID: "session-A", Content: "Second from A"}
 	msgData, _ = json.Marshal(msgA2)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write message A2: %v", err)
@@ -451,7 +450,6 @@ func TestHandler_PermissionRequest(t *testing.T) {
 
 	msg := ClientMessage{
 		Type:    "message",
-		ID:      "test-perm-123",
 		Content: "run ruby --version",
 	}
 	msgData, _ := json.Marshal(msg)
@@ -553,7 +551,7 @@ func TestHandler_PermissionResponseInvalidRequestID(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	msg := ClientMessage{Type: "message", ID: "msg-1", SessionID: "valid-session", Content: "hello"}
+	msg := ClientMessage{Type: "message", SessionID: "valid-session", Content: "hello"}
 	msgData, _ := json.Marshal(msg)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write: %v", err)
@@ -616,7 +614,7 @@ func TestHandler_AgentStartError(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	msg := ClientMessage{Type: "message", ID: "msg-1", Content: "hello"}
+	msg := ClientMessage{Type: "message", Content: "hello"}
 	msgData, _ := json.Marshal(msg)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write: %v", err)
@@ -665,7 +663,7 @@ func TestHandler_Interrupt(t *testing.T) {
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
 	// Create a session first
-	msg := ClientMessage{Type: "message", ID: "msg-1", SessionID: "interrupt-test-session", Content: "hello"}
+	msg := ClientMessage{Type: "message", SessionID: "interrupt-test-session", Content: "hello"}
 	msgData, _ := json.Marshal(msg)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write: %v", err)
@@ -771,7 +769,7 @@ func TestHandler_PermissionResponseDuplicate(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	msg := ClientMessage{Type: "message", ID: "msg-1", SessionID: "test-session", Content: "test"}
+	msg := ClientMessage{Type: "message", SessionID: "test-session", Content: "test"}
 	msgData, _ := json.Marshal(msg)
 	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
 		t.Fatalf("failed to write: %v", err)
@@ -786,7 +784,6 @@ func TestHandler_PermissionResponseDuplicate(t *testing.T) {
 
 	permResp1 := ClientMessage{
 		Type:      "permission_response",
-		ID:        "perm-1",
 		SessionID: "test-session",
 		RequestID: "req-dup-test",
 		Allow:     true,
@@ -798,7 +795,6 @@ func TestHandler_PermissionResponseDuplicate(t *testing.T) {
 
 	permResp2 := ClientMessage{
 		Type:      "permission_response",
-		ID:        "perm-2",
 		SessionID: "test-session",
 		RequestID: "req-dup-test",
 		Allow:     true,

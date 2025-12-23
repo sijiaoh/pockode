@@ -165,7 +165,6 @@ function ChatPanel({ onLogout }: Props) {
 			// Send to server with session_id
 			const sent = send({
 				type: "message",
-				id: assistantMessageId,
 				content,
 				session_id: currentSessionId,
 			});

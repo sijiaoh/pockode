@@ -5,7 +5,6 @@ import "encoding/json"
 // ClientMessage represents a message sent by the client.
 type ClientMessage struct {
 	Type      string `json:"type"`                 // "message", "interrupt", or "permission_response"
-	ID        string `json:"id"`                   // TODO: unused, only logged - remove or use
 	Content   string `json:"content"`              // User input (for "message" type)
 	SessionID string `json:"session_id,omitempty"` // Session identifier
 	// Permission response fields (for "permission_response" type)

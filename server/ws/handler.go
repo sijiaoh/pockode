@@ -127,7 +127,7 @@ func (h *Handler) handleConnection(ctx context.Context, conn *websocket.Conn) {
 			continue
 		}
 
-		logger.Debug("handleConnection: parsed message type=%s, id=%s, sessionID=%s", msg.Type, msg.ID, msg.SessionID)
+		logger.Debug("handleConnection: parsed message type=%s, sessionID=%s", msg.Type, msg.SessionID)
 
 		switch msg.Type {
 		case "message":
