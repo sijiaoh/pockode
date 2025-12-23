@@ -72,7 +72,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //
 // Behavior:
 //   - Same sessionID on different connections → separate Claude processes
-//   - Page refresh → new connection → new process (conversation restored via --resume)
+//   - Page refresh → new connection → new process (conversation restored via --session-id)
 //   - Multiple tabs → independent processes, no cross-tab sync
 //
 // Trade-offs:
