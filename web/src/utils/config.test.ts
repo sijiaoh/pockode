@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getApiBaseUrl, getWebSocketUrl } from "./config";
 
 describe("getApiBaseUrl", () => {
-	it("returns default URL when env is not set", () => {
-		expect(getApiBaseUrl()).toBe("http://localhost:8080");
+	it("returns window.location.origin when env is not set", () => {
+		expect(getApiBaseUrl()).toBe(window.location.origin);
 	});
 });
 
@@ -14,7 +14,8 @@ describe("getWebSocketUrl", () => {
 
 	it("converts http to ws protocol", () => {
 		const url = getWebSocketUrl();
-		expect(url).toBe("ws://localhost:8080/ws");
+		const expectedOrigin = window.location.origin.replace(/^http/, "ws");
+		expect(url).toBe(`${expectedOrigin}/ws`);
 	});
 
 	it("converts https to wss protocol", () => {

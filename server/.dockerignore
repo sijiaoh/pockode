@@ -1,0 +1,5 @@
+tmp/
+.gitignore
+.dockerignore
+Dockerfile
+.DS_Store
