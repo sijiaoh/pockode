@@ -52,6 +52,9 @@ server/
 │   └── auth_test.go
 ├── logger/
 │   └── logger.go        # 日志工具
+├── git/
+│   ├── git.go           # Git 仓库初始化
+│   └── git_test.go
 └── go.mod
 ```
 
@@ -106,6 +109,20 @@ go test -tags=integration ./agent/claude -v -run Integration
 ⚠️ 会消耗 API token，仅在以下情况手动执行：
 - 修改了 `agent/claude/claude.go` 的解析逻辑
 - 升级 Claude CLI 版本后
+
+## 环境变量
+
+| 变量 | 必需 | 默认值 | 说明 |
+|------|------|--------|------|
+| `PORT` | 否 | `8080` | 服务端口 |
+| `AUTH_TOKEN` | 是 | — | API 认证令牌 |
+| `WORK_DIR` | 否 | `/workspace` | 工作目录 |
+| `DEV_MODE` | 否 | `false` | 开发模式 |
+| `GIT_ENABLED` | 否 | `false` | 启用 git 初始化 |
+| `REPOSITORY_URL` | GIT_ENABLED=true 时必需 | — | Git 仓库 URL |
+| `REPOSITORY_TOKEN` | GIT_ENABLED=true 时必需 | — | 仓库的 PAT |
+| `GIT_USER_NAME` | GIT_ENABLED=true 时必需 | — | git commit 用户名 |
+| `GIT_USER_EMAIL` | GIT_ENABLED=true 时必需 | — | git commit 邮箱 |
 
 ## 边界
 
