@@ -117,12 +117,21 @@ func TestParseLine(t *testing.T) {
 			},
 		},
 		{
-			name:  "user tool_result message",
+			name:  "user tool_result with string content",
 			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_123","content":"file contents here"}]}}`,
 			expected: []agent.AgentEvent{{
 				Type:       agent.EventTypeToolResult,
 				ToolUseID:  "toolu_123",
 				ToolResult: "file contents here",
+			}},
+		},
+		{
+			name:  "user tool_result with array content",
+			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_img","content":[{"type":"image","source":{"type":"base64","data":"..."}},{"type":"text","text":"description"}]}]}}`,
+			expected: []agent.AgentEvent{{
+				Type:       agent.EventTypeToolResult,
+				ToolUseID:  "toolu_img",
+				ToolResult: `[{"type":"image","source":{"type":"base64","data":"..."}},{"type":"text","text":"description"}]`,
 			}},
 		},
 		{

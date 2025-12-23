@@ -361,7 +361,7 @@ type cliContentBlock struct {
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   string          `json:"content,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
 }
 
 func parseLine(line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
@@ -500,10 +500,16 @@ func parseUserEvent(event cliEvent) []agent.AgentEvent {
 	var events []agent.AgentEvent
 	for _, block := range msg.Content {
 		if block.Type == "tool_result" {
+			// Content is JSON: either a string ("...") or array/object.
+			// Unmarshal extracts the string value; for non-strings, use raw JSON.
+			var content string
+			if err := json.Unmarshal(block.Content, &content); err != nil {
+				content = string(block.Content)
+			}
 			events = append(events, agent.AgentEvent{
 				Type:       agent.EventTypeToolResult,
 				ToolUseID:  block.ToolUseID,
-				ToolResult: block.Content,
+				ToolResult: content,
 			})
 		}
 	}
