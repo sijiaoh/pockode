@@ -1,8 +1,7 @@
 // API configuration
 
 export function getApiBaseUrl(): string {
-	// Use VITE_API_BASE_URL if set, otherwise use current origin (works with Vite proxy)
-	return import.meta.env.VITE_API_BASE_URL ?? window.location.origin;
+	return import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 }
 
 export function getWebSocketUrl(): string {

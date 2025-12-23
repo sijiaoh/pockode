@@ -9,7 +9,7 @@ export WORK_DIR="${WORK_DIR:-$PROJECT_DIR}"
 export PORT="${PORT:-8080}"
 export DEV_MODE="${DEV_MODE:-true}"
 export DEBUG="${DEBUG:-true}"
-export API_PORT="$PORT"
+export VITE_API_BASE_URL="${VITE_API_BASE_URL:-http://localhost:$PORT}"
 
 # Cleanup on exit
 cleanup() {
@@ -20,15 +20,9 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Install air if not available
-if ! command -v air &> /dev/null; then
-    echo "Installing air for hot reload..."
-    go install github.com/air-verse/air@latest
-fi
-
-# Start backend with hot reload
+# Start backend
 echo "Starting backend (port $PORT, workDir: $WORK_DIR)..."
-(cd "$PROJECT_DIR/server" && air) &
+(cd "$PROJECT_DIR/server" && go run .) &
 SERVER_PID=$!
 
 # Wait for backend to be ready
@@ -47,10 +41,10 @@ echo "Starting frontend..."
 WEB_PID=$!
 
 echo ""
-echo "Development server ready:"
-echo "  App:     http://localhost:5173"
-echo "  Token:   $AUTH_TOKEN"
+echo "Services started:"
+echo "  Backend:  http://localhost:$PORT"
+echo "  Frontend: http://localhost:5173"
+echo "  Token:    $AUTH_TOKEN"
 echo ""
-echo "(Backend running on port $PORT, proxied via Vite)"
 echo "Press Ctrl+C to stop."
 wait
