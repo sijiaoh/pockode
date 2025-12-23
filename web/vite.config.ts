@@ -10,9 +10,17 @@ export default defineConfig({
 	plugins: [react(), tailwindcss()],
 	server: {
 		proxy: {
-			"/api": apiTarget,
-			"/ws": { target: apiTarget, ws: true },
-			"/health": apiTarget,
+			"/api": {
+				target: apiTarget,
+				changeOrigin: true,
+			},
+			"/ws": {
+				target: apiTarget,
+				ws: true,
+			},
+			"/health": {
+				target: apiTarget,
+			},
 		},
 	},
 });

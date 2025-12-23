@@ -43,7 +43,7 @@ func (a *Agent) Start(ctx context.Context, workDir string, sessionID string) (ag
 		"--verbose",
 	}
 	if sessionID != "" {
-		args = append(args, "--session-id", sessionID)
+		args = append(args, "--resume", sessionID)
 	}
 
 	cmd := exec.CommandContext(procCtx, Binary, args...)
