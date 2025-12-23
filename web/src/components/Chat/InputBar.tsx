@@ -17,11 +17,11 @@ function InputBar({
 
 	const handleSend = useCallback(() => {
 		const trimmed = input.trim();
-		if (trimmed && !disabled) {
+		if (trimmed && !disabled && !isStreaming) {
 			onSend(trimmed);
 			setInput("");
 		}
-	}, [input, onSend, disabled]);
+	}, [input, onSend, disabled, isStreaming]);
 
 	const handleKeyDown = useCallback(
 		(e: KeyboardEvent<HTMLTextAreaElement>) => {
