@@ -82,7 +82,7 @@ describe("MessageItem", () => {
 				{ type: "text", content: "I'll read the file" },
 				{
 					type: "tool_call",
-					tool: { name: "Read", input: { file: "test.go" } },
+					tool: { id: "tool-1", name: "Read", input: { file: "test.go" } },
 				},
 			],
 			status: "complete",
@@ -103,6 +103,7 @@ describe("MessageItem", () => {
 				{
 					type: "tool_call",
 					tool: {
+						id: "tool-2",
 						name: "Bash",
 						input: { command: "ls" },
 						result: "file1.txt\nfile2.txt",
@@ -147,7 +148,7 @@ describe("MessageItem", () => {
 			content: "",
 			parts: [
 				{ type: "text", content: "First text" },
-				{ type: "tool_call", tool: { name: "Read", input: {} } },
+				{ type: "tool_call", tool: { id: "tool-3", name: "Read", input: {} } },
 				{ type: "text", content: "Second text" },
 			],
 			status: "complete",

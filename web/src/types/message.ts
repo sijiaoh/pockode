@@ -19,7 +19,7 @@ export type MessageStatus =
 
 // Tool call
 export interface ToolCall {
-	id?: string;
+	id: string;
 	name: string;
 	input: unknown;
 	result?: string;
@@ -69,21 +69,23 @@ export type WSClientMessage =
 	  };
 
 // WebSocket server message
-export interface WSServerMessage {
-	type:
-		| "text"
-		| "tool_call"
-		| "tool_result"
-		| "error"
-		| "done"
-		| "interrupted"
-		| "permission_request"
-		| "system";
-	content?: string;
-	tool_name?: string;
-	tool_input?: unknown;
-	tool_use_id?: string;
-	tool_result?: string;
-	error?: string;
-	request_id?: string;
-}
+export type WSServerMessage =
+	| { type: "text"; content: string }
+	| {
+			type: "tool_call";
+			tool_name: string;
+			tool_input: unknown;
+			tool_use_id: string;
+	  }
+	| { type: "tool_result"; tool_use_id: string; tool_result: string }
+	| { type: "error"; error: string }
+	| { type: "done" }
+	| { type: "interrupted" }
+	| {
+			type: "permission_request";
+			request_id: string;
+			tool_name: string;
+			tool_input: unknown;
+			tool_use_id?: string;
+	  }
+	| { type: "system"; content: string };
