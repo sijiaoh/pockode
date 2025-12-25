@@ -54,20 +54,20 @@ class MockWebSocket {
 }
 
 // Store original WebSocket
-const OriginalWebSocket = global.WebSocket;
+const OriginalWebSocket = globalThis.WebSocket;
 
 beforeEach(() => {
 	vi.useFakeTimers();
 	mockWsInstances = [];
 	currentMockWs = null;
 	// Replace WebSocket with mock class
-	global.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+	globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 });
 
 afterEach(() => {
 	vi.useRealTimers();
 	vi.resetModules();
-	global.WebSocket = OriginalWebSocket;
+	globalThis.WebSocket = OriginalWebSocket;
 });
 
 // Helper to get fresh wsStore for each test
