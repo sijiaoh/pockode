@@ -125,5 +125,4 @@ describe("MessageItem", () => {
 		expect(screen.getByText(/file1\.txt/)).toBeInTheDocument();
 		expect(screen.getByText(/file2\.txt/)).toBeInTheDocument();
 	});
-
 });

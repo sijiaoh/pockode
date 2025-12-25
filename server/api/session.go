@@ -69,6 +69,27 @@ func (h *SessionHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleGetHistory handles GET /api/sessions/{id}/history
+func (h *SessionHandler) HandleGetHistory(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if sessionID == "" {
+		http.Error(w, "Session ID required", http.StatusBadRequest)
+		return
+	}
+
+	history, err := h.store.GetHistory(sessionID)
+	if err != nil {
+		logger.Error("Failed to get history: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"history": history,
+	})
+}
+
 // HandleUpdate handles PATCH /api/sessions/{id}
 func (h *SessionHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
@@ -105,4 +126,5 @@ func (h *SessionHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions", h.HandleCreate)
 	mux.HandleFunc("DELETE /api/sessions/{id}", h.HandleDelete)
 	mux.HandleFunc("PATCH /api/sessions/{id}", h.HandleUpdate)
+	mux.HandleFunc("GET /api/sessions/{id}/history", h.HandleGetHistory)
 }

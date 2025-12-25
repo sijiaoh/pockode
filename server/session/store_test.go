@@ -201,3 +201,69 @@ func TestFileStore_Persistence(t *testing.T) {
 		t.Errorf("expected session ID %s, got %s", sess.ID, sessions[0].ID)
 	}
 }
+
+func TestFileStore_History(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+
+	sessionID := "test-session"
+
+	// Empty history for non-existent session
+	history, err := store.GetHistory(sessionID)
+	if err != nil {
+		t.Fatalf("GetHistory failed: %v", err)
+	}
+	if len(history) != 0 {
+		t.Errorf("expected 0 records, got %d", len(history))
+	}
+
+	// Append records
+	record1 := map[string]string{"type": "message", "content": "hello"}
+	record2 := map[string]string{"type": "text", "content": "world"}
+
+	if err := store.AppendToHistory(sessionID, record1); err != nil {
+		t.Fatalf("AppendToHistory failed: %v", err)
+	}
+	if err := store.AppendToHistory(sessionID, record2); err != nil {
+		t.Fatalf("AppendToHistory failed: %v", err)
+	}
+
+	// Read back
+	history, err = store.GetHistory(sessionID)
+	if err != nil {
+		t.Fatalf("GetHistory failed: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(history))
+	}
+
+	// Verify content (raw JSON)
+	if string(history[0]) != `{"content":"hello","type":"message"}` {
+		t.Errorf("unexpected record 0: %s", history[0])
+	}
+	if string(history[1]) != `{"content":"world","type":"text"}` {
+		t.Errorf("unexpected record 1: %s", history[1])
+	}
+}
+
+func TestFileStore_Delete_RemovesHistory(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+
+	sessionID := "session-with-history"
+	store.Create(sessionID)
+	store.AppendToHistory(sessionID, map[string]string{"type": "message", "content": "test"})
+
+	// Verify history exists
+	history, _ := store.GetHistory(sessionID)
+	if len(history) != 1 {
+		t.Fatal("expected history to exist before delete")
+	}
+
+	// Delete session
+	store.Delete(sessionID)
+
+	// Verify history is also deleted
+	history, _ = store.GetHistory(sessionID)
+	if len(history) != 0 {
+		t.Errorf("expected history to be deleted, got %d records", len(history))
+	}
+}

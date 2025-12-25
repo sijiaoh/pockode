@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createSession,
 	deleteSession,
+	getHistory,
 	listSessions,
 	updateSessionTitle,
 } from "./sessionApi";
@@ -138,6 +139,31 @@ describe("sessionApi", () => {
 					body: JSON.stringify({ title: "New Title" }),
 				}),
 			);
+		});
+	});
+
+	describe("getHistory", () => {
+		it("fetches history for session", async () => {
+			const mockHistory = [
+				{ type: "message", content: "hello" },
+				{ type: "text", content: "world" },
+			];
+			vi.mocked(fetch).mockResolvedValueOnce({
+				ok: true,
+				json: () => Promise.resolve({ history: mockHistory }),
+			} as Response);
+
+			const history = await getHistory("session-123");
+
+			expect(fetch).toHaveBeenCalledWith(
+				"http://localhost:8080/api/sessions/session-123/history",
+				expect.objectContaining({
+					headers: expect.objectContaining({
+						Authorization: "Bearer test-token",
+					}),
+				}),
+			);
+			expect(history).toEqual(mockHistory);
 		});
 	});
 });

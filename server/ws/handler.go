@@ -180,6 +180,11 @@ func (h *Handler) handleMessage(ctx context.Context, conn *websocket.Conn, msg C
 
 	logger.Info("handleMessage: prompt=%q, sessionID=%s", logger.Truncate(msg.Content, promptLogMaxLen), msg.SessionID)
 
+	// Persist user message to history
+	if err := h.sessionStore.AppendToHistory(msg.SessionID, msg); err != nil {
+		logger.Error("handleMessage: failed to append to history: %v", err)
+	}
+
 	return sess.SendMessage(msg.Content)
 }
 
@@ -229,6 +234,11 @@ func (h *Handler) streamEvents(ctx context.Context, conn *websocket.Conn, sessio
 			ToolResult: event.ToolResult,
 			Error:      event.Error,
 			RequestID:  event.RequestID,
+		}
+
+		// Persist event to history
+		if err := h.sessionStore.AppendToHistory(sessionID, serverMsg); err != nil {
+			logger.Error("streamEvents: failed to append to history: %v", err)
 		}
 
 		if err := h.sendWithLock(ctx, conn, state, serverMsg); err != nil {

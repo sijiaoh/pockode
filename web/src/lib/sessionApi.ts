@@ -47,3 +47,9 @@ export async function updateSessionTitle(
 		body: JSON.stringify({ title }),
 	});
 }
+
+export async function getHistory(sessionId: string): Promise<unknown[]> {
+	const response = await fetchWithAuth(`/api/sessions/${sessionId}/history`);
+	const data = await response.json();
+	return data.history;
+}

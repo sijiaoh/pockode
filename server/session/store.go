@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,12 +11,17 @@ import (
 
 // Store defines operations for session management.
 type Store interface {
+	// Session metadata
 	List() ([]SessionMeta, error)
 	Get(sessionID string) (SessionMeta, bool, error)
 	Create(sessionID string) (SessionMeta, error)
 	Delete(sessionID string) error
 	Update(sessionID string, title string) error
 	Activate(sessionID string) error
+
+	// History persistence
+	GetHistory(sessionID string) ([]json.RawMessage, error)
+	AppendToHistory(sessionID string, record any) error
 }
 
 // indexData is the structure of index.json.
@@ -123,17 +129,23 @@ func (s *FileStore) Create(sessionID string) (SessionMeta, error) {
 	return session, nil
 }
 
-// Delete removes a session by ID.
+// Delete removes a session by ID, including its history.
 func (s *FileStore) Delete(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Delete session directory (includes history)
+	sessionDir := filepath.Join(s.dataDir, "sessions", sessionID)
+	if err := os.RemoveAll(sessionDir); err != nil {
+		return err
+	}
+
+	// Update index
 	idx, err := s.readIndex()
 	if err != nil {
 		return err
 	}
 
-	// Find and remove session
 	newSessions := make([]SessionMeta, 0, len(idx.Sessions))
 	for _, sess := range idx.Sessions {
 		if sess.ID != sessionID {
@@ -186,4 +198,73 @@ func (s *FileStore) Activate(sessionID string) error {
 	}
 
 	return nil // Session not found, no error
+}
+
+func (s *FileStore) historyPath(sessionID string) string {
+	return filepath.Join(s.dataDir, "sessions", sessionID, "history.jsonl")
+}
+
+// GetHistory reads all history records from the session's JSONL file.
+func (s *FileStore) GetHistory(sessionID string) ([]json.RawMessage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	path := s.historyPath(sessionID)
+	file, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return []json.RawMessage{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var records []json.RawMessage
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		// Make a copy since scanner reuses the buffer
+		record := make(json.RawMessage, len(line))
+		copy(record, line)
+		records = append(records, record)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return records, nil
+}
+
+// AppendToHistory appends a record to the session's history JSONL file.
+func (s *FileStore) AppendToHistory(sessionID string, record any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := s.historyPath(sessionID)
+
+	// Ensure directory exists
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	// Open file for appending
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Marshal and write record
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+
+	data = append(data, '\n')
+	_, err = file.Write(data)
+	return err
 }

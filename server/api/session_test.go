@@ -144,3 +144,35 @@ func TestSessionHandler_Update_EmptyTitle(t *testing.T) {
 		t.Errorf("expected status 400, got %d", rec.Code)
 	}
 }
+
+func TestSessionHandler_GetHistory(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	sess, _ := store.Create("session-with-history")
+
+	// Add history records
+	store.AppendToHistory(sess.ID, map[string]string{"type": "message", "content": "hello"})
+	store.AppendToHistory(sess.ID, map[string]string{"type": "text", "content": "world"})
+
+	handler := NewSessionHandler(store)
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+sess.ID+"/history", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp struct {
+		History []json.RawMessage `json:"history"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.History) != 2 {
+		t.Errorf("expected 2 records, got %d", len(resp.History))
+	}
+}
