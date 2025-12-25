@@ -11,9 +11,11 @@ import (
 // Store defines operations for session management.
 type Store interface {
 	List() ([]SessionMeta, error)
+	Get(sessionID string) (SessionMeta, bool, error)
 	Create(sessionID string) (SessionMeta, error)
 	Delete(sessionID string) error
 	Update(sessionID string, title string) error
+	Activate(sessionID string) error
 }
 
 // indexData is the structure of index.json.
@@ -74,6 +76,24 @@ func (s *FileStore) List() ([]SessionMeta, error) {
 		return nil, err
 	}
 	return idx.Sessions, nil
+}
+
+// Get returns a session by ID. Returns (session, found, error).
+func (s *FileStore) Get(sessionID string) (SessionMeta, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	idx, err := s.readIndex()
+	if err != nil {
+		return SessionMeta{}, false, err
+	}
+
+	for _, sess := range idx.Sessions {
+		if sess.ID == sessionID {
+			return sess, true, nil
+		}
+	}
+	return SessionMeta{}, false, nil
 }
 
 // Create creates a new session with the given ID and default title.
@@ -140,6 +160,27 @@ func (s *FileStore) Update(sessionID string, title string) error {
 		if sess.ID == sessionID {
 			idx.Sessions[i].Title = title
 			idx.Sessions[i].UpdatedAt = now
+			return s.writeIndex(idx)
+		}
+	}
+
+	return nil // Session not found, no error
+}
+
+// Activate marks a session as activated (first message sent).
+func (s *FileStore) Activate(sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx, err := s.readIndex()
+	if err != nil {
+		return err
+	}
+
+	for i, sess := range idx.Sessions {
+		if sess.ID == sessionID {
+			idx.Sessions[i].Activated = true
+			idx.Sessions[i].UpdatedAt = time.Now()
 			return s.writeIndex(idx)
 		}
 	}

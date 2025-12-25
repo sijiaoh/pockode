@@ -17,9 +17,6 @@ const (
 )
 
 // AgentEvent represents a unified event from an AI agent.
-//
-// For required fields per event type, see requireFields() in
-// agent/claude/claude_integration_test.go (serves as schema documentation).
 type AgentEvent struct {
 	Type       EventType       `json:"type"`
 	Content    string          `json:"content,omitempty"`
@@ -30,6 +27,4 @@ type AgentEvent struct {
 	Error      string          `json:"error,omitempty"`
 	// Permission request fields
 	RequestID string `json:"request_id,omitempty"`
-	// SessionID is set in done event, returned by Claude CLI
-	SessionID string `json:"session_id,omitempty"`
 }

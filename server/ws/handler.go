@@ -11,6 +11,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/session"
 )
 
 const (
@@ -20,19 +21,21 @@ const (
 
 // Handler handles WebSocket connections for chat.
 type Handler struct {
-	token   string
-	agent   agent.Agent
-	workDir string
-	devMode bool
+	token        string
+	agent        agent.Agent
+	workDir      string
+	devMode      bool
+	sessionStore session.Store
 }
 
 // NewHandler creates a new WebSocket handler.
-func NewHandler(token string, ag agent.Agent, workDir string, devMode bool) *Handler {
+func NewHandler(token string, ag agent.Agent, workDir string, devMode bool, store session.Store) *Handler {
 	return &Handler{
-		token:   token,
-		agent:   ag,
-		workDir: workDir,
-		devMode: devMode,
+		token:        token,
+		agent:        ag,
+		workDir:      workDir,
+		devMode:      devMode,
+		sessionStore: store,
 	}
 }
 
@@ -63,27 +66,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handleConnection(r.Context(), conn)
 }
 
-// connectionState holds the state for a WebSocket connection.
-//
-// # Design: Connection-Scoped Sessions
-//
-// Sessions are scoped to individual WebSocket connections, not global.
-// Each connection maintains its own session map and Claude processes.
-//
-// Behavior:
-//   - Same sessionID on different connections → separate Claude processes
-//   - Page refresh → new connection → new process (conversation restored via --session-id)
-//   - Multiple tabs → independent processes, no cross-tab sync
-//
-// Trade-offs:
-//   - Pro: Simple architecture, no cross-connection synchronization needed
-//   - Pro: Each tab operates independently, predictable behavior
-//   - Pro: Connection close cleanly terminates its processes
-//   - Con: Same sessionID may run multiple concurrent processes (resource waste)
-//   - Con: No real-time sync between tabs viewing the same session
-//
-// Future consideration: If real-time multi-device sync becomes important,
-// promote sessions to Handler level with subscriber pattern for event broadcast.
+// connectionState holds agent processes for a single WebSocket connection.
+// Agent processes are connection-scoped; session metadata lives in sessionStore.
 type connectionState struct {
 	mu       sync.Mutex
 	sessions map[string]agent.Session // sessionID -> session
@@ -161,9 +145,18 @@ func (h *Handler) handleMessage(ctx context.Context, conn *websocket.Conn, msg C
 	state.mu.Unlock()
 
 	if !exists {
-		// Resume session (sessionID should exist from REST session creation).
-		var err error
-		sess, err = h.agent.Start(ctx, h.workDir, msg.SessionID, false)
+		// Check if session is activated (has been used before)
+		meta, found, err := h.sessionStore.Get(msg.SessionID)
+		if err != nil {
+			return fmt.Errorf("failed to get session: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("session not found: %s", msg.SessionID)
+		}
+
+		resume := meta.Activated
+
+		sess, err = h.agent.Start(ctx, h.workDir, msg.SessionID, resume)
 		if err != nil {
 			return err
 		}
@@ -172,10 +165,17 @@ func (h *Handler) handleMessage(ctx context.Context, conn *websocket.Conn, msg C
 		state.sessions[msg.SessionID] = sess
 		state.mu.Unlock()
 
+		// Mark session as activated on first use
+		if !resume {
+			if err := h.sessionStore.Activate(msg.SessionID); err != nil {
+				logger.Error("handleMessage: failed to activate session: %v", err)
+			}
+		}
+
 		// Start goroutine to stream events from this session.
 		go h.streamEvents(ctx, conn, msg.SessionID, sess, state)
 
-		logger.Info("handleMessage: created session %s", msg.SessionID)
+		logger.Info("handleMessage: started session %s (resume=%v)", msg.SessionID, resume)
 	}
 
 	logger.Info("handleMessage: prompt=%q, sessionID=%s", logger.Truncate(msg.Content, promptLogMaxLen), msg.SessionID)

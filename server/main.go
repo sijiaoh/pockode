@@ -33,11 +33,11 @@ func newHandler(token, workDir string, devMode bool, sessionStore session.Store)
 	claudeAgent := claude.New()
 
 	// Session REST API
-	sessionHandler := api.NewSessionHandler(sessionStore, claudeAgent, workDir)
+	sessionHandler := api.NewSessionHandler(sessionStore)
 	sessionHandler.Register(mux)
 
 	// WebSocket endpoint (handles its own auth via query param)
-	wsHandler := ws.NewHandler(token, claudeAgent, workDir, devMode)
+	wsHandler := ws.NewHandler(token, claudeAgent, workDir, devMode, sessionStore)
 	mux.Handle("GET /ws", wsHandler)
 
 	return middleware.Auth(token)(mux)

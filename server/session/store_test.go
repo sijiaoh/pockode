@@ -120,6 +120,67 @@ func TestFileStore_UpdateNonExistent(t *testing.T) {
 	}
 }
 
+func TestFileStore_Get(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+
+	// Get non-existent session
+	_, found, err := store.Get("non-existent")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if found {
+		t.Error("expected not found for non-existent session")
+	}
+
+	// Create and get session
+	created, _ := store.Create("test-session")
+	sess, found, err := store.Get("test-session")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if !found {
+		t.Error("expected session to be found")
+	}
+	if sess.ID != created.ID {
+		t.Errorf("expected ID %s, got %s", created.ID, sess.ID)
+	}
+}
+
+func TestFileStore_Activate(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+
+	sess, _ := store.Create("session-to-activate")
+	if sess.Activated {
+		t.Error("expected new session to not be activated")
+	}
+
+	err := store.Activate(sess.ID)
+	if err != nil {
+		t.Fatalf("Activate failed: %v", err)
+	}
+
+	updated, found, _ := store.Get(sess.ID)
+	if !found {
+		t.Fatal("session not found after activate")
+	}
+	if !updated.Activated {
+		t.Error("expected session to be activated")
+	}
+	if !updated.UpdatedAt.After(sess.UpdatedAt) {
+		t.Error("expected UpdatedAt to be updated")
+	}
+}
+
+func TestFileStore_ActivateNonExistent(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+
+	// Should not error on non-existent session
+	err := store.Activate("non-existent-id")
+	if err != nil {
+		t.Errorf("Activate non-existent should not error, got %v", err)
+	}
+}
+
 func TestFileStore_Persistence(t *testing.T) {
 	dir := t.TempDir()
 

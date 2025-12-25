@@ -33,8 +33,7 @@ func New() *Agent {
 }
 
 // Start launches a persistent Claude CLI process.
-// isNew indicates whether this is a new session (use --session-id) or resuming (use --resume).
-func (a *Agent) Start(ctx context.Context, workDir string, sessionID string, isNew bool) (agent.Session, error) {
+func (a *Agent) Start(ctx context.Context, workDir string, sessionID string, resume bool) (agent.Session, error) {
 	procCtx, cancel := context.WithCancel(ctx)
 
 	args := []string{
@@ -44,10 +43,10 @@ func (a *Agent) Start(ctx context.Context, workDir string, sessionID string, isN
 		"--verbose",
 	}
 	if sessionID != "" {
-		if isNew {
-			args = append(args, "--session-id", sessionID)
-		} else {
+		if resume {
 			args = append(args, "--resume", sessionID)
+		} else {
+			args = append(args, "--session-id", sessionID)
 		}
 	}
 
@@ -550,8 +549,5 @@ func parseResultEvent(line []byte) agent.AgentEvent {
 		}
 	}
 
-	return agent.AgentEvent{
-		Type:      eventType,
-		SessionID: result.SessionID,
-	}
+	return agent.AgentEvent{Type: eventType}
 }

@@ -7,269 +7,145 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/session"
 )
 
-// mockSession implements agent.Session for testing.
-type mockSession struct {
-	events          chan agent.AgentEvent
-	messageQueue    chan string
-	pendingRequests *sync.Map
-	ctx             context.Context
-	mu              sync.Mutex
-	closed          bool
-	interruptCh     chan struct{} // closed when SendInterrupt is called
-	interruptOnce   sync.Once
+type testEnv struct {
+	t      *testing.T
+	mock   *mockAgent
+	store  *session.FileStore
+	server *httptest.Server
+	conn   *websocket.Conn
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-func (s *mockSession) Events() <-chan agent.AgentEvent {
-	return s.events
-}
-
-func (s *mockSession) SendMessage(prompt string) error {
-	select {
-	case s.messageQueue <- prompt:
-		return nil
-	case <-s.ctx.Done():
-		return s.ctx.Err()
+func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
 	}
-}
 
-func (s *mockSession) SendPermissionResponse(requestID string, allow bool) error {
-	_, ok := s.pendingRequests.LoadAndDelete(requestID)
-	if !ok {
-		return fmt.Errorf("no pending request for id: %s", requestID)
+	h := NewHandler("test-token", mock, "/tmp", true, store)
+	server := httptest.NewServer(h)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		cancel()
+		server.Close()
+		t.Fatalf("failed to connect: %v", err)
 	}
-	return nil
-}
 
-func (s *mockSession) SendInterrupt() error {
-	s.interruptOnce.Do(func() {
-		close(s.interruptCh)
+	t.Cleanup(func() {
+		conn.Close(websocket.StatusNormalClosure, "")
+		cancel()
+		server.Close()
 	})
-	return nil
+
+	return &testEnv{
+		t:      t,
+		mock:   mock,
+		store:  store,
+		server: server,
+		conn:   conn,
+		ctx:    ctx,
+		cancel: cancel,
+	}
 }
 
-func (s *mockSession) Close() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return
+func (e *testEnv) send(msg ClientMessage) {
+	data, _ := json.Marshal(msg)
+	if err := e.conn.Write(e.ctx, websocket.MessageText, data); err != nil {
+		e.t.Fatalf("failed to send: %v", err)
 	}
-	s.closed = true
-	close(s.messageQueue)
 }
 
-// mockAgent implements agent.Agent for testing.
-type mockAgent struct {
-	events    []agent.AgentEvent // events to send for each message
-	startErr  error              // error to return from Start
-	sessionID string             // session ID to return
-
-	mu                sync.Mutex
-	messages          []string                // record of all messages sent
-	messagesBySession map[string][]string     // messages grouped by sessionID
-	sessions          map[string]*mockSession // track created sessions
+func (e *testEnv) sendMessage(sessionID, content string) {
+	e.send(ClientMessage{Type: "message", SessionID: sessionID, Content: content})
 }
 
-func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string, isNew bool) (agent.Session, error) {
-	if m.startErr != nil {
-		return nil, m.startErr
+func (e *testEnv) read() ServerMessage {
+	_, data, err := e.conn.Read(e.ctx)
+	if err != nil {
+		e.t.Fatalf("failed to read: %v", err)
 	}
-
-	eventsChan := make(chan agent.AgentEvent, 100)
-	messageQueue := make(chan string, 10)
-	pendingRequests := &sync.Map{}
-
-	effectiveSessionID := sessionID
-	if effectiveSessionID == "" {
-		effectiveSessionID = m.sessionID
+	var msg ServerMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		e.t.Fatalf("failed to unmarshal: %v", err)
 	}
-	if effectiveSessionID == "" {
-		effectiveSessionID = "mock-session-default"
+	return msg
+}
+
+func (e *testEnv) readN(n int) []ServerMessage {
+	msgs := make([]ServerMessage, n)
+	for i := 0; i < n; i++ {
+		msgs[i] = e.read()
 	}
+	return msgs
+}
 
-	sess := &mockSession{
-		events:          eventsChan,
-		messageQueue:    messageQueue,
-		pendingRequests: pendingRequests,
-		ctx:             ctx,
-		interruptCh:     make(chan struct{}),
-	}
-
-	m.mu.Lock()
-	if m.sessions == nil {
-		m.sessions = make(map[string]*mockSession)
-	}
-	m.sessions[effectiveSessionID] = sess
-	m.mu.Unlock()
-
-	go func() {
-		defer close(eventsChan)
-
-		for {
-			select {
-			case prompt, ok := <-messageQueue:
-				if !ok {
-					return
-				}
-
-				m.mu.Lock()
-				m.messages = append(m.messages, prompt)
-				if m.messagesBySession == nil {
-					m.messagesBySession = make(map[string][]string)
-				}
-				m.messagesBySession[effectiveSessionID] = append(m.messagesBySession[effectiveSessionID], prompt)
-				m.mu.Unlock()
-
-				for _, event := range m.events {
-					if event.Type == agent.EventTypePermissionRequest {
-						pendingRequests.Store(event.RequestID, true)
-					}
-					select {
-					case eventsChan <- event:
-					case <-ctx.Done():
-						return
-					}
-				}
-
-				hasDone := false
-				for _, e := range m.events {
-					if e.Type == agent.EventTypeDone {
-						hasDone = true
-						break
-					}
-				}
-				if !hasDone {
-					select {
-					case eventsChan <- agent.AgentEvent{Type: agent.EventTypeDone}:
-					case <-ctx.Done():
-						return
-					}
-				}
-
-			case <-ctx.Done():
-				return
-			}
+func (e *testEnv) skipN(n int) {
+	for i := 0; i < n; i++ {
+		if _, _, err := e.conn.Read(e.ctx); err != nil {
+			e.t.Fatalf("failed to skip response %d: %v", i, err)
 		}
-	}()
-
-	return sess, nil
-}
-
-func (m *mockAgent) getMessages() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	result := make([]string, len(m.messages))
-	copy(result, m.messages)
-	return result
-}
-
-func (m *mockAgent) getMessagesBySession(sessionID string) []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	msgs := m.messagesBySession[sessionID]
-	result := make([]string, len(msgs))
-	copy(result, msgs)
-	return result
-}
-
-func (m *mockAgent) getSession(sessionID string) *mockSession {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.sessions[sessionID]
+	}
 }
 
 func TestHandler_MissingToken(t *testing.T) {
-	h := NewHandler("secret-token", &mockAgent{}, "/tmp", true)
+	store, _ := session.NewFileStore(t.TempDir())
+	h := NewHandler("secret-token", &mockAgent{}, "/tmp", true, store)
 
-	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
 	rec := httptest.NewRecorder()
-
-	h.ServeHTTP(rec, req)
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ws", nil))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
-
 	if !strings.Contains(rec.Body.String(), "Missing token") {
 		t.Errorf("expected 'Missing token' in body, got %q", rec.Body.String())
 	}
 }
 
 func TestHandler_InvalidToken(t *testing.T) {
-	h := NewHandler("secret-token", &mockAgent{}, "/tmp", true)
+	store, _ := session.NewFileStore(t.TempDir())
+	h := NewHandler("secret-token", &mockAgent{}, "/tmp", true, store)
 
-	req := httptest.NewRequest(http.MethodGet, "/ws?token=wrong-token", nil)
 	rec := httptest.NewRecorder()
-
-	h.ServeHTTP(rec, req)
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ws?token=wrong-token", nil))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
-
 	if !strings.Contains(rec.Body.String(), "Invalid token") {
 		t.Errorf("expected 'Invalid token' in body, got %q", rec.Body.String())
 	}
 }
 
 func TestHandler_WebSocketConnection(t *testing.T) {
-	events := []agent.AgentEvent{
-		{Type: agent.EventTypeText, Content: "Hello"},
-		{Type: agent.EventTypeDone},
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			{Type: agent.EventTypeText, Content: "Hello"},
+			{Type: agent.EventTypeDone},
+		},
 	}
-	h := NewHandler("test-token", &mockAgent{events: events}, "/tmp", true)
+	env := newTestEnv(t, mock)
+	env.store.Create("sess")
 
-	server := httptest.NewServer(h)
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	msg := ClientMessage{
-		Type:    "message",
-		Content: "Hello AI",
-	}
-	msgData, _ := json.Marshal(msg)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write: %v", err)
-	}
-
-	var responses []ServerMessage
-	for i := 0; i < 2; i++ {
-		_, data, err := conn.Read(ctx)
-		if err != nil {
-			t.Fatalf("failed to read response %d: %v", i, err)
-		}
-		var resp ServerMessage
-		if err := json.Unmarshal(data, &resp); err != nil {
-			t.Fatalf("failed to unmarshal: %v", err)
-		}
-		responses = append(responses, resp)
-	}
-
-	if len(responses) != 2 {
-		t.Fatalf("expected 2 responses, got %d", len(responses))
-	}
+	env.sendMessage("sess", "Hello AI")
+	responses := env.readN(2)
 
 	if responses[0].Type != "text" || responses[0].Content != "Hello" {
 		t.Errorf("unexpected first response: %+v", responses[0])
 	}
-
 	if responses[1].Type != "done" {
 		t.Errorf("unexpected second response: %+v", responses[1])
 	}
@@ -277,65 +153,24 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 
 func TestHandler_MultipleMessages(t *testing.T) {
 	mock := &mockAgent{
-		sessionID: "session-abc-123",
 		events: []agent.AgentEvent{
 			{Type: agent.EventTypeText, Content: "Response"},
 			{Type: agent.EventTypeDone},
 		},
 	}
-	h := NewHandler("test-token", mock, "/tmp", true)
+	env := newTestEnv(t, mock)
+	env.store.Create("sess")
 
-	server := httptest.NewServer(h)
-	defer server.Close()
+	env.sendMessage("sess", "First message")
+	env.skipN(2)
+	env.sendMessage("sess", "Second message")
+	env.skipN(2)
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
+	if len(mock.messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(mock.messages))
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	msg1 := ClientMessage{Type: "message", Content: "First message"}
-	msgData, _ := json.Marshal(msg1)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write first message: %v", err)
-	}
-
-	for i := 0; i < 2; i++ {
-		_, _, err := conn.Read(ctx)
-		if err != nil {
-			t.Fatalf("failed to read response %d: %v", i, err)
-		}
-	}
-
-	msg2 := ClientMessage{Type: "message", Content: "Second message"}
-	msgData, _ = json.Marshal(msg2)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write second message: %v", err)
-	}
-
-	for i := 0; i < 2; i++ {
-		_, _, err := conn.Read(ctx)
-		if err != nil {
-			t.Fatalf("failed to read response %d: %v", i, err)
-		}
-	}
-
-	messages := mock.getMessages()
-	if len(messages) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(messages))
-	}
-
-	if messages[0] != "First message" {
-		t.Errorf("expected first message 'First message', got %q", messages[0])
-	}
-
-	if messages[1] != "Second message" {
-		t.Errorf("expected second message 'Second message', got %q", messages[1])
+	if mock.messages[0] != "First message" || mock.messages[1] != "Second message" {
+		t.Errorf("unexpected messages: %v", mock.messages)
 	}
 }
 
@@ -346,296 +181,131 @@ func TestHandler_MultipleSessions(t *testing.T) {
 			{Type: agent.EventTypeDone},
 		},
 	}
-	h := NewHandler("test-token", mock, "/tmp", true)
+	env := newTestEnv(t, mock)
+	env.store.Create("session-A")
+	env.store.Create("session-B")
 
-	server := httptest.NewServer(h)
-	defer server.Close()
+	env.sendMessage("session-A", "Hello from A")
+	env.skipN(2)
+	env.sendMessage("session-B", "Hello from B")
+	env.skipN(2)
+	env.sendMessage("session-A", "Second from A")
+	env.skipN(2)
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
+	if len(mock.messagesBySession["session-A"]) != 2 {
+		t.Errorf("expected 2 messages for session A, got %d", len(mock.messagesBySession["session-A"]))
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	msgA := ClientMessage{Type: "message", SessionID: "session-A", Content: "Hello from A"}
-	msgData, _ := json.Marshal(msgA)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write message A: %v", err)
-	}
-
-	for i := 0; i < 2; i++ {
-		_, _, err := conn.Read(ctx)
-		if err != nil {
-			t.Fatalf("failed to read response A-%d: %v", i, err)
-		}
-	}
-
-	msgB := ClientMessage{Type: "message", SessionID: "session-B", Content: "Hello from B"}
-	msgData, _ = json.Marshal(msgB)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write message B: %v", err)
-	}
-
-	for i := 0; i < 2; i++ {
-		_, _, err := conn.Read(ctx)
-		if err != nil {
-			t.Fatalf("failed to read response B-%d: %v", i, err)
-		}
-	}
-
-	msgA2 := ClientMessage{Type: "message", SessionID: "session-A", Content: "Second from A"}
-	msgData, _ = json.Marshal(msgA2)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write message A2: %v", err)
-	}
-
-	for i := 0; i < 2; i++ {
-		_, _, err := conn.Read(ctx)
-		if err != nil {
-			t.Fatalf("failed to read response A2-%d: %v", i, err)
-		}
-	}
-
-	messagesA := mock.getMessagesBySession("session-A")
-	if len(messagesA) != 2 {
-		t.Fatalf("expected 2 messages for session A, got %d", len(messagesA))
-	}
-	if messagesA[0] != "Hello from A" {
-		t.Errorf("expected first message 'Hello from A', got %q", messagesA[0])
-	}
-	if messagesA[1] != "Second from A" {
-		t.Errorf("expected second message 'Second from A', got %q", messagesA[1])
-	}
-
-	messagesB := mock.getMessagesBySession("session-B")
-	if len(messagesB) != 1 {
-		t.Fatalf("expected 1 message for session B, got %d", len(messagesB))
-	}
-	if messagesB[0] != "Hello from B" {
-		t.Errorf("expected message 'Hello from B', got %q", messagesB[0])
+	if len(mock.messagesBySession["session-B"]) != 1 {
+		t.Errorf("expected 1 message for session B, got %d", len(mock.messagesBySession["session-B"]))
 	}
 }
 
 func TestHandler_PermissionRequest(t *testing.T) {
-	events := []agent.AgentEvent{
-		{
-			Type:      agent.EventTypePermissionRequest,
-			RequestID: "req-123",
-			ToolName:  "Bash",
-			ToolInput: []byte(`{"command":"ruby --version"}`),
-			ToolUseID: "toolu_abc",
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			{
+				Type:      agent.EventTypePermissionRequest,
+				RequestID: "req-123",
+				ToolName:  "Bash",
+				ToolInput: []byte(`{"command":"ls"}`),
+			},
+			{Type: agent.EventTypeDone},
 		},
-		{Type: agent.EventTypeDone},
 	}
-	h := NewHandler("test-token", &mockAgent{events: events}, "/tmp", true)
+	env := newTestEnv(t, mock)
+	env.store.Create("sess")
 
-	server := httptest.NewServer(h)
-	defer server.Close()
+	env.sendMessage("sess", "run ls")
+	resp := env.read()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
+	if resp.Type != "permission_request" {
+		t.Errorf("expected permission_request, got %s", resp.Type)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	msg := ClientMessage{
-		Type:    "message",
-		Content: "run ruby --version",
+	if resp.RequestID != "req-123" {
+		t.Errorf("expected request_id 'req-123', got %q", resp.RequestID)
 	}
-	msgData, _ := json.Marshal(msg)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write: %v", err)
-	}
-
-	var responses []ServerMessage
-	for i := 0; i < 2; i++ {
-		_, data, err := conn.Read(ctx)
-		if err != nil {
-			t.Fatalf("failed to read: %v", err)
-		}
-		var resp ServerMessage
-		if err := json.Unmarshal(data, &resp); err != nil {
-			t.Fatalf("failed to unmarshal: %v", err)
-		}
-		responses = append(responses, resp)
-	}
-
-	if responses[0].Type != "permission_request" {
-		t.Errorf("expected first response to be permission_request, got %+v", responses[0])
-	}
-
-	if responses[0].RequestID != "req-123" {
-		t.Errorf("expected request_id 'req-123', got %q", responses[0].RequestID)
-	}
-
-	if responses[0].ToolName != "Bash" {
-		t.Errorf("expected tool_name 'Bash', got %q", responses[0].ToolName)
+	if resp.ToolName != "Bash" {
+		t.Errorf("expected tool_name 'Bash', got %q", resp.ToolName)
 	}
 }
 
-func TestHandler_PermissionResponseInvalidSessionID(t *testing.T) {
-	h := NewHandler("test-token", &mockAgent{}, "/tmp", true)
+func TestHandler_PermissionResponse_InvalidSession(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
 
-	server := httptest.NewServer(h)
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	msg := ClientMessage{
+	env.send(ClientMessage{
 		Type:      "permission_response",
-		SessionID: "non-existent-session",
+		SessionID: "non-existent",
 		RequestID: "req-123",
 		Allow:     true,
-	}
-	msgData, _ := json.Marshal(msg)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write: %v", err)
-	}
+	})
+	resp := env.read()
 
-	_, data, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("failed to read: %v", err)
-	}
-
-	var resp ServerMessage
-	if err := json.Unmarshal(data, &resp); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-
-	if resp.Type != "error" {
-		t.Errorf("expected error response, got %+v", resp)
-	}
-
-	if !strings.Contains(resp.Error, "session not found") {
-		t.Errorf("expected error message about session not found, got %q", resp.Error)
+	if resp.Type != "error" || !strings.Contains(resp.Error, "session not found") {
+		t.Errorf("expected session not found error, got %+v", resp)
 	}
 }
 
-func TestHandler_PermissionResponseInvalidRequestID(t *testing.T) {
-	events := []agent.AgentEvent{
-		{Type: agent.EventTypeText, Content: "Hello"},
-		{Type: agent.EventTypeDone},
+func TestHandler_PermissionResponse_InvalidRequestID(t *testing.T) {
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			{Type: agent.EventTypeText, Content: "Hello"},
+			{Type: agent.EventTypeDone},
+		},
 	}
-	h := NewHandler("test-token", &mockAgent{events: events}, "/tmp", true)
+	env := newTestEnv(t, mock)
+	env.store.Create("sess")
 
-	server := httptest.NewServer(h)
-	defer server.Close()
+	env.sendMessage("sess", "hello")
+	env.skipN(2)
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	msg := ClientMessage{Type: "message", SessionID: "valid-session", Content: "hello"}
-	msgData, _ := json.Marshal(msg)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write: %v", err)
-	}
-
-	for i := 0; i < 2; i++ {
-		_, _, err := conn.Read(ctx)
-		if err != nil {
-			t.Fatalf("failed to read response %d: %v", i, err)
-		}
-	}
-
-	permResp := ClientMessage{
+	env.send(ClientMessage{
 		Type:      "permission_response",
-		SessionID: "valid-session",
-		RequestID: "non-existent-request-id",
+		SessionID: "sess",
+		RequestID: "non-existent-request",
 		Allow:     true,
-	}
-	msgData, _ = json.Marshal(permResp)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write: %v", err)
-	}
+	})
+	resp := env.read()
 
-	_, data, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("failed to read: %v", err)
+	if resp.Type != "error" || !strings.Contains(resp.Error, "no pending request") {
+		t.Errorf("expected no pending request error, got %+v", resp)
 	}
+}
 
-	var resp ServerMessage
-	if err := json.Unmarshal(data, &resp); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
+func TestHandler_PermissionResponse_Duplicate(t *testing.T) {
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			{Type: agent.EventTypePermissionRequest, RequestID: "req-dup"},
+			{Type: agent.EventTypeDone},
+		},
 	}
+	env := newTestEnv(t, mock)
+	env.store.Create("sess")
 
-	if resp.Type != "error" {
-		t.Errorf("expected error response, got %+v", resp)
-	}
+	env.sendMessage("sess", "test")
+	env.skipN(2)
 
-	if !strings.Contains(resp.Error, "no pending request") {
-		t.Errorf("expected error about no pending request, got %q", resp.Error)
+	permResp := ClientMessage{Type: "permission_response", SessionID: "sess", RequestID: "req-dup", Allow: true}
+	env.send(permResp)
+	env.send(permResp)
+	resp := env.read()
+
+	if resp.Type != "error" || !strings.Contains(resp.Error, "no pending request") {
+		t.Errorf("expected no pending request error for duplicate, got %+v", resp)
 	}
 }
 
 func TestHandler_AgentStartError(t *testing.T) {
 	mock := &mockAgent{
-		startErr: fmt.Errorf("failed to start claude CLI"),
+		startErr: fmt.Errorf("failed to start agent"),
 	}
-	h := NewHandler("test-token", mock, "/tmp", true)
+	env := newTestEnv(t, mock)
+	env.store.Create("sess")
 
-	server := httptest.NewServer(h)
-	defer server.Close()
+	env.sendMessage("sess", "hello")
+	resp := env.read()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	msg := ClientMessage{Type: "message", Content: "hello"}
-	msgData, _ := json.Marshal(msg)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write: %v", err)
-	}
-
-	_, data, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("failed to read: %v", err)
-	}
-
-	var resp ServerMessage
-	if err := json.Unmarshal(data, &resp); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-
-	if resp.Type != "error" {
-		t.Errorf("expected error response, got %+v", resp)
-	}
-
-	if !strings.Contains(resp.Error, "failed to start claude CLI") {
-		t.Errorf("expected error about failed to start, got %q", resp.Error)
+	if resp.Type != "error" || !strings.Contains(resp.Error, "failed to start agent") {
+		t.Errorf("expected agent start error, got %+v", resp)
 	}
 }
 
@@ -646,179 +316,75 @@ func TestHandler_Interrupt(t *testing.T) {
 			{Type: agent.EventTypeDone},
 		},
 	}
-	h := NewHandler("test-token", mock, "/tmp", true)
+	env := newTestEnv(t, mock)
+	env.store.Create("sess")
 
-	server := httptest.NewServer(h)
-	defer server.Close()
+	env.sendMessage("sess", "hello")
+	env.skipN(2)
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	// Create a session first
-	msg := ClientMessage{Type: "message", SessionID: "interrupt-test-session", Content: "hello"}
-	msgData, _ := json.Marshal(msg)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write: %v", err)
-	}
-
-	// Read responses (text, done)
-	for i := 0; i < 2; i++ {
-		_, _, err := conn.Read(ctx)
-		if err != nil {
-			t.Fatalf("failed to read response %d: %v", i, err)
-		}
-	}
-
-	// Verify session exists before interrupt
-	sess := mock.getSession("interrupt-test-session")
+	sess := mock.sessions["sess"]
 	if sess == nil {
-		t.Fatal("session should exist before interrupt")
+		t.Fatal("session should exist")
 	}
 
-	// Interrupt the session (soft stop, session remains active)
-	interruptMsg := ClientMessage{Type: "interrupt", SessionID: "interrupt-test-session"}
-	msgData, _ = json.Marshal(interruptMsg)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write interrupt: %v", err)
-	}
+	env.send(ClientMessage{Type: "interrupt", SessionID: "sess"})
 
-	// Wait for SendInterrupt to be called
 	select {
 	case <-sess.interruptCh:
-		// Success: SendInterrupt was called
-	case <-ctx.Done():
-		t.Fatal("timeout waiting for SendInterrupt")
+	case <-env.ctx.Done():
+		t.Fatal("timeout waiting for interrupt")
 	}
 }
 
-func TestHandler_InterruptInvalidSession(t *testing.T) {
-	h := NewHandler("test-token", &mockAgent{}, "/tmp", true)
+func TestHandler_Interrupt_InvalidSession(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
 
-	server := httptest.NewServer(h)
-	defer server.Close()
+	env.send(ClientMessage{Type: "interrupt", SessionID: "non-existent"})
+	resp := env.read()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	// Try to interrupt non-existent session
-	interruptMsg := ClientMessage{Type: "interrupt", SessionID: "non-existent"}
-	msgData, _ := json.Marshal(interruptMsg)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write: %v", err)
-	}
-
-	_, data, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("failed to read: %v", err)
-	}
-
-	var resp ServerMessage
-	if err := json.Unmarshal(data, &resp); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-
-	if resp.Type != "error" {
-		t.Errorf("expected error response, got %+v", resp)
-	}
-
-	if !strings.Contains(resp.Error, "session not found") {
-		t.Errorf("expected error about session not found, got %q", resp.Error)
+	if resp.Type != "error" || !strings.Contains(resp.Error, "session not found") {
+		t.Errorf("expected session not found error, got %+v", resp)
 	}
 }
 
-func TestHandler_PermissionResponseDuplicate(t *testing.T) {
-	events := []agent.AgentEvent{
-		{
-			Type:      agent.EventTypePermissionRequest,
-			RequestID: "req-dup-test",
-			ToolName:  "Bash",
-			ToolInput: []byte(`{"command":"ls"}`),
-			ToolUseID: "toolu_dup",
+func TestHandler_NewSession_ResumeFalse(t *testing.T) {
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			{Type: agent.EventTypeText, Content: "Response"},
+			{Type: agent.EventTypeDone},
 		},
-		{Type: agent.EventTypeDone},
 	}
-	h := NewHandler("test-token", &mockAgent{events: events}, "/tmp", true)
+	env := newTestEnv(t, mock)
+	env.store.Create("new-session")
 
-	server := httptest.NewServer(h)
-	defer server.Close()
+	env.sendMessage("new-session", "hello")
+	env.skipN(2)
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=test-token"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	msg := ClientMessage{Type: "message", SessionID: "test-session", Content: "test"}
-	msgData, _ := json.Marshal(msg)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write: %v", err)
+	if len(mock.startCalls) != 1 || mock.startCalls[0].resume {
+		t.Errorf("expected resume=false, got %+v", mock.startCalls)
 	}
 
-	for i := 0; i < 2; i++ {
-		_, _, err := conn.Read(ctx)
-		if err != nil {
-			t.Fatalf("failed to read response %d: %v", i, err)
-		}
+	sess, _, _ := env.store.Get("new-session")
+	if !sess.Activated {
+		t.Error("expected session to be activated")
 	}
+}
 
-	permResp1 := ClientMessage{
-		Type:      "permission_response",
-		SessionID: "test-session",
-		RequestID: "req-dup-test",
-		Allow:     true,
+func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			{Type: agent.EventTypeText, Content: "Response"},
+			{Type: agent.EventTypeDone},
+		},
 	}
-	msgData, _ = json.Marshal(permResp1)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write first permission response: %v", err)
-	}
+	env := newTestEnv(t, mock)
+	env.store.Create("activated-session")
+	env.store.Activate("activated-session")
 
-	permResp2 := ClientMessage{
-		Type:      "permission_response",
-		SessionID: "test-session",
-		RequestID: "req-dup-test",
-		Allow:     true,
-	}
-	msgData, _ = json.Marshal(permResp2)
-	if err := conn.Write(ctx, websocket.MessageText, msgData); err != nil {
-		t.Fatalf("failed to write duplicate permission response: %v", err)
-	}
+	env.sendMessage("activated-session", "hello")
+	env.skipN(2)
 
-	_, data, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("failed to read error response: %v", err)
-	}
-
-	var resp ServerMessage
-	if err := json.Unmarshal(data, &resp); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-
-	if resp.Type != "error" {
-		t.Errorf("expected error response for duplicate, got %+v", resp)
-	}
-
-	if !strings.Contains(resp.Error, "no pending request") {
-		t.Errorf("expected error about no pending request, got %q", resp.Error)
+	if len(mock.startCalls) != 1 || !mock.startCalls[0].resume {
+		t.Errorf("expected resume=true, got %+v", mock.startCalls)
 	}
 }

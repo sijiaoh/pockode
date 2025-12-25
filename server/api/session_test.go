@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,45 +8,15 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/pockode/server/agent"
 	"github.com/pockode/server/session"
 )
-
-// mockAgent implements agent.Agent for testing.
-type mockAgent struct {
-	lastSession *mockSession
-}
-
-func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string, isNew bool) (agent.Session, error) {
-	m.lastSession = &mockSession{}
-	return m.lastSession, nil
-}
-
-type mockSession struct {
-	closed bool
-}
-
-func (m *mockSession) Events() <-chan agent.AgentEvent {
-	ch := make(chan agent.AgentEvent, 1)
-	ch <- agent.AgentEvent{Type: agent.EventTypeDone}
-	close(ch)
-	return ch
-}
-
-func (m *mockSession) SendMessage(prompt string) error { return nil }
-
-func (m *mockSession) SendPermissionResponse(requestID string, allow bool) error { return nil }
-
-func (m *mockSession) SendInterrupt() error { return nil }
-
-func (m *mockSession) Close() { m.closed = true }
 
 func TestSessionHandler_List(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	store.Create("session-1")
 	store.Create("session-2")
 
-	handler := NewSessionHandler(store, nil, "")
+	handler := NewSessionHandler(store)
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
 	rec := httptest.NewRecorder()
 
@@ -70,8 +39,7 @@ func TestSessionHandler_List(t *testing.T) {
 
 func TestSessionHandler_Create(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
-	mockAg := &mockAgent{}
-	handler := NewSessionHandler(store, mockAg, "/tmp")
+	handler := NewSessionHandler(store)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions", nil)
 	rec := httptest.NewRecorder()
@@ -94,6 +62,10 @@ func TestSessionHandler_Create(t *testing.T) {
 	if sess.Title != "New Chat" {
 		t.Errorf("expected title 'New Chat', got %q", sess.Title)
 	}
+	// Verify session is not activated yet
+	if sess.Activated {
+		t.Error("expected session to not be activated")
+	}
 
 	// Verify session is persisted in store
 	sessions, _ := store.List()
@@ -103,18 +75,13 @@ func TestSessionHandler_Create(t *testing.T) {
 	if sessions[0].ID != sess.ID {
 		t.Errorf("expected stored session ID to match response, got %q vs %q", sessions[0].ID, sess.ID)
 	}
-
-	// Verify agent session was closed
-	if !mockAg.lastSession.closed {
-		t.Error("expected agent session to be closed")
-	}
 }
 
 func TestSessionHandler_Delete(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	sess, _ := store.Create("session-to-delete")
 
-	handler := NewSessionHandler(store, nil, "")
+	handler := NewSessionHandler(store)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -138,7 +105,7 @@ func TestSessionHandler_Update(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	sess, _ := store.Create("session-to-update")
 
-	handler := NewSessionHandler(store, nil, "")
+	handler := NewSessionHandler(store)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 
@@ -163,7 +130,7 @@ func TestSessionHandler_Update_EmptyTitle(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	sess, _ := store.Create("session-for-empty-title")
 
-	handler := NewSessionHandler(store, nil, "")
+	handler := NewSessionHandler(store)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 

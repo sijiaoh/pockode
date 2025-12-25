@@ -8,4 +8,5 @@ type SessionMeta struct {
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	Activated bool      `json:"activated"` // true after first message sent
 }

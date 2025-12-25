@@ -5,21 +5,18 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
-	"github.com/pockode/server/agent"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
 
 // SessionHandler handles session-related REST endpoints.
 type SessionHandler struct {
-	store   session.Store
-	agent   agent.Agent
-	workDir string
+	store session.Store
 }
 
 // NewSessionHandler creates a new session handler.
-func NewSessionHandler(store session.Store, ag agent.Agent, workDir string) *SessionHandler {
-	return &SessionHandler{store: store, agent: ag, workDir: workDir}
+func NewSessionHandler(store session.Store) *SessionHandler {
+	return &SessionHandler{store: store}
 }
 
 // HandleList handles GET /api/sessions
@@ -42,16 +39,7 @@ func (h *SessionHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	// Generate UUIDv7 for session ID
 	sessionID := uuid.Must(uuid.NewV7()).String()
 
-	// Start Claude CLI with --session-id to register the session, then close immediately
-	agentSess, err := h.agent.Start(r.Context(), h.workDir, sessionID, true)
-	if err != nil {
-		logger.Error("Failed to start agent: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-	agentSess.Close()
-
-	// Save to store
+	// Save to store (agent session is created lazily on first message)
 	sess, err := h.store.Create(sessionID)
 	if err != nil {
 		logger.Error("Failed to create session: %v", err)
