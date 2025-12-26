@@ -39,16 +39,45 @@ const mockSession = (id: string, title = "Test Session"): SessionMeta => ({
 	updated_at: "2024-01-01T00:00:00Z",
 });
 
+// Mock window.location and window.history
+const mockPushState = vi.fn();
+const originalLocation = window.location;
+const originalHistory = window.history;
+
+function setUrlPath(path: string) {
+	Object.defineProperty(window, "location", {
+		value: { ...originalLocation, pathname: path },
+		writable: true,
+	});
+}
+
 describe("useSession", () => {
 	let queryClient: QueryClient;
 
 	beforeEach(() => {
 		queryClient = createTestQueryClient();
 		vi.clearAllMocks();
+		// Reset URL to root
+		setUrlPath("/");
+		// Mock pushState
+		Object.defineProperty(window, "history", {
+			value: { ...originalHistory, pushState: mockPushState },
+			writable: true,
+		});
+		mockPushState.mockClear();
 	});
 
 	afterEach(() => {
 		queryClient.clear();
+		// Restore originals
+		Object.defineProperty(window, "location", {
+			value: originalLocation,
+			writable: true,
+		});
+		Object.defineProperty(window, "history", {
+			value: originalHistory,
+			writable: true,
+		});
 	});
 
 	describe("initial load", () => {
@@ -254,6 +283,64 @@ describe("useSession", () => {
 			});
 
 			expect(result.current.currentSession?.title).toBe("Second");
+		});
+	});
+
+	describe("URL sync", () => {
+		it("uses session ID from URL if valid", async () => {
+			setUrlPath("/s/2");
+			const sessions = [mockSession("1"), mockSession("2")];
+			vi.mocked(sessionApi.listSessions).mockResolvedValue(sessions);
+
+			const { result } = renderHook(() => useSession(), {
+				wrapper: createWrapper(queryClient),
+			});
+
+			await waitFor(() => {
+				expect(result.current.sessions.length).toBe(2);
+			});
+
+			// Should use session from URL, not first one
+			expect(result.current.currentSessionId).toBe("2");
+		});
+
+		it("falls back to first session if URL session ID is invalid", async () => {
+			setUrlPath("/s/invalid-id");
+			const sessions = [mockSession("1"), mockSession("2")];
+			vi.mocked(sessionApi.listSessions).mockResolvedValue(sessions);
+
+			const { result } = renderHook(() => useSession(), {
+				wrapper: createWrapper(queryClient),
+			});
+
+			await waitFor(() => {
+				expect(result.current.currentSessionId).toBe("1");
+			});
+		});
+
+		it("updates URL when session changes", async () => {
+			const sessions = [mockSession("1"), mockSession("2")];
+			vi.mocked(sessionApi.listSessions).mockResolvedValue(sessions);
+
+			const { result } = renderHook(() => useSession(), {
+				wrapper: createWrapper(queryClient),
+			});
+
+			await waitFor(() => {
+				expect(result.current.currentSessionId).toBe("1");
+			});
+
+			// URL should be updated to /s/1
+			expect(mockPushState).toHaveBeenCalledWith(null, "", "/s/1");
+
+			mockPushState.mockClear();
+
+			act(() => {
+				result.current.selectSession("2");
+			});
+
+			// URL should be updated to /s/2
+			expect(mockPushState).toHaveBeenCalledWith(null, "", "/s/2");
 		});
 	});
 });

@@ -8,13 +8,29 @@ import {
 } from "../lib/sessionApi";
 import type { SessionMeta } from "../types/message";
 
+// Extract session ID from URL path (e.g., /s/abc123 -> abc123)
+function getSessionIdFromUrl(): string | null {
+	const match = window.location.pathname.match(/^\/s\/([^/]+)/);
+	return match ? match[1] : null;
+}
+
+// Update URL to reflect current session
+function updateUrl(sessionId: string | null) {
+	const newPath = sessionId ? `/s/${sessionId}` : "/";
+	if (window.location.pathname !== newPath) {
+		window.history.pushState(null, "", newPath);
+	}
+}
+
 interface UseSessionOptions {
 	enabled?: boolean;
 }
 
 export function useSession({ enabled = true }: UseSessionOptions = {}) {
 	const queryClient = useQueryClient();
-	const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+	const [currentSessionId, setCurrentSessionId] = useState<string | null>(
+		getSessionIdFromUrl,
+	);
 
 	const {
 		data: sessions = [],
@@ -58,7 +74,14 @@ export function useSession({ enabled = true }: UseSessionOptions = {}) {
 
 	// Set initial session when data loads
 	useEffect(() => {
-		if (!isSuccess || currentSessionId || createMutation.isPending) return;
+		if (!isSuccess || createMutation.isPending) return;
+
+		// If we have a session ID from URL, validate it exists
+		if (currentSessionId) {
+			const exists = sessions.some((s) => s.id === currentSessionId);
+			if (exists) return; // Valid session, keep it
+			// Invalid session ID in URL, fall through to select/create
+		}
 
 		if (sessions.length > 0) {
 			setCurrentSessionId(sessions[0].id);
@@ -66,6 +89,26 @@ export function useSession({ enabled = true }: UseSessionOptions = {}) {
 			createMutation.mutate();
 		}
 	}, [isSuccess, sessions, currentSessionId, createMutation]);
+
+	// Sync URL when session changes
+	useEffect(() => {
+		if (currentSessionId) {
+			updateUrl(currentSessionId);
+		}
+	}, [currentSessionId]);
+
+	// Handle browser back/forward
+	useEffect(() => {
+		const handlePopState = () => {
+			const urlSessionId = getSessionIdFromUrl();
+			if (urlSessionId !== currentSessionId) {
+				setCurrentSessionId(urlSessionId);
+			}
+		};
+
+		window.addEventListener("popstate", handlePopState);
+		return () => window.removeEventListener("popstate", handlePopState);
+	}, [currentSessionId]);
 
 	const handleDelete = async (id: string) => {
 		const remaining = sessions.filter((s) => s.id !== id);
