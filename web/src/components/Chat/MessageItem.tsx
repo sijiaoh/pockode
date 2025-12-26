@@ -165,9 +165,8 @@ function MessageItem({ message }: Props) {
 				{renderContent()}
 
 				{/* Status indicator */}
-				{message.status === "sending" && <Spinner className="mt-2" />}
-				{message.status === "streaming" && (
-					<span className="ml-1 inline-block h-4 w-2 animate-pulse bg-gray-400" />
+				{(message.status === "sending" || message.status === "streaming") && (
+					<Spinner className="mt-2" />
 				)}
 				{message.status === "error" && (
 					<p className="mt-2 text-sm text-red-400">{message.error}</p>
