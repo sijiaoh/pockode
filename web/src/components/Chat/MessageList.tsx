@@ -8,7 +8,6 @@ interface Props {
 
 function MessageList({ messages }: Props) {
 	const containerRef = useRef<HTMLDivElement>(null);
-	const endRef = useRef<HTMLDivElement>(null);
 	const userScrolledUp = useRef(false);
 
 	// Detect user scroll: if scrolling away from bottom, mark as scrolled up
@@ -20,18 +19,15 @@ function MessageList({ messages }: Props) {
 		const distanceFromBottom =
 			container.scrollHeight - container.scrollTop - container.clientHeight;
 
-		if (distanceFromBottom > threshold) {
-			userScrolledUp.current = true;
-		} else {
-			userScrolledUp.current = false;
-		}
+		userScrolledUp.current = distanceFromBottom > threshold;
 	};
 
 	// Auto scroll to bottom only if user hasn't scrolled up
 	// biome-ignore lint/correctness/useExhaustiveDependencies: messages triggers scroll on any update
 	useEffect(() => {
-		if (!userScrolledUp.current) {
-			endRef.current?.scrollIntoView({ behavior: "smooth" });
+		const container = containerRef.current;
+		if (!userScrolledUp.current && container) {
+			container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
 		}
 	}, [messages]);
 
@@ -49,7 +45,6 @@ function MessageList({ messages }: Props) {
 			{messages.map((message) => (
 				<MessageItem key={message.id} message={message} />
 			))}
-			<div ref={endRef} />
 		</div>
 	);
 }
