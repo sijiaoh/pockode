@@ -15,7 +15,8 @@ export type MessageStatus =
 	| "streaming"
 	| "complete"
 	| "error"
-	| "interrupted";
+	| "interrupted"
+	| "process_ended";
 
 // Tool call
 export interface ToolCall {
@@ -81,6 +82,7 @@ export type WSServerMessage =
 	| { type: "error"; error: string }
 	| { type: "done" }
 	| { type: "interrupted" }
+	| { type: "process_ended" }
 	| {
 			type: "permission_request";
 			request_id: string;

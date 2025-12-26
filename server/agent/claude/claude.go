@@ -98,6 +98,12 @@ func (a *Agent) Start(ctx context.Context, workDir string, sessionID string, res
 		stderrCh := readStderr(stderr)
 		streamOutput(procCtx, stdout, events, pendingRequests)
 		waitForProcess(procCtx, cmd, stderrCh, events)
+
+		// Notify client that process has ended (abnormal: process should stay alive)
+		select {
+		case events <- agent.AgentEvent{Type: agent.EventTypeProcessEnded}:
+		case <-procCtx.Done():
+		}
 	}()
 
 	return sess, nil

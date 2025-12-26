@@ -14,6 +14,7 @@ const (
 	EventTypeInterrupted       EventType = "interrupted"
 	EventTypePermissionRequest EventType = "permission_request"
 	EventTypeSystem            EventType = "system"
+	EventTypeProcessEnded      EventType = "process_ended"
 )
 
 // AgentEvent represents a unified event from an AI agent.

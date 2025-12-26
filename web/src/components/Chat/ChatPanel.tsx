@@ -25,6 +25,7 @@ type NormalizedEvent =
 	| { type: "error"; error: string }
 	| { type: "done" }
 	| { type: "interrupted" }
+	| { type: "process_ended" }
 	| { type: "system"; content: string }
 	| { type: "message"; content: string }; // For history replay (user message)
 
@@ -57,6 +58,8 @@ function normalizeEvent(
 			return { type: "done" };
 		case "interrupted":
 			return { type: "interrupted" };
+		case "process_ended":
+			return { type: "process_ended" };
 		case "system":
 			return { type: "system", content: (record.content as string) ?? "" };
 		case "message":
@@ -159,6 +162,8 @@ function applyServerEvent(
 	} else if (event.type === "error") {
 		message.status = "error";
 		message.error = event.error;
+	} else if (event.type === "process_ended") {
+		message.status = "process_ended";
 	}
 
 	updated[index] = message;

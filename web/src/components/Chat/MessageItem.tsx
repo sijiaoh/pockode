@@ -174,6 +174,9 @@ function MessageItem({ message }: Props) {
 				{message.status === "interrupted" && (
 					<p className="mt-2 text-sm text-gray-400">Interrupted</p>
 				)}
+				{message.status === "process_ended" && (
+					<p className="mt-2 text-sm text-yellow-400">Process ended</p>
+				)}
 			</div>
 		</div>
 	);
