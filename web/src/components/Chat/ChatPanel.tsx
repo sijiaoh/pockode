@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { type ConnectionStatus, useWebSocket } from "../../hooks/useWebSocket";
 import { getHistory } from "../../lib/sessionApi";
 import type {
+	ContentPart,
 	Message,
-	MessagePart,
 	PermissionRequest,
 	WSServerMessage,
 } from "../../types/message";
@@ -27,22 +27,23 @@ interface NormalizedEvent {
 function normalizeEvent(
 	e: WSServerMessage | Record<string, unknown>,
 ): NormalizedEvent {
+	const record = e as Record<string, unknown>;
 	return {
-		type: e.type as string,
-		content: e.content as string | undefined,
-		toolUseId: e.tool_use_id as string | undefined,
-		toolName: e.tool_name as string | undefined,
-		toolInput: e.tool_input,
-		toolResult: e.tool_result as string | undefined,
-		error: e.error as string | undefined,
+		type: record.type as string,
+		content: record.content as string | undefined,
+		toolUseId: record.tool_use_id as string | undefined,
+		toolName: record.tool_name as string | undefined,
+		toolInput: record.tool_input,
+		toolResult: record.tool_result as string | undefined,
+		error: record.error as string | undefined,
 	};
 }
 
 // Apply an event to message parts, returning updated parts
 function applyEventToParts(
-	parts: MessagePart[],
+	parts: ContentPart[],
 	event: NormalizedEvent,
-): MessagePart[] {
+): ContentPart[] {
 	switch (event.type) {
 		case "text": {
 			const lastPart = parts[parts.length - 1];

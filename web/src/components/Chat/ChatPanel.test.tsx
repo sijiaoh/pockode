@@ -29,7 +29,7 @@ vi.mock("../../utils/uuid", () => ({
 	generateUUID: () => `uuid-${++mockState.uuidCounter}`,
 }));
 
-const mockGetHistory = vi.fn(() => Promise.resolve([]));
+const mockGetHistory = vi.fn((): Promise<unknown[]> => Promise.resolve([]));
 vi.mock("../../lib/sessionApi", () => ({
 	getHistory: () => mockGetHistory(),
 }));
