@@ -17,6 +17,10 @@ const (
 	EventTypeProcessEnded      EventType = "process_ended"
 )
 
+// PermissionUpdate is passed through from Claude CLI without interpretation.
+// We only need to check if the slice is non-empty (for "Always Allow" button visibility).
+type PermissionUpdate = json.RawMessage
+
 // AgentEvent represents a unified event from an AI agent.
 type AgentEvent struct {
 	Type       EventType       `json:"type"`
@@ -27,5 +31,6 @@ type AgentEvent struct {
 	ToolResult string          `json:"tool_result,omitempty"`
 	Error      string          `json:"error,omitempty"`
 	// Permission request fields
-	RequestID string `json:"request_id,omitempty"`
+	RequestID             string             `json:"request_id,omitempty"`
+	PermissionSuggestions []PermissionUpdate `json:"permission_suggestions,omitempty"`
 }

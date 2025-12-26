@@ -17,6 +17,7 @@ describe("PermissionDialog", () => {
 			<PermissionDialog
 				request={mockRequest}
 				onAllow={vi.fn()}
+				onAlwaysAllow={vi.fn()}
 				onDeny={vi.fn()}
 			/>,
 		);
@@ -33,6 +34,7 @@ describe("PermissionDialog", () => {
 			<PermissionDialog
 				request={mockRequest}
 				onAllow={onAllow}
+				onAlwaysAllow={vi.fn()}
 				onDeny={vi.fn()}
 			/>,
 		);
@@ -49,6 +51,7 @@ describe("PermissionDialog", () => {
 			<PermissionDialog
 				request={mockRequest}
 				onAllow={vi.fn()}
+				onAlwaysAllow={vi.fn()}
 				onDeny={onDeny}
 			/>,
 		);
@@ -65,6 +68,7 @@ describe("PermissionDialog", () => {
 			<PermissionDialog
 				request={mockRequest}
 				onAllow={vi.fn()}
+				onAlwaysAllow={vi.fn()}
 				onDeny={onDeny}
 			/>,
 		);

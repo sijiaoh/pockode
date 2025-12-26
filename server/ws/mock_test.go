@@ -35,7 +35,7 @@ func (s *mockSession) SendMessage(prompt string) error {
 	}
 }
 
-func (s *mockSession) SendPermissionResponse(requestID string, allow bool) error {
+func (s *mockSession) SendPermissionResponse(requestID string, choice agent.PermissionChoice) error {
 	_, ok := s.pendingRequests.LoadAndDelete(requestID)
 	if !ok {
 		return fmt.Errorf("no pending request for id: %s", requestID)

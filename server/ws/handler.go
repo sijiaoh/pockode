@@ -217,7 +217,20 @@ func (h *Handler) handlePermissionResponse(ctx context.Context, conn *websocket.
 		return fmt.Errorf("session not found: %s", msg.SessionID)
 	}
 
-	return sess.SendPermissionResponse(msg.RequestID, msg.Allow)
+	choice := parsePermissionChoice(msg.Choice)
+	return sess.SendPermissionResponse(msg.RequestID, choice)
+}
+
+// parsePermissionChoice converts a string choice to PermissionChoice enum.
+func parsePermissionChoice(choice string) agent.PermissionChoice {
+	switch choice {
+	case "allow":
+		return agent.PermissionAllow
+	case "always_allow":
+		return agent.PermissionAlwaysAllow
+	default:
+		return agent.PermissionDeny
+	}
 }
 
 // streamEvents reads events from the agent session and sends them to the client.
@@ -226,15 +239,16 @@ func (h *Handler) streamEvents(ctx context.Context, conn *websocket.Conn, sessio
 		logger.Debug("streamEvents: sessionID=%s, type=%s", sessionID, event.Type)
 
 		serverMsg := ServerMessage{
-			Type:       string(event.Type),
-			SessionID:  sessionID,
-			Content:    event.Content,
-			ToolName:   event.ToolName,
-			ToolInput:  event.ToolInput,
-			ToolUseID:  event.ToolUseID,
-			ToolResult: event.ToolResult,
-			Error:      event.Error,
-			RequestID:  event.RequestID,
+			Type:                  string(event.Type),
+			SessionID:             sessionID,
+			Content:               event.Content,
+			ToolName:              event.ToolName,
+			ToolInput:             event.ToolInput,
+			ToolUseID:             event.ToolUseID,
+			ToolResult:            event.ToolResult,
+			Error:                 event.Error,
+			RequestID:             event.RequestID,
+			PermissionSuggestions: event.PermissionSuggestions,
 		}
 
 		// Persist event to history

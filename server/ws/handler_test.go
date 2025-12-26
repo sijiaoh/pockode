@@ -236,7 +236,7 @@ func TestHandler_PermissionResponse_InvalidSession(t *testing.T) {
 		Type:      "permission_response",
 		SessionID: "non-existent",
 		RequestID: "req-123",
-		Allow:     true,
+		Choice:    "allow",
 	})
 	resp := env.read()
 
@@ -262,7 +262,7 @@ func TestHandler_PermissionResponse_InvalidRequestID(t *testing.T) {
 		Type:      "permission_response",
 		SessionID: "sess",
 		RequestID: "non-existent-request",
-		Allow:     true,
+		Choice:    "allow",
 	})
 	resp := env.read()
 
@@ -284,7 +284,7 @@ func TestHandler_PermissionResponse_Duplicate(t *testing.T) {
 	env.sendMessage("sess", "test")
 	env.skipN(2)
 
-	permResp := ClientMessage{Type: "permission_response", SessionID: "sess", RequestID: "req-dup", Allow: true}
+	permResp := ClientMessage{Type: "permission_response", SessionID: "sess", RequestID: "req-dup", Choice: "allow"}
 	env.send(permResp)
 	env.send(permResp)
 	resp := env.read()

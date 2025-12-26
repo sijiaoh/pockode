@@ -143,13 +143,13 @@ func (s *session) SendMessage(prompt string) error {
 }
 
 // SendPermissionResponse sends a permission response to Claude.
-func (s *session) SendPermissionResponse(requestID string, allow bool) error {
+func (s *session) SendPermissionResponse(requestID string, choice agent.PermissionChoice) error {
 	pending, ok := s.pendingRequests.LoadAndDelete(requestID)
 	if !ok {
 		return fmt.Errorf("no pending request for id: %s", requestID)
 	}
 	req := pending.(*controlRequest)
-	return s.sendControlResponse(req, allow)
+	return s.sendControlResponse(req, choice)
 }
 
 // SendInterrupt sends an interrupt signal to stop the current task.
@@ -187,15 +187,21 @@ func (s *session) Close() {
 	s.cancel()
 }
 
-func (s *session) sendControlResponse(req *controlRequest, allow bool) error {
+func (s *session) sendControlResponse(req *controlRequest, choice agent.PermissionChoice) error {
 	var content controlResponseContent
-	if allow {
+
+	switch choice {
+	case agent.PermissionAllow, agent.PermissionAlwaysAllow:
 		content = controlResponseContent{
 			Behavior:     "allow",
 			ToolUseID:    req.Request.ToolUseID,
 			UpdatedInput: req.Request.Input,
 		}
-	} else {
+		// Include permission suggestions if user chose "always allow"
+		if choice == agent.PermissionAlwaysAllow && len(req.Request.PermissionSuggestions) > 0 {
+			content.UpdatedPermissions = req.Request.PermissionSuggestions
+		}
+	default: // PermissionDeny or unknown
 		content = controlResponseContent{
 			Behavior:  "deny",
 			Message:   "User denied permission",
@@ -316,10 +322,11 @@ type controlRequest struct {
 }
 
 type permissionData struct {
-	Subtype   string          `json:"subtype"`
-	ToolName  string          `json:"tool_name"`
-	Input     json.RawMessage `json:"input"`
-	ToolUseID string          `json:"tool_use_id"`
+	Subtype               string                  `json:"subtype"`
+	ToolName              string                  `json:"tool_name"`
+	Input                 json.RawMessage         `json:"input"`
+	ToolUseID             string                  `json:"tool_use_id"`
+	PermissionSuggestions []agent.PermissionUpdate `json:"permission_suggestions,omitempty"`
 }
 
 type controlResponse struct {
@@ -334,11 +341,12 @@ type controlResponsePayload struct {
 }
 
 type controlResponseContent struct {
-	Behavior     string          `json:"behavior"`
-	Message      string          `json:"message,omitempty"`
-	Interrupt    bool            `json:"interrupt,omitempty"`
-	ToolUseID    string          `json:"toolUseID"`
-	UpdatedInput json.RawMessage `json:"updatedInput,omitempty"`
+	Behavior           string                   `json:"behavior"`
+	Message            string                   `json:"message,omitempty"`
+	Interrupt          bool                     `json:"interrupt,omitempty"`
+	ToolUseID          string                   `json:"toolUseID"`
+	UpdatedInput       json.RawMessage          `json:"updatedInput,omitempty"`
+	UpdatedPermissions []agent.PermissionUpdate `json:"updatedPermissions,omitempty"`
 }
 
 type interruptRequest struct {
@@ -438,11 +446,12 @@ func parseControlRequest(line []byte, pendingRequests *sync.Map) []agent.AgentEv
 	pendingRequests.Store(req.RequestID, &req)
 
 	return []agent.AgentEvent{{
-		Type:      agent.EventTypePermissionRequest,
-		RequestID: req.RequestID,
-		ToolName:  req.Request.ToolName,
-		ToolInput: req.Request.Input,
-		ToolUseID: req.Request.ToolUseID,
+		Type:                  agent.EventTypePermissionRequest,
+		RequestID:             req.RequestID,
+		ToolName:              req.Request.ToolName,
+		ToolInput:             req.Request.Input,
+		ToolUseID:             req.Request.ToolUseID,
+		PermissionSuggestions: req.Request.PermissionSuggestions,
 	}}
 }
 

@@ -272,7 +272,7 @@ func TestSession_SendPermissionResponse_Allow(t *testing.T) {
 		pendingRequests: pendingRequests,
 	}
 
-	err := sess.SendPermissionResponse("req-perm-123", true)
+	err := sess.SendPermissionResponse("req-perm-123", agent.PermissionAllow)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestSession_SendPermissionResponse_Deny(t *testing.T) {
 		pendingRequests: pendingRequests,
 	}
 
-	err := sess.SendPermissionResponse("req-deny-456", false)
+	err := sess.SendPermissionResponse("req-deny-456", agent.PermissionDeny)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -335,12 +335,53 @@ func TestSession_SendPermissionResponse_InvalidRequestID(t *testing.T) {
 		pendingRequests: pendingRequests,
 	}
 
-	err := sess.SendPermissionResponse("non-existent-id", true)
+	err := sess.SendPermissionResponse("non-existent-id", agent.PermissionAllow)
 	if err == nil {
 		t.Fatal("expected error for non-existent request ID")
 	}
 	if err.Error() != "no pending request for id: non-existent-id" {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestSession_SendPermissionResponse_AlwaysAllow(t *testing.T) {
+	var buf bytes.Buffer
+	pendingRequests := &sync.Map{}
+
+	// Store a pending request with permission suggestions
+	suggestions := []agent.PermissionUpdate{
+		json.RawMessage(`{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm install *"}],"behavior":"allow","destination":"localSettings"}`),
+	}
+	req := &controlRequest{
+		RequestID: "req-always-789",
+		Request: &permissionData{
+			ToolUseID:             "toolu_always",
+			Input:                 json.RawMessage(`{"command":"npm install lodash"}`),
+			PermissionSuggestions: suggestions,
+		},
+	}
+	pendingRequests.Store("req-always-789", req)
+
+	sess := &session{
+		stdin:           nopWriteCloser{&buf},
+		pendingRequests: pendingRequests,
+	}
+
+	err := sess.SendPermissionResponse("req-always-789", agent.PermissionAlwaysAllow)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify response was written with updatedPermissions
+	var response controlResponse
+	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if response.Response.Response.Behavior != "allow" {
+		t.Errorf("expected behavior 'allow', got %q", response.Response.Response.Behavior)
+	}
+	if response.Response.Response.UpdatedPermissions == nil {
+		t.Error("expected updatedPermissions to be set")
 	}
 }
 

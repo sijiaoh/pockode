@@ -2,6 +2,15 @@ package agent
 
 import "context"
 
+// PermissionChoice represents the user's decision on a permission request.
+type PermissionChoice int
+
+const (
+	PermissionDeny        PermissionChoice = iota // Deny the request
+	PermissionAllow                               // Allow this one request
+	PermissionAlwaysAllow                         // Allow and persist for future requests
+)
+
 // Agent defines the interface for an AI agent.
 type Agent interface {
 	// Start launches a persistent agent process and returns a Session.
@@ -23,8 +32,8 @@ type Session interface {
 
 	// SendPermissionResponse sends a permission response to the agent.
 	// requestID is the ID from EventTypePermissionRequest.
-	// allow indicates whether the user approved the action.
-	SendPermissionResponse(requestID string, allow bool) error
+	// choice indicates the user's decision (deny, allow once, or always allow).
+	SendPermissionResponse(requestID string, choice PermissionChoice) error
 
 	// SendInterrupt sends an interrupt signal to stop the current task.
 	// This is a soft stop that preserves the session for future messages.

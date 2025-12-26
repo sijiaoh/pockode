@@ -275,6 +275,7 @@ function ChatPanel({
 					toolName: serverMsg.tool_name,
 					toolInput: serverMsg.tool_input,
 					toolUseId: serverMsg.tool_use_id,
+					permissionSuggestions: serverMsg.permission_suggestions,
 				});
 				return;
 			}
@@ -345,14 +346,14 @@ function ChatPanel({
 	);
 
 	const handlePermissionResponse = useCallback(
-		(allow: boolean) => {
+		(choice: "deny" | "allow" | "always_allow") => {
 			if (!permissionRequest) return;
 
 			send({
 				type: "permission_response",
 				session_id: sessionId,
 				request_id: permissionRequest.requestId,
-				allow,
+				choice,
 			});
 
 			setPermissionRequest(null);
@@ -440,8 +441,9 @@ function ChatPanel({
 			{permissionRequest && (
 				<PermissionDialog
 					request={permissionRequest}
-					onAllow={() => handlePermissionResponse(true)}
-					onDeny={() => handlePermissionResponse(false)}
+					onAllow={() => handlePermissionResponse("allow")}
+					onAlwaysAllow={() => handlePermissionResponse("always_allow")}
+					onDeny={() => handlePermissionResponse("deny")}
 				/>
 			)}
 		</div>

@@ -4,10 +4,11 @@ import type { PermissionRequest } from "../../types/message";
 interface Props {
 	request: PermissionRequest;
 	onAllow: () => void;
+	onAlwaysAllow: () => void;
 	onDeny: () => void;
 }
 
-function PermissionDialog({ request, onAllow, onDeny }: Props) {
+function PermissionDialog({ request, onAllow, onAlwaysAllow, onDeny }: Props) {
 	const allowButtonRef = useRef<HTMLButtonElement>(null);
 
 	// Focus trap and keyboard handling
@@ -78,6 +79,16 @@ function PermissionDialog({ request, onAllow, onDeny }: Props) {
 					>
 						Deny
 					</button>
+					{request.permissionSuggestions &&
+						request.permissionSuggestions.length > 0 && (
+							<button
+								type="button"
+								onClick={onAlwaysAllow}
+								className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
+							>
+								Always Allow
+							</button>
+						)}
 					<button
 						ref={allowButtonRef}
 						type="button"

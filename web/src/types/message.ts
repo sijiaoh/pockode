@@ -43,12 +43,17 @@ export interface Message {
 	createdAt: Date;
 }
 
+// Permission update is passed through from Claude CLI without interpretation.
+// We only check if the array is non-empty (for "Always Allow" button visibility).
+export type PermissionUpdate = unknown;
+
 // Permission request
 export interface PermissionRequest {
 	requestId: string;
 	toolName: string;
 	toolInput: unknown;
 	toolUseId: string;
+	permissionSuggestions?: PermissionUpdate[];
 }
 
 // WebSocket client message
@@ -66,7 +71,7 @@ export type WSClientMessage =
 			type: "permission_response";
 			session_id: string;
 			request_id: string;
-			allow: boolean;
+			choice: "deny" | "allow" | "always_allow";
 	  };
 
 // Base interface for all server messages
@@ -98,5 +103,6 @@ export type WSServerMessage =
 			tool_name: string;
 			tool_input: unknown;
 			tool_use_id: string;
+			permission_suggestions?: PermissionUpdate[];
 	  })
 	| (WSServerMessageBase & { type: "system"; content: string });

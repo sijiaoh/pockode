@@ -196,7 +196,7 @@ describe("ChatPanel", () => {
 				type: "permission_response",
 				session_id: "test-session",
 				request_id: "req-1",
-				allow: true,
+				choice: "allow",
 			});
 			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 		});
