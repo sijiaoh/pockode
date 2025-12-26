@@ -322,10 +322,10 @@ type controlRequest struct {
 }
 
 type permissionData struct {
-	Subtype               string                  `json:"subtype"`
-	ToolName              string                  `json:"tool_name"`
-	Input                 json.RawMessage         `json:"input"`
-	ToolUseID             string                  `json:"tool_use_id"`
+	Subtype               string                   `json:"subtype"`
+	ToolName              string                   `json:"tool_name"`
+	Input                 json.RawMessage          `json:"input"`
+	ToolUseID             string                   `json:"tool_use_id"`
 	PermissionSuggestions []agent.PermissionUpdate `json:"permission_suggestions,omitempty"`
 }
 
