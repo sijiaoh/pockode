@@ -27,7 +27,7 @@ function SessionItem({ session, isActive, onSelect, onDelete }: Props) {
 			<button
 				type="button"
 				onClick={onDelete}
-				className={`ml-2 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 ${
+				className={`ml-2 rounded p-1 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 ${
 					isActive ? "hover:bg-blue-700" : "hover:bg-gray-600"
 				}`}
 				aria-label="Delete session"
