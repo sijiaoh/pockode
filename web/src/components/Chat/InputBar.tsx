@@ -1,4 +1,11 @@
-import { type KeyboardEvent, useCallback, useMemo, useState } from "react";
+import {
+	type KeyboardEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 
 interface Props {
 	onSend: (content: string) => void;
@@ -14,6 +21,7 @@ function InputBar({
 	onInterrupt,
 }: Props) {
 	const [input, setInput] = useState("");
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isMac = useMemo(
 		() =>
 			typeof navigator !== "undefined" &&
@@ -21,6 +29,15 @@ function InputBar({
 		[],
 	);
 	const shortcutHint = isMac ? "⌘↵" : "Ctrl↵";
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when input changes to adjust height
+	useEffect(() => {
+		const textarea = textareaRef.current;
+		if (textarea) {
+			textarea.style.height = "auto";
+			textarea.style.height = `${textarea.scrollHeight}px`;
+		}
+	}, [input]);
 
 	const handleSend = useCallback(() => {
 		const trimmed = input.trim();
@@ -44,13 +61,14 @@ function InputBar({
 		<div className="border-t border-gray-700 p-3 sm:p-4">
 			<div className="flex gap-2">
 				<textarea
+					ref={textareaRef}
 					value={input}
 					onChange={(e) => setInput(e.target.value)}
 					onKeyDown={handleKeyDown}
 					placeholder="Type a message..."
 					disabled={disabled}
 					rows={1}
-					className="min-h-[44px] flex-1 resize-none rounded-lg bg-gray-800 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 sm:px-4"
+					className="min-h-[44px] max-h-[40vh] flex-1 resize-none overflow-y-auto rounded-lg bg-gray-800 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 sm:max-h-[200px] sm:px-4"
 				/>
 				{isStreaming ? (
 					<button
