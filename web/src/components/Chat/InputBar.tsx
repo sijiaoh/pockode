@@ -59,7 +59,7 @@ function InputBar({
 
 	return (
 		<div className="border-t border-gray-700 p-3 sm:p-4">
-			<div className="flex gap-2">
+			<div className="flex items-end gap-2">
 				<textarea
 					ref={textareaRef}
 					value={input}
