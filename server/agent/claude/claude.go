@@ -473,13 +473,14 @@ func parseAssistantEvent(event cliEvent) []agent.AgentEvent {
 	var events []agent.AgentEvent
 	var textParts []string
 
+	// TODO: Handle thinking/redacted_thinking blocks and other missing fields.
 	for _, block := range msg.Content {
 		switch block.Type {
 		case "text":
 			if block.Text != "" {
 				textParts = append(textParts, block.Text)
 			}
-		case "tool_use":
+		case "tool_use", "server_tool_use":
 			if len(textParts) > 0 {
 				events = append(events, agent.AgentEvent{
 					Type:    agent.EventTypeText,

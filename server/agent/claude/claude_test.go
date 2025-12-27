@@ -114,6 +114,16 @@ func TestParseLine(t *testing.T) {
 			},
 		},
 		{
+			name:  "assistant server_tool_use (web search)",
+			input: `{"type":"assistant","message":{"content":[{"type":"server_tool_use","id":"srvtoolu_123","name":"web_search","input":{"query":"golang concurrency"}}]}}`,
+			expected: []agent.AgentEvent{{
+				Type:      agent.EventTypeToolCall,
+				ToolUseID: "srvtoolu_123",
+				ToolName:  "web_search",
+				ToolInput: json.RawMessage(`{"query":"golang concurrency"}`),
+			}},
+		},
+		{
 			name:  "user tool_result with string content",
 			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_123","content":"file contents here"}]}}`,
 			expected: []agent.AgentEvent{{
