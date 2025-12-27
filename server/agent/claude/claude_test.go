@@ -360,7 +360,12 @@ func TestSession_SendPermissionResponse_AlwaysAllow(t *testing.T) {
 
 	// Store a pending request with permission suggestions
 	suggestions := []agent.PermissionUpdate{
-		json.RawMessage(`{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm install *"}],"behavior":"allow","destination":"localSettings"}`),
+		{
+			Type:        agent.PermissionUpdateAddRules,
+			Rules:       []agent.PermissionRuleValue{{ToolName: "Bash", RuleContent: "npm install *"}},
+			Behavior:    agent.PermissionBehaviorAllow,
+			Destination: agent.PermissionDestinationLocalSettings,
+		},
 	}
 	req := &controlRequest{
 		RequestID: "req-always-789",

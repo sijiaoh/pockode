@@ -17,20 +17,72 @@ const (
 	EventTypeProcessEnded      EventType = "process_ended"
 )
 
-// PermissionUpdate is passed through from Claude CLI without interpretation.
-// We only need to check if the slice is non-empty (for "Always Allow" button visibility).
-type PermissionUpdate = json.RawMessage
+// PermissionBehavior represents the permission action.
+type PermissionBehavior string
+
+const (
+	PermissionBehaviorAllow PermissionBehavior = "allow"
+	PermissionBehaviorDeny  PermissionBehavior = "deny"
+	PermissionBehaviorAsk   PermissionBehavior = "ask"
+)
+
+// PermissionUpdateDestination represents where the permission update is stored.
+type PermissionUpdateDestination string
+
+const (
+	PermissionDestinationUserSettings    PermissionUpdateDestination = "userSettings"
+	PermissionDestinationProjectSettings PermissionUpdateDestination = "projectSettings"
+	PermissionDestinationLocalSettings   PermissionUpdateDestination = "localSettings"
+	PermissionDestinationSession         PermissionUpdateDestination = "session"
+)
+
+// PermissionUpdateType represents the type of permission update.
+type PermissionUpdateType string
+
+const (
+	PermissionUpdateAddRules          PermissionUpdateType = "addRules"
+	PermissionUpdateReplaceRules      PermissionUpdateType = "replaceRules"
+	PermissionUpdateRemoveRules       PermissionUpdateType = "removeRules"
+	PermissionUpdateSetMode           PermissionUpdateType = "setMode"
+	PermissionUpdateAddDirectories    PermissionUpdateType = "addDirectories"
+	PermissionUpdateRemoveDirectories PermissionUpdateType = "removeDirectories"
+)
+
+// PermissionMode represents the permission mode for setMode updates.
+type PermissionMode string
+
+const (
+	PermissionModeDefault           PermissionMode = "default"
+	PermissionModeAcceptEdits       PermissionMode = "acceptEdits"
+	PermissionModeBypassPermissions PermissionMode = "bypassPermissions"
+	PermissionModePlan              PermissionMode = "plan"
+)
+
+// PermissionRuleValue represents a single permission rule.
+type PermissionRuleValue struct {
+	ToolName    string `json:"toolName"`
+	RuleContent string `json:"ruleContent,omitempty"`
+}
+
+// PermissionUpdate represents a permission update operation.
+type PermissionUpdate struct {
+	Type        PermissionUpdateType        `json:"type"`
+	Behavior    PermissionBehavior          `json:"behavior,omitempty"`
+	Destination PermissionUpdateDestination `json:"destination"`
+	Rules       []PermissionRuleValue       `json:"rules,omitempty"`
+	Mode        PermissionMode              `json:"mode,omitempty"`
+	Directories []string                    `json:"directories,omitempty"`
+}
 
 // AgentEvent represents a unified event from an AI agent.
 type AgentEvent struct {
-	Type       EventType       `json:"type"`
-	Content    string          `json:"content,omitempty"`
-	ToolName   string          `json:"tool_name,omitempty"`
-	ToolInput  json.RawMessage `json:"tool_input,omitempty"`
-	ToolUseID  string          `json:"tool_use_id,omitempty"`
-	ToolResult string          `json:"tool_result,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	// Permission request fields
+	Type                  EventType          `json:"type"`
+	Content               string             `json:"content,omitempty"`
+	ToolName              string             `json:"tool_name,omitempty"`
+	ToolInput             json.RawMessage    `json:"tool_input,omitempty"`
+	ToolUseID             string             `json:"tool_use_id,omitempty"`
+	ToolResult            string             `json:"tool_result,omitempty"`
+	Error                 string             `json:"error,omitempty"`
 	RequestID             string             `json:"request_id,omitempty"`
 	PermissionSuggestions []PermissionUpdate `json:"permission_suggestions,omitempty"`
 }

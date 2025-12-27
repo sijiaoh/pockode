@@ -1,5 +1,10 @@
 import { useEffect, useRef } from "react";
-import type { PermissionRequest } from "../../types/message";
+import type {
+	PermissionRequest,
+	PermissionRuleValue,
+	PermissionUpdate,
+	PermissionUpdateDestination,
+} from "../../types/message";
 
 interface Props {
 	request: PermissionRequest;
@@ -8,12 +13,39 @@ interface Props {
 	onDeny: () => void;
 }
 
+// Format permission rules for display (e.g., "Bash(go build:*)")
+function formatPermissionRule(rule: PermissionRuleValue): string {
+	if (rule.ruleContent) {
+		return `${rule.toolName}(${rule.ruleContent})`;
+	}
+	return rule.toolName;
+}
+
+// Get human-readable destination label
+function getDestinationLabel(destination: PermissionUpdateDestination): string {
+	switch (destination) {
+		case "session":
+			return "this session";
+		case "projectSettings":
+			return "this project";
+		case "localSettings":
+			return "local settings";
+		case "userSettings":
+			return "all projects";
+	}
+}
+
+// Check if the update type has rules
+function hasRules(
+	update: PermissionUpdate,
+): update is PermissionUpdate & { rules: PermissionRuleValue[] } {
+	return "rules" in update;
+}
+
 function PermissionDialog({ request, onAllow, onAlwaysAllow, onDeny }: Props) {
 	const allowButtonRef = useRef<HTMLButtonElement>(null);
 
-	// Focus trap and keyboard handling
 	useEffect(() => {
-		// Focus the Allow button when dialog opens
 		allowButtonRef.current?.focus();
 
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -34,6 +66,9 @@ function PermissionDialog({ request, onAllow, onAlwaysAllow, onDeny }: Props) {
 			return String(input);
 		}
 	};
+
+	const suggestion: PermissionUpdate | undefined =
+		request.permissionSuggestions?.[0];
 
 	return (
 		<div
@@ -71,6 +106,25 @@ function PermissionDialog({ request, onAllow, onAlwaysAllow, onDeny }: Props) {
 					</div>
 				</div>
 
+				{suggestion && hasRules(suggestion) && (
+					<div className="border-t border-gray-700 bg-gray-900/50 px-4 py-3">
+						<p className="mb-1 text-xs text-gray-500">
+							"Always Allow" will add to{" "}
+							{getDestinationLabel(suggestion.destination)}:
+						</p>
+						<div className="flex flex-wrap gap-1.5">
+							{suggestion.rules.map((rule, idx) => (
+								<code
+									key={`${rule.toolName}-${idx}`}
+									className="rounded bg-green-900/30 px-1.5 py-0.5 text-xs text-green-400"
+								>
+									{formatPermissionRule(rule)}
+								</code>
+							))}
+						</div>
+					</div>
+				)}
+
 				<div className="flex justify-end gap-3 border-t border-gray-700 p-4">
 					<button
 						type="button"
@@ -79,16 +133,15 @@ function PermissionDialog({ request, onAllow, onAlwaysAllow, onDeny }: Props) {
 					>
 						Deny
 					</button>
-					{request.permissionSuggestions &&
-						request.permissionSuggestions.length > 0 && (
-							<button
-								type="button"
-								onClick={onAlwaysAllow}
-								className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
-							>
-								Always Allow
-							</button>
-						)}
+					{suggestion && (
+						<button
+							type="button"
+							onClick={onAlwaysAllow}
+							className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
+						>
+							Always Allow
+						</button>
+					)}
 					<button
 						ref={allowButtonRef}
 						type="button"

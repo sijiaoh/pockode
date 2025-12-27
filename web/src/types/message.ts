@@ -43,11 +43,54 @@ export interface Message {
 	createdAt: Date;
 }
 
-// Permission update is passed through from Claude CLI without interpretation.
-// We only check if the array is non-empty (for "Always Allow" button visibility).
-export type PermissionUpdate = unknown;
+export type PermissionBehavior = "allow" | "deny" | "ask";
 
-// Permission request
+export type PermissionUpdateDestination =
+	| "userSettings"
+	| "projectSettings"
+	| "localSettings"
+	| "session";
+
+export interface PermissionRuleValue {
+	toolName: string;
+	ruleContent?: string;
+}
+
+export type PermissionUpdate =
+	| {
+			type: "addRules";
+			rules: PermissionRuleValue[];
+			behavior: PermissionBehavior;
+			destination: PermissionUpdateDestination;
+	  }
+	| {
+			type: "replaceRules";
+			rules: PermissionRuleValue[];
+			behavior: PermissionBehavior;
+			destination: PermissionUpdateDestination;
+	  }
+	| {
+			type: "removeRules";
+			rules: PermissionRuleValue[];
+			behavior: PermissionBehavior;
+			destination: PermissionUpdateDestination;
+	  }
+	| {
+			type: "setMode";
+			mode: "default" | "acceptEdits" | "bypassPermissions" | "plan";
+			destination: PermissionUpdateDestination;
+	  }
+	| {
+			type: "addDirectories";
+			directories: string[];
+			destination: PermissionUpdateDestination;
+	  }
+	| {
+			type: "removeDirectories";
+			directories: string[];
+			destination: PermissionUpdateDestination;
+	  };
+
 export interface PermissionRequest {
 	requestId: string;
 	toolName: string;
