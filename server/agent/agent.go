@@ -35,6 +35,12 @@ type Session interface {
 	// choice indicates the user's decision (deny, allow once, or always allow).
 	SendPermissionResponse(requestID string, choice PermissionChoice) error
 
+	// SendQuestionResponse sends answers to user questions.
+	// requestID is the ID from EventTypeAskUserQuestion.
+	// answers maps question text to selected option label(s).
+	// If answers is nil, the question is cancelled (deny response sent).
+	SendQuestionResponse(requestID string, answers map[string]string) error
+
 	// SendInterrupt sends an interrupt signal to stop the current task.
 	// This is a soft stop that preserves the session for future messages.
 	SendInterrupt() error

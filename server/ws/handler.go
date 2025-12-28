@@ -132,6 +132,12 @@ func (h *Handler) handleConnection(ctx context.Context, conn *websocket.Conn) {
 				h.sendErrorWithLock(ctx, conn, state, err.Error())
 			}
 
+		case "question_response":
+			if err := h.handleQuestionResponse(ctx, conn, msg, state); err != nil {
+				logger.Error("handleConnection: question response error: %v", err)
+				h.sendErrorWithLock(ctx, conn, state, err.Error())
+			}
+
 		default:
 			h.sendErrorWithLock(ctx, conn, state, "Unknown message type")
 		}
@@ -221,6 +227,20 @@ func (h *Handler) handlePermissionResponse(ctx context.Context, conn *websocket.
 	return sess.SendPermissionResponse(msg.RequestID, choice)
 }
 
+// handleQuestionResponse routes a question response to the correct session.
+// If msg.Answers is nil, the question is cancelled.
+func (h *Handler) handleQuestionResponse(ctx context.Context, conn *websocket.Conn, msg ClientMessage, state *connectionState) error {
+	state.mu.Lock()
+	sess, exists := state.sessions[msg.SessionID]
+	state.mu.Unlock()
+
+	if !exists {
+		return fmt.Errorf("session not found: %s", msg.SessionID)
+	}
+
+	return sess.SendQuestionResponse(msg.RequestID, msg.Answers)
+}
+
 // parsePermissionChoice converts a string choice to PermissionChoice enum.
 func parsePermissionChoice(choice string) agent.PermissionChoice {
 	switch choice {
@@ -249,6 +269,7 @@ func (h *Handler) streamEvents(ctx context.Context, conn *websocket.Conn, sessio
 			Error:                 event.Error,
 			RequestID:             event.RequestID,
 			PermissionSuggestions: event.PermissionSuggestions,
+			Questions:             event.Questions,
 		}
 
 		// Persist event to history

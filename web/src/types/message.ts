@@ -99,6 +99,24 @@ export interface PermissionRequest {
 	permissionSuggestions?: PermissionUpdate[];
 }
 
+// AskUserQuestion types
+export interface QuestionOption {
+	label: string;
+	description: string;
+}
+
+export interface AskUserQuestion {
+	question: string;
+	header: string;
+	options: QuestionOption[];
+	multiSelect: boolean;
+}
+
+export interface AskUserQuestionRequest {
+	requestId: string;
+	questions: AskUserQuestion[];
+}
+
 // WebSocket client message
 export type WSClientMessage =
 	| {
@@ -115,6 +133,12 @@ export type WSClientMessage =
 			session_id: string;
 			request_id: string;
 			choice: "deny" | "allow" | "always_allow";
+	  }
+	| {
+			type: "question_response";
+			session_id: string;
+			request_id: string;
+			answers: Record<string, string> | null; // null = cancel
 	  };
 
 // Base interface for all server messages
@@ -147,5 +171,10 @@ export type WSServerMessage =
 			tool_input: unknown;
 			tool_use_id: string;
 			permission_suggestions?: PermissionUpdate[];
+	  })
+	| (WSServerMessageBase & {
+			type: "ask_user_question";
+			request_id: string;
+			questions: AskUserQuestion[];
 	  })
 	| (WSServerMessageBase & { type: "system"; content: string });

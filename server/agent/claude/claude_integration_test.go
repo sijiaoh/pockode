@@ -5,6 +5,7 @@ package claude
 import (
 	"context"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,19 @@ func requireFields(t *testing.T, event agent.AgentEvent) {
 		requireNonEmpty(t, "RequestID", event.RequestID)
 		requireNonEmpty(t, "ToolName", event.ToolName)
 		requireNonEmpty(t, "ToolUseID", event.ToolUseID)
+	case agent.EventTypeAskUserQuestion:
+		requireNonEmpty(t, "RequestID", event.RequestID)
+		if len(event.Questions) == 0 {
+			t.Error("missing required field: Questions")
+		}
+		for i, q := range event.Questions {
+			if q.Question == "" {
+				t.Errorf("Questions[%d]: missing required field: Question", i)
+			}
+			if len(q.Options) == 0 {
+				t.Errorf("Questions[%d]: missing required field: Options", i)
+			}
+		}
 	case agent.EventTypeError:
 		requireNonEmpty(t, "Error", event.Error)
 	}
@@ -370,4 +384,119 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// TestIntegration_AskUserQuestionFlow tests the AskUserQuestion event handling.
+// This test explicitly instructs Claude to use the AskUserQuestion tool and
+// validates the complete question-response flow.
+func TestIntegration_AskUserQuestionFlow(t *testing.T) {
+	a := New()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	session, err := a.Start(ctx, t.TempDir(), "", false)
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer session.Close()
+
+	// Instruct Claude to use the AskUserQuestion tool
+	prompt := `Use the AskUserQuestion tool to ask me what programming language I prefer: Python or Go. Provide exactly two options.`
+
+	if err := session.SendMessage(prompt); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	var questionEvents, doneEvents, errorEvents int
+	var selectedAnswer string
+	var responseText strings.Builder
+
+eventLoop:
+	for {
+		select {
+		case event, ok := <-session.Events():
+			if !ok {
+				break eventLoop
+			}
+			requireFields(t, event)
+			switch event.Type {
+			case agent.EventTypeAskUserQuestion:
+				questionEvents++
+				t.Logf("ask_user_question: request_id=%s, questions=%d", event.RequestID, len(event.Questions))
+
+				// Validate question structure
+				if len(event.Questions) != 1 {
+					t.Errorf("expected 1 question, got %d", len(event.Questions))
+				}
+
+				q := event.Questions[0]
+				t.Logf("  question: %s (options=%d, multiSelect=%v)", q.Question, len(q.Options), q.MultiSelect)
+
+				// Validate options
+				if len(q.Options) != 2 {
+					t.Errorf("expected 2 options, got %d", len(q.Options))
+				}
+
+				// Validate options contain Python and Go
+				optionLabels := make(map[string]bool)
+				for _, opt := range q.Options {
+					optionLabels[opt.Label] = true
+					t.Logf("    option: %s - %s", opt.Label, truncate(opt.Description, 50))
+				}
+				if !optionLabels["Python"] {
+					t.Error("expected option 'Python' not found")
+				}
+				if !optionLabels["Go"] {
+					t.Error("expected option 'Go' not found")
+				}
+
+				// Select first option (Python)
+				selectedAnswer = q.Options[0].Label
+				answers := map[string]string{q.Question: selectedAnswer}
+
+				if err := session.SendQuestionResponse(event.RequestID, answers); err != nil {
+					t.Errorf("failed to send question response: %v", err)
+				}
+
+			case agent.EventTypeText:
+				responseText.WriteString(event.Content)
+				t.Logf("text: %s", truncate(event.Content, 100))
+
+			case agent.EventTypeDone:
+				doneEvents++
+				break eventLoop
+
+			case agent.EventTypeError:
+				errorEvents++
+				t.Errorf("error event: %s", event.Error)
+
+			case agent.EventTypePermissionRequest:
+				t.Errorf("unexpected permission_request for tool: %s", event.ToolName)
+			}
+		case <-ctx.Done():
+			t.Fatal("timeout waiting for events")
+		}
+	}
+
+	t.Logf("summary: question_events=%d, done_events=%d, error_events=%d", questionEvents, doneEvents, errorEvents)
+
+	// Strict validations
+	if questionEvents != 1 {
+		t.Errorf("expected exactly 1 ask_user_question event, got %d (retries indicate response format error)", questionEvents)
+	}
+
+	if doneEvents != 1 {
+		t.Errorf("expected 1 done event, got %d", doneEvents)
+	}
+
+	if errorEvents > 0 {
+		t.Errorf("expected 0 error events, got %d", errorEvents)
+	}
+
+	// Validate Claude acknowledged the selection
+	response := responseText.String()
+	if !strings.Contains(strings.ToLower(response), strings.ToLower(selectedAnswer)) {
+		t.Errorf("expected Claude's response to mention selected answer %q, got: %s", selectedAnswer, truncate(response, 200))
+	}
 }

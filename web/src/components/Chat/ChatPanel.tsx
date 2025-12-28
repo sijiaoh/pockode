@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { type ConnectionStatus, useWebSocket } from "../../hooks/useWebSocket";
 import { getHistory } from "../../lib/sessionApi";
 import type {
+	AskUserQuestionRequest,
 	ContentPart,
 	Message,
 	PermissionRequest,
@@ -9,6 +10,7 @@ import type {
 } from "../../types/message";
 import { generateUUID } from "../../utils/uuid";
 import { ThemeSwitcher } from "../ui";
+import AskUserQuestionDialog from "./AskUserQuestionDialog";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
 import PermissionDialog from "./PermissionDialog";
@@ -221,6 +223,8 @@ function ChatPanel({
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [permissionRequest, setPermissionRequest] =
 		useState<PermissionRequest | null>(null);
+	const [questionRequest, setQuestionRequest] =
+		useState<AskUserQuestionRequest | null>(null);
 
 	const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
@@ -229,6 +233,7 @@ function ChatPanel({
 	useEffect(() => {
 		setMessages([]);
 		setPermissionRequest(null);
+		setQuestionRequest(null);
 
 		async function loadHistory() {
 			setIsLoadingHistory(true);
@@ -277,6 +282,15 @@ function ChatPanel({
 					toolInput: serverMsg.tool_input,
 					toolUseId: serverMsg.tool_use_id,
 					permissionSuggestions: serverMsg.permission_suggestions,
+				});
+				return;
+			}
+
+			// Handle ask_user_question (not stored in history, UI-only)
+			if (serverMsg.type === "ask_user_question") {
+				setQuestionRequest({
+					requestId: serverMsg.request_id,
+					questions: serverMsg.questions,
 				});
 				return;
 			}
@@ -360,6 +374,22 @@ function ChatPanel({
 			setPermissionRequest(null);
 		},
 		[send, permissionRequest, sessionId],
+	);
+
+	const handleQuestionResponse = useCallback(
+		(answers: Record<string, string> | null) => {
+			if (!questionRequest) return;
+
+			send({
+				type: "question_response",
+				session_id: sessionId,
+				request_id: questionRequest.requestId,
+				answers,
+			});
+
+			setQuestionRequest(null);
+		},
+		[send, questionRequest, sessionId],
 	);
 
 	// Check if AI is currently streaming a response
@@ -448,6 +478,14 @@ function ChatPanel({
 					onAllow={() => handlePermissionResponse("allow")}
 					onAlwaysAllow={() => handlePermissionResponse("always_allow")}
 					onDeny={() => handlePermissionResponse("deny")}
+				/>
+			)}
+
+			{questionRequest && (
+				<AskUserQuestionDialog
+					request={questionRequest}
+					onSubmit={handleQuestionResponse}
+					onCancel={() => handleQuestionResponse(null)}
 				/>
 			)}
 		</div>

@@ -388,3 +388,83 @@ func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 		t.Errorf("expected resume=true, got %+v", mock.startCalls)
 	}
 }
+
+func TestHandler_AskUserQuestion(t *testing.T) {
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			{
+				Type:      agent.EventTypeAskUserQuestion,
+				RequestID: "req-q-123",
+				Questions: []agent.AskUserQuestion{
+					{
+						Question:    "Which library?",
+						Header:      "Library",
+						Options:     []agent.QuestionOption{{Label: "A", Description: "Option A"}},
+						MultiSelect: false,
+					},
+				},
+			},
+			{Type: agent.EventTypeDone},
+		},
+	}
+	env := newTestEnv(t, mock)
+	env.store.Create("sess")
+
+	env.sendMessage("sess", "ask me")
+	resp := env.read()
+
+	if resp.Type != "ask_user_question" {
+		t.Errorf("expected ask_user_question, got %s", resp.Type)
+	}
+	if resp.RequestID != "req-q-123" {
+		t.Errorf("expected request_id 'req-q-123', got %q", resp.RequestID)
+	}
+	if len(resp.Questions) != 1 {
+		t.Errorf("expected 1 question, got %d", len(resp.Questions))
+	}
+	if resp.Questions[0].Question != "Which library?" {
+		t.Errorf("expected question 'Which library?', got %q", resp.Questions[0].Question)
+	}
+}
+
+func TestHandler_QuestionResponse_InvalidSession(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	env.send(ClientMessage{
+		Type:      "question_response",
+		SessionID: "non-existent",
+		RequestID: "req-123",
+		Answers:   map[string]string{"q": "a"},
+	})
+	resp := env.read()
+
+	if resp.Type != "error" || !strings.Contains(resp.Error, "session not found") {
+		t.Errorf("expected session not found error, got %+v", resp)
+	}
+}
+
+func TestHandler_QuestionResponse_InvalidRequestID(t *testing.T) {
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			{Type: agent.EventTypeText, Content: "Hello"},
+			{Type: agent.EventTypeDone},
+		},
+	}
+	env := newTestEnv(t, mock)
+	env.store.Create("sess")
+
+	env.sendMessage("sess", "hello")
+	env.skipN(2)
+
+	env.send(ClientMessage{
+		Type:      "question_response",
+		SessionID: "sess",
+		RequestID: "non-existent-request",
+		Answers:   map[string]string{"q": "a"},
+	})
+	resp := env.read()
+
+	if resp.Type != "error" || !strings.Contains(resp.Error, "no pending request") {
+		t.Errorf("expected no pending request error, got %+v", resp)
+	}
+}

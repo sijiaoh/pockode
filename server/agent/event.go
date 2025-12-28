@@ -13,6 +13,7 @@ const (
 	EventTypeDone              EventType = "done"
 	EventTypeInterrupted       EventType = "interrupted"
 	EventTypePermissionRequest EventType = "permission_request"
+	EventTypeAskUserQuestion   EventType = "ask_user_question"
 	EventTypeSystem            EventType = "system"
 	EventTypeProcessEnded      EventType = "process_ended"
 )
@@ -74,6 +75,20 @@ type PermissionUpdate struct {
 	Directories []string                    `json:"directories,omitempty"`
 }
 
+// QuestionOption represents a single option for a user question.
+type QuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+// AskUserQuestion represents a question to ask the user.
+type AskUserQuestion struct {
+	Question    string           `json:"question"`
+	Header      string           `json:"header"`
+	Options     []QuestionOption `json:"options"`
+	MultiSelect bool             `json:"multiSelect"`
+}
+
 // AgentEvent represents a unified event from an AI agent.
 type AgentEvent struct {
 	Type                  EventType          `json:"type"`
@@ -85,4 +100,5 @@ type AgentEvent struct {
 	Error                 string             `json:"error,omitempty"`
 	RequestID             string             `json:"request_id,omitempty"`
 	PermissionSuggestions []PermissionUpdate `json:"permission_suggestions,omitempty"`
+	Questions             []AskUserQuestion  `json:"questions,omitempty"`
 }

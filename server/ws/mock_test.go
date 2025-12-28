@@ -43,6 +43,14 @@ func (s *mockSession) SendPermissionResponse(requestID string, choice agent.Perm
 	return nil
 }
 
+func (s *mockSession) SendQuestionResponse(requestID string, answers map[string]string) error {
+	_, ok := s.pendingRequests.LoadAndDelete(requestID)
+	if !ok {
+		return fmt.Errorf("no pending request for id: %s", requestID)
+	}
+	return nil
+}
+
 func (s *mockSession) SendInterrupt() error {
 	s.interruptOnce.Do(func() {
 		close(s.interruptCh)

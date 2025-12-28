@@ -142,14 +142,32 @@ func (s *session) SendMessage(prompt string) error {
 	return s.writeStdin(data)
 }
 
-// SendPermissionResponse sends a permission response to Claude.
-func (s *session) SendPermissionResponse(requestID string, choice agent.PermissionChoice) error {
+// getPendingRequest retrieves and removes a pending control request.
+func (s *session) getPendingRequest(requestID string) (*controlRequest, error) {
 	pending, ok := s.pendingRequests.LoadAndDelete(requestID)
 	if !ok {
-		return fmt.Errorf("no pending request for id: %s", requestID)
+		return nil, fmt.Errorf("no pending request for id: %s", requestID)
 	}
-	req := pending.(*controlRequest)
-	return s.sendControlResponse(req, choice)
+	return pending.(*controlRequest), nil
+}
+
+// SendPermissionResponse sends a permission response to Claude.
+func (s *session) SendPermissionResponse(requestID string, choice agent.PermissionChoice) error {
+	req, err := s.getPendingRequest(requestID)
+	if err != nil {
+		return err
+	}
+	return s.sendPermissionControlResponse(req, choice)
+}
+
+// SendQuestionResponse sends answers to user questions.
+// If answers is nil, sends a cancel (deny) response.
+func (s *session) SendQuestionResponse(requestID string, answers map[string]string) error {
+	req, err := s.getPendingRequest(requestID)
+	if err != nil {
+		return err
+	}
+	return s.sendQuestionControlResponse(req, answers)
 }
 
 // SendInterrupt sends an interrupt signal to stop the current task.
@@ -187,7 +205,7 @@ func (s *session) Close() {
 	s.cancel()
 }
 
-func (s *session) sendControlResponse(req *controlRequest, choice agent.PermissionChoice) error {
+func (s *session) sendPermissionControlResponse(req *controlRequest, choice agent.PermissionChoice) error {
 	var content controlResponseContent
 
 	switch choice {
@@ -224,7 +242,48 @@ func (s *session) sendControlResponse(req *controlRequest, choice agent.Permissi
 		return fmt.Errorf("failed to marshal control response: %w", err)
 	}
 
-	logger.Debug("sendControlResponse: %s", string(data))
+	logger.Debug("sendPermissionControlResponse: %s", string(data))
+	return s.writeStdin(data)
+}
+
+func (s *session) sendQuestionControlResponse(req *controlRequest, answers map[string]string) error {
+	var content controlResponseContent
+
+	if answers == nil {
+		// Cancel: send deny response
+		content = controlResponseContent{
+			Behavior:  "deny",
+			Message:   "User cancelled the question",
+			ToolUseID: req.Request.ToolUseID,
+		}
+	} else {
+		// Normal response with answers
+		updatedInput, err := json.Marshal(map[string]any{"answers": answers})
+		if err != nil {
+			return fmt.Errorf("failed to marshal updated input: %w", err)
+		}
+		content = controlResponseContent{
+			Behavior:     "allow",
+			ToolUseID:    req.Request.ToolUseID,
+			UpdatedInput: updatedInput,
+		}
+	}
+
+	response := controlResponse{
+		Type: "control_response",
+		Response: controlResponsePayload{
+			Subtype:   "success",
+			RequestID: req.RequestID,
+			Response:  content,
+		},
+	}
+
+	data, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("failed to marshal question response: %w", err)
+	}
+
+	logger.Debug("sendQuestionControlResponse: %s", string(data))
 	return s.writeStdin(data)
 }
 
@@ -318,14 +377,14 @@ type textContent struct {
 
 type controlRequest struct {
 	RequestID string          `json:"request_id"`
-	Request   *permissionData `json:"request"`
+	Request   *controlPayload `json:"request"`
 }
 
-type permissionData struct {
+type controlPayload struct {
 	Subtype               string                   `json:"subtype"`
-	ToolName              string                   `json:"tool_name"`
-	Input                 json.RawMessage          `json:"input"`
-	ToolUseID             string                   `json:"tool_use_id"`
+	ToolName              string                   `json:"tool_name,omitempty"`
+	Input                 json.RawMessage          `json:"input,omitempty"`
+	ToolUseID             string                   `json:"tool_use_id,omitempty"`
 	PermissionSuggestions []agent.PermissionUpdate `json:"permission_suggestions,omitempty"`
 }
 
@@ -341,10 +400,11 @@ type controlResponsePayload struct {
 }
 
 type controlResponseContent struct {
-	Behavior           string                   `json:"behavior"`
+	// Permission/Question response fields
+	Behavior           string                   `json:"behavior,omitempty"`
 	Message            string                   `json:"message,omitempty"`
 	Interrupt          bool                     `json:"interrupt,omitempty"`
-	ToolUseID          string                   `json:"toolUseID"`
+	ToolUseID          string                   `json:"toolUseID,omitempty"`
 	UpdatedInput       json.RawMessage          `json:"updatedInput,omitempty"`
 	UpdatedPermissions []agent.PermissionUpdate `json:"updatedPermissions,omitempty"`
 }
@@ -437,22 +497,45 @@ func parseControlRequest(line []byte, pendingRequests *sync.Map) []agent.AgentEv
 		logger.Debug("parseControlRequest: ignoring request with nil request data")
 		return nil
 	}
-	if req.Request.Subtype != "can_use_tool" {
-		logger.Debug("parseControlRequest: ignoring non-permission request: %s", req.Request.Subtype)
+
+	switch req.Request.Subtype {
+	case "can_use_tool":
+		// AskUserQuestion is sent as can_use_tool with tool_name="AskUserQuestion"
+		if req.Request.ToolName == "AskUserQuestion" {
+			// Parse questions from input first, before storing to pendingRequests
+			var input struct {
+				Questions []agent.AskUserQuestion `json:"questions"`
+			}
+			if err := json.Unmarshal(req.Request.Input, &input); err != nil {
+				logger.Error("parseControlRequest: failed to parse AskUserQuestion input: %v", err)
+				return nil
+			}
+
+			logger.Info("parseControlRequest: AskUserQuestion, requestID=%s", req.RequestID)
+			pendingRequests.Store(req.RequestID, &req)
+
+			return []agent.AgentEvent{{
+				Type:      agent.EventTypeAskUserQuestion,
+				RequestID: req.RequestID,
+				Questions: input.Questions,
+			}}
+		}
+
+		logger.Info("parseControlRequest: tool=%s, requestID=%s", req.Request.ToolName, req.RequestID)
+		pendingRequests.Store(req.RequestID, &req)
+		return []agent.AgentEvent{{
+			Type:                  agent.EventTypePermissionRequest,
+			RequestID:             req.RequestID,
+			ToolName:              req.Request.ToolName,
+			ToolInput:             req.Request.Input,
+			ToolUseID:             req.Request.ToolUseID,
+			PermissionSuggestions: req.Request.PermissionSuggestions,
+		}}
+
+	default:
+		logger.Debug("parseControlRequest: ignoring unknown subtype: %s", req.Request.Subtype)
 		return nil
 	}
-
-	logger.Info("parseControlRequest: tool=%s, requestID=%s", req.Request.ToolName, req.RequestID)
-	pendingRequests.Store(req.RequestID, &req)
-
-	return []agent.AgentEvent{{
-		Type:                  agent.EventTypePermissionRequest,
-		RequestID:             req.RequestID,
-		ToolName:              req.Request.ToolName,
-		ToolInput:             req.Request.Input,
-		ToolUseID:             req.Request.ToolUseID,
-		PermissionSuggestions: req.Request.PermissionSuggestions,
-	}}
 }
 
 func parseAssistantEvent(event cliEvent) []agent.AgentEvent {
