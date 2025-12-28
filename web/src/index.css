@@ -43,96 +43,338 @@
 	--color-th-ai-bubble-text: var(--th-ai-bubble-text);
 }
 
-/*
- * Theme: Clarity (Light)
+/* =============================================================================
+ * THEME: SLATE (Default)
  *
- * Design philosophy:
- * - Clean, airy feel with subtle cool undertones
- * - Slate palette for sophistication (not pure gray)
- * - Indigo accent for modern tech/AI identity
- * - High readability with comfortable contrast
- */
-:root {
+ * Design: Classic professional with cool undertones
+ * Accent: Indigo - modern, intelligent, trustworthy
+ * ============================================================================= */
+
+:root,
+.theme-slate {
 	/* Backgrounds - Pure white base with cool gray progression */
 	--th-bg-primary: #ffffff;
-	--th-bg-secondary: #f8fafc; /* slate-50: subtle blue tint */
-	--th-bg-tertiary: #f1f5f9; /* slate-100: soft elevation */
-	--th-bg-overlay: rgba(15, 23, 42, 0.6); /* slate-900 based */
+	--th-bg-secondary: #f8fafc;
+	--th-bg-tertiary: #f1f5f9;
+	--th-bg-overlay: rgba(15, 23, 42, 0.6);
 
 	/* Text - Slate grays for softer, more refined look */
-	--th-text-primary: #0f172a; /* slate-900: deep but not harsh */
-	--th-text-secondary: #475569; /* slate-600: comfortable reading */
-	--th-text-muted: #94a3b8; /* slate-400: subtle hints */
+	--th-text-primary: #0f172a;
+	--th-text-secondary: #475569;
+	--th-text-muted: #94a3b8;
 	--th-text-inverse: #ffffff;
 
-	/* Borders - Subtle definition */
-	--th-border: #e2e8f0; /* slate-200: soft separation */
-	--th-border-focus: #6366f1; /* indigo-500: matches accent */
+	/* Borders */
+	--th-border: #e2e8f0;
+	--th-border-focus: #6366f1;
 
-	/* Interactive - Indigo for modern, intelligent feel */
-	--th-accent: #6366f1; /* indigo-500: distinctive, not generic blue */
-	--th-accent-hover: #4f46e5; /* indigo-600: deepens on interaction */
+	/* Interactive - Indigo */
+	--th-accent: #6366f1;
+	--th-accent-hover: #4f46e5;
 	--th-accent-text: #ffffff;
 
-	/* Semantic - Carefully chosen for clarity */
-	--th-success: #10b981; /* emerald-500: fresh, modern green */
-	--th-error: #ef4444; /* red-500: clear danger signal */
-	--th-warning: #f59e0b; /* amber-500: warm, visible caution */
+	/* Semantic */
+	--th-success: #10b981;
+	--th-error: #ef4444;
+	--th-warning: #f59e0b;
 
-	/* Special - Code */
-	--th-code-bg: #f1f5f9; /* slate-100: subtle code background */
-	--th-code-text: #1e293b; /* slate-800: high contrast code */
+	/* Code */
+	--th-code-bg: #f1f5f9;
+	--th-code-text: #1e293b;
 
-	/* Special - Chat bubbles */
-	--th-user-bubble: #6366f1; /* indigo-500: user messages */
+	/* Chat bubbles */
+	--th-user-bubble: #6366f1;
 	--th-user-bubble-text: #ffffff;
-	--th-ai-bubble: #f1f5f9; /* slate-100: AI messages */
-	--th-ai-bubble-text: #0f172a; /* slate-900: readable on light bg */
+	--th-ai-bubble: #f1f5f9;
+	--th-ai-bubble-text: #0f172a;
 }
 
-/*
- * Theme: Obsidian (Dark)
- *
- * Design philosophy:
- * - Deep slate-blue base for reduced eye strain
- * - NOT pure black - subtle warmth for comfort
- * - Brighter accent for visibility on dark
- * - Carefully calibrated contrast for extended use
- */
-.dark {
-	/* Backgrounds - Deep midnight slate, not pure black */
-	--th-bg-primary: #0f172a; /* slate-900: deep but not harsh */
-	--th-bg-secondary: #1e293b; /* slate-800: elevated surfaces */
-	--th-bg-tertiary: #334155; /* slate-700: interactive elements */
+.dark.theme-slate {
+	/* Backgrounds - Deep midnight slate */
+	--th-bg-primary: #0f172a;
+	--th-bg-secondary: #1e293b;
+	--th-bg-tertiary: #334155;
 	--th-bg-overlay: rgba(0, 0, 0, 0.75);
 
-	/* Text - Bright but easy on the eyes */
-	--th-text-primary: #f1f5f9; /* slate-100: not pure white */
-	--th-text-secondary: #cbd5e1; /* slate-300: comfortable secondary */
-	--th-text-muted: #64748b; /* slate-500: subtle but readable */
-	--th-text-inverse: #0f172a; /* slate-900 */
+	/* Text */
+	--th-text-primary: #f1f5f9;
+	--th-text-secondary: #cbd5e1;
+	--th-text-muted: #64748b;
+	--th-text-inverse: #0f172a;
 
-	/* Borders - Visible but not harsh */
-	--th-border: #334155; /* slate-700: subtle definition */
-	--th-border-focus: #818cf8; /* indigo-400: brighter for dark bg */
+	/* Borders */
+	--th-border: #334155;
+	--th-border-focus: #818cf8;
 
-	/* Interactive - Brighter indigo for dark mode visibility */
-	--th-accent: #818cf8; /* indigo-400: luminous on dark */
-	--th-accent-hover: #a5b4fc; /* indigo-300: lightens on hover */
-	--th-accent-text: #0f172a; /* dark text for contrast */
+	/* Interactive - Brighter indigo */
+	--th-accent: #818cf8;
+	--th-accent-hover: #a5b4fc;
+	--th-accent-text: #0f172a;
 
-	/* Semantic - Brighter variants for visibility */
-	--th-success: #34d399; /* emerald-400: vibrant success */
-	--th-error: #f87171; /* red-400: visible but not alarming */
-	--th-warning: #fbbf24; /* amber-400: warm and visible */
+	/* Semantic */
+	--th-success: #34d399;
+	--th-error: #f87171;
+	--th-warning: #fbbf24;
 
-	/* Special - Code */
-	--th-code-bg: #1e293b; /* slate-800: elevated code blocks */
-	--th-code-text: #e2e8f0; /* slate-200: high contrast code */
+	/* Code */
+	--th-code-bg: #1e293b;
+	--th-code-text: #e2e8f0;
 
-	/* Special - Chat bubbles */
-	--th-user-bubble: #6366f1; /* indigo-500: user messages */
+	/* Chat bubbles */
+	--th-user-bubble: #6366f1;
 	--th-user-bubble-text: #ffffff;
-	--th-ai-bubble: #334155; /* slate-700: AI messages */
-	--th-ai-bubble-text: #f1f5f9; /* slate-100: readable on dark bg */
+	--th-ai-bubble: #334155;
+	--th-ai-bubble-text: #f1f5f9;
+}
+
+/* =============================================================================
+ * THEME: CYBER
+ *
+ * Design: Futuristic tech aesthetic with electric cyan
+ * Accent: Cyan/Teal - cutting-edge, AI-forward, energetic
+ * Inspiration: Tron, cyberpunk UI, terminal aesthetics
+ * ============================================================================= */
+
+.theme-cyber {
+	/* Backgrounds - Cool gray with subtle blue undertone */
+	--th-bg-primary: #f8fafb;
+	--th-bg-secondary: #f0f4f7;
+	--th-bg-tertiary: #e4eaef;
+	--th-bg-overlay: rgba(8, 28, 41, 0.7);
+
+	/* Text - Cool neutrals */
+	--th-text-primary: #0c1e29;
+	--th-text-secondary: #3d5466;
+	--th-text-muted: #7c96a8;
+	--th-text-inverse: #ffffff;
+
+	/* Borders */
+	--th-border: #d4e0e8;
+	--th-border-focus: #06b6d4;
+
+	/* Interactive - Electric Cyan */
+	--th-accent: #0891b2;
+	--th-accent-hover: #0e7490;
+	--th-accent-text: #ffffff;
+
+	/* Semantic */
+	--th-success: #14b8a6;
+	--th-error: #f43f5e;
+	--th-warning: #f59e0b;
+
+	/* Code */
+	--th-code-bg: #e4eaef;
+	--th-code-text: #164e63;
+
+	/* Chat bubbles */
+	--th-user-bubble: #0891b2;
+	--th-user-bubble-text: #ffffff;
+	--th-ai-bubble: #e4eaef;
+	--th-ai-bubble-text: #0c1e29;
+}
+
+.dark.theme-cyber {
+	/* Backgrounds - Deep ocean blue, almost black */
+	--th-bg-primary: #0a1929;
+	--th-bg-secondary: #0f2438;
+	--th-bg-tertiary: #163049;
+	--th-bg-overlay: rgba(0, 0, 0, 0.8);
+
+	/* Text - Ice white with cyan tint */
+	--th-text-primary: #e6f4f8;
+	--th-text-secondary: #a5c9d6;
+	--th-text-muted: #5a8599;
+	--th-text-inverse: #0a1929;
+
+	/* Borders */
+	--th-border: #1e3a50;
+	--th-border-focus: #22d3ee;
+
+	/* Interactive - Glowing Cyan */
+	--th-accent: #22d3ee;
+	--th-accent-hover: #67e8f9;
+	--th-accent-text: #0a1929;
+
+	/* Semantic */
+	--th-success: #2dd4bf;
+	--th-error: #fb7185;
+	--th-warning: #fbbf24;
+
+	/* Code */
+	--th-code-bg: #0f2438;
+	--th-code-text: #67e8f9;
+
+	/* Chat bubbles */
+	--th-user-bubble: #0e7490;
+	--th-user-bubble-text: #e6f4f8;
+	--th-ai-bubble: #163049;
+	--th-ai-bubble-text: #e6f4f8;
+}
+
+/* =============================================================================
+ * THEME: ROSE
+ *
+ * Design: Soft, warm, and comfortable - inspired by Catppuccin
+ * Accent: Rose/Pink - friendly, approachable, modern
+ * Perfect for: Long coding sessions, reduced eye strain
+ * ============================================================================= */
+
+.theme-rose {
+	/* Backgrounds - Warm cream whites */
+	--th-bg-primary: #fefcfb;
+	--th-bg-secondary: #faf5f3;
+	--th-bg-tertiary: #f3ebe7;
+	--th-bg-overlay: rgba(49, 36, 32, 0.6);
+
+	/* Text - Warm browns */
+	--th-text-primary: #312420;
+	--th-text-secondary: #6b5550;
+	--th-text-muted: #a8938d;
+	--th-text-inverse: #fefcfb;
+
+	/* Borders */
+	--th-border: #e8ddd8;
+	--th-border-focus: #e11d48;
+
+	/* Interactive - Rose */
+	--th-accent: #e11d48;
+	--th-accent-hover: #be123c;
+	--th-accent-text: #ffffff;
+
+	/* Semantic */
+	--th-success: #059669;
+	--th-error: #dc2626;
+	--th-warning: #d97706;
+
+	/* Code */
+	--th-code-bg: #f3ebe7;
+	--th-code-text: #4a3630;
+
+	/* Chat bubbles */
+	--th-user-bubble: #e11d48;
+	--th-user-bubble-text: #ffffff;
+	--th-ai-bubble: #f3ebe7;
+	--th-ai-bubble-text: #312420;
+}
+
+.dark.theme-rose {
+	/* Backgrounds - Warm dark browns (Catppuccin Mocha inspired) */
+	--th-bg-primary: #1e1815;
+	--th-bg-secondary: #2a2320;
+	--th-bg-tertiary: #3d3330;
+	--th-bg-overlay: rgba(0, 0, 0, 0.75);
+
+	/* Text - Warm off-whites */
+	--th-text-primary: #f5ebe8;
+	--th-text-secondary: #d4c4be;
+	--th-text-muted: #8a7a74;
+	--th-text-inverse: #1e1815;
+
+	/* Borders */
+	--th-border: #3d3330;
+	--th-border-focus: #fb7185;
+
+	/* Interactive - Soft Rose */
+	--th-accent: #fb7185;
+	--th-accent-hover: #fda4af;
+	--th-accent-text: #1e1815;
+
+	/* Semantic */
+	--th-success: #4ade80;
+	--th-error: #f87171;
+	--th-warning: #fbbf24;
+
+	/* Code */
+	--th-code-bg: #2a2320;
+	--th-code-text: #f5ebe8;
+
+	/* Chat bubbles */
+	--th-user-bubble: #be123c;
+	--th-user-bubble-text: #f5ebe8;
+	--th-ai-bubble: #3d3330;
+	--th-ai-bubble-text: #f5ebe8;
+}
+
+/* =============================================================================
+ * THEME: GRAPE
+ *
+ * Design: Bold and expressive - inspired by Dracula
+ * Accent: Violet/Purple - creative, distinctive, trendy
+ * Perfect for: Standing out, personal expression
+ * ============================================================================= */
+
+.theme-grape {
+	/* Backgrounds - Subtle lavender tints */
+	--th-bg-primary: #fcfaff;
+	--th-bg-secondary: #f6f2fb;
+	--th-bg-tertiary: #ede6f5;
+	--th-bg-overlay: rgba(46, 32, 74, 0.6);
+
+	/* Text - Deep purples */
+	--th-text-primary: #2e204a;
+	--th-text-secondary: #5c4d73;
+	--th-text-muted: #9588a8;
+	--th-text-inverse: #fcfaff;
+
+	/* Borders */
+	--th-border: #e2d9ee;
+	--th-border-focus: #8b5cf6;
+
+	/* Interactive - Violet */
+	--th-accent: #8b5cf6;
+	--th-accent-hover: #7c3aed;
+	--th-accent-text: #ffffff;
+
+	/* Semantic */
+	--th-success: #22c55e;
+	--th-error: #ef4444;
+	--th-warning: #eab308;
+
+	/* Code */
+	--th-code-bg: #ede6f5;
+	--th-code-text: #3b2960;
+
+	/* Chat bubbles */
+	--th-user-bubble: #8b5cf6;
+	--th-user-bubble-text: #ffffff;
+	--th-ai-bubble: #ede6f5;
+	--th-ai-bubble-text: #2e204a;
+}
+
+.dark.theme-grape {
+	/* Backgrounds - Deep purple (Dracula inspired) */
+	--th-bg-primary: #1a1625;
+	--th-bg-secondary: #252033;
+	--th-bg-tertiary: #342d47;
+	--th-bg-overlay: rgba(0, 0, 0, 0.8);
+
+	/* Text - Soft lavender whites */
+	--th-text-primary: #f3f0f8;
+	--th-text-secondary: #c9c2d6;
+	--th-text-muted: #7e7491;
+	--th-text-inverse: #1a1625;
+
+	/* Borders */
+	--th-border: #342d47;
+	--th-border-focus: #a78bfa;
+
+	/* Interactive - Luminous Violet */
+	--th-accent: #a78bfa;
+	--th-accent-hover: #c4b5fd;
+	--th-accent-text: #1a1625;
+
+	/* Semantic */
+	--th-success: #4ade80;
+	--th-error: #f87171;
+	--th-warning: #facc15;
+
+	/* Code */
+	--th-code-bg: #252033;
+	--th-code-text: #e9d5ff;
+
+	/* Chat bubbles */
+	--th-user-bubble: #7c3aed;
+	--th-user-bubble-text: #f3f0f8;
+	--th-ai-bubble: #342d47;
+	--th-ai-bubble-text: #f3f0f8;
 }
