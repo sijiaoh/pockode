@@ -11,6 +11,7 @@ import type {
 import { generateUUID } from "../../utils/uuid";
 import { ThemeSwitcher } from "../ui";
 import AskUserQuestionDialog from "./AskUserQuestionDialog";
+import ExitPlanModeDialog from "./ExitPlanModeDialog";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
 import PermissionDialog from "./PermissionDialog";
@@ -472,14 +473,21 @@ function ChatPanel({
 				onInterrupt={handleInterrupt}
 			/>
 
-			{permissionRequest && (
-				<PermissionDialog
-					request={permissionRequest}
-					onAllow={() => handlePermissionResponse("allow")}
-					onAlwaysAllow={() => handlePermissionResponse("always_allow")}
-					onDeny={() => handlePermissionResponse("deny")}
-				/>
-			)}
+			{permissionRequest &&
+				(permissionRequest.toolName === "ExitPlanMode" ? (
+					<ExitPlanModeDialog
+						request={permissionRequest}
+						onApprove={() => handlePermissionResponse("allow")}
+						onReject={() => handlePermissionResponse("deny")}
+					/>
+				) : (
+					<PermissionDialog
+						request={permissionRequest}
+						onAllow={() => handlePermissionResponse("allow")}
+						onAlwaysAllow={() => handlePermissionResponse("always_allow")}
+						onDeny={() => handlePermissionResponse("deny")}
+					/>
+				))}
 
 			{questionRequest && (
 				<AskUserQuestionDialog
