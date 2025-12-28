@@ -144,44 +144,57 @@ func (h *Handler) handleConnection(ctx context.Context, conn *websocket.Conn) {
 	}
 }
 
+// getOrCreateSession returns an existing session or creates a new one.
+// The entire check-and-create operation is protected by state.mu to prevent race conditions.
+func (h *Handler) getOrCreateSession(ctx context.Context, conn *websocket.Conn, sessionID string, state *connectionState) (agent.Session, error) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	// Return existing session if available
+	if sess, exists := state.sessions[sessionID]; exists {
+		return sess, nil
+	}
+
+	// Check if session metadata exists and whether to resume
+	meta, found, err := h.sessionStore.Get(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	resume := meta.Activated
+
+	// Start agent process
+	sess, err := h.agent.Start(ctx, h.workDir, sessionID, resume)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store session before releasing lock
+	state.sessions[sessionID] = sess
+
+	// Mark session as activated on first use
+	if !resume {
+		if err := h.sessionStore.Activate(sessionID); err != nil {
+			logger.Error("getOrCreateSession: failed to activate session: %v", err)
+		}
+	}
+
+	// Start goroutine to stream events from this session
+	go h.streamEvents(ctx, conn, sessionID, sess, state)
+
+	logger.Info("getOrCreateSession: started session %s (resume=%v)", sessionID, resume)
+
+	return sess, nil
+}
+
 // handleMessage processes a user message, creating or reusing a session as needed.
 func (h *Handler) handleMessage(ctx context.Context, conn *websocket.Conn, msg ClientMessage, state *connectionState) error {
-	state.mu.Lock()
-	sess, exists := state.sessions[msg.SessionID]
-	state.mu.Unlock()
-
-	if !exists {
-		// Check if session is activated (has been used before)
-		meta, found, err := h.sessionStore.Get(msg.SessionID)
-		if err != nil {
-			return fmt.Errorf("failed to get session: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("session not found: %s", msg.SessionID)
-		}
-
-		resume := meta.Activated
-
-		sess, err = h.agent.Start(ctx, h.workDir, msg.SessionID, resume)
-		if err != nil {
-			return err
-		}
-
-		state.mu.Lock()
-		state.sessions[msg.SessionID] = sess
-		state.mu.Unlock()
-
-		// Mark session as activated on first use
-		if !resume {
-			if err := h.sessionStore.Activate(msg.SessionID); err != nil {
-				logger.Error("handleMessage: failed to activate session: %v", err)
-			}
-		}
-
-		// Start goroutine to stream events from this session.
-		go h.streamEvents(ctx, conn, msg.SessionID, sess, state)
-
-		logger.Info("handleMessage: started session %s (resume=%v)", msg.SessionID, resume)
+	sess, err := h.getOrCreateSession(ctx, conn, msg.SessionID, state)
+	if err != nil {
+		return err
 	}
 
 	logger.Info("handleMessage: prompt=%q, sessionID=%s", logger.Truncate(msg.Content, promptLogMaxLen), msg.SessionID)
