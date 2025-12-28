@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
 
 // Mock ResizeObserver for components that use it
-global.ResizeObserver = class ResizeObserver {
+globalThis.ResizeObserver = class ResizeObserver {
 	observe() {}
 	unobserve() {}
 	disconnect() {}
