@@ -29,6 +29,10 @@ function InputBar({
 		}
 	}, [input]);
 
+	useEffect(() => {
+		textareaRef.current?.focus();
+	}, [sessionId]);
+
 	const handleSend = useCallback(() => {
 		const trimmed = input.trim();
 		if (trimmed && !disabled && !isStreaming) {
