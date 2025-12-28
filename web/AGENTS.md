@@ -161,6 +161,19 @@ describe("MyComponent", () => {
 });
 ```
 
+## Zustand 状态管理
+
+**领域数据**用 Zustand，**UI 状态**用 React。
+
+- 领域数据：与 UI 表现无关的业务数据（即使没有 UI 也存在的数据）
+- UI 状态：控制界面行为的状态（sidebar 开关、modal 显隐、选中项）
+
+### 使用规范
+
+- 按领域划分 store，组件只调用 action 不处理业务逻辑
+- 使用选择器订阅具体字段，多字段用 `useShallow`
+- 禁止 `const store = useStore()` 全量订阅
+
 ## 边界
 
 ### Always Do

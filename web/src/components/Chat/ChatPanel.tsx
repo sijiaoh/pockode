@@ -9,7 +9,7 @@ import type {
 	WSServerMessage,
 } from "../../types/message";
 import { generateUUID } from "../../utils/uuid";
-import { ThemeSwitcher } from "../ui";
+import MainContainer from "../Layout/MainContainer";
 import AskUserQuestionDialog from "./AskUserQuestionDialog";
 import ExitPlanModeDialog from "./ExitPlanModeDialog";
 import InputBar from "./InputBar";
@@ -420,51 +420,16 @@ function ChatPanel({
 
 	const { text: statusText, color: statusColor } = STATUS_CONFIG[status];
 
+	const statusIndicator = (
+		<span className={`text-sm ${statusColor}`}>{statusText}</span>
+	);
+
 	return (
-		<div className="flex h-dvh flex-col bg-th-bg-primary">
-			<header className="flex items-center justify-between border-b border-th-border p-3 sm:p-4">
-				<div className="flex items-center gap-3">
-					{onOpenSidebar && (
-						<button
-							type="button"
-							onClick={onOpenSidebar}
-							className="rounded p-1 text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
-							aria-label="Open menu"
-						>
-							<svg
-								className="h-6 w-6"
-								fill="none"
-								stroke="currentColor"
-								viewBox="0 0 24 24"
-								aria-hidden="true"
-							>
-								<path
-									strokeLinecap="round"
-									strokeLinejoin="round"
-									strokeWidth={2}
-									d="M4 6h16M4 12h16M4 18h16"
-								/>
-							</svg>
-						</button>
-					)}
-					<h1 className="text-lg font-bold text-th-text-primary sm:text-xl">
-						Pockode
-					</h1>
-				</div>
-				<div className="flex items-center gap-3">
-					<span className={`text-sm ${statusColor}`}>{statusText}</span>
-					<ThemeSwitcher />
-					{onLogout && (
-						<button
-							type="button"
-							onClick={onLogout}
-							className="text-sm text-th-text-muted hover:text-th-text-primary"
-						>
-							Logout
-						</button>
-					)}
-				</div>
-			</header>
+		<MainContainer
+			onOpenSidebar={onOpenSidebar}
+			onLogout={onLogout}
+			headerRight={statusIndicator}
+		>
 			<MessageList messages={messages} sessionId={sessionId} />
 			<InputBar
 				onSend={handleSend}
@@ -496,7 +461,7 @@ function ChatPanel({
 					onCancel={() => handleQuestionResponse(null)}
 				/>
 			)}
-		</div>
+		</MainContainer>
 	);
 }
 
