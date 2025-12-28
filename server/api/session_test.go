@@ -145,6 +145,24 @@ func TestSessionHandler_Update_EmptyTitle(t *testing.T) {
 	}
 }
 
+func TestSessionHandler_Update_NotFound(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+
+	handler := NewSessionHandler(store)
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	body := strings.NewReader(`{"title":"Some Title"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/sessions/non-existent-id", body)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", rec.Code)
+	}
+}
+
 func TestSessionHandler_GetHistory(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	sess, _ := store.Create("session-with-history")

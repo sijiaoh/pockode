@@ -113,10 +113,10 @@ func TestFileStore_Update(t *testing.T) {
 func TestFileStore_UpdateNonExistent(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	// Should not error on non-existent session
+	// Should return ErrSessionNotFound for non-existent session
 	err := store.Update("non-existent-id", "Title")
-	if err != nil {
-		t.Errorf("Update non-existent should not error, got %v", err)
+	if err != ErrSessionNotFound {
+		t.Errorf("Update non-existent should return ErrSessionNotFound, got %v", err)
 	}
 }
 
@@ -174,10 +174,10 @@ func TestFileStore_Activate(t *testing.T) {
 func TestFileStore_ActivateNonExistent(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	// Should not error on non-existent session
+	// Should return ErrSessionNotFound for non-existent session
 	err := store.Activate("non-existent-id")
-	if err != nil {
-		t.Errorf("Activate non-existent should not error, got %v", err)
+	if err != ErrSessionNotFound {
+		t.Errorf("Activate non-existent should return ErrSessionNotFound, got %v", err)
 	}
 }
 

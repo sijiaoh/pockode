@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -112,6 +113,10 @@ func (h *SessionHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.Update(sessionID, req.Title); err != nil {
+		if errors.Is(err, session.ErrSessionNotFound) {
+			http.Error(w, "Session not found", http.StatusNotFound)
+			return
+		}
 		logger.Error("Failed to update session: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return

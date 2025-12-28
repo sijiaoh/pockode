@@ -1,6 +1,11 @@
 package session
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var ErrSessionNotFound = errors.New("session not found")
 
 // SessionMeta holds metadata for a chat session.
 type SessionMeta struct {

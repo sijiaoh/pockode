@@ -158,6 +158,7 @@ func (s *FileStore) Delete(sessionID string) error {
 }
 
 // Update updates a session's title by ID.
+// Returns ErrSessionNotFound if the session does not exist.
 func (s *FileStore) Update(sessionID string, title string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -176,10 +177,11 @@ func (s *FileStore) Update(sessionID string, title string) error {
 		}
 	}
 
-	return nil // Session not found, no error
+	return ErrSessionNotFound
 }
 
 // Activate marks a session as activated (first message sent).
+// Returns ErrSessionNotFound if the session does not exist.
 func (s *FileStore) Activate(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -197,7 +199,7 @@ func (s *FileStore) Activate(sessionID string) error {
 		}
 	}
 
-	return nil // Session not found, no error
+	return ErrSessionNotFound
 }
 
 func (s *FileStore) historyPath(sessionID string) string {
