@@ -1,202 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
-import { type ConnectionStatus, useWebSocket } from "../../hooks/useWebSocket";
-import { getHistory } from "../../lib/sessionApi";
+import {
+	type ConnectionStatus,
+	useChatMessages,
+} from "../../hooks/useChatMessages";
 import type {
 	AskUserQuestionRequest,
-	ContentPart,
-	Message,
 	PermissionRequest,
 	WSServerMessage,
 } from "../../types/message";
-import { generateUUID } from "../../utils/uuid";
 import MainContainer from "../Layout/MainContainer";
 import AskUserQuestionDialog from "./AskUserQuestionDialog";
 import ExitPlanModeDialog from "./ExitPlanModeDialog";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
 import PermissionDialog from "./PermissionDialog";
-
-// Normalized event with camelCase (internal representation)
-type NormalizedEvent =
-	| { type: "text"; content: string }
-	| {
-			type: "tool_call";
-			toolUseId: string;
-			toolName: string;
-			toolInput: unknown;
-	  }
-	| { type: "tool_result"; toolUseId: string; toolResult: string }
-	| { type: "error"; error: string }
-	| { type: "done" }
-	| { type: "interrupted" }
-	| { type: "process_ended" }
-	| { type: "system"; content: string }
-	| { type: "message"; content: string }; // For history replay (user message)
-
-// Convert snake_case server event to camelCase
-function normalizeEvent(
-	e: WSServerMessage | Record<string, unknown>,
-): NormalizedEvent {
-	const record = e as Record<string, unknown>;
-	const type = record.type as string;
-
-	switch (type) {
-		case "text":
-			return { type: "text", content: (record.content as string) ?? "" };
-		case "tool_call":
-			return {
-				type: "tool_call",
-				toolUseId: record.tool_use_id as string,
-				toolName: record.tool_name as string,
-				toolInput: record.tool_input,
-			};
-		case "tool_result":
-			return {
-				type: "tool_result",
-				toolUseId: record.tool_use_id as string,
-				toolResult: (record.tool_result as string) ?? "",
-			};
-		case "error":
-			return { type: "error", error: (record.error as string) ?? "" };
-		case "done":
-			return { type: "done" };
-		case "interrupted":
-			return { type: "interrupted" };
-		case "process_ended":
-			return { type: "process_ended" };
-		case "system":
-			return { type: "system", content: (record.content as string) ?? "" };
-		case "message":
-			return { type: "message", content: (record.content as string) ?? "" };
-		default:
-			// Fallback for unknown types - treat as text
-			return { type: "text", content: "" };
-	}
-}
-
-// Apply an event to message parts, returning updated parts
-function applyEventToParts(
-	parts: ContentPart[],
-	event: NormalizedEvent,
-): ContentPart[] {
-	switch (event.type) {
-		case "text": {
-			const lastPart = parts[parts.length - 1];
-			if (lastPart?.type === "text") {
-				return [
-					...parts.slice(0, -1),
-					{ type: "text", content: lastPart.content + event.content },
-				];
-			}
-			return [...parts, { type: "text", content: event.content }];
-		}
-		case "tool_call":
-			return [
-				...parts,
-				{
-					type: "tool_call",
-					tool: {
-						id: event.toolUseId,
-						name: event.toolName,
-						input: event.toolInput,
-					},
-				},
-			];
-		case "tool_result":
-			return parts.map((part) =>
-				part.type === "tool_call" && part.tool.id === event.toolUseId
-					? { ...part, tool: { ...part.tool, result: event.toolResult } }
-					: part,
-			);
-		default:
-			return parts;
-	}
-}
-
-// Create a new assistant message
-function createAssistantMessage(
-	status: Message["status"] = "streaming",
-): Message {
-	return {
-		id: generateUUID(),
-		role: "assistant",
-		content: "",
-		parts: [],
-		status,
-		createdAt: new Date(),
-	};
-}
-
-// Apply a server event to message list (pure function, shared by replay and real-time)
-function applyServerEvent(
-	messages: Message[],
-	event: NormalizedEvent,
-): Message[] {
-	// System messages are always standalone
-	if (event.type === "system") {
-		const systemMessage = createAssistantMessage("complete");
-		systemMessage.parts = [{ type: "system", content: event.content }];
-		return [...messages, systemMessage];
-	}
-
-	// Find current assistant (sending or streaming)
-	let index = messages.findIndex(
-		(m) => m.status === "sending" || m.status === "streaming",
-	);
-
-	// No current assistant? Create one to hold the orphan event
-	if (index === -1) {
-		const newAssistant = createAssistantMessage();
-		messages = [...messages, newAssistant];
-		index = messages.length - 1;
-	}
-
-	// Apply event to the assistant message
-	const updated = [...messages];
-	const message = { ...updated[index] };
-	message.parts = applyEventToParts(message.parts ?? [], event);
-
-	// Update status
-	if (event.type === "text") {
-		message.status = "streaming";
-	} else if (event.type === "done") {
-		message.status = "complete";
-	} else if (event.type === "interrupted") {
-		message.status = "interrupted";
-	} else if (event.type === "error") {
-		message.status = "error";
-		message.error = event.error;
-	} else if (event.type === "process_ended") {
-		message.status = "process_ended";
-	}
-
-	updated[index] = message;
-	return updated;
-}
-
-// Finalize any incomplete assistant message and add user message + new assistant
-function applyUserMessage(messages: Message[], content: string): Message[] {
-	// Finalize any streaming assistant
-	const finalized = messages.map((m) =>
-		m.status === "sending" || m.status === "streaming"
-			? { ...m, status: "complete" as const }
-			: m,
-	);
-
-	// Add user message
-	const userMessage: Message = {
-		id: generateUUID(),
-		role: "user",
-		content,
-		status: "complete",
-		createdAt: new Date(),
-	};
-
-	// Add empty assistant message
-	const assistantMessage = createAssistantMessage();
-
-	return [...finalized, userMessage, assistantMessage];
-}
 
 interface Props {
 	sessionId: string;
@@ -221,97 +38,49 @@ function ChatPanel({
 	onLogout,
 	onOpenSidebar,
 }: Props) {
-	const [messages, setMessages] = useState<Message[]>([]);
+	// Dialog state kept here (tightly coupled to UI, not domain data)
 	const [permissionRequest, setPermissionRequest] =
 		useState<PermissionRequest | null>(null);
 	const [questionRequest, setQuestionRequest] =
 		useState<AskUserQuestionRequest | null>(null);
 
-	const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-
-	// Load history when session changes
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally loading history when sessionId prop changes
-	useEffect(() => {
-		setMessages([]);
-		setPermissionRequest(null);
-		setQuestionRequest(null);
-
-		async function loadHistory() {
-			setIsLoadingHistory(true);
-			try {
-				const history = await getHistory(sessionId);
-				replayHistory(history);
-			} catch (err) {
-				console.error("Failed to load history:", err);
-			} finally {
-				setIsLoadingHistory(false);
-			}
+	const handleServerMessage = useCallback((serverMsg: WSServerMessage) => {
+		if (serverMsg.type === "permission_request") {
+			setPermissionRequest({
+				requestId: serverMsg.request_id,
+				toolName: serverMsg.tool_name,
+				toolInput: serverMsg.tool_input,
+				toolUseId: serverMsg.tool_use_id,
+				permissionSuggestions: serverMsg.permission_suggestions,
+			});
+		} else if (serverMsg.type === "ask_user_question") {
+			setQuestionRequest({
+				requestId: serverMsg.request_id,
+				questions: serverMsg.questions,
+			});
 		}
-
-		loadHistory();
-	}, [sessionId]);
-
-	// Replay historical records to rebuild message state
-	const replayHistory = useCallback((records: unknown[]) => {
-		let messages: Message[] = [];
-
-		for (const record of records) {
-			const event = normalizeEvent(record as Record<string, unknown>);
-
-			if (event.type === "message" && event.content) {
-				messages = applyUserMessage(messages, event.content);
-			} else {
-				messages = applyServerEvent(messages, event);
-			}
-		}
-
-		setMessages(messages);
 	}, []);
 
-	const handleServerMessage = useCallback(
-		(serverMsg: WSServerMessage) => {
-			// Filter messages by session_id
-			if (serverMsg.session_id && serverMsg.session_id !== sessionId) {
-				return;
-			}
-
-			// Handle permission request (not stored in history, UI-only)
-			if (serverMsg.type === "permission_request") {
-				setPermissionRequest({
-					requestId: serverMsg.request_id,
-					toolName: serverMsg.tool_name,
-					toolInput: serverMsg.tool_input,
-					toolUseId: serverMsg.tool_use_id,
-					permissionSuggestions: serverMsg.permission_suggestions,
-				});
-				return;
-			}
-
-			// Handle ask_user_question (not stored in history, UI-only)
-			if (serverMsg.type === "ask_user_question") {
-				setQuestionRequest({
-					requestId: serverMsg.request_id,
-					questions: serverMsg.questions,
-				});
-				return;
-			}
-
-			const event = normalizeEvent(serverMsg);
-			setMessages((prev) => applyServerEvent(prev, event));
-		},
-		[sessionId],
-	);
-
-	const { status, send } = useWebSocket({
-		onMessage: handleServerMessage,
+	const {
+		messages,
+		isLoadingHistory,
+		isStreaming,
+		status,
+		send,
+		sendUserMessage,
+	} = useChatMessages({
+		sessionId,
+		onServerMessage: handleServerMessage,
 	});
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: sessionId change should reset dialogs
+	useEffect(() => {
+		setPermissionRequest(null);
+		setQuestionRequest(null);
+	}, [sessionId]);
 
 	const handleSend = useCallback(
 		(content: string) => {
-			const userMessageId = generateUUID();
-			const assistantMessageId = generateUUID();
-
-			// Update session title on first message
 			if (sessionTitle === "New Chat") {
 				const title =
 					content.length > 30
@@ -320,45 +89,9 @@ function ChatPanel({
 				onUpdateTitle(title);
 			}
 
-			// Add user message
-			const userMessage: Message = {
-				id: userMessageId,
-				role: "user",
-				content,
-				status: "complete",
-				createdAt: new Date(),
-			};
-
-			// Add empty AI message (ready to receive streaming content)
-			const assistantMessage: Message = {
-				id: assistantMessageId,
-				role: "assistant",
-				content: "",
-				status: "sending",
-				createdAt: new Date(),
-			};
-
-			setMessages((prev) => [...prev, userMessage, assistantMessage]);
-
-			// Send to server with session_id
-			const sent = send({
-				type: "message",
-				content,
-				session_id: sessionId,
-			});
-
-			// Handle send failure
-			if (!sent) {
-				setMessages((prev) =>
-					prev.map((m) =>
-						m.id === assistantMessageId
-							? { ...m, status: "error", error: "Failed to send message" }
-							: m,
-					),
-				);
-			}
+			sendUserMessage(content);
 		},
-		[send, sessionId, sessionTitle, onUpdateTitle],
+		[sessionTitle, onUpdateTitle, sendUserMessage],
 	);
 
 	const handlePermissionResponse = useCallback(
@@ -393,12 +126,6 @@ function ChatPanel({
 		[send, questionRequest, sessionId],
 	);
 
-	// Check if AI is currently streaming a response
-	const isStreaming = messages.some(
-		(m) => m.status === "sending" || m.status === "streaming",
-	);
-
-	// Handle interrupt request
 	const handleInterrupt = useCallback(() => {
 		send({
 			type: "interrupt",
@@ -406,7 +133,6 @@ function ChatPanel({
 		});
 	}, [send, sessionId]);
 
-	// Esc key to interrupt streaming
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape" && isStreaming) {

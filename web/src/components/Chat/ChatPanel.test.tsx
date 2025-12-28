@@ -218,10 +218,70 @@ describe("ChatPanel", () => {
 				session_id: "test-session",
 			});
 		});
+
+		it("sends interrupt when Escape pressed during streaming", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const textarea = screen.getByRole("textbox");
+			await user.type(textarea, "Hi");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			mockState.send.mockClear();
+
+			// Press Escape while streaming
+			await user.keyboard("{Escape}");
+
+			expect(mockState.send).toHaveBeenCalledWith({
+				type: "interrupt",
+				session_id: "test-session",
+			});
+		});
+	});
+
+	describe("ask user question", () => {
+		it("shows dialog and sends answer response", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			act(() => {
+				mockState.onMessage?.({
+					type: "ask_user_question",
+					request_id: "q-1",
+					questions: [
+						{
+							question: "Which library?",
+							header: "Library",
+							options: [
+								{ label: "React", description: "UI library" },
+								{ label: "Vue", description: "Progressive framework" },
+							],
+							multiSelect: false,
+						},
+					],
+				});
+			});
+
+			expect(screen.getByRole("dialog")).toBeInTheDocument();
+			expect(screen.getByText("Which library?")).toBeInTheDocument();
+
+			// Select an option and submit
+			await user.click(screen.getByText("React"));
+			await user.click(screen.getByRole("button", { name: /Submit/i }));
+
+			expect(mockState.send).toHaveBeenCalledWith({
+				type: "question_response",
+				session_id: "test-session",
+				request_id: "q-1",
+				answers: expect.any(Object),
+			});
+			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		});
 	});
 
 	describe("history replay", () => {
-		it("replays history with text and tool calls", async () => {
+		it("loads and displays history on mount", async () => {
 			const user = userEvent.setup();
 			mockGetHistory.mockResolvedValue([
 				{ type: "message", content: "Hello" },
@@ -239,93 +299,11 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			// User message displayed
 			expect(screen.getByText("Hello")).toBeInTheDocument();
-			// Assistant text displayed
 			expect(screen.getByText("Hi there!")).toBeInTheDocument();
-			// Tool call displayed
 			expect(screen.getByText("Bash")).toBeInTheDocument();
-			// Expand tool to see result
 			await user.click(screen.getByText("Bash"));
 			expect(screen.getByText("file.txt")).toBeInTheDocument();
-		});
-
-		it("replays multiple conversation turns", async () => {
-			mockGetHistory.mockResolvedValue([
-				{ type: "message", content: "First question" },
-				{ type: "text", content: "First answer" },
-				{ type: "done" },
-				{ type: "message", content: "Second question" },
-				{ type: "text", content: "Second answer" },
-				{ type: "done" },
-			]);
-
-			render(<ChatPanel {...defaultProps} />);
-			await waitForHistoryLoad();
-
-			expect(screen.getByText("First question")).toBeInTheDocument();
-			expect(screen.getByText("First answer")).toBeInTheDocument();
-			expect(screen.getByText("Second question")).toBeInTheDocument();
-			expect(screen.getByText("Second answer")).toBeInTheDocument();
-		});
-
-		it("handles incomplete assistant message without done event", async () => {
-			// Simulates abnormal end: assistant was responding but crashed,
-			// then user sent another message
-			mockGetHistory.mockResolvedValue([
-				{ type: "message", content: "First question" },
-				{ type: "text", content: "Partial answer..." },
-				// No "done" event - abnormal end
-				{ type: "message", content: "Second question" },
-				{ type: "text", content: "Complete answer" },
-				{ type: "done" },
-			]);
-
-			render(<ChatPanel {...defaultProps} />);
-			await waitForHistoryLoad();
-
-			// Both conversations should be visible
-			expect(screen.getByText("First question")).toBeInTheDocument();
-			expect(screen.getByText("Partial answer...")).toBeInTheDocument();
-			expect(screen.getByText("Second question")).toBeInTheDocument();
-			expect(screen.getByText("Complete answer")).toBeInTheDocument();
-		});
-
-		it("replays system message as standalone before user message", async () => {
-			const user = userEvent.setup();
-			mockGetHistory.mockResolvedValue([
-				{ type: "system", content: "Welcome! Please login." },
-				{ type: "message", content: "Hello" },
-				{ type: "text", content: "Hi there!" },
-				{ type: "done" },
-			]);
-
-			render(<ChatPanel {...defaultProps} />);
-			await waitForHistoryLoad();
-
-			// System message is standalone (expand to see content)
-			await user.click(screen.getByText("system"));
-			expect(screen.getByText("Welcome! Please login.")).toBeInTheDocument();
-			// Subsequent conversation works
-			expect(screen.getByText("Hello")).toBeInTheDocument();
-			expect(screen.getByText("Hi there!")).toBeInTheDocument();
-		});
-
-		it("separates consecutive server responses after done", async () => {
-			// Two separate assistant responses without user messages in between
-			mockGetHistory.mockResolvedValue([
-				{ type: "text", content: "First response" },
-				{ type: "done" },
-				{ type: "text", content: "Second response" },
-				{ type: "done" },
-			]);
-
-			render(<ChatPanel {...defaultProps} />);
-			await waitForHistoryLoad();
-
-			// Both should be visible as separate messages
-			expect(screen.getByText("First response")).toBeInTheDocument();
-			expect(screen.getByText("Second response")).toBeInTheDocument();
 		});
 	});
 });
