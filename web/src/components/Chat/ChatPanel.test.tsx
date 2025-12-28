@@ -52,9 +52,7 @@ describe("ChatPanel", () => {
 	// Helper to wait for history loading to complete
 	const waitForHistoryLoad = async () => {
 		await waitFor(() => {
-			expect(
-				screen.getByPlaceholderText("Type a message..."),
-			).not.toBeDisabled();
+			expect(screen.getByRole("textbox")).not.toBeDisabled();
 		});
 	};
 
@@ -64,7 +62,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			const textarea = screen.getByPlaceholderText("Type a message...");
+			const textarea = screen.getByRole("textbox");
 			await user.type(textarea, "Hello AI");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
@@ -88,7 +86,7 @@ describe("ChatPanel", () => {
 			);
 			await waitForHistoryLoad();
 
-			const textarea = screen.getByPlaceholderText("Type a message...");
+			const textarea = screen.getByRole("textbox");
 			await user.type(textarea, "My first message");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
@@ -101,7 +99,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			const textarea = screen.getByPlaceholderText("Type a message...");
+			const textarea = screen.getByRole("textbox");
 			await user.type(textarea, "Hello");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
@@ -115,7 +113,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			const textarea = screen.getByPlaceholderText("Type a message...");
+			const textarea = screen.getByRole("textbox");
 			await user.type(textarea, "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
@@ -132,7 +130,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			const textarea = screen.getByPlaceholderText("Type a message...");
+			const textarea = screen.getByRole("textbox");
 			await user.type(textarea, "List files");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
@@ -161,7 +159,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			const textarea = screen.getByPlaceholderText("Type a message...");
+			const textarea = screen.getByRole("textbox");
 			await user.type(textarea, "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
@@ -208,7 +206,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			const textarea = screen.getByPlaceholderText("Type a message...");
+			const textarea = screen.getByRole("textbox");
 			await user.type(textarea, "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 			mockState.send.mockClear();

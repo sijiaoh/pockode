@@ -432,6 +432,7 @@ function ChatPanel({
 		>
 			<MessageList messages={messages} sessionId={sessionId} />
 			<InputBar
+				sessionId={sessionId}
 				onSend={handleSend}
 				disabled={status !== "connected" || isLoadingHistory}
 				isStreaming={isStreaming}

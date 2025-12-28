@@ -1,13 +1,9 @@
-import {
-	type KeyboardEvent,
-	useCallback,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { type KeyboardEvent, useCallback, useEffect, useRef } from "react";
+import { inputActions, useInputStore } from "../../lib/inputStore";
 import { isMobile } from "../../utils/breakpoints";
 
 interface Props {
+	sessionId: string;
 	onSend: (content: string) => void;
 	disabled?: boolean;
 	isStreaming?: boolean;
@@ -15,12 +11,13 @@ interface Props {
 }
 
 function InputBar({
+	sessionId,
 	onSend,
 	disabled = false,
 	isStreaming = false,
 	onInterrupt,
 }: Props) {
-	const [input, setInput] = useState("");
+	const input = useInputStore((state) => state.inputs[sessionId] ?? "");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when input changes to adjust height
@@ -36,9 +33,9 @@ function InputBar({
 		const trimmed = input.trim();
 		if (trimmed && !disabled && !isStreaming) {
 			onSend(trimmed);
-			setInput("");
+			inputActions.clear(sessionId);
 		}
-	}, [input, onSend, disabled, isStreaming]);
+	}, [input, onSend, disabled, isStreaming, sessionId]);
 
 	const handleKeyDown = useCallback(
 		(e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -56,7 +53,7 @@ function InputBar({
 				<textarea
 					ref={textareaRef}
 					value={input}
-					onChange={(e) => setInput(e.target.value)}
+					onChange={(e) => inputActions.set(sessionId, e.target.value)}
 					onKeyDown={handleKeyDown}
 					placeholder={
 						isMobile()
