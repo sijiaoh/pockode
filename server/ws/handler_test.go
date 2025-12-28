@@ -15,6 +15,8 @@ import (
 	"github.com/pockode/server/session"
 )
 
+var bgCtx = context.Background()
+
 type testEnv struct {
 	t      *testing.T
 	mock   *mockAgent
@@ -138,7 +140,7 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("sess")
+	env.store.Create(bgCtx, "sess")
 
 	env.sendMessage("sess", "Hello AI")
 	responses := env.readN(2)
@@ -159,7 +161,7 @@ func TestHandler_MultipleMessages(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("sess")
+	env.store.Create(bgCtx, "sess")
 
 	env.sendMessage("sess", "First message")
 	env.skipN(2)
@@ -182,8 +184,8 @@ func TestHandler_MultipleSessions(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("session-A")
-	env.store.Create("session-B")
+	env.store.Create(bgCtx, "session-A")
+	env.store.Create(bgCtx, "session-B")
 
 	env.sendMessage("session-A", "Hello from A")
 	env.skipN(2)
@@ -213,7 +215,7 @@ func TestHandler_PermissionRequest(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("sess")
+	env.store.Create(bgCtx, "sess")
 
 	env.sendMessage("sess", "run ls")
 	resp := env.read()
@@ -253,7 +255,7 @@ func TestHandler_PermissionResponse_InvalidRequestID(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("sess")
+	env.store.Create(bgCtx, "sess")
 
 	env.sendMessage("sess", "hello")
 	env.skipN(2)
@@ -279,7 +281,7 @@ func TestHandler_PermissionResponse_Duplicate(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("sess")
+	env.store.Create(bgCtx, "sess")
 
 	env.sendMessage("sess", "test")
 	env.skipN(2)
@@ -299,7 +301,7 @@ func TestHandler_AgentStartError(t *testing.T) {
 		startErr: fmt.Errorf("failed to start agent"),
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("sess")
+	env.store.Create(bgCtx, "sess")
 
 	env.sendMessage("sess", "hello")
 	resp := env.read()
@@ -317,7 +319,7 @@ func TestHandler_Interrupt(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("sess")
+	env.store.Create(bgCtx, "sess")
 
 	env.sendMessage("sess", "hello")
 	env.skipN(2)
@@ -355,7 +357,7 @@ func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("new-session")
+	env.store.Create(bgCtx, "new-session")
 
 	env.sendMessage("new-session", "hello")
 	env.skipN(2)
@@ -378,8 +380,8 @@ func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("activated-session")
-	env.store.Activate("activated-session")
+	env.store.Create(bgCtx, "activated-session")
+	env.store.Activate(bgCtx, "activated-session")
 
 	env.sendMessage("activated-session", "hello")
 	env.skipN(2)
@@ -408,7 +410,7 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("sess")
+	env.store.Create(bgCtx, "sess")
 
 	env.sendMessage("sess", "ask me")
 	resp := env.read()
@@ -451,7 +453,7 @@ func TestHandler_QuestionResponse_InvalidRequestID(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.store.Create("sess")
+	env.store.Create(bgCtx, "sess")
 
 	env.sendMessage("sess", "hello")
 	env.skipN(2)

@@ -37,11 +37,9 @@ func (h *SessionHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 
 // HandleCreate handles POST /api/sessions
 func (h *SessionHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
-	// Generate UUIDv7 for session ID
 	sessionID := uuid.Must(uuid.NewV7()).String()
 
-	// Save to store (agent session is created lazily on first message)
-	sess, err := h.store.Create(sessionID)
+	sess, err := h.store.Create(r.Context(), sessionID)
 	if err != nil {
 		logger.Error("Failed to create session: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -61,7 +59,7 @@ func (h *SessionHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.store.Delete(sessionID); err != nil {
+	if err := h.store.Delete(r.Context(), sessionID); err != nil {
 		logger.Error("Failed to delete session: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -78,7 +76,7 @@ func (h *SessionHandler) HandleGetHistory(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	history, err := h.store.GetHistory(sessionID)
+	history, err := h.store.GetHistory(r.Context(), sessionID)
 	if err != nil {
 		logger.Error("Failed to get history: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -112,7 +110,7 @@ func (h *SessionHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.store.Update(sessionID, req.Title); err != nil {
+	if err := h.store.Update(r.Context(), sessionID, req.Title); err != nil {
 		if errors.Is(err, session.ErrSessionNotFound) {
 			http.Error(w, "Session not found", http.StatusNotFound)
 			return

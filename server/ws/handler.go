@@ -163,7 +163,7 @@ func (h *Handler) getOrCreateSession(ctx context.Context, conn *websocket.Conn, 
 	state.sessions[sessionID] = sess
 
 	if !resume {
-		if err := h.sessionStore.Activate(sessionID); err != nil {
+		if err := h.sessionStore.Activate(ctx, sessionID); err != nil {
 			logger.Error("getOrCreateSession: failed to activate session: %v", err)
 		}
 	}
@@ -183,7 +183,7 @@ func (h *Handler) handleMessage(ctx context.Context, conn *websocket.Conn, msg C
 
 	logger.Info("handleMessage: prompt=%q, sessionID=%s", logger.Truncate(msg.Content, promptLogMaxLen), msg.SessionID)
 
-	if err := h.sessionStore.AppendToHistory(msg.SessionID, msg); err != nil {
+	if err := h.sessionStore.AppendToHistory(ctx, msg.SessionID, msg); err != nil {
 		logger.Error("handleMessage: failed to append to history: %v", err)
 	}
 
@@ -262,7 +262,7 @@ func (h *Handler) streamEvents(ctx context.Context, conn *websocket.Conn, sessio
 			Questions:             event.Questions,
 		}
 
-		if err := h.sessionStore.AppendToHistory(sessionID, serverMsg); err != nil {
+		if err := h.sessionStore.AppendToHistory(ctx, sessionID, serverMsg); err != nil {
 			logger.Error("streamEvents: failed to append to history: %v", err)
 		}
 

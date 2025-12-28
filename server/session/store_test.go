@@ -1,8 +1,11 @@
 package session
 
 import (
+	"context"
 	"testing"
 )
+
+var ctx = context.Background()
 
 func TestFileStore_Create(t *testing.T) {
 	store, err := NewFileStore(t.TempDir())
@@ -10,7 +13,7 @@ func TestFileStore_Create(t *testing.T) {
 		t.Fatalf("NewFileStore failed: %v", err)
 	}
 
-	sess, err := store.Create("test-session-id")
+	sess, err := store.Create(ctx, "test-session-id")
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -38,9 +41,8 @@ func TestFileStore_List(t *testing.T) {
 		t.Errorf("expected 0 sessions, got %d", len(sessions))
 	}
 
-	// Create sessions
-	sess1, _ := store.Create("session-1")
-	sess2, _ := store.Create("session-2")
+	sess1, _ := store.Create(ctx, "session-1")
+	sess2, _ := store.Create(ctx, "session-2")
 
 	sessions, err = store.List()
 	if err != nil {
@@ -62,9 +64,9 @@ func TestFileStore_List(t *testing.T) {
 func TestFileStore_Delete(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	sess, _ := store.Create("session-to-delete")
+	sess, _ := store.Create(ctx, "session-to-delete")
 
-	err := store.Delete(sess.ID)
+	err := store.Delete(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
@@ -78,8 +80,7 @@ func TestFileStore_Delete(t *testing.T) {
 func TestFileStore_DeleteNonExistent(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	// Delete is idempotent - no error on non-existent session
-	err := store.Delete("non-existent-id")
+	err := store.Delete(ctx, "non-existent-id")
 	if err != nil {
 		t.Errorf("Delete non-existent should not error, got %v", err)
 	}
@@ -88,12 +89,12 @@ func TestFileStore_DeleteNonExistent(t *testing.T) {
 func TestFileStore_Update(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	sess, _ := store.Create("session-to-update")
+	sess, _ := store.Create(ctx, "session-to-update")
 	if sess.Title != "New Chat" {
 		t.Fatalf("expected initial title 'New Chat', got %q", sess.Title)
 	}
 
-	err := store.Update(sess.ID, "Updated Title")
+	err := store.Update(ctx, sess.ID, "Updated Title")
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
@@ -113,8 +114,7 @@ func TestFileStore_Update(t *testing.T) {
 func TestFileStore_UpdateNonExistent(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	// Should return ErrSessionNotFound for non-existent session
-	err := store.Update("non-existent-id", "Title")
+	err := store.Update(ctx, "non-existent-id", "Title")
 	if err != ErrSessionNotFound {
 		t.Errorf("Update non-existent should return ErrSessionNotFound, got %v", err)
 	}
@@ -132,8 +132,7 @@ func TestFileStore_Get(t *testing.T) {
 		t.Error("expected not found for non-existent session")
 	}
 
-	// Create and get session
-	created, _ := store.Create("test-session")
+	created, _ := store.Create(ctx, "test-session")
 	sess, found, err := store.Get("test-session")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
@@ -149,12 +148,12 @@ func TestFileStore_Get(t *testing.T) {
 func TestFileStore_Activate(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	sess, _ := store.Create("session-to-activate")
+	sess, _ := store.Create(ctx, "session-to-activate")
 	if sess.Activated {
 		t.Error("expected new session to not be activated")
 	}
 
-	err := store.Activate(sess.ID)
+	err := store.Activate(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("Activate failed: %v", err)
 	}
@@ -174,8 +173,7 @@ func TestFileStore_Activate(t *testing.T) {
 func TestFileStore_ActivateNonExistent(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	// Should return ErrSessionNotFound for non-existent session
-	err := store.Activate("non-existent-id")
+	err := store.Activate(ctx, "non-existent-id")
 	if err != ErrSessionNotFound {
 		t.Errorf("Activate non-existent should return ErrSessionNotFound, got %v", err)
 	}
@@ -184,9 +182,8 @@ func TestFileStore_ActivateNonExistent(t *testing.T) {
 func TestFileStore_Persistence(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create session with first store instance
 	store1, _ := NewFileStore(dir)
-	sess, _ := store1.Create("persistent-session")
+	sess, _ := store1.Create(ctx, "persistent-session")
 
 	// Create new store instance, should see persisted data
 	store2, _ := NewFileStore(dir)
@@ -207,8 +204,7 @@ func TestFileStore_History(t *testing.T) {
 
 	sessionID := "test-session"
 
-	// Empty history for non-existent session
-	history, err := store.GetHistory(sessionID)
+	history, err := store.GetHistory(ctx, sessionID)
 	if err != nil {
 		t.Fatalf("GetHistory failed: %v", err)
 	}
@@ -216,19 +212,17 @@ func TestFileStore_History(t *testing.T) {
 		t.Errorf("expected 0 records, got %d", len(history))
 	}
 
-	// Append records
 	record1 := map[string]string{"type": "message", "content": "hello"}
 	record2 := map[string]string{"type": "text", "content": "world"}
 
-	if err := store.AppendToHistory(sessionID, record1); err != nil {
+	if err := store.AppendToHistory(ctx, sessionID, record1); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
-	if err := store.AppendToHistory(sessionID, record2); err != nil {
+	if err := store.AppendToHistory(ctx, sessionID, record2); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
 
-	// Read back
-	history, err = store.GetHistory(sessionID)
+	history, err = store.GetHistory(ctx, sessionID)
 	if err != nil {
 		t.Fatalf("GetHistory failed: %v", err)
 	}
@@ -249,20 +243,17 @@ func TestFileStore_Delete_RemovesHistory(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
 	sessionID := "session-with-history"
-	store.Create(sessionID)
-	store.AppendToHistory(sessionID, map[string]string{"type": "message", "content": "test"})
+	store.Create(ctx, sessionID)
+	store.AppendToHistory(ctx, sessionID, map[string]string{"type": "message", "content": "test"})
 
-	// Verify history exists
-	history, _ := store.GetHistory(sessionID)
+	history, _ := store.GetHistory(ctx, sessionID)
 	if len(history) != 1 {
 		t.Fatal("expected history to exist before delete")
 	}
 
-	// Delete session
-	store.Delete(sessionID)
+	store.Delete(ctx, sessionID)
 
-	// Verify history is also deleted
-	history, _ = store.GetHistory(sessionID)
+	history, _ = store.GetHistory(ctx, sessionID)
 	if len(history) != 0 {
 		t.Errorf("expected history to be deleted, got %d records", len(history))
 	}

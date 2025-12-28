@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,10 +12,12 @@ import (
 	"github.com/pockode/server/session"
 )
 
+var ctx = context.Background()
+
 func TestSessionHandler_List(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
-	store.Create("session-1")
-	store.Create("session-2")
+	store.Create(ctx, "session-1")
+	store.Create(ctx, "session-2")
 
 	handler := NewSessionHandler(store)
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
@@ -79,7 +82,7 @@ func TestSessionHandler_Create(t *testing.T) {
 
 func TestSessionHandler_Delete(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
-	sess, _ := store.Create("session-to-delete")
+	sess, _ := store.Create(ctx, "session-to-delete")
 
 	handler := NewSessionHandler(store)
 	mux := http.NewServeMux()
@@ -103,7 +106,7 @@ func TestSessionHandler_Delete(t *testing.T) {
 
 func TestSessionHandler_Update(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
-	sess, _ := store.Create("session-to-update")
+	sess, _ := store.Create(ctx, "session-to-update")
 
 	handler := NewSessionHandler(store)
 	mux := http.NewServeMux()
@@ -128,7 +131,7 @@ func TestSessionHandler_Update(t *testing.T) {
 
 func TestSessionHandler_Update_EmptyTitle(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
-	sess, _ := store.Create("session-for-empty-title")
+	sess, _ := store.Create(ctx, "session-for-empty-title")
 
 	handler := NewSessionHandler(store)
 	mux := http.NewServeMux()
@@ -165,11 +168,10 @@ func TestSessionHandler_Update_NotFound(t *testing.T) {
 
 func TestSessionHandler_GetHistory(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
-	sess, _ := store.Create("session-with-history")
+	sess, _ := store.Create(ctx, "session-with-history")
 
-	// Add history records
-	store.AppendToHistory(sess.ID, map[string]string{"type": "message", "content": "hello"})
-	store.AppendToHistory(sess.ID, map[string]string{"type": "text", "content": "world"})
+	store.AppendToHistory(ctx, sess.ID, map[string]string{"type": "message", "content": "hello"})
+	store.AppendToHistory(ctx, sess.ID, map[string]string{"type": "text", "content": "world"})
 
 	handler := NewSessionHandler(store)
 	mux := http.NewServeMux()

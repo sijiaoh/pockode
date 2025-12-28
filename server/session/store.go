@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,17 +11,19 @@ import (
 )
 
 type Store interface {
-	// Session metadata
+	// Session metadata (memory only)
 	List() ([]SessionMeta, error)
 	Get(sessionID string) (SessionMeta, bool, error)
-	Create(sessionID string) (SessionMeta, error)
-	Delete(sessionID string) error
-	Update(sessionID string, title string) error
-	Activate(sessionID string) error
+
+	// Session metadata (with I/O)
+	Create(ctx context.Context, sessionID string) (SessionMeta, error)
+	Delete(ctx context.Context, sessionID string) error
+	Update(ctx context.Context, sessionID string, title string) error
+	Activate(ctx context.Context, sessionID string) error
 
 	// History persistence
-	GetHistory(sessionID string) ([]json.RawMessage, error)
-	AppendToHistory(sessionID string, record any) error
+	GetHistory(ctx context.Context, sessionID string) ([]json.RawMessage, error)
+	AppendToHistory(ctx context.Context, sessionID string, record any) error
 }
 
 type indexData struct {
@@ -103,7 +106,11 @@ func (s *FileStore) Get(sessionID string) (SessionMeta, bool, error) {
 	return SessionMeta{}, false, nil
 }
 
-func (s *FileStore) Create(sessionID string) (SessionMeta, error) {
+func (s *FileStore) Create(ctx context.Context, sessionID string) (SessionMeta, error) {
+	if err := ctx.Err(); err != nil {
+		return SessionMeta{}, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -118,14 +125,17 @@ func (s *FileStore) Create(sessionID string) (SessionMeta, error) {
 	s.sessions = append([]SessionMeta{session}, s.sessions...)
 
 	if err := s.persistIndex(); err != nil {
-		// Rollback on error
 		s.sessions = s.sessions[1:]
 		return SessionMeta{}, err
 	}
 	return session, nil
 }
 
-func (s *FileStore) Delete(sessionID string) error {
+func (s *FileStore) Delete(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -145,7 +155,11 @@ func (s *FileStore) Delete(sessionID string) error {
 	return s.persistIndex()
 }
 
-func (s *FileStore) Update(sessionID string, title string) error {
+func (s *FileStore) Update(ctx context.Context, sessionID string, title string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -161,7 +175,11 @@ func (s *FileStore) Update(sessionID string, title string) error {
 	return ErrSessionNotFound
 }
 
-func (s *FileStore) Activate(sessionID string) error {
+func (s *FileStore) Activate(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -180,7 +198,11 @@ func (s *FileStore) historyPath(sessionID string) string {
 	return filepath.Join(s.dataDir, "sessions", sessionID, "history.jsonl")
 }
 
-func (s *FileStore) GetHistory(sessionID string) ([]json.RawMessage, error) {
+func (s *FileStore) GetHistory(ctx context.Context, sessionID string) ([]json.RawMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -214,7 +236,11 @@ func (s *FileStore) GetHistory(sessionID string) ([]json.RawMessage, error) {
 	return records, nil
 }
 
-func (s *FileStore) AppendToHistory(sessionID string, record any) error {
+func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, record any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
