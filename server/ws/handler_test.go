@@ -230,8 +230,8 @@ func TestHandler_PermissionResponse_InvalidSession(t *testing.T) {
 	})
 	resp := env.read()
 
-	if resp.Type != "error" || !strings.Contains(resp.Error, "session not attached") {
-		t.Errorf("expected session not attached error, got %+v", resp)
+	if resp.Type != "error" || !strings.Contains(resp.Error, "session not found") {
+		t.Errorf("expected session not found error, got %+v", resp)
 	}
 }
 
@@ -332,8 +332,8 @@ func TestHandler_Interrupt_InvalidSession(t *testing.T) {
 	env.send(ClientMessage{Type: "interrupt", SessionID: "non-existent"})
 	resp := env.read()
 
-	if resp.Type != "error" || !strings.Contains(resp.Error, "session not attached") {
-		t.Errorf("expected session not attached error, got %+v", resp)
+	if resp.Type != "error" || !strings.Contains(resp.Error, "session not found") {
+		t.Errorf("expected session not found error, got %+v", resp)
 	}
 }
 
@@ -414,6 +414,22 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 	}
 	if resp.Questions[0].Question != "Which library?" {
 		t.Errorf("expected question 'Which library?', got %q", resp.Questions[0].Question)
+	}
+}
+
+func TestHandler_QuestionResponse_InvalidSession(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	env.send(ClientMessage{
+		Type:      "question_response",
+		SessionID: "non-existent",
+		RequestID: "req-123",
+		Answers:   map[string]string{"q1": "answer1"},
+	})
+	resp := env.read()
+
+	if resp.Type != "error" || !strings.Contains(resp.Error, "session not found") {
+		t.Errorf("expected session not found error, got %+v", resp)
 	}
 }
 

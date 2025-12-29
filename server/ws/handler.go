@@ -110,19 +110,19 @@ func (h *Handler) handleConnection(ctx context.Context, conn *websocket.Conn) {
 			}
 
 		case "interrupt":
-			if err := h.handleInterrupt(log, msg, state); err != nil {
+			if err := h.handleInterrupt(ctx, log, conn, msg, state); err != nil {
 				log.Error("interrupt error", "error", err)
 				h.sendError(ctx, conn, err.Error())
 			}
 
 		case "permission_response":
-			if err := h.handlePermissionResponse(ctx, msg, state); err != nil {
+			if err := h.handlePermissionResponse(ctx, log, conn, msg, state); err != nil {
 				log.Error("permission response error", "error", err)
 				h.sendError(ctx, conn, err.Error())
 			}
 
 		case "question_response":
-			if err := h.handleQuestionResponse(msg, state); err != nil {
+			if err := h.handleQuestionResponse(ctx, log, conn, msg, state); err != nil {
 				log.Error("question response error", "error", err)
 				h.sendError(ctx, conn, err.Error())
 			}
@@ -186,13 +186,13 @@ func (h *Handler) handleMessage(ctx context.Context, log *slog.Logger, conn *web
 }
 
 // Soft stop that preserves the session for future messages.
-func (h *Handler) handleInterrupt(log *slog.Logger, msg ClientMessage, state *connectionState) error {
-	entry, exists := state.attached[msg.SessionID]
-	if !exists {
-		return fmt.Errorf("session not attached: %s", msg.SessionID)
+func (h *Handler) handleInterrupt(ctx context.Context, log *slog.Logger, conn *websocket.Conn, msg ClientMessage, state *connectionState) error {
+	sess, err := h.getOrCreateSession(ctx, log, conn, msg.SessionID, state)
+	if err != nil {
+		return err
 	}
 
-	if err := entry.Session().SendInterrupt(); err != nil {
+	if err := sess.SendInterrupt(); err != nil {
 		return fmt.Errorf("failed to send interrupt: %w", err)
 	}
 
@@ -200,27 +200,27 @@ func (h *Handler) handleInterrupt(log *slog.Logger, msg ClientMessage, state *co
 	return nil
 }
 
-func (h *Handler) handlePermissionResponse(ctx context.Context, msg ClientMessage, state *connectionState) error {
-	entry, exists := state.attached[msg.SessionID]
-	if !exists {
-		return fmt.Errorf("session not attached: %s", msg.SessionID)
+func (h *Handler) handlePermissionResponse(ctx context.Context, log *slog.Logger, conn *websocket.Conn, msg ClientMessage, state *connectionState) error {
+	sess, err := h.getOrCreateSession(ctx, log, conn, msg.SessionID, state)
+	if err != nil {
+		return err
 	}
 
 	if err := h.sessionStore.AppendToHistory(ctx, msg.SessionID, msg); err != nil {
-		slog.Error("failed to append permission_response to history", "error", err)
+		log.Error("failed to append permission_response to history", "error", err)
 	}
 
 	choice := parsePermissionChoice(msg.Choice)
-	return entry.Session().SendPermissionResponse(msg.RequestID, choice)
+	return sess.SendPermissionResponse(msg.RequestID, choice)
 }
 
-func (h *Handler) handleQuestionResponse(msg ClientMessage, state *connectionState) error {
-	entry, exists := state.attached[msg.SessionID]
-	if !exists {
-		return fmt.Errorf("session not attached: %s", msg.SessionID)
+func (h *Handler) handleQuestionResponse(ctx context.Context, log *slog.Logger, conn *websocket.Conn, msg ClientMessage, state *connectionState) error {
+	sess, err := h.getOrCreateSession(ctx, log, conn, msg.SessionID, state)
+	if err != nil {
+		return err
 	}
 
-	return entry.Session().SendQuestionResponse(msg.RequestID, msg.Answers)
+	return sess.SendQuestionResponse(msg.RequestID, msg.Answers)
 }
 
 func parsePermissionChoice(choice string) agent.PermissionChoice {
