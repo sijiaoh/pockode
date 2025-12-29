@@ -8,7 +8,7 @@ import (
 
 // ClientMessage represents a message sent by the client.
 type ClientMessage struct {
-	Type      string            `json:"type"`                 // "message", "interrupt", "permission_response", or "question_response"
+	Type      string            `json:"type"`                 // "attach", "message", "interrupt", "permission_response", or "question_response"
 	Content   string            `json:"content"`              // User input (for "message" type)
 	SessionID string            `json:"session_id,omitempty"` // Session identifier
 	RequestID string            `json:"request_id,omitempty"` // Request ID (for permission_response and question_response)

@@ -63,6 +63,13 @@ export function useChatMessages({
 		onMessage: handleServerMessage,
 	});
 
+	// Attach to session when connected (enables receiving events without sending a message)
+	useEffect(() => {
+		if (status === "connected") {
+			send({ type: "attach", session_id: sessionId });
+		}
+	}, [status, sessionId, send]);
+
 	useEffect(() => {
 		setMessages([]);
 

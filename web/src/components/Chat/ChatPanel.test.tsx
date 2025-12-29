@@ -94,7 +94,8 @@ describe("ChatPanel", () => {
 		});
 
 		it("shows error when send fails", async () => {
-			mockState.send.mockReturnValueOnce(false);
+			// First call is attach (returns true), second is user message (fails)
+			mockState.send.mockReturnValueOnce(true).mockReturnValueOnce(false);
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();

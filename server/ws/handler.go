@@ -97,6 +97,12 @@ func (h *Handler) handleConnection(ctx context.Context, conn *websocket.Conn) {
 		log.Debug("parsed message", "type", msg.Type)
 
 		switch msg.Type {
+		case "attach":
+			if _, err := h.getOrCreateSession(ctx, log, conn, msg.SessionID, state); err != nil {
+				log.Error("attach error", "error", err)
+				h.sendError(ctx, conn, err.Error())
+			}
+
 		case "message":
 			if err := h.handleMessage(ctx, log, conn, msg, state); err != nil {
 				log.Error("handleMessage error", "error", err)

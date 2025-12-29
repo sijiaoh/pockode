@@ -128,6 +128,10 @@ export interface AskUserQuestionRequest {
 // WebSocket client message
 export type WSClientMessage =
 	| {
+			type: "attach";
+			session_id: string;
+	  }
+	| {
 			type: "message";
 			content: string;
 			session_id: string;
