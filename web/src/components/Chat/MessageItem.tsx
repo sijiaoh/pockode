@@ -316,7 +316,7 @@ function MessageItem({ message, onPermissionRespond }: Props) {
 	if (message.role === "user") {
 		return (
 			<div className="flex justify-end">
-				<div className="max-w-[80%] rounded-lg bg-th-user-bubble p-2.5 text-th-user-bubble-text sm:p-3">
+				<div className="max-w-[80%] min-w-0 overflow-hidden rounded-lg bg-th-user-bubble p-2.5 text-th-user-bubble-text sm:p-3">
 					<p className="whitespace-pre-wrap break-words">{message.content}</p>
 				</div>
 			</div>
@@ -326,7 +326,7 @@ function MessageItem({ message, onPermissionRespond }: Props) {
 	// Assistant message
 	return (
 		<div className="flex justify-start">
-			<div className="max-w-[80%] rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3">
+			<div className="max-w-[80%] min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3">
 				{message.parts.length > 0 && (
 					<div className="space-y-2">
 						{message.parts.map((part, index) => {

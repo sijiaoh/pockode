@@ -16,7 +16,7 @@ function CodeBlock({ className, children, node }: CodeProps) {
 
 	if (isInline) {
 		return (
-			<code className="rounded bg-th-code-bg px-1.5 py-0.5 text-sm text-th-code-text">
+			<code className="break-all rounded bg-th-code-bg px-1.5 py-0.5 text-sm text-th-code-text">
 				{children}
 			</code>
 		);
