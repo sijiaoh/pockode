@@ -173,7 +173,7 @@ describe("ChatPanel", () => {
 	});
 
 	describe("permission requests", () => {
-		it("shows dialog and sends allow response", async () => {
+		it("shows inline permission request and sends allow response", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -188,7 +188,10 @@ describe("ChatPanel", () => {
 				});
 			});
 
-			expect(screen.getByRole("dialog")).toBeInTheDocument();
+			// Permission request now shows inline in message flow
+			expect(screen.getByText("Bash")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
+
 			await user.click(screen.getByRole("button", { name: "Allow" }));
 
 			expect(mockState.send).toHaveBeenCalledWith({
@@ -197,7 +200,32 @@ describe("ChatPanel", () => {
 				request_id: "req-1",
 				choice: "allow",
 			});
-			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		});
+
+		it("shows inline permission request and sends deny response", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			act(() => {
+				mockState.onMessage?.({
+					type: "permission_request",
+					request_id: "req-2",
+					tool_name: "Edit",
+					tool_input: { file_path: "/etc/passwd" },
+					tool_use_id: "tool-2",
+				});
+			});
+
+			expect(screen.getByText("Edit")).toBeInTheDocument();
+			await user.click(screen.getByRole("button", { name: "Deny" }));
+
+			expect(mockState.send).toHaveBeenCalledWith({
+				type: "permission_response",
+				session_id: "test-session",
+				request_id: "req-2",
+				choice: "deny",
+			});
 		});
 	});
 

@@ -23,11 +23,19 @@ export interface ToolCall {
 	result?: string;
 }
 
+// Permission request status
+export type PermissionStatus = "pending" | "allowed" | "denied";
+
 // Content part - represents a piece of content in timeline order
 export type ContentPart =
 	| { type: "text"; content: string }
 	| { type: "tool_call"; tool: ToolCall }
-	| { type: "system"; content: string };
+	| { type: "system"; content: string }
+	| {
+			type: "permission_request";
+			request: PermissionRequest;
+			status: PermissionStatus;
+	  };
 
 // User message - plain text content
 export interface UserMessage {

@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Message } from "../../types/message";
 import MessageItem from "./MessageItem";
 
@@ -120,5 +120,86 @@ describe("MessageItem", () => {
 		await user.click(screen.getByRole("button"));
 		expect(screen.getByText(/file1\.txt/)).toBeInTheDocument();
 		expect(screen.getByText(/file2\.txt/)).toBeInTheDocument();
+	});
+
+	it("renders pending permission_request with action buttons", () => {
+		const message: Message = {
+			id: "7",
+			role: "assistant",
+			parts: [
+				{
+					type: "permission_request",
+					request: {
+						requestId: "req-1",
+						toolName: "Bash",
+						toolInput: { command: "rm -rf /" },
+						toolUseId: "tool-1",
+					},
+					status: "pending",
+				},
+			],
+			status: "streaming",
+			createdAt: new Date(),
+		};
+
+		render(<MessageItem message={message} onPermissionRespond={vi.fn()} />);
+		expect(screen.getByText("Bash")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Deny" })).toBeInTheDocument();
+	});
+
+	it("calls onPermissionRespond when Allow is clicked", async () => {
+		const user = userEvent.setup();
+		const onRespond = vi.fn();
+		const message: Message = {
+			id: "8",
+			role: "assistant",
+			parts: [
+				{
+					type: "permission_request",
+					request: {
+						requestId: "req-1",
+						toolName: "Bash",
+						toolInput: { command: "ls" },
+						toolUseId: "tool-1",
+					},
+					status: "pending",
+				},
+			],
+			status: "streaming",
+			createdAt: new Date(),
+		};
+
+		render(<MessageItem message={message} onPermissionRespond={onRespond} />);
+		await user.click(screen.getByRole("button", { name: "Allow" }));
+		expect(onRespond).toHaveBeenCalledWith("req-1", "allow");
+	});
+
+	it("renders allowed permission_request without buttons", () => {
+		const message: Message = {
+			id: "9",
+			role: "assistant",
+			parts: [
+				{
+					type: "permission_request",
+					request: {
+						requestId: "req-1",
+						toolName: "Bash",
+						toolInput: { command: "ls" },
+						toolUseId: "tool-1",
+					},
+					status: "allowed",
+				},
+			],
+			status: "complete",
+			createdAt: new Date(),
+		};
+
+		render(<MessageItem message={message} />);
+		expect(screen.getByText("Bash")).toBeInTheDocument();
+		expect(screen.getByText("✓")).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Allow" }),
+		).not.toBeInTheDocument();
 	});
 });

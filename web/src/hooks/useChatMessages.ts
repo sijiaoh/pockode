@@ -8,6 +8,7 @@ import { getHistory } from "../lib/sessionApi";
 import type {
 	AssistantMessage,
 	Message,
+	PermissionStatus,
 	UserMessage,
 	WSClientMessage,
 	WSServerMessage,
@@ -29,6 +30,7 @@ interface UseChatMessagesReturn {
 	status: ConnectionStatus;
 	send: (msg: WSClientMessage) => boolean;
 	sendUserMessage: (content: string) => boolean;
+	updatePermissionStatus: (requestId: string, status: PermissionStatus) => void;
 }
 
 export function useChatMessages({
@@ -44,15 +46,13 @@ export function useChatMessages({
 				return;
 			}
 
-			// Delegate dialog events to parent; message events handled here
-			if (
-				serverMsg.type === "permission_request" ||
-				serverMsg.type === "ask_user_question"
-			) {
+			// Delegate ask_user_question to parent (keeps dialog pattern)
+			if (serverMsg.type === "ask_user_question") {
 				onServerMessage?.(serverMsg);
 				return;
 			}
 
+			// permission_request is now handled via messageReducer
 			const event = normalizeEvent(serverMsg);
 			setMessages((prev) => applyServerEvent(prev, event));
 		},
@@ -135,6 +135,29 @@ export function useChatMessages({
 		[send, sessionId],
 	);
 
+	const updatePermissionStatus = useCallback(
+		(requestId: string, newStatus: PermissionStatus) => {
+			setMessages((prev) =>
+				prev.map((msg): Message => {
+					if (msg.role !== "assistant") return msg;
+					return {
+						...msg,
+						parts: msg.parts.map((part) => {
+							if (
+								part.type === "permission_request" &&
+								part.request.requestId === requestId
+							) {
+								return { ...part, status: newStatus };
+							}
+							return part;
+						}),
+					};
+				}),
+			);
+		},
+		[],
+	);
+
 	const isStreaming = messages.some(
 		(m) => m.status === "sending" || m.status === "streaming",
 	);
@@ -146,5 +169,6 @@ export function useChatMessages({
 		status,
 		send,
 		sendUserMessage,
+		updatePermissionStatus,
 	};
 }

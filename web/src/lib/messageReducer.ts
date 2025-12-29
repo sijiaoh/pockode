@@ -2,6 +2,7 @@ import type {
 	AssistantMessage,
 	ContentPart,
 	Message,
+	PermissionUpdate,
 	UserMessage,
 	WSServerMessage,
 } from "../types/message";
@@ -22,7 +23,15 @@ export type NormalizedEvent =
 	| { type: "interrupted" }
 	| { type: "process_ended" }
 	| { type: "system"; content: string }
-	| { type: "message"; content: string }; // For history replay (user message)
+	| { type: "message"; content: string } // For history replay (user message)
+	| {
+			type: "permission_request";
+			requestId: string;
+			toolName: string;
+			toolInput: unknown;
+			toolUseId: string;
+			permissionSuggestions?: PermissionUpdate[];
+	  };
 
 // Convert snake_case server event to camelCase
 export function normalizeEvent(
@@ -59,6 +68,17 @@ export function normalizeEvent(
 			return { type: "system", content: (record.content as string) ?? "" };
 		case "message":
 			return { type: "message", content: (record.content as string) ?? "" };
+		case "permission_request":
+			return {
+				type: "permission_request",
+				requestId: record.request_id as string,
+				toolName: record.tool_name as string,
+				toolInput: record.tool_input,
+				toolUseId: record.tool_use_id as string,
+				permissionSuggestions: record.permission_suggestions as
+					| PermissionUpdate[]
+					| undefined,
+			};
 		default:
 			// Fallback for unknown types - treat as text
 			return { type: "text", content: "" };
@@ -68,6 +88,7 @@ export function normalizeEvent(
 export function applyEventToParts(
 	parts: ContentPart[],
 	event: NormalizedEvent,
+	isReplay = false,
 ): ContentPart[] {
 	switch (event.type) {
 		case "text": {
@@ -98,6 +119,21 @@ export function applyEventToParts(
 					? { ...part, tool: { ...part.tool, result: event.toolResult } }
 					: part,
 			);
+		case "permission_request":
+			return [
+				...parts,
+				{
+					type: "permission_request",
+					request: {
+						requestId: event.requestId,
+						toolName: event.toolName,
+						toolInput: event.toolInput,
+						toolUseId: event.toolUseId,
+						permissionSuggestions: event.permissionSuggestions,
+					},
+					status: isReplay ? "denied" : "pending",
+				},
+			];
 		default:
 			return parts;
 	}
@@ -119,6 +155,7 @@ export function createAssistantMessage(
 export function applyServerEvent(
 	messages: Message[],
 	event: NormalizedEvent,
+	isReplay = false,
 ): Message[] {
 	// System messages are always standalone
 	if (event.type === "system") {
@@ -150,7 +187,7 @@ export function applyServerEvent(
 
 	const message: AssistantMessage = {
 		...current,
-		parts: applyEventToParts(current.parts, event),
+		parts: applyEventToParts(current.parts, event, isReplay),
 	};
 
 	if (event.type === "text") {
@@ -205,7 +242,30 @@ export function replayHistory(records: unknown[]): Message[] {
 		if (event.type === "message" && event.content) {
 			messages = applyUserMessage(messages, event.content);
 		} else {
-			messages = applyServerEvent(messages, event);
+			messages = applyServerEvent(messages, event, true);
+		}
+	}
+
+	// Check if the last permission_request might still be pending
+	// A permission_request is considered pending if:
+	// 1. It's at the end of the last assistant message
+	// 2. The message wasn't finalized (no done/error/interrupted after it)
+	const lastMessage = messages.at(-1);
+	if (
+		lastMessage?.role === "assistant" &&
+		(lastMessage.status === "streaming" || lastMessage.status === "sending")
+	) {
+		const lastPart = lastMessage.parts.at(-1);
+		// Only the very last permission_request could be pending
+		if (
+			lastPart?.type === "permission_request" &&
+			lastPart.status === "denied"
+		) {
+			const updatedParts = [
+				...lastMessage.parts.slice(0, -1),
+				{ ...lastPart, status: "pending" as const },
+			];
+			messages[messages.length - 1] = { ...lastMessage, parts: updatedParts };
 		}
 	}
 

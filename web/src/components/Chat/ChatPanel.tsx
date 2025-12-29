@@ -5,15 +5,12 @@ import {
 } from "../../hooks/useChatMessages";
 import type {
 	AskUserQuestionRequest,
-	PermissionRequest,
 	WSServerMessage,
 } from "../../types/message";
 import MainContainer from "../Layout/MainContainer";
 import AskUserQuestionDialog from "./AskUserQuestionDialog";
-import ExitPlanModeDialog from "./ExitPlanModeDialog";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
-import PermissionDialog from "./PermissionDialog";
 
 interface Props {
 	sessionId: string;
@@ -38,22 +35,12 @@ function ChatPanel({
 	onLogout,
 	onOpenSidebar,
 }: Props) {
-	// Dialog state kept here (tightly coupled to UI, not domain data)
-	const [permissionRequest, setPermissionRequest] =
-		useState<PermissionRequest | null>(null);
+	// Dialog state for ask_user_question (permission_request now in message flow)
 	const [questionRequest, setQuestionRequest] =
 		useState<AskUserQuestionRequest | null>(null);
 
 	const handleServerMessage = useCallback((serverMsg: WSServerMessage) => {
-		if (serverMsg.type === "permission_request") {
-			setPermissionRequest({
-				requestId: serverMsg.request_id,
-				toolName: serverMsg.tool_name,
-				toolInput: serverMsg.tool_input,
-				toolUseId: serverMsg.tool_use_id,
-				permissionSuggestions: serverMsg.permission_suggestions,
-			});
-		} else if (serverMsg.type === "ask_user_question") {
+		if (serverMsg.type === "ask_user_question") {
 			setQuestionRequest({
 				requestId: serverMsg.request_id,
 				questions: serverMsg.questions,
@@ -68,6 +55,7 @@ function ChatPanel({
 		status,
 		send,
 		sendUserMessage,
+		updatePermissionStatus,
 	} = useChatMessages({
 		sessionId,
 		onServerMessage: handleServerMessage,
@@ -75,7 +63,6 @@ function ChatPanel({
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: sessionId change should reset dialogs
 	useEffect(() => {
-		setPermissionRequest(null);
 		setQuestionRequest(null);
 	}, [sessionId]);
 
@@ -94,20 +81,20 @@ function ChatPanel({
 		[sessionTitle, onUpdateTitle, sendUserMessage],
 	);
 
-	const handlePermissionResponse = useCallback(
-		(choice: "deny" | "allow" | "always_allow") => {
-			if (!permissionRequest) return;
-
+	const handlePermissionRespond = useCallback(
+		(requestId: string, choice: "deny" | "allow" | "always_allow") => {
 			send({
 				type: "permission_response",
 				session_id: sessionId,
-				request_id: permissionRequest.requestId,
+				request_id: requestId,
 				choice,
 			});
 
-			setPermissionRequest(null);
+			// Update message state to reflect the response
+			const newStatus = choice === "deny" ? "denied" : "allowed";
+			updatePermissionStatus(requestId, newStatus);
 		},
-		[send, permissionRequest, sessionId],
+		[send, sessionId, updatePermissionStatus],
 	);
 
 	const handleQuestionResponse = useCallback(
@@ -156,7 +143,11 @@ function ChatPanel({
 			onLogout={onLogout}
 			headerRight={statusIndicator}
 		>
-			<MessageList messages={messages} sessionId={sessionId} />
+			<MessageList
+				messages={messages}
+				sessionId={sessionId}
+				onPermissionRespond={handlePermissionRespond}
+			/>
 			<InputBar
 				sessionId={sessionId}
 				onSend={handleSend}
@@ -164,22 +155,6 @@ function ChatPanel({
 				isStreaming={isStreaming}
 				onInterrupt={handleInterrupt}
 			/>
-
-			{permissionRequest &&
-				(permissionRequest.toolName === "ExitPlanMode" ? (
-					<ExitPlanModeDialog
-						request={permissionRequest}
-						onApprove={() => handlePermissionResponse("allow")}
-						onReject={() => handlePermissionResponse("deny")}
-					/>
-				) : (
-					<PermissionDialog
-						request={permissionRequest}
-						onAllow={() => handlePermissionResponse("allow")}
-						onAlwaysAllow={() => handlePermissionResponse("always_allow")}
-						onDeny={() => handlePermissionResponse("deny")}
-					/>
-				))}
 
 			{questionRequest && (
 				<AskUserQuestionDialog

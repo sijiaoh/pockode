@@ -57,6 +57,39 @@ describe("messageReducer", () => {
 			const event = normalizeEvent({ type: "unknown_type" });
 			expect(event).toEqual({ type: "text", content: "" });
 		});
+
+		it("normalizes permission_request event", () => {
+			const event = normalizeEvent({
+				type: "permission_request",
+				request_id: "req-1",
+				tool_name: "Bash",
+				tool_input: { command: "rm -rf /" },
+				tool_use_id: "tool-1",
+				permission_suggestions: [
+					{
+						type: "addRules",
+						rules: [{ toolName: "Bash", ruleContent: "rm:*" }],
+						behavior: "allow",
+						destination: "session",
+					},
+				],
+			});
+			expect(event).toEqual({
+				type: "permission_request",
+				requestId: "req-1",
+				toolName: "Bash",
+				toolInput: { command: "rm -rf /" },
+				toolUseId: "tool-1",
+				permissionSuggestions: [
+					{
+						type: "addRules",
+						rules: [{ toolName: "Bash", ruleContent: "rm:*" }],
+						behavior: "allow",
+						destination: "session",
+					},
+				],
+			});
+		});
 	});
 
 	describe("applyEventToParts", () => {
@@ -111,6 +144,47 @@ describe("messageReducer", () => {
 					},
 				},
 			]);
+		});
+
+		it("adds permission_request as pending", () => {
+			const parts = applyEventToParts([], {
+				type: "permission_request",
+				requestId: "req-1",
+				toolName: "Bash",
+				toolInput: { command: "rm -rf /" },
+				toolUseId: "tool-1",
+			});
+			expect(parts).toEqual([
+				{
+					type: "permission_request",
+					request: {
+						requestId: "req-1",
+						toolName: "Bash",
+						toolInput: { command: "rm -rf /" },
+						toolUseId: "tool-1",
+						permissionSuggestions: undefined,
+					},
+					status: "pending",
+				},
+			]);
+		});
+
+		it("adds permission_request as denied during replay", () => {
+			const parts = applyEventToParts(
+				[],
+				{
+					type: "permission_request",
+					requestId: "req-1",
+					toolName: "Bash",
+					toolInput: { command: "ls" },
+					toolUseId: "tool-1",
+				},
+				true,
+			);
+			expect(parts[0]).toMatchObject({
+				type: "permission_request",
+				status: "denied",
+			});
 		});
 	});
 
@@ -287,6 +361,46 @@ describe("messageReducer", () => {
 			expect(system.status).toBe("complete");
 			expect(messages[1].role).toBe("user");
 			expect(messages[2].role).toBe("assistant");
+		});
+
+		it("replays completed permission_request as denied", () => {
+			const history = [
+				{ type: "message", content: "Do something" },
+				{
+					type: "permission_request",
+					request_id: "req-1",
+					tool_name: "Bash",
+					tool_input: { command: "ls" },
+					tool_use_id: "tool-1",
+				},
+				{ type: "text", content: "Continuing..." },
+				{ type: "done" },
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "permission_request",
+				status: "denied",
+			});
+		});
+
+		it("restores pending status for last unfinished permission_request", () => {
+			const history = [
+				{ type: "message", content: "Do something" },
+				{
+					type: "permission_request",
+					request_id: "req-1",
+					tool_name: "Bash",
+					tool_input: { command: "ls" },
+					tool_use_id: "tool-1",
+				},
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "permission_request",
+				status: "pending",
+			});
 		});
 	});
 });
