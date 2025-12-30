@@ -4,9 +4,10 @@ import DiffFileList from "./DiffFileList";
 
 interface Props {
 	onSelectFile: (path: string, staged: boolean) => void;
+	activeFile: { path: string; staged: boolean } | null;
 }
 
-function DiffSidebarContent({ onSelectFile }: Props) {
+function DiffSidebarContent({ onSelectFile, activeFile }: Props) {
 	const { data: status, isLoading, error } = useGitStatus();
 
 	if (isLoading) {
@@ -43,12 +44,14 @@ function DiffSidebarContent({ onSelectFile }: Props) {
 				files={status.staged}
 				staged={true}
 				onSelectFile={onSelectFile}
+				activeFile={activeFile}
 			/>
 			<DiffFileList
 				title="Unstaged"
 				files={status.unstaged}
 				staged={false}
 				onSelectFile={onSelectFile}
+				activeFile={activeFile}
 			/>
 		</div>
 	);

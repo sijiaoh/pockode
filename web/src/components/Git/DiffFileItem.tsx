@@ -4,6 +4,7 @@ import type { FileStatus } from "../../types/git";
 interface Props {
 	file: FileStatus;
 	onSelect: () => void;
+	isActive: boolean;
 }
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -14,14 +15,18 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
 	"?": { label: "Untracked", color: "text-th-text-muted" },
 };
 
-function DiffFileItem({ file, onSelect }: Props) {
+function DiffFileItem({ file, onSelect, isActive }: Props) {
 	const statusInfo = STATUS_LABELS[file.status] || STATUS_LABELS["?"];
 
 	return (
 		<button
 			type="button"
 			onClick={onSelect}
-			className="flex w-full min-h-[44px] items-center gap-2 rounded-lg px-3 py-2 text-left text-th-text-secondary transition-colors hover:bg-th-bg-tertiary focus:outline-none focus:ring-2 focus:ring-th-accent focus:ring-offset-1 focus:ring-offset-th-bg-secondary"
+			className={`flex w-full min-h-[44px] items-center gap-2 rounded-lg px-3 py-2 text-left text-th-text-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-1 focus-visible:ring-offset-th-bg-secondary ${
+				isActive
+					? "bg-th-bg-tertiary border-l-2 border-th-accent"
+					: "hover:bg-th-bg-tertiary"
+			}`}
 			aria-label={`View ${statusInfo.label.toLowerCase()} file: ${file.path}`}
 		>
 			<span

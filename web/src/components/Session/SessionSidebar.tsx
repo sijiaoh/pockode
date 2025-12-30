@@ -14,6 +14,7 @@ interface Props {
 	onDeleteSession: (id: string) => void;
 	onSelectDiffFile: (path: string, staged: boolean) => void;
 	isLoading: boolean;
+	activeFile: { path: string; staged: boolean } | null;
 }
 
 function SessionSidebar({
@@ -26,6 +27,7 @@ function SessionSidebar({
 	onDeleteSession,
 	onSelectDiffFile,
 	isLoading,
+	activeFile,
 }: Props) {
 	const [activeTab, setActiveTab] = useState<Tab>("sessions");
 
@@ -53,7 +55,10 @@ function SessionSidebar({
 			)}
 
 			{activeTab === "diff" && (
-				<DiffSidebarContent onSelectFile={handleSelectFile} />
+				<DiffSidebarContent
+					onSelectFile={handleSelectFile}
+					activeFile={activeFile}
+				/>
 			)}
 		</Sidebar>
 	);

@@ -6,9 +6,16 @@ interface Props {
 	files: FileStatus[];
 	staged: boolean;
 	onSelectFile: (path: string, staged: boolean) => void;
+	activeFile: { path: string; staged: boolean } | null;
 }
 
-function DiffFileList({ title, files, staged, onSelectFile }: Props) {
+function DiffFileList({
+	title,
+	files,
+	staged,
+	onSelectFile,
+	activeFile,
+}: Props) {
 	if (files.length === 0) {
 		return null;
 	}
@@ -24,6 +31,9 @@ function DiffFileList({ title, files, staged, onSelectFile }: Props) {
 						key={`${staged}-${file.path}`}
 						file={file}
 						onSelect={() => onSelectFile(file.path, staged)}
+						isActive={
+							activeFile?.staged === staged && activeFile?.path === file.path
+						}
 					/>
 				))}
 			</div>

@@ -79,6 +79,11 @@ function AppShell() {
 
 	const { overlay, sessionId: routeSessionId } = useRouteState();
 
+	const activeFile =
+		overlay?.type === "diff"
+			? { path: overlay.path, staged: overlay.staged }
+			: null;
+
 	const {
 		sessions,
 		currentSessionId,
@@ -217,6 +222,7 @@ function AppShell() {
 				onDeleteSession={handleDeleteSession}
 				onSelectDiffFile={handleSelectDiffFile}
 				isLoading={isLoading}
+				activeFile={activeFile}
 			/>
 		</>
 	);
