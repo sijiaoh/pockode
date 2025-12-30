@@ -51,6 +51,7 @@ describe("api", () => {
 			vi.mocked(fetch).mockResolvedValueOnce({
 				ok: false,
 				status: 401,
+				text: () => Promise.resolve("Unauthorized"),
 			} as Response);
 
 			const error = await fetchWithAuth("/api/test").catch((e) => e);

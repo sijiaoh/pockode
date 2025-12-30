@@ -68,6 +68,7 @@ describe("sessionApi", () => {
 			vi.mocked(fetch).mockResolvedValueOnce({
 				ok: false,
 				status: 401,
+				text: () => Promise.resolve("Unauthorized"),
 			} as Response);
 
 			const error = await listSessions().catch((e) => e);
@@ -122,6 +123,7 @@ describe("sessionApi", () => {
 			vi.mocked(fetch).mockResolvedValueOnce({
 				ok: false,
 				status: 500,
+				text: () => Promise.resolve("Internal Server Error"),
 			} as Response);
 
 			const error = await deleteSession("123").catch((e) => e);
