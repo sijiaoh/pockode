@@ -1,4 +1,3 @@
-export type { DiffViewState } from "./ChatPanel";
 export { default as ChatPanel } from "./ChatPanel";
 export { default as InputBar } from "./InputBar";
 export { default as MessageItem } from "./MessageItem";

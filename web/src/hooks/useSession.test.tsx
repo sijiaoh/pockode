@@ -39,45 +39,16 @@ const mockSession = (id: string, title = "Test Session"): SessionMeta => ({
 	updated_at: "2024-01-01T00:00:00Z",
 });
 
-// Mock window.location and window.history
-const mockPushState = vi.fn();
-const originalLocation = window.location;
-const originalHistory = window.history;
-
-function setUrlPath(path: string) {
-	Object.defineProperty(window, "location", {
-		value: { ...originalLocation, pathname: path },
-		writable: true,
-	});
-}
-
 describe("useSession", () => {
 	let queryClient: QueryClient;
 
 	beforeEach(() => {
 		queryClient = createTestQueryClient();
 		vi.clearAllMocks();
-		// Reset URL to root
-		setUrlPath("/");
-		// Mock pushState
-		Object.defineProperty(window, "history", {
-			value: { ...originalHistory, pushState: mockPushState },
-			writable: true,
-		});
-		mockPushState.mockClear();
 	});
 
 	afterEach(() => {
 		queryClient.clear();
-		// Restore originals
-		Object.defineProperty(window, "location", {
-			value: originalLocation,
-			writable: true,
-		});
-		Object.defineProperty(window, "history", {
-			value: originalHistory,
-			writable: true,
-		});
 	});
 
 	describe("initial load", () => {
@@ -312,13 +283,12 @@ describe("useSession", () => {
 		});
 	});
 
-	describe("URL sync", () => {
-		it("uses session ID from URL if valid", async () => {
-			setUrlPath("/s/2");
+	describe("routeSessionId", () => {
+		it("uses routeSessionId when provided", async () => {
 			const sessions = [mockSession("1"), mockSession("2")];
 			vi.mocked(sessionApi.listSessions).mockResolvedValue(sessions);
 
-			const { result } = renderHook(() => useSession(), {
+			const { result } = renderHook(() => useSession({ routeSessionId: "2" }), {
 				wrapper: createWrapper(queryClient),
 			});
 
@@ -326,47 +296,51 @@ describe("useSession", () => {
 				expect(result.current.sessions.length).toBe(2);
 			});
 
-			// Should use session from URL, not first one
+			// Should use session from route, not first one
 			expect(result.current.currentSessionId).toBe("2");
 		});
 
-		it("falls back to first session if URL session ID is invalid", async () => {
-			setUrlPath("/s/invalid-id");
+		it("keeps invalid routeSessionId (route layer should handle redirect)", async () => {
 			const sessions = [mockSession("1"), mockSession("2")];
 			vi.mocked(sessionApi.listSessions).mockResolvedValue(sessions);
 
-			const { result } = renderHook(() => useSession(), {
-				wrapper: createWrapper(queryClient),
-			});
+			const { result } = renderHook(
+				() => useSession({ routeSessionId: "invalid-id" }),
+				{
+					wrapper: createWrapper(queryClient),
+				},
+			);
 
 			await waitFor(() => {
-				expect(result.current.currentSessionId).toBe("1");
+				expect(result.current.sessions.length).toBe(2);
 			});
+
+			// routeSessionId takes precedence, even if invalid
+			// The route layer should handle redirecting to a valid session
+			expect(result.current.currentSessionId).toBe("invalid-id");
+			expect(result.current.currentSession).toBeUndefined();
 		});
 
-		it("updates URL when session changes", async () => {
-			const sessions = [mockSession("1"), mockSession("2")];
+		it("routeSessionId takes precedence over internal state", async () => {
+			const sessions = [mockSession("1"), mockSession("2"), mockSession("3")];
 			vi.mocked(sessionApi.listSessions).mockResolvedValue(sessions);
 
-			const { result } = renderHook(() => useSession(), {
-				wrapper: createWrapper(queryClient),
-			});
+			const { result, rerender } = renderHook(
+				({ routeSessionId }) => useSession({ routeSessionId }),
+				{
+					wrapper: createWrapper(queryClient),
+					initialProps: { routeSessionId: "2" as string | undefined },
+				},
+			);
 
 			await waitFor(() => {
-				expect(result.current.currentSessionId).toBe("1");
+				expect(result.current.currentSessionId).toBe("2");
 			});
 
-			// URL should be updated to /s/1
-			expect(mockPushState).toHaveBeenCalledWith(null, "", "/s/1");
+			// Simulate route change
+			rerender({ routeSessionId: "3" });
 
-			mockPushState.mockClear();
-
-			act(() => {
-				result.current.selectSession("2");
-			});
-
-			// URL should be updated to /s/2
-			expect(mockPushState).toHaveBeenCalledWith(null, "", "/s/2");
+			expect(result.current.currentSessionId).toBe("3");
 		});
 	});
 });

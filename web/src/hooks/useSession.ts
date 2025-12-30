@@ -8,29 +8,23 @@ import {
 } from "../lib/sessionApi";
 import type { SessionMeta } from "../types/message";
 
-// Extract session ID from URL path (e.g., /s/abc123 -> abc123)
-function getSessionIdFromUrl(): string | null {
-	const match = window.location.pathname.match(/^\/s\/([^/]+)/);
-	return match ? match[1] : null;
-}
-
-// Update URL to reflect current session
-function updateUrl(sessionId: string | null) {
-	const newPath = sessionId ? `/s/${sessionId}` : "/";
-	if (window.location.pathname !== newPath) {
-		window.history.pushState(null, "", newPath);
-	}
-}
-
 interface UseSessionOptions {
 	enabled?: boolean;
+	/** Session ID from router - takes precedence over internal state */
+	routeSessionId?: string | null;
 }
 
-export function useSession({ enabled = true }: UseSessionOptions = {}) {
+export function useSession({
+	enabled = true,
+	routeSessionId,
+}: UseSessionOptions = {}) {
 	const queryClient = useQueryClient();
-	const [currentSessionId, setCurrentSessionId] = useState<string | null>(
-		getSessionIdFromUrl,
+	const [internalSessionId, setInternalSessionId] = useState<string | null>(
+		null,
 	);
+
+	// Route session ID takes precedence over internal state
+	const currentSessionId = routeSessionId ?? internalSessionId;
 
 	const {
 		data: sessions = [],
@@ -49,7 +43,7 @@ export function useSession({ enabled = true }: UseSessionOptions = {}) {
 				newSession,
 				...old,
 			]);
-			setCurrentSessionId(newSession.id);
+			setInternalSessionId(newSession.id);
 		},
 	});
 
@@ -75,53 +69,34 @@ export function useSession({ enabled = true }: UseSessionOptions = {}) {
 		},
 	});
 
-	// Set initial session when data loads
-	useEffect(() => {
-		if (!isSuccess || createMutation.isPending) return;
+	const isCreating = createMutation.isPending;
+	const createNewSession = createMutation.mutate;
 
-		// If we have a session ID from URL, validate it exists
+	useEffect(() => {
+		if (!isSuccess || isCreating) return;
+
 		if (currentSessionId) {
 			const exists = sessions.some((s) => s.id === currentSessionId);
-			if (exists) return; // Valid session, keep it
-			// Invalid session ID in URL, fall through to select/create
+			if (exists) return;
+			// Invalid session ID - fall through to select first or create new
 		}
 
 		if (sessions.length > 0) {
-			setCurrentSessionId(sessions[0].id);
+			setInternalSessionId(sessions[0].id);
 		} else {
-			createMutation.mutate();
+			createNewSession();
 		}
-	}, [isSuccess, sessions, currentSessionId, createMutation]);
-
-	// Sync URL when session changes
-	useEffect(() => {
-		if (currentSessionId) {
-			updateUrl(currentSessionId);
-		}
-	}, [currentSessionId]);
-
-	// Handle browser back/forward
-	useEffect(() => {
-		const handlePopState = () => {
-			const urlSessionId = getSessionIdFromUrl();
-			if (urlSessionId !== currentSessionId) {
-				setCurrentSessionId(urlSessionId);
-			}
-		};
-
-		window.addEventListener("popstate", handlePopState);
-		return () => window.removeEventListener("popstate", handlePopState);
-	}, [currentSessionId]);
+	}, [isSuccess, sessions, currentSessionId, isCreating, createNewSession]);
 
 	const handleDelete = async (id: string) => {
 		const remaining = sessions.filter((s) => s.id !== id);
 
 		if (id === currentSessionId) {
 			if (remaining.length > 0) {
-				setCurrentSessionId(remaining[0].id);
+				setInternalSessionId(remaining[0].id);
 				deleteMutation.mutate(id);
 			} else {
-				// Create new session first, then delete
+				// Must create before delete to ensure we always have a session
 				await createMutation.mutateAsync();
 				deleteMutation.mutate(id);
 			}
@@ -140,7 +115,7 @@ export function useSession({ enabled = true }: UseSessionOptions = {}) {
 		loadSessions: () =>
 			queryClient.invalidateQueries({ queryKey: ["sessions"] }),
 		createSession: () => createMutation.mutateAsync(),
-		selectSession: setCurrentSessionId,
+		selectSession: setInternalSessionId,
 		deleteSession: handleDelete,
 		updateTitle: (id: string, title: string) =>
 			updateTitleMutation.mutate({ id, title }),

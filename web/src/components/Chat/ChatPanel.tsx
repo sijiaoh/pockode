@@ -3,15 +3,11 @@ import {
 	type ConnectionStatus,
 	useChatMessages,
 } from "../../hooks/useChatMessages";
+import type { OverlayState } from "../../types/overlay";
 import { DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
-
-export interface DiffViewState {
-	path: string;
-	staged: boolean;
-}
 
 interface Props {
 	sessionId: string;
@@ -19,8 +15,8 @@ interface Props {
 	onUpdateTitle: (title: string) => void;
 	onLogout?: () => void;
 	onOpenSidebar?: () => void;
-	diffViewState?: DiffViewState | null;
-	onCloseDiffView?: () => void;
+	overlay?: OverlayState;
+	onCloseOverlay?: () => void;
 }
 
 const STATUS_CONFIG: Record<ConnectionStatus, { text: string; color: string }> =
@@ -37,8 +33,8 @@ function ChatPanel({
 	onUpdateTitle,
 	onLogout,
 	onOpenSidebar,
-	diffViewState,
-	onCloseDiffView,
+	overlay,
+	onCloseOverlay,
 }: Props) {
 	const {
 		messages,
@@ -121,6 +117,31 @@ function ChatPanel({
 
 	const { text: statusText, color: statusColor } = STATUS_CONFIG[status];
 
+	const renderContent = () => {
+		if (!overlay) {
+			return (
+				<MessageList
+					messages={messages}
+					sessionId={sessionId}
+					isProcessRunning={isProcessRunning}
+					onPermissionRespond={handlePermissionRespond}
+					onQuestionRespond={handleQuestionRespond}
+				/>
+			);
+		}
+
+		switch (overlay.type) {
+			case "diff":
+				return (
+					<DiffView
+						path={overlay.path}
+						staged={overlay.staged}
+						onBack={onCloseOverlay ?? (() => {})}
+					/>
+				);
+		}
+	};
+
 	const statusIndicator = (
 		<span className={`text-sm ${statusColor}`}>{statusText}</span>
 	);
@@ -131,21 +152,7 @@ function ChatPanel({
 			onLogout={onLogout}
 			headerRight={statusIndicator}
 		>
-			{diffViewState && onCloseDiffView ? (
-				<DiffView
-					path={diffViewState.path}
-					staged={diffViewState.staged}
-					onBack={onCloseDiffView}
-				/>
-			) : (
-				<MessageList
-					messages={messages}
-					sessionId={sessionId}
-					isProcessRunning={isProcessRunning}
-					onPermissionRespond={handlePermissionRespond}
-					onQuestionRespond={handleQuestionRespond}
-				/>
-			)}
+			{renderContent()}
 			<InputBar
 				sessionId={sessionId}
 				onSend={handleSend}
