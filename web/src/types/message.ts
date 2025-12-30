@@ -26,6 +26,9 @@ export interface ToolCall {
 // Permission request status
 export type PermissionStatus = "pending" | "allowed" | "denied";
 
+// Question status
+export type QuestionStatus = "pending" | "answered" | "cancelled";
+
 // Content part - represents a piece of content in timeline order
 export type ContentPart =
 	| { type: "text"; content: string }
@@ -35,6 +38,12 @@ export type ContentPart =
 			type: "permission_request";
 			request: PermissionRequest;
 			status: PermissionStatus;
+	  }
+	| {
+			type: "ask_user_question";
+			request: AskUserQuestionRequest;
+			status: QuestionStatus;
+			answers?: Record<string, string>;
 	  };
 
 // User message - plain text content

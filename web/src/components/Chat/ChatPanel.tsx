@@ -1,15 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import {
 	type ConnectionStatus,
 	useChatMessages,
 } from "../../hooks/useChatMessages";
-import type {
-	AskUserQuestionRequest,
-	WSServerMessage,
-} from "../../types/message";
 import { DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
-import AskUserQuestionDialog from "./AskUserQuestionDialog";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
 
@@ -45,19 +40,6 @@ function ChatPanel({
 	diffViewState,
 	onCloseDiffView,
 }: Props) {
-	// Dialog state for ask_user_question (permission_request now in message flow)
-	const [questionRequest, setQuestionRequest] =
-		useState<AskUserQuestionRequest | null>(null);
-
-	const handleServerMessage = useCallback((serverMsg: WSServerMessage) => {
-		if (serverMsg.type === "ask_user_question") {
-			setQuestionRequest({
-				requestId: serverMsg.request_id,
-				questions: serverMsg.questions,
-			});
-		}
-	}, []);
-
 	const {
 		messages,
 		isLoadingHistory,
@@ -67,15 +49,10 @@ function ChatPanel({
 		send,
 		sendUserMessage,
 		updatePermissionStatus,
+		updateQuestionStatus,
 	} = useChatMessages({
 		sessionId,
-		onServerMessage: handleServerMessage,
 	});
-
-	// biome-ignore lint/correctness/useExhaustiveDependencies: sessionId change should reset dialogs
-	useEffect(() => {
-		setQuestionRequest(null);
-	}, [sessionId]);
 
 	const handleSend = useCallback(
 		(content: string) => {
@@ -108,20 +85,20 @@ function ChatPanel({
 		[send, sessionId, updatePermissionStatus],
 	);
 
-	const handleQuestionResponse = useCallback(
-		(answers: Record<string, string> | null) => {
-			if (!questionRequest) return;
-
+	const handleQuestionRespond = useCallback(
+		(requestId: string, answers: Record<string, string> | null) => {
 			send({
 				type: "question_response",
 				session_id: sessionId,
-				request_id: questionRequest.requestId,
+				request_id: requestId,
 				answers,
 			});
 
-			setQuestionRequest(null);
+			// Update message state to reflect the response
+			const newStatus = answers === null ? "cancelled" : "answered";
+			updateQuestionStatus(requestId, newStatus, answers ?? undefined);
 		},
-		[send, questionRequest, sessionId],
+		[send, sessionId, updateQuestionStatus],
 	);
 
 	const handleInterrupt = useCallback(() => {
@@ -166,6 +143,7 @@ function ChatPanel({
 					sessionId={sessionId}
 					isProcessRunning={isProcessRunning}
 					onPermissionRespond={handlePermissionRespond}
+					onQuestionRespond={handleQuestionRespond}
 				/>
 			)}
 			<InputBar
@@ -175,14 +153,6 @@ function ChatPanel({
 				isStreaming={isStreaming}
 				onInterrupt={handleInterrupt}
 			/>
-
-			{questionRequest && (
-				<AskUserQuestionDialog
-					request={questionRequest}
-					onSubmit={handleQuestionResponse}
-					onCancel={() => handleQuestionResponse(null)}
-				/>
-			)}
 		</MainContainer>
 	);
 }

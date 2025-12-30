@@ -10,6 +10,7 @@ import type {
 	ToolCall,
 } from "../../types/message";
 import { ScrollableContent, Spinner } from "../ui";
+import AskUserQuestionItem from "./AskUserQuestionItem";
 import { MarkdownContent } from "./MarkdownContent";
 
 interface ToolCallItemProps {
@@ -286,9 +287,17 @@ function PermissionRequestItem({
 interface ContentPartItemProps {
 	part: ContentPart;
 	onPermissionRespond?: (requestId: string, choice: PermissionChoice) => void;
+	onQuestionRespond?: (
+		requestId: string,
+		answers: Record<string, string> | null,
+	) => void;
 }
 
-function ContentPartItem({ part, onPermissionRespond }: ContentPartItemProps) {
+function ContentPartItem({
+	part,
+	onPermissionRespond,
+	onQuestionRespond,
+}: ContentPartItemProps) {
 	if (part.type === "text") {
 		return <MarkdownContent content={part.content} />;
 	}
@@ -304,6 +313,16 @@ function ContentPartItem({ part, onPermissionRespond }: ContentPartItemProps) {
 			/>
 		);
 	}
+	if (part.type === "ask_user_question") {
+		return (
+			<AskUserQuestionItem
+				request={part.request}
+				status={part.status}
+				savedAnswers={part.answers}
+				onRespond={onQuestionRespond}
+			/>
+		);
+	}
 	return <ToolCallItem tool={part.tool} />;
 }
 
@@ -312,6 +331,10 @@ interface Props {
 	isLast?: boolean;
 	isProcessRunning?: boolean;
 	onPermissionRespond?: (requestId: string, choice: PermissionChoice) => void;
+	onQuestionRespond?: (
+		requestId: string,
+		answers: Record<string, string> | null,
+	) => void;
 }
 
 function MessageItem({
@@ -319,6 +342,7 @@ function MessageItem({
 	isLast,
 	isProcessRunning,
 	onPermissionRespond,
+	onQuestionRespond,
 }: Props) {
 	if (message.role === "user") {
 		return (
@@ -340,14 +364,17 @@ function MessageItem({
 							const key =
 								part.type === "permission_request"
 									? part.request.requestId
-									: part.type === "tool_call"
-										? part.tool.id
-										: `${part.type}-${index}`;
+									: part.type === "ask_user_question"
+										? part.request.requestId
+										: part.type === "tool_call"
+											? part.tool.id
+											: `${part.type}-${index}`;
 							return (
 								<ContentPartItem
 									key={key}
 									part={part}
 									onPermissionRespond={onPermissionRespond}
+									onQuestionRespond={onQuestionRespond}
 								/>
 							);
 						})}

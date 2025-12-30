@@ -13,6 +13,19 @@ vi.mock("../utils/uuid", () => ({
 	generateUUID: () => "test-uuid",
 }));
 
+// Shared test fixtures
+const sampleQuestions = [
+	{
+		question: "Which library?",
+		header: "Library",
+		options: [
+			{ label: "React", description: "UI library" },
+			{ label: "Vue", description: "Framework" },
+		],
+		multiSelect: false,
+	},
+];
+
 describe("messageReducer", () => {
 	describe("normalizeEvent", () => {
 		it("normalizes tool_call event with snake_case to camelCase", () => {
@@ -103,6 +116,45 @@ describe("messageReducer", () => {
 				choice: "allow",
 			});
 		});
+
+		it("normalizes ask_user_question event", () => {
+			const event = normalizeEvent({
+				type: "ask_user_question",
+				request_id: "q-1",
+				questions: sampleQuestions,
+			});
+			expect(event).toEqual({
+				type: "ask_user_question",
+				requestId: "q-1",
+				questions: sampleQuestions,
+			});
+		});
+
+		it("normalizes question_response event with answers", () => {
+			const event = normalizeEvent({
+				type: "question_response",
+				request_id: "q-1",
+				answers: { q1: "React" },
+			});
+			expect(event).toEqual({
+				type: "question_response",
+				requestId: "q-1",
+				answers: { q1: "React" },
+			});
+		});
+
+		it("normalizes question_response event with null answers (cancelled)", () => {
+			const event = normalizeEvent({
+				type: "question_response",
+				request_id: "q-1",
+				answers: null,
+			});
+			expect(event).toEqual({
+				type: "question_response",
+				requestId: "q-1",
+				answers: null,
+			});
+		});
 	});
 
 	describe("applyEventToParts", () => {
@@ -177,6 +229,21 @@ describe("messageReducer", () => {
 						toolUseId: "tool-1",
 						permissionSuggestions: undefined,
 					},
+					status: "pending",
+				},
+			]);
+		});
+
+		it("adds ask_user_question as pending", () => {
+			const parts = applyEventToParts([], {
+				type: "ask_user_question",
+				requestId: "q-1",
+				questions: sampleQuestions,
+			});
+			expect(parts).toEqual([
+				{
+					type: "ask_user_question",
+					request: { requestId: "q-1", questions: sampleQuestions },
 					status: "pending",
 				},
 			]);
@@ -377,6 +444,86 @@ describe("messageReducer", () => {
 			// Verify same object reference (no unnecessary copy)
 			expect(messages[0]).toBe(initial);
 		});
+
+		it("updates ask_user_question status on question_response with answers", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "ask_user_question",
+						request: { requestId: "q-1", questions: sampleQuestions },
+						status: "pending",
+					},
+				],
+				status: "streaming",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], {
+				type: "question_response",
+				requestId: "q-1",
+				answers: { "Which library?": "React" },
+			});
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "answered",
+				answers: { "Which library?": "React" },
+			});
+		});
+
+		it("updates ask_user_question status on question_response with null (cancelled)", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "ask_user_question",
+						request: { requestId: "q-1", questions: sampleQuestions },
+						status: "pending",
+					},
+				],
+				status: "streaming",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], {
+				type: "question_response",
+				requestId: "q-1",
+				answers: null,
+			});
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "cancelled",
+			});
+		});
+
+		it("does not modify message when question requestId not found", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "ask_user_question",
+						request: { requestId: "q-1", questions: sampleQuestions },
+						status: "pending",
+					},
+				],
+				status: "streaming",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], {
+				type: "question_response",
+				requestId: "non-existent",
+				answers: { "Which library?": "React" },
+			});
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "pending",
+			});
+			expect(messages[0]).toBe(initial);
+		});
 	});
 
 	describe("applyUserMessage", () => {
@@ -542,6 +689,67 @@ describe("messageReducer", () => {
 			const assistant = messages[1] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
 				type: "permission_request",
+				status: "pending",
+			});
+		});
+
+		it("replays ask_user_question with answered response", () => {
+			const history = [
+				{ type: "message", content: "Help me choose" },
+				{
+					type: "ask_user_question",
+					request_id: "q-1",
+					questions: sampleQuestions,
+				},
+				{
+					type: "question_response",
+					request_id: "q-1",
+					answers: { "Which library?": "React" },
+				},
+				{ type: "text", content: "Great choice!" },
+				{ type: "done" },
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "answered",
+				answers: { "Which library?": "React" },
+			});
+		});
+
+		it("replays ask_user_question with cancelled response", () => {
+			const history = [
+				{ type: "message", content: "Help me choose" },
+				{
+					type: "ask_user_question",
+					request_id: "q-1",
+					questions: sampleQuestions,
+				},
+				{ type: "question_response", request_id: "q-1", answers: null },
+				{ type: "interrupted" },
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "cancelled",
+			});
+		});
+
+		it("keeps pending status for ask_user_question without response", () => {
+			const history = [
+				{ type: "message", content: "Help me choose" },
+				{
+					type: "ask_user_question",
+					request_id: "q-1",
+					questions: sampleQuestions,
+				},
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
 				status: "pending",
 			});
 		});

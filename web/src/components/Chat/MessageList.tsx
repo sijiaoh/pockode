@@ -9,6 +9,10 @@ interface Props {
 	sessionId: string;
 	isProcessRunning: boolean;
 	onPermissionRespond?: (requestId: string, choice: PermissionChoice) => void;
+	onQuestionRespond?: (
+		requestId: string,
+		answers: Record<string, string> | null,
+	) => void;
 }
 
 function MessageList({
@@ -16,6 +20,7 @@ function MessageList({
 	sessionId,
 	isProcessRunning,
 	onPermissionRespond,
+	onQuestionRespond,
 }: Props) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [isScrolledUp, setIsScrolledUp] = useState(false);
@@ -91,6 +96,7 @@ function MessageList({
 								isLast={index === messages.length - 1}
 								isProcessRunning={isProcessRunning}
 								onPermissionRespond={onPermissionRespond}
+								onQuestionRespond={onQuestionRespond}
 							/>
 						))}
 					</div>

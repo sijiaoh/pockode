@@ -9,6 +9,7 @@ import type {
 	AssistantMessage,
 	Message,
 	PermissionStatus,
+	QuestionStatus,
 	UserMessage,
 	WSClientMessage,
 	WSServerMessage,
@@ -20,7 +21,6 @@ export type { ConnectionStatus };
 
 interface UseChatMessagesOptions {
 	sessionId: string;
-	onServerMessage?: (msg: WSServerMessage) => void;
 }
 
 interface UseChatMessagesReturn {
@@ -32,11 +32,15 @@ interface UseChatMessagesReturn {
 	send: (msg: WSClientMessage) => boolean;
 	sendUserMessage: (content: string) => boolean;
 	updatePermissionStatus: (requestId: string, status: PermissionStatus) => void;
+	updateQuestionStatus: (
+		requestId: string,
+		status: QuestionStatus,
+		answers?: Record<string, string>,
+	) => void;
 }
 
 export function useChatMessages({
 	sessionId,
-	onServerMessage,
 }: UseChatMessagesOptions): UseChatMessagesReturn {
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [isLoadingHistory, setIsLoadingHistory] = useState(false);
@@ -61,17 +65,11 @@ export function useChatMessages({
 				setIsProcessRunning(true);
 			}
 
-			// Delegate ask_user_question to parent (keeps dialog pattern)
-			if (serverMsg.type === "ask_user_question") {
-				onServerMessage?.(serverMsg);
-				return;
-			}
-
-			// permission_request is now handled via messageReducer
+			// ask_user_question and permission_request are now handled via messageReducer
 			const event = normalizeEvent(serverMsg);
 			setMessages((prev) => applyServerEvent(prev, event));
 		},
-		[sessionId, onServerMessage],
+		[sessionId],
 	);
 
 	const { status, send } = useWebSocket({
@@ -174,6 +172,33 @@ export function useChatMessages({
 		[],
 	);
 
+	const updateQuestionStatus = useCallback(
+		(
+			requestId: string,
+			newStatus: QuestionStatus,
+			answers?: Record<string, string>,
+		) => {
+			setMessages((prev) =>
+				prev.map((msg): Message => {
+					if (msg.role !== "assistant") return msg;
+					return {
+						...msg,
+						parts: msg.parts.map((part) => {
+							if (
+								part.type === "ask_user_question" &&
+								part.request.requestId === requestId
+							) {
+								return { ...part, status: newStatus, answers };
+							}
+							return part;
+						}),
+					};
+				}),
+			);
+		},
+		[],
+	);
+
 	// isStreaming controls input blocking
 	// - sending: always block (waiting for server response)
 	// - streaming: only block when process is running
@@ -192,5 +217,6 @@ export function useChatMessages({
 		send,
 		sendUserMessage,
 		updatePermissionStatus,
+		updateQuestionStatus,
 	};
 }

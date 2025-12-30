@@ -1,8 +1,10 @@
 import type {
+	AskUserQuestion,
 	AssistantMessage,
 	ContentPart,
 	Message,
 	PermissionUpdate,
+	QuestionStatus,
 	UserMessage,
 	WSServerMessage,
 } from "../types/message";
@@ -36,6 +38,16 @@ export type NormalizedEvent =
 			type: "permission_response";
 			requestId: string;
 			choice: "deny" | "allow" | "always_allow";
+	  }
+	| {
+			type: "ask_user_question";
+			requestId: string;
+			questions: AskUserQuestion[];
+	  }
+	| {
+			type: "question_response";
+			requestId: string;
+			answers: Record<string, string> | null;
 	  };
 
 // Convert snake_case server event to camelCase
@@ -89,6 +101,18 @@ export function normalizeEvent(
 				type: "permission_response",
 				requestId: record.request_id as string,
 				choice: record.choice as "deny" | "allow" | "always_allow",
+			};
+		case "ask_user_question":
+			return {
+				type: "ask_user_question",
+				requestId: record.request_id as string,
+				questions: record.questions as AskUserQuestion[],
+			};
+		case "question_response":
+			return {
+				type: "question_response",
+				requestId: record.request_id as string,
+				answers: record.answers as Record<string, string> | null,
 			};
 		default:
 			// Fallback for unknown types - treat as text
@@ -144,6 +168,18 @@ export function applyEventToParts(
 					status: "pending",
 				},
 			];
+		case "ask_user_question":
+			return [
+				...parts,
+				{
+					type: "ask_user_question",
+					request: {
+						requestId: event.requestId,
+						questions: event.questions,
+					},
+					status: "pending",
+				},
+			];
 		default:
 			return parts;
 	}
@@ -177,6 +213,18 @@ export function applyServerEvent(
 	if (event.type === "permission_response") {
 		const newStatus = event.choice === "deny" ? "denied" : "allowed";
 		return updatePermissionRequestStatus(messages, event.requestId, newStatus);
+	}
+
+	// Question response updates existing ask_user_question across all messages
+	if (event.type === "question_response") {
+		const newStatus: QuestionStatus =
+			event.answers === null ? "cancelled" : "answered";
+		return updateQuestionStatus(
+			messages,
+			event.requestId,
+			newStatus,
+			event.answers,
+		);
 	}
 
 	// Find current assistant (sending or streaming) - use last one to avoid appending to stale messages
@@ -238,6 +286,36 @@ function updatePermissionRequestStatus(
 			) {
 				changed = true;
 				return { ...part, status: newStatus };
+			}
+			return part;
+		});
+
+		if (!changed) return msg;
+		return { ...msg, parts: updatedParts };
+	});
+}
+
+function updateQuestionStatus(
+	messages: Message[],
+	requestId: string,
+	newStatus: QuestionStatus,
+	answers: Record<string, string> | null,
+): Message[] {
+	return messages.map((msg) => {
+		if (msg.role !== "assistant") return msg;
+
+		let changed = false;
+		const updatedParts = msg.parts.map((part) => {
+			if (
+				part.type === "ask_user_question" &&
+				part.request.requestId === requestId
+			) {
+				changed = true;
+				return {
+					...part,
+					status: newStatus,
+					answers: answers ?? undefined,
+				};
 			}
 			return part;
 		});

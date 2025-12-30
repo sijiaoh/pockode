@@ -287,7 +287,7 @@ describe("ChatPanel", () => {
 	});
 
 	describe("ask user question", () => {
-		it("shows dialog and sends answer response", async () => {
+		it("shows inline question and sends answer response", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -310,8 +310,10 @@ describe("ChatPanel", () => {
 				});
 			});
 
-			expect(screen.getByRole("dialog")).toBeInTheDocument();
+			// Inline question displays in message flow (no dialog role)
 			expect(screen.getByText("Which library?")).toBeInTheDocument();
+			// Header "Library" appears both in collapsed view and expanded view
+			expect(screen.getAllByText("Library")).toHaveLength(2);
 
 			// Select an option and submit
 			await user.click(screen.getByText("React"));
@@ -323,7 +325,6 @@ describe("ChatPanel", () => {
 				request_id: "q-1",
 				answers: expect.any(Object),
 			});
-			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 		});
 	});
 
