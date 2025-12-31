@@ -199,7 +199,15 @@ describe("MessageItem", () => {
 
 		render(<MessageItem message={message} onPermissionRespond={onRespond} />);
 		await user.click(screen.getByRole("button", { name: "Allow" }));
-		expect(onRespond).toHaveBeenCalledWith("req-1", "allow");
+		expect(onRespond).toHaveBeenCalledWith(
+			{
+				requestId: "req-1",
+				toolName: "Bash",
+				toolInput: { command: "ls" },
+				toolUseId: "tool-1",
+			},
+			"allow",
+		);
 	});
 
 	it("renders allowed permission_request without buttons", () => {

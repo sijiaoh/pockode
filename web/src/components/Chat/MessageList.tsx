@@ -1,16 +1,23 @@
 import { ArrowDown } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
-import type { Message } from "../../types/message";
+import type {
+	AskUserQuestionRequest,
+	Message,
+	PermissionRequest,
+} from "../../types/message";
 import MessageItem, { type PermissionChoice } from "./MessageItem";
 
 interface Props {
 	messages: Message[];
 	sessionId: string;
 	isProcessRunning: boolean;
-	onPermissionRespond?: (requestId: string, choice: PermissionChoice) => void;
+	onPermissionRespond?: (
+		request: PermissionRequest,
+		choice: PermissionChoice,
+	) => void;
 	onQuestionRespond?: (
-		requestId: string,
+		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
 }

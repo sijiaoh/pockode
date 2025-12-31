@@ -10,7 +10,7 @@ interface Props {
 	status: QuestionStatus;
 	savedAnswers?: Record<string, string>;
 	onRespond?: (
-		requestId: string,
+		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
 }
@@ -102,7 +102,7 @@ function AskUserQuestionItem({
 				}
 			}
 		}
-		onRespond?.(request.requestId, finalAnswers);
+		onRespond?.(request, finalAnswers);
 	};
 
 	const isOptionSelected = (
@@ -267,7 +267,7 @@ function AskUserQuestionItem({
 				<div className="flex justify-end gap-2 border-t border-th-border p-2">
 					<button
 						type="button"
-						onClick={() => onRespond(request.requestId, null)}
+						onClick={() => onRespond(request, null)}
 						className="rounded bg-th-bg-secondary px-2 py-1 text-th-text-muted hover:bg-th-overlay-hover"
 					>
 						Cancel

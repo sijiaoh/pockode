@@ -198,6 +198,9 @@ describe("ChatPanel", () => {
 				type: "permission_response",
 				session_id: "test-session",
 				request_id: "req-1",
+				tool_use_id: "tool-1",
+				tool_input: { command: "rm -rf /" },
+				permission_suggestions: undefined,
 				choice: "allow",
 			});
 		});
@@ -224,6 +227,9 @@ describe("ChatPanel", () => {
 				type: "permission_response",
 				session_id: "test-session",
 				request_id: "req-2",
+				tool_use_id: "tool-2",
+				tool_input: { file_path: "/etc/passwd" },
+				permission_suggestions: undefined,
 				choice: "deny",
 			});
 		});
@@ -296,6 +302,7 @@ describe("ChatPanel", () => {
 				mockState.onMessage?.({
 					type: "ask_user_question",
 					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
 					questions: [
 						{
 							question: "Which library?",
@@ -323,7 +330,8 @@ describe("ChatPanel", () => {
 				type: "question_response",
 				session_id: "test-session",
 				request_id: "q-1",
-				answers: expect.any(Object),
+				tool_use_id: "toolu_q_1",
+				answers: { "Which library?": "React" },
 			});
 		});
 	});

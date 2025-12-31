@@ -3,6 +3,10 @@ import {
 	type ConnectionStatus,
 	useChatMessages,
 } from "../../hooks/useChatMessages";
+import type {
+	AskUserQuestionRequest,
+	PermissionRequest,
+} from "../../types/message";
 import type { OverlayState } from "../../types/overlay";
 import { DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
@@ -66,33 +70,40 @@ function ChatPanel({
 	);
 
 	const handlePermissionRespond = useCallback(
-		(requestId: string, choice: "deny" | "allow" | "always_allow") => {
+		(request: PermissionRequest, choice: "deny" | "allow" | "always_allow") => {
 			send({
 				type: "permission_response",
 				session_id: sessionId,
-				request_id: requestId,
+				request_id: request.requestId,
+				tool_use_id: request.toolUseId,
+				tool_input: request.toolInput,
+				permission_suggestions: request.permissionSuggestions,
 				choice,
 			});
 
 			// Update message state to reflect the response
 			const newStatus = choice === "deny" ? "denied" : "allowed";
-			updatePermissionStatus(requestId, newStatus);
+			updatePermissionStatus(request.requestId, newStatus);
 		},
 		[send, sessionId, updatePermissionStatus],
 	);
 
 	const handleQuestionRespond = useCallback(
-		(requestId: string, answers: Record<string, string> | null) => {
+		(
+			request: AskUserQuestionRequest,
+			answers: Record<string, string> | null,
+		) => {
 			send({
 				type: "question_response",
 				session_id: sessionId,
-				request_id: requestId,
+				request_id: request.requestId,
+				tool_use_id: request.toolUseId,
 				answers,
 			});
 
 			// Update message state to reflect the response
 			const newStatus = answers === null ? "cancelled" : "answered";
-			updateQuestionStatus(requestId, newStatus, answers ?? undefined);
+			updateQuestionStatus(request.requestId, newStatus, answers ?? undefined);
 		},
 		[send, sessionId, updateQuestionStatus],
 	);

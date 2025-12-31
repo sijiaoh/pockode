@@ -42,6 +42,7 @@ export type NormalizedEvent =
 	| {
 			type: "ask_user_question";
 			requestId: string;
+			toolUseId: string;
 			questions: AskUserQuestion[];
 	  }
 	| {
@@ -106,6 +107,7 @@ export function normalizeEvent(
 			return {
 				type: "ask_user_question",
 				requestId: record.request_id as string,
+				toolUseId: record.tool_use_id as string,
 				questions: record.questions as AskUserQuestion[],
 			};
 		case "question_response":
@@ -175,6 +177,7 @@ export function applyEventToParts(
 					type: "ask_user_question",
 					request: {
 						requestId: event.requestId,
+						toolUseId: event.toolUseId,
 						questions: event.questions,
 					},
 					status: "pending",

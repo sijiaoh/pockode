@@ -139,6 +139,7 @@ export interface AskUserQuestion {
 
 export interface AskUserQuestionRequest {
 	requestId: string;
+	toolUseId: string;
 	questions: AskUserQuestion[];
 }
 
@@ -161,12 +162,16 @@ export type WSClientMessage =
 			type: "permission_response";
 			session_id: string;
 			request_id: string;
+			tool_use_id: string;
+			tool_input: unknown;
+			permission_suggestions?: PermissionUpdate[];
 			choice: "deny" | "allow" | "always_allow";
 	  }
 	| {
 			type: "question_response";
 			session_id: string;
 			request_id: string;
+			tool_use_id: string;
 			answers: Record<string, string> | null; // null = cancel
 	  };
 
@@ -204,6 +209,7 @@ export type WSServerMessage =
 	| (WSServerMessageBase & {
 			type: "ask_user_question";
 			request_id: string;
+			tool_use_id: string;
 			questions: AskUserQuestion[];
 	  })
 	| (WSServerMessageBase & { type: "system"; content: string })

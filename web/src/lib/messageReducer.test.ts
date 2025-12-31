@@ -121,11 +121,13 @@ describe("messageReducer", () => {
 			const event = normalizeEvent({
 				type: "ask_user_question",
 				request_id: "q-1",
+				tool_use_id: "toolu_q_1",
 				questions: sampleQuestions,
 			});
 			expect(event).toEqual({
 				type: "ask_user_question",
 				requestId: "q-1",
+				toolUseId: "toolu_q_1",
 				questions: sampleQuestions,
 			});
 		});
@@ -238,12 +240,17 @@ describe("messageReducer", () => {
 			const parts = applyEventToParts([], {
 				type: "ask_user_question",
 				requestId: "q-1",
+				toolUseId: "toolu_q_1",
 				questions: sampleQuestions,
 			});
 			expect(parts).toEqual([
 				{
 					type: "ask_user_question",
-					request: { requestId: "q-1", questions: sampleQuestions },
+					request: {
+						requestId: "q-1",
+						toolUseId: "toolu_q_1",
+						questions: sampleQuestions,
+					},
 					status: "pending",
 				},
 			]);
@@ -452,7 +459,11 @@ describe("messageReducer", () => {
 				parts: [
 					{
 						type: "ask_user_question",
-						request: { requestId: "q-1", questions: sampleQuestions },
+						request: {
+							requestId: "q-1",
+							toolUseId: "toolu_q_1",
+							questions: sampleQuestions,
+						},
 						status: "pending",
 					},
 				],
@@ -479,7 +490,11 @@ describe("messageReducer", () => {
 				parts: [
 					{
 						type: "ask_user_question",
-						request: { requestId: "q-1", questions: sampleQuestions },
+						request: {
+							requestId: "q-1",
+							toolUseId: "toolu_q_1",
+							questions: sampleQuestions,
+						},
 						status: "pending",
 					},
 				],
@@ -505,7 +520,11 @@ describe("messageReducer", () => {
 				parts: [
 					{
 						type: "ask_user_question",
-						request: { requestId: "q-1", questions: sampleQuestions },
+						request: {
+							requestId: "q-1",
+							toolUseId: "toolu_q_1",
+							questions: sampleQuestions,
+						},
 						status: "pending",
 					},
 				],
@@ -722,6 +741,7 @@ describe("messageReducer", () => {
 				{
 					type: "ask_user_question",
 					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
 					questions: sampleQuestions,
 				},
 				{
@@ -747,6 +767,7 @@ describe("messageReducer", () => {
 				{
 					type: "ask_user_question",
 					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
 					questions: sampleQuestions,
 				},
 				{ type: "question_response", request_id: "q-1", answers: null },
@@ -766,6 +787,7 @@ describe("messageReducer", () => {
 				{
 					type: "ask_user_question",
 					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
 					questions: sampleQuestions,
 				},
 			];

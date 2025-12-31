@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type {
+	AskUserQuestionRequest,
 	ContentPart,
 	Message,
 	PermissionRequest,
@@ -120,7 +121,7 @@ type PermissionChoice = "deny" | "allow" | "always_allow";
 interface PermissionRequestItemProps {
 	request: PermissionRequest;
 	status: PermissionStatus;
-	onRespond?: (requestId: string, choice: PermissionChoice) => void;
+	onRespond?: (request: PermissionRequest, choice: PermissionChoice) => void;
 }
 
 /** Extract plan content from ExitPlanMode input */
@@ -256,7 +257,7 @@ function PermissionRequestItem({
 				<div className="flex justify-end gap-2 border-t border-th-border p-2">
 					<button
 						type="button"
-						onClick={() => onRespond(request.requestId, "deny")}
+						onClick={() => onRespond(request, "deny")}
 						className="rounded bg-th-bg-secondary px-2 py-1 text-th-text-muted hover:bg-th-overlay-hover"
 					>
 						Deny
@@ -265,7 +266,7 @@ function PermissionRequestItem({
 						request.permissionSuggestions.length > 0 && (
 							<button
 								type="button"
-								onClick={() => onRespond(request.requestId, "always_allow")}
+								onClick={() => onRespond(request, "always_allow")}
 								className="rounded bg-th-success/20 px-2 py-1 text-th-success hover:bg-th-success/30"
 							>
 								Always Allow
@@ -273,7 +274,7 @@ function PermissionRequestItem({
 						)}
 					<button
 						type="button"
-						onClick={() => onRespond(request.requestId, "allow")}
+						onClick={() => onRespond(request, "allow")}
 						className="rounded bg-th-accent px-2 py-1 text-th-bg hover:opacity-90"
 					>
 						Allow
@@ -286,9 +287,12 @@ function PermissionRequestItem({
 
 interface ContentPartItemProps {
 	part: ContentPart;
-	onPermissionRespond?: (requestId: string, choice: PermissionChoice) => void;
+	onPermissionRespond?: (
+		request: PermissionRequest,
+		choice: PermissionChoice,
+	) => void;
 	onQuestionRespond?: (
-		requestId: string,
+		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
 }
@@ -330,9 +334,12 @@ interface Props {
 	message: Message;
 	isLast?: boolean;
 	isProcessRunning?: boolean;
-	onPermissionRespond?: (requestId: string, choice: PermissionChoice) => void;
+	onPermissionRespond?: (
+		request: PermissionRequest,
+		choice: PermissionChoice,
+	) => void;
 	onQuestionRespond?: (
-		requestId: string,
+		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
 }
