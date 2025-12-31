@@ -126,7 +126,7 @@ type session struct {
 	events          chan agent.AgentEvent
 	stdin           io.WriteCloser
 	stdinMu         sync.Mutex
-	pendingRequests *sync.Map
+	pendingRequests *sync.Map // tracks sent control requests by requestID for response matching
 	cancel          func()
 	closeOnce       sync.Once
 }
@@ -155,45 +155,79 @@ func (s *session) SendMessage(prompt string) error {
 	return s.writeStdin(data)
 }
 
-// getPendingRequest retrieves and removes a pending control request.
-func (s *session) getPendingRequest(requestID string) (*controlRequest, error) {
-	pending, ok := s.pendingRequests.LoadAndDelete(requestID)
-	if !ok {
-		return nil, fmt.Errorf("no pending request for id: %s", requestID)
-	}
-	req, ok := pending.(*controlRequest)
-	if !ok {
-		return nil, fmt.Errorf("invalid request type for id: %s", requestID)
-	}
-	return req, nil
-}
-
 // SendPermissionResponse sends a permission response to Claude.
-func (s *session) SendPermissionResponse(requestID string, choice agent.PermissionChoice) error {
-	req, err := s.getPendingRequest(requestID)
-	if err != nil {
-		return err
+func (s *session) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
+	var content controlResponseContent
+
+	switch choice {
+	case agent.PermissionAllow, agent.PermissionAlwaysAllow:
+		content = controlResponseContent{
+			Behavior:     "allow",
+			ToolUseID:    data.ToolUseID,
+			UpdatedInput: data.ToolInput,
+		}
+		if choice == agent.PermissionAlwaysAllow && len(data.PermissionSuggestions) > 0 {
+			content.UpdatedPermissions = data.PermissionSuggestions
+		}
+	default:
+		content = controlResponseContent{
+			Behavior:  "deny",
+			Message:   "User denied permission",
+			Interrupt: true,
+			ToolUseID: data.ToolUseID,
+		}
 	}
-	return s.sendPermissionControlResponse(req, choice)
+
+	return s.sendControlResponse(data.RequestID, content)
 }
 
 // SendQuestionResponse sends answers to user questions.
 // If answers is nil, sends a cancel (deny) response.
-func (s *session) SendQuestionResponse(requestID string, answers map[string]string) error {
-	req, err := s.getPendingRequest(requestID)
-	if err != nil {
-		return err
+func (s *session) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
+	var content controlResponseContent
+
+	if answers == nil {
+		content = controlResponseContent{
+			Behavior:  "deny",
+			Message:   "User cancelled the question",
+			ToolUseID: data.ToolUseID,
+		}
+	} else {
+		updatedInput, err := json.Marshal(map[string]any{"answers": answers})
+		if err != nil {
+			return fmt.Errorf("failed to marshal updated input: %w", err)
+		}
+		content = controlResponseContent{
+			Behavior:     "allow",
+			ToolUseID:    data.ToolUseID,
+			UpdatedInput: updatedInput,
+		}
 	}
-	return s.sendQuestionControlResponse(req, answers)
+
+	return s.sendControlResponse(data.RequestID, content)
 }
 
-// interruptMarker is stored in pendingRequests to identify interrupt requests.
-//
-// When Claude is actively processing a task, interrupts result in a "result" event
-// with "Request was aborted" error (handled by parseResultEvent). But when Claude
-// is idle, interrupts only return a control_response acknowledgment. We use this
-// marker to identify such responses and emit EventTypeInterrupted so the frontend
-// knows the interrupt succeeded and can accept new input.
+func (s *session) sendControlResponse(requestID string, content controlResponseContent) error {
+	response := controlResponse{
+		Type: "control_response",
+		Response: controlResponsePayload{
+			Subtype:   "success",
+			RequestID: requestID,
+			Response:  content,
+		},
+	}
+
+	data, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("failed to marshal control response: %w", err)
+	}
+
+	s.log.Debug("sending control response")
+	return s.writeStdin(data)
+}
+
+// interruptMarker is stored in pendingRequests to identify interrupt responses.
+// Needed because control_response only contains request_id, not the request type.
 type interruptMarker struct{}
 
 // SendInterrupt sends an interrupt signal to stop the current task.
@@ -242,88 +276,6 @@ func (s *session) Close() {
 		s.stdin.Close()
 		s.stdinMu.Unlock()
 	})
-}
-
-func (s *session) sendPermissionControlResponse(req *controlRequest, choice agent.PermissionChoice) error {
-	var content controlResponseContent
-
-	switch choice {
-	case agent.PermissionAllow, agent.PermissionAlwaysAllow:
-		content = controlResponseContent{
-			Behavior:     "allow",
-			ToolUseID:    req.Request.ToolUseID,
-			UpdatedInput: req.Request.Input,
-		}
-		// Include permission suggestions if user chose "always allow"
-		if choice == agent.PermissionAlwaysAllow && len(req.Request.PermissionSuggestions) > 0 {
-			content.UpdatedPermissions = req.Request.PermissionSuggestions
-		}
-	default: // PermissionDeny or unknown
-		content = controlResponseContent{
-			Behavior:  "deny",
-			Message:   "User denied permission",
-			Interrupt: true,
-			ToolUseID: req.Request.ToolUseID,
-		}
-	}
-
-	response := controlResponse{
-		Type: "control_response",
-		Response: controlResponsePayload{
-			Subtype:   "success",
-			RequestID: req.RequestID,
-			Response:  content,
-		},
-	}
-
-	data, err := json.Marshal(response)
-	if err != nil {
-		return fmt.Errorf("failed to marshal control response: %w", err)
-	}
-
-	s.log.Debug("sending permission control response")
-	return s.writeStdin(data)
-}
-
-func (s *session) sendQuestionControlResponse(req *controlRequest, answers map[string]string) error {
-	var content controlResponseContent
-
-	if answers == nil {
-		// Cancel: send deny response
-		content = controlResponseContent{
-			Behavior:  "deny",
-			Message:   "User cancelled the question",
-			ToolUseID: req.Request.ToolUseID,
-		}
-	} else {
-		// Normal response with answers
-		updatedInput, err := json.Marshal(map[string]any{"answers": answers})
-		if err != nil {
-			return fmt.Errorf("failed to marshal updated input: %w", err)
-		}
-		content = controlResponseContent{
-			Behavior:     "allow",
-			ToolUseID:    req.Request.ToolUseID,
-			UpdatedInput: updatedInput,
-		}
-	}
-
-	response := controlResponse{
-		Type: "control_response",
-		Response: controlResponsePayload{
-			Subtype:   "success",
-			RequestID: req.RequestID,
-			Response:  content,
-		},
-	}
-
-	data, err := json.Marshal(response)
-	if err != nil {
-		return fmt.Errorf("failed to marshal question response: %w", err)
-	}
-
-	s.log.Debug("sending question control response")
-	return s.writeStdin(data)
 }
 
 // writeStdin writes data to stdin with mutex protection.
@@ -512,7 +464,7 @@ func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent
 			Content: string(line),
 		}}
 	case "control_request":
-		return parseControlRequest(log, line, pendingRequests)
+		return parseControlRequest(log, line)
 	case "control_response":
 		return parseControlResponse(log, line, pendingRequests)
 	default:
@@ -524,7 +476,7 @@ func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent
 	}
 }
 
-func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
+func parseControlRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
 	var req controlRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		log.Warn("failed to parse control request from CLI", "error", err)
@@ -540,7 +492,6 @@ func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Ma
 	case "can_use_tool":
 		// AskUserQuestion is sent as can_use_tool with tool_name="AskUserQuestion"
 		if req.Request.ToolName == "AskUserQuestion" {
-			// Parse questions from input first, before storing to pendingRequests
 			var input struct {
 				Questions []agent.AskUserQuestion `json:"questions"`
 			}
@@ -550,17 +501,15 @@ func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Ma
 			}
 
 			log.Info("AskUserQuestion received", "requestId", req.RequestID)
-			pendingRequests.Store(req.RequestID, &req)
-
 			return []agent.AgentEvent{{
 				Type:      agent.EventTypeAskUserQuestion,
 				RequestID: req.RequestID,
+				ToolUseID: req.Request.ToolUseID,
 				Questions: input.Questions,
 			}}
 		}
 
 		log.Info("tool permission request", "tool", req.Request.ToolName, "requestId", req.RequestID)
-		pendingRequests.Store(req.RequestID, &req)
 		return []agent.AgentEvent{{
 			Type:                  agent.EventTypePermissionRequest,
 			RequestID:             req.RequestID,

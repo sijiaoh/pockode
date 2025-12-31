@@ -230,12 +230,20 @@ func (h *Handler) handlePermissionResponse(ctx context.Context, log *slog.Logger
 		return err
 	}
 
+	data := agent.PermissionRequestData{
+		RequestID:             msg.RequestID,
+		ToolInput:             msg.ToolInput,
+		ToolUseID:             msg.ToolUseID,
+		PermissionSuggestions: msg.PermissionSuggestions,
+	}
+	if err := sess.SendPermissionResponse(data, parsePermissionChoice(msg.Choice)); err != nil {
+		return err
+	}
+
 	if err := h.sessionStore.AppendToHistory(ctx, msg.SessionID, msg); err != nil {
 		log.Error("failed to append permission_response to history", "error", err)
 	}
-
-	choice := parsePermissionChoice(msg.Choice)
-	return sess.SendPermissionResponse(msg.RequestID, choice)
+	return nil
 }
 
 func (h *Handler) handleQuestionResponse(ctx context.Context, log *slog.Logger, msg ClientMessage) error {
@@ -244,7 +252,18 @@ func (h *Handler) handleQuestionResponse(ctx context.Context, log *slog.Logger, 
 		return err
 	}
 
-	return sess.SendQuestionResponse(msg.RequestID, msg.Answers)
+	data := agent.QuestionRequestData{
+		RequestID: msg.RequestID,
+		ToolUseID: msg.ToolUseID,
+	}
+	if err := sess.SendQuestionResponse(data, msg.Answers); err != nil {
+		return err
+	}
+
+	if err := h.sessionStore.AppendToHistory(ctx, msg.SessionID, msg); err != nil {
+		log.Error("failed to append question_response to history", "error", err)
+	}
+	return nil
 }
 
 func parsePermissionChoice(choice string) agent.PermissionChoice {

@@ -5,21 +5,19 @@ package ws
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/pockode/server/agent"
 )
 
 type mockSession struct {
-	events          chan agent.AgentEvent
-	messageQueue    chan string
-	pendingRequests *sync.Map
-	ctx             context.Context
-	mu              sync.Mutex
-	closed          bool
-	interruptCh     chan struct{}
-	interruptOnce   sync.Once
+	events        chan agent.AgentEvent
+	messageQueue  chan string
+	ctx           context.Context
+	mu            sync.Mutex
+	closed        bool
+	interruptCh   chan struct{}
+	interruptOnce sync.Once
 }
 
 func (s *mockSession) Events() <-chan agent.AgentEvent {
@@ -35,19 +33,11 @@ func (s *mockSession) SendMessage(prompt string) error {
 	}
 }
 
-func (s *mockSession) SendPermissionResponse(requestID string, _ agent.PermissionChoice) error {
-	_, ok := s.pendingRequests.LoadAndDelete(requestID)
-	if !ok {
-		return fmt.Errorf("no pending request for id: %s", requestID)
-	}
+func (s *mockSession) SendPermissionResponse(data agent.PermissionRequestData, _ agent.PermissionChoice) error {
 	return nil
 }
 
-func (s *mockSession) SendQuestionResponse(requestID string, _ map[string]string) error {
-	_, ok := s.pendingRequests.LoadAndDelete(requestID)
-	if !ok {
-		return fmt.Errorf("no pending request for id: %s", requestID)
-	}
+func (s *mockSession) SendQuestionResponse(data agent.QuestionRequestData, _ map[string]string) error {
 	return nil
 }
 
@@ -96,7 +86,6 @@ func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string,
 
 	eventsChan := make(chan agent.AgentEvent, 100)
 	messageQueue := make(chan string, 10)
-	pendingRequests := &sync.Map{}
 
 	effectiveSessionID := sessionID
 	if effectiveSessionID == "" {
@@ -107,11 +96,10 @@ func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string,
 	}
 
 	sess := &mockSession{
-		events:          eventsChan,
-		messageQueue:    messageQueue,
-		pendingRequests: pendingRequests,
-		ctx:             ctx,
-		interruptCh:     make(chan struct{}),
+		events:       eventsChan,
+		messageQueue: messageQueue,
+		ctx:          ctx,
+		interruptCh:  make(chan struct{}),
 	}
 
 	m.mu.Lock()
@@ -140,9 +128,6 @@ func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string,
 				m.mu.Unlock()
 
 				for _, event := range m.events {
-					if event.Type == agent.EventTypePermissionRequest || event.Type == agent.EventTypeAskUserQuestion {
-						pendingRequests.Store(event.RequestID, true)
-					}
 					select {
 					case eventsChan <- event:
 					case <-ctx.Done():

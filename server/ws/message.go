@@ -14,6 +14,11 @@ type ClientMessage struct {
 	RequestID string            `json:"request_id,omitempty"` // Request ID (for permission_response and question_response)
 	Choice    string            `json:"choice,omitempty"`     // "deny", "allow", or "always_allow" (for permission_response)
 	Answers   map[string]string `json:"answers,omitempty"`    // question -> selected label(s), nil = cancel (for question_response)
+
+	// Fields for permission_response (client echoes back from permission_request)
+	ToolInput             json.RawMessage          `json:"tool_input,omitempty"`
+	ToolUseID             string                   `json:"tool_use_id,omitempty"`
+	PermissionSuggestions []agent.PermissionUpdate `json:"permission_suggestions,omitempty"`
 }
 
 // ServerMessage represents a message sent by the server.

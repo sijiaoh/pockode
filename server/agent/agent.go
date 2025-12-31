@@ -1,6 +1,9 @@
 package agent
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // PermissionChoice represents the user's decision on a permission request.
 type PermissionChoice int
@@ -10,6 +13,20 @@ const (
 	PermissionAllow                               // Allow this one request
 	PermissionAlwaysAllow                         // Allow and persist for future requests
 )
+
+// PermissionRequestData contains the data needed to send a permission response.
+type PermissionRequestData struct {
+	RequestID             string
+	ToolInput             json.RawMessage
+	ToolUseID             string
+	PermissionSuggestions []PermissionUpdate
+}
+
+// QuestionRequestData contains the data needed to send a question response.
+type QuestionRequestData struct {
+	RequestID string
+	ToolUseID string
+}
 
 // Agent defines the interface for an AI agent.
 type Agent interface {
@@ -31,15 +48,11 @@ type Session interface {
 	SendMessage(prompt string) error
 
 	// SendPermissionResponse sends a permission response to the agent.
-	// requestID is the ID from EventTypePermissionRequest.
-	// choice indicates the user's decision (deny, allow once, or always allow).
-	SendPermissionResponse(requestID string, choice PermissionChoice) error
+	SendPermissionResponse(data PermissionRequestData, choice PermissionChoice) error
 
 	// SendQuestionResponse sends answers to user questions.
-	// requestID is the ID from EventTypeAskUserQuestion.
-	// answers maps question text to selected option label(s).
 	// If answers is nil, the question is cancelled (deny response sent).
-	SendQuestionResponse(requestID string, answers map[string]string) error
+	SendQuestionResponse(data QuestionRequestData, answers map[string]string) error
 
 	// SendInterrupt sends an interrupt signal to stop the current task.
 	// This is a soft stop that preserves the session for future messages.

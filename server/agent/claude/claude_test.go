@@ -188,10 +188,11 @@ func TestParseLine(t *testing.T) {
 		},
 		{
 			name:  "control_request AskUserQuestion tool",
-			input: `{"type":"control_request","request_id":"req-q-123","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Which library?","header":"Library","options":[{"label":"A","description":"Option A"}],"multiSelect":false}]}}}`,
+			input: `{"type":"control_request","request_id":"req-q-123","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q_abc","input":{"questions":[{"question":"Which library?","header":"Library","options":[{"label":"A","description":"Option A"}],"multiSelect":false}]}}}`,
 			expected: []agent.AgentEvent{{
 				Type:      agent.EventTypeAskUserQuestion,
 				RequestID: "req-q-123",
+				ToolUseID: "toolu_q_abc",
 				Questions: []agent.AskUserQuestion{
 					{
 						Question:    "Which library?",
@@ -267,34 +268,6 @@ func TestParseLine_ControlResponseWithPendingInterrupt(t *testing.T) {
 	}
 }
 
-func TestParseControlRequest_StoresPendingRequest(t *testing.T) {
-	pendingRequests := &sync.Map{}
-
-	input := `{"type":"control_request","request_id":"req-789","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"},"tool_use_id":"toolu_xyz"}}`
-	results := parseLine(testLogger(), []byte(input), pendingRequests)
-
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-
-	// Verify request is stored in pending map
-	stored, ok := pendingRequests.Load("req-789")
-	if !ok {
-		t.Fatal("expected pending request to be stored")
-	}
-
-	req := stored.(*controlRequest)
-	if req.RequestID != "req-789" {
-		t.Errorf("expected request_id 'req-789', got %q", req.RequestID)
-	}
-	if req.Request.ToolName != "Bash" {
-		t.Errorf("expected tool_name 'Bash', got %q", req.Request.ToolName)
-	}
-	if req.Request.ToolUseID != "toolu_xyz" {
-		t.Errorf("expected tool_use_id 'toolu_xyz', got %q", req.Request.ToolUseID)
-	}
-}
-
 // nopWriteCloser wraps a Writer to implement WriteCloser
 type nopWriteCloser struct {
 	*bytes.Buffer
@@ -308,35 +281,22 @@ func testLogger() *slog.Logger {
 
 func TestSession_SendPermissionResponse_Allow(t *testing.T) {
 	var buf bytes.Buffer
-	pendingRequests := &sync.Map{}
-
-	// Store a pending request
-	req := &controlRequest{
-		RequestID: "req-perm-123",
-		Request: &controlPayload{
-			ToolUseID: "toolu_perm",
-			Input:     json.RawMessage(`{"command":"ls"}`),
-		},
-	}
-	pendingRequests.Store("req-perm-123", req)
-
 	sess := &session{
 		log:             testLogger(),
 		stdin:           nopWriteCloser{&buf},
-		pendingRequests: pendingRequests,
+		pendingRequests: &sync.Map{},
 	}
 
-	err := sess.SendPermissionResponse("req-perm-123", agent.PermissionAllow)
+	data := agent.PermissionRequestData{
+		RequestID: "req-perm-123",
+		ToolUseID: "toolu_perm",
+		ToolInput: json.RawMessage(`{"command":"ls"}`),
+	}
+	err := sess.SendPermissionResponse(data, agent.PermissionAllow)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify request was removed from pending
-	if _, ok := pendingRequests.Load("req-perm-123"); ok {
-		t.Error("expected pending request to be removed")
-	}
-
-	// Verify response was written
 	var response controlResponse
 	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
@@ -348,23 +308,17 @@ func TestSession_SendPermissionResponse_Allow(t *testing.T) {
 
 func TestSession_SendPermissionResponse_Deny(t *testing.T) {
 	var buf bytes.Buffer
-	pendingRequests := &sync.Map{}
-
-	req := &controlRequest{
-		RequestID: "req-deny-456",
-		Request: &controlPayload{
-			ToolUseID: "toolu_deny",
-		},
-	}
-	pendingRequests.Store("req-deny-456", req)
-
 	sess := &session{
 		log:             testLogger(),
 		stdin:           nopWriteCloser{&buf},
-		pendingRequests: pendingRequests,
+		pendingRequests: &sync.Map{},
 	}
 
-	err := sess.SendPermissionResponse("req-deny-456", agent.PermissionDeny)
+	data := agent.PermissionRequestData{
+		RequestID: "req-deny-456",
+		ToolUseID: "toolu_deny",
+	}
+	err := sess.SendPermissionResponse(data, agent.PermissionDeny)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -381,30 +335,14 @@ func TestSession_SendPermissionResponse_Deny(t *testing.T) {
 	}
 }
 
-func TestSession_SendPermissionResponse_InvalidRequestID(t *testing.T) {
+func TestSession_SendPermissionResponse_AlwaysAllow(t *testing.T) {
 	var buf bytes.Buffer
-	pendingRequests := &sync.Map{}
-
 	sess := &session{
 		log:             testLogger(),
 		stdin:           nopWriteCloser{&buf},
-		pendingRequests: pendingRequests,
+		pendingRequests: &sync.Map{},
 	}
 
-	err := sess.SendPermissionResponse("non-existent-id", agent.PermissionAllow)
-	if err == nil {
-		t.Fatal("expected error for non-existent request ID")
-	}
-	if err.Error() != "no pending request for id: non-existent-id" {
-		t.Errorf("unexpected error message: %v", err)
-	}
-}
-
-func TestSession_SendPermissionResponse_AlwaysAllow(t *testing.T) {
-	var buf bytes.Buffer
-	pendingRequests := &sync.Map{}
-
-	// Store a pending request with permission suggestions
 	suggestions := []agent.PermissionUpdate{
 		{
 			Type:        agent.PermissionUpdateAddRules,
@@ -413,28 +351,17 @@ func TestSession_SendPermissionResponse_AlwaysAllow(t *testing.T) {
 			Destination: agent.PermissionDestinationLocalSettings,
 		},
 	}
-	req := &controlRequest{
-		RequestID: "req-always-789",
-		Request: &controlPayload{
-			ToolUseID:             "toolu_always",
-			Input:                 json.RawMessage(`{"command":"npm install lodash"}`),
-			PermissionSuggestions: suggestions,
-		},
+	data := agent.PermissionRequestData{
+		RequestID:             "req-always-789",
+		ToolUseID:             "toolu_always",
+		ToolInput:             json.RawMessage(`{"command":"npm install lodash"}`),
+		PermissionSuggestions: suggestions,
 	}
-	pendingRequests.Store("req-always-789", req)
-
-	sess := &session{
-		log:             testLogger(),
-		stdin:           nopWriteCloser{&buf},
-		pendingRequests: pendingRequests,
-	}
-
-	err := sess.SendPermissionResponse("req-always-789", agent.PermissionAlwaysAllow)
+	err := sess.SendPermissionResponse(data, agent.PermissionAlwaysAllow)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify response was written with updatedPermissions
 	var response controlResponse
 	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
@@ -483,39 +410,26 @@ func TestSession_SendMessage(t *testing.T) {
 
 func TestSession_SendQuestionResponse(t *testing.T) {
 	var buf bytes.Buffer
-	pendingRequests := &sync.Map{}
-
-	// Store a pending question request
-	req := &controlRequest{
-		RequestID: "req-q-456",
-		Request: &controlPayload{
-			Subtype: "ask_user_question",
-		},
-	}
-	pendingRequests.Store("req-q-456", req)
-
 	sess := &session{
 		log:             testLogger(),
 		stdin:           nopWriteCloser{&buf},
-		pendingRequests: pendingRequests,
+		pendingRequests: &sync.Map{},
 	}
 
+	data := agent.QuestionRequestData{
+		RequestID: "req-q-456",
+		ToolUseID: "toolu_q",
+	}
 	answers := map[string]string{
 		"Which library?": "date-fns",
 		"Which format?":  "Other: custom",
 	}
 
-	err := sess.SendQuestionResponse("req-q-456", answers)
+	err := sess.SendQuestionResponse(data, answers)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify request was removed from pending
-	if _, ok := pendingRequests.Load("req-q-456"); ok {
-		t.Error("expected pending request to be removed")
-	}
-
-	// Verify response was written
 	var response controlResponse
 	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
@@ -526,7 +440,6 @@ func TestSession_SendQuestionResponse(t *testing.T) {
 	if response.Response.Response.Behavior != "allow" {
 		t.Errorf("expected behavior 'allow', got %q", response.Response.Response.Behavior)
 	}
-	// Answers are now in updatedInput
 	var updatedInput struct {
 		Answers map[string]string `json:"answers"`
 	}
@@ -540,36 +453,21 @@ func TestSession_SendQuestionResponse(t *testing.T) {
 
 func TestSession_SendQuestionResponse_Cancel(t *testing.T) {
 	var buf bytes.Buffer
-	pendingRequests := &sync.Map{}
-
-	req := &controlRequest{
-		RequestID: "req-q-cancel",
-		Request: &controlPayload{
-			Subtype:   "can_use_tool",
-			ToolName:  "AskUserQuestion",
-			ToolUseID: "toolu_q_cancel",
-		},
-	}
-	pendingRequests.Store("req-q-cancel", req)
-
 	sess := &session{
 		log:             testLogger(),
 		stdin:           nopWriteCloser{&buf},
-		pendingRequests: pendingRequests,
+		pendingRequests: &sync.Map{},
 	}
 
-	// Send nil answers to cancel
-	err := sess.SendQuestionResponse("req-q-cancel", nil)
+	data := agent.QuestionRequestData{
+		RequestID: "req-q-cancel",
+		ToolUseID: "toolu_q_cancel",
+	}
+	err := sess.SendQuestionResponse(data, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify request was removed from pending
-	if _, ok := pendingRequests.Load("req-q-cancel"); ok {
-		t.Error("expected pending request to be removed")
-	}
-
-	// Verify response was written with deny behavior
 	var response controlResponse
 	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
@@ -585,24 +483,5 @@ func TestSession_SendQuestionResponse_Cancel(t *testing.T) {
 	}
 	if response.Response.Response.UpdatedInput != nil {
 		t.Error("expected updatedInput to be nil for cancel")
-	}
-}
-
-func TestSession_SendQuestionResponse_InvalidRequestID(t *testing.T) {
-	var buf bytes.Buffer
-	pendingRequests := &sync.Map{}
-
-	sess := &session{
-		log:             testLogger(),
-		stdin:           nopWriteCloser{&buf},
-		pendingRequests: pendingRequests,
-	}
-
-	err := sess.SendQuestionResponse("non-existent-id", map[string]string{"q": "a"})
-	if err == nil {
-		t.Fatal("expected error for non-existent request ID")
-	}
-	if err.Error() != "no pending request for id: non-existent-id" {
-		t.Errorf("unexpected error message: %v", err)
 	}
 }

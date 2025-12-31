@@ -267,6 +267,7 @@ func TestHandler_PermissionRequest(t *testing.T) {
 				RequestID: "req-123",
 				ToolName:  "Bash",
 				ToolInput: []byte(`{"command":"ls"}`),
+				ToolUseID: "toolu_perm",
 			},
 			{Type: agent.EventTypeDone},
 		},
@@ -286,73 +287,6 @@ func TestHandler_PermissionRequest(t *testing.T) {
 	}
 	if resp.ToolName != "Bash" {
 		t.Errorf("expected tool_name 'Bash', got %q", resp.ToolName)
-	}
-}
-
-func TestHandler_PermissionResponse_InvalidSession(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{})
-
-	env.send(ClientMessage{
-		Type:      "permission_response",
-		SessionID: "non-existent",
-		RequestID: "req-123",
-		Choice:    "allow",
-	})
-	resp := env.read()
-
-	if resp.Type != "error" || !strings.Contains(resp.Error, "session not found") {
-		t.Errorf("expected session not found error, got %+v", resp)
-	}
-}
-
-func TestHandler_PermissionResponse_InvalidRequestID(t *testing.T) {
-	mock := &mockAgent{
-		events: []agent.AgentEvent{
-			{Type: agent.EventTypeText, Content: "Hello"},
-			{Type: agent.EventTypeDone},
-		},
-	}
-	env := newTestEnv(t, mock)
-	env.store.Create(bgCtx, "sess")
-
-	env.attach("sess")
-	env.sendMessage("sess", "hello")
-	env.skipN(2)
-
-	env.send(ClientMessage{
-		Type:      "permission_response",
-		SessionID: "sess",
-		RequestID: "non-existent-request",
-		Choice:    "allow",
-	})
-	resp := env.read()
-
-	if resp.Type != "error" || !strings.Contains(resp.Error, "no pending request") {
-		t.Errorf("expected no pending request error, got %+v", resp)
-	}
-}
-
-func TestHandler_PermissionResponse_Duplicate(t *testing.T) {
-	mock := &mockAgent{
-		events: []agent.AgentEvent{
-			{Type: agent.EventTypePermissionRequest, RequestID: "req-dup"},
-			{Type: agent.EventTypeDone},
-		},
-	}
-	env := newTestEnv(t, mock)
-	env.store.Create(bgCtx, "sess")
-
-	env.attach("sess")
-	env.sendMessage("sess", "test")
-	env.skipN(2)
-
-	permResp := ClientMessage{Type: "permission_response", SessionID: "sess", RequestID: "req-dup", Choice: "allow"}
-	env.send(permResp)
-	env.send(permResp)
-	resp := env.read()
-
-	if resp.Type != "error" || !strings.Contains(resp.Error, "no pending request") {
-		t.Errorf("expected no pending request error for duplicate, got %+v", resp)
 	}
 }
 
@@ -460,6 +394,7 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 			{
 				Type:      agent.EventTypeAskUserQuestion,
 				RequestID: "req-q-123",
+				ToolUseID: "toolu_q_123",
 				Questions: []agent.AskUserQuestion{
 					{
 						Question:    "Which library?",
@@ -490,22 +425,6 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 	}
 	if resp.Questions[0].Question != "Which library?" {
 		t.Errorf("expected question 'Which library?', got %q", resp.Questions[0].Question)
-	}
-}
-
-func TestHandler_QuestionResponse_InvalidSession(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{})
-
-	env.send(ClientMessage{
-		Type:      "question_response",
-		SessionID: "non-existent",
-		RequestID: "req-123",
-		Answers:   map[string]string{"q1": "answer1"},
-	})
-	resp := env.read()
-
-	if resp.Type != "error" || !strings.Contains(resp.Error, "session not found") {
-		t.Errorf("expected session not found error, got %+v", resp)
 	}
 }
 

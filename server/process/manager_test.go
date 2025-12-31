@@ -49,10 +49,10 @@ type mockSession struct {
 
 func (s *mockSession) Events() <-chan agent.AgentEvent { return s.events }
 func (s *mockSession) SendMessage(prompt string) error { return nil }
-func (s *mockSession) SendPermissionResponse(requestID string, choice agent.PermissionChoice) error {
+func (s *mockSession) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
 	return nil
 }
-func (s *mockSession) SendQuestionResponse(requestID string, answers map[string]string) error {
+func (s *mockSession) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
 	return nil
 }
 func (s *mockSession) SendInterrupt() error { return nil }
