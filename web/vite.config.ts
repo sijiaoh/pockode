@@ -8,6 +8,7 @@ const serverPort = process.env.SERVER_PORT || "8080";
 export default defineConfig({
 	plugins: [react(), tailwindcss()],
 	server: {
+		allowedHosts: [".local.pockode.com"],
 		proxy: {
 			"/api": {
 				target: `http://localhost:${serverPort}`,

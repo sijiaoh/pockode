@@ -46,6 +46,7 @@ auth.token = "%s"
 [[proxies]]
 name = "http"
 type = "http"
+localIP = "localhost"
 localPort = %d
 customDomains = ["%s"]
 `, cfg.FrpServer, cfg.FrpPort, cfg.FrpToken, localPort, customDomain)
