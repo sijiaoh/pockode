@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useCallback, useEffect, useRef } from "react";
+import { useInputHistory } from "../../hooks/useInputHistory";
 import { inputActions, useInputStore } from "../../lib/inputStore";
 import { isMobile } from "../../utils/breakpoints";
 
@@ -19,6 +20,8 @@ function InputBar({
 }: Props) {
 	const input = useInputStore((state) => state.inputs[sessionId] ?? "");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const { saveToHistory, getPrevious, getNext, resetNavigation } =
+		useInputHistory();
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when input changes to adjust height
 	useEffect(() => {
@@ -37,19 +40,84 @@ function InputBar({
 	const handleSend = useCallback(() => {
 		const trimmed = input.trim();
 		if (trimmed && canSend && !isStreaming) {
+			saveToHistory(trimmed);
+			resetNavigation();
 			onSend(trimmed);
 			inputActions.clear(sessionId);
 		}
-	}, [input, onSend, canSend, isStreaming, sessionId]);
+	}, [
+		input,
+		onSend,
+		canSend,
+		isStreaming,
+		sessionId,
+		saveToHistory,
+		resetNavigation,
+	]);
+
+	const isAtFirstLine = useCallback(() => {
+		const textarea = textareaRef.current;
+		if (!textarea) return true;
+		const cursorPos = textarea.selectionStart;
+		const textBeforeCursor = textarea.value.substring(0, cursorPos);
+		return !textBeforeCursor.includes("\n");
+	}, []);
+
+	const isAtLastLine = useCallback(() => {
+		const textarea = textareaRef.current;
+		if (!textarea) return true;
+		const cursorPos = textarea.selectionStart;
+		const textAfterCursor = textarea.value.substring(cursorPos);
+		return !textAfterCursor.includes("\n");
+	}, []);
+
+	const moveCursorToEnd = useCallback(() => {
+		const textarea = textareaRef.current;
+		if (textarea) {
+			const len = textarea.value.length;
+			textarea.setSelectionRange(len, len);
+		}
+	}, []);
 
 	const handleKeyDown = useCallback(
 		(e: KeyboardEvent<HTMLTextAreaElement>) => {
-			if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+			if (e.nativeEvent.isComposing) return;
+
+			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
 				handleSend();
+				return;
+			}
+
+			if (e.key === "ArrowUp" && isAtFirstLine()) {
+				const previous = getPrevious(input);
+				if (previous !== null) {
+					e.preventDefault();
+					inputActions.set(sessionId, previous);
+					requestAnimationFrame(moveCursorToEnd);
+				}
+				return;
+			}
+
+			if (e.key === "ArrowDown" && isAtLastLine()) {
+				const next = getNext();
+				if (next !== null) {
+					e.preventDefault();
+					inputActions.set(sessionId, next);
+					requestAnimationFrame(moveCursorToEnd);
+				}
 			}
 		},
-		[handleSend],
+		[
+			handleSend,
+			isAtFirstLine,
+			isAtLastLine,
+			getPrevious,
+			getNext,
+			input,
+			sessionId,
+			moveCursorToEnd,
+		],
 	);
 
 	return (

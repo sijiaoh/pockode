@@ -1,14 +1,21 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useInputStore } from "../../lib/inputStore";
 import InputBar from "./InputBar";
+
+const HISTORY_KEY = "input_history";
 
 const TEST_SESSION_ID = "test-session";
 
 describe("InputBar", () => {
+	beforeEach(() => {
+		localStorage.clear();
+	});
+
 	afterEach(() => {
 		useInputStore.setState({ inputs: {} });
+		localStorage.clear();
 	});
 
 	it("disables send button when canSend is false", () => {
@@ -162,5 +169,41 @@ describe("InputBar", () => {
 
 		rerender(<InputBar sessionId="session-1" onSend={() => {}} />);
 		expect(textarea).toHaveValue("session 1 text");
+	});
+
+	it("saves sent message to history", async () => {
+		const user = userEvent.setup();
+		render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+		await user.type(screen.getByRole("textbox"), "test message");
+		await user.click(screen.getByRole("button", { name: /Send/ }));
+
+		const stored = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]");
+		expect(stored).toContain("test message");
+	});
+
+	it("navigates to previous history on ArrowUp", () => {
+		localStorage.setItem(HISTORY_KEY, JSON.stringify(["previous message"]));
+		render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+		const textarea = screen.getByRole("textbox");
+		fireEvent.keyDown(textarea, { key: "ArrowUp" });
+
+		expect(textarea).toHaveValue("previous message");
+	});
+
+	it("navigates back to draft on ArrowDown", () => {
+		localStorage.setItem(HISTORY_KEY, JSON.stringify(["history"]));
+		render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+		const textarea = screen.getByRole("textbox");
+		fireEvent.change(textarea, { target: { value: "my draft" } });
+		fireEvent.keyDown(textarea, { key: "ArrowUp" });
+
+		expect(textarea).toHaveValue("history");
+
+		fireEvent.keyDown(textarea, { key: "ArrowDown" });
+
+		expect(textarea).toHaveValue("my draft");
 	});
 });
