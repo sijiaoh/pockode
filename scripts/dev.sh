@@ -10,6 +10,10 @@ export PORT="${PORT:-8080}"
 export DEV_MODE="${DEV_MODE:-true}"
 export DEBUG="${DEBUG:-true}"
 
+# Relay configuration (for local development)
+export RELAY_ENABLED="${RELAY_ENABLED:-false}"
+export RELAY_CLOUD_URL="${RELAY_CLOUD_URL:-http://local.pockode.com}"
+
 # Cleanup on exit
 cleanup() {
     echo ""

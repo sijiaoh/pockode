@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/relay"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/ws"
 )
@@ -118,6 +120,36 @@ func main() {
 		Handler: handler,
 	}
 
+	// Initialize relay if enabled
+	var relayManager *relay.Manager
+	if os.Getenv("RELAY_ENABLED") == "true" {
+		portInt, err := strconv.Atoi(port)
+		if err != nil {
+			slog.Error("invalid PORT for relay", "port", port, "error", err)
+			os.Exit(1)
+		}
+		cloudURL := os.Getenv("RELAY_CLOUD_URL")
+		if cloudURL == "" {
+			cloudURL = "https://cloud.pockode.com"
+		}
+
+		relayCfg := relay.Config{
+			CloudURL:  cloudURL,
+			DataDir:   dataDir,
+			LocalPort: portInt,
+		}
+
+		relayManager = relay.NewManager(relayCfg, slog.Default())
+
+		remoteURL, err := relayManager.Start(context.Background())
+		if err != nil {
+			slog.Error("failed to start relay", "error", err)
+			os.Exit(1)
+		}
+
+		slog.Info("remote access enabled", "url", remoteURL)
+	}
+
 	// Graceful shutdown
 	shutdownDone := make(chan struct{})
 	go func() {
@@ -130,6 +162,9 @@ func main() {
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			slog.Error("server shutdown error", "error", err)
+		}
+		if relayManager != nil {
+			relayManager.Stop()
 		}
 		manager.Shutdown()
 		close(shutdownDone)
