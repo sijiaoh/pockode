@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -74,6 +75,12 @@ func main() {
 	if dataDir == "" {
 		dataDir = ".pockode"
 	}
+	absDataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		slog.Error("failed to resolve data directory", "error", err)
+		os.Exit(1)
+	}
+	dataDir = absDataDir
 
 	if os.Getenv("GIT_ENABLED") == "true" {
 		gitCfg := git.Config{

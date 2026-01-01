@@ -58,8 +58,8 @@ func (m *Manager) Start(ctx context.Context) (string, error) {
 		m.log.Info("using stored config", "subdomain", storedCfg.Subdomain)
 	}
 
-	if err := m.frpc.EnsureBinary(ctx, storedCfg.FrpVersion); err != nil {
-		return "", fmt.Errorf("ensure frpc binary: %w", err)
+	if err := m.frpc.CheckInstalled(); err != nil {
+		return "", err
 	}
 
 	if err := m.frpc.GenerateConfig(storedCfg, m.config.LocalPort); err != nil {

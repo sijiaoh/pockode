@@ -3,49 +3,26 @@ package relay
 import (
 	"log/slog"
 	"os"
-	"path/filepath"
+	"os/exec"
 	"strings"
 	"testing"
 )
 
-func TestBuildDownloadURL(t *testing.T) {
-	tests := []struct {
-		name    string
-		version string
-		goos    string
-		goarch  string
-		want    string
-	}{
-		{
-			name:    "darwin arm64",
-			version: "0.65.0",
-			goos:    "darwin",
-			goarch:  "arm64",
-			want:    "https://github.com/fatedier/frp/releases/download/v0.65.0/frp_0.65.0_darwin_arm64.tar.gz",
-		},
-		{
-			name:    "linux amd64",
-			version: "0.65.0",
-			goos:    "linux",
-			goarch:  "amd64",
-			want:    "https://github.com/fatedier/frp/releases/download/v0.65.0/frp_0.65.0_linux_amd64.tar.gz",
-		},
-		{
-			name:    "windows amd64",
-			version: "0.65.0",
-			goos:    "windows",
-			goarch:  "amd64",
-			want:    "https://github.com/fatedier/frp/releases/download/v0.65.0/frp_0.65.0_windows_amd64.tar.gz",
-		},
-	}
+func TestFrpcRunner_CheckInstalled(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	runner := NewFrpcRunner(t.TempDir(), log)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := buildDownloadURL(tt.version, tt.goos, tt.goarch)
-			if got != tt.want {
-				t.Errorf("buildDownloadURL() = %v, want %v", got, tt.want)
-			}
-		})
+	err := runner.CheckInstalled()
+
+	_, lookErr := exec.LookPath("frpc")
+	if lookErr != nil {
+		if err != ErrFrpcNotFound {
+			t.Errorf("CheckInstalled() error = %v, want ErrFrpcNotFound", err)
+		}
+	} else {
+		if err != nil {
+			t.Errorf("CheckInstalled() error = %v", err)
+		}
 	}
 }
 
@@ -142,30 +119,5 @@ func TestFrpcRunner_ConfigFilePermissions(t *testing.T) {
 	perm := info.Mode().Perm()
 	if perm&0077 != 0 {
 		t.Errorf("Config file permissions = %o, want 0600 (no group/other access)", perm)
-	}
-}
-
-func TestFrpcRunner_EnsureBinary_SkipsIfExists(t *testing.T) {
-	dir := t.TempDir()
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	runner := NewFrpcRunner(dir, log)
-
-	binDir := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-
-	binPath := filepath.Join(binDir, "frpc-0.65.0")
-	if err := os.WriteFile(binPath, []byte("fake binary"), 0755); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	err := runner.EnsureBinary(t.Context(), "0.65.0")
-	if err != nil {
-		t.Errorf("EnsureBinary() error = %v", err)
-	}
-
-	if runner.binPath != binPath {
-		t.Errorf("binPath = %v, want %v", runner.binPath, binPath)
 	}
 }

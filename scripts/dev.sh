@@ -9,6 +9,7 @@ export WORK_DIR="${WORK_DIR:-$PROJECT_DIR}"
 export PORT="${PORT:-8080}"
 export DEV_MODE="${DEV_MODE:-true}"
 export DEBUG="${DEBUG:-true}"
+export LOG_LEVEL="${LOG_LEVEL:-debug}"
 
 # Relay configuration (for local development)
 export RELAY_ENABLED="${RELAY_ENABLED:-false}"
