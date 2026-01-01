@@ -31,7 +31,7 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 WORKDIR /workspace
 COPY --from=builder --chown=pockode:pockode /app/server /usr/local/bin/server
 
-ENV PORT=8080
+ENV SERVER_PORT=8080
 ENV WORK_DIR=/workspace
 ENV DEV_MODE=false
 ENV PATH="/home/pockode/.local/bin:${PATH}"

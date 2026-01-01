@@ -53,7 +53,7 @@ func newHandler(token string, manager *process.Manager, devMode bool, sessionSto
 func main() {
 	logger.Init()
 
-	port := os.Getenv("PORT")
+	port := os.Getenv("SERVER_PORT")
 	if port == "" {
 		port = "8080"
 	}
@@ -132,7 +132,7 @@ func main() {
 	if os.Getenv("RELAY_ENABLED") == "true" {
 		portInt, err := strconv.Atoi(port)
 		if err != nil {
-			slog.Error("invalid PORT for relay", "port", port, "error", err)
+			slog.Error("invalid SERVER_PORT for relay", "port", port, "error", err)
 			os.Exit(1)
 		}
 		cloudURL := os.Getenv("RELAY_CLOUD_URL")

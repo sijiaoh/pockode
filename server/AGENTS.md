@@ -62,7 +62,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | 变量 | 必需 | 默认 | 说明 |
 |------|:----:|------|------|
 | `AUTH_TOKEN` | ✓ | — | API 认证令牌 |
-| `PORT` | | `8080` | 服务端口 |
+| `SERVER_PORT` | | `8080` | 服务端口 |
 | `WORK_DIR` | | `/workspace` | 工作目录 |
 | `DEV_MODE` | | `false` | 开发模式 |
 | `LOG_FORMAT` | | `text` | `json` / `text` |

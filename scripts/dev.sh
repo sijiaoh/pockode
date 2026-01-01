@@ -6,7 +6,8 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 # Configuration
 export AUTH_TOKEN="${AUTH_TOKEN:-dev-token}"
 export WORK_DIR="${WORK_DIR:-$PROJECT_DIR}"
-export PORT="${PORT:-8080}"
+export SERVER_PORT="${SERVER_PORT:-8080}"
+export WEB_PORT="${WEB_PORT:-5173}"
 export DEV_MODE="${DEV_MODE:-true}"
 export DEBUG="${DEBUG:-true}"
 export LOG_LEVEL="${LOG_LEVEL:-debug}"
@@ -25,14 +26,14 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Start backend
-echo "Starting backend (port $PORT, workDir: $WORK_DIR)..."
+echo "Starting backend (port $SERVER_PORT, workDir: $WORK_DIR)..."
 (cd "$PROJECT_DIR/server" && go run .) &
 SERVER_PID=$!
 
 # Wait for backend to be ready
 echo "Waiting for backend..."
 for _ in {1..30}; do
-    if curl -s "http://localhost:$PORT/health" > /dev/null 2>&1; then
+    if curl -s "http://localhost:$SERVER_PORT/health" > /dev/null 2>&1; then
         echo "Backend ready."
         break
     fi
@@ -40,14 +41,14 @@ for _ in {1..30}; do
 done
 
 # Start frontend
-echo "Starting frontend..."
-(cd "$PROJECT_DIR/web" && npm run dev) &
+echo "Starting frontend (port $WEB_PORT)..."
+(cd "$PROJECT_DIR/web" && npm run dev -- --port "$WEB_PORT") &
 WEB_PID=$!
 
 echo ""
 echo "Services started:"
-echo "  Backend:  http://localhost:$PORT"
-echo "  Frontend: http://localhost:5173"
+echo "  Backend:  http://localhost:$SERVER_PORT"
+echo "  Frontend: http://localhost:$WEB_PORT"
 echo "  Token:    $AUTH_TOKEN"
 echo ""
 echo "Press Ctrl+C to stop."
