@@ -1,5 +1,6 @@
 import { useMatch, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useIsDesktop } from "../hooks/useIsDesktop";
 import { useSession } from "../hooks/useSession";
 import {
 	authActions,
@@ -74,6 +75,7 @@ function useRouteState(): RouteInfo {
 function AppShell() {
 	const isAuthenticated = useAuthStore(selectIsAuthenticated);
 	const navigate = useNavigate();
+	const isDesktop = useIsDesktop();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 	const isCreatingSession = useRef(false);
 
@@ -124,6 +126,13 @@ function AppShell() {
 				});
 		}
 	}, [needsNewSession, createSession, navigate]);
+
+	// Load sessions on mount for desktop (sidebar always visible)
+	useEffect(() => {
+		if (isDesktop && isAuthenticated) {
+			loadSessions();
+		}
+	}, [isDesktop, isAuthenticated, loadSessions]);
 
 	const handleTokenSubmit = (token: string) => {
 		authActions.login(token);
@@ -202,16 +211,7 @@ function AppShell() {
 	}
 
 	return (
-		<>
-			<ChatPanel
-				sessionId={currentSessionId}
-				sessionTitle={currentSession.title}
-				onUpdateTitle={(title) => updateTitle(currentSessionId, title)}
-				onLogout={authActions.logout}
-				onOpenSidebar={handleOpenSidebar}
-				overlay={overlay}
-				onCloseOverlay={handleCloseOverlay}
-			/>
+		<div className="flex h-dvh">
 			<SessionSidebar
 				isOpen={sidebarOpen}
 				onClose={() => setSidebarOpen(false)}
@@ -223,8 +223,18 @@ function AppShell() {
 				onSelectDiffFile={handleSelectDiffFile}
 				isLoading={isLoading}
 				activeFile={activeFile}
+				isDesktop={isDesktop}
 			/>
-		</>
+			<ChatPanel
+				sessionId={currentSessionId}
+				sessionTitle={currentSession.title}
+				onUpdateTitle={(title) => updateTitle(currentSessionId, title)}
+				onLogout={authActions.logout}
+				onOpenSidebar={handleOpenSidebar}
+				overlay={overlay}
+				onCloseOverlay={handleCloseOverlay}
+			/>
+		</div>
 	);
 }
 

@@ -17,14 +17,14 @@ function MainContainer({
 	headerRight,
 }: Props) {
 	return (
-		<div className="flex h-dvh flex-col bg-th-bg-primary">
+		<div className="flex min-w-0 flex-1 flex-col bg-th-bg-primary">
 			<header className="flex items-center justify-between border-b border-th-border p-3 sm:p-4">
 				<div className="flex items-center gap-3">
 					{onOpenSidebar && (
 						<button
 							type="button"
 							onClick={onOpenSidebar}
-							className="rounded p-1 text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
+							className="rounded p-1 text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary md:hidden"
 							aria-label="Open menu"
 						>
 							<Menu className="h-6 w-6" aria-hidden="true" />

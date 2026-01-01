@@ -6,11 +6,14 @@ interface Props {
 	onClose: () => void;
 	title: string;
 	children: React.ReactNode;
+	isDesktop: boolean;
 }
 
-function Sidebar({ isOpen, onClose, title, children }: Props) {
-	// Close on Escape key
+function Sidebar({ isOpen, onClose, title, children, isDesktop }: Props) {
+	// Close on Escape key (mobile only)
 	useEffect(() => {
+		if (isDesktop) return;
+
 		const handleKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape" && isOpen) {
 				onClose();
@@ -18,8 +21,21 @@ function Sidebar({ isOpen, onClose, title, children }: Props) {
 		};
 		document.addEventListener("keydown", handleKeyDown);
 		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, [isOpen, onClose]);
+	}, [isOpen, onClose, isDesktop]);
 
+	// Desktop: always visible as part of flex layout
+	if (isDesktop) {
+		return (
+			<div className="flex h-dvh w-72 shrink-0 flex-col border-r border-th-border bg-th-bg-secondary">
+				<div className="flex items-center border-b border-th-border p-4">
+					<h2 className="font-semibold text-th-text-primary">{title}</h2>
+				</div>
+				<div className="flex flex-1 flex-col overflow-hidden">{children}</div>
+			</div>
+		);
+	}
+
+	// Mobile: overlay drawer
 	if (!isOpen) return null;
 
 	return (

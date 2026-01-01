@@ -15,6 +15,7 @@ interface Props {
 	onSelectDiffFile: (path: string, staged: boolean) => void;
 	isLoading: boolean;
 	activeFile: { path: string; staged: boolean } | null;
+	isDesktop: boolean;
 }
 
 function SessionSidebar({
@@ -28,16 +29,22 @@ function SessionSidebar({
 	onSelectDiffFile,
 	isLoading,
 	activeFile,
+	isDesktop,
 }: Props) {
 	const [activeTab, setActiveTab] = useState<Tab>("sessions");
 
 	const handleSelectFile = (path: string, staged: boolean) => {
 		onSelectDiffFile(path, staged);
-		onClose();
+		if (!isDesktop) onClose();
 	};
 
 	return (
-		<Sidebar isOpen={isOpen} onClose={onClose} title="Pockode">
+		<Sidebar
+			isOpen={isOpen}
+			onClose={onClose}
+			title="Pockode"
+			isDesktop={isDesktop}
+		>
 			<SidebarTabs activeTab={activeTab} onTabChange={setActiveTab} />
 
 			{activeTab === "sessions" && (
@@ -46,7 +53,7 @@ function SessionSidebar({
 					currentSessionId={currentSessionId}
 					onSelectSession={(id) => {
 						onSelectSession(id);
-						onClose();
+						if (!isDesktop) onClose();
 					}}
 					onCreateSession={onCreateSession}
 					onDeleteSession={onDeleteSession}
