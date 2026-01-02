@@ -1,4 +1,5 @@
 import { useGitStatus } from "../../hooks/useGitStatus";
+import { useSidebarRefresh } from "../Layout";
 import { Spinner } from "../ui";
 import DiffFileList from "./DiffFileList";
 
@@ -7,8 +8,11 @@ interface Props {
 	activeFile: { path: string; staged: boolean } | null;
 }
 
-function DiffSidebarContent({ onSelectFile, activeFile }: Props) {
-	const { data: status, isLoading, error } = useGitStatus();
+function DiffTab({ onSelectFile, activeFile }: Props) {
+	const { data: status, isLoading, error, refresh } = useGitStatus();
+	const { isActive } = useSidebarRefresh("diff", refresh);
+
+	if (!isActive) return null;
 
 	if (isLoading) {
 		return (
@@ -57,4 +61,4 @@ function DiffSidebarContent({ onSelectFile, activeFile }: Props) {
 	);
 }
 
-export default DiffSidebarContent;
+export default DiffTab;

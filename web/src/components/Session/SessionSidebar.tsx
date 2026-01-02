@@ -1,19 +1,21 @@
-import { useState } from "react";
-import type { SessionMeta } from "../../types/message";
-import { DiffSidebarContent } from "../Git";
-import { Sidebar, SidebarTabs, type Tab } from "../Layout";
-import SessionSidebarContent from "./SessionSidebarContent";
+import { GitCompare, MessageSquare } from "lucide-react";
+import { DiffTab } from "../Git";
+import { TabbedSidebar, type TabConfig } from "../Layout";
+import SessionsTab from "./SessionsTab";
+
+const TABS: TabConfig[] = [
+	{ id: "sessions", label: "Sessions", icon: MessageSquare },
+	{ id: "diff", label: "Diff", icon: GitCompare },
+];
 
 interface Props {
 	isOpen: boolean;
 	onClose: () => void;
-	sessions: SessionMeta[];
 	currentSessionId: string | null;
 	onSelectSession: (id: string) => void;
 	onCreateSession: () => void;
 	onDeleteSession: (id: string) => void;
 	onSelectDiffFile: (path: string, staged: boolean) => void;
-	isLoading: boolean;
 	activeFile: { path: string; staged: boolean } | null;
 	isDesktop: boolean;
 }
@@ -21,17 +23,18 @@ interface Props {
 function SessionSidebar({
 	isOpen,
 	onClose,
-	sessions,
 	currentSessionId,
 	onSelectSession,
 	onCreateSession,
 	onDeleteSession,
 	onSelectDiffFile,
-	isLoading,
 	activeFile,
 	isDesktop,
 }: Props) {
-	const [activeTab, setActiveTab] = useState<Tab>("sessions");
+	const handleSelectSession = (id: string) => {
+		onSelectSession(id);
+		if (!isDesktop) onClose();
+	};
 
 	const handleSelectFile = (path: string, staged: boolean) => {
 		onSelectDiffFile(path, staged);
@@ -39,35 +42,22 @@ function SessionSidebar({
 	};
 
 	return (
-		<Sidebar
+		<TabbedSidebar
 			isOpen={isOpen}
 			onClose={onClose}
 			title="Pockode"
+			tabs={TABS}
+			defaultTab="sessions"
 			isDesktop={isDesktop}
 		>
-			<SidebarTabs activeTab={activeTab} onTabChange={setActiveTab} />
-
-			{activeTab === "sessions" && (
-				<SessionSidebarContent
-					sessions={sessions}
-					currentSessionId={currentSessionId}
-					onSelectSession={(id) => {
-						onSelectSession(id);
-						if (!isDesktop) onClose();
-					}}
-					onCreateSession={onCreateSession}
-					onDeleteSession={onDeleteSession}
-					isLoading={isLoading}
-				/>
-			)}
-
-			{activeTab === "diff" && (
-				<DiffSidebarContent
-					onSelectFile={handleSelectFile}
-					activeFile={activeFile}
-				/>
-			)}
-		</Sidebar>
+			<SessionsTab
+				currentSessionId={currentSessionId}
+				onSelectSession={handleSelectSession}
+				onCreateSession={onCreateSession}
+				onDeleteSession={onDeleteSession}
+			/>
+			<DiffTab onSelectFile={handleSelectFile} activeFile={activeFile} />
+		</TabbedSidebar>
 	);
 }
 

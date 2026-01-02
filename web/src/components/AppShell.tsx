@@ -90,10 +90,8 @@ function AppShell() {
 		sessions,
 		currentSessionId,
 		currentSession,
-		isLoading,
 		redirectSessionId,
 		needsNewSession,
-		loadSessions,
 		createSession,
 		deleteSession,
 		updateTitle,
@@ -127,21 +125,13 @@ function AppShell() {
 		}
 	}, [needsNewSession, createSession, navigate]);
 
-	// Load sessions on mount for desktop (sidebar always visible)
-	useEffect(() => {
-		if (isDesktop && isAuthenticated) {
-			loadSessions();
-		}
-	}, [isDesktop, isAuthenticated, loadSessions]);
-
 	const handleTokenSubmit = (token: string) => {
 		authActions.login(token);
 	};
 
 	const handleOpenSidebar = useCallback(() => {
 		setSidebarOpen(true);
-		loadSessions();
-	}, [loadSessions]);
+	}, []);
 
 	const handleSelectSession = useCallback(
 		(id: string) => {
@@ -215,13 +205,11 @@ function AppShell() {
 			<SessionSidebar
 				isOpen={sidebarOpen}
 				onClose={() => setSidebarOpen(false)}
-				sessions={sessions}
 				currentSessionId={currentSessionId}
 				onSelectSession={handleSelectSession}
 				onCreateSession={handleCreateSession}
 				onDeleteSession={handleDeleteSession}
 				onSelectDiffFile={handleSelectDiffFile}
-				isLoading={isLoading}
 				activeFile={activeFile}
 				isDesktop={isDesktop}
 			/>
