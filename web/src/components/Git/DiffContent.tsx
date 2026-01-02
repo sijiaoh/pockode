@@ -1,7 +1,7 @@
 import { DiffModeEnum, DiffView } from "@git-diff-view/react";
 import type { getDiffViewHighlighter } from "@git-diff-view/shiki";
 import "@git-diff-view/react/styles/diff-view-pure.css";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { memo, useEffect, useState, useSyncExternalStore } from "react";
 import {
 	getDiffHighlighter,
 	getIsDarkMode,
@@ -15,7 +15,12 @@ interface Props {
 	newContent: string;
 }
 
-function DiffContent({ diff, fileName, oldContent, newContent }: Props) {
+const DiffContent = memo(function DiffContent({
+	diff,
+	fileName,
+	oldContent,
+	newContent,
+}: Props) {
 	const isDark = useSyncExternalStore(subscribeToDarkMode, getIsDarkMode);
 	const [highlighter, setHighlighter] = useState<Awaited<
 		ReturnType<typeof getDiffViewHighlighter>
@@ -60,6 +65,6 @@ function DiffContent({ diff, fileName, oldContent, newContent }: Props) {
 			/>
 		</div>
 	);
-}
+});
 
 export default DiffContent;
