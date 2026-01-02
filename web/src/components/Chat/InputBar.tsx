@@ -34,7 +34,7 @@ function InputBar({
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when sessionId changes to focus input
 	useEffect(() => {
-		textareaRef.current?.focus();
+		if (!isMobile()) textareaRef.current?.focus();
 	}, [sessionId]);
 
 	const handleSend = useCallback(() => {
