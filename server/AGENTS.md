@@ -73,6 +73,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `RELAY_PORT` | | `SERVER_PORT` | Relay 转发目标端口（开发时可设为前端端口） |
 | `LOG_FORMAT` | | `text` | `json` / `text` |
 | `LOG_LEVEL` | | `info` | `debug`/`info`/`warn`/`error` |
+| `LOG_FILE` | | `dataDir/server.log`(生产) | 日志文件路径（开发模式默认输出到 stdout） |
 | `GIT_ENABLED` | | `false` | 启用 git |
 | `REPOSITORY_URL` | git时 | — | 仓库 URL |
 | `REPOSITORY_TOKEN` | git时 | — | PAT |

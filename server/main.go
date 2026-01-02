@@ -109,8 +109,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	logger.Init()
-
 	port := "8080"
 	if *portFlag != 0 {
 		port = strconv.Itoa(*portFlag)
@@ -150,6 +148,11 @@ func main() {
 		os.Exit(1)
 	}
 	dataDir = absDataDir
+
+	logger.Init(logger.Config{
+		DataDir: dataDir,
+		DevMode: devMode,
+	})
 
 	if os.Getenv("GIT_ENABLED") == "true" {
 		gitCfg := git.Config{
