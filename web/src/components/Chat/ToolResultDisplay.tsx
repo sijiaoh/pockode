@@ -4,8 +4,8 @@ import { AnsiUp } from "ansi_up";
 import { createPatch } from "diff";
 import { Check, Circle, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import ShikiHighlighter from "react-shiki";
 import {
+	CodeHighlighter,
 	getDiffHighlighter,
 	getIsDarkMode,
 	getLanguageFromPath,
@@ -65,11 +65,7 @@ function ReadResultDisplay({
 		return <pre className="text-th-text-muted">{result}</pre>;
 	}
 
-	return (
-		<ShikiHighlighter language={language} theme="github-dark">
-			{code}
-		</ShikiHighlighter>
-	);
+	return <CodeHighlighter language={language}>{code}</CodeHighlighter>;
 }
 
 /** Edit tool: show diff using @git-diff-view */
@@ -157,12 +153,7 @@ function MultiEditResultDisplay({ input }: { input: MultiEditInput }) {
 /** Write tool: show new file content with syntax highlighting */
 function WriteResultDisplay({ input }: { input: WriteInput }) {
 	const language = getLanguageFromPath(input.file_path);
-
-	return (
-		<ShikiHighlighter language={language} theme="github-dark">
-			{input.content}
-		</ShikiHighlighter>
-	);
+	return <CodeHighlighter language={language}>{input.content}</CodeHighlighter>;
 }
 
 /** TodoWrite tool: show todo list with status icons */
@@ -180,8 +171,12 @@ function TodoWriteResultDisplay({ input }: { input: TodoWriteInput }) {
 
 	return (
 		<div className="space-y-1 text-sm">
-			{input.todos.map((todo) => (
-				<div key={todo.content} className="flex items-center gap-2">
+			{input.todos.map((todo, index) => (
+				<div
+					// biome-ignore lint/suspicious/noArrayIndexKey: todos have no unique identifier
+					key={index}
+					className="flex items-center gap-2"
+				>
 					{getStatusIcon(todo.status)}
 					<span
 						className={

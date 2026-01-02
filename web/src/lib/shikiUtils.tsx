@@ -1,4 +1,6 @@
 import { getDiffViewHighlighter } from "@git-diff-view/shiki";
+import { useSyncExternalStore } from "react";
+import ShikiHighlighter from "react-shiki";
 import { bundledLanguagesInfo } from "shiki";
 
 // Build extension map from Shiki's bundled languages
@@ -55,4 +57,24 @@ export function subscribeToDarkMode(callback: () => void) {
 
 export function getIsDarkMode() {
 	return document.documentElement.classList.contains("dark");
+}
+
+export function getShikiTheme() {
+	return getIsDarkMode() ? "github-dark" : "github-light";
+}
+
+/** Code highlighter component with automatic dark/light theme switching */
+export function CodeHighlighter({
+	children,
+	language,
+}: {
+	children: string;
+	language?: string;
+}) {
+	const theme = useSyncExternalStore(subscribeToDarkMode, getShikiTheme);
+	return (
+		<ShikiHighlighter language={language} theme={theme}>
+			{children}
+		</ShikiHighlighter>
+	);
 }

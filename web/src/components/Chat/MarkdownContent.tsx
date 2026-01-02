@@ -1,8 +1,9 @@
 import type { Element } from "hast";
 import type { ComponentPropsWithoutRef } from "react";
 import Markdown from "react-markdown";
-import ShikiHighlighter, { isInlineCode } from "react-shiki";
+import { isInlineCode } from "react-shiki";
 import remarkGfm from "remark-gfm";
+import { CodeHighlighter } from "../../lib/shikiUtils";
 
 type CodeProps = ComponentPropsWithoutRef<"code"> & {
 	node?: Element;
@@ -22,11 +23,7 @@ function CodeBlock({ className, children, node }: CodeProps) {
 		);
 	}
 
-	return (
-		<ShikiHighlighter language={language} theme="github-dark">
-			{code}
-		</ShikiHighlighter>
-	);
+	return <CodeHighlighter language={language}>{code}</CodeHighlighter>;
 }
 
 interface MarkdownContentProps {
@@ -35,7 +32,7 @@ interface MarkdownContentProps {
 
 export function MarkdownContent({ content }: MarkdownContentProps) {
 	return (
-		<div className="prose dark:prose-invert prose-sm max-w-none prose-code:before:content-none prose-code:after:content-none">
+		<div className="prose dark:prose-invert prose-sm max-w-none prose-code:before:content-none prose-code:after:content-none prose-pre:bg-transparent prose-pre:p-0">
 			<Markdown
 				remarkPlugins={[remarkGfm]}
 				components={{
