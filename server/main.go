@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"flag"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -93,29 +94,46 @@ func newSPAHandler(apiHandler http.Handler) http.Handler {
 }
 
 func main() {
+	portFlag := flag.Int("port", 0, "server port (default 8080)")
+	tokenFlag := flag.String("auth-token", "", "authentication token (required)")
+	devModeFlag := flag.Bool("dev", false, "enable development mode")
+	relayFlag := flag.Bool("relay", false, "enable relay for remote access")
+	flag.Parse()
+
 	logger.Init()
 
-	port := os.Getenv("SERVER_PORT")
-	if port == "" {
-		port = "8080"
+	port := "8080"
+	if *portFlag != 0 {
+		port = strconv.Itoa(*portFlag)
+	} else if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
+		port = envPort
 	}
 
-	token := os.Getenv("AUTH_TOKEN")
+	token := *tokenFlag
 	if token == "" {
-		slog.Error("AUTH_TOKEN environment variable is required")
+		token = os.Getenv("AUTH_TOKEN")
+	}
+	if token == "" {
+		slog.Error("AUTH_TOKEN is required (use --auth-token flag or AUTH_TOKEN env)")
 		os.Exit(1)
 	}
 
-	workDir := os.Getenv("WORK_DIR")
-	if workDir == "" {
-		workDir = "/workspace"
+	workDir := "."
+	if envWorkDir := os.Getenv("WORK_DIR"); envWorkDir != "" {
+		workDir = envWorkDir
 	}
+	absWorkDir, err := filepath.Abs(workDir)
+	if err != nil {
+		slog.Error("failed to resolve work directory", "error", err)
+		os.Exit(1)
+	}
+	workDir = absWorkDir
 
-	devMode := os.Getenv("DEV_MODE") == "true"
+	devMode := *devModeFlag || os.Getenv("DEV_MODE") == "true"
 
-	dataDir := os.Getenv("DATA_DIR")
-	if dataDir == "" {
-		dataDir = ".pockode"
+	dataDir := ".pockode"
+	if envDataDir := os.Getenv("DATA_DIR"); envDataDir != "" {
+		dataDir = envDataDir
 	}
 	absDataDir, err := filepath.Abs(dataDir)
 	if err != nil {
@@ -171,10 +189,11 @@ func main() {
 
 	// Initialize relay if enabled
 	var relayManager *relay.Manager
-	if os.Getenv("RELAY_ENABLED") == "true" {
+	relayEnabled := *relayFlag || os.Getenv("RELAY_ENABLED") == "true"
+	if relayEnabled {
 		relayPort := os.Getenv("RELAY_PORT")
 		if relayPort == "" {
-			relayPort = port // Default to SERVER_PORT
+			relayPort = port
 		}
 		portInt, err := strconv.Atoi(relayPort)
 		if err != nil {
