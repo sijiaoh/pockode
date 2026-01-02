@@ -12,6 +12,7 @@ import {
 	subscribeToDarkMode,
 } from "../../lib/shikiUtils";
 import { parseReadResult } from "../../lib/toolResultParser";
+import { MarkdownContent } from "./MarkdownContent";
 
 // Singleton AnsiUp instance
 const ansiUp = new AnsiUp();
@@ -48,7 +49,11 @@ interface TodoWriteInput {
 	}>;
 }
 
-/** Read tool: parse line numbers + syntax highlight */
+function isMarkdownFile(filePath: string): boolean {
+	const ext = filePath.split(".").pop()?.toLowerCase();
+	return ext === "md" || ext === "mdx";
+}
+
 function ReadResultDisplay({
 	result,
 	filePath,
@@ -58,17 +63,20 @@ function ReadResultDisplay({
 }) {
 	const lines = useMemo(() => parseReadResult(result), [result]);
 	const code = useMemo(() => lines.map((l) => l.content).join("\n"), [lines]);
-	const language = filePath ? getLanguageFromPath(filePath) : undefined;
 
 	if (lines.length === 0) {
 		// Fallback to plain text if parsing fails
 		return <pre className="text-th-text-muted">{result}</pre>;
 	}
 
+	if (filePath && isMarkdownFile(filePath)) {
+		return <MarkdownContent content={code} />;
+	}
+
+	const language = filePath ? getLanguageFromPath(filePath) : undefined;
 	return <CodeHighlighter language={language}>{code}</CodeHighlighter>;
 }
 
-/** Edit tool: show diff using @git-diff-view */
 function EditResultDisplay({ input }: { input: EditInput }) {
 	const isDark = useSyncExternalStore(subscribeToDarkMode, getIsDarkMode);
 	const [highlighter, setHighlighter] = useState<Awaited<
@@ -105,7 +113,6 @@ function EditResultDisplay({ input }: { input: EditInput }) {
 	);
 }
 
-/** MultiEdit tool: show multiple diffs */
 function MultiEditResultDisplay({ input }: { input: MultiEditInput }) {
 	const isDark = useSyncExternalStore(subscribeToDarkMode, getIsDarkMode);
 	const [highlighter, setHighlighter] = useState<Awaited<
@@ -150,13 +157,14 @@ function MultiEditResultDisplay({ input }: { input: MultiEditInput }) {
 	);
 }
 
-/** Write tool: show new file content with syntax highlighting */
 function WriteResultDisplay({ input }: { input: WriteInput }) {
+	if (isMarkdownFile(input.file_path)) {
+		return <MarkdownContent content={input.content} />;
+	}
 	const language = getLanguageFromPath(input.file_path);
 	return <CodeHighlighter language={language}>{input.content}</CodeHighlighter>;
 }
 
-/** TodoWrite tool: show todo list with status icons */
 function TodoWriteResultDisplay({ input }: { input: TodoWriteInput }) {
 	const getStatusIcon = (status: TodoWriteInput["todos"][number]["status"]) => {
 		switch (status) {
@@ -193,7 +201,6 @@ function TodoWriteResultDisplay({ input }: { input: TodoWriteInput }) {
 	);
 }
 
-/** Bash tool: render ANSI escape codes as HTML */
 function BashResultDisplay({ result }: { result: string }) {
 	const html = useMemo(() => ansiUp.ansi_to_html(result), [result]);
 
@@ -206,7 +213,6 @@ function BashResultDisplay({ result }: { result: string }) {
 	);
 }
 
-// Type guards for runtime validation
 function isEditInput(input: unknown): input is EditInput {
 	const i = input as Record<string, unknown>;
 	return (
@@ -231,7 +237,6 @@ function isTodoWriteInput(input: unknown): input is TodoWriteInput {
 	return Array.isArray(i?.todos) && i.todos.length > 0;
 }
 
-/** Main component: dispatch based on tool name */
 function ToolResultDisplay({
 	toolName,
 	toolInput,
