@@ -5,9 +5,10 @@ import FileTreeNode from "./FileTreeNode";
 interface Props {
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
+	expandSignal: number;
 }
 
-function FileTree({ onSelectFile, activeFilePath }: Props) {
+function FileTree({ onSelectFile, activeFilePath, expandSignal }: Props) {
 	const { data, isLoading, error } = useContents();
 
 	if (isLoading) {
@@ -46,6 +47,7 @@ function FileTree({ onSelectFile, activeFilePath }: Props) {
 					depth={0}
 					onSelectFile={onSelectFile}
 					activeFilePath={activeFilePath}
+					expandSignal={expandSignal}
 				/>
 			))}
 		</div>

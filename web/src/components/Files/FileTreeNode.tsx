@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, File, Folder } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useContents } from "../../hooks/useContents";
 import type { Entry } from "../../types/contents";
 import { Spinner } from "../ui";
@@ -9,12 +9,28 @@ interface Props {
 	depth: number;
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
+	expandSignal: number;
 }
 
-function FileTreeNode({ entry, depth, onSelectFile, activeFilePath }: Props) {
-	const [isExpanded, setIsExpanded] = useState(false);
+function FileTreeNode({
+	entry,
+	depth,
+	onSelectFile,
+	activeFilePath,
+	expandSignal,
+}: Props) {
 	const isDirectory = entry.type === "dir";
 	const isActive = entry.path === activeFilePath;
+	const isInActivePath =
+		isDirectory && !!activeFilePath?.startsWith(`${entry.path}/`);
+	const [isExpanded, setIsExpanded] = useState(isInActivePath);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: expandSignal is used as a trigger to re-run the effect
+	useEffect(() => {
+		if (isInActivePath) {
+			setIsExpanded(true);
+		}
+	}, [expandSignal, isInActivePath]);
 
 	const { data, isLoading, error } = useContents(
 		entry.path,
@@ -91,6 +107,7 @@ function FileTreeNode({ entry, depth, onSelectFile, activeFilePath }: Props) {
 								depth={depth + 1}
 								onSelectFile={onSelectFile}
 								activeFilePath={activeFilePath}
+								expandSignal={expandSignal}
 							/>
 						))
 					) : null}
