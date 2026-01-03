@@ -6,6 +6,6 @@ export function useContents(path = "", enabled = true) {
 		queryKey: ["contents", path],
 		queryFn: () => getContents(path),
 		enabled,
-		staleTime: Infinity,
+		staleTime: 0,
 	});
 }

@@ -16,6 +16,6 @@ export function useGitDiff({
 		queryKey: ["git-diff", path, staged],
 		queryFn: () => getGitDiff(path, staged),
 		enabled: enabled && !!path,
-		staleTime: 30_000, // 30 seconds
+		staleTime: 0,
 	});
 }
