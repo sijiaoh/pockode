@@ -56,6 +56,11 @@ function Dialog({ title, onClose }: Props) {
 export default Dialog;
 ```
 
+### 组件设计
+
+- **该抽象就抽象** — 重复的 UI 模式、已知会扩展的功能，应及时抽取为共用组件或 Hooks
+- **共性与个性分离** — 概念相同的 UI 共用骨架，通过 props/参数注入各自的业务逻辑
+
 ### Tailwind
 
 - Mobile-first：默认移动端，`sm:`/`md:`/`lg:` 适配大屏
