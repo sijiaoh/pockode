@@ -75,6 +75,14 @@ function DiffView({ path, staged, onBack }: Props) {
 		</div>
 	);
 
+	const handlePathClick = () => {
+		navigate({
+			to: "/files/$",
+			params: { _splat: path },
+			search: sessionId ? { session: sessionId } : {},
+		});
+	};
+
 	return (
 		<ContentView
 			path={path}
@@ -82,6 +90,7 @@ function DiffView({ path, staged, onBack }: Props) {
 			isLoading={isLoading}
 			error={error instanceof Error ? error : null}
 			onBack={onBack}
+			onPathClick={handlePathClick}
 			headerActions={headerActions}
 		>
 			{diff !== undefined && (
