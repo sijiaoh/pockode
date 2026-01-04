@@ -17,7 +17,7 @@ function MainContainer({
 	headerRight,
 }: Props) {
 	return (
-		<div className="flex min-w-0 flex-1 flex-col bg-th-bg-primary">
+		<div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-th-bg-primary">
 			<header className="flex items-center justify-between border-b border-th-border p-3 sm:p-4">
 				<div className="flex items-center gap-3">
 					{onOpenSidebar && (

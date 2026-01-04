@@ -640,3 +640,17 @@ body {
 		position: static !important;
 	}
 }
+
+/* Let parent container handle scrolling instead of child components' internal scroll */
+.diff-table-scroll-container,
+.shiki {
+	/* biome-ignore lint/complexity/noImportantStyles: Override library's scroll container */
+	overflow-x: visible !important;
+	/* biome-ignore lint/complexity/noImportantStyles: Override library's scroll container */
+	overflow-y: visible !important;
+}
+
+/* Prevent shiki background from being cut off when content overflows */
+.shiki {
+	min-width: fit-content;
+}

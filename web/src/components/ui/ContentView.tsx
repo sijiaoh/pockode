@@ -66,7 +66,7 @@ export default function ContentView({
 	children,
 }: Props) {
 	return (
-		<div className="flex flex-1 flex-col overflow-hidden">
+		<div className="flex min-h-0 flex-1 flex-col">
 			<div className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
 				<button
 					type="button"
@@ -82,7 +82,7 @@ export default function ContentView({
 				<PathDisplay path={path} pathColor={pathColor} onClick={onPathClick} />
 			</div>
 
-			<div className="flex-1 overflow-auto">
+			<div className="min-h-0 flex-1 overflow-auto">
 				{isLoading ? (
 					<div className="flex items-center justify-center p-8">
 						<Spinner className="text-th-text-muted" />
