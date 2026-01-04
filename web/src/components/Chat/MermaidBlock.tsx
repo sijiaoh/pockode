@@ -29,7 +29,11 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
 
 		async function render() {
 			try {
-				mermaid.initialize({ startOnLoad: false, theme, suppressErrorRendering: true });
+				mermaid.initialize({
+					startOnLoad: false,
+					theme,
+					suppressErrorRendering: true,
+				});
 				const { svg } = await mermaid.render(`mermaid-${id}`, code);
 				if (!cancelled) {
 					setSvg(svg);
