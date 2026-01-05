@@ -291,10 +291,7 @@ func TestManager_Broadcast(t *testing.T) {
 	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false)
 
 	// Send event through agent session
-	mock.sessions["sess-1"].events <- agent.AgentEvent{
-		Type:    agent.EventTypeText,
-		Content: "hello",
-	}
+	mock.sessions["sess-1"].events <- agent.TextEvent{Content: "hello"}
 
 	// Both clients should receive the broadcast
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

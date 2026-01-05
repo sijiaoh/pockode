@@ -137,14 +137,14 @@ func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string,
 
 				hasDone := false
 				for _, e := range m.events {
-					if e.Type == agent.EventTypeDone {
+					if _, ok := e.(agent.DoneEvent); ok {
 						hasDone = true
 						break
 					}
 				}
 				if !hasDone {
 					select {
-					case eventsChan <- agent.AgentEvent{Type: agent.EventTypeDone}:
+					case eventsChan <- agent.DoneEvent{}:
 					case <-ctx.Done():
 						return
 					}

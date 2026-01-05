@@ -17,24 +17,24 @@ import (
 // Also serves as documentation for AgentEvent's required fields per type.
 func requireFields(t *testing.T, event agent.AgentEvent) {
 	t.Helper()
-	switch event.Type {
-	case agent.EventTypeText:
-		requireNonEmpty(t, "Content", event.Content)
-	case agent.EventTypeToolCall:
-		requireNonEmpty(t, "ToolName", event.ToolName)
-		requireNonEmpty(t, "ToolUseID", event.ToolUseID)
-	case agent.EventTypeToolResult:
-		requireNonEmpty(t, "ToolUseID", event.ToolUseID)
-	case agent.EventTypePermissionRequest:
-		requireNonEmpty(t, "RequestID", event.RequestID)
-		requireNonEmpty(t, "ToolName", event.ToolName)
-		requireNonEmpty(t, "ToolUseID", event.ToolUseID)
-	case agent.EventTypeAskUserQuestion:
-		requireNonEmpty(t, "RequestID", event.RequestID)
-		if len(event.Questions) == 0 {
+	switch e := event.(type) {
+	case agent.TextEvent:
+		requireNonEmpty(t, "Content", e.Content)
+	case agent.ToolCallEvent:
+		requireNonEmpty(t, "ToolName", e.ToolName)
+		requireNonEmpty(t, "ToolUseID", e.ToolUseID)
+	case agent.ToolResultEvent:
+		requireNonEmpty(t, "ToolUseID", e.ToolUseID)
+	case agent.PermissionRequestEvent:
+		requireNonEmpty(t, "RequestID", e.RequestID)
+		requireNonEmpty(t, "ToolName", e.ToolName)
+		requireNonEmpty(t, "ToolUseID", e.ToolUseID)
+	case agent.AskUserQuestionEvent:
+		requireNonEmpty(t, "RequestID", e.RequestID)
+		if len(e.Questions) == 0 {
 			t.Error("missing required field: Questions")
 		}
-		for i, q := range event.Questions {
+		for i, q := range e.Questions {
 			if q.Question == "" {
 				t.Errorf("Questions[%d]: missing required field: Question", i)
 			}
@@ -42,8 +42,8 @@ func requireFields(t *testing.T, event agent.AgentEvent) {
 				t.Errorf("Questions[%d]: missing required field: Options", i)
 			}
 		}
-	case agent.EventTypeError:
-		requireNonEmpty(t, "Error", event.Error)
+	case agent.ErrorEvent:
+		requireNonEmpty(t, "Error", e.Error)
 	}
 }
 
@@ -97,15 +97,15 @@ eventLoop:
 				break eventLoop
 			}
 			requireFields(t, event)
-			switch event.Type {
-			case agent.EventTypeText:
+			switch e := event.(type) {
+			case agent.TextEvent:
 				textEvents++
-				t.Logf("text: %s", event.Content)
-			case agent.EventTypeDone:
+				t.Logf("text: %s", e.Content)
+			case agent.DoneEvent:
 				doneEvents++
 				break eventLoop // Message complete, exit loop
-			case agent.EventTypeError:
-				t.Errorf("error event: %s", event.Error)
+			case agent.ErrorEvent:
+				t.Errorf("error event: %s", e.Error)
 			}
 		case <-ctx.Done():
 			t.Fatal("timeout waiting for events")
@@ -148,26 +148,32 @@ eventLoop:
 				break eventLoop
 			}
 			requireFields(t, event)
-			switch event.Type {
-			case agent.EventTypeToolCall:
+			switch e := event.(type) {
+			case agent.ToolCallEvent:
 				toolCalls++
-				t.Logf("tool_call: %s (id=%s)", event.ToolName, event.ToolUseID)
-			case agent.EventTypeToolResult:
+				t.Logf("tool_call: %s (id=%s)", e.ToolName, e.ToolUseID)
+			case agent.ToolResultEvent:
 				toolResults++
-				t.Logf("tool_result: id=%s, content=%s", event.ToolUseID, event.ToolResult[:min(100, len(event.ToolResult))])
-			case agent.EventTypePermissionRequest:
+				t.Logf("tool_result: id=%s, content=%s", e.ToolUseID, e.ToolResult[:min(100, len(e.ToolResult))])
+			case agent.PermissionRequestEvent:
 				permissionRequests++
-				t.Logf("permission_request: %s (request_id=%s)", event.ToolName, event.RequestID)
+				t.Logf("permission_request: %s (request_id=%s)", e.ToolName, e.RequestID)
 				// Auto-approve for integration test (without persistent permission)
-				if err := session.SendPermissionResponse(event.RequestID, agent.PermissionAllow); err != nil {
+				data := agent.PermissionRequestData{
+					RequestID:             e.RequestID,
+					ToolInput:             e.ToolInput,
+					ToolUseID:             e.ToolUseID,
+					PermissionSuggestions: e.PermissionSuggestions,
+				}
+				if err := session.SendPermissionResponse(data, agent.PermissionAllow); err != nil {
 					t.Errorf("failed to send permission response: %v", err)
 				}
-			case agent.EventTypeError:
+			case agent.ErrorEvent:
 				errorEvents++
-				t.Logf("error: %s", event.Error)
-			case agent.EventTypeText:
-				t.Logf("text: %s", event.Content[:min(100, len(event.Content))])
-			case agent.EventTypeDone:
+				t.Logf("error: %s", e.Error)
+			case agent.TextEvent:
+				t.Logf("text: %s", e.Content[:min(100, len(e.Content))])
+			case agent.DoneEvent:
 				break eventLoop // Message complete
 			}
 		case <-ctx.Done():
@@ -222,10 +228,12 @@ eventLoop:
 			if !ok {
 				break eventLoop
 			}
-			t.Logf("event: %s", event.Type)
-			if event.Type == agent.EventTypeInterrupted {
+			switch event.(type) {
+			case agent.InterruptedEvent:
 				interruptedEvents++
 				break eventLoop
+			default:
+				t.Logf("event: %T", event)
 			}
 		case <-ctx.Done():
 			t.Fatal("timeout waiting for interrupted event")
@@ -265,26 +273,32 @@ eventLoop:
 				break eventLoop
 			}
 			requireFields(t, event)
-			switch event.Type {
-			case agent.EventTypePermissionRequest:
+			switch e := event.(type) {
+			case agent.PermissionRequestEvent:
 				permissionRequests++
-				t.Logf("permission_request: tool=%s, request_id=%s", event.ToolName, event.RequestID)
+				t.Logf("permission_request: tool=%s, request_id=%s", e.ToolName, e.RequestID)
 				// Deny the permission request
-				if err := session.SendPermissionResponse(event.RequestID, agent.PermissionDeny); err != nil {
+				data := agent.PermissionRequestData{
+					RequestID:             e.RequestID,
+					ToolInput:             e.ToolInput,
+					ToolUseID:             e.ToolUseID,
+					PermissionSuggestions: e.PermissionSuggestions,
+				}
+				if err := session.SendPermissionResponse(data, agent.PermissionDeny); err != nil {
 					t.Errorf("failed to send permission response: %v", err)
 				}
-			case agent.EventTypeInterrupted:
+			case agent.InterruptedEvent:
 				interruptedEvents++
 				t.Log("interrupted event received after denial")
 				break eventLoop
-			case agent.EventTypeDone:
+			case agent.DoneEvent:
 				doneEvents++
 				t.Log("done event received")
 				break eventLoop
-			case agent.EventTypeText:
-				t.Logf("text: %s", truncate(event.Content, 100))
-			case agent.EventTypeError:
-				t.Logf("error: %s", event.Error)
+			case agent.TextEvent:
+				t.Logf("text: %s", truncate(e.Content, 100))
+			case agent.ErrorEvent:
+				t.Logf("error: %s", e.Error)
 			}
 		case <-ctx.Done():
 			t.Fatal("timeout waiting for events")
@@ -334,28 +348,34 @@ eventLoop:
 				break eventLoop
 			}
 			requireFields(t, event)
-			switch event.Type {
-			case agent.EventTypePermissionRequest:
+			switch e := event.(type) {
+			case agent.PermissionRequestEvent:
 				permissionRequests++
-				t.Logf("permission_request: tool=%s, request_id=%s", event.ToolName, event.RequestID)
-				if len(event.PermissionSuggestions) > 0 {
+				t.Logf("permission_request: tool=%s, request_id=%s", e.ToolName, e.RequestID)
+				if len(e.PermissionSuggestions) > 0 {
 					hasPermissionSuggestions = true
-					t.Logf("permission_suggestions: %d items", len(event.PermissionSuggestions))
+					t.Logf("permission_suggestions: %d items", len(e.PermissionSuggestions))
 				}
 				// Use AlwaysAllow to test the updatedPermissions flow
-				if err := session.SendPermissionResponse(event.RequestID, agent.PermissionAlwaysAllow); err != nil {
+				data := agent.PermissionRequestData{
+					RequestID:             e.RequestID,
+					ToolInput:             e.ToolInput,
+					ToolUseID:             e.ToolUseID,
+					PermissionSuggestions: e.PermissionSuggestions,
+				}
+				if err := session.SendPermissionResponse(data, agent.PermissionAlwaysAllow); err != nil {
 					t.Errorf("failed to send permission response: %v", err)
 				}
-			case agent.EventTypeToolResult:
+			case agent.ToolResultEvent:
 				toolResults++
-				t.Logf("tool_result: id=%s", event.ToolUseID)
-			case agent.EventTypeDone:
+				t.Logf("tool_result: id=%s", e.ToolUseID)
+			case agent.DoneEvent:
 				t.Log("done event received")
 				break eventLoop
-			case agent.EventTypeText:
-				t.Logf("text: %s", truncate(event.Content, 100))
-			case agent.EventTypeError:
-				t.Logf("error: %s", event.Error)
+			case agent.TextEvent:
+				t.Logf("text: %s", truncate(e.Content, 100))
+			case agent.ErrorEvent:
+				t.Logf("error: %s", e.Error)
 			}
 		case <-ctx.Done():
 			t.Fatal("timeout waiting for events")
@@ -420,17 +440,17 @@ eventLoop:
 				break eventLoop
 			}
 			requireFields(t, event)
-			switch event.Type {
-			case agent.EventTypeAskUserQuestion:
+			switch e := event.(type) {
+			case agent.AskUserQuestionEvent:
 				questionEvents++
-				t.Logf("ask_user_question: request_id=%s, questions=%d", event.RequestID, len(event.Questions))
+				t.Logf("ask_user_question: request_id=%s, questions=%d", e.RequestID, len(e.Questions))
 
 				// Validate question structure
-				if len(event.Questions) != 1 {
-					t.Errorf("expected 1 question, got %d", len(event.Questions))
+				if len(e.Questions) != 1 {
+					t.Errorf("expected 1 question, got %d", len(e.Questions))
 				}
 
-				q := event.Questions[0]
+				q := e.Questions[0]
 				t.Logf("  question: %s (options=%d, multiSelect=%v)", q.Question, len(q.Options), q.MultiSelect)
 
 				// Validate options
@@ -455,24 +475,28 @@ eventLoop:
 				selectedAnswer = q.Options[0].Label
 				answers := map[string]string{q.Question: selectedAnswer}
 
-				if err := session.SendQuestionResponse(event.RequestID, answers); err != nil {
+				data := agent.QuestionRequestData{
+					RequestID: e.RequestID,
+					ToolUseID: e.ToolUseID,
+				}
+				if err := session.SendQuestionResponse(data, answers); err != nil {
 					t.Errorf("failed to send question response: %v", err)
 				}
 
-			case agent.EventTypeText:
-				responseText.WriteString(event.Content)
-				t.Logf("text: %s", truncate(event.Content, 100))
+			case agent.TextEvent:
+				responseText.WriteString(e.Content)
+				t.Logf("text: %s", truncate(e.Content, 100))
 
-			case agent.EventTypeDone:
+			case agent.DoneEvent:
 				doneEvents++
 				break eventLoop
 
-			case agent.EventTypeError:
+			case agent.ErrorEvent:
 				errorEvents++
-				t.Errorf("error event: %s", event.Error)
+				t.Errorf("error event: %s", e.Error)
 
-			case agent.EventTypePermissionRequest:
-				t.Errorf("unexpected permission_request for tool: %s", event.ToolName)
+			case agent.PermissionRequestEvent:
+				t.Errorf("unexpected permission_request for tool: %s", e.ToolName)
 			}
 		case <-ctx.Done():
 			t.Fatal("timeout waiting for events")

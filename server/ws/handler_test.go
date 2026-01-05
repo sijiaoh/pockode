@@ -233,8 +233,8 @@ func TestHandler_Attach(t *testing.T) {
 func TestHandler_Attach_ProcessRunning(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
-			{Type: agent.EventTypeText, Content: "Response"},
-			{Type: agent.EventTypeDone},
+			agent.TextEvent{Content: "Response"},
+			agent.DoneEvent{},
 		},
 	}
 	env := newTestEnv(t, mock)
@@ -276,8 +276,8 @@ func TestHandler_Attach_InvalidSession(t *testing.T) {
 func TestHandler_WebSocketConnection(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
-			{Type: agent.EventTypeText, Content: "Hello"},
-			{Type: agent.EventTypeDone},
+			agent.TextEvent{Content: "Hello"},
+			agent.DoneEvent{},
 		},
 	}
 	env := newTestEnv(t, mock)
@@ -298,8 +298,8 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 func TestHandler_MultipleSessions(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
-			{Type: agent.EventTypeText, Content: "Response"},
-			{Type: agent.EventTypeDone},
+			agent.TextEvent{Content: "Response"},
+			agent.DoneEvent{},
 		},
 	}
 	env := newTestEnv(t, mock)
@@ -326,14 +326,13 @@ func TestHandler_MultipleSessions(t *testing.T) {
 func TestHandler_PermissionRequest(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
-			{
-				Type:      agent.EventTypePermissionRequest,
+			agent.PermissionRequestEvent{
 				RequestID: "req-123",
 				ToolName:  "Bash",
 				ToolInput: []byte(`{"command":"ls"}`),
 				ToolUseID: "toolu_perm",
 			},
-			{Type: agent.EventTypeDone},
+			agent.DoneEvent{},
 		},
 	}
 	env := newTestEnv(t, mock)
@@ -372,8 +371,8 @@ func TestHandler_AgentStartError(t *testing.T) {
 func TestHandler_Interrupt(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
-			{Type: agent.EventTypeText, Content: "Response"},
-			{Type: agent.EventTypeDone},
+			agent.TextEvent{Content: "Response"},
+			agent.DoneEvent{},
 		},
 	}
 	env := newTestEnv(t, mock)
@@ -411,8 +410,8 @@ func TestHandler_Interrupt_InvalidSession(t *testing.T) {
 func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
-			{Type: agent.EventTypeText, Content: "Response"},
-			{Type: agent.EventTypeDone},
+			agent.TextEvent{Content: "Response"},
+			agent.DoneEvent{},
 		},
 	}
 	env := newTestEnv(t, mock)
@@ -435,8 +434,8 @@ func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
-			{Type: agent.EventTypeText, Content: "Response"},
-			{Type: agent.EventTypeDone},
+			agent.TextEvent{Content: "Response"},
+			agent.DoneEvent{},
 		},
 	}
 	env := newTestEnv(t, mock)
@@ -455,8 +454,7 @@ func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 func TestHandler_AskUserQuestion(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
-			{
-				Type:      agent.EventTypeAskUserQuestion,
+			agent.AskUserQuestionEvent{
 				RequestID: "req-q-123",
 				ToolUseID: "toolu_q_123",
 				Questions: []agent.AskUserQuestion{
@@ -468,7 +466,7 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 					},
 				},
 			},
-			{Type: agent.EventTypeDone},
+			agent.DoneEvent{},
 		},
 	}
 	env := newTestEnv(t, mock)

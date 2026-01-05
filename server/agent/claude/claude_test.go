@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
-	"reflect"
 	"sync"
 	"testing"
 
@@ -24,12 +23,9 @@ func TestParseLine(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:  "invalid json falls back to raw text",
-			input: "not json",
-			expected: []agent.AgentEvent{{
-				Type:    agent.EventTypeText,
-				Content: "not json",
-			}},
+			name:     "invalid json falls back to raw text",
+			input:    "not json",
+			expected: []agent.AgentEvent{agent.TextEvent{Content: "not json"}},
 		},
 		{
 			name:     "system init event is filtered",
@@ -37,34 +33,24 @@ func TestParseLine(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:  "result event success",
-			input: `{"type":"result","subtype":"success","result":"Hello"}`,
-			expected: []agent.AgentEvent{
-				{Type: agent.EventTypeDone},
-			},
+			name:     "result event success",
+			input:    `{"type":"result","subtype":"success","result":"Hello"}`,
+			expected: []agent.AgentEvent{agent.DoneEvent{}},
 		},
 		{
-			name:  "result event interrupted",
-			input: `{"type":"result","subtype":"error_during_execution","errors":["Error: Request was aborted."]}`,
-			expected: []agent.AgentEvent{
-				{Type: agent.EventTypeInterrupted},
-			},
+			name:     "result event interrupted",
+			input:    `{"type":"result","subtype":"error_during_execution","errors":["Error: Request was aborted."]}`,
+			expected: []agent.AgentEvent{agent.InterruptedEvent{}},
 		},
 		{
-			name:  "assistant text message",
-			input: `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello World"}]}}`,
-			expected: []agent.AgentEvent{{
-				Type:    agent.EventTypeText,
-				Content: "Hello World",
-			}},
+			name:     "assistant text message",
+			input:    `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello World"}]}}`,
+			expected: []agent.AgentEvent{agent.TextEvent{Content: "Hello World"}},
 		},
 		{
-			name:  "assistant message with multiple text blocks",
-			input: `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"},{"type":"text","text":" World"}]}}`,
-			expected: []agent.AgentEvent{{
-				Type:    agent.EventTypeText,
-				Content: "Hello World",
-			}},
+			name:     "assistant message with multiple text blocks",
+			input:    `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"},{"type":"text","text":" World"}]}}`,
+			expected: []agent.AgentEvent{agent.TextEvent{Content: "Hello World"}},
 		},
 		{
 			name:     "assistant message with empty content",
@@ -74,8 +60,7 @@ func TestParseLine(t *testing.T) {
 		{
 			name:  "assistant tool_use message",
 			input: `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_123","name":"Read","input":{"file":"test.go"}}]}}`,
-			expected: []agent.AgentEvent{{
-				Type:      agent.EventTypeToolCall,
+			expected: []agent.AgentEvent{agent.ToolCallEvent{
 				ToolUseID: "toolu_123",
 				ToolName:  "Read",
 				ToolInput: json.RawMessage(`{"file":"test.go"}`),
@@ -85,12 +70,8 @@ func TestParseLine(t *testing.T) {
 			name:  "assistant text and tool_use in same message",
 			input: `{"type":"assistant","message":{"content":[{"type":"text","text":"I will read the file"},{"type":"tool_use","id":"toolu_456","name":"Read","input":{"path":"main.go"}}]}}`,
 			expected: []agent.AgentEvent{
-				{
-					Type:    agent.EventTypeText,
-					Content: "I will read the file",
-				},
-				{
-					Type:      agent.EventTypeToolCall,
+				agent.TextEvent{Content: "I will read the file"},
+				agent.ToolCallEvent{
 					ToolUseID: "toolu_456",
 					ToolName:  "Read",
 					ToolInput: json.RawMessage(`{"path":"main.go"}`),
@@ -101,14 +82,12 @@ func TestParseLine(t *testing.T) {
 			name:  "assistant multiple tool_use (parallel tools)",
 			input: `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"path":"a.go"}},{"type":"tool_use","id":"toolu_2","name":"Read","input":{"path":"b.go"}}]}}`,
 			expected: []agent.AgentEvent{
-				{
-					Type:      agent.EventTypeToolCall,
+				agent.ToolCallEvent{
 					ToolUseID: "toolu_1",
 					ToolName:  "Read",
 					ToolInput: json.RawMessage(`{"path":"a.go"}`),
 				},
-				{
-					Type:      agent.EventTypeToolCall,
+				agent.ToolCallEvent{
 					ToolUseID: "toolu_2",
 					ToolName:  "Read",
 					ToolInput: json.RawMessage(`{"path":"b.go"}`),
@@ -118,8 +97,7 @@ func TestParseLine(t *testing.T) {
 		{
 			name:  "assistant server_tool_use (web search)",
 			input: `{"type":"assistant","message":{"content":[{"type":"server_tool_use","id":"srvtoolu_123","name":"web_search","input":{"query":"golang concurrency"}}]}}`,
-			expected: []agent.AgentEvent{{
-				Type:      agent.EventTypeToolCall,
+			expected: []agent.AgentEvent{agent.ToolCallEvent{
 				ToolUseID: "srvtoolu_123",
 				ToolName:  "web_search",
 				ToolInput: json.RawMessage(`{"query":"golang concurrency"}`),
@@ -128,8 +106,7 @@ func TestParseLine(t *testing.T) {
 		{
 			name:  "user tool_result with string content",
 			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_123","content":"file contents here"}]}}`,
-			expected: []agent.AgentEvent{{
-				Type:       agent.EventTypeToolResult,
+			expected: []agent.AgentEvent{agent.ToolResultEvent{
 				ToolUseID:  "toolu_123",
 				ToolResult: "file contents here",
 			}},
@@ -137,8 +114,7 @@ func TestParseLine(t *testing.T) {
 		{
 			name:  "user tool_result with array content",
 			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_img","content":[{"type":"image","source":{"type":"base64","data":"..."}},{"type":"text","text":"description"}]}]}}`,
-			expected: []agent.AgentEvent{{
-				Type:       agent.EventTypeToolResult,
+			expected: []agent.AgentEvent{agent.ToolResultEvent{
 				ToolUseID:  "toolu_img",
 				ToolResult: `[{"type":"image","source":{"type":"base64","data":"..."}},{"type":"text","text":"description"}]`,
 			}},
@@ -147,39 +123,30 @@ func TestParseLine(t *testing.T) {
 			name:  "user multiple tool_results (parallel tool results)",
 			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"result 1"},{"type":"tool_result","tool_use_id":"toolu_2","content":"result 2"}]}}`,
 			expected: []agent.AgentEvent{
-				{
-					Type:       agent.EventTypeToolResult,
+				agent.ToolResultEvent{
 					ToolUseID:  "toolu_1",
 					ToolResult: "result 1",
 				},
-				{
-					Type:       agent.EventTypeToolResult,
+				agent.ToolResultEvent{
 					ToolUseID:  "toolu_2",
 					ToolResult: "result 2",
 				},
 			},
 		},
 		{
-			name:  "user event with invalid message falls back to raw text",
-			input: `{"type":"user","message":"invalid message format"}`,
-			expected: []agent.AgentEvent{{
-				Type:    agent.EventTypeText,
-				Content: `"invalid message format"`,
-			}},
+			name:     "user event with invalid message falls back to raw text",
+			input:    `{"type":"user","message":"invalid message format"}`,
+			expected: []agent.AgentEvent{agent.TextEvent{Content: `"invalid message format"`}},
 		},
 		{
-			name:  "unknown event type falls back to raw text",
-			input: `{"type":"unknown_event"}`,
-			expected: []agent.AgentEvent{{
-				Type:    agent.EventTypeText,
-				Content: `{"type":"unknown_event"}`,
-			}},
+			name:     "unknown event type falls back to raw text",
+			input:    `{"type":"unknown_event"}`,
+			expected: []agent.AgentEvent{agent.TextEvent{Content: `{"type":"unknown_event"}`}},
 		},
 		{
 			name:  "control_request permission request",
 			input: `{"type":"control_request","request_id":"req-123","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ruby --version"},"tool_use_id":"toolu_abc"}}`,
-			expected: []agent.AgentEvent{{
-				Type:      agent.EventTypePermissionRequest,
+			expected: []agent.AgentEvent{agent.PermissionRequestEvent{
 				RequestID: "req-123",
 				ToolName:  "Bash",
 				ToolInput: json.RawMessage(`{"command":"ruby --version"}`),
@@ -189,8 +156,7 @@ func TestParseLine(t *testing.T) {
 		{
 			name:  "control_request AskUserQuestion tool",
 			input: `{"type":"control_request","request_id":"req-q-123","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q_abc","input":{"questions":[{"question":"Which library?","header":"Library","options":[{"label":"A","description":"Option A"}],"multiSelect":false}]}}}`,
-			expected: []agent.AgentEvent{{
-				Type:      agent.EventTypeAskUserQuestion,
+			expected: []agent.AgentEvent{agent.AskUserQuestionEvent{
 				RequestID: "req-q-123",
 				ToolUseID: "toolu_q_abc",
 				Questions: []agent.AskUserQuestion{
@@ -234,12 +200,9 @@ func TestParseLine(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:  "control_cancel_request cancels request",
-			input: `{"type":"control_cancel_request","request_id":"req-cancel-123"}`,
-			expected: []agent.AgentEvent{{
-				Type:      agent.EventTypeRequestCancelled,
-				RequestID: "req-cancel-123",
-			}},
+			name:     "control_cancel_request cancels request",
+			input:    `{"type":"control_cancel_request","request_id":"req-cancel-123"}`,
+			expected: []agent.AgentEvent{agent.RequestCancelledEvent{RequestID: "req-cancel-123"}},
 		},
 	}
 
@@ -248,10 +211,88 @@ func TestParseLine(t *testing.T) {
 			pendingRequests := &sync.Map{}
 			results := parseLine(testLogger(), []byte(tt.input), pendingRequests)
 
-			if !reflect.DeepEqual(results, tt.expected) {
+			if !agentEventsEqual(results, tt.expected) {
 				t.Errorf("expected %+v, got %+v", tt.expected, results)
 			}
 		})
+	}
+}
+
+// agentEventsEqual compares two slices of AgentEvent.
+func agentEventsEqual(a, b []agent.AgentEvent) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !agentEventEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// agentEventEqual compares two AgentEvent values using type switch.
+func agentEventEqual(a, b agent.AgentEvent) bool {
+	switch av := a.(type) {
+	case agent.TextEvent:
+		bv, ok := b.(agent.TextEvent)
+		return ok && av.Content == bv.Content
+	case agent.ToolCallEvent:
+		bv, ok := b.(agent.ToolCallEvent)
+		return ok && av.ToolUseID == bv.ToolUseID && av.ToolName == bv.ToolName &&
+			string(av.ToolInput) == string(bv.ToolInput)
+	case agent.ToolResultEvent:
+		bv, ok := b.(agent.ToolResultEvent)
+		return ok && av.ToolUseID == bv.ToolUseID && av.ToolResult == bv.ToolResult
+	case agent.ErrorEvent:
+		bv, ok := b.(agent.ErrorEvent)
+		return ok && av.Error == bv.Error
+	case agent.DoneEvent:
+		_, ok := b.(agent.DoneEvent)
+		return ok
+	case agent.InterruptedEvent:
+		_, ok := b.(agent.InterruptedEvent)
+		return ok
+	case agent.PermissionRequestEvent:
+		bv, ok := b.(agent.PermissionRequestEvent)
+		return ok && av.RequestID == bv.RequestID && av.ToolName == bv.ToolName &&
+			av.ToolUseID == bv.ToolUseID && string(av.ToolInput) == string(bv.ToolInput)
+	case agent.RequestCancelledEvent:
+		bv, ok := b.(agent.RequestCancelledEvent)
+		return ok && av.RequestID == bv.RequestID
+	case agent.AskUserQuestionEvent:
+		bv, ok := b.(agent.AskUserQuestionEvent)
+		if !ok || av.RequestID != bv.RequestID || av.ToolUseID != bv.ToolUseID {
+			return false
+		}
+		if len(av.Questions) != len(bv.Questions) {
+			return false
+		}
+		for i := range av.Questions {
+			if av.Questions[i].Question != bv.Questions[i].Question ||
+				av.Questions[i].Header != bv.Questions[i].Header ||
+				av.Questions[i].MultiSelect != bv.Questions[i].MultiSelect {
+				return false
+			}
+			if len(av.Questions[i].Options) != len(bv.Questions[i].Options) {
+				return false
+			}
+			for j := range av.Questions[i].Options {
+				if av.Questions[i].Options[j].Label != bv.Questions[i].Options[j].Label ||
+					av.Questions[i].Options[j].Description != bv.Questions[i].Options[j].Description {
+					return false
+				}
+			}
+		}
+		return true
+	case agent.SystemEvent:
+		bv, ok := b.(agent.SystemEvent)
+		return ok && av.Content == bv.Content
+	case agent.ProcessEndedEvent:
+		_, ok := b.(agent.ProcessEndedEvent)
+		return ok
+	default:
+		return false
 	}
 }
 
@@ -265,8 +306,8 @@ func TestParseLine_ControlResponseWithPendingInterrupt(t *testing.T) {
 	input := `{"type":"control_response","response":{"subtype":"success","request_id":"interrupt-123"}}`
 	results := parseLine(testLogger(), []byte(input), pendingRequests)
 
-	expected := []agent.AgentEvent{{Type: agent.EventTypeInterrupted}}
-	if !reflect.DeepEqual(results, expected) {
+	expected := []agent.AgentEvent{agent.InterruptedEvent{}}
+	if !agentEventsEqual(results, expected) {
 		t.Errorf("expected %+v, got %+v", expected, results)
 	}
 

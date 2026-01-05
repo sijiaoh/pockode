@@ -112,7 +112,7 @@ func (a *Agent) Start(ctx context.Context, workDir string, sessionID string, res
 
 		// Notify client that process has ended (abnormal: process should stay alive)
 		select {
-		case events <- agent.AgentEvent{Type: agent.EventTypeProcessEnded}:
+		case events <- agent.ProcessEndedEvent{}:
 		case <-procCtx.Done():
 		}
 	}()
@@ -340,7 +340,7 @@ func waitForProcess(ctx context.Context, log *slog.Logger, cmd *exec.Cmd, stderr
 				errMsg = err.Error()
 			}
 			select {
-			case events <- agent.AgentEvent{Type: agent.EventTypeError, Error: errMsg}:
+			case events <- agent.ErrorEvent{Error: errMsg}:
 			case <-ctx.Done():
 			}
 		}
@@ -446,10 +446,7 @@ func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent
 	var event cliEvent
 	if err := json.Unmarshal(line, &event); err != nil {
 		log.Warn("failed to parse JSON from CLI", "error", err, "lineLength", len(line))
-		return []agent.AgentEvent{{
-			Type:    agent.EventTypeText,
-			Content: string(line),
-		}}
+		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
 	}
 
 	switch event.Type {
@@ -464,10 +461,7 @@ func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent
 		if event.Subtype == "init" {
 			return nil
 		}
-		return []agent.AgentEvent{{
-			Type:    agent.EventTypeSystem,
-			Content: string(line),
-		}}
+		return []agent.AgentEvent{agent.SystemEvent{Content: string(line)}}
 	case "control_request":
 		return parseControlRequest(log, line)
 	case "control_response":
@@ -476,10 +470,7 @@ func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent
 		return parseControlCancelRequest(log, line)
 	default:
 		log.Warn("unknown event type from CLI", "type", event.Type)
-		return []agent.AgentEvent{{
-			Type:    agent.EventTypeText,
-			Content: string(line),
-		}}
+		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
 	}
 }
 
@@ -508,8 +499,7 @@ func parseControlRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
 			}
 
 			log.Info("AskUserQuestion received", "requestId", req.RequestID)
-			return []agent.AgentEvent{{
-				Type:      agent.EventTypeAskUserQuestion,
+			return []agent.AgentEvent{agent.AskUserQuestionEvent{
 				RequestID: req.RequestID,
 				ToolUseID: req.Request.ToolUseID,
 				Questions: input.Questions,
@@ -517,8 +507,7 @@ func parseControlRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
 		}
 
 		log.Info("tool permission request", "tool", req.Request.ToolName, "requestId", req.RequestID)
-		return []agent.AgentEvent{{
-			Type:                  agent.EventTypePermissionRequest,
+		return []agent.AgentEvent{agent.PermissionRequestEvent{
 			RequestID:             req.RequestID,
 			ToolName:              req.Request.ToolName,
 			ToolInput:             req.Request.Input,
@@ -553,9 +542,7 @@ func parseControlResponse(log *slog.Logger, line []byte, pendingRequests *sync.M
 	if pending, ok := pendingRequests.LoadAndDelete(requestID); ok {
 		if _, isInterrupt := pending.(interruptMarker); isInterrupt {
 			log.Info("interrupt acknowledged", "requestId", requestID)
-			return []agent.AgentEvent{{
-				Type: agent.EventTypeInterrupted,
-			}}
+			return []agent.AgentEvent{agent.InterruptedEvent{}}
 		}
 	}
 
@@ -577,10 +564,7 @@ func parseControlCancelRequest(log *slog.Logger, line []byte) []agent.AgentEvent
 	}
 
 	log.Debug("control cancel request received", "requestId", req.RequestID)
-	return []agent.AgentEvent{{
-		Type:      agent.EventTypeRequestCancelled,
-		RequestID: req.RequestID,
-	}}
+	return []agent.AgentEvent{agent.RequestCancelledEvent{RequestID: req.RequestID}}
 }
 
 func parseAssistantEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
@@ -592,10 +576,7 @@ func parseAssistantEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 	var msg cliMessage
 	if err := json.Unmarshal(event.Message, &msg); err != nil {
 		log.Warn("failed to parse assistant message from CLI", "error", err)
-		return []agent.AgentEvent{{
-			Type:    agent.EventTypeText,
-			Content: string(event.Message),
-		}}
+		return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message)}}
 	}
 
 	var events []agent.AgentEvent
@@ -610,14 +591,10 @@ func parseAssistantEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 			}
 		case "tool_use", "server_tool_use":
 			if len(textParts) > 0 {
-				events = append(events, agent.AgentEvent{
-					Type:    agent.EventTypeText,
-					Content: strings.Join(textParts, ""),
-				})
+				events = append(events, agent.TextEvent{Content: strings.Join(textParts, "")})
 				textParts = nil
 			}
-			events = append(events, agent.AgentEvent{
-				Type:      agent.EventTypeToolCall,
+			events = append(events, agent.ToolCallEvent{
 				ToolUseID: block.ID,
 				ToolName:  block.Name,
 				ToolInput: block.Input,
@@ -626,10 +603,7 @@ func parseAssistantEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 	}
 
 	if len(textParts) > 0 {
-		events = append(events, agent.AgentEvent{
-			Type:    agent.EventTypeText,
-			Content: strings.Join(textParts, ""),
-		})
+		events = append(events, agent.TextEvent{Content: strings.Join(textParts, "")})
 	}
 
 	return events
@@ -643,10 +617,7 @@ func parseUserEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 	var msg cliMessage
 	if err := json.Unmarshal(event.Message, &msg); err != nil {
 		log.Warn("failed to parse user message from CLI", "error", err)
-		return []agent.AgentEvent{{
-			Type:    agent.EventTypeText,
-			Content: string(event.Message),
-		}}
+		return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message)}}
 	}
 
 	var events []agent.AgentEvent
@@ -658,8 +629,7 @@ func parseUserEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 			if err := json.Unmarshal(block.Content, &content); err != nil {
 				content = string(block.Content)
 			}
-			events = append(events, agent.AgentEvent{
-				Type:       agent.EventTypeToolResult,
+			events = append(events, agent.ToolResultEvent{
 				ToolUseID:  block.ToolUseID,
 				ToolResult: content,
 			})
@@ -678,20 +648,17 @@ type resultEvent struct {
 func parseResultEvent(line []byte) agent.AgentEvent {
 	var result resultEvent
 	if err := json.Unmarshal(line, &result); err != nil {
-		return agent.AgentEvent{Type: agent.EventTypeDone}
+		return agent.DoneEvent{}
 	}
-
-	eventType := agent.EventTypeDone
 
 	// Check if this was an interrupt (aborted request)
 	if result.Subtype == "error_during_execution" {
 		for _, e := range result.Errors {
 			if strings.Contains(e, "Request was aborted") {
-				eventType = agent.EventTypeInterrupted
-				break
+				return agent.InterruptedEvent{}
 			}
 		}
 	}
 
-	return agent.AgentEvent{Type: eventType}
+	return agent.DoneEvent{}
 }

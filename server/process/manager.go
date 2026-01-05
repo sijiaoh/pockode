@@ -276,7 +276,7 @@ func (p *Process) streamEvents(ctx context.Context) {
 	log := slog.With("sessionId", p.sessionID)
 
 	for event := range p.agentSession.Events() {
-		log.Debug("streaming event", "type", event.Type)
+		log.Debug("streaming event", "type", event.EventType())
 
 		serverMsg := agent.NewServerMessage(p.sessionID, event)
 
