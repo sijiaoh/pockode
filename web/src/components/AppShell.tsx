@@ -100,12 +100,14 @@ function AppShell() {
 
 	const token = useAuthStore((state) => state.token);
 
-	// Connect to WebSocket when auth token is available
+	// Connect to WebSocket when token becomes available (initial connection only)
+	// Reconnection is handled internally by wsStore with proper delay
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally exclude wsStatus to avoid bypassing retry delay
 	useEffect(() => {
 		if (token && wsStatus === "disconnected") {
 			wsActions.connect(token);
 		}
-	}, [token, wsStatus]);
+	}, [token]);
 
 	// Handle auth failure by logging out
 	useEffect(() => {
