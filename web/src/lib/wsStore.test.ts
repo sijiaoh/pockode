@@ -37,7 +37,7 @@ class MockWebSocket {
 			// It's a request, send a response synchronously via queueMicrotask
 			queueMicrotask(() => {
 				let result = {};
-				if (parsed.method === "attach") {
+				if (parsed.method === "chat.attach") {
 					result = { process_running: false };
 				}
 				this.simulateMessage({
@@ -276,7 +276,7 @@ describe("wsStore", () => {
 			expect(getMockWs()?.send).toHaveBeenCalled();
 			const ws = getMockWs();
 			const sentData = JSON.parse(ws?.send.mock.calls[0][0] ?? "{}");
-			expect(sentData.method).toBe("message");
+			expect(sentData.method).toBe("chat.message");
 			expect(sentData.params).toEqual({
 				session_id: "test-session",
 				content: "hello",
@@ -309,7 +309,7 @@ describe("wsStore", () => {
 			wsActions.subscribeNotification(listener);
 
 			await connectAndAuth();
-			getMockWs()?.simulateNotification("text", {
+			getMockWs()?.simulateNotification("chat.text", {
 				session_id: "test",
 				content: "hello",
 			});

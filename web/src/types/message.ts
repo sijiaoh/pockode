@@ -237,7 +237,7 @@ export interface SystemNotification {
 	content: string;
 }
 
-// Server notification method names
+// Server notification event types
 export type ServerMethod =
 	| "text"
 	| "tool_call"
@@ -251,7 +251,7 @@ export type ServerMethod =
 	| "request_cancelled"
 	| "system";
 
-// Internal representation with type field for UI compatibility
+// Server notification with type field for discriminated union
 export type ServerNotification =
 	| { type: "text"; session_id: string; content: string }
 	| {

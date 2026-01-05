@@ -142,14 +142,14 @@ func (e *testEnv) readNotification() rpcNotification {
 }
 
 func (e *testEnv) attach(sessionID string) {
-	resp := e.call("attach", rpc.AttachParams{SessionID: sessionID})
+	resp := e.call("chat.attach", rpc.AttachParams{SessionID: sessionID})
 	if resp.Error != nil {
 		e.t.Fatalf("attach failed: %s", resp.Error.Message)
 	}
 }
 
 func (e *testEnv) sendMessage(sessionID, content string) {
-	resp := e.call("message", rpc.MessageParams{SessionID: sessionID, Content: content})
+	resp := e.call("chat.message", rpc.MessageParams{SessionID: sessionID, Content: content})
 	if resp.Error != nil {
 		e.t.Fatalf("message failed: %s", resp.Error.Message)
 	}
@@ -253,7 +253,7 @@ func TestHandler_Attach(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	env.store.Create(bgCtx, "sess")
 
-	resp := env.call("attach", rpc.AttachParams{SessionID: "sess"})
+	resp := env.call("chat.attach", rpc.AttachParams{SessionID: "sess"})
 
 	if resp.Error != nil {
 		t.Errorf("unexpected error: %s", resp.Error.Message)
@@ -290,7 +290,7 @@ func TestHandler_Attach_ProcessRunning(t *testing.T) {
 	}
 
 	// New attach should show process_running=true
-	resp := env.call("attach", rpc.AttachParams{SessionID: "sess"})
+	resp := env.call("chat.attach", rpc.AttachParams{SessionID: "sess"})
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
 	}
@@ -308,7 +308,7 @@ func TestHandler_Attach_ProcessRunning(t *testing.T) {
 func TestHandler_Attach_InvalidSession(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	resp := env.call("attach", rpc.AttachParams{SessionID: "non-existent"})
+	resp := env.call("chat.attach", rpc.AttachParams{SessionID: "non-existent"})
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
 		t.Errorf("expected session not found error, got %+v", resp)
@@ -332,11 +332,11 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 	notif1 := env.readNotification()
 	notif2 := env.readNotification()
 
-	if notif1.Method != "text" {
-		t.Errorf("expected method 'text', got %q", notif1.Method)
+	if notif1.Method != "chat.text" {
+		t.Errorf("expected method 'chat.text', got %q", notif1.Method)
 	}
-	if notif2.Method != "done" {
-		t.Errorf("expected method 'done', got %q", notif2.Method)
+	if notif2.Method != "chat.done" {
+		t.Errorf("expected method 'chat.done', got %q", notif2.Method)
 	}
 }
 
@@ -387,8 +387,8 @@ func TestHandler_PermissionRequest(t *testing.T) {
 	env.sendMessage("sess", "run ls")
 	notif := env.readNotification()
 
-	if notif.Method != "permission_request" {
-		t.Errorf("expected method 'permission_request', got %q", notif.Method)
+	if notif.Method != "chat.permission_request" {
+		t.Errorf("expected method 'chat.permission_request', got %q", notif.Method)
 	}
 
 	var params rpc.PermissionRequestParams
@@ -412,7 +412,7 @@ func TestHandler_AgentStartError(t *testing.T) {
 	env.store.Create(bgCtx, "sess")
 
 	env.attach("sess")
-	resp := env.call("message", rpc.MessageParams{SessionID: "sess", Content: "hello"})
+	resp := env.call("chat.message", rpc.MessageParams{SessionID: "sess", Content: "hello"})
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "failed to start agent") {
 		t.Errorf("expected agent start error, got %+v", resp)
@@ -438,7 +438,7 @@ func TestHandler_Interrupt(t *testing.T) {
 		t.Fatal("session should exist")
 	}
 
-	resp := env.call("interrupt", rpc.InterruptParams{SessionID: "sess"})
+	resp := env.call("chat.interrupt", rpc.InterruptParams{SessionID: "sess"})
 	if resp.Error != nil {
 		t.Errorf("unexpected error: %s", resp.Error.Message)
 	}
@@ -453,7 +453,7 @@ func TestHandler_Interrupt(t *testing.T) {
 func TestHandler_Interrupt_InvalidSession(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	resp := env.call("interrupt", rpc.InterruptParams{SessionID: "non-existent"})
+	resp := env.call("chat.interrupt", rpc.InterruptParams{SessionID: "non-existent"})
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
 		t.Errorf("expected session not found error, got %+v", resp)
@@ -529,8 +529,8 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 	env.sendMessage("sess", "ask me")
 	notif := env.readNotification()
 
-	if notif.Method != "ask_user_question" {
-		t.Errorf("expected method 'ask_user_question', got %q", notif.Method)
+	if notif.Method != "chat.ask_user_question" {
+		t.Errorf("expected method 'chat.ask_user_question', got %q", notif.Method)
 	}
 
 	var params rpc.AskUserQuestionParams
@@ -564,7 +564,7 @@ func TestHandler_Message_SessionNotInStore(t *testing.T) {
 	env := newTestEnv(t, mock)
 
 	// Try to send message to non-existent session
-	resp := env.call("message", rpc.MessageParams{SessionID: "non-existent-session", Content: "hello"})
+	resp := env.call("chat.message", rpc.MessageParams{SessionID: "non-existent-session", Content: "hello"})
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
 		t.Errorf("expected session not found error, got %+v", resp)

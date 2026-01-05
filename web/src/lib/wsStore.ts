@@ -70,9 +70,15 @@ function createRPCClient(socket: WebSocket): JSONRPCClient {
 	});
 }
 
+function stripNamespace(method: string): string {
+	const dotIndex = method.indexOf(".");
+	return dotIndex >= 0 ? method.slice(dotIndex + 1) : method;
+}
+
 function handleNotification(method: string, params: unknown): void {
+	const eventType = stripNamespace(method);
 	const notification = {
-		type: method,
+		type: eventType,
 		...(params as object),
 	} as ServerNotification;
 
@@ -81,7 +87,7 @@ function handleNotification(method: string, params: unknown): void {
 	if (
 		sessionId &&
 		!unreadActions.isViewing(sessionId) &&
-		!SILENT_EVENTS.has(method as ServerMethod)
+		!SILENT_EVENTS.has(eventType as ServerMethod)
 	) {
 		unreadActions.markUnread(sessionId);
 	}
@@ -194,7 +200,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 			if (!rpcClient) {
 				throw new Error("Not connected");
 			}
-			return rpcClient.request("attach", {
+			return rpcClient.request("chat.attach", {
 				session_id: sessionId,
 			} as AttachParams);
 		},
@@ -203,7 +209,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 			if (!rpcClient) {
 				throw new Error("Not connected");
 			}
-			await rpcClient.request("message", {
+			await rpcClient.request("chat.message", {
 				session_id: sessionId,
 				content,
 			} as MessageParams);
@@ -213,7 +219,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 			if (!rpcClient) {
 				throw new Error("Not connected");
 			}
-			await rpcClient.request("interrupt", {
+			await rpcClient.request("chat.interrupt", {
 				session_id: sessionId,
 			} as InterruptParams);
 		},
@@ -224,14 +230,14 @@ export const useWSStore = create<WSState>((set, get) => ({
 			if (!rpcClient) {
 				throw new Error("Not connected");
 			}
-			await rpcClient.request("permission_response", params);
+			await rpcClient.request("chat.permission_response", params);
 		},
 
 		questionResponse: async (params: QuestionResponseParams): Promise<void> => {
 			if (!rpcClient) {
 				throw new Error("Not connected");
 			}
-			await rpcClient.request("question_response", params);
+			await rpcClient.request("chat.question_response", params);
 		},
 
 		subscribeNotification: (listener: NotificationListener) => {

@@ -142,15 +142,15 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 
 	// Dispatch to method handlers
 	switch req.Method {
-	case "attach":
+	case "chat.attach":
 		h.handleAttach(ctx, conn, req)
-	case "message":
+	case "chat.message":
 		h.handleMessage(ctx, conn, req)
-	case "interrupt":
+	case "chat.interrupt":
 		h.handleInterrupt(ctx, conn, req)
-	case "permission_response":
+	case "chat.permission_response":
 		h.handlePermissionResponse(ctx, conn, req)
-	case "question_response":
+	case "chat.question_response":
 		h.handleQuestionResponse(ctx, conn, req)
 	default:
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeMethodNotFound, "method not found: "+req.Method)
