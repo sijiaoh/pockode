@@ -1,9 +1,17 @@
 import { JSONRPCClient } from "json-rpc-2.0";
 import { create } from "zustand";
-import type { AuthParams, ServerMethod, ServerNotification } from "../types/message";
+import type {
+	AuthParams,
+	ServerMethod,
+	ServerNotification,
+} from "../types/message";
 import { getWebSocketUrl } from "../utils/config";
-import { authActions } from "./authStore";
-import { type ChatActions, type SessionActions, createChatActions, createSessionActions } from "./rpc";
+import {
+	type ChatActions,
+	createChatActions,
+	createSessionActions,
+	type SessionActions,
+} from "./rpc";
 import { unreadActions } from "./unreadStore";
 
 // Events that should NOT trigger unread notifications.
@@ -20,12 +28,13 @@ export type ConnectionStatus =
 	| "connecting"
 	| "connected"
 	| "disconnected"
+	| "auth_failed"
 	| "error";
 
 type NotificationListener = (notification: ServerNotification) => void;
 
 interface ConnectionActions {
-	connect: () => void;
+	connect: (token: string) => void;
 	disconnect: () => void;
 	subscribeNotification: (listener: NotificationListener) => () => void;
 }
@@ -40,9 +49,9 @@ interface WSState {
 // Module-level state for mutable objects (not reactive)
 let ws: WebSocket | null = null;
 let rpcClient: JSONRPCClient | null = null;
+let currentToken: string | null = null;
 let reconnectAttempts = 0;
 let reconnectTimeout: number | undefined;
-let authFailed = false;
 const notificationListeners = new Set<NotificationListener>();
 
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -97,22 +106,24 @@ export const useWSStore = create<WSState>((set, get) => ({
 	status: "disconnected",
 
 	actions: {
-		connect: () => {
-			const token = authActions.getToken();
+		connect: (token: string) => {
+			const currentStatus = get().status;
+			// "error" is a terminal state requiring user intervention (page refresh)
+			if (
+				currentStatus === "connecting" ||
+				currentStatus === "connected" ||
+				currentStatus === "error"
+			) {
+				return;
+			}
+
 			if (!token) {
 				set({ status: "error" });
 				return;
 			}
 
-			// Close existing connection
-			if (ws) {
-				ws.close();
-				ws = null;
-				rpcClient = null;
-			}
-
+			currentToken = token;
 			set({ status: "connecting" });
-			authFailed = false;
 
 			const url = getWebSocketUrl();
 			const socket = new WebSocket(url);
@@ -127,10 +138,8 @@ export const useWSStore = create<WSState>((set, get) => ({
 					reconnectAttempts = 0;
 				} catch (error) {
 					console.error("WebSocket auth failed:", error);
-					authFailed = true;
-					set({ status: "error" });
+					set({ status: "auth_failed" });
 					socket.close();
-					authActions.logout();
 				}
 			};
 
@@ -154,22 +163,30 @@ export const useWSStore = create<WSState>((set, get) => ({
 			};
 
 			socket.onerror = () => {
-				set({ status: "error" });
+				// Error is always followed by close, let onclose handle state
 			};
 
 			socket.onclose = () => {
 				ws = null;
 				rpcClient = null;
 
-				if (authFailed) {
+				const currentStatus = get().status;
+				// Don't reconnect on auth failure or intentional disconnect
+				if (
+					currentStatus === "auth_failed" ||
+					currentStatus === "disconnected"
+				) {
 					return;
 				}
 
-				if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+				// Retry if we have attempts left and a token
+				if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && currentToken) {
 					set({ status: "disconnected" });
 					reconnectAttempts += 1;
 					reconnectTimeout = window.setTimeout(() => {
-						get().actions.connect();
+						if (currentToken) {
+							get().actions.connect(currentToken);
+						}
 					}, RECONNECT_INTERVAL);
 				} else {
 					set({ status: "error" });
@@ -184,13 +201,15 @@ export const useWSStore = create<WSState>((set, get) => ({
 				clearTimeout(reconnectTimeout);
 				reconnectTimeout = undefined;
 			}
+			currentToken = null;
 			reconnectAttempts = MAX_RECONNECT_ATTEMPTS; // Prevent auto-reconnect
+			// Set status BEFORE closing so onclose sees correct state
+			set({ status: "disconnected" });
 			if (ws) {
 				ws.close();
 				ws = null;
 				rpcClient = null;
 			}
-			set({ status: "disconnected" });
 		},
 
 		subscribeNotification: (listener: NotificationListener) => {
@@ -216,12 +235,12 @@ export function resetWSStore() {
 		ws = null;
 	}
 	rpcClient = null;
+	currentToken = null;
 	if (reconnectTimeout) {
 		clearTimeout(reconnectTimeout);
 		reconnectTimeout = undefined;
 	}
 	reconnectAttempts = 0;
-	authFailed = false;
 	notificationListeners.clear();
 	useWSStore.setState({ status: "disconnected" });
 }

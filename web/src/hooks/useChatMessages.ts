@@ -5,7 +5,7 @@ import {
 	replayHistory,
 } from "../lib/messageReducer";
 import { getHistory } from "../lib/sessionApi";
-import { useWSStore } from "../lib/wsStore";
+import { type ConnectionStatus, useWSStore } from "../lib/wsStore";
 import type {
 	AssistantMessage,
 	Message,
@@ -41,8 +41,6 @@ interface UseChatMessagesReturn {
 		answers?: Record<string, string>,
 	) => void;
 }
-
-type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
 // Actions are stable references - get once at module level
 const { attach, sendMessage, subscribeNotification } =

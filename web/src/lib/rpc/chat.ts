@@ -53,9 +53,7 @@ export function createChatActions(
 			await requireClient().request("chat.permission_response", params);
 		},
 
-		questionResponse: async (
-			params: QuestionResponseParams,
-		): Promise<void> => {
+		questionResponse: async (params: QuestionResponseParams): Promise<void> => {
 			await requireClient().request("chat.question_response", params);
 		},
 	};

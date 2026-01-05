@@ -29,6 +29,7 @@ const STATUS_CONFIG: Record<ConnectionStatus, { text: string; color: string }> =
 	{
 		connected: { text: "Connected", color: "text-th-success" },
 		error: { text: "Connection Error", color: "text-th-error" },
+		auth_failed: { text: "Auth Failed", color: "text-th-error" },
 		disconnected: { text: "Disconnected", color: "text-th-warning" },
 		connecting: { text: "Connecting...", color: "text-th-warning" },
 	};

@@ -1,2 +1,2 @@
-export { createChatActions, type ChatActions } from "./chat";
+export { type ChatActions, createChatActions } from "./chat";
 export { createSessionActions, type SessionActions } from "./session";

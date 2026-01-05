@@ -98,12 +98,21 @@ function AppShell() {
 
 	const { overlay, sessionId: routeSessionId } = useRouteState();
 
+	const token = useAuthStore((state) => state.token);
+
 	// Connect to WebSocket when auth token is available
 	useEffect(() => {
-		if (hasAuthToken && wsStatus === "disconnected") {
-			wsActions.connect();
+		if (token && wsStatus === "disconnected") {
+			wsActions.connect(token);
 		}
-	}, [hasAuthToken, wsStatus]);
+	}, [token, wsStatus]);
+
+	// Handle auth failure by logging out
+	useEffect(() => {
+		if (wsStatus === "auth_failed") {
+			authActions.logout();
+		}
+	}, [wsStatus]);
 
 	const activeDiffFile =
 		overlay?.type === "diff"

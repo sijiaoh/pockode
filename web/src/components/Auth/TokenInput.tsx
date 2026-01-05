@@ -5,11 +5,11 @@ interface Props {
 }
 
 function TokenInput({ onSubmit }: Props) {
-	const [token, setToken] = useState("");
+	const [authToken, setAuthToken] = useState("");
 
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
-		const trimmed = token.trim();
+		const trimmed = authToken.trim();
 		if (trimmed) {
 			onSubmit(trimmed);
 		}
@@ -30,14 +30,14 @@ function TokenInput({ onSubmit }: Props) {
 				<input
 					id="token-input"
 					type="password"
-					value={token}
-					onChange={(e) => setToken(e.target.value)}
+					value={authToken}
+					onChange={(e) => setAuthToken(e.target.value)}
 					placeholder="Token"
 					className="mb-4 w-full rounded-lg border border-th-border bg-th-bg-secondary p-3 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none"
 				/>
 				<button
 					type="submit"
-					disabled={!token.trim()}
+					disabled={!authToken.trim()}
 					className="w-full rounded-lg bg-th-accent p-3 font-semibold text-th-accent-text transition-colors hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:bg-th-bg-tertiary disabled:text-th-text-muted"
 				>
 					Connect
