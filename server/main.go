@@ -57,8 +57,8 @@ func newHandler(token string, manager *process.Manager, devMode bool, sessionSto
 	contentsHandler := api.NewContentsHandler(workDir)
 	contentsHandler.Register(mux)
 
-	// WebSocket endpoint (handles its own auth via query param)
-	wsHandler := ws.NewHandler(token, manager, devMode, sessionStore)
+	// WebSocket JSON-RPC endpoint
+	wsHandler := ws.NewRPCHandler(token, manager, devMode, sessionStore)
 	mux.Handle("GET /ws", wsHandler)
 
 	authedMux := middleware.Auth(token)(mux)

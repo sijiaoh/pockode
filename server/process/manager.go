@@ -2,17 +2,17 @@ package process
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"sync"
 	"time"
 
-	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
+	"github.com/sourcegraph/jsonrpc2"
 )
 
-// Manager manages agent processes and WebSocket subscriptions.
+// Manager manages agent processes and JSON-RPC subscriptions.
 // Processes and subscriptions have independent lifecycles.
 type Manager struct {
 	agent        agent.Agent
@@ -24,9 +24,9 @@ type Manager struct {
 	processesMu sync.Mutex
 	processes   map[string]*Process
 
-	// Subscription management: sessionID -> subscribed WebSocket connections
+	// Subscription management: sessionID -> subscribed JSON-RPC connections
 	subsMu sync.Mutex
-	subs   map[string][]*connWriter
+	subs   map[string][]*jsonrpc2.Conn
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -43,12 +43,6 @@ type Process struct {
 	lastActive time.Time
 }
 
-// connWriter wraps a WebSocket connection for thread-safe writes.
-type connWriter struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
-}
-
 // NewManager creates a new manager with the given idle timeout.
 func NewManager(ag agent.Agent, workDir string, store session.Store, idleTimeout time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -58,7 +52,7 @@ func NewManager(ag agent.Agent, workDir string, store session.Store, idleTimeout
 		sessionStore: store,
 		idleTimeout:  idleTimeout,
 		processes:    make(map[string]*Process),
-		subs:         make(map[string][]*connWriter),
+		subs:         make(map[string][]*jsonrpc2.Conn),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
@@ -123,35 +117,35 @@ func (m *Manager) Touch(sessionID string) {
 	}
 }
 
-// Subscribe adds a WebSocket connection to receive events for a session.
+// SubscribeRPC adds a JSON-RPC connection to receive events for a session.
 // The connection will receive events from any process started for this session.
 // Returns true if this is a new subscription (not already subscribed).
-func (m *Manager) Subscribe(sessionID string, conn *websocket.Conn) bool {
+func (m *Manager) SubscribeRPC(sessionID string, conn *jsonrpc2.Conn) bool {
 	m.subsMu.Lock()
 	defer m.subsMu.Unlock()
 
 	// Check if already subscribed
-	for _, cw := range m.subs[sessionID] {
-		if cw.conn == conn {
+	for _, c := range m.subs[sessionID] {
+		if c == conn {
 			return false
 		}
 	}
 
-	m.subs[sessionID] = append(m.subs[sessionID], &connWriter{conn: conn})
+	m.subs[sessionID] = append(m.subs[sessionID], conn)
 	slog.Debug("subscribed to session", "sessionId", sessionID, "totalSubs", len(m.subs[sessionID]))
 	return true
 }
 
-// Unsubscribe removes a WebSocket connection from receiving events.
-func (m *Manager) Unsubscribe(sessionID string, conn *websocket.Conn) {
+// UnsubscribeRPC removes a JSON-RPC connection from receiving events.
+func (m *Manager) UnsubscribeRPC(sessionID string, conn *jsonrpc2.Conn) {
 	m.subsMu.Lock()
 	defer m.subsMu.Unlock()
 
 	conns := m.subs[sessionID]
-	newConns := make([]*connWriter, 0, len(conns))
-	for _, cw := range conns {
-		if cw.conn != conn {
-			newConns = append(newConns, cw)
+	newConns := make([]*jsonrpc2.Conn, 0, len(conns))
+	for _, c := range conns {
+		if c != conn {
+			newConns = append(newConns, c)
 		}
 	}
 
@@ -163,26 +157,22 @@ func (m *Manager) Unsubscribe(sessionID string, conn *websocket.Conn) {
 	slog.Debug("unsubscribed from session", "sessionId", sessionID, "totalSubs", len(newConns))
 }
 
-// broadcast sends a message to all subscribers of a session.
-func (m *Manager) broadcast(ctx context.Context, sessionID string, msg agent.ServerMessage) {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		slog.Error("failed to marshal message", "error", err)
-		return
-	}
-
+// GetSubscribers returns a copy of the subscribers for a session.
+func (m *Manager) GetSubscribers(sessionID string) []*jsonrpc2.Conn {
 	m.subsMu.Lock()
-	conns := make([]*connWriter, len(m.subs[sessionID]))
+	defer m.subsMu.Unlock()
+	conns := make([]*jsonrpc2.Conn, len(m.subs[sessionID]))
 	copy(conns, m.subs[sessionID])
-	m.subsMu.Unlock()
+	return conns
+}
 
-	for _, cw := range conns {
-		cw.mu.Lock()
-		err := cw.conn.Write(ctx, websocket.MessageText, data)
-		cw.mu.Unlock()
+// Notify sends a JSON-RPC notification to all subscribers of a session.
+func (m *Manager) Notify(ctx context.Context, sessionID string, method string, params interface{}) {
+	conns := m.GetSubscribers(sessionID)
 
-		if err != nil {
-			slog.Debug("broadcast write failed", "error", err)
+	for _, conn := range conns {
+		if err := conn.Notify(ctx, method, params); err != nil {
+			slog.Debug("notify failed", "error", err, "method", method)
 		}
 	}
 }
@@ -271,22 +261,24 @@ func (p *Process) getLastActive() time.Time {
 	return p.lastActive
 }
 
-// streamEvents routes events to history and all subscribed WebSockets.
+// streamEvents routes events to history and broadcasts to all subscribed connections.
 func (p *Process) streamEvents(ctx context.Context) {
 	log := slog.With("sessionId", p.sessionID)
 
 	for event := range p.agentSession.Events() {
-		log.Debug("streaming event", "type", event.EventType())
+		eventType := event.EventType()
+		log.Debug("streaming event", "type", eventType)
 
-		serverMsg := agent.NewServerMessage(p.sessionID, event)
+		// Build notification params for history and broadcast
+		params := rpc.NewNotifyParams(p.sessionID, event)
 
-		// History persists even when no WebSocket is connected
-		if err := p.sessionStore.AppendToHistory(ctx, p.sessionID, serverMsg); err != nil {
+		// History persists even when no connection is active
+		if err := p.sessionStore.AppendToHistory(ctx, p.sessionID, params); err != nil {
 			log.Error("failed to append to history", "error", err)
 		}
 
-		// Broadcast via manager to all subscribers
-		p.manager.broadcast(ctx, p.sessionID, serverMsg)
+		// Send as JSON-RPC notification
+		p.manager.Notify(ctx, p.sessionID, string(eventType), params)
 	}
 
 	log.Info("event stream ended")

@@ -12,7 +12,9 @@ import (
 	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
+	"github.com/sourcegraph/jsonrpc2"
 )
 
 var bgCtx = context.Background()
@@ -26,6 +28,7 @@ type testEnv struct {
 	conn    *websocket.Conn
 	ctx     context.Context
 	cancel  context.CancelFunc
+	reqID   int
 }
 
 func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
@@ -35,7 +38,7 @@ func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
 	}
 
 	manager := process.NewManager(mock, "/tmp", store, 10*time.Minute)
-	h := NewHandler("test-token", manager, true, store)
+	h := NewRPCHandler("test-token", manager, true, store)
 	server := httptest.NewServer(h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -57,15 +60,13 @@ func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
 		conn:    conn,
 		ctx:     ctx,
 		cancel:  cancel,
+		reqID:   0,
 	}
 
-	env.send(ClientMessage{Type: ClientMessageAuth, Token: "test-token"})
-	resp := env.read()
-	if resp.Type != ServerMessageAuthResponse {
-		t.Fatalf("expected %s, got %s", ServerMessageAuthResponse, resp.Type)
-	}
-	if !resp.Success {
-		t.Fatalf("auth failed: %s", resp.Error)
+	// Authenticate
+	resp := env.call("auth", rpc.AuthParams{Token: "test-token"})
+	if resp.Error != nil {
+		t.Fatalf("auth failed: %s", resp.Error.Message)
 	}
 
 	t.Cleanup(func() {
@@ -78,40 +79,80 @@ func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
 	return env
 }
 
-func (e *testEnv) send(msg ClientMessage) {
-	data, _ := json.Marshal(msg)
+type rpcRequest struct {
+	JSONRPC string      `json:"jsonrpc"`
+	ID      int         `json:"id"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params"`
+}
+
+type rpcResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      int             `json:"id"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *jsonrpc2.Error `json:"error,omitempty"`
+}
+
+type rpcNotification struct {
+	JSONRPC string          `json:"jsonrpc"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+}
+
+func (e *testEnv) nextID() int {
+	e.reqID++
+	return e.reqID
+}
+
+func (e *testEnv) call(method string, params interface{}) rpcResponse {
+	req := rpcRequest{
+		JSONRPC: "2.0",
+		ID:      e.nextID(),
+		Method:  method,
+		Params:  params,
+	}
+	data, _ := json.Marshal(req)
 	if err := e.conn.Write(e.ctx, websocket.MessageText, data); err != nil {
 		e.t.Fatalf("failed to send: %v", err)
 	}
+
+	_, respData, err := e.conn.Read(e.ctx)
+	if err != nil {
+		e.t.Fatalf("failed to read: %v", err)
+	}
+
+	var resp rpcResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		e.t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	return resp
 }
 
-func (e *testEnv) attach(sessionID string) {
-	e.send(ClientMessage{Type: ClientMessageAttach, SessionID: sessionID})
-	e.read() // consume attach_response
-}
-
-func (e *testEnv) sendMessage(sessionID, content string) {
-	e.send(ClientMessage{Type: ClientMessageMessage, SessionID: sessionID, Content: content})
-}
-
-func (e *testEnv) read() agent.ServerMessage {
+func (e *testEnv) readNotification() rpcNotification {
 	_, data, err := e.conn.Read(e.ctx)
 	if err != nil {
 		e.t.Fatalf("failed to read: %v", err)
 	}
-	var msg agent.ServerMessage
-	if err := json.Unmarshal(data, &msg); err != nil {
-		e.t.Fatalf("failed to unmarshal: %v", err)
+
+	var notif rpcNotification
+	if err := json.Unmarshal(data, &notif); err != nil {
+		e.t.Fatalf("failed to unmarshal notification: %v", err)
 	}
-	return msg
+	return notif
 }
 
-func (e *testEnv) readN(n int) []agent.ServerMessage {
-	msgs := make([]agent.ServerMessage, n)
-	for i := 0; i < n; i++ {
-		msgs[i] = e.read()
+func (e *testEnv) attach(sessionID string) {
+	resp := e.call("attach", rpc.AttachParams{SessionID: sessionID})
+	if resp.Error != nil {
+		e.t.Fatalf("attach failed: %s", resp.Error.Message)
 	}
-	return msgs
+}
+
+func (e *testEnv) sendMessage(sessionID, content string) {
+	resp := e.call("message", rpc.MessageParams{SessionID: sessionID, Content: content})
+	if resp.Error != nil {
+		e.t.Fatalf("message failed: %s", resp.Error.Message)
+	}
 }
 
 func (e *testEnv) skipN(n int) {
@@ -127,7 +168,7 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	manager := process.NewManager(&mockAgent{}, "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	h := NewHandler("secret-token", manager, true, store)
+	h := NewRPCHandler("secret-token", manager, true, store)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -141,7 +182,8 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	data, _ := json.Marshal(ClientMessage{Type: ClientMessageAuth, Token: "wrong-token"})
+	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "auth", Params: rpc.AuthParams{Token: "wrong-token"}}
+	data, _ := json.Marshal(req)
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 		t.Fatalf("failed to send: %v", err)
 	}
@@ -151,19 +193,16 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 		t.Fatalf("failed to read: %v", err)
 	}
 
-	var resp agent.ServerMessage
+	var resp rpcResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
 
-	if resp.Type != ServerMessageAuthResponse {
-		t.Errorf("expected %s, got %s", ServerMessageAuthResponse, resp.Type)
-	}
-	if resp.Success {
+	if resp.Error == nil {
 		t.Error("expected auth to fail")
 	}
-	if !strings.Contains(resp.Error, "Invalid token") {
-		t.Errorf("expected 'Invalid token' error, got %q", resp.Error)
+	if !strings.Contains(resp.Error.Message, "invalid token") {
+		t.Errorf("expected 'invalid token' error, got %q", resp.Error.Message)
 	}
 }
 
@@ -172,7 +211,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	manager := process.NewManager(&mockAgent{}, "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	h := NewHandler("test-token", manager, true, store)
+	h := NewRPCHandler("test-token", manager, true, store)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -186,7 +225,8 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	data, _ := json.Marshal(ClientMessage{Type: ClientMessageAttach, SessionID: "sess"})
+	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "attach", Params: rpc.AttachParams{SessionID: "sess"}}
+	data, _ := json.Marshal(req)
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 		t.Fatalf("failed to send: %v", err)
 	}
@@ -196,19 +236,16 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 		t.Fatalf("failed to read: %v", err)
 	}
 
-	var resp agent.ServerMessage
+	var resp rpcResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
 
-	if resp.Type != ServerMessageAuthResponse {
-		t.Errorf("expected %s, got %s", ServerMessageAuthResponse, resp.Type)
-	}
-	if resp.Success {
+	if resp.Error == nil {
 		t.Error("expected auth to fail")
 	}
-	if !strings.Contains(resp.Error, "First message must be auth") {
-		t.Errorf("expected 'First message must be auth' error, got %q", resp.Error)
+	if !strings.Contains(resp.Error.Message, "first request must be auth") {
+		t.Errorf("expected 'first request must be auth' error, got %q", resp.Error.Message)
 	}
 }
 
@@ -216,16 +253,18 @@ func TestHandler_Attach(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	env.store.Create(bgCtx, "sess")
 
-	env.send(ClientMessage{Type: ClientMessageAttach, SessionID: "sess"})
-	resp := env.read()
+	resp := env.call("attach", rpc.AttachParams{SessionID: "sess"})
 
-	if resp.Type != ServerMessageAttachResponse {
-		t.Errorf("expected %s, got %s", ServerMessageAttachResponse, resp.Type)
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %s", resp.Error.Message)
 	}
-	if resp.SessionID != "sess" {
-		t.Errorf("expected session_id 'sess', got %q", resp.SessionID)
+
+	var result rpc.AttachResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
 	}
-	if resp.ProcessRunning {
+
+	if result.ProcessRunning {
 		t.Error("expected process_running=false before message")
 	}
 }
@@ -243,7 +282,7 @@ func TestHandler_Attach_ProcessRunning(t *testing.T) {
 	// Start process by sending message
 	env.attach("sess")
 	env.sendMessage("sess", "hello")
-	env.skipN(2) // Text + Done
+	env.skipN(2) // Text + Done notifications
 
 	// Verify process is still running
 	if !env.manager.HasProcess("sess") {
@@ -251,13 +290,17 @@ func TestHandler_Attach_ProcessRunning(t *testing.T) {
 	}
 
 	// New attach should show process_running=true
-	env.send(ClientMessage{Type: ClientMessageAttach, SessionID: "sess"})
-	resp := env.read()
-
-	if resp.Type != ServerMessageAttachResponse {
-		t.Fatalf("expected %s, got %s", ServerMessageAttachResponse, resp.Type)
+	resp := env.call("attach", rpc.AttachParams{SessionID: "sess"})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
 	}
-	if !resp.ProcessRunning {
+
+	var result rpc.AttachResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	if !result.ProcessRunning {
 		t.Error("expected process_running=true after message")
 	}
 }
@@ -265,10 +308,9 @@ func TestHandler_Attach_ProcessRunning(t *testing.T) {
 func TestHandler_Attach_InvalidSession(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	env.send(ClientMessage{Type: ClientMessageAttach, SessionID: "non-existent"})
-	resp := env.read()
+	resp := env.call("attach", rpc.AttachParams{SessionID: "non-existent"})
 
-	if resp.Type != agent.EventTypeError || !strings.Contains(resp.Error, "session not found") {
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
 		t.Errorf("expected session not found error, got %+v", resp)
 	}
 }
@@ -285,13 +327,16 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 
 	env.attach("sess")
 	env.sendMessage("sess", "Hello AI")
-	responses := env.readN(2)
 
-	if responses[0].Type != agent.EventTypeText || responses[0].Content != "Hello" {
-		t.Errorf("unexpected first response: %+v", responses[0])
+	// Read notifications
+	notif1 := env.readNotification()
+	notif2 := env.readNotification()
+
+	if notif1.Method != "text" {
+		t.Errorf("expected method 'text', got %q", notif1.Method)
 	}
-	if responses[1].Type != agent.EventTypeDone {
-		t.Errorf("unexpected second response: %+v", responses[1])
+	if notif2.Method != "done" {
+		t.Errorf("expected method 'done', got %q", notif2.Method)
 	}
 }
 
@@ -340,16 +385,22 @@ func TestHandler_PermissionRequest(t *testing.T) {
 
 	env.attach("sess")
 	env.sendMessage("sess", "run ls")
-	resp := env.read()
+	notif := env.readNotification()
 
-	if resp.Type != agent.EventTypePermissionRequest {
-		t.Errorf("expected %s, got %s", agent.EventTypePermissionRequest, resp.Type)
+	if notif.Method != "permission_request" {
+		t.Errorf("expected method 'permission_request', got %q", notif.Method)
 	}
-	if resp.RequestID != "req-123" {
-		t.Errorf("expected request_id 'req-123', got %q", resp.RequestID)
+
+	var params rpc.PermissionRequestParams
+	if err := json.Unmarshal(notif.Params, &params); err != nil {
+		t.Fatalf("failed to unmarshal params: %v", err)
 	}
-	if resp.ToolName != "Bash" {
-		t.Errorf("expected tool_name 'Bash', got %q", resp.ToolName)
+
+	if params.RequestID != "req-123" {
+		t.Errorf("expected request_id 'req-123', got %q", params.RequestID)
+	}
+	if params.ToolName != "Bash" {
+		t.Errorf("expected tool_name 'Bash', got %q", params.ToolName)
 	}
 }
 
@@ -360,10 +411,10 @@ func TestHandler_AgentStartError(t *testing.T) {
 	env := newTestEnv(t, mock)
 	env.store.Create(bgCtx, "sess")
 
-	env.sendMessage("sess", "hello")
-	resp := env.read()
+	env.attach("sess")
+	resp := env.call("message", rpc.MessageParams{SessionID: "sess", Content: "hello"})
 
-	if resp.Type != agent.EventTypeError || !strings.Contains(resp.Error, "failed to start agent") {
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "failed to start agent") {
 		t.Errorf("expected agent start error, got %+v", resp)
 	}
 }
@@ -387,7 +438,10 @@ func TestHandler_Interrupt(t *testing.T) {
 		t.Fatal("session should exist")
 	}
 
-	env.send(ClientMessage{Type: ClientMessageInterrupt, SessionID: "sess"})
+	resp := env.call("interrupt", rpc.InterruptParams{SessionID: "sess"})
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %s", resp.Error.Message)
+	}
 
 	select {
 	case <-sess.interruptCh:
@@ -399,10 +453,9 @@ func TestHandler_Interrupt(t *testing.T) {
 func TestHandler_Interrupt_InvalidSession(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	env.send(ClientMessage{Type: ClientMessageInterrupt, SessionID: "non-existent"})
-	resp := env.read()
+	resp := env.call("interrupt", rpc.InterruptParams{SessionID: "non-existent"})
 
-	if resp.Type != agent.EventTypeError || !strings.Contains(resp.Error, "session not found") {
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
 		t.Errorf("expected session not found error, got %+v", resp)
 	}
 }
@@ -474,43 +527,35 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 
 	env.attach("sess")
 	env.sendMessage("sess", "ask me")
-	resp := env.read()
+	notif := env.readNotification()
 
-	if resp.Type != agent.EventTypeAskUserQuestion {
-		t.Errorf("expected %s, got %s", agent.EventTypeAskUserQuestion, resp.Type)
+	if notif.Method != "ask_user_question" {
+		t.Errorf("expected method 'ask_user_question', got %q", notif.Method)
 	}
-	if resp.RequestID != "req-q-123" {
-		t.Errorf("expected request_id 'req-q-123', got %q", resp.RequestID)
-	}
-	if len(resp.Questions) != 1 {
-		t.Errorf("expected 1 question, got %d", len(resp.Questions))
-	}
-	if resp.Questions[0].Question != "Which library?" {
-		t.Errorf("expected question 'Which library?', got %q", resp.Questions[0].Question)
-	}
-}
 
-func TestHandler_InvalidJSON(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{})
-
-	if err := env.conn.Write(env.ctx, websocket.MessageText, []byte("{invalid json")); err != nil {
-		t.Fatalf("failed to send: %v", err)
+	var params rpc.AskUserQuestionParams
+	if err := json.Unmarshal(notif.Params, &params); err != nil {
+		t.Fatalf("failed to unmarshal params: %v", err)
 	}
-	resp := env.read()
 
-	if resp.Type != agent.EventTypeError || !strings.Contains(resp.Error, "Invalid message format") {
-		t.Errorf("expected invalid format error, got %+v", resp)
+	if params.RequestID != "req-q-123" {
+		t.Errorf("expected request_id 'req-q-123', got %q", params.RequestID)
+	}
+	if len(params.Questions) != 1 {
+		t.Errorf("expected 1 question, got %d", len(params.Questions))
+	}
+	if params.Questions[0].Question != "Which library?" {
+		t.Errorf("expected question 'Which library?', got %q", params.Questions[0].Question)
 	}
 }
 
-func TestHandler_UnknownMessageType(t *testing.T) {
+func TestHandler_UnknownMethod(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	env.send(ClientMessage{Type: "unknown_type", SessionID: "sess"})
-	resp := env.read()
+	resp := env.call("unknown_method", nil)
 
-	if resp.Type != agent.EventTypeError || !strings.Contains(resp.Error, "Unknown message type") {
-		t.Errorf("expected unknown message type error, got %+v", resp)
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "method not found") {
+		t.Errorf("expected method not found error, got %+v", resp)
 	}
 }
 
@@ -518,10 +563,10 @@ func TestHandler_Message_SessionNotInStore(t *testing.T) {
 	mock := &mockAgent{}
 	env := newTestEnv(t, mock)
 
-	env.sendMessage("non-existent-session", "hello")
-	resp := env.read()
+	// Try to send message to non-existent session
+	resp := env.call("message", rpc.MessageParams{SessionID: "non-existent-session", Content: "hello"})
 
-	if resp.Type != agent.EventTypeError || !strings.Contains(resp.Error, "session not found") {
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
 		t.Errorf("expected session not found error, got %+v", resp)
 	}
 }

@@ -90,8 +90,6 @@ type AskUserQuestion struct {
 	MultiSelect bool             `json:"multiSelect"`
 }
 
-// --- AgentEvent: Interface + Individual Types ---
-
 // AgentEvent represents an event from an AI agent.
 // Each event type has its own struct with only the relevant fields.
 type AgentEvent interface {
@@ -189,59 +187,3 @@ type ProcessEndedEvent struct{}
 
 func (ProcessEndedEvent) EventType() EventType { return EventTypeProcessEnded }
 func (ProcessEndedEvent) isAgentEvent()        {}
-
-// ServerMessage is the JSON wire format for WebSocket communication.
-// For type-safe event handling, use AgentEvent interface instead.
-type ServerMessage struct {
-	Type                  EventType          `json:"type"`
-	SessionID             string             `json:"session_id,omitempty"`
-	Content               string             `json:"content,omitempty"`
-	ToolName              string             `json:"tool_name,omitempty"`
-	ToolInput             json.RawMessage    `json:"tool_input,omitempty"`
-	ToolUseID             string             `json:"tool_use_id,omitempty"`
-	ToolResult            string             `json:"tool_result,omitempty"`
-	Error                 string             `json:"error,omitempty"`
-	RequestID             string             `json:"request_id,omitempty"`
-	PermissionSuggestions []PermissionUpdate `json:"permission_suggestions,omitempty"`
-	Questions             []AskUserQuestion  `json:"questions,omitempty"`
-	ProcessRunning        bool               `json:"process_running"`
-	Success               bool               `json:"success,omitempty"`
-}
-
-// NewServerMessage creates a ServerMessage from an AgentEvent.
-func NewServerMessage(sessionID string, event AgentEvent) ServerMessage {
-	msg := ServerMessage{
-		Type:      event.EventType(),
-		SessionID: sessionID,
-	}
-
-	switch e := event.(type) {
-	case TextEvent:
-		msg.Content = e.Content
-	case ToolCallEvent:
-		msg.ToolName = e.ToolName
-		msg.ToolInput = e.ToolInput
-		msg.ToolUseID = e.ToolUseID
-	case ToolResultEvent:
-		msg.ToolUseID = e.ToolUseID
-		msg.ToolResult = e.ToolResult
-	case ErrorEvent:
-		msg.Error = e.Error
-	case PermissionRequestEvent:
-		msg.RequestID = e.RequestID
-		msg.ToolName = e.ToolName
-		msg.ToolInput = e.ToolInput
-		msg.ToolUseID = e.ToolUseID
-		msg.PermissionSuggestions = e.PermissionSuggestions
-	case RequestCancelledEvent:
-		msg.RequestID = e.RequestID
-	case AskUserQuestionEvent:
-		msg.RequestID = e.RequestID
-		msg.ToolUseID = e.ToolUseID
-		msg.Questions = e.Questions
-	case SystemEvent:
-		msg.Content = e.Content
-	}
-
-	return msg
-}

@@ -2,15 +2,15 @@ package process
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
+	"io"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
+	"github.com/sourcegraph/jsonrpc2"
 )
 
 type mockAgent struct {
@@ -210,112 +210,111 @@ func TestManager_Close_SpecificProcess(t *testing.T) {
 	}
 }
 
-// newTestWebSocket creates a WebSocket connection pair for testing.
-func newTestWebSocket(t *testing.T) (*websocket.Conn, *websocket.Conn) {
-	t.Helper()
-
-	serverConnCh := make(chan *websocket.Conn, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			t.Errorf("failed to accept websocket: %v", err)
-			return
-		}
-		serverConnCh <- conn
-		// Block until test cleanup to prevent premature connection close
-		<-r.Context().Done()
-	}))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-
-	clientConn, _, err := websocket.Dial(ctx, "ws"+server.URL[4:], nil)
-	if err != nil {
-		cancel()
-		server.Close()
-		t.Fatalf("failed to dial websocket: %v", err)
-	}
-
-	serverConn := <-serverConnCh
-
-	t.Cleanup(func() {
-		cancel()
-		server.Close()
-	})
-
-	return serverConn, clientConn
+// testObjectStream is a mock ObjectStream for testing JSON-RPC connections.
+type testObjectStream struct {
+	r        *io.PipeReader
+	w        *io.PipeWriter
+	received chan interface{}
+	closed   chan struct{}
 }
 
-func TestManager_SubscribeUnsubscribe(t *testing.T) {
+func newTestObjectStream() *testObjectStream {
+	r, w := io.Pipe()
+	return &testObjectStream{
+		r:        r,
+		w:        w,
+		received: make(chan interface{}, 10),
+		closed:   make(chan struct{}),
+	}
+}
+
+func (s *testObjectStream) ReadObject(v interface{}) error {
+	<-s.closed
+	return io.EOF
+}
+
+func (s *testObjectStream) WriteObject(v interface{}) error {
+	s.received <- v
+	return nil
+}
+
+func (s *testObjectStream) Close() error {
+	close(s.closed)
+	s.r.Close()
+	s.w.Close()
+	return nil
+}
+
+func TestManager_SubscribeUnsubscribeRPC(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
 	m := NewManager(mock, "/tmp", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	conn1, _ := newTestWebSocket(t)
-	conn2, _ := newTestWebSocket(t)
+	stream1 := newTestObjectStream()
+	stream2 := newTestObjectStream()
+	conn1 := jsonrpc2.NewConn(context.Background(), stream1, nil)
+	conn2 := jsonrpc2.NewConn(context.Background(), stream2, nil)
+	defer conn1.Close()
+	defer conn2.Close()
 
 	// Subscribe to session (no process needed)
-	if !m.Subscribe("sess-1", conn1) {
+	if !m.SubscribeRPC("sess-1", conn1) {
 		t.Error("expected first subscribe to return true")
 	}
-	if !m.Subscribe("sess-1", conn2) {
+	if !m.SubscribeRPC("sess-1", conn2) {
 		t.Error("expected second subscribe to return true")
 	}
 
 	// Duplicate subscribe should return false
-	if m.Subscribe("sess-1", conn1) {
+	if m.SubscribeRPC("sess-1", conn1) {
 		t.Error("expected duplicate subscribe to return false")
 	}
 
-	m.Unsubscribe("sess-1", conn1)
-	m.Unsubscribe("sess-1", conn2)
+	m.UnsubscribeRPC("sess-1", conn1)
+	m.UnsubscribeRPC("sess-1", conn2)
 
 	// Unsubscribe non-existent should not panic
-	m.Unsubscribe("sess-1", conn1)
+	m.UnsubscribeRPC("sess-1", conn1)
 }
 
-func TestManager_Broadcast(t *testing.T) {
+func TestManager_Notify(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
 	m := NewManager(mock, "/tmp", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	serverConn1, clientConn1 := newTestWebSocket(t)
-	serverConn2, clientConn2 := newTestWebSocket(t)
+	_, _ = store.Create(context.Background(), "sess-1")
 
-	// Subscribe first
-	m.Subscribe("sess-1", serverConn1)
-	m.Subscribe("sess-1", serverConn2)
+	stream1 := newTestObjectStream()
+	stream2 := newTestObjectStream()
+	conn1 := jsonrpc2.NewConn(context.Background(), stream1, nil)
+	conn2 := jsonrpc2.NewConn(context.Background(), stream2, nil)
+	defer conn1.Close()
+	defer conn2.Close()
 
-	// Create process
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false)
+	m.SubscribeRPC("sess-1", conn1)
+	m.SubscribeRPC("sess-1", conn2)
 
-	// Send event through agent session
-	mock.sessions["sess-1"].events <- agent.TextEvent{Content: "hello"}
+	params := rpc.TextParams{SessionID: "sess-1", Content: "hello"}
+	m.Notify(context.Background(), "sess-1", "text", params)
 
-	// Both clients should receive the broadcast
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	_, data1, err := clientConn1.Read(ctx)
-	if err != nil {
-		t.Fatalf("client1 read error: %v", err)
-	}
-	if string(data1) == "" {
-		t.Error("client1 received empty message")
-	}
-
-	_, data2, err := clientConn2.Read(ctx)
-	if err != nil {
-		t.Fatalf("client2 read error: %v", err)
-	}
-	if string(data2) == "" {
-		t.Error("client2 received empty message")
+	select {
+	case msg := <-stream1.received:
+		if msg == nil {
+			t.Error("stream1 received nil message")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("stream1 did not receive notification")
 	}
 
-	// Both should receive the same message
-	if string(data1) != string(data2) {
-		t.Errorf("clients received different messages: %s vs %s", data1, data2)
+	select {
+	case msg := <-stream2.received:
+		if msg == nil {
+			t.Error("stream2 received nil message")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("stream2 did not receive notification")
 	}
 }
 
