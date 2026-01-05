@@ -30,7 +30,24 @@ class MockWebSocket {
 	onerror: (() => void) | null = null;
 	onmessage: ((event: { data: string }) => void) | null = null;
 
-	send = vi.fn();
+	send = vi.fn((data: string) => {
+		// Auto-respond to JSON-RPC requests with success (synchronous for testing)
+		const parsed = JSON.parse(data);
+		if (parsed.id !== undefined) {
+			// It's a request, send a response synchronously via queueMicrotask
+			queueMicrotask(() => {
+				let result = {};
+				if (parsed.method === "attach") {
+					result = { process_running: false };
+				}
+				this.simulateMessage({
+					jsonrpc: "2.0",
+					id: parsed.id,
+					result,
+				});
+			});
+		}
+	});
 	close = vi.fn(() => {
 		this.readyState = MockWebSocket.CLOSED;
 		this.onclose?.();
@@ -56,6 +73,13 @@ class MockWebSocket {
 	simulateClose() {
 		this.readyState = MockWebSocket.CLOSED;
 		this.onclose?.();
+	}
+	simulateNotification(method: string, params: unknown) {
+		this.simulateMessage({
+			jsonrpc: "2.0",
+			method,
+			params,
+		});
 	}
 }
 
@@ -93,6 +117,19 @@ function getMockWs() {
 	return currentMockWs;
 }
 
+// Helper to simulate successful auth
+async function connectAndAuth() {
+	const wsActions = await getWsActions();
+	const useWSStore = await getUseWSStore();
+
+	wsActions.connect();
+	getMockWs()?.simulateOpen();
+
+	// Auth request is sent, simulate response
+	await vi.runAllTimersAsync();
+	expect(useWSStore.getState().status).toBe("connected");
+}
+
 describe("wsStore", () => {
 	describe("connect", () => {
 		it("sets status to connecting then connected after auth", async () => {
@@ -108,23 +145,23 @@ describe("wsStore", () => {
 			expect(statusChanges).toContain("connecting");
 
 			getMockWs()?.simulateOpen();
-			// After open, should still be connecting (waiting for auth_response)
-			expect(useWSStore.getState().status).toBe("connecting");
-
-			// Simulate auth_response
-			getMockWs()?.simulateMessage({ type: "auth_response", success: true });
+			// After open, auth is sent and should auto-respond
+			await vi.runAllTimersAsync();
 			expect(useWSStore.getState().status).toBe("connected");
 		});
 
-		it("sends auth message on open", async () => {
+		it("sends auth RPC request on open", async () => {
 			const wsActions = await getWsActions();
 
 			wsActions.connect();
 			getMockWs()?.simulateOpen();
 
-			expect(getMockWs()?.send).toHaveBeenCalledWith(
-				JSON.stringify({ type: "auth", token: "test-token" }),
-			);
+			expect(getMockWs()?.send).toHaveBeenCalled();
+			const ws = getMockWs();
+			const sentData = JSON.parse(ws?.send.mock.calls[0][0] ?? "{}");
+			expect(sentData.jsonrpc).toBe("2.0");
+			expect(sentData.method).toBe("auth");
+			expect(sentData.params).toEqual({ token: "test-token" });
 		});
 
 		it("sets status to error on auth failure", async () => {
@@ -132,13 +169,25 @@ describe("wsStore", () => {
 			const useWSStore = await getUseWSStore();
 
 			wsActions.connect();
-			getMockWs()?.simulateOpen();
-			getMockWs()?.simulateMessage({
-				type: "auth_response",
-				success: false,
-				error: "Invalid token",
-			});
+			const ws = getMockWs();
+			if (ws) {
+				// Override send to return auth error instead of success
+				ws.send = vi.fn((data: string) => {
+					const parsed = JSON.parse(data);
+					if (parsed.id !== undefined && parsed.method === "auth") {
+						queueMicrotask(() => {
+							ws.simulateMessage({
+								jsonrpc: "2.0",
+								id: parsed.id,
+								error: { code: -32600, message: "Invalid token" },
+							});
+						});
+					}
+				});
+			}
+			ws?.simulateOpen();
 
+			await vi.runAllTimersAsync();
 			expect(useWSStore.getState().status).toBe("error");
 		});
 
@@ -171,13 +220,13 @@ describe("wsStore", () => {
 			// First connection closes
 			wsActions.connect();
 			getMockWs()?.simulateOpen();
-			getMockWs()?.simulateMessage({ type: "auth_response", success: true });
+			await vi.runAllTimersAsync();
 			getMockWs()?.simulateClose();
 
 			// Auto-reconnect triggers
 			vi.advanceTimersByTime(3000);
 			getMockWs()?.simulateOpen();
-			getMockWs()?.simulateMessage({ type: "auth_response", success: true });
+			await vi.runAllTimersAsync();
 
 			// Should have reset attempts - can reconnect again if needed
 			getMockWs()?.simulateClose();
@@ -191,9 +240,7 @@ describe("wsStore", () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
-			wsActions.connect();
-			getMockWs()?.simulateOpen();
-			getMockWs()?.simulateMessage({ type: "auth_response", success: true });
+			await connectAndAuth();
 			const ws = getMockWs();
 
 			wsActions.disconnect();
@@ -205,9 +252,7 @@ describe("wsStore", () => {
 		it("cancels pending reconnect", async () => {
 			const wsActions = await getWsActions();
 
-			wsActions.connect();
-			getMockWs()?.simulateOpen();
-			getMockWs()?.simulateMessage({ type: "auth_response", success: true });
+			await connectAndAuth();
 			getMockWs()?.simulateClose();
 
 			// Reconnect scheduled but not yet executed
@@ -219,84 +264,69 @@ describe("wsStore", () => {
 		});
 	});
 
-	describe("send", () => {
-		it("sends JSON message when connected", async () => {
+	describe("RPC methods", () => {
+		it("sendMessage sends RPC request", async () => {
 			const wsActions = await getWsActions();
 
-			wsActions.connect();
-			getMockWs()?.simulateOpen();
-			getMockWs()?.simulateMessage({ type: "auth_response", success: true });
+			await connectAndAuth();
+			getMockWs()?.send.mockClear();
 
-			const result = wsActions.send({
-				type: "message",
-				content: "hello",
-				session_id: "test-session",
-			});
+			await wsActions.sendMessage("test-session", "hello");
 
-			expect(result).toBe(true);
-			expect(getMockWs()?.send).toHaveBeenCalledWith(
-				JSON.stringify({
-					type: "message",
-					content: "hello",
-					session_id: "test-session",
-				}),
-			);
-		});
-
-		it("returns false when not connected", async () => {
-			const wsActions = await getWsActions();
-
-			const result = wsActions.send({
-				type: "message",
-				content: "hello",
-				session_id: "test-session",
-			});
-
-			expect(result).toBe(false);
-		});
-
-		it("returns false when WebSocket not open", async () => {
-			const wsActions = await getWsActions();
-
-			wsActions.connect();
+			expect(getMockWs()?.send).toHaveBeenCalled();
 			const ws = getMockWs();
-			// Don't call simulateOpen - stays in connecting state
-			if (ws) {
-				ws.readyState = MockWebSocket.CLOSED;
-			}
-
-			const result = wsActions.send({
-				type: "message",
-				content: "hello",
+			const sentData = JSON.parse(ws?.send.mock.calls[0][0] ?? "{}");
+			expect(sentData.method).toBe("message");
+			expect(sentData.params).toEqual({
 				session_id: "test-session",
+				content: "hello",
 			});
+		});
 
-			expect(result).toBe(false);
+		it("attach returns result", async () => {
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+
+			const result = await wsActions.attach("test-session");
+
+			expect(result).toEqual({ process_running: false });
+		});
+
+		it("throws when not connected", async () => {
+			const wsActions = await getWsActions();
+
+			await expect(wsActions.sendMessage("test", "hello")).rejects.toThrow(
+				"Not connected",
+			);
 		});
 	});
 
-	describe("message handling", () => {
-		it("notifies message listeners on valid JSON", async () => {
+	describe("notification handling", () => {
+		it("notifies listeners on JSON-RPC notification", async () => {
 			const wsActions = await getWsActions();
 			const listener = vi.fn();
-			wsActions.subscribeMessage(listener);
+			wsActions.subscribeNotification(listener);
 
-			wsActions.connect();
-			getMockWs()?.simulateOpen();
-			getMockWs()?.simulateMessage({ type: "auth_response", success: true });
-			getMockWs()?.simulateMessage({ type: "text", content: "hello" });
+			await connectAndAuth();
+			getMockWs()?.simulateNotification("text", {
+				session_id: "test",
+				content: "hello",
+			});
 
-			expect(listener).toHaveBeenCalledWith({ type: "text", content: "hello" });
+			expect(listener).toHaveBeenCalledWith({
+				type: "text",
+				session_id: "test",
+				content: "hello",
+			});
 		});
 
 		it("handles invalid JSON gracefully", async () => {
 			const wsActions = await getWsActions();
 			const listener = vi.fn();
-			wsActions.subscribeMessage(listener);
+			wsActions.subscribeNotification(listener);
 
-			wsActions.connect();
-			getMockWs()?.simulateOpen();
-			getMockWs()?.simulateMessage({ type: "auth_response", success: true });
+			await connectAndAuth();
 
 			// Send raw invalid JSON
 			getMockWs()?.onmessage?.({ data: "not json" });
@@ -319,7 +349,7 @@ describe("wsStore", () => {
 			unsubscribe();
 
 			getMockWs()?.simulateOpen();
-			getMockWs()?.simulateMessage({ type: "auth_response", success: true });
+			await vi.runAllTimersAsync();
 			expect(listener).not.toHaveBeenCalled();
 		});
 
@@ -341,11 +371,7 @@ describe("wsStore", () => {
 
 	describe("auto-reconnect", () => {
 		it("reconnects up to 5 times on close", async () => {
-			const wsActions = await getWsActions();
-
-			wsActions.connect();
-			getMockWs()?.simulateOpen();
-			getMockWs()?.simulateMessage({ type: "auth_response", success: true });
+			await connectAndAuth();
 
 			// Trigger 5 reconnects
 			for (let i = 0; i < 5; i++) {

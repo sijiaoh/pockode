@@ -5,19 +5,20 @@ import {
 	replayHistory,
 } from "../lib/messageReducer";
 import { getHistory } from "../lib/sessionApi";
+import { useWSStore } from "../lib/wsStore";
 import type {
 	AssistantMessage,
 	Message,
+	PermissionResponseParams,
 	PermissionStatus,
+	QuestionResponseParams,
 	QuestionStatus,
+	ServerNotification,
 	UserMessage,
-	WSClientMessage,
-	WSServerMessage,
 } from "../types/message";
 import { generateUUID } from "../utils/uuid";
-import { type ConnectionStatus, useWebSocket } from "./useWebSocket";
 
-export type { ConnectionStatus };
+export type { ConnectionStatus } from "../lib/wsStore";
 
 interface UseChatMessagesOptions {
 	sessionId: string;
@@ -29,8 +30,10 @@ interface UseChatMessagesReturn {
 	isStreaming: boolean;
 	isProcessRunning: boolean;
 	status: ConnectionStatus;
-	send: (msg: WSClientMessage) => boolean;
-	sendUserMessage: (content: string) => boolean;
+	sendUserMessage: (content: string) => Promise<boolean>;
+	interrupt: () => Promise<void>;
+	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
+	questionResponse: (params: QuestionResponseParams) => Promise<void>;
 	updatePermissionStatus: (requestId: string, status: PermissionStatus) => void;
 	updateQuestionStatus: (
 		requestId: string,
@@ -38,6 +41,12 @@ interface UseChatMessagesReturn {
 		answers?: Record<string, string>,
 	) => void;
 }
+
+type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
+
+// Actions are stable references - get once at module level
+const { connect, attach, sendMessage, subscribeNotification } =
+	useWSStore.getState().actions;
 
 export function useChatMessages({
 	sessionId,
@@ -47,35 +56,41 @@ export function useChatMessages({
 	const [isProcessRunning, setIsProcessRunning] = useState(false);
 	const hasConnectedOnceRef = useRef(false);
 
-	const handleServerMessage = useCallback(
-		(serverMsg: WSServerMessage) => {
-			if (serverMsg.session_id && serverMsg.session_id !== sessionId) {
-				return;
-			}
+	const status = useWSStore((state) => state.status);
+	const actions = useWSStore((state) => state.actions);
 
-			if (serverMsg.type === "attach_response") {
-				setIsProcessRunning(serverMsg.process_running);
+	const handleNotification = useCallback(
+		(notification: ServerNotification) => {
+			if (notification.session_id !== sessionId) {
 				return;
 			}
 
 			// Update process running state
-			if (serverMsg.type === "process_ended") {
+			if (notification.type === "process_ended") {
 				setIsProcessRunning(false);
 			} else {
 				// Any event from process means it's running
 				setIsProcessRunning(true);
 			}
 
-			// ask_user_question and permission_request are now handled via messageReducer
-			const event = normalizeEvent(serverMsg);
+			const event = normalizeEvent(notification);
 			setMessages((prev) => applyServerEvent(prev, event));
 		},
 		[sessionId],
 	);
 
-	const { status, send } = useWebSocket({
-		onMessage: handleServerMessage,
-	});
+	// Subscribe to notifications
+	useEffect(() => {
+		return subscribeNotification(handleNotification);
+	}, [handleNotification]);
+
+	// Connect on mount (only once per app lifecycle)
+	useEffect(() => {
+		const currentStatus = useWSStore.getState().status;
+		if (currentStatus === "disconnected") {
+			connect();
+		}
+	}, []);
 
 	useEffect(() => {
 		setMessages([]);
@@ -101,7 +116,11 @@ export function useChatMessages({
 	// Attach to session when connected (enables receiving events without sending a message)
 	useEffect(() => {
 		if (status === "connected") {
-			send({ type: "attach", session_id: sessionId });
+			attach(sessionId)
+				.then((result) => {
+					setIsProcessRunning(result.process_running);
+				})
+				.catch((err) => console.error("Attach failed:", err));
 
 			// On reconnect, reload history to sync messages missed during disconnect
 			if (hasConnectedOnceRef.current) {
@@ -111,10 +130,10 @@ export function useChatMessages({
 			}
 			hasConnectedOnceRef.current = true;
 		}
-	}, [status, sessionId, send]);
+	}, [status, sessionId]);
 
-	const sendUserMessage = useCallback(
-		(content: string): boolean => {
+	const sendUserMessageHandler = useCallback(
+		async (content: string): Promise<boolean> => {
 			const userMessageId = generateUUID();
 			const assistantMessageId = generateUUID();
 
@@ -137,13 +156,11 @@ export function useChatMessages({
 
 			setMessages((prev) => [...prev, userMessage, assistantMessage]);
 
-			const sent = send({
-				type: "message",
-				content,
-				session_id: sessionId,
-			});
-
-			if (!sent) {
+			try {
+				await sendMessage(sessionId, content);
+				return true;
+			} catch (error) {
+				console.error("Failed to send message:", error);
 				setMessages((prev) =>
 					prev.map((m): Message => {
 						if (m.role === "assistant" && m.id === assistantMessageId) {
@@ -152,11 +169,10 @@ export function useChatMessages({
 						return m;
 					}),
 				);
+				return false;
 			}
-
-			return sent;
 		},
-		[send, sessionId],
+		[sessionId],
 	);
 
 	const updatePermissionStatus = useCallback(
@@ -224,8 +240,13 @@ export function useChatMessages({
 		isStreaming,
 		isProcessRunning,
 		status,
-		send,
-		sendUserMessage,
+		sendUserMessage: sendUserMessageHandler,
+		interrupt: useCallback(
+			() => actions.interrupt(sessionId),
+			[actions, sessionId],
+		),
+		permissionResponse: actions.permissionResponse,
+		questionResponse: actions.questionResponse,
 		updatePermissionStatus,
 		updateQuestionStatus,
 	};

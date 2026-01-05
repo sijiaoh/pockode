@@ -1,29 +1,63 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WSServerMessage } from "../../types/message";
+import type { ServerNotification } from "../../types/message";
 import ChatPanel from "./ChatPanel";
 
 // Mock scrollTo (not available in jsdom)
 Element.prototype.scrollTo = vi.fn();
 
-// Mock state - stored in module scope for vi.mock factory access
-const mockState = {
-	send: vi.fn(() => true),
-	onMessage: null as ((message: WSServerMessage) => void) | null,
+// Use vi.hoisted to ensure mockState is available when vi.mock factory runs
+const mockState = vi.hoisted(() => ({
+	sendMessage: vi.fn(() => Promise.resolve()),
+	interrupt: vi.fn(() => Promise.resolve()),
+	permissionResponse: vi.fn(() => Promise.resolve()),
+	questionResponse: vi.fn(() => Promise.resolve()),
+	attach: vi.fn(() => Promise.resolve({ process_running: false })),
+	onNotification: null as ((notification: ServerNotification) => void) | null,
 	uuidCounter: 0,
-};
-
-vi.mock("../../hooks/useWebSocket", () => ({
-	useWebSocket: (options: { onMessage: (msg: WSServerMessage) => void }) => {
-		mockState.onMessage = options.onMessage;
-		return {
-			status: "connected",
-			send: mockState.send,
-			disconnect: vi.fn(),
-		};
-	},
 }));
+
+vi.mock("../../lib/wsStore", () => {
+	const createMockActions = () => ({
+		connect: vi.fn(),
+		disconnect: vi.fn(),
+		attach: mockState.attach,
+		sendMessage: mockState.sendMessage,
+		interrupt: mockState.interrupt,
+		permissionResponse: mockState.permissionResponse,
+		questionResponse: mockState.questionResponse,
+		subscribeNotification: (
+			listener: (notification: ServerNotification) => void,
+		) => {
+			mockState.onNotification = listener;
+			return () => {
+				mockState.onNotification = null;
+			};
+		},
+	});
+
+	const mockStore = ((selector: (state: unknown) => unknown) => {
+		const state = {
+			status: "connected",
+			actions: createMockActions(),
+		};
+		return selector(state);
+	}) as unknown as {
+		(selector: (state: unknown) => unknown): unknown;
+		getState: () => {
+			status: string;
+			actions: ReturnType<typeof createMockActions>;
+		};
+	};
+
+	mockStore.getState = () => ({
+		status: "connected",
+		actions: createMockActions(),
+	});
+
+	return { useWSStore: mockStore };
+});
 
 vi.mock("../../utils/uuid", () => ({
 	generateUUID: () => `uuid-${++mockState.uuidCounter}`,
@@ -43,8 +77,8 @@ describe("ChatPanel", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mockState.send.mockReturnValue(true);
-		mockState.onMessage = null;
+		mockState.sendMessage.mockResolvedValue(undefined);
+		mockState.onNotification = null;
 		mockState.uuidCounter = 0;
 		mockGetHistory.mockResolvedValue([]);
 	});
@@ -57,7 +91,7 @@ describe("ChatPanel", () => {
 	};
 
 	describe("sending messages", () => {
-		it("sends message to WebSocket with session_id", async () => {
+		it("sends message via RPC with session_id and content", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -66,11 +100,10 @@ describe("ChatPanel", () => {
 			await user.type(textarea, "Hello AI");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
-			expect(mockState.send).toHaveBeenCalledWith({
-				type: "message",
-				content: "Hello AI",
-				session_id: "test-session",
-			});
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"Hello AI",
+			);
 			expect(screen.getByText("Hello AI")).toBeInTheDocument();
 		});
 
@@ -94,8 +127,7 @@ describe("ChatPanel", () => {
 		});
 
 		it("shows error when send fails", async () => {
-			// First call is attach (returns true), second is user message (fails)
-			mockState.send.mockReturnValueOnce(true).mockReturnValueOnce(false);
+			mockState.sendMessage.mockRejectedValueOnce(new Error("Network error"));
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -104,7 +136,9 @@ describe("ChatPanel", () => {
 			await user.type(textarea, "Hello");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
-			expect(screen.getByText("Failed to send message")).toBeInTheDocument();
+			await waitFor(() => {
+				expect(screen.getByText("Failed to send message")).toBeInTheDocument();
+			});
 		});
 	});
 
@@ -119,8 +153,16 @@ describe("ChatPanel", () => {
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
 			act(() => {
-				mockState.onMessage?.({ type: "text", content: "Hello " });
-				mockState.onMessage?.({ type: "text", content: "there!" });
+				mockState.onNotification?.({
+					type: "text",
+					session_id: "test-session",
+					content: "Hello ",
+				});
+				mockState.onNotification?.({
+					type: "text",
+					session_id: "test-session",
+					content: "there!",
+				});
 			});
 
 			expect(screen.getByText("Hello there!")).toBeInTheDocument();
@@ -136,14 +178,16 @@ describe("ChatPanel", () => {
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
 			act(() => {
-				mockState.onMessage?.({
+				mockState.onNotification?.({
 					type: "tool_call",
+					session_id: "test-session",
 					tool_name: "Bash",
 					tool_input: { command: "ls" },
 					tool_use_id: "tool-1",
 				});
-				mockState.onMessage?.({
+				mockState.onNotification?.({
 					type: "tool_result",
+					session_id: "test-session",
 					tool_use_id: "tool-1",
 					tool_result: "file1.txt",
 				});
@@ -165,7 +209,11 @@ describe("ChatPanel", () => {
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
 			act(() => {
-				mockState.onMessage?.({ type: "error", error: "Something went wrong" });
+				mockState.onNotification?.({
+					type: "error",
+					session_id: "test-session",
+					error: "Something went wrong",
+				});
 			});
 
 			expect(screen.getByText("Something went wrong")).toBeInTheDocument();
@@ -179,8 +227,9 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			act(() => {
-				mockState.onMessage?.({
+				mockState.onNotification?.({
 					type: "permission_request",
+					session_id: "test-session",
 					request_id: "req-1",
 					tool_name: "Bash",
 					tool_input: { command: "rm -rf /" },
@@ -194,8 +243,7 @@ describe("ChatPanel", () => {
 
 			await user.click(screen.getByRole("button", { name: "Allow" }));
 
-			expect(mockState.send).toHaveBeenCalledWith({
-				type: "permission_response",
+			expect(mockState.permissionResponse).toHaveBeenCalledWith({
 				session_id: "test-session",
 				request_id: "req-1",
 				tool_use_id: "tool-1",
@@ -211,8 +259,9 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			act(() => {
-				mockState.onMessage?.({
+				mockState.onNotification?.({
 					type: "permission_request",
+					session_id: "test-session",
 					request_id: "req-2",
 					tool_name: "Edit",
 					tool_input: { file_path: "/etc/passwd" },
@@ -223,8 +272,7 @@ describe("ChatPanel", () => {
 			expect(screen.getByText("Edit")).toBeInTheDocument();
 			await user.click(screen.getByRole("button", { name: "Deny" }));
 
-			expect(mockState.send).toHaveBeenCalledWith({
-				type: "permission_response",
+			expect(mockState.permissionResponse).toHaveBeenCalledWith({
 				session_id: "test-session",
 				request_id: "req-2",
 				tool_use_id: "tool-2",
@@ -247,20 +295,17 @@ describe("ChatPanel", () => {
 
 			// Simulate receiving text to set isProcessRunning=true (which enables isStreaming)
 			act(() => {
-				mockState.onMessage?.({
+				mockState.onNotification?.({
 					type: "text",
 					session_id: "test-session",
 					content: "Hello",
 				});
 			});
-			mockState.send.mockClear();
+			mockState.interrupt.mockClear();
 
 			await user.click(screen.getByRole("button", { name: /Stop/ }));
 
-			expect(mockState.send).toHaveBeenCalledWith({
-				type: "interrupt",
-				session_id: "test-session",
-			});
+			expect(mockState.interrupt).toHaveBeenCalledWith("test-session");
 		});
 
 		it("sends interrupt when Escape pressed during streaming", async () => {
@@ -274,21 +319,18 @@ describe("ChatPanel", () => {
 
 			// Simulate receiving text to set isProcessRunning=true (which enables isStreaming)
 			act(() => {
-				mockState.onMessage?.({
+				mockState.onNotification?.({
 					type: "text",
 					session_id: "test-session",
 					content: "Hello",
 				});
 			});
-			mockState.send.mockClear();
+			mockState.interrupt.mockClear();
 
 			// Press Escape while streaming
 			await user.keyboard("{Escape}");
 
-			expect(mockState.send).toHaveBeenCalledWith({
-				type: "interrupt",
-				session_id: "test-session",
-			});
+			expect(mockState.interrupt).toHaveBeenCalledWith("test-session");
 		});
 	});
 
@@ -299,8 +341,9 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			act(() => {
-				mockState.onMessage?.({
+				mockState.onNotification?.({
 					type: "ask_user_question",
+					session_id: "test-session",
 					request_id: "q-1",
 					tool_use_id: "toolu_q_1",
 					questions: [
@@ -326,8 +369,7 @@ describe("ChatPanel", () => {
 			await user.click(screen.getByText("React"));
 			await user.click(screen.getByRole("button", { name: /Submit/i }));
 
-			expect(mockState.send).toHaveBeenCalledWith({
-				type: "question_response",
+			expect(mockState.questionResponse).toHaveBeenCalledWith({
 				session_id: "test-session",
 				request_id: "q-1",
 				tool_use_id: "toolu_q_1",

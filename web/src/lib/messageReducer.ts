@@ -5,8 +5,8 @@ import type {
 	Message,
 	PermissionUpdate,
 	QuestionStatus,
+	ServerNotification,
 	UserMessage,
-	WSServerMessage,
 } from "../types/message";
 import { generateUUID } from "../utils/uuid";
 
@@ -57,7 +57,7 @@ export type NormalizedEvent =
 
 // Convert snake_case server event to camelCase
 export function normalizeEvent(
-	e: WSServerMessage | Record<string, unknown>,
+	e: ServerNotification | Record<string, unknown>,
 ): NormalizedEvent {
 	const record = e as Record<string, unknown>;
 	const type = record.type as string;

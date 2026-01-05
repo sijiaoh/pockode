@@ -48,8 +48,10 @@ function ChatPanel({
 		isStreaming,
 		isProcessRunning,
 		status,
-		send,
 		sendUserMessage,
+		interrupt,
+		permissionResponse,
+		questionResponse,
 		updatePermissionStatus,
 		updateQuestionStatus,
 	} = useChatMessages({
@@ -84,8 +86,7 @@ function ChatPanel({
 
 	const handlePermissionRespond = useCallback(
 		(request: PermissionRequest, choice: "deny" | "allow" | "always_allow") => {
-			send({
-				type: "permission_response",
+			permissionResponse({
 				session_id: sessionId,
 				request_id: request.requestId,
 				tool_use_id: request.toolUseId,
@@ -98,7 +99,7 @@ function ChatPanel({
 			const newStatus = choice === "deny" ? "denied" : "allowed";
 			updatePermissionStatus(request.requestId, newStatus);
 		},
-		[send, sessionId, updatePermissionStatus],
+		[permissionResponse, sessionId, updatePermissionStatus],
 	);
 
 	const handleQuestionRespond = useCallback(
@@ -106,8 +107,7 @@ function ChatPanel({
 			request: AskUserQuestionRequest,
 			answers: Record<string, string> | null,
 		) => {
-			send({
-				type: "question_response",
+			questionResponse({
 				session_id: sessionId,
 				request_id: request.requestId,
 				tool_use_id: request.toolUseId,
@@ -118,15 +118,12 @@ function ChatPanel({
 			const newStatus = answers === null ? "cancelled" : "answered";
 			updateQuestionStatus(request.requestId, newStatus, answers ?? undefined);
 		},
-		[send, sessionId, updateQuestionStatus],
+		[questionResponse, sessionId, updateQuestionStatus],
 	);
 
 	const handleInterrupt = useCallback(() => {
-		send({
-			type: "interrupt",
-			session_id: sessionId,
-		});
-	}, [send, sessionId]);
+		interrupt();
+	}, [interrupt]);
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {

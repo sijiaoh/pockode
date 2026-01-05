@@ -143,90 +143,153 @@ export interface AskUserQuestionRequest {
 	questions: AskUserQuestion[];
 }
 
-// WebSocket client message
-export type WSClientMessage =
-	| {
-			type: "auth";
-			token: string;
-	  }
-	| {
-			type: "attach";
-			session_id: string;
-	  }
-	| {
-			type: "message";
-			content: string;
-			session_id: string;
-	  }
-	| {
-			type: "interrupt";
-			session_id: string;
-	  }
-	| {
-			type: "permission_response";
-			session_id: string;
-			request_id: string;
-			tool_use_id: string;
-			tool_input: unknown;
-			permission_suggestions?: PermissionUpdate[];
-			choice: "deny" | "allow" | "always_allow";
-	  }
-	| {
-			type: "question_response";
-			session_id: string;
-			request_id: string;
-			tool_use_id: string;
-			answers: Record<string, string> | null; // null = cancel
-	  };
+// JSON-RPC 2.0 Request Params (Client → Server)
 
-// Base interface for all server messages
-interface WSServerMessageBase {
-	session_id?: string;
+export interface AuthParams {
+	token: string;
 }
 
-// WebSocket server message
-export type WSServerMessage =
-	| (WSServerMessageBase & { type: "text"; content: string })
-	| (WSServerMessageBase & {
+export interface AttachParams {
+	session_id: string;
+}
+
+export interface AttachResult {
+	process_running: boolean;
+}
+
+export interface MessageParams {
+	session_id: string;
+	content: string;
+}
+
+export interface InterruptParams {
+	session_id: string;
+}
+
+export interface PermissionResponseParams {
+	session_id: string;
+	request_id: string;
+	tool_use_id: string;
+	tool_input: unknown;
+	permission_suggestions?: PermissionUpdate[];
+	choice: "deny" | "allow" | "always_allow";
+}
+
+export interface QuestionResponseParams {
+	session_id: string;
+	request_id: string;
+	tool_use_id: string;
+	answers: Record<string, string> | null; // null = cancel
+}
+
+// JSON-RPC 2.0 Notification Params (Server → Client)
+
+export interface TextNotification {
+	session_id: string;
+	content: string;
+}
+
+export interface ToolCallNotification {
+	session_id: string;
+	tool_name: string;
+	tool_input: unknown;
+	tool_use_id: string;
+}
+
+export interface ToolResultNotification {
+	session_id: string;
+	tool_use_id: string;
+	tool_result: string;
+}
+
+export interface ErrorNotification {
+	session_id: string;
+	error: string;
+}
+
+export interface SessionNotification {
+	session_id: string;
+}
+
+export interface PermissionRequestNotification {
+	session_id: string;
+	request_id: string;
+	tool_name: string;
+	tool_input: unknown;
+	tool_use_id: string;
+	permission_suggestions?: PermissionUpdate[];
+}
+
+export interface AskUserQuestionNotification {
+	session_id: string;
+	request_id: string;
+	tool_use_id: string;
+	questions: AskUserQuestion[];
+}
+
+export interface RequestCancelledNotification {
+	session_id: string;
+	request_id: string;
+}
+
+export interface SystemNotification {
+	session_id: string;
+	content: string;
+}
+
+// Server notification method names
+export type ServerMethod =
+	| "text"
+	| "tool_call"
+	| "tool_result"
+	| "error"
+	| "done"
+	| "interrupted"
+	| "process_ended"
+	| "permission_request"
+	| "ask_user_question"
+	| "request_cancelled"
+	| "system";
+
+// Internal representation with type field for UI compatibility
+export type ServerNotification =
+	| { type: "text"; session_id: string; content: string }
+	| {
 			type: "tool_call";
+			session_id: string;
 			tool_name: string;
 			tool_input: unknown;
 			tool_use_id: string;
-	  })
-	| (WSServerMessageBase & {
+	  }
+	| {
 			type: "tool_result";
+			session_id: string;
 			tool_use_id: string;
 			tool_result: string;
-	  })
-	| (WSServerMessageBase & { type: "error"; error: string })
-	| (WSServerMessageBase & { type: "done" })
-	| (WSServerMessageBase & { type: "interrupted" })
-	| (WSServerMessageBase & { type: "process_ended" })
-	| (WSServerMessageBase & {
+	  }
+	| { type: "error"; session_id: string; error: string }
+	| { type: "done"; session_id: string }
+	| { type: "interrupted"; session_id: string }
+	| { type: "process_ended"; session_id: string }
+	| {
 			type: "permission_request";
+			session_id: string;
 			request_id: string;
 			tool_name: string;
 			tool_input: unknown;
 			tool_use_id: string;
 			permission_suggestions?: PermissionUpdate[];
-	  })
-	| (WSServerMessageBase & {
+	  }
+	| {
 			type: "ask_user_question";
+			session_id: string;
 			request_id: string;
 			tool_use_id: string;
 			questions: AskUserQuestion[];
-	  })
-	| (WSServerMessageBase & {
+	  }
+	| {
 			type: "request_cancelled";
+			session_id: string;
 			request_id: string;
-	  })
-	| (WSServerMessageBase & { type: "system"; content: string })
-	| (WSServerMessageBase & {
-			type: "attach_response";
-			process_running: boolean;
-	  })
-	| (WSServerMessageBase & {
-			type: "auth_response";
-			success: boolean;
-			error?: string;
-	  });
+	  }
+	| { type: "system"; session_id: string; content: string };

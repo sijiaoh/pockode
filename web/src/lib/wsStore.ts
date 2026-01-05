@@ -1,5 +1,16 @@
+import { JSONRPCClient } from "json-rpc-2.0";
 import { create } from "zustand";
-import type { WSClientMessage, WSServerMessage } from "../types/message";
+import type {
+	AttachParams,
+	AttachResult,
+	AuthParams,
+	InterruptParams,
+	MessageParams,
+	PermissionResponseParams,
+	QuestionResponseParams,
+	ServerMethod,
+	ServerNotification,
+} from "../types/message";
 import { getWebSocketUrl } from "../utils/config";
 import { authActions } from "./authStore";
 import { unreadActions } from "./unreadStore";
@@ -7,13 +18,11 @@ import { unreadActions } from "./unreadStore";
 // Events that should NOT trigger unread notifications.
 // These are either streaming events (continuous output) or control messages.
 // Any new event type not listed here will trigger unread by default (safe fallback).
-const SILENT_EVENTS = new Set<WSServerMessage["type"]>([
+const SILENT_EVENTS = new Set<ServerMethod>([
 	"text",
 	"tool_call",
 	"tool_result",
 	"system",
-	"attach_response",
-	"auth_response",
 ]);
 
 export type ConnectionStatus =
@@ -22,29 +31,65 @@ export type ConnectionStatus =
 	| "disconnected"
 	| "error";
 
-type MessageListener = (message: WSServerMessage) => void;
+type NotificationListener = (notification: ServerNotification) => void;
 
-interface WSActions {
+interface RPCActions {
 	connect: () => void;
 	disconnect: () => void;
-	send: (message: WSClientMessage) => boolean;
-	subscribeMessage: (listener: MessageListener) => () => void;
+	attach: (sessionId: string) => Promise<AttachResult>;
+	sendMessage: (sessionId: string, content: string) => Promise<void>;
+	interrupt: (sessionId: string) => Promise<void>;
+	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
+	questionResponse: (params: QuestionResponseParams) => Promise<void>;
+	subscribeNotification: (listener: NotificationListener) => () => void;
 }
 
 interface WSState {
 	status: ConnectionStatus;
-	actions: WSActions;
+	actions: RPCActions;
 }
 
 // Module-level state for mutable objects (not reactive)
 let ws: WebSocket | null = null;
+let rpcClient: JSONRPCClient | null = null;
 let reconnectAttempts = 0;
 let reconnectTimeout: number | undefined;
 let authFailed = false;
-const messageListeners = new Set<MessageListener>();
+const notificationListeners = new Set<NotificationListener>();
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_INTERVAL = 3000;
+
+function createRPCClient(socket: WebSocket): JSONRPCClient {
+	return new JSONRPCClient((request) => {
+		if (socket.readyState === WebSocket.OPEN) {
+			socket.send(JSON.stringify(request));
+		} else {
+			return Promise.reject(new Error("WebSocket is not connected"));
+		}
+	});
+}
+
+function handleNotification(method: string, params: unknown): void {
+	const notification = {
+		type: method,
+		...(params as object),
+	} as ServerNotification;
+
+	// Mark session as unread if not currently viewing it
+	const sessionId = notification.session_id;
+	if (
+		sessionId &&
+		!unreadActions.isViewing(sessionId) &&
+		!SILENT_EVENTS.has(method as ServerMethod)
+	) {
+		unreadActions.markUnread(sessionId);
+	}
+
+	for (const listener of notificationListeners) {
+		listener(notification);
+	}
+}
 
 export const useWSStore = create<WSState>((set, get) => ({
 	status: "disconnected",
@@ -61,6 +106,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 			if (ws) {
 				ws.close();
 				ws = null;
+				rpcClient = null;
 			}
 
 			set({ status: "connecting" });
@@ -69,39 +115,35 @@ export const useWSStore = create<WSState>((set, get) => ({
 			const url = getWebSocketUrl();
 			const socket = new WebSocket(url);
 
-			socket.onopen = () => {
-				socket.send(JSON.stringify({ type: "auth", token }));
+			socket.onopen = async () => {
+				const client = createRPCClient(socket);
+				rpcClient = client;
+
+				try {
+					await client.request("auth", { token } as AuthParams);
+					set({ status: "connected" });
+					reconnectAttempts = 0;
+				} catch (error) {
+					console.error("WebSocket auth failed:", error);
+					authFailed = true;
+					set({ status: "error" });
+					socket.close();
+				}
 			};
 
 			socket.onmessage = (event) => {
 				try {
-					const data = JSON.parse(event.data) as WSServerMessage;
+					const data = JSON.parse(event.data);
 
-					if (data.type === "auth_response") {
-						if (data.success) {
-							set({ status: "connected" });
-							reconnectAttempts = 0;
-						} else {
-							console.error("WebSocket auth failed:", data.error);
-							authFailed = true;
-							set({ status: "error" });
-							socket.close();
-						}
+					// JSON-RPC 2.0 response (has id)
+					if ("id" in data && data.id !== null) {
+						rpcClient?.receive(data);
 						return;
 					}
 
-					// Mark session as unread if not currently viewing it
-					const messageSessionId = data.session_id;
-					if (
-						messageSessionId &&
-						!unreadActions.isViewing(messageSessionId) &&
-						!SILENT_EVENTS.has(data.type)
-					) {
-						unreadActions.markUnread(messageSessionId);
-					}
-
-					for (const listener of messageListeners) {
-						listener(data);
+					// JSON-RPC 2.0 notification (no id, has method)
+					if ("method" in data) {
+						handleNotification(data.method, data.params);
 					}
 				} catch (e) {
 					console.warn("Failed to parse WebSocket message:", event.data, e);
@@ -114,18 +156,20 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 			socket.onclose = () => {
 				ws = null;
+				rpcClient = null;
 
 				if (authFailed) {
 					return;
 				}
 
-				set({ status: "disconnected" });
-
 				if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+					set({ status: "disconnected" });
 					reconnectAttempts += 1;
 					reconnectTimeout = window.setTimeout(() => {
 						get().actions.connect();
 					}, RECONNECT_INTERVAL);
+				} else {
+					set({ status: "error" });
 				}
 			};
 
@@ -141,23 +185,59 @@ export const useWSStore = create<WSState>((set, get) => ({
 			if (ws) {
 				ws.close();
 				ws = null;
+				rpcClient = null;
 			}
 			set({ status: "disconnected" });
 		},
 
-		send: (message) => {
-			if (ws?.readyState === WebSocket.OPEN) {
-				ws.send(JSON.stringify(message));
-				return true;
+		attach: async (sessionId: string): Promise<AttachResult> => {
+			if (!rpcClient) {
+				throw new Error("Not connected");
 			}
-			console.warn("WebSocket is not connected, message not sent:", message);
-			return false;
+			return rpcClient.request("attach", {
+				session_id: sessionId,
+			} as AttachParams);
 		},
 
-		subscribeMessage: (listener) => {
-			messageListeners.add(listener);
+		sendMessage: async (sessionId: string, content: string): Promise<void> => {
+			if (!rpcClient) {
+				throw new Error("Not connected");
+			}
+			await rpcClient.request("message", {
+				session_id: sessionId,
+				content,
+			} as MessageParams);
+		},
+
+		interrupt: async (sessionId: string): Promise<void> => {
+			if (!rpcClient) {
+				throw new Error("Not connected");
+			}
+			await rpcClient.request("interrupt", {
+				session_id: sessionId,
+			} as InterruptParams);
+		},
+
+		permissionResponse: async (
+			params: PermissionResponseParams,
+		): Promise<void> => {
+			if (!rpcClient) {
+				throw new Error("Not connected");
+			}
+			await rpcClient.request("permission_response", params);
+		},
+
+		questionResponse: async (params: QuestionResponseParams): Promise<void> => {
+			if (!rpcClient) {
+				throw new Error("Not connected");
+			}
+			await rpcClient.request("question_response", params);
+		},
+
+		subscribeNotification: (listener: NotificationListener) => {
+			notificationListeners.add(listener);
 			return () => {
-				messageListeners.delete(listener);
+				notificationListeners.delete(listener);
 			};
 		},
 	},
@@ -172,12 +252,13 @@ export function resetWSStore() {
 		ws.close();
 		ws = null;
 	}
+	rpcClient = null;
 	if (reconnectTimeout) {
 		clearTimeout(reconnectTimeout);
 		reconnectTimeout = undefined;
 	}
 	reconnectAttempts = 0;
 	authFailed = false;
-	messageListeners.clear();
+	notificationListeners.clear();
 	useWSStore.setState({ status: "disconnected" });
 }
