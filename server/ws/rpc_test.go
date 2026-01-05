@@ -141,6 +141,19 @@ func (e *testEnv) readNotification() rpcNotification {
 	return notif
 }
 
+func (e *testEnv) readEvent() rpc.EventParams {
+	notif := e.readNotification()
+	if notif.Method != "chat.event" {
+		e.t.Fatalf("expected method 'chat.event', got %q", notif.Method)
+	}
+
+	var params rpc.EventParams
+	if err := json.Unmarshal(notif.Params, &params); err != nil {
+		e.t.Fatalf("failed to unmarshal event params: %v", err)
+	}
+	return params
+}
+
 func (e *testEnv) attach(sessionID string) {
 	resp := e.call("chat.attach", rpc.AttachParams{SessionID: sessionID})
 	if resp.Error != nil {
@@ -328,15 +341,14 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 	env.attach("sess")
 	env.sendMessage("sess", "Hello AI")
 
-	// Read notifications
-	notif1 := env.readNotification()
-	notif2 := env.readNotification()
+	event1 := env.readEvent()
+	event2 := env.readEvent()
 
-	if notif1.Method != "chat.text" {
-		t.Errorf("expected method 'chat.text', got %q", notif1.Method)
+	if event1.Type != "text" {
+		t.Errorf("expected type 'text', got %q", event1.Type)
 	}
-	if notif2.Method != "chat.done" {
-		t.Errorf("expected method 'chat.done', got %q", notif2.Method)
+	if event2.Type != "done" {
+		t.Errorf("expected type 'done', got %q", event2.Type)
 	}
 }
 
@@ -385,22 +397,16 @@ func TestHandler_PermissionRequest(t *testing.T) {
 
 	env.attach("sess")
 	env.sendMessage("sess", "run ls")
-	notif := env.readNotification()
+	event := env.readEvent()
 
-	if notif.Method != "chat.permission_request" {
-		t.Errorf("expected method 'chat.permission_request', got %q", notif.Method)
+	if event.Type != "permission_request" {
+		t.Errorf("expected type 'permission_request', got %q", event.Type)
 	}
-
-	var params rpc.PermissionRequestParams
-	if err := json.Unmarshal(notif.Params, &params); err != nil {
-		t.Fatalf("failed to unmarshal params: %v", err)
+	if event.RequestID != "req-123" {
+		t.Errorf("expected request_id 'req-123', got %q", event.RequestID)
 	}
-
-	if params.RequestID != "req-123" {
-		t.Errorf("expected request_id 'req-123', got %q", params.RequestID)
-	}
-	if params.ToolName != "Bash" {
-		t.Errorf("expected tool_name 'Bash', got %q", params.ToolName)
+	if event.ToolName != "Bash" {
+		t.Errorf("expected tool_name 'Bash', got %q", event.ToolName)
 	}
 }
 
@@ -527,25 +533,19 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 
 	env.attach("sess")
 	env.sendMessage("sess", "ask me")
-	notif := env.readNotification()
+	event := env.readEvent()
 
-	if notif.Method != "chat.ask_user_question" {
-		t.Errorf("expected method 'chat.ask_user_question', got %q", notif.Method)
+	if event.Type != "ask_user_question" {
+		t.Errorf("expected type 'ask_user_question', got %q", event.Type)
 	}
-
-	var params rpc.AskUserQuestionParams
-	if err := json.Unmarshal(notif.Params, &params); err != nil {
-		t.Fatalf("failed to unmarshal params: %v", err)
+	if event.RequestID != "req-q-123" {
+		t.Errorf("expected request_id 'req-q-123', got %q", event.RequestID)
 	}
-
-	if params.RequestID != "req-q-123" {
-		t.Errorf("expected request_id 'req-q-123', got %q", params.RequestID)
+	if len(event.Questions) != 1 {
+		t.Errorf("expected 1 question, got %d", len(event.Questions))
 	}
-	if len(params.Questions) != 1 {
-		t.Errorf("expected 1 question, got %d", len(params.Questions))
-	}
-	if params.Questions[0].Question != "Which library?" {
-		t.Errorf("expected question 'Which library?', got %q", params.Questions[0].Question)
+	if event.Questions[0].Question != "Which library?" {
+		t.Errorf("expected question 'Which library?', got %q", event.Questions[0].Question)
 	}
 }
 
