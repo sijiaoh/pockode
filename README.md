@@ -32,15 +32,14 @@ No more fat-finger typos. No more hunting for that semicolon. Just conversations
 ## Quick Start
 
 ```bash
-# Download and install
-sudo curl -fsSL https://github.com/sijiaoh/pockode/releases/latest/download/pockode-$(uname -s)-$(uname -m) -o /usr/local/bin/pockode
-sudo chmod +x /usr/local/bin/pockode
+# Install
+curl -fsSL https://pockode.com/install.sh | sh
 
-# Run it
-pockode
+# Run
+pockode -relay -auth-token YOUR_PASSWORD
 ```
 
-That's it. Open the URL on your phone and start coding.
+Scan the QR code on your phone. That's it.
 
 ## Roadmap
 

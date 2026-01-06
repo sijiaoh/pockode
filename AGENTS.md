@@ -14,7 +14,6 @@ Pockode 是一个移动端编程平台，核心理念是「AI 编辑为主，手
 | 后端    | Go                         |
 | 通信    | WebSocket JSON-RPC 2.0（[設計](docs/websocket-rpc-design.md)） |
 | AI 调用 | CLI 子进程（非 SDK 绑定）  |
-| 部署    | CloudFront (前端) + EC2 Docker (后端) |
 
 ## 项目结构
 
@@ -28,10 +27,10 @@ pockode/
 ## 架构概览
 
 ```
-CloudFront (React SPA)
+React SPA (前端)
         │ WebSocket
         ▼
-   EC2 Docker (Go 服务)
+   Go 服务 (后端)
         │ spawn + stream-json
         ▼
    AI CLI (claude / gemini / ...)

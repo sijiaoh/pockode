@@ -1,0 +1,25 @@
+{{ define "main" }}
+<div class="grain"></div>
+
+<nav class="nav">
+  <a href="/" class="nav-logo">Pockode</a>
+  <a href="{{ .Site.Params.github }}" class="nav-link" target="_blank" rel="noopener">GitHub</a>
+</nav>
+
+<article class="page">
+  <h1>{{ .Title }}</h1>
+  <div class="page-content">
+    {{ .Content }}
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="footer-links">
+    <a href="{{ .Site.Params.github }}" target="_blank" rel="noopener">GitHub</a>
+    <a href="{{ .Site.Params.github }}/issues" target="_blank" rel="noopener">Issues</a>
+    <a href="{{ .Site.Params.github }}/blob/main/LICENSE.md" target="_blank" rel="noopener">License</a>
+    <a href="/privacy">Privacy</a>
+  </div>
+  <p class="footer-copy">Pockode is open source under the O'Saasy License.</p>
+</footer>
+{{ end }}
