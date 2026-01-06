@@ -201,8 +201,13 @@ type GitStatus struct {
 }
 
 // Status returns the current git status (staged and unstaged files).
+// It recursively includes changes from submodules with prefixed paths.
 func Status(dir string) (*GitStatus, error) {
-	cmd := exec.Command("git", "status", "--porcelain=v1", "-uall")
+	return statusRecursive(dir, "")
+}
+
+func statusRecursive(dir, prefix string) (*GitStatus, error) {
+	cmd := exec.Command("git", "status", "--porcelain=v1", "-uall", "--ignore-submodules=none")
 	cmd.Dir = dir
 	output, err := cmd.Output()
 	if err != nil {
@@ -214,61 +219,109 @@ func Status(dir string) (*GitStatus, error) {
 		Unstaged: []FileStatus{},
 	}
 
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
+	submodules := getSubmodulePaths(dir)
+
+	for _, line := range strings.Split(string(output), "\n") {
 		if len(line) < 3 {
 			continue
 		}
 
 		// Porcelain v1: XY PATH where X=staged, Y=unstaged
-		staged := line[0]
-		unstaged := line[1]
+		stagedStatus := line[0]
+		unstagedStatus := line[1]
 		path := strings.TrimSpace(line[3:])
 
-		if strings.Contains(path, " -> ") {
-			parts := strings.Split(path, " -> ")
-			path = parts[len(parts)-1]
+		// Handle renames: "old -> new"
+		if idx := strings.Index(path, " -> "); idx != -1 {
+			path = path[idx+4:]
 		}
 
-		if staged != ' ' && staged != '?' {
-			result.Staged = append(result.Staged, FileStatus{
-				Path:   path,
-				Status: string(staged),
-			})
+		fullPath := joinPath(prefix, path)
+
+		// Recurse into submodules
+		if contains(submodules, path) {
+			subStatus, err := statusRecursive(filepath.Join(dir, path), fullPath)
+			if err != nil {
+				slog.Warn("failed to get submodule status", "submodule", path, "error", err)
+				continue
+			}
+			result.Staged = append(result.Staged, subStatus.Staged...)
+			result.Unstaged = append(result.Unstaged, subStatus.Unstaged...)
+			continue
 		}
 
-		if unstaged != ' ' {
-			result.Unstaged = append(result.Unstaged, FileStatus{
-				Path:   path,
-				Status: string(unstaged),
-			})
+		if stagedStatus != ' ' && stagedStatus != '?' {
+			result.Staged = append(result.Staged, FileStatus{Path: fullPath, Status: string(stagedStatus)})
+		}
+		if unstagedStatus != ' ' {
+			result.Unstaged = append(result.Unstaged, FileStatus{Path: fullPath, Status: string(unstagedStatus)})
 		}
 	}
 
 	return result, nil
 }
 
+func joinPath(prefix, path string) string {
+	if prefix == "" {
+		return path
+	}
+	return prefix + "/" + path
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func getSubmodulePaths(dir string) []string {
+	cmd := exec.Command("git", "config", "--file", ".gitmodules", "--get-regexp", "path")
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	var paths []string
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		// Format: "submodule.<name>.path <path>"
+		parts := strings.Fields(line)
+		if len(parts) >= 2 {
+			paths = append(paths, parts[1])
+		}
+	}
+	return paths
+}
+
 // Diff returns the unified diff for a specific file.
 // If staged is true, returns diff of staged changes (index vs HEAD).
 // If staged is false, returns diff of unstaged changes (worktree vs index).
+// For submodule paths (e.g., "submodule/path/to/file"), it runs diff inside the submodule.
 func Diff(dir, path string, staged bool) (string, error) {
+	// Resolve submodule path if needed
+	actualDir, relativePath := resolveSubmodulePath(dir, path)
+
 	var args []string
 	if staged {
-		args = []string{"diff", "--cached", "--", path}
+		args = []string{"diff", "--cached", "--", relativePath}
 	} else {
-		args = []string{"diff", "--", path}
+		args = []string{"diff", "--", relativePath}
 	}
 
 	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	cmd.Dir = actualDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		fullPath := filepath.Join(dir, path)
+		fullPath := filepath.Join(actualDir, relativePath)
 		if _, statErr := os.Stat(fullPath); os.IsNotExist(statErr) {
 			return "", fmt.Errorf("file not found: %s", path)
 		}
 		if !staged {
-			untrackedDiff, untrackedErr := showUntrackedFile(dir, path)
+			untrackedDiff, untrackedErr := showUntrackedFile(actualDir, relativePath)
 			if untrackedErr == nil {
 				return untrackedDiff, nil
 			}
@@ -277,10 +330,26 @@ func Diff(dir, path string, staged bool) (string, error) {
 	}
 
 	if len(output) == 0 && !staged {
-		return showUntrackedFile(dir, path)
+		return showUntrackedFile(actualDir, relativePath)
 	}
 
 	return string(output), nil
+}
+
+// resolveSubmodulePath resolves "submodule/path/to/file" to (dir/submodule, "path/to/file").
+func resolveSubmodulePath(dir, path string) (string, string) {
+	submodules := getSubmodulePaths(dir)
+
+	for _, sub := range submodules {
+		prefix := sub + "/"
+		if strings.HasPrefix(path, prefix) {
+			subDir := filepath.Join(dir, sub)
+			relativePath := strings.TrimPrefix(path, prefix)
+			return subDir, relativePath
+		}
+	}
+
+	return dir, path
 }
 
 // showUntrackedFile generates a diff-like output for untracked files.
@@ -334,20 +403,24 @@ type DiffResult struct {
 // DiffWithContent returns the unified diff along with old and new file contents.
 // For staged changes: old = HEAD, new = index
 // For unstaged changes: old = index, new = worktree
+// Supports submodule paths (e.g., "submodule/path/to/file").
 func DiffWithContent(dir, path string, staged bool) (*DiffResult, error) {
 	diff, err := Diff(dir, path, staged)
 	if err != nil {
 		return nil, err
 	}
 
+	// Resolve submodule path for content retrieval
+	actualDir, relativePath := resolveSubmodulePath(dir, path)
+
 	var oldContent, newContent string
 
 	if staged {
-		oldContent, _ = getFileFromRef(dir, "HEAD", path)
-		newContent, _ = getFileFromIndex(dir, path)
+		oldContent, _ = getFileFromRef(actualDir, "HEAD", relativePath)
+		newContent, _ = getFileFromIndex(actualDir, relativePath)
 	} else {
-		oldContent, _ = getFileFromIndex(dir, path)
-		newContent, _ = getFileFromWorktree(dir, path)
+		oldContent, _ = getFileFromIndex(actualDir, relativePath)
+		newContent, _ = getFileFromWorktree(actualDir, relativePath)
 	}
 
 	return &DiffResult{
