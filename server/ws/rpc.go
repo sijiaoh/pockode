@@ -48,21 +48,21 @@ func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RPCHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
-	connID := uuid.Must(uuid.NewV7()).String()
-	log := slog.With("connId", connID)
-	log.Info("new websocket connection")
-
-	// Create ObjectStream adapter for coder/websocket
 	stream := newWebSocketStream(wsConn)
+	connID := uuid.Must(uuid.NewV7()).String()
+	h.HandleStream(ctx, stream, connID)
+}
 
-	// Create connection state for tracking subscriptions
+func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStream, connID string) {
+	log := slog.With("connId", connID)
+	log.Info("new connection")
+
 	state := &rpcConnState{
 		subscribed: make(map[string]struct{}),
 		manager:    h.manager,
 		log:        log,
 	}
 
-	// Create handler that requires auth
 	handler := &rpcMethodHandler{
 		RPCHandler:    h,
 		state:         state,
@@ -70,14 +70,11 @@ func (h *RPCHandler) handleConnection(ctx context.Context, wsConn *websocket.Con
 		authenticated: false,
 	}
 
-	// Create JSON-RPC connection
 	rpcConn := jsonrpc2.NewConn(ctx, stream, jsonrpc2.AsyncHandler(handler))
 	state.setConn(rpcConn)
 
-	// Wait for connection to close
 	<-rpcConn.DisconnectNotify()
 
-	// Cleanup: unsubscribe from all sessions
 	state.cleanup()
 	log.Info("connection closed", "subscriptions", len(state.subscribed))
 }

@@ -8,11 +8,9 @@ import (
 )
 
 type StoredConfig struct {
-	Subdomain  string `json:"subdomain"`
-	FrpServer  string `json:"frp_server"`
-	FrpPort    int    `json:"frp_port"`
-	FrpToken   string `json:"frp_token"`
-	FrpVersion string `json:"frp_version"`
+	Subdomain   string `json:"subdomain"`
+	RelayToken  string `json:"relay_token"`
+	RelayServer string `json:"relay_server"`
 }
 
 type Store struct {

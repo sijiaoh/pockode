@@ -9,6 +9,7 @@ import (
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/ws"
 )
 
 func TestHealthEndpoint(t *testing.T) {
@@ -16,7 +17,8 @@ func TestHealthEndpoint(t *testing.T) {
 	manager := process.NewManager(claude.New(), "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	handler := newHandler("test-token", manager, true, store, "/tmp")
+	wsHandler := ws.NewRPCHandler("test-token", manager, true, store, "/tmp")
+	handler := newHandler("test-token", manager, true, store, "/tmp", wsHandler)
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
@@ -36,7 +38,8 @@ func TestPingEndpoint(t *testing.T) {
 	manager := process.NewManager(claude.New(), "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	handler := newHandler(token, manager, true, store, "/tmp")
+	wsHandler := ws.NewRPCHandler(token, manager, true, store, "/tmp")
+	handler := newHandler(token, manager, true, store, "/tmp", wsHandler)
 
 	t.Run("returns pong with valid token", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/ping", nil)

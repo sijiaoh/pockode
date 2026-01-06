@@ -18,11 +18,9 @@ func TestClient_Register(t *testing.T) {
 		{
 			name: "successful registration",
 			response: &StoredConfig{
-				Subdomain:  "abc123def456ghi789jkl0123",
-				FrpServer:  "cloud.pockode.com",
-				FrpPort:    7000,
-				FrpToken:   "test_token",
-				FrpVersion: "0.65.0",
+				Subdomain:   "abc123def456ghi789jkl0123",
+				RelayToken:  "test_token_abc123",
+				RelayServer: "cloud.pockode.com",
 			},
 			statusCode: http.StatusCreated,
 			wantErr:    false,
@@ -73,17 +71,11 @@ func TestClient_Register(t *testing.T) {
 			if cfg.Subdomain != tt.response.Subdomain {
 				t.Errorf("Subdomain = %v, want %v", cfg.Subdomain, tt.response.Subdomain)
 			}
-			if cfg.FrpServer != tt.response.FrpServer {
-				t.Errorf("FrpServer = %v, want %v", cfg.FrpServer, tt.response.FrpServer)
+			if cfg.RelayToken != tt.response.RelayToken {
+				t.Errorf("RelayToken = %v, want %v", cfg.RelayToken, tt.response.RelayToken)
 			}
-			if cfg.FrpPort != tt.response.FrpPort {
-				t.Errorf("FrpPort = %v, want %v", cfg.FrpPort, tt.response.FrpPort)
-			}
-			if cfg.FrpToken != tt.response.FrpToken {
-				t.Errorf("FrpToken = %v, want %v", cfg.FrpToken, tt.response.FrpToken)
-			}
-			if cfg.FrpVersion != tt.response.FrpVersion {
-				t.Errorf("FrpVersion = %v, want %v", cfg.FrpVersion, tt.response.FrpVersion)
+			if cfg.RelayServer != tt.response.RelayServer {
+				t.Errorf("RelayServer = %v, want %v", cfg.RelayServer, tt.response.RelayServer)
 			}
 		})
 	}

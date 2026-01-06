@@ -15,20 +15,17 @@ func TestStore_LoadSave(t *testing.T) {
 		{
 			name: "valid config",
 			cfg: &StoredConfig{
-				Subdomain:  "abc123def456ghi789jkl0123",
-				FrpServer:  "cloud.pockode.com",
-				FrpPort:    7000,
-				FrpToken:   "test_token",
-				FrpVersion: "0.65.0",
+				Subdomain:   "abc123def456ghi789jkl0123",
+				RelayToken:  "test_token_abc123",
+				RelayServer: "cloud.pockode.com",
 			},
 			wantErr: false,
 		},
 		{
 			name: "minimal config",
 			cfg: &StoredConfig{
-				Subdomain: "minimal",
-				FrpServer: "localhost",
-				FrpPort:   7000,
+				Subdomain:   "minimal",
+				RelayServer: "localhost",
 			},
 			wantErr: false,
 		},
@@ -57,17 +54,11 @@ func TestStore_LoadSave(t *testing.T) {
 			if loaded.Subdomain != tt.cfg.Subdomain {
 				t.Errorf("Subdomain = %v, want %v", loaded.Subdomain, tt.cfg.Subdomain)
 			}
-			if loaded.FrpServer != tt.cfg.FrpServer {
-				t.Errorf("FrpServer = %v, want %v", loaded.FrpServer, tt.cfg.FrpServer)
+			if loaded.RelayToken != tt.cfg.RelayToken {
+				t.Errorf("RelayToken = %v, want %v", loaded.RelayToken, tt.cfg.RelayToken)
 			}
-			if loaded.FrpPort != tt.cfg.FrpPort {
-				t.Errorf("FrpPort = %v, want %v", loaded.FrpPort, tt.cfg.FrpPort)
-			}
-			if loaded.FrpToken != tt.cfg.FrpToken {
-				t.Errorf("FrpToken = %v, want %v", loaded.FrpToken, tt.cfg.FrpToken)
-			}
-			if loaded.FrpVersion != tt.cfg.FrpVersion {
-				t.Errorf("FrpVersion = %v, want %v", loaded.FrpVersion, tt.cfg.FrpVersion)
+			if loaded.RelayServer != tt.cfg.RelayServer {
+				t.Errorf("RelayServer = %v, want %v", loaded.RelayServer, tt.cfg.RelayServer)
 			}
 		})
 	}
@@ -91,10 +82,9 @@ func TestStore_FilePermissions(t *testing.T) {
 	store := NewStore(dir)
 
 	cfg := &StoredConfig{
-		Subdomain: "test",
-		FrpServer: "localhost",
-		FrpPort:   7000,
-		FrpToken:  "secret_token",
+		Subdomain:   "test",
+		RelayToken:  "secret_token",
+		RelayServer: "localhost",
 	}
 
 	if err := store.Save(cfg); err != nil {

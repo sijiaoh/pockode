@@ -31,7 +31,7 @@ var version = "dev"
 //go:embed static/*
 var staticFS embed.FS
 
-func newHandler(token string, manager *process.Manager, devMode bool, sessionStore session.Store, workDir string) http.Handler {
+func newHandler(token string, manager *process.Manager, devMode bool, sessionStore session.Store, workDir string, wsHandler *ws.RPCHandler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -44,8 +44,6 @@ func newHandler(token string, manager *process.Manager, devMode bool, sessionSto
 		w.Write([]byte(`{"message":"pong"}`))
 	})
 
-	// WebSocket JSON-RPC endpoint
-	wsHandler := ws.NewRPCHandler(token, manager, devMode, sessionStore, workDir)
 	mux.Handle("GET /ws", wsHandler)
 
 	authedMux := middleware.Auth(token)(mux)
@@ -183,7 +181,8 @@ func main() {
 	claudeAgent := claude.New()
 	manager := process.NewManager(claudeAgent, workDir, sessionStore, idleTimeout)
 
-	handler := newHandler(token, manager, devMode, sessionStore, workDir)
+	wsHandler := ws.NewRPCHandler(token, manager, devMode, sessionStore, workDir)
+	handler := newHandler(token, manager, devMode, sessionStore, workDir, wsHandler)
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -192,26 +191,17 @@ func main() {
 
 	// Initialize relay if enabled
 	var relayManager *relay.Manager
+	var cancelRelayStreams context.CancelFunc
 	relayEnabled := *relayFlag || os.Getenv("RELAY_ENABLED") == "true"
 	if relayEnabled {
-		relayPort := os.Getenv("RELAY_PORT")
-		if relayPort == "" {
-			relayPort = port
-		}
-		portInt, err := strconv.Atoi(relayPort)
-		if err != nil {
-			slog.Error("invalid RELAY_PORT", "port", relayPort, "error", err)
-			os.Exit(1)
-		}
 		cloudURL := os.Getenv("RELAY_CLOUD_URL")
 		if cloudURL == "" {
 			cloudURL = "https://cloud.pockode.com"
 		}
 
 		relayCfg := relay.Config{
-			CloudURL:  cloudURL,
-			DataDir:   dataDir,
-			LocalPort: portInt,
+			CloudURL: cloudURL,
+			DataDir:  dataDir,
 		}
 
 		relayManager = relay.NewManager(relayCfg, slog.Default())
@@ -230,6 +220,14 @@ func main() {
 		fmt.Println()
 		relay.PrintQRCode(remoteURL)
 		fmt.Println()
+
+		var relayStreamCtx context.Context
+		relayStreamCtx, cancelRelayStreams = context.WithCancel(context.Background())
+		go func() {
+			for stream := range relayManager.NewStreams() {
+				go wsHandler.HandleStream(relayStreamCtx, stream, stream.ConnectionID())
+			}
+		}()
 	}
 
 	// Graceful shutdown
@@ -246,6 +244,7 @@ func main() {
 			slog.Error("server shutdown error", "error", err)
 		}
 		if relayManager != nil {
+			cancelRelayStreams()
 			relayManager.Stop()
 		}
 		manager.Shutdown()
