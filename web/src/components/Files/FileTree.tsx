@@ -39,7 +39,7 @@ function FileTree({ onSelectFile, activeFilePath, expandSignal }: Props) {
 	}
 
 	return (
-		<div className="flex-1 overflow-y-auto py-1">
+		<div className="py-1">
 			{data.map((entry) => (
 				<FileTreeNode
 					key={entry.path}
