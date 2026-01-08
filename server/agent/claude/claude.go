@@ -497,8 +497,8 @@ func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent
 	case "control_cancel_request":
 		return parseControlCancelRequest(log, line)
 	default:
-		log.Warn("unknown event type from CLI", "type", event.Type)
-		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
+		log.Debug("unhandled event type from CLI", "type", event.Type)
+		return []agent.AgentEvent{agent.RawEvent{Content: string(line)}}
 	}
 }
 

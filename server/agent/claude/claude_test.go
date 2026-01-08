@@ -147,9 +147,14 @@ func TestParseLine(t *testing.T) {
 			expected: []agent.AgentEvent{agent.TextEvent{Content: `"invalid message format"`}},
 		},
 		{
-			name:     "unknown event type falls back to raw text",
+			name:     "progress event returns RawEvent",
+			input:    `{"type":"progress","data":{"type":"bash_progress","output":"","fullOutput":"","elapsedTimeSeconds":2,"totalLines":0},"toolUseID":"bash-progress-0"}`,
+			expected: []agent.AgentEvent{agent.RawEvent{Content: `{"type":"progress","data":{"type":"bash_progress","output":"","fullOutput":"","elapsedTimeSeconds":2,"totalLines":0},"toolUseID":"bash-progress-0"}`}},
+		},
+		{
+			name:     "unknown event type returns RawEvent",
 			input:    `{"type":"unknown_event"}`,
-			expected: []agent.AgentEvent{agent.TextEvent{Content: `{"type":"unknown_event"}`}},
+			expected: []agent.AgentEvent{agent.RawEvent{Content: `{"type":"unknown_event"}`}},
 		},
 		{
 			name:  "control_request permission request",
@@ -302,6 +307,9 @@ func agentEventEqual(a, b agent.AgentEvent) bool {
 	case agent.ProcessEndedEvent:
 		_, ok := b.(agent.ProcessEndedEvent)
 		return ok
+	case agent.RawEvent:
+		bv, ok := b.(agent.RawEvent)
+		return ok && av.Content == bv.Content
 	default:
 		return false
 	}

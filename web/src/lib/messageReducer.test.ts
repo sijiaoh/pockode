@@ -79,9 +79,17 @@ describe("messageReducer", () => {
 			});
 		});
 
-		it("returns empty text for unknown event type", () => {
+		it("returns raw event for unknown event type", () => {
 			const event = normalizeEvent({ type: "unknown_type" });
-			expect(event).toEqual({ type: "text", content: "" });
+			expect(event).toEqual({
+				type: "raw",
+				content: '{"type":"unknown_type"}',
+			});
+		});
+
+		it("normalizes raw event", () => {
+			const event = normalizeEvent({ type: "raw", content: '{"foo":"bar"}' });
+			expect(event).toEqual({ type: "raw", content: '{"foo":"bar"}' });
 		});
 
 		it("normalizes permission_request event", () => {

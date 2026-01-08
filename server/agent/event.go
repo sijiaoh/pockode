@@ -21,6 +21,7 @@ const (
 	EventTypeMessage            EventType = "message"             // User message
 	EventTypePermissionResponse EventType = "permission_response" // User permission response
 	EventTypeQuestionResponse   EventType = "question_response"   // User question response
+	EventTypeRaw                EventType = "raw"                 // Unprocessed CLI output
 )
 
 // PermissionBehavior represents the permission action.
@@ -227,3 +228,11 @@ type QuestionResponseEvent struct {
 
 func (QuestionResponseEvent) EventType() EventType { return EventTypeQuestionResponse }
 func (QuestionResponseEvent) isAgentEvent()        {}
+
+// RawEvent represents unprocessed CLI output (JSON preserved as-is).
+type RawEvent struct {
+	Content string
+}
+
+func (RawEvent) EventType() EventType { return EventTypeRaw }
+func (RawEvent) isAgentEvent()        {}

@@ -54,7 +54,8 @@ export type NormalizedEvent =
 			type: "question_response";
 			requestId: string;
 			answers: Record<string, string> | null;
-	  };
+	  }
+	| { type: "raw"; content: string };
 
 // Convert snake_case server event to camelCase
 export function normalizeEvent(
@@ -132,9 +133,11 @@ export function normalizeEvent(
 				requestId: record.request_id as string,
 				answers: record.answers as Record<string, string> | null,
 			};
+		case "raw":
+			return { type: "raw", content: (record.content as string) ?? "" };
 		default:
-			// Fallback for unknown types - treat as text
-			return { type: "text", content: "" };
+			// Fallback for unknown types - treat as raw
+			return { type: "raw", content: JSON.stringify(record) };
 	}
 }
 
@@ -200,6 +203,8 @@ export function applyEventToParts(
 				...parts,
 				{ type: "warning", message: event.message, code: event.code },
 			];
+		case "raw":
+			return [...parts, { type: "raw", content: event.content }];
 		default:
 			return parts;
 	}

@@ -149,6 +149,47 @@ function WarningItem({ message, code }: WarningItemProps) {
 	);
 }
 
+interface RawItemProps {
+	content: string;
+}
+
+function RawItem({ content }: RawItemProps) {
+	const [expanded, setExpanded] = useState(false);
+	const { label, formatted } = useMemo(() => {
+		try {
+			const parsed = JSON.parse(content);
+			return {
+				label: typeof parsed.type === "string" ? parsed.type : "raw",
+				formatted: JSON.stringify(parsed, null, 2),
+			};
+		} catch {
+			return { label: "raw", formatted: content };
+		}
+	}, [content]);
+
+	return (
+		<div className="rounded bg-th-bg-secondary text-xs">
+			<button
+				type="button"
+				onClick={() => setExpanded(!expanded)}
+				className="flex w-full items-center gap-1.5 rounded p-2 text-left hover:bg-th-overlay-hover"
+			>
+				<span
+					className={`w-2.5 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
+				>
+					▶
+				</span>
+				<span className="italic text-th-text-muted">{label}</span>
+			</button>
+			{expanded && (
+				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+					<pre className="text-th-text-muted">{formatted}</pre>
+				</ScrollableContent>
+			)}
+		</div>
+	);
+}
+
 type PermissionChoice = "deny" | "allow" | "always_allow";
 
 interface PermissionRequestItemProps {
@@ -377,6 +418,9 @@ function ContentPartItem({
 	}
 	if (part.type === "warning") {
 		return <WarningItem message={part.message} code={part.code} />;
+	}
+	if (part.type === "raw") {
+		return <RawItem content={part.content} />;
 	}
 	return <ToolCallItem tool={part.tool} />;
 }

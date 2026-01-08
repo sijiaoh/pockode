@@ -45,7 +45,8 @@ export type ContentPart =
 			request: AskUserQuestionRequest;
 			status: QuestionStatus;
 			answers?: Record<string, string>;
-	  };
+	  }
+	| { type: "raw"; content: string };
 
 // User message - plain text content
 export interface UserMessage {
