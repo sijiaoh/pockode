@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"unicode"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/rpc"
@@ -59,6 +60,8 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
+
+	h.recordCommandIfSlash(params.Content)
 
 	log.Info("received prompt", "length", len(params.Content))
 
@@ -194,6 +197,33 @@ func parsePermissionChoice(choice string) agent.PermissionChoice {
 	default:
 		return agent.PermissionDeny
 	}
+}
+
+func (h *rpcMethodHandler) recordCommandIfSlash(content string) {
+	if len(content) == 0 || content[0] != '/' {
+		return
+	}
+
+	// Extract command name: "/help arg1 arg2" -> "help"
+	name := content[1:]
+	for i, r := range name {
+		if isWhitespace(r) {
+			name = name[:i]
+			break
+		}
+	}
+
+	if name == "" {
+		return
+	}
+
+	if err := h.commandStore.Use(name); err != nil {
+		h.log.Error("failed to record command usage", "command", name, "error", err)
+	}
+}
+
+func isWhitespace(r rune) bool {
+	return unicode.IsSpace(r)
 }
 
 func (h *rpcMethodHandler) getOrCreateProcess(ctx context.Context, log *slog.Logger, sessionID string) (agent.Session, error) {

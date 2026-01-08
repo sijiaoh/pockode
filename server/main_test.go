@@ -7,17 +7,20 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent/claude"
+	"github.com/pockode/server/command"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/ws"
 )
 
 func TestHealthEndpoint(t *testing.T) {
-	store, _ := session.NewFileStore(t.TempDir())
+	tempDir := t.TempDir()
+	store, _ := session.NewFileStore(tempDir)
+	cmdStore, _ := command.NewStore(tempDir)
 	manager := process.NewManager(claude.New(), "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	wsHandler := ws.NewRPCHandler("test-token", manager, true, store, "/tmp")
+	wsHandler := ws.NewRPCHandler("test-token", manager, true, store, cmdStore, "/tmp")
 	handler := newHandler("test-token", manager, true, store, "/tmp", wsHandler)
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -34,11 +37,13 @@ func TestHealthEndpoint(t *testing.T) {
 
 func TestPingEndpoint(t *testing.T) {
 	const token = "test-token"
-	store, _ := session.NewFileStore(t.TempDir())
+	tempDir := t.TempDir()
+	store, _ := session.NewFileStore(tempDir)
+	cmdStore, _ := command.NewStore(tempDir)
 	manager := process.NewManager(claude.New(), "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	wsHandler := ws.NewRPCHandler(token, manager, true, store, "/tmp")
+	wsHandler := ws.NewRPCHandler(token, manager, true, store, cmdStore, "/tmp")
 	handler := newHandler(token, manager, true, store, "/tmp", wsHandler)
 
 	t.Run("returns pong with valid token", func(t *testing.T) {

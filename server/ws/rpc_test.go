@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/command"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
@@ -35,13 +36,18 @@ type testEnv struct {
 }
 
 func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
-	store, err := session.NewFileStore(t.TempDir())
+	tempDir := t.TempDir()
+	store, err := session.NewFileStore(tempDir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
+	cmdStore, err := command.NewStore(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create command store: %v", err)
+	}
 
 	manager := process.NewManager(mock, "/tmp", store, 10*time.Minute)
-	h := NewRPCHandler("test-token", manager, true, store, t.TempDir())
+	h := NewRPCHandler("test-token", manager, true, store, cmdStore, t.TempDir())
 	server := httptest.NewServer(h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -167,11 +173,13 @@ func (e *testEnv) skipN(n int) {
 }
 
 func TestHandler_Auth_InvalidToken(t *testing.T) {
-	store, _ := session.NewFileStore(t.TempDir())
+	tempDir := t.TempDir()
+	store, _ := session.NewFileStore(tempDir)
+	cmdStore, _ := command.NewStore(tempDir)
 	manager := process.NewManager(&mockAgent{}, "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	h := NewRPCHandler("secret-token", manager, true, store, t.TempDir())
+	h := NewRPCHandler("secret-token", manager, true, store, cmdStore, t.TempDir())
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -210,11 +218,13 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 }
 
 func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
-	store, _ := session.NewFileStore(t.TempDir())
+	tempDir := t.TempDir()
+	store, _ := session.NewFileStore(tempDir)
+	cmdStore, _ := command.NewStore(tempDir)
 	manager := process.NewManager(&mockAgent{}, "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	h := NewRPCHandler("test-token", manager, true, store, t.TempDir())
+	h := NewRPCHandler("test-token", manager, true, store, cmdStore, t.TempDir())
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -736,13 +746,18 @@ type workDirTestEnv struct {
 }
 
 func newWorkDirTestEnv(t *testing.T, workDir string) *workDirTestEnv {
-	store, err := session.NewFileStore(t.TempDir())
+	tempDir := t.TempDir()
+	store, err := session.NewFileStore(tempDir)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
+	cmdStore, err := command.NewStore(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create command store: %v", err)
+	}
 
 	manager := process.NewManager(&mockAgent{}, "/tmp", store, 10*time.Minute)
-	h := NewRPCHandler("test-token", manager, true, store, workDir)
+	h := NewRPCHandler("test-token", manager, true, store, cmdStore, workDir)
 	server := httptest.NewServer(h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

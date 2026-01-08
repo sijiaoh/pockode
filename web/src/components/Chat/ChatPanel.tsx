@@ -128,6 +128,8 @@ function ChatPanel({
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
+			// Skip if already handled (e.g., by CommandPalette)
+			if (e.defaultPrevented) return;
 			if (e.key === "Escape" && isStreaming) {
 				handleInterrupt();
 			}

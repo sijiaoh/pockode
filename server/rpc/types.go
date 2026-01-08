@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
 )
@@ -92,6 +93,12 @@ type GitDiffResult struct {
 	Diff       string `json:"diff"`
 	OldContent string `json:"old_content"`
 	NewContent string `json:"new_content"`
+}
+
+// Command namespace
+
+type CommandListResult struct {
+	Commands []command.Command `json:"commands"`
 }
 
 // Server → Client

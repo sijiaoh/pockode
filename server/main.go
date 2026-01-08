@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent/claude"
+	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/middleware"
@@ -168,6 +169,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize command store
+	commandStore, err := command.NewStore(dataDir)
+	if err != nil {
+		slog.Error("failed to initialize command store", "error", err)
+		os.Exit(1)
+	}
+
 	// Initialize process manager with idle timeout
 	idleTimeout := 10 * time.Minute
 	if env := os.Getenv("IDLE_TIMEOUT"); env != "" {
@@ -181,7 +189,7 @@ func main() {
 	claudeAgent := claude.New()
 	manager := process.NewManager(claudeAgent, workDir, sessionStore, idleTimeout)
 
-	wsHandler := ws.NewRPCHandler(token, manager, devMode, sessionStore, workDir)
+	wsHandler := ws.NewRPCHandler(token, manager, devMode, sessionStore, commandStore, workDir)
 	handler := newHandler(token, manager, devMode, sessionStore, workDir, wsHandler)
 
 	srv := &http.Server{

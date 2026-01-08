@@ -8,7 +8,9 @@ import type {
 import { getWebSocketUrl } from "../utils/config";
 import {
 	type ChatActions,
+	type CommandActions,
 	createChatActions,
+	createCommandActions,
 	createFileActions,
 	createGitActions,
 	createSessionActions,
@@ -45,6 +47,7 @@ interface ConnectionActions {
 
 type RPCActions = ConnectionActions &
 	ChatActions &
+	CommandActions &
 	SessionActions &
 	FileActions &
 	GitActions;
@@ -118,6 +121,7 @@ function handleNotification(method: string, params: unknown): void {
 
 // Create namespace-specific actions
 const chatActions = createChatActions(getClient);
+const commandActions = createCommandActions(getClient);
 const sessionActions = createSessionActions(getClient);
 const fileActions = createFileActions(getClient);
 const gitActions = createGitActions(getClient);
@@ -241,6 +245,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 		// Spread namespace-specific actions
 		...chatActions,
+		...commandActions,
 		...sessionActions,
 		...fileActions,
 		...gitActions,

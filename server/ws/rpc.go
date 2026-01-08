@@ -10,6 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
+	"github.com/pockode/server/command"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
@@ -23,15 +24,17 @@ type RPCHandler struct {
 	manager      *process.Manager
 	devMode      bool
 	sessionStore session.Store
+	commandStore *command.Store
 	workDir      string
 }
 
-func NewRPCHandler(token string, manager *process.Manager, devMode bool, store session.Store, workDir string) *RPCHandler {
+func NewRPCHandler(token string, manager *process.Manager, devMode bool, sessionStore session.Store, commandStore *command.Store, workDir string) *RPCHandler {
 	return &RPCHandler{
 		token:        token,
 		manager:      manager,
 		devMode:      devMode,
-		sessionStore: store,
+		sessionStore: sessionStore,
+		commandStore: commandStore,
 		workDir:      workDir,
 	}
 }
@@ -174,6 +177,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitStatus(ctx, conn, req)
 	case "git.diff":
 		h.handleGitDiff(ctx, conn, req)
+	// command namespace
+	case "command.list":
+		h.handleCommandList(ctx, conn, req)
 	default:
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeMethodNotFound, "method not found: "+req.Method)
 	}
