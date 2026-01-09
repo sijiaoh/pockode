@@ -261,7 +261,7 @@ function InputBar({
 	return (
 		<div
 			ref={containerRef}
-			className="relative border-t border-th-border p-3 sm:p-4"
+			className="relative border-t border-th-border px-3 py-2 sm:px-4 sm:py-3"
 		>
 			{isPaletteOpen && (
 				<CommandPalette
@@ -287,13 +287,13 @@ function InputBar({
 					autoComplete="off"
 					autoCorrect="off"
 					autoCapitalize="off"
-					className="min-h-[44px] max-h-[40vh] flex-1 resize-none overflow-y-auto rounded-lg bg-th-bg-secondary px-3 py-2 text-th-text-primary placeholder:text-th-text-muted focus:outline-none focus:ring-2 focus:ring-th-border-focus sm:max-h-[200px] sm:px-4"
+					className="min-h-9 max-h-[40vh] flex-1 resize-none overflow-y-auto rounded-lg bg-th-bg-secondary px-3 py-1.5 text-th-text-primary placeholder:text-th-text-muted focus:outline-none focus:ring-2 focus:ring-th-border-focus sm:max-h-[200px] sm:px-4"
 				/>
 				{isStreaming ? (
 					<button
 						type="button"
 						onClick={onInterrupt}
-						className="min-h-[44px] rounded-lg bg-th-error px-3 py-2 text-th-text-inverse hover:opacity-90 sm:px-4"
+						className="h-9 rounded-lg bg-th-error px-3 text-th-text-inverse hover:opacity-90 sm:px-4"
 					>
 						Stop
 						<span className="hidden text-xs opacity-70 sm:inline"> Esc</span>
@@ -303,7 +303,7 @@ function InputBar({
 						type="button"
 						onClick={handleSend}
 						disabled={!canSend || !input.trim()}
-						className="min-h-[44px] rounded-lg bg-th-accent px-3 py-2 text-th-accent-text hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
+						className="h-9 rounded-lg bg-th-accent px-3 text-th-accent-text hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
 					>
 						Send
 					</button>

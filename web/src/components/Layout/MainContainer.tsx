@@ -18,30 +18,30 @@ function MainContainer({
 }: Props) {
 	return (
 		<div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-th-bg-primary">
-			<header className="flex items-center justify-between border-b border-th-border p-3 sm:p-4">
-				<div className="flex items-center gap-3">
+			<header className="flex h-11 shrink-0 items-center justify-between border-b border-th-border px-3 sm:h-12 sm:px-4">
+				<div className="flex items-center gap-2">
 					{onOpenSidebar && (
 						<button
 							type="button"
 							onClick={onOpenSidebar}
-							className="rounded p-1 text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary md:hidden"
+							className="-ml-1 flex h-8 w-8 items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary md:hidden"
 							aria-label="Open menu"
 						>
-							<Menu className="h-6 w-6" aria-hidden="true" />
+							<Menu className="h-5 w-5" aria-hidden="true" />
 						</button>
 					)}
-					<h1 className="text-lg font-bold text-th-text-primary sm:text-xl">
+					<h1 className="text-base font-semibold text-th-text-primary sm:text-lg">
 						{title}
 					</h1>
 				</div>
-				<div className="flex items-center gap-3">
+				<div className="flex items-center gap-2">
 					{headerRight}
 					<ThemeSwitcher />
 					{onLogout && (
 						<button
 							type="button"
 							onClick={onLogout}
-							className="text-sm text-th-text-muted hover:text-th-text-primary"
+							className="rounded px-2 py-1 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
 						>
 							Logout
 						</button>

@@ -85,9 +85,6 @@ function ThemeSwitcher() {
 	const buttonRef = useRef<HTMLButtonElement>(null);
 
 	const isDarkMode = resolvedMode === "dark";
-	const currentAccent = isDarkMode
-		? THEME_INFO[theme].accentDark
-		: THEME_INFO[theme].accentLight;
 
 	// Close panel on outside click
 	useEffect(() => {
@@ -135,9 +132,9 @@ function ThemeSwitcher() {
 	}, [isOpen]);
 
 	const modeIcon = isDarkMode ? (
-		<Moon className="h-5 w-5" aria-hidden="true" />
+		<Moon className="h-4 w-4" aria-hidden="true" />
 	) : (
-		<Sun className="h-5 w-5" aria-hidden="true" />
+		<Sun className="h-4 w-4" aria-hidden="true" />
 	);
 
 	return (
@@ -146,19 +143,11 @@ function ThemeSwitcher() {
 				ref={buttonRef}
 				type="button"
 				onClick={() => setIsOpen(!isOpen)}
-				className="flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg text-th-text-muted transition-transform hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
+				className="flex h-8 w-8 items-center justify-center rounded text-th-text-muted transition-transform hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
 				aria-label="Theme settings"
 				aria-expanded={isOpen}
 			>
 				{modeIcon}
-				<span
-					className="h-3 w-3 rounded-full"
-					style={{
-						backgroundColor: currentAccent,
-						boxShadow: `0 0 6px ${currentAccent}40`,
-					}}
-					aria-hidden="true"
-				/>
 			</button>
 
 			{isOpen && (
