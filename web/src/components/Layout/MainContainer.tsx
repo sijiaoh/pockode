@@ -1,12 +1,11 @@
 import { Menu } from "lucide-react";
-import { ThemeSwitcher } from "../ui";
+import { ConnectionStatus, ThemeSwitcher } from "../ui";
 
 interface Props {
 	children: React.ReactNode;
 	onOpenSidebar?: () => void;
 	onLogout?: () => void;
 	title?: string;
-	headerRight?: React.ReactNode;
 }
 
 function MainContainer({
@@ -14,7 +13,6 @@ function MainContainer({
 	onOpenSidebar,
 	onLogout,
 	title = "Pockode",
-	headerRight,
 }: Props) {
 	return (
 		<div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-th-bg-primary">
@@ -35,7 +33,7 @@ function MainContainer({
 					</h1>
 				</div>
 				<div className="flex items-center gap-2">
-					{headerRight}
+					<ConnectionStatus />
 					<ThemeSwitcher />
 					{onLogout && (
 						<button

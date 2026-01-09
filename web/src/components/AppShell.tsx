@@ -144,7 +144,6 @@ function AppShell() {
 		}
 	}, [redirectSessionId, navigate]);
 
-	// TODO: Fails silently and retries; persistent errors (e.g. network down) show only Loading with no feedback
 	useEffect(() => {
 		if (needsNewSession && !isCreatingSession.current) {
 			isCreatingSession.current = true;
@@ -241,8 +240,32 @@ function AppShell() {
 	}
 
 	if (!currentSessionId || !currentSession) {
+		// Connection failed - show error state with retry option
+		if (wsStatus === "error") {
+			return (
+				<div
+					className="flex h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary"
+					role="alert"
+				>
+					<div className="text-th-text-muted">Unable to connect to server</div>
+					<button
+						type="button"
+						onClick={() => window.location.reload()}
+						className="rounded bg-th-accent px-4 py-2 text-sm text-white hover:opacity-90"
+					>
+						Retry
+					</button>
+				</div>
+			);
+		}
+
 		return (
-			<div className="flex h-dvh items-center justify-center bg-th-bg-primary">
+			// biome-ignore lint/a11y/useSemanticElements: loading indicator is not a form output
+			<div
+				className="flex h-dvh items-center justify-center bg-th-bg-primary"
+				role="status"
+				aria-label="Loading"
+			>
 				<div className="text-th-text-muted">Loading...</div>
 			</div>
 		);
