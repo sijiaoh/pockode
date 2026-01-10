@@ -219,6 +219,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 				ws = null;
 				rpcReceiver = null;
 				rpcRequester = null;
+				watchCallbacks.clear();
 
 				const currentStatus = get().status;
 				// Don't reconnect on auth failure or intentional disconnect
