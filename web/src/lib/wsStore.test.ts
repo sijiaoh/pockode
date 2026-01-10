@@ -436,14 +436,14 @@ describe("wsStore", () => {
 
 			await connectAndAuth();
 			const ws = getMockWs();
-			expect(ws).not.toBeNull();
+			if (!ws) throw new Error("WebSocket not found");
 
 			// Mock watchSubscribe to return a known ID
 			ws.send = vi.fn((data: string) => {
 				const parsed = JSON.parse(data);
 				if (parsed.method === "watch.subscribe") {
 					queueMicrotask(() => {
-						ws?.simulateMessage({
+						ws.simulateMessage({
 							jsonrpc: "2.0",
 							id: parsed.id,
 							result: { id: "w_test123" },
@@ -455,7 +455,7 @@ describe("wsStore", () => {
 			const watchId = await wsActions.watchSubscribe("/test/path", callback);
 			expect(watchId).toBe("w_test123");
 
-			ws?.simulateNotification("watch.changed", {
+			ws.simulateNotification("watch.changed", {
 				id: "w_test123",
 				data: {},
 			});
@@ -469,14 +469,14 @@ describe("wsStore", () => {
 
 			await connectAndAuth();
 			const ws = getMockWs();
-			expect(ws).not.toBeNull();
+			if (!ws) throw new Error("WebSocket not found");
 
 			// Mock watchSubscribe
 			ws.send = vi.fn((data: string) => {
 				const parsed = JSON.parse(data);
 				if (parsed.method === "watch.subscribe") {
 					queueMicrotask(() => {
-						ws?.simulateMessage({
+						ws.simulateMessage({
 							jsonrpc: "2.0",
 							id: parsed.id,
 							result: { id: "w_known" },
@@ -488,7 +488,7 @@ describe("wsStore", () => {
 			await wsActions.watchSubscribe("/test/path", callback);
 
 			// Send notification with unknown ID
-			ws?.simulateNotification("watch.changed", {
+			ws.simulateNotification("watch.changed", {
 				id: "w_unknown",
 				data: {},
 			});
@@ -502,13 +502,13 @@ describe("wsStore", () => {
 
 			await connectAndAuth();
 			const ws = getMockWs();
-			expect(ws).not.toBeNull();
+			if (!ws) throw new Error("WebSocket not found");
 
 			ws.send = vi.fn((data: string) => {
 				const parsed = JSON.parse(data);
 				if (parsed.method === "watch.subscribe") {
 					queueMicrotask(() => {
-						ws?.simulateMessage({
+						ws.simulateMessage({
 							jsonrpc: "2.0",
 							id: parsed.id,
 							result: { id: "w_test123" },
@@ -516,7 +516,7 @@ describe("wsStore", () => {
 					});
 				} else if (parsed.method === "watch.unsubscribe") {
 					queueMicrotask(() => {
-						ws?.simulateMessage({
+						ws.simulateMessage({
 							jsonrpc: "2.0",
 							id: parsed.id,
 							result: {},
@@ -528,7 +528,7 @@ describe("wsStore", () => {
 			const watchId = await wsActions.watchSubscribe("/test/path", callback);
 			await wsActions.watchUnsubscribe(watchId);
 
-			ws?.simulateNotification("watch.changed", {
+			ws.simulateNotification("watch.changed", {
 				id: "w_test123",
 				data: {},
 			});

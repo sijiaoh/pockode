@@ -28,7 +28,6 @@ const SILENT_EVENTS = new Set<ServerMethod>([
 	"tool_call",
 	"tool_result",
 	"system",
-	"watch_changed", // Watch notifications don't trigger unread
 ]);
 
 export type ConnectionStatus =
@@ -290,9 +289,11 @@ export const useWSStore = create<WSState>((set, get) => ({
 			watchCallbacks.delete(id);
 			const client = getClient();
 			if (client) {
-				await client.request("watch.unsubscribe", { id }).catch(() => {
+				try {
+					await client.request("watch.unsubscribe", { id });
+				} catch {
 					// Ignore errors (connection might be closed)
-				});
+				}
 			}
 		},
 
