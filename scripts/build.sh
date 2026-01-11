@@ -4,6 +4,7 @@ set -e
 cd "$(dirname "$0")/.."
 
 VERSION=${VERSION:-dev}
+VERSION=${VERSION#v}
 OUTPUT_DIR=${OUTPUT_DIR:-dist}
 
 echo "Building Pockode $VERSION"
