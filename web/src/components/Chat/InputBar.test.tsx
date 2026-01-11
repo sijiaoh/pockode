@@ -276,6 +276,106 @@ describe("InputBar", () => {
 			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
 		});
 
+		it("does not open palette for file paths", () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/path/to/file" } });
+
+			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+		});
+
+		it("does not open palette for dotfiles", () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/.env" } });
+
+			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+		});
+
+		it("does not open palette for uppercase commands", () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/Help" } });
+
+			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+		});
+
+		it("opens palette for plugin-namespaced commands", async () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/plugin:command" } });
+
+			await waitFor(() => {
+				expect(screen.getByRole("listbox")).toBeInTheDocument();
+			});
+		});
+
+		it("opens palette for underscore commands", async () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/pr_comments" } });
+
+			await waitFor(() => {
+				expect(screen.getByRole("listbox")).toBeInTheDocument();
+			});
+		});
+
+		it("opens palette for hyphen commands", async () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/my-command" } });
+
+			await waitFor(() => {
+				expect(screen.getByRole("listbox")).toBeInTheDocument();
+			});
+		});
+
+		it("opens palette for commands with numbers", async () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/cmd123" } });
+
+			await waitFor(() => {
+				expect(screen.getByRole("listbox")).toBeInTheDocument();
+			});
+		});
+
+		it("opens palette for namespaced commands with hyphen", async () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/my-plugin:my-command" } });
+
+			await waitFor(() => {
+				expect(screen.getByRole("listbox")).toBeInTheDocument();
+			});
+		});
+
+		it("does not open palette for commands starting with number", () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/123cmd" } });
+
+			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+		});
+
+		it("does not open palette for commands starting with hyphen", () => {
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/-cmd" } });
+
+			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+		});
+
 		it("filters commands by input", async () => {
 			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
 

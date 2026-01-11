@@ -22,7 +22,9 @@ interface Props {
 	onInterrupt?: () => void;
 }
 
-const WHITESPACE_PATTERN = /\s/;
+// Slash command pattern per Claude Code naming conventions.
+// Keep in sync with server/command/store.go namePattern.
+const COMMAND_PATTERN = /^\/([a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)?)?$/;
 
 function InputBar({
 	sessionId,
@@ -42,8 +44,8 @@ function InputBar({
 	const [paletteDismissed, setPaletteDismissed] = useState(false);
 	const { listCommands, invalidateCommandCache } = useWSStore((s) => s.actions);
 
-	// Palette shows when "/" is typed without whitespace, unless manually dismissed
-	const isSlashMode = input.startsWith("/") && !WHITESPACE_PATTERN.test(input);
+	// Palette shows when input matches valid command pattern, unless manually dismissed
+	const isSlashMode = COMMAND_PATTERN.test(input);
 	const isPaletteOpen = isSlashMode && !paletteDismissed;
 	const filter = isPaletteOpen ? input.slice(1) : "";
 

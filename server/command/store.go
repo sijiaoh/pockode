@@ -5,11 +5,21 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"sync"
 	"time"
 )
+
+// namePattern validates slash command names per Claude Code naming conventions.
+// Keep in sync with web/src/components/Chat/InputBar.tsx COMMAND_PATTERN.
+var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)?$`)
+
+// IsValidName reports whether name is a valid slash command name.
+func IsValidName(name string) bool {
+	return namePattern.MatchString(name)
+}
 
 // BuiltinCommands is the list of built-in Claude Code slash commands.
 var BuiltinCommands = []string{
@@ -119,8 +129,12 @@ func (s *Store) List() []Command {
 
 const maxRecentCommands = 1000
 
-// Use records a command usage.
-func (s *Store) Use(name string) error {
+// Use records a command usage. Returns false if name is invalid.
+func (s *Store) Use(name string) (bool, error) {
+	if !IsValidName(name) {
+		return false, nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -137,7 +151,7 @@ func (s *Store) Use(name string) error {
 	s.recent = newRecent
 	if err := s.persist(); err != nil {
 		s.recent = old
-		return err
+		return false, err
 	}
-	return nil
+	return true, nil
 }

@@ -146,3 +146,85 @@ func TestNewStore_InvalidJSON(t *testing.T) {
 		t.Error("expected error for invalid JSON")
 	}
 }
+
+func TestIsValidName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		isValid bool
+	}{
+		// Valid commands
+		{"simple", "help", true},
+		{"with-hyphen", "my-command", true},
+		{"with-numbers", "cmd123", true},
+		{"namespaced", "plugin:command", true},
+		{"namespaced-with-hyphen", "my-plugin:my-command", true},
+
+		// Valid - underscores (e.g., pr_comments)
+		{"underscore", "my_command", true},
+		{"underscore-builtin", "pr_comments", true},
+
+		// Invalid - file paths
+		{"file-path", "path/to/file", false},
+		{"absolute-path", "Users/name/file", false},
+
+		// Invalid - dotfiles
+		{"dotfile", ".env", false},
+		{"dotfile-path", ".config/file", false},
+
+		// Invalid - uppercase
+		{"uppercase", "Help", false},
+		{"mixed-case", "myCommand", false},
+
+		// Invalid - special chars
+		{"starts-with-number", "123cmd", false},
+		{"starts-with-hyphen", "-cmd", false},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsValidName(tt.input)
+			if got != tt.isValid {
+				t.Errorf("IsValidName(%q) = %v, want %v", tt.input, got, tt.isValid)
+			}
+		})
+	}
+}
+
+func TestUse_InvalidName(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"file-path", "path/to/file"},
+		{"dotfile", ".env"},
+		{"uppercase", "Help"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorded, err := store.Use(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if recorded {
+				t.Errorf("expected Use(%q) to return false, got true", tt.input)
+			}
+		})
+	}
+
+	// Verify nothing was recorded
+	commands := store.List()
+	for _, cmd := range commands {
+		if !cmd.IsBuiltin {
+			t.Errorf("unexpected custom command recorded: %s", cmd.Name)
+		}
+	}
+}

@@ -213,11 +213,7 @@ func (h *rpcMethodHandler) recordCommandIfSlash(content string) {
 		}
 	}
 
-	if name == "" {
-		return
-	}
-
-	if err := h.commandStore.Use(name); err != nil {
+	if _, err := h.commandStore.Use(name); err != nil {
 		h.log.Error("failed to record command usage", "command", name, "error", err)
 	}
 }
