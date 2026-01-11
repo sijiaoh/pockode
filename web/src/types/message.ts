@@ -151,6 +151,10 @@ export interface AuthParams {
 	token: string;
 }
 
+export interface AuthResult {
+	version: string;
+}
+
 export interface AttachParams {
 	session_id: string;
 }

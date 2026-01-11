@@ -2,6 +2,7 @@ import { JSONRPCClient, type JSONRPCRequester } from "json-rpc-2.0";
 import { create } from "zustand";
 import type {
 	AuthParams,
+	AuthResult,
 	ServerMethod,
 	ServerNotification,
 } from "../types/message";
@@ -19,6 +20,7 @@ import {
 	type SessionActions,
 } from "./rpc";
 import { unreadActions } from "./unreadStore";
+import { APP_VERSION } from "./version";
 
 // Events that should NOT trigger unread notifications.
 // These are either streaming events (continuous output) or control messages.
@@ -190,7 +192,18 @@ export const useWSStore = create<WSState>((set, get) => ({
 				rpcRequester = clients.withTimeout;
 
 				try {
-					await rpcRequester.request("auth", { token } as AuthParams);
+					const result = (await rpcRequester.request("auth", {
+						token,
+					} as AuthParams)) as AuthResult;
+
+					if (result.version !== APP_VERSION) {
+						console.info(
+							`Version mismatch: client=${APP_VERSION}, server=${result.version}. Reloading...`,
+						);
+						window.location.reload();
+						return;
+					}
+
 					set({ status: "connected" });
 					reconnectAttempts = 0;
 				} catch (error) {

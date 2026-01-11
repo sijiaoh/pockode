@@ -20,7 +20,7 @@ func TestHealthEndpoint(t *testing.T) {
 	manager := process.NewManager(claude.New(), "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	wsHandler := ws.NewRPCHandler("test-token", manager, true, store, cmdStore, "/tmp")
+	wsHandler := ws.NewRPCHandler("test-token", "test", manager, true, store, cmdStore, "/tmp", nil, nil)
 	handler := newHandler("test-token", manager, true, store, "/tmp", wsHandler)
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -43,7 +43,7 @@ func TestPingEndpoint(t *testing.T) {
 	manager := process.NewManager(claude.New(), "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	wsHandler := ws.NewRPCHandler(token, manager, true, store, cmdStore, "/tmp")
+	wsHandler := ws.NewRPCHandler(token, "test", manager, true, store, cmdStore, "/tmp", nil, nil)
 	handler := newHandler(token, manager, true, store, "/tmp", wsHandler)
 
 	t.Run("returns pong with valid token", func(t *testing.T) {

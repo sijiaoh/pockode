@@ -47,7 +47,7 @@ func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
 	}
 
 	manager := process.NewManager(mock, "/tmp", store, 10*time.Minute)
-	h := NewRPCHandler("test-token", manager, true, store, cmdStore, t.TempDir())
+	h := NewRPCHandler("test-token", "test", manager, true, store, cmdStore, t.TempDir(), nil, nil)
 	server := httptest.NewServer(h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -179,7 +179,7 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	manager := process.NewManager(&mockAgent{}, "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	h := NewRPCHandler("secret-token", manager, true, store, cmdStore, t.TempDir())
+	h := NewRPCHandler("secret-token", "test", manager, true, store, cmdStore, t.TempDir(), nil, nil)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -224,7 +224,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	manager := process.NewManager(&mockAgent{}, "/tmp", store, 10*time.Minute)
 	defer manager.Shutdown()
 
-	h := NewRPCHandler("test-token", manager, true, store, cmdStore, t.TempDir())
+	h := NewRPCHandler("test-token", "test", manager, true, store, cmdStore, t.TempDir(), nil, nil)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -757,7 +757,7 @@ func newWorkDirTestEnv(t *testing.T, workDir string) *workDirTestEnv {
 	}
 
 	manager := process.NewManager(&mockAgent{}, "/tmp", store, 10*time.Minute)
-	h := NewRPCHandler("test-token", manager, true, store, cmdStore, workDir)
+	h := NewRPCHandler("test-token", "test", manager, true, store, cmdStore, workDir, nil, nil)
 	server := httptest.NewServer(h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

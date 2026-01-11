@@ -9,6 +9,9 @@ const webPort = Number(process.env.WEB_PORT) || 5173;
 // https://vite.dev/config/
 export default defineConfig({
 	clearScreen: false,
+	define: {
+		__APP_VERSION__: JSON.stringify(process.env.VERSION || "dev"),
+	},
 	plugins: [
 		react(),
 		tailwindcss(),

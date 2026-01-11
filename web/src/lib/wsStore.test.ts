@@ -31,8 +31,10 @@ class MockWebSocket {
 		if (parsed.id !== undefined) {
 			// It's a request, send a response synchronously via queueMicrotask
 			queueMicrotask(() => {
-				let result = {};
-				if (parsed.method === "chat.attach") {
+				let result: Record<string, unknown> = {};
+				if (parsed.method === "auth") {
+					result = { version: "test" };
+				} else if (parsed.method === "chat.attach") {
 					result = { process_running: false };
 				}
 				this.simulateMessage({

@@ -17,6 +17,10 @@ type AuthParams struct {
 	Token string `json:"token"`
 }
 
+type AuthResult struct {
+	Version string `json:"version"`
+}
+
 type AttachParams struct {
 	SessionID string `json:"session_id"`
 }

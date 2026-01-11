@@ -257,7 +257,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	wsHandler := ws.NewRPCHandler(token, manager, devMode, sessionStore, commandStore, workDir, fsWatcher, gitWatcher)
+	wsHandler := ws.NewRPCHandler(token, version, manager, devMode, sessionStore, commandStore, workDir, fsWatcher, gitWatcher)
 	handler := newHandler(token, manager, devMode, sessionStore, workDir, wsHandler)
 
 	srv := &http.Server{

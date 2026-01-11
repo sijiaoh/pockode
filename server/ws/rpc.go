@@ -23,6 +23,7 @@ import (
 // RPCHandler handles JSON-RPC 2.0 over WebSocket.
 type RPCHandler struct {
 	token        string
+	version      string
 	manager      *process.Manager
 	devMode      bool
 	sessionStore session.Store
@@ -32,9 +33,10 @@ type RPCHandler struct {
 	gitWatcher   *watch.GitWatcher
 }
 
-func NewRPCHandler(token string, manager *process.Manager, devMode bool, sessionStore session.Store, commandStore *command.Store, workDir string, watcher *watch.FSWatcher, gitWatcher *watch.GitWatcher) *RPCHandler {
+func NewRPCHandler(token, version string, manager *process.Manager, devMode bool, sessionStore session.Store, commandStore *command.Store, workDir string, watcher *watch.FSWatcher, gitWatcher *watch.GitWatcher) *RPCHandler {
 	return &RPCHandler{
 		token:        token,
+		version:      version,
 		manager:      manager,
 		devMode:      devMode,
 		sessionStore: sessionStore,
@@ -244,7 +246,7 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 	h.setAuthenticated()
 	h.log.Info("authenticated")
 
-	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+	if err := conn.Reply(ctx, req.ID, rpc.AuthResult{Version: h.version}); err != nil {
 		h.log.Error("failed to send auth response", "error", err)
 	}
 }
