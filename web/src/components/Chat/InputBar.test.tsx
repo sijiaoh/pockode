@@ -351,7 +351,9 @@ describe("InputBar", () => {
 			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
 
 			const textarea = screen.getByRole("textbox");
-			fireEvent.change(textarea, { target: { value: "/my-plugin:my-command" } });
+			fireEvent.change(textarea, {
+				target: { value: "/my-plugin:my-command" },
+			});
 
 			await waitFor(() => {
 				expect(screen.getByRole("listbox")).toBeInTheDocument();
