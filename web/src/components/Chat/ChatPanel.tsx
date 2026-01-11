@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { unreadActions } from "../../lib/unreadStore";
+import { useWSStore } from "../../lib/wsStore";
 import type {
 	AskUserQuestionRequest,
 	PermissionRequest,
@@ -31,6 +32,8 @@ function ChatPanel({
 	overlay,
 	onCloseOverlay,
 }: Props) {
+	const projectTitle = useWSStore((state) => state.projectTitle);
+
 	const {
 		messages,
 		isLoadingHistory,
@@ -157,7 +160,11 @@ function ChatPanel({
 	};
 
 	return (
-		<MainContainer onOpenSidebar={onOpenSidebar} onLogout={onLogout}>
+		<MainContainer
+			title={projectTitle}
+			onOpenSidebar={onOpenSidebar}
+			onLogout={onLogout}
+		>
 			{renderContent()}
 			<InputBar
 				sessionId={sessionId}
