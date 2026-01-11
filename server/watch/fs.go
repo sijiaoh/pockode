@@ -218,4 +218,3 @@ func (w *FSWatcher) notifyPath(path string) {
 
 	slog.Debug("notified path change", "path", path, "subscribers", notified)
 }
-

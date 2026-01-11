@@ -196,9 +196,9 @@ type FileStatus struct {
 
 // GitStatus represents the overall git status.
 type GitStatus struct {
-	Staged     []FileStatus           `json:"staged"`
-	Unstaged   []FileStatus           `json:"unstaged"`
-	Submodules map[string]*GitStatus  `json:"submodules,omitempty"`
+	Staged     []FileStatus          `json:"staged"`
+	Unstaged   []FileStatus          `json:"unstaged"`
+	Submodules map[string]*GitStatus `json:"submodules,omitempty"`
 }
 
 // HasFile returns true if the file exists in staged or unstaged list.
