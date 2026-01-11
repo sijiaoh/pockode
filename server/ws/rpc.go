@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"sync"
 
 	"github.com/coder/websocket"
@@ -246,7 +247,8 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 	h.setAuthenticated()
 	h.log.Info("authenticated")
 
-	if err := conn.Reply(ctx, req.ID, rpc.AuthResult{Version: h.version}); err != nil {
+	title := filepath.Base(h.workDir)
+	if err := conn.Reply(ctx, req.ID, rpc.AuthResult{Version: h.version, Title: title}); err != nil {
 		h.log.Error("failed to send auth response", "error", err)
 	}
 }

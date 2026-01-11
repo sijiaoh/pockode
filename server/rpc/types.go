@@ -19,6 +19,7 @@ type AuthParams struct {
 
 type AuthResult struct {
 	Version string `json:"version"`
+	Title   string `json:"title"`
 }
 
 type AttachParams struct {

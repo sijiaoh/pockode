@@ -153,6 +153,7 @@ export interface AuthParams {
 
 export interface AuthResult {
 	version: string;
+	title: string;
 }
 
 export interface AttachParams {
