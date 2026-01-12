@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +13,28 @@ import (
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/ws"
 )
+
+func TestFindAvailablePort(t *testing.T) {
+	t.Run("returns requested port when available", func(t *testing.T) {
+		port := findAvailablePort(19870)
+		if port != 19870 {
+			t.Errorf("got port %d, want 19870", port)
+		}
+	})
+
+	t.Run("increments when port is occupied", func(t *testing.T) {
+		ln, err := net.Listen("tcp", ":19871")
+		if err != nil {
+			t.Fatalf("failed to occupy port: %v", err)
+		}
+		defer ln.Close()
+
+		port := findAvailablePort(19871)
+		if port != 19872 {
+			t.Errorf("got port %d, want 19872", port)
+		}
+	})
+}
 
 func TestHealthEndpoint(t *testing.T) {
 	tempDir := t.TempDir()

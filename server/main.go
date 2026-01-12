@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -141,8 +142,22 @@ func getContentType(filePath string) string {
 	return "application/octet-stream"
 }
 
+const defaultPort = 9870
+
+func findAvailablePort(startPort int) int {
+	const maxAttempts = 100
+	for port := startPort; port < startPort+maxAttempts; port++ {
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err == nil {
+			ln.Close()
+			return port
+		}
+	}
+	return startPort
+}
+
 func main() {
-	portFlag := flag.Int("port", 0, "server port (default 8080)")
+	portFlag := flag.Int("port", 0, fmt.Sprintf("server port (default %d)", defaultPort))
 	tokenFlag := flag.String("auth-token", "", "authentication token (required)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
 	relayFlag := flag.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
@@ -154,12 +169,15 @@ func main() {
 		os.Exit(0)
 	}
 
-	port := "8080"
+	port := defaultPort
 	if *portFlag != 0 {
-		port = strconv.Itoa(*portFlag)
+		port = *portFlag
 	} else if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
-		port = envPort
+		if p, err := strconv.Atoi(envPort); err == nil {
+			port = p
+		}
 	}
+	port = findAvailablePort(port)
 
 	token := *tokenFlag
 	if token == "" {
@@ -261,8 +279,9 @@ func main() {
 	wsHandler := ws.NewRPCHandler(token, version, manager, devMode, sessionStore, commandStore, workDir, fsWatcher, gitWatcher)
 	handler := newHandler(token, manager, devMode, sessionStore, workDir, wsHandler)
 
+	portStr := strconv.Itoa(port)
 	srv := &http.Server{
-		Addr:    ":" + port,
+		Addr:    ":" + portStr,
 		Handler: handler,
 	}
 
@@ -283,12 +302,11 @@ func main() {
 			ClientVersion: version,
 		}
 
-		backendPort, _ := strconv.Atoi(port)
-		frontendPort := backendPort
+		frontendPort := port
 		if envFrontendPort := os.Getenv("RELAY_FRONTEND_PORT"); envFrontendPort != "" {
 			frontendPort, _ = strconv.Atoi(envFrontendPort)
 		}
-		relayManager = relay.NewManager(relayCfg, backendPort, frontendPort, slog.Default())
+		relayManager = relay.NewManager(relayCfg, port, frontendPort, slog.Default())
 
 		var err error
 		remoteURL, err = relayManager.Start(context.Background())
@@ -337,7 +355,7 @@ func main() {
 	// Display startup banner
 	startup.PrintBanner(startup.BannerOptions{
 		Version:      version,
-		LocalURL:     "http://localhost:" + port,
+		LocalURL:     "http://localhost:" + portStr,
 		RemoteURL:    remoteURL,
 		Announcement: announcement,
 	})
