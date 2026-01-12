@@ -6,6 +6,7 @@ import {
 	X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useWSStore } from "../../lib/wsStore";
 import type {
 	AskUserQuestionRequest,
 	ContentPart,
@@ -26,8 +27,34 @@ interface ToolCallItemProps {
 	tool: ToolCall;
 }
 
+/** Format file path as "filename (relative/dir)" for display */
+function formatFilePath(filePath: string, workDir: string): string {
+	const parts = filePath.split("/").filter(Boolean);
+	if (parts.length === 0) return filePath;
+
+	const fileName = parts[parts.length - 1];
+	if (parts.length === 1) return fileName;
+
+	// If path is within workDir, show relative path
+	if (workDir && filePath.startsWith(workDir)) {
+		const relativePath = filePath.slice(workDir.length).replace(/^\//, "");
+		const relativeParts = relativePath.split("/").filter(Boolean);
+		relativeParts.pop();
+		if (relativeParts.length === 0) return fileName;
+		return `${fileName} (${relativeParts.join("/")})`;
+	}
+
+	// For paths outside workDir, show only parent directory
+	const parentDir = parts[parts.length - 2];
+	return `${fileName} (${parentDir})`;
+}
+
 /** Extract a short summary from tool input for display */
-function getInputSummary(toolName: string, input: unknown): string {
+function getInputSummary(
+	toolName: string,
+	input: unknown,
+	workDir: string,
+): string {
 	if (!input || typeof input !== "object") return "";
 
 	const obj = input as Record<string, unknown>;
@@ -41,11 +68,9 @@ function getInputSummary(toolName: string, input: unknown): string {
 		}
 	}
 
-	// Read/Edit/Write: show file path
+	// Read/Edit/Write: show file name with relative directory path
 	if (typeof obj.file_path === "string") {
-		const path = obj.file_path;
-		const parts = path.split("/");
-		return parts.length > 2 ? `.../${parts.slice(-2).join("/")}` : path;
+		return formatFilePath(obj.file_path, workDir);
 	}
 
 	// Grep/Glob: show pattern
@@ -66,7 +91,8 @@ function getInputSummary(toolName: string, input: unknown): string {
 function ToolCallItem({ tool }: ToolCallItemProps) {
 	const [expanded, setExpanded] = useState(false);
 	const hasResult = Boolean(tool.result);
-	const summary = getInputSummary(tool.name, tool.input);
+	const workDir = useWSStore((state) => state.workDir);
+	const summary = getInputSummary(tool.name, tool.input, workDir);
 
 	return (
 		<div className="rounded bg-th-bg-secondary text-xs">
@@ -268,7 +294,8 @@ function PermissionRequestItem({
 	onRespond,
 }: PermissionRequestItemProps) {
 	const isPending = status === "pending";
-	const summary = getInputSummary(request.toolName, request.toolInput);
+	const workDir = useWSStore((state) => state.workDir);
+	const summary = getInputSummary(request.toolName, request.toolInput, workDir);
 	const isExitPlanMode = request.toolName === "ExitPlanMode";
 	const planContent = isExitPlanMode
 		? extractPlanContent(request.toolInput)

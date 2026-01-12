@@ -65,6 +65,7 @@ type RPCActions = ConnectionActions &
 interface WSState {
 	status: ConnectionStatus;
 	projectTitle: string;
+	workDir: string;
 	actions: RPCActions;
 }
 
@@ -164,6 +165,7 @@ const gitActions = createGitActions(getClient);
 export const useWSStore = create<WSState>((set, get) => ({
 	status: "disconnected",
 	projectTitle: "",
+	workDir: "",
 
 	actions: {
 		connect: (token: string) => {
@@ -208,7 +210,11 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 					document.title = `${result.title} | Pockode`;
 
-					set({ status: "connected", projectTitle: result.title });
+					set({
+						status: "connected",
+						projectTitle: result.title,
+						workDir: result.work_dir,
+					});
 					reconnectAttempts = 0;
 				} catch (error) {
 					console.error("WebSocket auth failed:", error);
@@ -378,5 +384,9 @@ export function resetWSStore() {
 	watchCallbacks.clear();
 	gitWatchCallbacks.clear();
 	sessionExistsChecker = null;
-	useWSStore.setState({ status: "disconnected", projectTitle: "" });
+	useWSStore.setState({
+		status: "disconnected",
+		projectTitle: "",
+		workDir: "",
+	});
 }

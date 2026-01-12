@@ -1,8 +1,15 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "../../types/message";
 import MessageItem from "./MessageItem";
+
+const mockWorkDir = vi.hoisted(() => ({ value: "/Users/test/project" }));
+
+vi.mock("../../lib/wsStore", () => ({
+	useWSStore: (selector: (state: { workDir: string }) => string) =>
+		selector({ workDir: mockWorkDir.value }),
+}));
 
 describe("MessageItem", () => {
 	it("renders user message content", () => {
@@ -272,5 +279,81 @@ describe("MessageItem", () => {
 
 		render(<MessageItem message={message} />);
 		expect(screen.getByText("init")).toBeInTheDocument();
+	});
+
+	describe("file path display", () => {
+		beforeEach(() => {
+			mockWorkDir.value = "/Users/test/project";
+		});
+
+		it("shows filename with relative path for files within workDir", () => {
+			const message: Message = {
+				id: "fp-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "tool_call",
+						tool: {
+							id: "tool-fp-1",
+							name: "Read",
+							input: {
+								file_path: "/Users/test/project/src/components/Button.tsx",
+							},
+						},
+					},
+				],
+				status: "complete",
+				createdAt: new Date(),
+			};
+
+			render(<MessageItem message={message} />);
+			expect(
+				screen.getByText("Button.tsx (src/components)"),
+			).toBeInTheDocument();
+		});
+
+		it("shows filename with parent dir only for files outside workDir", () => {
+			const message: Message = {
+				id: "fp-2",
+				role: "assistant",
+				parts: [
+					{
+						type: "tool_call",
+						tool: {
+							id: "tool-fp-2",
+							name: "Read",
+							input: { file_path: "/etc/hosts" },
+						},
+					},
+				],
+				status: "complete",
+				createdAt: new Date(),
+			};
+
+			render(<MessageItem message={message} />);
+			expect(screen.getByText("hosts (etc)")).toBeInTheDocument();
+		});
+
+		it("shows filename only for files in workDir root", () => {
+			const message: Message = {
+				id: "fp-3",
+				role: "assistant",
+				parts: [
+					{
+						type: "tool_call",
+						tool: {
+							id: "tool-fp-3",
+							name: "Read",
+							input: { file_path: "/Users/test/project/README.md" },
+						},
+					},
+				],
+				status: "complete",
+				createdAt: new Date(),
+			};
+
+			render(<MessageItem message={message} />);
+			expect(screen.getByText("README.md")).toBeInTheDocument();
+		});
 	});
 });

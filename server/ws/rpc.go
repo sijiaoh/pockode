@@ -248,7 +248,7 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 	h.log.Info("authenticated")
 
 	title := filepath.Base(h.workDir)
-	if err := conn.Reply(ctx, req.ID, rpc.AuthResult{Version: h.version, Title: title}); err != nil {
+	if err := conn.Reply(ctx, req.ID, rpc.AuthResult{Version: h.version, Title: title, WorkDir: h.workDir}); err != nil {
 		h.log.Error("failed to send auth response", "error", err)
 	}
 }

@@ -20,6 +20,7 @@ type AuthParams struct {
 type AuthResult struct {
 	Version string `json:"version"`
 	Title   string `json:"title"`
+	WorkDir string `json:"work_dir"`
 }
 
 type AttachParams struct {
