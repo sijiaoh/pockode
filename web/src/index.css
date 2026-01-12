@@ -34,6 +34,10 @@ body {
  * ============================================================================= */
 
 @theme inline {
+	/* Font families */
+	--font-sans: "Geist", system-ui, sans-serif;
+	--font-mono: "Geist Mono", ui-monospace, monospace;
+
 	/* Backgrounds */
 	--color-th-bg-primary: var(--th-bg-primary);
 	--color-th-bg-secondary: var(--th-bg-secondary);
@@ -70,6 +74,23 @@ body {
 	--color-th-user-bubble-text: var(--th-user-bubble-text);
 	--color-th-ai-bubble: var(--th-ai-bubble);
 	--color-th-ai-bubble-text: var(--th-ai-bubble-text);
+}
+
+/* =============================================================================
+ * BASE FONT SETTINGS
+ * ============================================================================= */
+
+html {
+	font-family: var(--font-sans);
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+code,
+kbd,
+pre,
+samp {
+	font-family: var(--font-mono);
 }
 
 /* =============================================================================
@@ -538,15 +559,17 @@ body {
  * ============================================================================= */
 
 .diff-view-wrapper {
-	font-family:
-		ui-monospace,
-		SFMono-Regular,
-		SF Mono,
-		Menlo,
-		Consolas,
-		monospace;
-	font-size: 0.75rem;
+	font-family: var(--font-mono);
+	font-size: 0.75rem; /* 12px - minimum readable size for code */
 	line-height: 1.5;
+}
+
+/* PC: Larger font for comfortable code reading */
+/* biome-ignore lint/correctness/noUnknownFunction: Tailwind CSS v4 theme() function */
+@media (width >= theme(--breakpoint-sm)) {
+	.diff-view-wrapper {
+		font-size: 0.8125rem; /* 13px - IDE-like experience */
+	}
 }
 
 /* Override diff-view colors to match our theme - Common styles */
@@ -653,4 +676,26 @@ body {
 /* Prevent shiki background from being cut off when content overflows */
 .shiki {
 	min-width: fit-content;
+}
+
+/* =============================================================================
+ * MARKDOWN CODE BLOCKS (Prose context)
+ *
+ * Optimized font sizes for code readability:
+ * - Mobile: 12px (0.75rem) - minimum readable size for code
+ * - PC: 13px (0.8125rem) - comfortable IDE-like reading experience
+ * ============================================================================= */
+
+.prose pre,
+.prose code {
+	font-size: 0.75rem;
+	line-height: 1.5;
+}
+
+/* biome-ignore lint/correctness/noUnknownFunction: Tailwind CSS v4 theme() function */
+@media (width >= theme(--breakpoint-sm)) {
+	.prose pre,
+	.prose code {
+		font-size: 0.8125rem;
+	}
 }
