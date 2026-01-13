@@ -131,19 +131,18 @@ function WorktreeSwitcher({ onClose, isDesktop = true }: Props) {
 
 			{closeButton}
 
-			{isOpen && (
-				<WorktreeDropdown
-					worktrees={worktrees}
-					current={current}
-					onSelect={handleSelect}
-					onDelete={handleDelete}
-					onCreateNew={handleOpenCreate}
-					onClose={() => setIsOpen(false)}
-					getDisplayName={getDisplayName}
-					triggerRef={buttonRef}
-					isDesktop={isDesktop}
-				/>
-			)}
+			<WorktreeDropdown
+				isOpen={isOpen}
+				worktrees={worktrees}
+				current={current}
+				onSelect={handleSelect}
+				onDelete={handleDelete}
+				onCreateNew={handleOpenCreate}
+				onClose={() => setIsOpen(false)}
+				getDisplayName={getDisplayName}
+				triggerRef={buttonRef}
+				isDesktop={isDesktop}
+			/>
 
 			{isCreateOpen && (
 				<WorktreeCreateSheet

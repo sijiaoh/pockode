@@ -1,9 +1,11 @@
-import { GitBranch, Plus, X } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { GitBranch, Plus } from "lucide-react";
+import { useMemo } from "react";
 import type { WorktreeInfo } from "../../types/message";
+import ResponsivePanel from "../ui/ResponsivePanel";
 import WorktreeItem from "./WorktreeItem";
 
 interface Props {
+	isOpen: boolean;
 	worktrees: WorktreeInfo[];
 	current: string;
 	onSelect: (worktree: WorktreeInfo) => void;
@@ -11,11 +13,12 @@ interface Props {
 	onCreateNew: () => void;
 	onClose: () => void;
 	getDisplayName: (worktree: WorktreeInfo) => string;
-	triggerRef?: React.RefObject<HTMLButtonElement | null>;
+	triggerRef?: React.RefObject<HTMLButtonElement>;
 	isDesktop: boolean;
 }
 
 function WorktreeDropdown({
+	isOpen,
 	worktrees,
 	current,
 	onSelect,
@@ -26,9 +29,6 @@ function WorktreeDropdown({
 	triggerRef,
 	isDesktop,
 }: Props) {
-	const panelRef = useRef<HTMLDivElement>(null);
-	const mobile = !isDesktop;
-
 	// Filter out current worktree - dropdown shows "switch to" options only
 	const switchableWorktrees = useMemo(() => {
 		return worktrees.filter((wt) =>
@@ -38,77 +38,16 @@ function WorktreeDropdown({
 
 	const hasNoSwitchTargets = switchableWorktrees.length === 0;
 
-	useEffect(() => {
-		const handleClickOutside = (e: MouseEvent) => {
-			const target = e.target as Element;
-			if (triggerRef?.current?.contains(target)) {
-				return;
-			}
-			// Ignore clicks inside portaled dialogs (e.g., delete confirmation)
-			if (target.closest('[role="dialog"]')) {
-				return;
-			}
-			if (panelRef.current && !panelRef.current.contains(target)) {
-				onClose();
-			}
-		};
-
-		document.addEventListener("mousedown", handleClickOutside);
-		return () => document.removeEventListener("mousedown", handleClickOutside);
-	}, [onClose, triggerRef]);
-
-	useEffect(() => {
-		const handleEscape = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
-		};
-
-		document.addEventListener("keydown", handleEscape);
-		return () => document.removeEventListener("keydown", handleEscape);
-	}, [onClose]);
-
-	useEffect(() => {
-		if (!mobile) return;
-
-		const originalOverflow = document.body.style.overflow;
-		document.body.style.overflow = "hidden";
-
-		return () => {
-			document.body.style.overflow = originalOverflow;
-		};
-	}, [mobile]);
-
-	const content = (
-		<div
-			ref={panelRef}
-			className={
-				mobile
-					? "fixed inset-x-0 bottom-0 z-50 flex max-h-[70dvh] flex-col rounded-t-2xl border-t border-th-border bg-th-bg-secondary shadow-xl"
-					: "absolute left-0 right-0 top-full z-50 mt-1 flex max-h-[50vh] flex-col overflow-hidden rounded-xl border border-th-border bg-th-bg-secondary shadow-lg"
-			}
-			role="listbox"
-			aria-label="Select worktree"
+	return (
+		<ResponsivePanel
+			isOpen={isOpen}
+			onClose={onClose}
+			title="Switch worktree"
+			triggerRef={triggerRef}
+			isDesktop={isDesktop}
+			mobileMaxHeight="70dvh"
+			desktopMaxHeight="50vh"
 		>
-			{mobile && (
-				<>
-					<div className="flex shrink-0 justify-center pt-3 pb-2">
-						<div className="h-1 w-10 rounded-full bg-th-text-muted/30" />
-					</div>
-					<div className="flex items-center justify-between border-b border-th-border px-4 pb-3">
-						<h2 className="text-sm font-semibold text-th-text-primary">
-							Switch worktree
-						</h2>
-						<button
-							type="button"
-							onClick={onClose}
-							className="-mr-1 rounded p-1 text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
-							aria-label="Close"
-						>
-							<X className="h-5 w-5" />
-						</button>
-					</div>
-				</>
-			)}
-
 			{hasNoSwitchTargets ? (
 				<div className="flex flex-col items-center px-4 py-6 text-center">
 					<div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-th-bg-tertiary">
@@ -141,24 +80,8 @@ function WorktreeDropdown({
 					<span className="text-sm font-medium">New worktree</span>
 				</button>
 			</div>
-		</div>
+		</ResponsivePanel>
 	);
-
-	if (mobile) {
-		return (
-			<>
-				{/* Backdrop - aria-hidden so click handler doesn't need keyboard equivalent */}
-				<div
-					className="fixed inset-0 z-40 bg-black/50"
-					onClick={onClose}
-					aria-hidden="true"
-				/>
-				{content}
-			</>
-		);
-	}
-
-	return content;
 }
 
 export default WorktreeDropdown;
