@@ -69,11 +69,11 @@ function WorktreeDropdown({
 				</div>
 			)}
 
-			<div className="border-t border-th-border">
+			<div className="border-t border-th-border py-2">
 				<button
 					type="button"
 					onClick={onCreateNew}
-					className="flex w-full items-center gap-3 px-3 py-2.5 text-th-accent transition-colors hover:bg-th-accent/10"
+					className="flex w-full items-center gap-3 px-3 py-2.5 text-th-accent transition-colors hover:bg-th-accent/10 focus-visible:bg-th-accent/10 focus-visible:outline-none"
 				>
 					<Plus className="h-4 w-4" />
 					<span className="text-sm font-medium">New worktree</span>
