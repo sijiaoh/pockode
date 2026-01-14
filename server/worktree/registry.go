@@ -45,7 +45,7 @@ func NewRegistry(mainDir string) *Registry {
 	return &Registry{
 		mainDir:  mainDir,
 		cache:    make(map[string]Info),
-		cacheTTL: 30 * time.Second,
+		cacheTTL: 3 * time.Second,
 	}
 }
 

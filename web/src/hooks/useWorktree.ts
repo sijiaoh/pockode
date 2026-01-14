@@ -66,7 +66,9 @@ export function useWorktree({
 		queryKey: ["worktrees"],
 		queryFn: listWorktrees,
 		enabled: enabled && isConnected && isGitRepo,
-		staleTime: Number.POSITIVE_INFINITY,
+		// TODO: Replace polling with JSON-RPC notification from server
+		staleTime: 5000,
+		refetchInterval: 5000,
 	});
 
 	// Handle worktree deleted notification
