@@ -54,6 +54,11 @@ function WorktreeDropdown({
 						<GitBranch className="h-5 w-5 text-th-text-muted" />
 					</div>
 					<p className="text-sm text-th-text-muted">No other worktrees yet</p>
+					<p className="mt-1 text-xs text-th-text-muted">
+						git worktree lets you work on
+						<br />
+						multiple branches in parallel
+					</p>
 				</div>
 			) : (
 				<div className="flex-1 overflow-y-auto py-2">

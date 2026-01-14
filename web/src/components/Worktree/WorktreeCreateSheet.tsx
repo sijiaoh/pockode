@@ -131,13 +131,14 @@ function WorktreeCreateSheet({
 								type="text"
 								value={name}
 								onChange={(e) => setName(e.target.value)}
-								placeholder="feature/my-feature"
+								placeholder="review"
 								className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
 								disabled={isCreating}
 								autoComplete="off"
+								required
 							/>
 							<p className="text-xs text-th-text-muted">
-								Used as the worktree directory name
+								Worktree directory name
 							</p>
 						</div>
 
@@ -147,20 +148,23 @@ function WorktreeCreateSheet({
 								htmlFor="worktree-branch"
 								className="text-sm font-medium text-th-text-primary"
 							>
-								Branch
+								Branch{" "}
+								<span className="font-normal text-th-text-muted">
+									(optional)
+								</span>
 							</label>
 							<input
 								id="worktree-branch"
 								type="text"
 								value={branch}
 								onChange={(e) => setBranch(e.target.value)}
-								placeholder="Same as name"
+								placeholder="feature/my-feature"
 								className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
 								disabled={isCreating}
 								autoComplete="off"
 							/>
 							<p className="text-xs text-th-text-muted">
-								Git branch to checkout (defaults to name)
+								Uses name if empty
 							</p>
 						</div>
 
