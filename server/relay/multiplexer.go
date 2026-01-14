@@ -15,7 +15,7 @@ import (
 type EnvelopeType string
 
 const (
-	EnvelopeTypeMessage      EnvelopeType = "message"
+	EnvelopeTypeJSONRPC      EnvelopeType = "jsonrpc"
 	EnvelopeTypeDisconnected EnvelopeType = "disconnected"
 	EnvelopeTypeHTTPRequest  EnvelopeType = "http_request"
 	EnvelopeTypeHTTPResponse EnvelopeType = "http_response"
@@ -63,7 +63,7 @@ func (m *Multiplexer) Run(ctx context.Context) error {
 		}
 
 		switch env.Type {
-		case EnvelopeTypeMessage:
+		case EnvelopeTypeJSONRPC:
 			stream, isNew := m.getOrCreateStream(env.ConnectionID)
 			if isNew {
 				select {
@@ -160,7 +160,7 @@ func (m *Multiplexer) send(connectionID string, payload interface{}) error {
 
 	env := Envelope{
 		ConnectionID: connectionID,
-		Type:         EnvelopeTypeMessage,
+		Type:         EnvelopeTypeJSONRPC,
 		Payload:      data,
 	}
 
