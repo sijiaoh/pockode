@@ -31,7 +31,6 @@ body {
   color: var(--text);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
 }
 
 /* Grain texture overlay */
@@ -86,9 +85,8 @@ body {
   content: '';
   position: absolute;
   top: -200px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 800px;
+  left: 0;
+  right: 0;
   height: 600px;
   background: radial-gradient(ellipse at center, rgba(59, 130, 246, 0.12) 0%, rgba(168, 85, 247, 0.06) 40%, transparent 70%);
   pointer-events: none;
@@ -538,7 +536,6 @@ body {
   }
 
   .hero::before {
-    width: 400px;
     height: 400px;
     top: -100px;
   }
