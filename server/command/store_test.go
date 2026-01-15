@@ -1,6 +1,8 @@
 package command
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -102,16 +104,43 @@ func TestList_DuplicateUsageDeduped(t *testing.T) {
 
 func TestUse_TrimsOldEntries(t *testing.T) {
 	dir := t.TempDir()
-	store := &Store{dataDir: dir}
+	filePath := filepath.Join(dir, "commands.json")
 
-	for i := 0; i < maxRecentCommands+100; i++ {
-		store.recent = append(store.recent, RecentCommand{Name: "cmd", UsedAt: time.Now()})
+	// Create initial data at max limit (all in the past)
+	var initial []RecentCommand
+	baseTime := time.Now().Add(-time.Hour)
+	for i := 0; i < maxRecentCommands; i++ {
+		initial = append(initial, RecentCommand{
+			Name:   fmt.Sprintf("cmd%d", i),
+			UsedAt: baseTime.Add(time.Duration(i) * time.Second),
+		})
+	}
+	data, _ := json.Marshal(initial)
+	os.WriteFile(filePath, data, 0644)
+
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
 
+	// Adding one more triggers trim
 	store.Use("final")
 
-	if len(store.recent) != maxRecentCommands {
-		t.Errorf("expected %d entries, got %d", maxRecentCommands, len(store.recent))
+	commands := store.List()
+	if len(commands) > maxRecentCommands+len(BuiltinCommands) {
+		t.Errorf("expected at most %d commands, got %d", maxRecentCommands+len(BuiltinCommands), len(commands))
+	}
+
+	// Verify newest entry is kept
+	if commands[0].Name != "final" {
+		t.Errorf("expected 'final' first (newest), got %s", commands[0].Name)
+	}
+
+	// Verify oldest entries are removed
+	for _, cmd := range commands {
+		if cmd.Name == "cmd0" {
+			t.Error("expected 'cmd0' (oldest) to be removed")
+		}
 	}
 }
 

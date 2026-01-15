@@ -77,6 +77,7 @@ func (s *Store) readFromDisk() ([]RecentCommand, error) {
 	if err := json.Unmarshal(data, &recent); err != nil {
 		return nil, err
 	}
+
 	return recent, nil
 }
 
@@ -100,11 +101,8 @@ func (s *Store) List() []Command {
 	})
 
 	seen := make(map[string]bool)
-	commands := []Command{}
+	commands := make([]Command, 0, len(sorted)+len(BuiltinCommands))
 	for _, rc := range sorted {
-		if seen[rc.Name] {
-			continue
-		}
 		seen[rc.Name] = true
 		commands = append(commands, Command{
 			Name:      rc.Name,
@@ -136,13 +134,27 @@ func (s *Store) Use(name string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	newRecent := append(slices.Clone(s.recent), RecentCommand{
-		Name:   name,
-		UsedAt: time.Now(),
+	now := time.Now()
+	newRecent := slices.Clone(s.recent)
+
+	idx := slices.IndexFunc(newRecent, func(rc RecentCommand) bool {
+		return rc.Name == name
 	})
 
+	if idx >= 0 {
+		newRecent[idx].UsedAt = now
+	} else {
+		newRecent = append(newRecent, RecentCommand{
+			Name:   name,
+			UsedAt: now,
+		})
+	}
+
 	if len(newRecent) > maxRecentCommands {
-		newRecent = newRecent[len(newRecent)-maxRecentCommands:]
+		sort.Slice(newRecent, func(i, j int) bool {
+			return newRecent[i].UsedAt.After(newRecent[j].UsedAt)
+		})
+		newRecent = newRecent[:maxRecentCommands]
 	}
 
 	old := s.recent
