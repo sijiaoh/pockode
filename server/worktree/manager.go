@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -99,7 +100,8 @@ func (m *Manager) Release(wt *Worktree) {
 	}
 }
 
-// ForceShutdown immediately shuts down a worktree and notifies all subscribers.
+// ForceShutdown immediately shuts down a worktree, notifies all subscribers,
+// and removes the worktree's data directory from .pockode.
 func (m *Manager) ForceShutdown(name string) {
 	m.mu.Lock()
 	wt, exists := m.worktrees[name]
@@ -112,6 +114,11 @@ func (m *Manager) ForceShutdown(name string) {
 		wt.NotifyAll(context.Background(), "worktree.deleted", rpc.WorktreeDeletedParams{Name: name})
 		wt.Stop()
 		slog.Info("worktree force shutdown", "name", name)
+	}
+
+	wtDataDir := filepath.Join(m.dataDir, "worktrees", name)
+	if err := os.RemoveAll(wtDataDir); err != nil {
+		slog.Warn("failed to remove worktree data directory", "path", wtDataDir, "error", err)
 	}
 }
 
