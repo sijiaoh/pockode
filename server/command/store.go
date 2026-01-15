@@ -78,7 +78,23 @@ func (s *Store) readFromDisk() ([]RecentCommand, error) {
 		return nil, err
 	}
 
-	return recent, nil
+	// Deduplicate for legacy data; new entries are deduplicated in Use().
+	return deduplicateCommands(recent), nil
+}
+
+func deduplicateCommands(commands []RecentCommand) []RecentCommand {
+	latest := make(map[string]RecentCommand)
+	for _, cmd := range commands {
+		if existing, ok := latest[cmd.Name]; !ok || cmd.UsedAt.After(existing.UsedAt) {
+			latest[cmd.Name] = cmd
+		}
+	}
+
+	result := make([]RecentCommand, 0, len(latest))
+	for _, cmd := range latest {
+		result = append(result, cmd)
+	}
+	return result
 }
 
 func (s *Store) persist() error {

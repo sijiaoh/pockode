@@ -165,6 +165,39 @@ func TestPersistence(t *testing.T) {
 	}
 }
 
+func TestNewStore_DeduplicatesOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "commands.json")
+
+	duplicateData := `[
+		{"name": "help", "usedAt": "2024-01-01T00:00:00Z"},
+		{"name": "model", "usedAt": "2024-01-02T00:00:00Z"},
+		{"name": "help", "usedAt": "2024-01-03T00:00:00Z"}
+	]`
+	os.WriteFile(filePath, []byte(duplicateData), 0644)
+
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	commands := store.List()
+
+	helpCount := 0
+	for _, cmd := range commands {
+		if cmd.Name == "help" {
+			helpCount++
+		}
+	}
+	if helpCount != 1 {
+		t.Errorf("expected 1 'help' entry, got %d", helpCount)
+	}
+
+	if commands[0].Name != "help" {
+		t.Errorf("expected 'help' first (most recent), got %s", commands[0].Name)
+	}
+}
+
 func TestNewStore_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "commands.json")
