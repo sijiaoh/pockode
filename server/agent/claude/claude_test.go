@@ -142,7 +142,7 @@ func TestParseLine(t *testing.T) {
 			},
 		},
 		{
-			name:     "user event with invalid message falls back to raw text",
+			name:     "user event with invalid message outputs as text",
 			input:    `{"type":"user","message":"invalid message format"}`,
 			expected: []agent.AgentEvent{agent.TextEvent{Content: `"invalid message format"`}},
 		},
@@ -554,5 +554,102 @@ func TestSession_SendQuestionResponse_Cancel(t *testing.T) {
 	}
 	if !response.Response.Response.Interrupt {
 		t.Error("expected interrupt to be true for cancel")
+	}
+}
+
+func TestExtractEventsFromText(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []agent.AgentEvent
+	}{
+		{
+			name:     "plain text only",
+			input:    "Hello world",
+			expected: nil,
+		},
+		{
+			name:     "single tag",
+			input:    "<local-command-stdout>output</local-command-stdout>",
+			expected: []agent.AgentEvent{agent.CommandOutputEvent{Content: "output"}},
+		},
+		{
+			name:     "text before tag",
+			input:    "Before text <local-command-stdout>output</local-command-stdout>",
+			expected: []agent.AgentEvent{agent.CommandOutputEvent{Content: "output"}},
+		},
+		{
+			name:     "text after tag",
+			input:    "<local-command-stdout>output</local-command-stdout> After text",
+			expected: []agent.AgentEvent{agent.CommandOutputEvent{Content: "output"}},
+		},
+		{
+			name:     "text surrounding tag",
+			input:    "Before <local-command-stdout>output</local-command-stdout> After",
+			expected: []agent.AgentEvent{agent.CommandOutputEvent{Content: "output"}},
+		},
+		{
+			name:  "multiple tags",
+			input: "<local-command-stdout>first</local-command-stdout> middle <local-command-stdout>second</local-command-stdout>",
+			expected: []agent.AgentEvent{
+				agent.CommandOutputEvent{Content: "first"},
+				agent.CommandOutputEvent{Content: "second"},
+			},
+		},
+		{
+			name:  "multiple tags with surrounding text",
+			input: "start <local-command-stdout>first</local-command-stdout> middle <local-command-stdout>second</local-command-stdout> end",
+			expected: []agent.AgentEvent{
+				agent.CommandOutputEvent{Content: "first"},
+				agent.CommandOutputEvent{Content: "second"},
+			},
+		},
+		{
+			name:     "empty input",
+			input:    "",
+			expected: nil,
+		},
+		{
+			name:     "whitespace only",
+			input:    "   ",
+			expected: nil,
+		},
+		{
+			name:     "unclosed tag",
+			input:    "<local-command-stdout>unclosed",
+			expected: nil,
+		},
+		{
+			name:     "unclosed tag with text before",
+			input:    "Before <local-command-stdout>unclosed",
+			expected: nil,
+		},
+		{
+			name:     "stderr tag",
+			input:    "<local-command-stderr>Error: Compaction canceled.</local-command-stderr>",
+			expected: []agent.AgentEvent{agent.CommandOutputEvent{Content: "Error: Compaction canceled."}},
+		},
+		{
+			name:  "mixed stdout and stderr",
+			input: "<local-command-stdout>output</local-command-stdout> <local-command-stderr>error</local-command-stderr>",
+			expected: []agent.AgentEvent{
+				agent.CommandOutputEvent{Content: "output"},
+				agent.CommandOutputEvent{Content: "error"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractEventsFromText(tt.input)
+			if len(result) != len(tt.expected) {
+				t.Fatalf("expected %d events, got %d: %+v", len(tt.expected), len(result), result)
+			}
+			for i, ev := range result {
+				if ev != tt.expected[i] {
+					t.Errorf("event[%d]: expected %+v, got %+v", i, tt.expected[i], ev)
+				}
+			}
+		})
 	}
 }

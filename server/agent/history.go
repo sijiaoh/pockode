@@ -56,6 +56,8 @@ func NewHistoryRecord(event AgentEvent) HistoryRecord {
 		r.Content = e.Content
 	case MessageEvent:
 		r.Content = e.Content
+	case CommandOutputEvent:
+		r.Content = e.Content
 	case PermissionResponseEvent:
 		r.RequestID = e.RequestID
 		r.Choice = e.Choice

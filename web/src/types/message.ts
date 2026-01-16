@@ -46,7 +46,8 @@ export type ContentPart =
 			status: QuestionStatus;
 			answers?: Record<string, string>;
 	  }
-	| { type: "raw"; content: string };
+	| { type: "raw"; content: string }
+	| { type: "command_output"; content: string };
 
 // User message - plain text content
 export interface UserMessage {
@@ -308,7 +309,8 @@ export type ServerMethod =
 	| "permission_request"
 	| "ask_user_question"
 	| "request_cancelled"
-	| "system";
+	| "system"
+	| "command_output";
 
 // Server notification with type field for discriminated union
 export type ServerNotification =
@@ -357,4 +359,5 @@ export type ServerNotification =
 			session_id: string;
 			request_id: string;
 	  }
-	| { type: "system"; session_id: string; content: string };
+	| { type: "system"; session_id: string; content: string }
+	| { type: "command_output"; session_id: string; content: string };

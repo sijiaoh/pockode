@@ -229,6 +229,11 @@ type RawParams struct {
 	Content   string `json:"content"`
 }
 
+type CommandOutputParams struct {
+	SessionID string `json:"session_id"`
+	Content   string `json:"content"`
+}
+
 // NewNotifyParams creates method-specific notification params from an AgentEvent.
 func NewNotifyParams(sessionID string, event agent.AgentEvent) interface{} {
 	switch e := event.(type) {
@@ -265,6 +270,8 @@ func NewNotifyParams(sessionID string, event agent.AgentEvent) interface{} {
 		return SessionParams{SessionID: sessionID}
 	case agent.RawEvent:
 		return RawParams{SessionID: sessionID, Content: e.Content}
+	case agent.CommandOutputEvent:
+		return CommandOutputParams{SessionID: sessionID, Content: e.Content}
 	default:
 		return SessionParams{SessionID: sessionID}
 	}

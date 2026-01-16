@@ -22,6 +22,7 @@ const (
 	EventTypePermissionResponse EventType = "permission_response" // User permission response
 	EventTypeQuestionResponse   EventType = "question_response"   // User question response
 	EventTypeRaw                EventType = "raw"                 // Unprocessed CLI output
+	EventTypeCommandOutput      EventType = "command_output"      // Local command output (e.g., /context)
 )
 
 // PermissionBehavior represents the permission action.
@@ -97,6 +98,10 @@ type AskUserQuestion struct {
 
 // AgentEvent represents an event from an AI agent.
 // Each event type has its own struct with only the relevant fields.
+//
+// When adding a new event type:
+//   - Add case to NewHistoryRecord in history.go
+//   - Add case to NewNotifyParams in rpc/types.go
 type AgentEvent interface {
 	EventType() EventType
 	isAgentEvent() // unexported marker method to restrict implementations to this package
@@ -236,3 +241,11 @@ type RawEvent struct {
 
 func (RawEvent) EventType() EventType { return EventTypeRaw }
 func (RawEvent) isAgentEvent()        {}
+
+// CommandOutputEvent represents local command output (e.g., /context, /help).
+type CommandOutputEvent struct {
+	Content string
+}
+
+func (CommandOutputEvent) EventType() EventType { return EventTypeCommandOutput }
+func (CommandOutputEvent) isAgentEvent()        {}

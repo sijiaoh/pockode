@@ -148,10 +148,8 @@ func (s *session) SendMessage(prompt string) error {
 	msg := userMessage{
 		Type: "user",
 		Message: userContent{
-			Role: "user",
-			Content: []textContent{
-				{Type: "text", Text: prompt},
-			},
+			Role:    "user",
+			Content: []textContent{{Type: "text", Text: prompt}},
 		},
 	}
 	data, err := json.Marshal(msg)
@@ -457,6 +455,11 @@ type cliMessage struct {
 	Content []cliContentBlock `json:"content"`
 }
 
+// cliMessageString is for user messages where content is a plain string instead of array.
+type cliMessageString struct {
+	Content string `json:"content"`
+}
+
 type cliContentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
@@ -647,15 +650,22 @@ func parseUserEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 		return nil
 	}
 
+	// Try to parse as cliMessage (content is array of blocks)
 	var msg cliMessage
 	if err := json.Unmarshal(event.Message, &msg); err != nil {
-		log.Warn("failed to parse user message from CLI", "error", err)
-		return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message)}}
+		// content might be a plain string - try parsing as cliMessageString
+		var msgStr cliMessageString
+		if err := json.Unmarshal(event.Message, &msgStr); err != nil {
+			// Unknown format - output raw for visibility
+			return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message)}}
+		}
+		return extractEventsFromText(msgStr.Content)
 	}
 
 	var events []agent.AgentEvent
 	for _, block := range msg.Content {
-		if block.Type == "tool_result" {
+		switch block.Type {
+		case "tool_result":
 			// Check if content contains image (array with type:"image" elements).
 			// TODO: Support image display. Also note current HTTP relay has 10MB limit,
 			// which may need adjustment for large images.
@@ -677,7 +687,71 @@ func parseUserEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 				ToolUseID:  block.ToolUseID,
 				ToolResult: content,
 			})
+
+		default:
+			// Unknown block type - log for debugging but don't output to UI
+			if data, err := json.Marshal(block); err == nil {
+				log.Debug("unknown user message block type", "block", string(data))
+			}
 		}
+	}
+
+	return events
+}
+
+// extractEventsFromText extracts agent events from text, handling special tags.
+// Content inside command output tags becomes CommandOutputEvent.
+// Text outside tags is logged but not emitted as events.
+func extractEventsFromText(text string) []agent.AgentEvent {
+	// Tags that represent command output
+	commandOutputTags := []struct{ open, close string }{
+		{"<local-command-stdout>", "</local-command-stdout>"},
+		{"<local-command-stderr>", "</local-command-stderr>"},
+	}
+
+	var events []agent.AgentEvent
+	remaining := text
+
+	for len(remaining) > 0 {
+		// Find the earliest tag
+		bestIdx := -1
+		var bestTag struct{ open, close string }
+		for _, tag := range commandOutputTags {
+			idx := strings.Index(remaining, tag.open)
+			if idx != -1 && (bestIdx == -1 || idx < bestIdx) {
+				bestIdx = idx
+				bestTag = tag
+			}
+		}
+
+		if bestIdx == -1 {
+			break
+		}
+
+		if before := strings.TrimSpace(remaining[:bestIdx]); before != "" {
+			slog.Debug("text outside command tags", "content", before)
+		}
+
+		endIdx := strings.Index(remaining[bestIdx:], bestTag.close)
+		if endIdx == -1 {
+			if rest := strings.TrimSpace(remaining[bestIdx:]); rest != "" {
+				slog.Debug("text outside command tags (unclosed)", "content", rest)
+			}
+			return events
+		}
+		endIdx += bestIdx
+
+		contentStart := bestIdx + len(bestTag.open)
+		content := strings.TrimSpace(remaining[contentStart:endIdx])
+		if content != "" {
+			events = append(events, agent.CommandOutputEvent{Content: content})
+		}
+
+		remaining = remaining[endIdx+len(bestTag.close):]
+	}
+
+	if remaining := strings.TrimSpace(remaining); remaining != "" {
+		slog.Debug("text outside command tags", "content", remaining)
 	}
 
 	return events

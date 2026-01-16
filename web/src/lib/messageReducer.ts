@@ -55,7 +55,8 @@ export type NormalizedEvent =
 			requestId: string;
 			answers: Record<string, string> | null;
 	  }
-	| { type: "raw"; content: string };
+	| { type: "raw"; content: string }
+	| { type: "command_output"; content: string };
 
 // Convert snake_case server event to camelCase
 export function normalizeEvent(
@@ -135,6 +136,11 @@ export function normalizeEvent(
 			};
 		case "raw":
 			return { type: "raw", content: (record.content as string) ?? "" };
+		case "command_output":
+			return {
+				type: "command_output",
+				content: (record.content as string) ?? "",
+			};
 		default:
 			// Fallback for unknown types - treat as raw
 			return { type: "raw", content: JSON.stringify(record) };
@@ -205,6 +211,8 @@ export function applyEventToParts(
 			];
 		case "raw":
 			return [...parts, { type: "raw", content: event.content }];
+		case "command_output":
+			return [...parts, { type: "command_output", content: event.content }];
 		default:
 			return parts;
 	}

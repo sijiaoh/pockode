@@ -221,6 +221,34 @@ function RawItem({ content }: RawItemProps) {
 	);
 }
 
+interface CommandOutputItemProps {
+	content: string;
+}
+
+function CommandOutputItem({ content }: CommandOutputItemProps) {
+	const [expanded, setExpanded] = useState(true);
+
+	return (
+		<div className="rounded bg-th-bg-secondary text-xs">
+			<button
+				type="button"
+				onClick={() => setExpanded(!expanded)}
+				className="flex w-full items-center gap-1.5 rounded p-2 text-left hover:bg-th-overlay-hover"
+			>
+				<ChevronRight
+					className={`size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
+				/>
+				<span className="text-th-accent">Command Output</span>
+			</button>
+			{expanded && (
+				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+					<MarkdownContent content={content} />
+				</ScrollableContent>
+			)}
+		</div>
+	);
+}
+
 type PermissionChoice = "deny" | "allow" | "always_allow";
 
 interface PermissionRequestItemProps {
@@ -455,6 +483,9 @@ function ContentPartItem({
 	}
 	if (part.type === "raw") {
 		return <RawItem content={part.content} />;
+	}
+	if (part.type === "command_output") {
+		return <CommandOutputItem content={part.content} />;
 	}
 	return <ToolCallItem tool={part.tool} />;
 }
