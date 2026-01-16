@@ -1,7 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { HttpError } from "./api";
 import { authActions } from "./authStore";
-import { worktreeActions } from "./worktreeStore";
+import { setOnWorktreeSwitched } from "./wsStore";
 
 function isUnauthorized(error: unknown): boolean {
 	return error instanceof HttpError && error.status === 401;
@@ -46,8 +46,8 @@ export function createQueryClient(): QueryClient {
 		}
 	});
 
-	// Prevent stale data flash when switching worktrees
-	worktreeActions.onWorktreeChange(() => {
+	// Clear worktree-dependent caches after worktree switch completes
+	setOnWorktreeSwitched(() => {
 		for (const key of WORKTREE_DEPENDENT_QUERY_KEYS) {
 			queryClient.removeQueries({ queryKey: [key] });
 		}

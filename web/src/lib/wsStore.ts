@@ -105,6 +105,13 @@ export function setSessionExistsChecker(
 	sessionExistsChecker = checker;
 }
 
+// Callback to clear worktree-dependent caches (set by queryClient)
+let onWorktreeSwitched: (() => void) | null = null;
+
+export function setOnWorktreeSwitched(callback: (() => void) | null) {
+	onWorktreeSwitched = callback;
+}
+
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_INTERVAL = 3000;
 
@@ -452,6 +459,7 @@ async function switchWorktreeRPC(name: string): Promise<SwitchResult> {
 
 		useWSStore.setState({ workDir: result.work_dir });
 		clearWatchSubscriptions();
+		onWorktreeSwitched?.();
 		return "success";
 	} catch (error) {
 		console.warn("Worktree switch RPC failed:", error);
@@ -490,6 +498,7 @@ export function resetWSStore() {
 	gitWatchCallbacks.clear();
 	sessionExistsChecker = null;
 	worktreeDeletedListener = null;
+	onWorktreeSwitched = null;
 	useWSStore.setState({
 		status: "disconnected",
 		projectTitle: "",
