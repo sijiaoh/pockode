@@ -675,4 +675,5 @@ samp {
 .shiki {
 	min-width: fit-content;
 	line-height: 1.5;
+	background-color: var(--th-code-bg) !important;
 }
