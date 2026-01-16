@@ -637,11 +637,21 @@ func TestExtractEventsFromText(t *testing.T) {
 				agent.CommandOutputEvent{Content: "error"},
 			},
 		},
+		{
+			name:     "empty tag content",
+			input:    "<local-command-stdout></local-command-stdout>",
+			expected: nil,
+		},
+		{
+			name:     "whitespace only tag content",
+			input:    "<local-command-stdout>   </local-command-stdout>",
+			expected: nil,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := extractEventsFromText(tt.input)
+			result := extractEventsFromText(testLogger(), tt.input)
 			if len(result) != len(tt.expected) {
 				t.Fatalf("expected %d events, got %d: %+v", len(tt.expected), len(result), result)
 			}

@@ -659,7 +659,7 @@ func parseUserEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 			// Unknown format - output raw for visibility
 			return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message)}}
 		}
-		return extractEventsFromText(msgStr.Content)
+		return extractEventsFromText(log, msgStr.Content)
 	}
 
 	var events []agent.AgentEvent
@@ -702,18 +702,22 @@ func parseUserEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 // extractEventsFromText extracts agent events from text, handling special tags.
 // Content inside command output tags becomes CommandOutputEvent.
 // Text outside tags is logged but not emitted as events.
-func extractEventsFromText(text string) []agent.AgentEvent {
-	// Tags that represent command output
+func extractEventsFromText(log *slog.Logger, text string) []agent.AgentEvent {
 	commandOutputTags := []struct{ open, close string }{
 		{"<local-command-stdout>", "</local-command-stdout>"},
 		{"<local-command-stderr>", "</local-command-stderr>"},
+	}
+
+	logIgnored := func(content string) {
+		if trimmed := strings.TrimSpace(content); trimmed != "" {
+			log.Debug("text outside command tags ignored", "content", trimmed)
+		}
 	}
 
 	var events []agent.AgentEvent
 	remaining := text
 
 	for len(remaining) > 0 {
-		// Find the earliest tag
 		bestIdx := -1
 		var bestTag struct{ open, close string }
 		for _, tag := range commandOutputTags {
@@ -728,15 +732,11 @@ func extractEventsFromText(text string) []agent.AgentEvent {
 			break
 		}
 
-		if before := strings.TrimSpace(remaining[:bestIdx]); before != "" {
-			slog.Debug("text outside command tags", "content", before)
-		}
+		logIgnored(remaining[:bestIdx])
 
 		endIdx := strings.Index(remaining[bestIdx:], bestTag.close)
 		if endIdx == -1 {
-			if rest := strings.TrimSpace(remaining[bestIdx:]); rest != "" {
-				slog.Debug("text outside command tags (unclosed)", "content", rest)
-			}
+			logIgnored(remaining[bestIdx:])
 			return events
 		}
 		endIdx += bestIdx
@@ -750,9 +750,7 @@ func extractEventsFromText(text string) []agent.AgentEvent {
 		remaining = remaining[endIdx+len(bestTag.close):]
 	}
 
-	if remaining := strings.TrimSpace(remaining); remaining != "" {
-		slog.Debug("text outside command tags", "content", remaining)
-	}
+	logIgnored(remaining)
 
 	return events
 }
