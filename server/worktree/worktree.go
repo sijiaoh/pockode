@@ -37,6 +37,16 @@ func (w *Worktree) Unsubscribe(conn *jsonrpc2.Conn) {
 	delete(w.subscribers, conn)
 }
 
+// UnsubscribeConnection removes all subscriptions for a connection.
+// This is the single source of truth for connection cleanup - any new
+// resources that need cleanup when a connection leaves should be added here.
+func (w *Worktree) UnsubscribeConnection(conn *jsonrpc2.Conn, connID string) {
+	w.ProcessManager.UnsubscribeConn(conn)
+	w.FSWatcher.CleanupConnection(connID)
+	w.GitWatcher.CleanupConnection(connID)
+	w.Unsubscribe(conn)
+}
+
 func (w *Worktree) NotifyAll(ctx context.Context, method string, params any) {
 	w.mu.Lock()
 	conns := make([]*jsonrpc2.Conn, 0, len(w.subscribers))

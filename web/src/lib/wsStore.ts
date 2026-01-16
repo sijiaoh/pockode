@@ -84,6 +84,18 @@ const notificationListeners = new Set<NotificationListener>();
 const watchCallbacks = new Map<string, () => void>();
 const gitWatchCallbacks = new Map<string, () => void>();
 
+/**
+ * Clear all local watch subscriptions.
+ * Called when switching worktrees or disconnecting.
+ *
+ * NOTE: When adding new watcher types, add cleanup here.
+ * This mirrors server-side Worktree.UnsubscribeConnection().
+ */
+function clearWatchSubscriptions(): void {
+	watchCallbacks.clear();
+	gitWatchCallbacks.clear();
+}
+
 // Callback to check if a session exists (set by useSession hook)
 let sessionExistsChecker: ((sessionId: string) => boolean) | null = null;
 
@@ -295,8 +307,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 				ws = null;
 				rpcReceiver = null;
 				rpcRequester = null;
-				watchCallbacks.clear();
-				gitWatchCallbacks.clear();
+				clearWatchSubscriptions();
 
 				const currentStatus = get().status;
 				// Don't reconnect on auth failure or intentional disconnect
@@ -411,7 +422,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 /**
  * Reconnect WebSocket with current token.
- * Used when switching worktrees to re-authenticate with the new worktree context.
+ * Used as a fallback when worktree.switch RPC fails.
  */
 export function reconnectWebSocket(): void {
 	if (!currentToken) return;
@@ -426,9 +437,38 @@ export function reconnectWebSocket(): void {
 // Expose actions for non-React contexts (e.g., authStore logout)
 export const wsActions = useWSStore.getState().actions;
 
-// Reconnect WebSocket when worktree changes
-worktreeActions.onWorktreeChange(() => {
-	reconnectWebSocket();
+type SwitchResult = "success" | "not_connected" | "failed";
+
+// Switch worktree on existing connection
+async function switchWorktreeRPC(name: string): Promise<SwitchResult> {
+	if (!rpcRequester) {
+		return "not_connected";
+	}
+
+	try {
+		const result = (await rpcRequester.request("worktree.switch", {
+			name,
+		})) as { work_dir: string; worktree_name: string };
+
+		useWSStore.setState({ workDir: result.work_dir });
+		clearWatchSubscriptions();
+		return "success";
+	} catch (error) {
+		console.warn("Worktree switch RPC failed:", error);
+		return "failed";
+	}
+}
+
+// Handle worktree change: try RPC switch, fall back to reconnect if needed
+worktreeActions.onWorktreeChange((_prev, next) => {
+	void switchWorktreeRPC(next).then((result) => {
+		if (result === "failed") {
+			// RPC failed while connected - reconnect to recover
+			reconnectWebSocket();
+		}
+		// "not_connected": auth will bind to correct worktree on connect
+		// "success": done
+	});
 });
 
 // Reset function for testing

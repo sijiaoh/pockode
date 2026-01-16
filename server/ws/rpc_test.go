@@ -1137,3 +1137,79 @@ func TestHandler_WorktreeCreateAndDelete_E2E(t *testing.T) {
 		}
 	}
 }
+
+func TestHandler_WorktreeSwitch(t *testing.T) {
+	dir := setupGitRepo(t)
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0644)
+	runGitIn(t, dir, "add", ".")
+	runGitIn(t, dir, "commit", "-m", "initial")
+
+	env := newWorkDirTestEnv(t, dir)
+
+	// Create a worktree to switch to
+	createResp := env.call("worktree.create", rpc.WorktreeCreateParams{
+		Name:   "feature",
+		Branch: "feature-branch",
+	})
+	if createResp.Error != nil {
+		t.Fatalf("create failed: %s", createResp.Error.Message)
+	}
+
+	// Switch to the new worktree
+	switchResp := env.call("worktree.switch", rpc.WorktreeSwitchParams{Name: "feature"})
+	if switchResp.Error != nil {
+		t.Fatalf("switch failed: %s", switchResp.Error.Message)
+	}
+
+	var switchResult rpc.WorktreeSwitchResult
+	json.Unmarshal(switchResp.Result, &switchResult)
+
+	if switchResult.WorktreeName != "feature" {
+		t.Errorf("expected worktree_name 'feature', got %q", switchResult.WorktreeName)
+	}
+	if !strings.Contains(switchResult.WorkDir, "feature") {
+		t.Errorf("expected work_dir to contain 'feature', got %q", switchResult.WorkDir)
+	}
+
+	// Switch back to main (empty name)
+	switchResp = env.call("worktree.switch", rpc.WorktreeSwitchParams{Name: ""})
+	if switchResp.Error != nil {
+		t.Fatalf("switch to main failed: %s", switchResp.Error.Message)
+	}
+
+	json.Unmarshal(switchResp.Result, &switchResult)
+	if switchResult.WorktreeName != "" {
+		t.Errorf("expected empty worktree_name for main, got %q", switchResult.WorktreeName)
+	}
+}
+
+func TestHandler_WorktreeSwitch_SameWorktree(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	// Switch to main (already on main) - should be no-op
+	resp := env.call("worktree.switch", rpc.WorktreeSwitchParams{Name: ""})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result rpc.WorktreeSwitchResult
+	json.Unmarshal(resp.Result, &result)
+
+	// Should return current worktree info without error
+	if result.WorkDir == "" {
+		t.Error("expected non-empty work_dir")
+	}
+}
+
+func TestHandler_WorktreeSwitch_NotFound(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("worktree.switch", rpc.WorktreeSwitchParams{Name: "nonexistent"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "worktree not found") {
+		t.Errorf("expected 'worktree not found' error, got %q", resp.Error.Message)
+	}
+}

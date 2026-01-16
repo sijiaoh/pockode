@@ -109,3 +109,59 @@ func (h *rpcMethodHandler) handleWorktreeDelete(ctx context.Context, conn *jsonr
 		h.log.Error("failed to send worktree delete response", "error", err)
 	}
 }
+
+func (h *rpcMethodHandler) handleWorktreeSwitch(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.WorktreeSwitchParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	// Get new worktree first (outside lock) to ensure it exists before modifying state
+	newWorktree, err := h.worktreeManager.Get(params.Name)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "worktree not found")
+		return
+	}
+
+	// Atomically check and switch worktree
+	h.state.mu.Lock()
+	currentWorktree := h.state.worktree
+
+	// No-op if switching to same worktree
+	if currentWorktree != nil && currentWorktree.Name == params.Name {
+		h.state.mu.Unlock()
+		// Release the extra ref we acquired above
+		h.worktreeManager.Release(newWorktree)
+		result := rpc.WorktreeSwitchResult{
+			WorkDir:      currentWorktree.WorkDir,
+			WorktreeName: currentWorktree.Name,
+		}
+		if err := conn.Reply(ctx, req.ID, result); err != nil {
+			h.log.Error("failed to send worktree switch response", "error", err)
+		}
+		return
+	}
+
+	// Cleanup old worktree (inline to avoid double-lock)
+	if currentWorktree != nil {
+		currentWorktree.UnsubscribeConnection(conn, h.state.connID)
+		h.worktreeManager.Release(currentWorktree)
+	}
+
+	// Bind to new worktree and subscribe atomically
+	h.state.worktree = newWorktree
+	h.state.subscribed = make(map[string]struct{})
+	newWorktree.Subscribe(conn)
+	h.state.mu.Unlock()
+
+	h.log.Info("worktree switched", "to", newWorktree.Name)
+
+	result := rpc.WorktreeSwitchResult{
+		WorkDir:      newWorktree.WorkDir,
+		WorktreeName: newWorktree.Name,
+	}
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send worktree switch response", "error", err)
+	}
+}

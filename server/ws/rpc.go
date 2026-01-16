@@ -122,19 +122,16 @@ func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.worktree != nil {
-		conn := s.conn
-		for sessionID := range s.subscribed {
-			s.worktree.ProcessManager.UnsubscribeRPC(sessionID, conn)
-			s.log.Debug("unsubscribed from session", "sessionId", sessionID)
-		}
-
-		s.worktree.FSWatcher.CleanupConnection(s.connID)
-		s.worktree.GitWatcher.CleanupConnection(s.connID)
-		s.worktree.Unsubscribe(conn)
-
-		worktreeManager.Release(s.worktree)
+	if s.worktree == nil {
+		return // Not authenticated yet (e.g., connection closed before auth)
 	}
+
+	s.worktree.UnsubscribeConnection(s.conn, s.connID)
+	worktreeManager.Release(s.worktree)
+
+	// Reset state (safe even for connection close - no harm in resetting)
+	s.worktree = nil
+	s.subscribed = make(map[string]struct{})
 }
 
 type rpcMethodHandler struct {
@@ -210,6 +207,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleWorktreeCreate(ctx, conn, req)
 	case "worktree.delete":
 		h.handleWorktreeDelete(ctx, conn, req)
+	case "worktree.switch":
+		h.handleWorktreeSwitch(ctx, conn, req)
 	default:
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeMethodNotFound, "method not found: "+req.Method)
 	}

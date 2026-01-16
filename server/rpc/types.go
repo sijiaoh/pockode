@@ -162,6 +162,17 @@ type WorktreeDeletedParams struct {
 	Name string `json:"name"`
 }
 
+// WorktreeSwitchParams is the params for the worktree.switch request.
+type WorktreeSwitchParams struct {
+	Name string `json:"name"` // empty = main worktree
+}
+
+// WorktreeSwitchResult is the result of the worktree.switch request.
+type WorktreeSwitchResult struct {
+	WorkDir      string `json:"work_dir"`
+	WorktreeName string `json:"worktree_name"`
+}
+
 // Server → Client
 
 // SessionParams is the params for done, interrupted, and process_ended notifications.

@@ -180,6 +180,27 @@ func (m *Manager) UnsubscribeRPC(sessionID string, conn *jsonrpc2.Conn) {
 	slog.Debug("unsubscribed from session", "sessionId", sessionID, "totalSubs", len(newConns))
 }
 
+// UnsubscribeConn removes a connection from all session subscriptions.
+// Used when a connection disconnects or switches worktrees.
+func (m *Manager) UnsubscribeConn(conn *jsonrpc2.Conn) {
+	m.subsMu.Lock()
+	defer m.subsMu.Unlock()
+
+	for sessionID, conns := range m.subs {
+		newConns := make([]*jsonrpc2.Conn, 0, len(conns))
+		for _, c := range conns {
+			if c != conn {
+				newConns = append(newConns, c)
+			}
+		}
+		if len(newConns) == 0 {
+			delete(m.subs, sessionID)
+		} else {
+			m.subs[sessionID] = newConns
+		}
+	}
+}
+
 // GetSubscribers returns a copy of the subscribers for a session.
 func (m *Manager) GetSubscribers(sessionID string) []*jsonrpc2.Conn {
 	m.subsMu.Lock()

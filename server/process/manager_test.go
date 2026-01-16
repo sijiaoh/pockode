@@ -278,6 +278,50 @@ func TestManager_SubscribeUnsubscribeRPC(t *testing.T) {
 	m.UnsubscribeRPC("sess-1", conn1)
 }
 
+func TestManager_UnsubscribeConn(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mock, "/tmp", store, 10*time.Minute)
+	defer m.Shutdown()
+
+	stream1 := newTestObjectStream()
+	stream2 := newTestObjectStream()
+	conn1 := jsonrpc2.NewConn(context.Background(), stream1, nil)
+	conn2 := jsonrpc2.NewConn(context.Background(), stream2, nil)
+	defer conn1.Close()
+	defer conn2.Close()
+
+	// Subscribe conn1 to multiple sessions
+	m.SubscribeRPC("sess-1", conn1)
+	m.SubscribeRPC("sess-2", conn1)
+	m.SubscribeRPC("sess-1", conn2)
+
+	// Verify subscriptions
+	if len(m.GetSubscribers("sess-1")) != 2 {
+		t.Error("expected 2 subscribers for sess-1")
+	}
+	if len(m.GetSubscribers("sess-2")) != 1 {
+		t.Error("expected 1 subscriber for sess-2")
+	}
+
+	// Unsubscribe conn1 from all sessions
+	m.UnsubscribeConn(conn1)
+
+	// conn1 should be removed from all sessions
+	if len(m.GetSubscribers("sess-1")) != 1 {
+		t.Error("expected 1 subscriber for sess-1 after UnsubscribeConn")
+	}
+	if len(m.GetSubscribers("sess-2")) != 0 {
+		t.Error("expected 0 subscribers for sess-2 after UnsubscribeConn")
+	}
+
+	// conn2 should still be subscribed
+	subs := m.GetSubscribers("sess-1")
+	if len(subs) != 1 || subs[0] != conn2 {
+		t.Error("expected conn2 to remain subscribed to sess-1")
+	}
+}
+
 func TestManager_Notify(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
