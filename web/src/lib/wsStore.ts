@@ -55,6 +55,8 @@ export interface WatchActions {
 	watchUnsubscribe: (id: string) => Promise<void>;
 	gitSubscribe: (callback: () => void) => Promise<string>;
 	gitUnsubscribe: (id: string) => Promise<void>;
+	worktreeSubscribe: (callback: () => void) => Promise<string>;
+	worktreeUnsubscribe: (id: string) => Promise<void>;
 }
 
 type RPCActions = ConnectionActions &
@@ -83,6 +85,7 @@ let reconnectTimeout: number | undefined;
 const notificationListeners = new Set<NotificationListener>();
 const watchCallbacks = new Map<string, () => void>();
 const gitWatchCallbacks = new Map<string, () => void>();
+const worktreeWatchCallbacks = new Map<string, () => void>();
 
 /**
  * Clear all local watch subscriptions.
@@ -94,6 +97,8 @@ const gitWatchCallbacks = new Map<string, () => void>();
 function clearWatchSubscriptions(): void {
 	watchCallbacks.clear();
 	gitWatchCallbacks.clear();
+	// Note: worktreeWatchCallbacks is NOT cleared here because it's Manager-level,
+	// not worktree-specific. It persists across worktree switches.
 }
 
 // Callback to check if a session exists (set by useSession hook)
@@ -165,6 +170,13 @@ function handleNotification(method: string, params: unknown): void {
 			worktreeActions.setCurrent("");
 		}
 		worktreeDeletedListener?.(name, wasCurrentWorktree);
+		return;
+	}
+
+	// Handle worktree.changed notification via callback
+	if (method === "worktree.changed") {
+		const { id } = params as { id: string };
+		worktreeWatchCallbacks.get(id)?.();
 		return;
 	}
 
@@ -417,6 +429,30 @@ export const useWSStore = create<WSState>((set, get) => ({
 			}
 		},
 
+		worktreeSubscribe: async (callback: () => void): Promise<string> => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			const result = (await client.request("worktree.subscribe", {})) as {
+				id: string;
+			};
+			worktreeWatchCallbacks.set(result.id, callback);
+			return result.id;
+		},
+
+		worktreeUnsubscribe: async (id: string): Promise<void> => {
+			worktreeWatchCallbacks.delete(id);
+			const client = getClient();
+			if (client) {
+				try {
+					await client.request("worktree.unsubscribe", { id });
+				} catch {
+					// Ignore errors (connection might be closed)
+				}
+			}
+		},
+
 		// Spread namespace-specific actions
 		...chatActions,
 		...commandActions,
@@ -496,6 +532,7 @@ export function resetWSStore() {
 	notificationListeners.clear();
 	watchCallbacks.clear();
 	gitWatchCallbacks.clear();
+	worktreeWatchCallbacks.clear();
 	sessionExistsChecker = null;
 	worktreeDeletedListener = null;
 	onWorktreeSwitched = null;

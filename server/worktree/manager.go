@@ -21,10 +21,11 @@ const idleReleaseDelay = 30 * time.Second
 
 // Manager manages the lifecycle of worktrees with lazy creation and reference-counted cleanup.
 type Manager struct {
-	registry    *Registry
-	agent       agent.Agent
-	dataDir     string
-	idleTimeout time.Duration
+	registry        *Registry
+	agent           agent.Agent
+	dataDir         string
+	idleTimeout     time.Duration
+	WorktreeWatcher *watch.WorktreeWatcher
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
@@ -32,16 +33,21 @@ type Manager struct {
 
 func NewManager(registry *Registry, ag agent.Agent, dataDir string, idleTimeout time.Duration) *Manager {
 	return &Manager{
-		registry:    registry,
-		agent:       ag,
-		dataDir:     dataDir,
-		idleTimeout: idleTimeout,
-		worktrees:   make(map[string]*Worktree),
+		registry:        registry,
+		agent:           ag,
+		dataDir:         dataDir,
+		idleTimeout:     idleTimeout,
+		WorktreeWatcher: watch.NewWorktreeWatcher(registry.MainDir()),
+		worktrees:       make(map[string]*Worktree),
 	}
 }
 
 func (m *Manager) Registry() *Registry {
 	return m.registry
+}
+
+func (m *Manager) Start() error {
+	return m.WorktreeWatcher.Start()
 }
 
 // Get returns (or creates) the worktree for the given name and increments the reference count.
@@ -123,6 +129,8 @@ func (m *Manager) ForceShutdown(name string) {
 }
 
 func (m *Manager) Shutdown() {
+	m.WorktreeWatcher.Stop()
+
 	m.mu.Lock()
 	worktrees := make([]*Worktree, 0, len(m.worktrees))
 	for _, wt := range m.worktrees {

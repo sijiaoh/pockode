@@ -43,6 +43,8 @@ export function useWorktree({
 }: UseWorktreeOptions = {}) {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
+	const worktreeSubscribe = useWSStore((s) => s.actions.worktreeSubscribe);
+	const worktreeUnsubscribe = useWSStore((s) => s.actions.worktreeUnsubscribe);
 	const wsStatus = useWSStore((state) => state.status);
 	const current = useWorktreeStore((state) => state.current);
 	const isGitRepo = useWorktreeStore((state) => state.isGitRepo);
@@ -67,10 +69,44 @@ export function useWorktree({
 		queryKey: ["worktrees"],
 		queryFn: listWorktrees,
 		enabled: enabled && isConnected && isGitRepo,
-		// TODO: Replace polling with JSON-RPC notification from server
-		staleTime: 5000,
-		refetchInterval: 5000,
+		staleTime: Number.POSITIVE_INFINITY,
 	});
+
+	// Subscribe to worktree list changes
+	useEffect(() => {
+		if (!enabled || !isConnected || !isGitRepo) return;
+
+		let watchId: string | null = null;
+		let cancelled = false;
+
+		worktreeSubscribe(() => {
+			queryClient.invalidateQueries({ queryKey: ["worktrees"] });
+		})
+			.then((id) => {
+				if (cancelled) {
+					worktreeUnsubscribe(id);
+				} else {
+					watchId = id;
+				}
+			})
+			.catch((err) => {
+				console.error("Failed to subscribe to worktree watch:", err);
+			});
+
+		return () => {
+			cancelled = true;
+			if (watchId) {
+				worktreeUnsubscribe(watchId);
+			}
+		};
+	}, [
+		enabled,
+		isConnected,
+		isGitRepo,
+		queryClient,
+		worktreeSubscribe,
+		worktreeUnsubscribe,
+	]);
 
 	useEffect(() => {
 		setWorktreeDeletedListener((name, wasCurrentWorktree) => {

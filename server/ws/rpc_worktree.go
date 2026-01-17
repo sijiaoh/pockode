@@ -165,3 +165,35 @@ func (h *rpcMethodHandler) handleWorktreeSwitch(ctx context.Context, conn *jsonr
 		h.log.Error("failed to send worktree switch response", "error", err)
 	}
 }
+
+func (h *rpcMethodHandler) handleWorktreeSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	connID := h.state.getConnID()
+	id, err := h.worktreeManager.WorktreeWatcher.Subscribe(conn, connID)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, rpc.WorktreeSubscribeResult{ID: id}); err != nil {
+		h.log.Error("failed to send worktree subscribe response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleWorktreeUnsubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.WorktreeUnsubscribeParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.ID == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "id is required")
+		return
+	}
+
+	h.worktreeManager.WorktreeWatcher.Unsubscribe(params.ID)
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send worktree unsubscribe response", "error", err)
+	}
+}

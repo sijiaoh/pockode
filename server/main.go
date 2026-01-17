@@ -254,6 +254,9 @@ func main() {
 	claudeAgent := claude.New()
 	registry := worktree.NewRegistry(workDir)
 	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout)
+	if err := worktreeManager.Start(); err != nil {
+		slog.Warn("failed to start worktree manager", "error", err)
+	}
 
 	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager)
 	handler := newHandler(token, devMode, wsHandler)

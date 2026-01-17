@@ -122,6 +122,9 @@ func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Cleanup worktree watcher subscription (Manager-level, not worktree-specific)
+	worktreeManager.WorktreeWatcher.CleanupConnection(s.connID)
+
 	if s.worktree == nil {
 		return // Not authenticated yet (e.g., connection closed before auth)
 	}
@@ -209,6 +212,10 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleWorktreeDelete(ctx, conn, req)
 	case "worktree.switch":
 		h.handleWorktreeSwitch(ctx, conn, req)
+	case "worktree.subscribe":
+		h.handleWorktreeSubscribe(ctx, conn, req)
+	case "worktree.unsubscribe":
+		h.handleWorktreeUnsubscribe(ctx, conn, req)
 	default:
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeMethodNotFound, "method not found: "+req.Method)
 	}

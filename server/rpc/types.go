@@ -130,6 +130,16 @@ type GitUnsubscribeParams struct {
 	ID string `json:"id"`
 }
 
+// Worktree watch (subscription for worktree list changes)
+
+type WorktreeSubscribeResult struct {
+	ID string `json:"id"`
+}
+
+type WorktreeUnsubscribeParams struct {
+	ID string `json:"id"`
+}
+
 // Worktree namespace
 
 type WorktreeInfo struct {
