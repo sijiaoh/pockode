@@ -46,10 +46,12 @@ export function createQueryClient(): QueryClient {
 		}
 	});
 
-	// Clear worktree-dependent caches after worktree switch completes
+	// Invalidate worktree-dependent caches after switch completes.
+	// invalidateQueries forces refetch even if a fetch from the old worktree
+	// arrived during the switch (removeQueries would leave that stale data).
 	setOnWorktreeSwitched(() => {
 		for (const key of WORKTREE_DEPENDENT_QUERY_KEYS) {
-			queryClient.removeQueries({ queryKey: [key] });
+			queryClient.invalidateQueries({ queryKey: [key] });
 		}
 	});
 
