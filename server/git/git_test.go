@@ -72,6 +72,10 @@ func TestExtractHost(t *testing.T) {
 }
 
 func setupTestRepoWithSubmodule(t *testing.T) (string, func()) {
+	return setupTestRepoWithSubmoduleOpts(t, true)
+}
+
+func setupTestRepoWithSubmoduleOpts(t *testing.T, initSubmodule bool) (string, func()) {
 	t.Helper()
 
 	tempDir, err := os.MkdirTemp("", "git-test-*")
@@ -130,54 +134,63 @@ func setupTestRepoWithSubmodule(t *testing.T) (string, func()) {
 		t.Fatalf("failed to write .gitmodules: %v", err)
 	}
 
-	// Create submodule directory with its own git repo
+	// Create submodule directory
 	subDir := filepath.Join(parentRepo, "mysub")
 	if err := os.MkdirAll(subDir, 0755); err != nil {
 		cleanup()
 		t.Fatalf("failed to create mysub dir: %v", err)
 	}
 
-	// Initialize submodule as a git repo
-	cmds = [][]string{
-		{"git", "init"},
-		{"git", "config", "user.email", "test@test.com"},
-		{"git", "config", "user.name", "Test"},
-	}
-	for _, args := range cmds {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = subDir
-		if out, err := cmd.CombinedOutput(); err != nil {
+	if initSubmodule {
+		// Initialize submodule as a git repo
+		cmds = [][]string{
+			{"git", "init"},
+			{"git", "config", "user.email", "test@test.com"},
+			{"git", "config", "user.name", "Test"},
+		}
+		for _, args := range cmds {
+			cmd := exec.Command(args[0], args[1:]...)
+			cmd.Dir = subDir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				cleanup()
+				t.Fatalf("failed to run %v in submodule: %v\n%s", args, err, out)
+			}
+		}
+
+		// Create and commit a file in submodule
+		subFile := filepath.Join(subDir, "sub.txt")
+		if err := os.WriteFile(subFile, []byte("sub content\n"), 0644); err != nil {
 			cleanup()
-			t.Fatalf("failed to run %v in submodule: %v\n%s", args, err, out)
+			t.Fatalf("failed to write sub.txt: %v", err)
+		}
+
+		cmds = [][]string{
+			{"git", "add", "sub.txt"},
+			{"git", "commit", "--no-gpg-sign", "-m", "initial"},
+		}
+		for _, args := range cmds {
+			cmd := exec.Command(args[0], args[1:]...)
+			cmd.Dir = subDir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				cleanup()
+				t.Fatalf("failed to run %v in submodule: %v\n%s", args, err, out)
+			}
+		}
+
+		// Commit .gitmodules and submodule in parent
+		cmds = [][]string{
+			{"git", "add", ".gitmodules"},
+			{"git", "add", "mysub"},
+			{"git", "commit", "--no-gpg-sign", "-m", "add submodule"},
+		}
+	} else {
+		// Only commit .gitmodules
+		cmds = [][]string{
+			{"git", "add", ".gitmodules"},
+			{"git", "commit", "--no-gpg-sign", "-m", "add gitmodules"},
 		}
 	}
 
-	// Create and commit a file in submodule
-	subFile := filepath.Join(subDir, "sub.txt")
-	if err := os.WriteFile(subFile, []byte("sub content\n"), 0644); err != nil {
-		cleanup()
-		t.Fatalf("failed to write sub.txt: %v", err)
-	}
-
-	cmds = [][]string{
-		{"git", "add", "sub.txt"},
-		{"git", "commit", "--no-gpg-sign", "-m", "initial"},
-	}
-	for _, args := range cmds {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = subDir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			cleanup()
-			t.Fatalf("failed to run %v in submodule: %v\n%s", args, err, out)
-		}
-	}
-
-	// Commit .gitmodules and submodule in parent
-	cmds = [][]string{
-		{"git", "add", ".gitmodules"},
-		{"git", "add", "mysub"},
-		{"git", "commit", "--no-gpg-sign", "-m", "add submodule"},
-	}
 	for _, args := range cmds {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = parentRepo
@@ -225,6 +238,27 @@ func TestStatus_WithSubmodule(t *testing.T) {
 	// Also verify HasFile works with full path
 	if !status.HasFile("mysub/sub.txt", false) {
 		t.Error("HasFile('mysub/sub.txt', false) should return true")
+	}
+}
+
+func TestStatus_UninitializedSubmodule(t *testing.T) {
+	parentRepo, cleanup := setupTestRepoWithSubmoduleOpts(t, false)
+	defer cleanup()
+
+	status, err := Status(parentRepo)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+
+	subStatus, ok := status.Submodules["mysub"]
+	if !ok {
+		t.Fatalf("expected submodule 'mysub' in status.Submodules")
+	}
+	if len(subStatus.Staged) != 0 {
+		t.Errorf("expected empty staged, got %v", subStatus.Staged)
+	}
+	if len(subStatus.Unstaged) != 0 {
+		t.Errorf("expected empty unstaged, got %v", subStatus.Unstaged)
 	}
 }
 

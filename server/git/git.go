@@ -252,7 +252,12 @@ func Status(dir string) (*GitStatus, error) {
 	if len(submodules) > 0 {
 		result.Submodules = make(map[string]*GitStatus, len(submodules))
 		for _, sub := range submodules {
-			subStatus, err := Status(filepath.Join(dir, sub))
+			subDir := filepath.Join(dir, sub)
+			if !isGitRepository(subDir) {
+				result.Submodules[sub] = &GitStatus{Staged: []FileStatus{}, Unstaged: []FileStatus{}}
+				continue
+			}
+			subStatus, err := Status(subDir)
 			if err != nil {
 				slog.Warn("failed to get submodule status", "submodule", sub, "error", err)
 				result.Submodules[sub] = &GitStatus{Staged: []FileStatus{}, Unstaged: []FileStatus{}}
@@ -300,6 +305,14 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+// isGitRepository checks if dir has its own .git (file or directory).
+// Uninitialized submodules lack .git, causing git commands to use parent repo.
+func isGitRepository(dir string) bool {
+	gitPath := filepath.Join(dir, ".git")
+	_, err := os.Stat(gitPath)
+	return err == nil
 }
 
 func getSubmodulePaths(dir string) []string {
