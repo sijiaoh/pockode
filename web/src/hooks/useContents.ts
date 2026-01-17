@@ -19,6 +19,6 @@ export function useContents(path = "", enabled = true) {
 			return result.file as FileContent;
 		},
 		enabled,
-		staleTime: 0,
+		staleTime: Number.POSITIVE_INFINITY,
 	});
 }

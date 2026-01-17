@@ -21,6 +21,8 @@ export function useGitDiff({
 		queryKey: gitDiffQueryKey(path, staged),
 		queryFn: () => getDiff(path, staged),
 		enabled: enabled && !!path,
+		// TODO: GitWatcher uses --stat which doesn't detect all changes.
+		// Keep staleTime: 0 to increase refetch opportunities until watcher detection is improved.
 		staleTime: 0,
 	});
 }
