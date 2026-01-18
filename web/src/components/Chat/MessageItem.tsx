@@ -5,7 +5,7 @@ import {
 	CircleHelp,
 	X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { useWSStore } from "../../lib/wsStore";
 import type {
 	AskUserQuestionRequest,
@@ -88,7 +88,7 @@ function getInputSummary(
 	return "";
 }
 
-function ToolCallItem({ tool }: ToolCallItemProps) {
+const ToolCallItem = memo(function ToolCallItem({ tool }: ToolCallItemProps) {
 	const [expanded, setExpanded] = useState(false);
 	const hasResult = Boolean(tool.result);
 	const workDir = useWSStore((state) => state.workDir);
@@ -124,7 +124,7 @@ function ToolCallItem({ tool }: ToolCallItemProps) {
 			)}
 		</div>
 	);
-}
+});
 
 interface SystemItemProps {
 	content: string;
@@ -504,7 +504,7 @@ interface Props {
 	) => void;
 }
 
-function MessageItem({
+const MessageItem = memo(function MessageItem({
 	message,
 	isLast,
 	isProcessRunning,
@@ -568,7 +568,7 @@ function MessageItem({
 			</div>
 		</div>
 	);
-}
+});
 
 export type { PermissionChoice };
 export default MessageItem;

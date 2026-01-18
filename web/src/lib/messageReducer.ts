@@ -329,7 +329,7 @@ export function applyServerEvent(
 	return updated;
 }
 
-function updatePermissionRequestStatus(
+export function updatePermissionRequestStatus(
 	messages: Message[],
 	requestId: string,
 	newStatus: "allowed" | "denied",
@@ -357,13 +357,14 @@ function updatePermissionRequestStatus(
 	return anyChanged ? updated : messages;
 }
 
-function updateQuestionStatus(
+export function updateQuestionStatus(
 	messages: Message[],
 	requestId: string,
 	newStatus: QuestionStatus,
 	answers: Record<string, string> | null,
 ): Message[] {
-	return messages.map((msg) => {
+	let anyChanged = false;
+	const updated = messages.map((msg) => {
 		if (msg.role !== "assistant") return msg;
 
 		let changed = false;
@@ -383,8 +384,10 @@ function updateQuestionStatus(
 		});
 
 		if (!changed) return msg;
+		anyChanged = true;
 		return { ...msg, parts: updatedParts };
 	});
+	return anyChanged ? updated : messages;
 }
 
 function updateToolResult(

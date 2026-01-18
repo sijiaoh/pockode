@@ -3,6 +3,8 @@ import {
 	applyServerEvent,
 	normalizeEvent,
 	replayHistory,
+	updatePermissionRequestStatus,
+	updateQuestionStatus as updateQuestionStatusReducer,
 } from "../lib/messageReducer";
 import { getHistory } from "../lib/sessionApi";
 import { type ConnectionStatus, useWSStore } from "../lib/wsStore";
@@ -168,21 +170,7 @@ export function useChatMessages({
 	const updatePermissionStatus = useCallback(
 		(requestId: string, newStatus: PermissionStatus) => {
 			setMessages((prev) =>
-				prev.map((msg): Message => {
-					if (msg.role !== "assistant") return msg;
-					return {
-						...msg,
-						parts: msg.parts.map((part) => {
-							if (
-								part.type === "permission_request" &&
-								part.request.requestId === requestId
-							) {
-								return { ...part, status: newStatus };
-							}
-							return part;
-						}),
-					};
-				}),
+				updatePermissionRequestStatus(prev, requestId, newStatus),
 			);
 		},
 		[],
@@ -195,21 +183,12 @@ export function useChatMessages({
 			answers?: Record<string, string>,
 		) => {
 			setMessages((prev) =>
-				prev.map((msg): Message => {
-					if (msg.role !== "assistant") return msg;
-					return {
-						...msg,
-						parts: msg.parts.map((part) => {
-							if (
-								part.type === "ask_user_question" &&
-								part.request.requestId === requestId
-							) {
-								return { ...part, status: newStatus, answers };
-							}
-							return part;
-						}),
-					};
-				}),
+				updateQuestionStatusReducer(
+					prev,
+					requestId,
+					newStatus,
+					answers ?? null,
+				),
 			);
 		},
 		[],
