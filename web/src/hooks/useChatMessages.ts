@@ -168,7 +168,7 @@ export function useChatMessages({
 	);
 
 	const updatePermissionStatus = useCallback(
-		(requestId: string, newStatus: PermissionStatus) => {
+		(requestId: string, newStatus: "allowed" | "denied") => {
 			setMessages((prev) =>
 				updatePermissionRequestStatus(prev, requestId, newStatus),
 			);
