@@ -409,7 +409,7 @@ describe("InputBar", () => {
 			expect(option).toHaveTextContent("(custom)");
 		});
 
-		it("navigates with Tab and Shift+Tab", async () => {
+		it("navigates with ArrowUp and ArrowDown", async () => {
 			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
 
 			const textarea = screen.getByRole("textbox");
@@ -420,12 +420,15 @@ describe("InputBar", () => {
 			});
 
 			const options = screen.getAllByRole("option");
+			// Initially first item is selected
 			expect(options[0]).toHaveAttribute("aria-selected", "true");
 
-			fireEvent.keyDown(textarea, { key: "Tab" });
+			// ArrowDown selects second item
+			fireEvent.keyDown(textarea, { key: "ArrowDown" });
 			expect(options[1]).toHaveAttribute("aria-selected", "true");
 
-			fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
+			// ArrowUp goes back to first
+			fireEvent.keyDown(textarea, { key: "ArrowUp" });
 			expect(options[0]).toHaveAttribute("aria-selected", "true");
 		});
 
@@ -441,15 +444,15 @@ describe("InputBar", () => {
 
 			const options = screen.getAllByRole("option");
 
-			// Navigate backwards from first item wraps to last
-			fireEvent.keyDown(textarea, { key: "Tab", shiftKey: true });
+			// ArrowUp from first item wraps to last
+			fireEvent.keyDown(textarea, { key: "ArrowUp" });
 			expect(options[options.length - 1]).toHaveAttribute(
 				"aria-selected",
 				"true",
 			);
 		});
 
-		it("selects command on Enter", async () => {
+		it("selects command on Tab or Enter", async () => {
 			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
 
 			const textarea = screen.getByRole("textbox");
@@ -459,10 +462,18 @@ describe("InputBar", () => {
 				expect(screen.getByRole("listbox")).toBeInTheDocument();
 			});
 
+			// Enter selects the first command
 			fireEvent.keyDown(textarea, { key: "Enter" });
-
 			expect(textarea).toHaveValue("/help ");
 			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+			// Tab also selects
+			fireEvent.change(textarea, { target: { value: "/" } });
+			await waitFor(() => {
+				expect(screen.getByRole("listbox")).toBeInTheDocument();
+			});
+			fireEvent.keyDown(textarea, { key: "Tab" });
+			expect(textarea).toHaveValue("/help ");
 		});
 
 		it("selects command on click", async () => {
@@ -568,22 +579,6 @@ describe("InputBar", () => {
 			expect(screen.getByText("No matching commands")).toBeInTheDocument();
 		});
 
-		it("does not send message when Enter selects a command", async () => {
-			const onSend = vi.fn();
-			render(<InputBar sessionId={TEST_SESSION_ID} onSend={onSend} />);
-
-			const textarea = screen.getByRole("textbox");
-			fireEvent.change(textarea, { target: { value: "/" } });
-
-			await waitFor(() => {
-				expect(screen.getByRole("listbox")).toBeInTheDocument();
-			});
-
-			fireEvent.keyDown(textarea, { key: "Enter" });
-
-			expect(onSend).not.toHaveBeenCalled();
-		});
-
 		it("invalidates command cache when slash command is sent", async () => {
 			const user = userEvent.setup();
 			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
@@ -604,7 +599,7 @@ describe("InputBar", () => {
 			expect(mockInvalidateCommandCache).not.toHaveBeenCalled();
 		});
 
-		it("resets selection index when filter changes", async () => {
+		it("resets selection to first when filter changes", async () => {
 			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
 
 			const textarea = screen.getByRole("textbox");
@@ -614,12 +609,13 @@ describe("InputBar", () => {
 				expect(screen.getByRole("listbox")).toBeInTheDocument();
 			});
 
-			// Navigate to second item
-			fireEvent.keyDown(textarea, { key: "Tab" });
+			// Navigate to select third item
+			fireEvent.keyDown(textarea, { key: "ArrowDown" });
+			fireEvent.keyDown(textarea, { key: "ArrowDown" });
 			const options = screen.getAllByRole("option");
-			expect(options[1]).toHaveAttribute("aria-selected", "true");
+			expect(options[2]).toHaveAttribute("aria-selected", "true");
 
-			// Change filter - selection should reset to first
+			// Change filter - selection should reset to first item
 			fireEvent.change(textarea, { target: { value: "/m" } });
 			const newOptions = screen.getAllByRole("option");
 			expect(newOptions[0]).toHaveAttribute("aria-selected", "true");
@@ -639,15 +635,33 @@ describe("InputBar", () => {
 
 			expect(screen.getByText("No matching commands")).toBeInTheDocument();
 
-			// Tab should not crash with empty list
-			fireEvent.keyDown(textarea, { key: "Tab" });
+			// ArrowDown should not crash with empty list
+			fireEvent.keyDown(textarea, { key: "ArrowDown" });
 
-			// With empty list, palette stays open and Tab does nothing
+			// With empty list, palette stays open and ArrowDown does nothing
 			expect(screen.getByRole("listbox")).toBeInTheDocument();
 
 			// Enter with empty list falls through to normal send behavior
 			fireEvent.keyDown(textarea, { key: "Enter" });
 			expect(onSend).toHaveBeenCalledWith("/");
+		});
+
+		it("does not trigger history navigation when palette is open", async () => {
+			localStorage.setItem(HISTORY_KEY, JSON.stringify(["previous message"]));
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "/" } });
+
+			await waitFor(() => {
+				expect(screen.getByRole("listbox")).toBeInTheDocument();
+			});
+
+			// ArrowUp should navigate palette, not history
+			fireEvent.keyDown(textarea, { key: "ArrowUp" });
+
+			// Input should still be "/" (not "previous message" from history)
+			expect(textarea).toHaveValue("/");
 		});
 	});
 });

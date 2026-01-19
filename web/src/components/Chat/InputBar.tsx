@@ -192,26 +192,28 @@ function InputBar({
 					return;
 				}
 
-				if (e.key === "Tab" && filteredCommands.length > 0) {
+				// Arrow keys navigate the palette
+				if (e.key === "ArrowUp" && filteredCommands.length > 0) {
 					e.preventDefault();
-					if (e.shiftKey) {
-						setSelectedIndex(
-							(i) =>
-								(i - 1 + filteredCommands.length) % filteredCommands.length,
-						);
-					} else {
-						setSelectedIndex((i) => (i + 1) % filteredCommands.length);
-					}
+					setSelectedIndex(
+						(i) => (i - 1 + filteredCommands.length) % filteredCommands.length,
+					);
 					return;
 				}
 
-				if (e.key === "Enter" && filteredCommands.length > 0) {
+				if (e.key === "ArrowDown" && filteredCommands.length > 0) {
 					e.preventDefault();
-					const safeIndex = Math.min(
-						selectedIndex,
-						filteredCommands.length - 1,
-					);
-					handleCommandSelect(filteredCommands[safeIndex]);
+					setSelectedIndex((i) => (i + 1) % filteredCommands.length);
+					return;
+				}
+
+				// Tab or Enter selects the command
+				if (
+					(e.key === "Tab" || e.key === "Enter") &&
+					filteredCommands.length > 0
+				) {
+					e.preventDefault();
+					handleCommandSelect(filteredCommands[selectedIndex]);
 					return;
 				}
 			}

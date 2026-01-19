@@ -53,14 +53,17 @@ function CommandPalette({ commands, selectedIndex, onSelect, filter }: Props) {
 			{commands.length > 0 && !hasCoarsePointer() && (
 				<div className="flex shrink-0 gap-3 border-t border-th-border px-4 py-2 text-xs text-th-text-muted">
 					<span>
-						<kbd className="rounded bg-th-bg-tertiary px-1.5 py-0.5">Tab</kbd>
+						<kbd className="rounded bg-th-bg-tertiary px-1.5 py-0.5">↑</kbd>
 						<kbd className="ml-1 rounded bg-th-bg-tertiary px-1.5 py-0.5">
-							⇧Tab
+							↓
 						</kbd>{" "}
 						navigate
 					</span>
 					<span>
-						<kbd className="rounded bg-th-bg-tertiary px-1.5 py-0.5">Enter</kbd>{" "}
+						<kbd className="rounded bg-th-bg-tertiary px-1.5 py-0.5">Tab</kbd>
+						<kbd className="ml-1 rounded bg-th-bg-tertiary px-1.5 py-0.5">
+							Enter
+						</kbd>{" "}
 						select
 					</span>
 					<span>
