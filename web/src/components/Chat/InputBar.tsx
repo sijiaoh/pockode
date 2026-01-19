@@ -197,12 +197,14 @@ function InputBar({
 			if (pending.direction === "up") {
 				const previous = getPrevious(inputRef.current);
 				if (previous !== null) {
+					setPaletteDismissed(true); // Don't open palette for history items
 					setInput(previous);
 					requestAnimationFrame(moveCursorToEnd);
 				}
 			} else {
 				const next = getNext();
 				if (next !== null) {
+					setPaletteDismissed(true); // Don't open palette for history items
 					setInput(next);
 					requestAnimationFrame(moveCursorToEnd);
 				}

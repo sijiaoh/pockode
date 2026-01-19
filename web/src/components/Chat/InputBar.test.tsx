@@ -299,6 +299,24 @@ describe("InputBar", () => {
 		});
 	});
 
+	it("does not open palette when navigating to slash command in history", async () => {
+		localStorage.setItem(HISTORY_KEY, JSON.stringify(["/help"]));
+		render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+		const textarea = screen.getByRole("textbox");
+
+		mockGetCaretCoordinates.mockReturnValue({ top: 0, left: 0, height: 20 });
+		fireEvent.keyDown(textarea, { key: "ArrowUp" });
+		fireEvent.keyUp(textarea, { key: "ArrowUp" });
+
+		await waitFor(() => {
+			expect(textarea).toHaveValue("/help");
+		});
+
+		// Palette should NOT open for history-navigated slash commands
+		expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+	});
+
 	describe("command palette", () => {
 		it("opens palette when typing /", async () => {
 			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
