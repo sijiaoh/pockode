@@ -159,44 +159,42 @@ function stripNamespace(method: string): string {
 	return dotIndex >= 0 ? method.slice(dotIndex + 1) : method;
 }
 
-function handleNotification(method: string, params: unknown): void {
-	// Handle fs.changed notifications specially via callback
-	if (method === "fs.changed") {
+function createIdBasedHandler(
+	callbacks: Map<string, () => void>,
+): (params: unknown) => boolean {
+	return (params) => {
 		const { id } = params as { id: string };
-		fsWatchCallbacks.get(id)?.();
-		return;
-	}
+		callbacks.get(id)?.();
+		return true;
+	};
+}
 
-	// Handle git.changed notifications specially via callback
-	if (method === "git.changed") {
-		const { id } = params as { id: string };
-		gitWatchCallbacks.get(id)?.();
-		return;
-	}
+type WatchNotificationHandler = (params: unknown) => boolean;
 
-	// Handle worktree.deleted notification
-	if (method === "worktree.deleted") {
+const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
+	"fs.changed": createIdBasedHandler(fsWatchCallbacks),
+	"git.changed": createIdBasedHandler(gitWatchCallbacks),
+	"worktree.changed": createIdBasedHandler(worktreeWatchCallbacks),
+	"worktree.deleted": (params) => {
 		const { name } = params as { name: string };
 		const wasCurrentWorktree = worktreeActions.getCurrent() === name;
-		// If connected to the deleted worktree, switch to main
 		if (wasCurrentWorktree) {
 			worktreeActions.setCurrent("");
 		}
 		worktreeDeletedListener?.(name, wasCurrentWorktree);
-		return;
-	}
-
-	// Handle worktree.changed notification via callback
-	if (method === "worktree.changed") {
-		const { id } = params as { id: string };
-		worktreeWatchCallbacks.get(id)?.();
-		return;
-	}
-
-	// Handle session.list.changed notification via callback
-	if (method === "session.list.changed") {
+		return true;
+	},
+	"session.list.changed": (params) => {
 		const changedParams = params as SessionListChangedNotification;
 		sessionListWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
+};
+
+function handleNotification(method: string, params: unknown): void {
+	// Try watch notification handlers first
+	const handler = watchNotificationHandlers[method];
+	if (handler?.(params)) {
 		return;
 	}
 

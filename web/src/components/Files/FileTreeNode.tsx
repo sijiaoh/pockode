@@ -42,12 +42,13 @@ const FileTreeNode = memo(function FileTreeNode({
 		isDirectory && isExpanded,
 	);
 
-	useFSWatch(
-		watchEnabled && isDirectory && isExpanded ? entry.path : null,
-		useCallback(() => {
+	useFSWatch({
+		path: entry.path,
+		onChanged: useCallback(() => {
 			queryClient.invalidateQueries({ queryKey: contentsQueryKey(entry.path) });
 		}, [queryClient, entry.path]),
-	);
+		enabled: watchEnabled && isDirectory && isExpanded,
+	});
 
 	const handleClick = () => {
 		if (isDirectory) {

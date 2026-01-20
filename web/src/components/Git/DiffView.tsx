@@ -38,7 +38,7 @@ function DiffView({ path, staged, onBack }: Props) {
 		queryClient.invalidateQueries({ queryKey: gitDiffQueryKey(path, staged) });
 	}, [queryClient, path, staged]);
 
-	useGitWatch(invalidateDiff);
+	useGitWatch({ onChanged: invalidateDiff });
 
 	const allFiles = useMemo(() => {
 		if (!gitStatus) return [];

@@ -28,12 +28,12 @@ function FileView({ path, onBack }: Props) {
 		setShowRaw(false);
 	}, [path]);
 
-	useFSWatch(
+	useFSWatch({
 		path,
-		useCallback(() => {
+		onChanged: useCallback(() => {
 			queryClient.invalidateQueries({ queryKey: contentsQueryKey(path) });
 		}, [queryClient, path]),
-	);
+	});
 
 	const content = useMemo(() => {
 		if (!data || !isFileContent(data)) return null;

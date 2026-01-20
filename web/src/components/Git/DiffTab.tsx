@@ -16,7 +16,7 @@ function DiffTab({ onSelectFile, activeFile }: Props) {
 	const { isActive } = useSidebarRefresh("diff", refresh);
 
 	// Use GitWatcher for git status changes (replaces fsnotify-based .git/index watching)
-	useGitWatch(refresh, isActive);
+	useGitWatch({ onChanged: refresh, enabled: isActive });
 
 	const flatStatus = useMemo(
 		() => (status ? flattenGitStatus(status) : null),

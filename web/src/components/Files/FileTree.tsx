@@ -21,12 +21,13 @@ function FileTree({
 	const queryClient = useQueryClient();
 	const { data, isLoading, error } = useContents();
 
-	useFSWatch(
-		watchEnabled ? "" : null,
-		useCallback(() => {
+	useFSWatch({
+		path: "",
+		onChanged: useCallback(() => {
 			queryClient.invalidateQueries({ queryKey: contentsQueryKey("") });
 		}, [queryClient]),
-	);
+		enabled: watchEnabled,
+	});
 
 	if (isLoading) {
 		return (

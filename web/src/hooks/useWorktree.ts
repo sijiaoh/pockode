@@ -13,6 +13,7 @@ import {
 	wsActions,
 } from "../lib/wsStore";
 import type { WorktreeInfo } from "../types/message";
+import { useSubscription } from "./useSubscription";
 
 async function listWorktrees(): Promise<WorktreeInfo[]> {
 	return wsActions.listWorktrees();
@@ -70,40 +71,18 @@ export function useWorktree({
 	});
 
 	// Subscribe to worktree list changes
-	useEffect(() => {
-		if (!enabled || !isConnected || !isGitRepo) return;
+	const handleWorktreeChanged = useCallback(() => {
+		queryClient.invalidateQueries({ queryKey: ["worktrees"] });
+	}, [queryClient]);
 
-		let watchId: string | null = null;
-		let cancelled = false;
-
-		worktreeSubscribe(() => {
-			queryClient.invalidateQueries({ queryKey: ["worktrees"] });
-		})
-			.then((id) => {
-				if (cancelled) {
-					worktreeUnsubscribe(id);
-				} else {
-					watchId = id;
-				}
-			})
-			.catch((err) => {
-				console.error("Failed to subscribe to worktree watch:", err);
-			});
-
-		return () => {
-			cancelled = true;
-			if (watchId) {
-				worktreeUnsubscribe(watchId);
-			}
-		};
-	}, [
-		enabled,
-		isConnected,
-		isGitRepo,
-		queryClient,
+	useSubscription(
 		worktreeSubscribe,
 		worktreeUnsubscribe,
-	]);
+		handleWorktreeChanged,
+		{
+			enabled: enabled && isGitRepo,
+		},
+	);
 
 	useEffect(() => {
 		setWorktreeDeletedListener((name, wasCurrentWorktree) => {
