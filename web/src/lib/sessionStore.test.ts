@@ -1,6 +1,6 @@
-import { describe, expect, it, beforeEach } from "vitest";
-import { prependSession, useSessionStore } from "./sessionStore";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { SessionMeta } from "../types/message";
+import { prependSession, useSessionStore } from "./sessionStore";
 
 const mockSession = (id: string, title = "Test"): SessionMeta => ({
 	id,
@@ -65,10 +65,9 @@ describe("useSessionStore", () => {
 		it("updates sessions with updater function", () => {
 			useSessionStore.setState({ sessions: [mockSession("1")] });
 
-			useSessionStore.getState().updateSessions((old) => [
-				...old,
-				mockSession("2"),
-			]);
+			useSessionStore
+				.getState()
+				.updateSessions((old) => [...old, mockSession("2")]);
 
 			expect(useSessionStore.getState().sessions.length).toBe(2);
 		});

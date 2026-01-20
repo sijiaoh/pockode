@@ -218,9 +218,7 @@ describe("useSession", () => {
 	describe("mutations", () => {
 		describe("createSession", () => {
 			it("optimistically adds session", async () => {
-				const { createSession: mockCreate } = await import(
-					"../lib/sessionApi"
-				);
+				const { createSession: mockCreate } = await import("../lib/sessionApi");
 				const newSession = mockSession("new-id", "New");
 				vi.mocked(mockCreate).mockResolvedValue(newSession);
 
