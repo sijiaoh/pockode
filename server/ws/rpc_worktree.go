@@ -173,6 +173,7 @@ func (h *rpcMethodHandler) handleWorktreeSubscribe(ctx context.Context, conn *js
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
+	h.log.Debug("subscribed", "watcher", "worktree", "watchId", id)
 
 	if err := conn.Reply(ctx, req.ID, rpc.WorktreeSubscribeResult{ID: id}); err != nil {
 		h.log.Error("failed to send worktree subscribe response", "error", err)

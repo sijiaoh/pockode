@@ -20,6 +20,7 @@ func (h *rpcMethodHandler) handleFSSubscribe(ctx context.Context, conn *jsonrpc2
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 		return
 	}
+	h.log.Debug("subscribed", "watcher", "fs", "watchId", id, "path", params.Path)
 
 	if err := conn.Reply(ctx, req.ID, rpc.FSSubscribeResult{ID: id}); err != nil {
 		h.log.Error("failed to send fs subscribe response", "error", err)

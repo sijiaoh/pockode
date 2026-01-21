@@ -57,8 +57,6 @@ func (w *GitWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (string, erro
 		Conn:   conn,
 	}
 	w.AddSubscription(sub)
-
-	slog.Debug("git subscription added", "watchId", id, "connId", connID)
 	return id, nil
 }
 

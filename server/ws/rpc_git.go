@@ -72,6 +72,7 @@ func (h *rpcMethodHandler) handleGitSubscribe(ctx context.Context, conn *jsonrpc
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
+	h.log.Debug("subscribed", "watcher", "git", "watchId", id)
 
 	if err := conn.Reply(ctx, req.ID, rpc.GitSubscribeResult{ID: id}); err != nil {
 		h.log.Error("failed to send git subscribe response", "error", err)

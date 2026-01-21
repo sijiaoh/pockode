@@ -104,6 +104,7 @@ func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn 
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to subscribe")
 		return
 	}
+	h.log.Debug("subscribed", "watcher", "session list", "watchId", id)
 
 	result := rpc.SessionListSubscribeResult{
 		ID:       id,

@@ -343,7 +343,7 @@ func (h *rpcMethodHandler) handleWatcherUnsubscribe(
 	}
 
 	watcher.Unsubscribe(params.ID)
-	h.log.Debug(logName+" unsubscribed", "watchId", params.ID)
+	h.log.Debug("unsubscribed", "watcher", logName, "watchId", params.ID)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		h.log.Error("failed to send "+logName+" unsubscribe response", "error", err)

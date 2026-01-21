@@ -56,8 +56,6 @@ func (w *WorktreeWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (string,
 		Conn:   conn,
 	}
 	w.AddSubscription(sub)
-
-	slog.Debug("worktree subscription added", "watchId", id, "connId", connID)
 	return id, nil
 }
 

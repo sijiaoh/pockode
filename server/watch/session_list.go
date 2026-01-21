@@ -91,7 +91,6 @@ func (w *SessionListWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (stri
 		return "", nil, err
 	}
 
-	slog.Debug("session list subscription added", "watchId", id, "connId", connID)
 	return id, sessions, nil
 }
 

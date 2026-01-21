@@ -96,7 +96,6 @@ func (w *FSWatcher) Subscribe(path string, conn *jsonrpc2.Conn, connID string) (
 	w.pathRefCount[path]++
 	w.pathMu.Unlock()
 
-	slog.Debug("fs subscription added", "watchId", id, "path", path, "connId", connID)
 	return id, nil
 }
 
