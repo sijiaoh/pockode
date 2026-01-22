@@ -18,6 +18,7 @@ type Worktree struct {
 	SessionStore       session.Store
 	FSWatcher          *watch.FSWatcher
 	GitWatcher         *watch.GitWatcher
+	GitDiffWatcher     *watch.GitDiffWatcher
 	SessionListWatcher *watch.SessionListWatcher
 	ProcessManager     *process.Manager
 

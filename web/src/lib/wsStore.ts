@@ -1,6 +1,10 @@
 import { JSONRPCClient, type JSONRPCRequester } from "json-rpc-2.0";
 import { create } from "zustand";
 import type {
+	GitDiffChangedNotification,
+	GitDiffSubscribeResult,
+} from "../types/git";
+import type {
 	AuthParams,
 	AuthResult,
 	ServerMethod,
@@ -70,6 +74,12 @@ export interface WatchActions {
 	fsUnsubscribe: (id: string) => Promise<void>;
 	gitSubscribe: (callback: () => void) => Promise<WatchSubscribeResult>;
 	gitUnsubscribe: (id: string) => Promise<void>;
+	gitDiffSubscribe: (
+		path: string,
+		staged: boolean,
+		callback: (params: GitDiffChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<GitDiffSubscribeResult>>;
+	gitDiffUnsubscribe: (id: string) => Promise<void>;
 	worktreeSubscribe: (callback: () => void) => Promise<WatchSubscribeResult>;
 	worktreeUnsubscribe: (id: string) => Promise<void>;
 	sessionListSubscribe: (
@@ -104,6 +114,10 @@ let reconnectTimeout: number | undefined;
 const notificationListeners = new Set<NotificationListener>();
 const fsWatchCallbacks = new Map<string, () => void>();
 const gitWatchCallbacks = new Map<string, () => void>();
+const gitDiffWatchCallbacks = new Map<
+	string,
+	(params: GitDiffChangedNotification) => void
+>();
 const worktreeWatchCallbacks = new Map<string, () => void>();
 const sessionListWatchCallbacks = new Map<
 	string,
@@ -120,6 +134,7 @@ const sessionListWatchCallbacks = new Map<
 function clearWatchSubscriptions(): void {
 	fsWatchCallbacks.clear();
 	gitWatchCallbacks.clear();
+	gitDiffWatchCallbacks.clear();
 	sessionListWatchCallbacks.clear();
 	// Note: worktreeWatchCallbacks is NOT cleared here because it's Manager-level,
 	// not worktree-specific. It persists across worktree switches.
@@ -185,6 +200,11 @@ type WatchNotificationHandler = (params: unknown) => boolean;
 const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 	"fs.changed": createIdBasedHandler(fsWatchCallbacks),
 	"git.changed": createIdBasedHandler(gitWatchCallbacks),
+	"git.diff.changed": (params) => {
+		const diffParams = params as GitDiffChangedNotification;
+		gitDiffWatchCallbacks.get(diffParams.id)?.(diffParams);
+		return true;
+	},
 	"worktree.changed": createIdBasedHandler(worktreeWatchCallbacks),
 	"worktree.deleted": (params) => {
 		const { name } = params as { name: string };
@@ -455,6 +475,35 @@ export const useWSStore = create<WSState>((set, get) => ({
 			}
 		},
 
+		gitDiffSubscribe: async (
+			path: string,
+			staged: boolean,
+			callback: (params: GitDiffChangedNotification) => void,
+		) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			const result = (await client.request("git.diff.subscribe", {
+				path,
+				staged,
+			})) as GitDiffSubscribeResult;
+			gitDiffWatchCallbacks.set(result.id, callback);
+			return { id: result.id, initial: result };
+		},
+
+		gitDiffUnsubscribe: async (id: string) => {
+			gitDiffWatchCallbacks.delete(id);
+			const client = getClient();
+			if (client) {
+				try {
+					await client.request("git.diff.unsubscribe", { id });
+				} catch {
+					// Ignore errors (connection might be closed)
+				}
+			}
+		},
+
 		worktreeSubscribe: async (callback: () => void) => {
 			const client = getClient();
 			if (!client) {
@@ -585,6 +634,7 @@ export function resetWSStore() {
 	notificationListeners.clear();
 	fsWatchCallbacks.clear();
 	gitWatchCallbacks.clear();
+	gitDiffWatchCallbacks.clear();
 	worktreeWatchCallbacks.clear();
 	sessionListWatchCallbacks.clear();
 	sessionExistsChecker = null;

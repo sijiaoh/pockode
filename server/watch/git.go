@@ -14,14 +14,15 @@ import (
 
 const gitPollInterval = 3 * time.Second
 
-// GitWatcher polls git status/diff and notifies subscribers when changes are detected.
+// GitWatcher polls git status and notifies subscribers when file list changes are detected.
+// For file-specific diff content changes, use GitDiffWatcher instead.
 type GitWatcher struct {
 	*BaseWatcher
 
 	workDir string
 
 	stateMu   sync.Mutex
-	lastState string // Combined status + diff signatures
+	lastState string // git status output
 }
 
 func NewGitWatcher(workDir string) *GitWatcher {
@@ -93,25 +94,16 @@ func (w *GitWatcher) checkAndNotify() {
 	}
 }
 
-// pollGitState returns a combined signature of status + diff --stat.
-// Detects: file changes, staging changes, and partial staging.
+// pollGitState returns the git status output for detecting file list changes.
 func (w *GitWatcher) pollGitState() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	var parts []string
-
-	if out := w.runGitCmd(ctx, "status", "--porcelain=v1", "-uall", "--ignore-submodules=none"); out != "" {
-		parts = append(parts, "S:"+sortLines(out))
+	out := w.runGitCmd(ctx, "status", "--porcelain=v1", "-uall", "--ignore-submodules=none")
+	if out == "" {
+		return ""
 	}
-	if out := w.runGitCmd(ctx, "diff", "--stat", "--submodule=short"); out != "" {
-		parts = append(parts, "U:"+out)
-	}
-	if out := w.runGitCmd(ctx, "diff", "--staged", "--stat", "--submodule=short"); out != "" {
-		parts = append(parts, "T:"+out)
-	}
-
-	return strings.Join(parts, "\n---\n")
+	return sortLines(out)
 }
 
 func (w *GitWatcher) runGitCmd(ctx context.Context, args ...string) string {

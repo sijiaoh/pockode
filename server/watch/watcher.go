@@ -13,6 +13,7 @@ type Watcher interface {
 var (
 	_ Watcher = (*FSWatcher)(nil)
 	_ Watcher = (*GitWatcher)(nil)
+	_ Watcher = (*GitDiffWatcher)(nil)
 	_ Watcher = (*WorktreeWatcher)(nil)
 	_ Watcher = (*SessionListWatcher)(nil)
 )

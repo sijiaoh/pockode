@@ -90,15 +90,22 @@ type FileGetResult struct {
 
 type GitStatusResult = git.GitStatus
 
-type GitDiffParams struct {
+// Git diff watch (subscription for file-specific diff changes)
+
+type GitDiffSubscribeParams struct {
 	Path   string `json:"path"`
 	Staged bool   `json:"staged"`
 }
 
-type GitDiffResult struct {
+type GitDiffSubscribeResult struct {
+	ID         string `json:"id"`
 	Diff       string `json:"diff"`
 	OldContent string `json:"old_content"`
 	NewContent string `json:"new_content"`
+}
+
+type GitDiffUnsubscribeParams struct {
+	ID string `json:"id"`
 }
 
 // Command namespace

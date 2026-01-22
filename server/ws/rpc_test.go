@@ -938,7 +938,7 @@ func TestHandler_GitStatus_UntrackedFile(t *testing.T) {
 	}
 }
 
-func TestHandler_GitDiff_Unstaged(t *testing.T) {
+func TestHandler_GitDiffSubscribe_Unstaged(t *testing.T) {
 	dir := setupGitRepo(t)
 
 	// Create and commit a file
@@ -951,15 +951,18 @@ func TestHandler_GitDiff_Unstaged(t *testing.T) {
 	os.WriteFile(testFile, []byte("modified"), 0644)
 
 	env := newWorkDirTestEnv(t, dir)
-	resp := env.call("git.diff", rpc.GitDiffParams{Path: "test.txt", Staged: false})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "test.txt", Staged: false})
 
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
 	}
 
-	var result rpc.GitDiffResult
+	var result rpc.GitDiffSubscribeResult
 	json.Unmarshal(resp.Result, &result)
 
+	if result.ID == "" {
+		t.Error("expected subscription ID")
+	}
 	if result.OldContent != "original" {
 		t.Errorf("expected old content 'original', got %q", result.OldContent)
 	}
@@ -968,7 +971,7 @@ func TestHandler_GitDiff_Unstaged(t *testing.T) {
 	}
 }
 
-func TestHandler_GitDiff_Staged(t *testing.T) {
+func TestHandler_GitDiffSubscribe_Staged(t *testing.T) {
 	dir := setupGitRepo(t)
 
 	// Create and commit a file
@@ -982,15 +985,18 @@ func TestHandler_GitDiff_Staged(t *testing.T) {
 	runGitIn(t, dir, "add", "test.txt")
 
 	env := newWorkDirTestEnv(t, dir)
-	resp := env.call("git.diff", rpc.GitDiffParams{Path: "test.txt", Staged: true})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "test.txt", Staged: true})
 
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
 	}
 
-	var result rpc.GitDiffResult
+	var result rpc.GitDiffSubscribeResult
 	json.Unmarshal(resp.Result, &result)
 
+	if result.ID == "" {
+		t.Error("expected subscription ID")
+	}
 	if result.OldContent != "original" {
 		t.Errorf("expected old content 'original', got %q", result.OldContent)
 	}
@@ -999,11 +1005,11 @@ func TestHandler_GitDiff_Staged(t *testing.T) {
 	}
 }
 
-func TestHandler_GitDiff_PathRequired(t *testing.T) {
+func TestHandler_GitDiffSubscribe_PathRequired(t *testing.T) {
 	dir := setupGitRepo(t)
 	env := newWorkDirTestEnv(t, dir)
 
-	resp := env.call("git.diff", rpc.GitDiffParams{Path: "", Staged: false})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "", Staged: false})
 
 	if resp.Error == nil {
 		t.Fatal("expected error")
@@ -1013,11 +1019,11 @@ func TestHandler_GitDiff_PathRequired(t *testing.T) {
 	}
 }
 
-func TestHandler_GitDiff_InvalidPath(t *testing.T) {
+func TestHandler_GitDiffSubscribe_InvalidPath(t *testing.T) {
 	dir := setupGitRepo(t)
 	env := newWorkDirTestEnv(t, dir)
 
-	resp := env.call("git.diff", rpc.GitDiffParams{Path: "../etc/passwd", Staged: false})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "../etc/passwd", Staged: false})
 
 	if resp.Error == nil {
 		t.Fatal("expected error")

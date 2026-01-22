@@ -9,10 +9,18 @@ export interface GitStatus {
 	submodules?: Record<string, GitStatus>;
 }
 
-export interface GitDiffResponse {
+export interface GitDiffData {
 	diff: string;
 	old_content: string;
 	new_content: string;
+}
+
+export interface GitDiffSubscribeResult extends GitDiffData {
+	id: string;
+}
+
+export interface GitDiffChangedNotification extends GitDiffData {
+	id: string;
 }
 
 /**

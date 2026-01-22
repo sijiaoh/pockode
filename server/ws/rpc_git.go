@@ -23,8 +23,8 @@ func (h *rpcMethodHandler) handleGitStatus(ctx context.Context, conn *jsonrpc2.C
 	}
 }
 
-func (h *rpcMethodHandler) handleGitDiff(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	var params rpc.GitDiffParams
+func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.GitDiffSubscribeParams
 	if err := unmarshalParams(req, &params); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
 		return
@@ -44,7 +44,8 @@ func (h *rpcMethodHandler) handleGitDiff(ctx context.Context, conn *jsonrpc2.Con
 		return
 	}
 
-	result, err := git.DiffWithContent(h.state.worktree.WorkDir, params.Path, params.Staged)
+	connID := h.state.getConnID()
+	id, result, err := h.state.worktree.GitDiffWatcher.Subscribe(params.Path, params.Staged, conn, connID)
 	if err != nil {
 		if strings.Contains(err.Error(), "file not found") {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
@@ -54,14 +55,16 @@ func (h *rpcMethodHandler) handleGitDiff(ctx context.Context, conn *jsonrpc2.Con
 		return
 	}
 
-	response := rpc.GitDiffResult{
+	h.log.Debug("subscribed", "watcher", "git-diff", "watchId", id, "path", params.Path, "staged", params.Staged)
+
+	response := rpc.GitDiffSubscribeResult{
+		ID:         id,
 		Diff:       result.Diff,
 		OldContent: result.OldContent,
 		NewContent: result.NewContent,
 	}
-
 	if err := conn.Reply(ctx, req.ID, response); err != nil {
-		h.log.Error("failed to send git diff response", "error", err)
+		h.log.Error("failed to send git diff subscribe response", "error", err)
 	}
 }
 

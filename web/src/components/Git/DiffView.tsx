@@ -1,10 +1,8 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useCallback, useMemo } from "react";
-import { gitDiffQueryKey, useGitDiff } from "../../hooks/useGitDiff";
+import { useMemo } from "react";
+import { useGitDiffWatch } from "../../hooks/useGitDiffWatch";
 import { useGitStatus } from "../../hooks/useGitStatus";
-import { useGitWatch } from "../../hooks/useGitWatch";
 import { useCurrentWorktree } from "../../hooks/useRouteState";
 import { buildNavigation } from "../../lib/navigation";
 import type { OverlaySearchParams } from "../../router";
@@ -26,19 +24,12 @@ const navButtonClass = (enabled: boolean) =>
 	}`;
 
 function DiffView({ path, staged, onBack }: Props) {
-	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const worktree = useCurrentWorktree();
 	const search = useSearch({ strict: false }) as OverlaySearchParams;
 	const sessionId = search.session;
-	const { data: diff, isLoading, error } = useGitDiff({ path, staged });
+	const { data: diff, isLoading } = useGitDiffWatch({ path, staged });
 	const { data: gitStatus } = useGitStatus();
-
-	const invalidateDiff = useCallback(() => {
-		queryClient.invalidateQueries({ queryKey: gitDiffQueryKey(path, staged) });
-	}, [queryClient, path, staged]);
-
-	useGitWatch({ onChanged: invalidateDiff });
 
 	const allFiles = useMemo(() => {
 		if (!gitStatus) return [];
@@ -110,7 +101,6 @@ function DiffView({ path, staged, onBack }: Props) {
 			path={path}
 			pathColor={staged ? "text-th-success" : "text-th-warning"}
 			isLoading={isLoading}
-			error={error instanceof Error ? error : null}
 			onBack={onBack}
 			onPathClick={handlePathClick}
 			headerActions={headerActions}
