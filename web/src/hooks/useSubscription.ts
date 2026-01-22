@@ -105,16 +105,27 @@ export function useSubscription<TNotification = void, TInitial = void>(
 		cancelledRef.current = false;
 		doSubscribe();
 
-		// Resubscribe on worktree change (server resets worktree-scoped subscriptions)
-		const unregister = resubscribeOnWorktreeChange
-			? worktreeActions.onWorktreeChange(() => {
+		const cleanupSwitchStart = resubscribeOnWorktreeChange
+			? worktreeActions.onWorktreeSwitchStart(() => {
+					cancelledRef.current = true;
 					onResetRef.current?.();
+					if (subscriptionIdRef.current) {
+						unsubscribe(subscriptionIdRef.current);
+						subscriptionIdRef.current = null;
+					}
+				})
+			: undefined;
+
+		const cleanupSwitchEnd = resubscribeOnWorktreeChange
+			? worktreeActions.onWorktreeSwitchEnd(() => {
+					cancelledRef.current = false;
 					doSubscribe();
 				})
 			: undefined;
 
 		return () => {
-			unregister?.();
+			cleanupSwitchStart?.();
+			cleanupSwitchEnd?.();
 			cancelledRef.current = true;
 			if (subscriptionIdRef.current) {
 				unsubscribe(subscriptionIdRef.current);

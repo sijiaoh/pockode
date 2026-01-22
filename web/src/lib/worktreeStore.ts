@@ -16,16 +16,40 @@ export const useWorktreeStore = create<WorktreeState>(() => ({
 type WorktreeChangeListener = (prev: string, next: string) => void;
 const changeListeners = new Set<WorktreeChangeListener>();
 
+type WorktreeSwitchListener = () => void;
+const switchStartListeners = new Set<WorktreeSwitchListener>();
+const switchEndListeners = new Set<WorktreeSwitchListener>();
+
 export const worktreeActions = {
 	setCurrent: (name: string) => {
 		const prev = useWorktreeStore.getState().current;
 		if (prev === name) return;
+
+		for (const listener of switchStartListeners) {
+			listener();
+		}
 
 		useWorktreeStore.setState({ current: name });
 
 		for (const listener of changeListeners) {
 			listener(prev, name);
 		}
+	},
+
+	notifyWorktreeSwitchEnd: () => {
+		for (const listener of switchEndListeners) {
+			listener();
+		}
+	},
+
+	onWorktreeSwitchStart: (listener: WorktreeSwitchListener) => {
+		switchStartListeners.add(listener);
+		return () => switchStartListeners.delete(listener);
+	},
+
+	onWorktreeSwitchEnd: (listener: WorktreeSwitchListener) => {
+		switchEndListeners.add(listener);
+		return () => switchEndListeners.delete(listener);
 	},
 
 	onWorktreeChange: (listener: WorktreeChangeListener) => {
@@ -55,4 +79,7 @@ export function getDisplayName(worktree: WorktreeInfo): string {
 
 export function resetWorktreeStore() {
 	worktreeActions.reset();
+	changeListeners.clear();
+	switchStartListeners.clear();
+	switchEndListeners.clear();
 }

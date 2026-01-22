@@ -11,15 +11,23 @@ vi.mock("../lib/wsStore", () => ({
 	}),
 }));
 
-const worktreeChangeCallbacks: Array<() => void> = [];
+const switchStartCallbacks: Array<() => void> = [];
+const switchEndCallbacks: Array<() => void> = [];
 
 vi.mock("../lib/worktreeStore", () => ({
 	worktreeActions: {
-		onWorktreeChange: vi.fn((callback: () => void) => {
-			worktreeChangeCallbacks.push(callback);
+		onWorktreeSwitchStart: vi.fn((callback: () => void) => {
+			switchStartCallbacks.push(callback);
 			return () => {
-				const index = worktreeChangeCallbacks.indexOf(callback);
-				if (index !== -1) worktreeChangeCallbacks.splice(index, 1);
+				const index = switchStartCallbacks.indexOf(callback);
+				if (index !== -1) switchStartCallbacks.splice(index, 1);
+			};
+		}),
+		onWorktreeSwitchEnd: vi.fn((callback: () => void) => {
+			switchEndCallbacks.push(callback);
+			return () => {
+				const index = switchEndCallbacks.indexOf(callback);
+				if (index !== -1) switchEndCallbacks.splice(index, 1);
 			};
 		}),
 	},
@@ -28,12 +36,13 @@ vi.mock("../lib/worktreeStore", () => ({
 describe("useSubscription", () => {
 	const mockSubscribe = vi.fn();
 	const mockUnsubscribe = vi.fn();
-	const mockOnChanged = vi.fn();
+	const mockOnNotification = vi.fn();
 
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockStatus = "connected";
-		worktreeChangeCallbacks.length = 0;
+		switchStartCallbacks.length = 0;
+		switchEndCallbacks.length = 0;
 		mockSubscribe.mockResolvedValue({ id: "sub-123" });
 		mockUnsubscribe.mockResolvedValue(undefined);
 	});
@@ -41,7 +50,7 @@ describe("useSubscription", () => {
 	describe("subscription lifecycle", () => {
 		it("subscribes when connected and enabled", async () => {
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged),
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification),
 			);
 
 			await waitFor(() => {
@@ -51,7 +60,7 @@ describe("useSubscription", () => {
 
 		it("does not subscribe when disabled", async () => {
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged, {
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification, {
 					enabled: false,
 				}),
 			);
@@ -64,7 +73,7 @@ describe("useSubscription", () => {
 			mockStatus = "disconnected";
 
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged),
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification),
 			);
 
 			await new Promise((r) => setTimeout(r, 50));
@@ -73,7 +82,7 @@ describe("useSubscription", () => {
 
 		it("unsubscribes on unmount", async () => {
 			const { unmount } = renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged),
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification),
 			);
 
 			await waitFor(() => {
@@ -88,7 +97,7 @@ describe("useSubscription", () => {
 		it("unsubscribes when disabled after being enabled", async () => {
 			const { rerender } = renderHook(
 				({ enabled }) =>
-					useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged, {
+					useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification, {
 						enabled,
 					}),
 				{ initialProps: { enabled: true } },
@@ -114,7 +123,7 @@ describe("useSubscription", () => {
 			);
 
 			const { unmount } = renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged),
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification),
 			);
 
 			expect(mockSubscribe).toHaveBeenCalled();
@@ -139,7 +148,7 @@ describe("useSubscription", () => {
 			});
 
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged),
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification),
 			);
 
 			await waitFor(() => {
@@ -150,7 +159,7 @@ describe("useSubscription", () => {
 				capturedCallback?.();
 			});
 
-			expect(mockOnChanged).toHaveBeenCalledTimes(1);
+			expect(mockOnNotification).toHaveBeenCalledTimes(1);
 		});
 
 		it("uses latest onChanged callback via ref", async () => {
@@ -193,7 +202,7 @@ describe("useSubscription", () => {
 			});
 
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged, {
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification, {
 					onSubscribed,
 				}),
 			);
@@ -208,7 +217,7 @@ describe("useSubscription", () => {
 			mockSubscribe.mockResolvedValue({ id: "sub-no-init" });
 
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged, {
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification, {
 					onSubscribed,
 				}),
 			);
@@ -225,7 +234,7 @@ describe("useSubscription", () => {
 			mockStatus = "disconnected";
 
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged, {
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification, {
 					onReset,
 				}),
 			);
@@ -243,7 +252,7 @@ describe("useSubscription", () => {
 				.mockResolvedValueOnce({ id: "sub-2" });
 
 			const { result } = renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged),
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification),
 			);
 
 			await waitFor(() => {
@@ -259,35 +268,40 @@ describe("useSubscription", () => {
 		});
 	});
 
-	describe("worktree change handling", () => {
-		it("resubscribes on worktree change by default", async () => {
+	describe("worktree switch handling", () => {
+		it("unsubscribes on switchStart, resubscribes on switchEnd", async () => {
 			mockSubscribe
 				.mockResolvedValueOnce({ id: "sub-1" })
 				.mockResolvedValueOnce({ id: "sub-2" });
 
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged),
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification),
 			);
 
 			await waitFor(() => {
 				expect(mockSubscribe).toHaveBeenCalledTimes(1);
 			});
 
-			expect(worktreeChangeCallbacks.length).toBe(1);
+			expect(switchStartCallbacks.length).toBe(1);
+			expect(switchEndCallbacks.length).toBe(1);
 
 			await act(async () => {
-				worktreeChangeCallbacks[0]?.();
+				switchStartCallbacks[0]?.();
+			});
+			expect(mockUnsubscribe).toHaveBeenCalledWith("sub-1");
+
+			await act(async () => {
+				switchEndCallbacks[0]?.();
 			});
 
 			await waitFor(() => {
 				expect(mockSubscribe).toHaveBeenCalledTimes(2);
 			});
-			expect(mockUnsubscribe).toHaveBeenCalledWith("sub-1");
 		});
 
-		it("does not register worktree listener when resubscribeOnWorktreeChange is false", async () => {
+		it("does not register listeners when resubscribeOnWorktreeChange is false", async () => {
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged, {
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification, {
 					resubscribeOnWorktreeChange: false,
 				}),
 			);
@@ -296,10 +310,11 @@ describe("useSubscription", () => {
 				expect(mockSubscribe).toHaveBeenCalledTimes(1);
 			});
 
-			expect(worktreeChangeCallbacks.length).toBe(0);
+			expect(switchStartCallbacks.length).toBe(0);
+			expect(switchEndCallbacks.length).toBe(0);
 		});
 
-		it("calls onReset before resubscribing on worktree change", async () => {
+		it("calls onReset on switchStart, resubscribes on switchEnd", async () => {
 			const onReset = vi.fn();
 			const callOrder: string[] = [];
 
@@ -310,7 +325,7 @@ describe("useSubscription", () => {
 			});
 
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged, {
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification, {
 					onReset,
 				}),
 			);
@@ -320,7 +335,12 @@ describe("useSubscription", () => {
 			});
 
 			await act(async () => {
-				worktreeChangeCallbacks[0]?.();
+				switchStartCallbacks[0]?.();
+			});
+			expect(callOrder).toEqual(["subscribe", "reset"]);
+
+			await act(async () => {
+				switchEndCallbacks[0]?.();
 			});
 
 			await waitFor(() => {
@@ -339,7 +359,7 @@ describe("useSubscription", () => {
 			mockSubscribe.mockRejectedValue(new Error("Subscribe failed"));
 
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged),
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification),
 			);
 
 			await waitFor(() => {
@@ -360,7 +380,7 @@ describe("useSubscription", () => {
 			mockSubscribe.mockRejectedValue(new Error("Subscribe failed"));
 
 			renderHook(() =>
-				useSubscription(mockSubscribe, mockUnsubscribe, mockOnChanged, {
+				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification, {
 					onReset,
 				}),
 			);

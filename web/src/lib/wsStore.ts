@@ -630,6 +630,7 @@ async function switchWorktreeRPC(name: string): Promise<SwitchResult> {
 		useWSStore.setState({ workDir: result.work_dir });
 		clearWatchSubscriptions();
 		onWorktreeSwitched?.();
+		worktreeActions.notifyWorktreeSwitchEnd();
 		return "success";
 	} catch (error) {
 		console.warn("Worktree switch RPC failed:", error);
