@@ -254,7 +254,7 @@ func (p *Process) streamEvents(ctx context.Context) {
 		log.Debug("streaming event", "type", eventType)
 
 		// Persist to history
-		if err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewHistoryRecord(event)); err != nil {
+		if err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event)); err != nil {
 			log.Error("failed to append to history", "error", err)
 		}
 

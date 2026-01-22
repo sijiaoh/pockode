@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/process"
-	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -90,14 +90,20 @@ func (w *ChatMessagesWatcher) notifyMessage(msg process.ChatMessage) {
 		return
 	}
 
+	// Use EventRecord as the notification payload (single source of truth)
+	record := msg.Event.ToRecord()
+
 	for _, id := range ids {
 		sub := w.GetSubscription(id)
 		if sub == nil {
 			continue
 		}
 
-		// Create params with subscription ID for client-side routing
-		params := mergeIDIntoParams(sub.ID, rpc.NewNotifyParams(sessionID, msg.Event))
+		// Add subscription ID to params for client-side routing
+		params := notifyParams{
+			ID:          sub.ID,
+			EventRecord: record,
+		}
 
 		if err := sub.Conn.Notify(context.Background(), method, params); err != nil {
 			slog.Debug("failed to notify subscriber",
@@ -108,17 +114,10 @@ func (w *ChatMessagesWatcher) notifyMessage(msg process.ChatMessage) {
 	}
 }
 
-// mergeIDIntoParams adds subscription ID to notification params.
-// Returns a new map with "id" field added.
-func mergeIDIntoParams(id string, params any) map[string]any {
-	data, _ := json.Marshal(params)
-	var result map[string]any
-	json.Unmarshal(data, &result)
-	if result == nil {
-		result = make(map[string]any)
-	}
-	result["id"] = id
-	return result
+// notifyParams embeds EventRecord with subscription ID for routing.
+type notifyParams struct {
+	ID string `json:"id"`
+	agent.EventRecord
 }
 
 // Subscribe registers a subscriber for a specific session.

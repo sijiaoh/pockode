@@ -2,9 +2,9 @@ package agent
 
 import "encoding/json"
 
-// HistoryRecord wraps an AgentEvent for JSON serialization with a type field.
-// This is used for persisting events to history storage.
-type HistoryRecord struct {
+// EventRecord is the serialized form of an AgentEvent.
+// Used for persistence (history storage) and notifications (WebSocket).
+type EventRecord struct {
 	Type                  EventType          `json:"type"`
 	Content               string             `json:"content,omitempty"`
 	ToolName              string             `json:"tool_name,omitempty"`
@@ -21,7 +21,7 @@ type HistoryRecord struct {
 	Answers               map[string]string  `json:"answers,omitempty"`
 }
 
-// NewHistoryRecord creates a HistoryRecord from an AgentEvent.
-func NewHistoryRecord(event AgentEvent) HistoryRecord {
-	return event.ToHistoryRecord()
+// NewEventRecord creates an EventRecord from an AgentEvent.
+func NewEventRecord(event AgentEvent) EventRecord {
+	return event.ToRecord()
 }

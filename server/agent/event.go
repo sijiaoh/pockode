@@ -120,20 +120,11 @@ type AskUserQuestion struct {
 type AgentEvent interface {
 	EventType() EventType
 
-	// ToHistoryRecord converts the event to a HistoryRecord for persistence.
-	ToHistoryRecord() HistoryRecord
-
-	// ToNotifyParams creates RPC notification params with the given session ID.
-	// Returns a struct with JSON tags for wire format serialization.
-	ToNotifyParams(sessionID string) any
+	// ToRecord converts the event to an EventRecord for persistence and notification.
+	// EventRecord is the single source of truth for event serialization.
+	ToRecord() EventRecord
 
 	isAgentEvent() // unexported marker method to restrict implementations to this package
-}
-
-// SessionNotifyParams is the common params for session-level notifications.
-// Used by DoneEvent, InterruptedEvent, ProcessEndedEvent, and events not sent as RPC notifications.
-type SessionNotifyParams struct {
-	SessionID string `json:"session_id"`
 }
 
 type TextEvent struct {
@@ -143,15 +134,8 @@ type TextEvent struct {
 func (TextEvent) EventType() EventType { return EventTypeText }
 func (TextEvent) isAgentEvent()        {}
 
-func (e TextEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{Type: e.EventType(), Content: e.Content}
-}
-
-func (e TextEvent) ToNotifyParams(sessionID string) any {
-	return struct {
-		SessionID string `json:"session_id"`
-		Content   string `json:"content"`
-	}{SessionID: sessionID, Content: e.Content}
+func (e TextEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType(), Content: e.Content}
 }
 
 type ToolCallEvent struct {
@@ -163,23 +147,9 @@ type ToolCallEvent struct {
 func (ToolCallEvent) EventType() EventType { return EventTypeToolCall }
 func (ToolCallEvent) isAgentEvent()        {}
 
-func (e ToolCallEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{
+func (e ToolCallEvent) ToRecord() EventRecord {
+	return EventRecord{
 		Type:      e.EventType(),
-		ToolName:  e.ToolName,
-		ToolInput: e.ToolInput,
-		ToolUseID: e.ToolUseID,
-	}
-}
-
-func (e ToolCallEvent) ToNotifyParams(sessionID string) any {
-	return struct {
-		SessionID string          `json:"session_id"`
-		ToolName  string          `json:"tool_name"`
-		ToolInput json.RawMessage `json:"tool_input"`
-		ToolUseID string          `json:"tool_use_id"`
-	}{
-		SessionID: sessionID,
 		ToolName:  e.ToolName,
 		ToolInput: e.ToolInput,
 		ToolUseID: e.ToolUseID,
@@ -194,21 +164,9 @@ type ToolResultEvent struct {
 func (ToolResultEvent) EventType() EventType { return EventTypeToolResult }
 func (ToolResultEvent) isAgentEvent()        {}
 
-func (e ToolResultEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{
+func (e ToolResultEvent) ToRecord() EventRecord {
+	return EventRecord{
 		Type:       e.EventType(),
-		ToolUseID:  e.ToolUseID,
-		ToolResult: e.ToolResult,
-	}
-}
-
-func (e ToolResultEvent) ToNotifyParams(sessionID string) any {
-	return struct {
-		SessionID  string `json:"session_id"`
-		ToolUseID  string `json:"tool_use_id"`
-		ToolResult string `json:"tool_result"`
-	}{
-		SessionID:  sessionID,
 		ToolUseID:  e.ToolUseID,
 		ToolResult: e.ToolResult,
 	}
@@ -224,23 +182,11 @@ type WarningEvent struct {
 func (WarningEvent) EventType() EventType { return EventTypeWarning }
 func (WarningEvent) isAgentEvent()        {}
 
-func (e WarningEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{
+func (e WarningEvent) ToRecord() EventRecord {
+	return EventRecord{
 		Type:    e.EventType(),
 		Message: e.Message,
 		Code:    e.Code,
-	}
-}
-
-func (e WarningEvent) ToNotifyParams(sessionID string) any {
-	return struct {
-		SessionID string `json:"session_id"`
-		Message   string `json:"message"`
-		Code      string `json:"code"`
-	}{
-		SessionID: sessionID,
-		Message:   e.Message,
-		Code:      e.Code,
 	}
 }
 
@@ -251,15 +197,8 @@ type ErrorEvent struct {
 func (ErrorEvent) EventType() EventType { return EventTypeError }
 func (ErrorEvent) isAgentEvent()        {}
 
-func (e ErrorEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{Type: e.EventType(), Error: e.Error}
-}
-
-func (e ErrorEvent) ToNotifyParams(sessionID string) any {
-	return struct {
-		SessionID string `json:"session_id"`
-		Error     string `json:"error"`
-	}{SessionID: sessionID, Error: e.Error}
+func (e ErrorEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType(), Error: e.Error}
 }
 
 type DoneEvent struct{}
@@ -267,12 +206,8 @@ type DoneEvent struct{}
 func (DoneEvent) EventType() EventType { return EventTypeDone }
 func (DoneEvent) isAgentEvent()        {}
 
-func (e DoneEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{Type: e.EventType()}
-}
-
-func (e DoneEvent) ToNotifyParams(sessionID string) any {
-	return SessionNotifyParams{SessionID: sessionID}
+func (e DoneEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType()}
 }
 
 type InterruptedEvent struct{}
@@ -280,12 +215,8 @@ type InterruptedEvent struct{}
 func (InterruptedEvent) EventType() EventType { return EventTypeInterrupted }
 func (InterruptedEvent) isAgentEvent()        {}
 
-func (e InterruptedEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{Type: e.EventType()}
-}
-
-func (e InterruptedEvent) ToNotifyParams(sessionID string) any {
-	return SessionNotifyParams{SessionID: sessionID}
+func (e InterruptedEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType()}
 }
 
 type PermissionRequestEvent struct {
@@ -299,27 +230,9 @@ type PermissionRequestEvent struct {
 func (PermissionRequestEvent) EventType() EventType { return EventTypePermissionRequest }
 func (PermissionRequestEvent) isAgentEvent()        {}
 
-func (e PermissionRequestEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{
+func (e PermissionRequestEvent) ToRecord() EventRecord {
+	return EventRecord{
 		Type:                  e.EventType(),
-		RequestID:             e.RequestID,
-		ToolName:              e.ToolName,
-		ToolInput:             e.ToolInput,
-		ToolUseID:             e.ToolUseID,
-		PermissionSuggestions: e.PermissionSuggestions,
-	}
-}
-
-func (e PermissionRequestEvent) ToNotifyParams(sessionID string) any {
-	return struct {
-		SessionID             string             `json:"session_id"`
-		RequestID             string             `json:"request_id"`
-		ToolName              string             `json:"tool_name"`
-		ToolInput             json.RawMessage    `json:"tool_input"`
-		ToolUseID             string             `json:"tool_use_id"`
-		PermissionSuggestions []PermissionUpdate `json:"permission_suggestions,omitempty"`
-	}{
-		SessionID:             sessionID,
 		RequestID:             e.RequestID,
 		ToolName:              e.ToolName,
 		ToolInput:             e.ToolInput,
@@ -335,15 +248,8 @@ type RequestCancelledEvent struct {
 func (RequestCancelledEvent) EventType() EventType { return EventTypeRequestCancelled }
 func (RequestCancelledEvent) isAgentEvent()        {}
 
-func (e RequestCancelledEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{Type: e.EventType(), RequestID: e.RequestID}
-}
-
-func (e RequestCancelledEvent) ToNotifyParams(sessionID string) any {
-	return struct {
-		SessionID string `json:"session_id"`
-		RequestID string `json:"request_id"`
-	}{SessionID: sessionID, RequestID: e.RequestID}
+func (e RequestCancelledEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType(), RequestID: e.RequestID}
 }
 
 type AskUserQuestionEvent struct {
@@ -355,23 +261,9 @@ type AskUserQuestionEvent struct {
 func (AskUserQuestionEvent) EventType() EventType { return EventTypeAskUserQuestion }
 func (AskUserQuestionEvent) isAgentEvent()        {}
 
-func (e AskUserQuestionEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{
+func (e AskUserQuestionEvent) ToRecord() EventRecord {
+	return EventRecord{
 		Type:      e.EventType(),
-		RequestID: e.RequestID,
-		ToolUseID: e.ToolUseID,
-		Questions: e.Questions,
-	}
-}
-
-func (e AskUserQuestionEvent) ToNotifyParams(sessionID string) any {
-	return struct {
-		SessionID string            `json:"session_id"`
-		RequestID string            `json:"request_id"`
-		ToolUseID string            `json:"tool_use_id"`
-		Questions []AskUserQuestion `json:"questions"`
-	}{
-		SessionID: sessionID,
 		RequestID: e.RequestID,
 		ToolUseID: e.ToolUseID,
 		Questions: e.Questions,
@@ -385,15 +277,8 @@ type SystemEvent struct {
 func (SystemEvent) EventType() EventType { return EventTypeSystem }
 func (SystemEvent) isAgentEvent()        {}
 
-func (e SystemEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{Type: e.EventType(), Content: e.Content}
-}
-
-func (e SystemEvent) ToNotifyParams(sessionID string) any {
-	return struct {
-		SessionID string `json:"session_id"`
-		Content   string `json:"content"`
-	}{SessionID: sessionID, Content: e.Content}
+func (e SystemEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType(), Content: e.Content}
 }
 
 type ProcessEndedEvent struct{}
@@ -401,12 +286,8 @@ type ProcessEndedEvent struct{}
 func (ProcessEndedEvent) EventType() EventType { return EventTypeProcessEnded }
 func (ProcessEndedEvent) isAgentEvent()        {}
 
-func (e ProcessEndedEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{Type: e.EventType()}
-}
-
-func (e ProcessEndedEvent) ToNotifyParams(sessionID string) any {
-	return SessionNotifyParams{SessionID: sessionID}
+func (e ProcessEndedEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType()}
 }
 
 // MessageEvent is for history replay only, not sent as RPC notification.
@@ -417,12 +298,8 @@ type MessageEvent struct {
 func (MessageEvent) EventType() EventType { return EventTypeMessage }
 func (MessageEvent) isAgentEvent()        {}
 
-func (e MessageEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{Type: e.EventType(), Content: e.Content}
-}
-
-func (e MessageEvent) ToNotifyParams(sessionID string) any {
-	return SessionNotifyParams{SessionID: sessionID}
+func (e MessageEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType(), Content: e.Content}
 }
 
 // PermissionResponseEvent is for history replay only, not sent as RPC notification.
@@ -434,16 +311,12 @@ type PermissionResponseEvent struct {
 func (PermissionResponseEvent) EventType() EventType { return EventTypePermissionResponse }
 func (PermissionResponseEvent) isAgentEvent()        {}
 
-func (e PermissionResponseEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{
+func (e PermissionResponseEvent) ToRecord() EventRecord {
+	return EventRecord{
 		Type:      e.EventType(),
 		RequestID: e.RequestID,
 		Choice:    e.Choice,
 	}
-}
-
-func (e PermissionResponseEvent) ToNotifyParams(sessionID string) any {
-	return SessionNotifyParams{SessionID: sessionID}
 }
 
 // QuestionResponseEvent is for history replay only, not sent as RPC notification.
@@ -455,16 +328,12 @@ type QuestionResponseEvent struct {
 func (QuestionResponseEvent) EventType() EventType { return EventTypeQuestionResponse }
 func (QuestionResponseEvent) isAgentEvent()        {}
 
-func (e QuestionResponseEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{
+func (e QuestionResponseEvent) ToRecord() EventRecord {
+	return EventRecord{
 		Type:      e.EventType(),
 		RequestID: e.RequestID,
 		Answers:   e.Answers,
 	}
-}
-
-func (e QuestionResponseEvent) ToNotifyParams(sessionID string) any {
-	return SessionNotifyParams{SessionID: sessionID}
 }
 
 type RawEvent struct {
@@ -474,15 +343,8 @@ type RawEvent struct {
 func (RawEvent) EventType() EventType { return EventTypeRaw }
 func (RawEvent) isAgentEvent()        {}
 
-func (e RawEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{Type: e.EventType(), Content: e.Content}
-}
-
-func (e RawEvent) ToNotifyParams(sessionID string) any {
-	return struct {
-		SessionID string `json:"session_id"`
-		Content   string `json:"content"`
-	}{SessionID: sessionID, Content: e.Content}
+func (e RawEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType(), Content: e.Content}
 }
 
 type CommandOutputEvent struct {
@@ -492,13 +354,6 @@ type CommandOutputEvent struct {
 func (CommandOutputEvent) EventType() EventType { return EventTypeCommandOutput }
 func (CommandOutputEvent) isAgentEvent()        {}
 
-func (e CommandOutputEvent) ToHistoryRecord() HistoryRecord {
-	return HistoryRecord{Type: e.EventType(), Content: e.Content}
-}
-
-func (e CommandOutputEvent) ToNotifyParams(sessionID string) any {
-	return struct {
-		SessionID string `json:"session_id"`
-		Content   string `json:"content"`
-	}{SessionID: sessionID, Content: e.Content}
+func (e CommandOutputEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType(), Content: e.Content}
 }

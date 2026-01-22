@@ -218,7 +218,7 @@ function handleNotification(method: string, params: unknown): void {
 
 	// Handle chat.* events from ChatMessagesWatcher (subscription ID based routing)
 	if (method.startsWith("chat.")) {
-		const { id, ...rest } = params as { id: string; session_id: string };
+		const { id, ...rest } = params as { id: string };
 		const eventType = stripNamespace(method);
 		const notification = {
 			type: eventType,

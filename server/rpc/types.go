@@ -271,13 +271,3 @@ type RawParams struct {
 	SessionID string `json:"session_id"`
 	Content   string `json:"content"`
 }
-
-type CommandOutputParams struct {
-	SessionID string `json:"session_id"`
-	Content   string `json:"content"`
-}
-
-// NewNotifyParams creates method-specific notification params from an AgentEvent.
-func NewNotifyParams(sessionID string, event agent.AgentEvent) interface{} {
-	return event.ToNotifyParams(sessionID)
-}

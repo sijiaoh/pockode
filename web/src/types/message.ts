@@ -247,59 +247,7 @@ export interface ChatMessagesSubscribeResult {
 }
 
 // JSON-RPC 2.0 Notification Params (Server → Client)
-
-export interface TextNotification {
-	session_id: string;
-	content: string;
-}
-
-export interface ToolCallNotification {
-	session_id: string;
-	tool_name: string;
-	tool_input: unknown;
-	tool_use_id: string;
-}
-
-export interface ToolResultNotification {
-	session_id: string;
-	tool_use_id: string;
-	tool_result: string;
-}
-
-export interface ErrorNotification {
-	session_id: string;
-	error: string;
-}
-
-export interface SessionNotification {
-	session_id: string;
-}
-
-export interface PermissionRequestNotification {
-	session_id: string;
-	request_id: string;
-	tool_name: string;
-	tool_input: unknown;
-	tool_use_id: string;
-	permission_suggestions?: PermissionUpdate[];
-}
-
-export interface AskUserQuestionNotification {
-	session_id: string;
-	request_id: string;
-	tool_use_id: string;
-	questions: AskUserQuestion[];
-}
-
-export interface RequestCancelledNotification {
-	session_id: string;
-	request_id: string;
-}
-
-export interface SystemNotification {
-	session_id: string;
-	content: string;
-}
+// These match the EventRecord format from the server.
 
 // Server notification event types
 export type ServerMethod =
@@ -319,33 +267,29 @@ export type ServerMethod =
 
 // Server notification with type field for discriminated union
 export type ServerNotification =
-	| { type: "text"; session_id: string; content: string }
+	| { type: "text"; content: string }
 	| {
 			type: "tool_call";
-			session_id: string;
 			tool_name: string;
 			tool_input: unknown;
 			tool_use_id: string;
 	  }
 	| {
 			type: "tool_result";
-			session_id: string;
 			tool_use_id: string;
 			tool_result: string;
 	  }
 	| {
 			type: "warning";
-			session_id: string;
 			message: string;
 			code: string;
 	  }
-	| { type: "error"; session_id: string; error: string }
-	| { type: "done"; session_id: string }
-	| { type: "interrupted"; session_id: string }
-	| { type: "process_ended"; session_id: string }
+	| { type: "error"; error: string }
+	| { type: "done" }
+	| { type: "interrupted" }
+	| { type: "process_ended" }
 	| {
 			type: "permission_request";
-			session_id: string;
 			request_id: string;
 			tool_name: string;
 			tool_input: unknown;
@@ -354,15 +298,13 @@ export type ServerNotification =
 	  }
 	| {
 			type: "ask_user_question";
-			session_id: string;
 			request_id: string;
 			tool_use_id: string;
 			questions: AskUserQuestion[];
 	  }
 	| {
 			type: "request_cancelled";
-			session_id: string;
 			request_id: string;
 	  }
-	| { type: "system"; session_id: string; content: string }
-	| { type: "command_output"; session_id: string; content: string };
+	| { type: "system"; content: string }
+	| { type: "command_output"; content: string };
