@@ -151,7 +151,6 @@ func (h *rpcMethodHandler) handleWorktreeSwitch(ctx context.Context, conn *jsonr
 
 	// Bind to new worktree and subscribe atomically
 	h.state.worktree = newWorktree
-	h.state.subscribed = make(map[string]struct{})
 	newWorktree.Subscribe(conn)
 	h.state.mu.Unlock()
 

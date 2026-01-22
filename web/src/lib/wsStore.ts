@@ -7,6 +7,7 @@ import type {
 import type {
 	AuthParams,
 	AuthResult,
+	ChatMessagesSubscribeResult,
 	ServerMethod,
 	ServerNotification,
 	SessionListChangedNotification,
@@ -49,12 +50,9 @@ export type ConnectionStatus =
 	| "auth_failed"
 	| "error";
 
-type NotificationListener = (notification: ServerNotification) => void;
-
 interface ConnectionActions {
 	connect: (token: string) => void;
 	disconnect: () => void;
-	subscribeNotification: (listener: NotificationListener) => () => void;
 }
 
 // TODO: Implement retry logic for watcher subscriptions.
@@ -86,6 +84,11 @@ export interface WatchActions {
 		callback: (params: SessionListChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<SessionMeta[]>>;
 	sessionListUnsubscribe: (id: string) => Promise<void>;
+	chatMessagesSubscribe: (
+		sessionId: string,
+		callback: (notification: ServerNotification) => void,
+	) => Promise<WatchSubscribeResult<ChatMessagesSubscribeResult>>;
+	chatMessagesUnsubscribe: (id: string) => Promise<void>;
 }
 
 type RPCActions = ConnectionActions &
@@ -111,7 +114,6 @@ let rpcRequester: JSONRPCRequester<void> | null = null;
 let currentToken: string | null = null;
 let reconnectAttempts = 0;
 let reconnectTimeout: number | undefined;
-const notificationListeners = new Set<NotificationListener>();
 const fsWatchCallbacks = new Map<string, () => void>();
 const gitWatchCallbacks = new Map<string, () => void>();
 const gitDiffWatchCallbacks = new Map<
@@ -122,6 +124,11 @@ const worktreeWatchCallbacks = new Map<string, () => void>();
 const sessionListWatchCallbacks = new Map<
 	string,
 	(params: SessionListChangedNotification) => void
+>();
+// Key: subscriptionId -> callback (unified with other watchers)
+const chatMessagesCallbacks = new Map<
+	string,
+	(notification: ServerNotification) => void
 >();
 
 /**
@@ -136,6 +143,7 @@ function clearWatchSubscriptions(): void {
 	gitWatchCallbacks.clear();
 	gitDiffWatchCallbacks.clear();
 	sessionListWatchCallbacks.clear();
+	chatMessagesCallbacks.clear();
 	// Note: worktreeWatchCallbacks is NOT cleared here because it's Manager-level,
 	// not worktree-specific. It persists across worktree switches.
 }
@@ -229,25 +237,29 @@ function handleNotification(method: string, params: unknown): void {
 		return;
 	}
 
-	const eventType = stripNamespace(method);
-	const notification = {
-		type: eventType,
-		...(params as object),
-	} as ServerNotification;
+	// Handle chat.* events from ChatMessagesWatcher (subscription ID based routing)
+	if (method.startsWith("chat.")) {
+		const { id, ...rest } = params as { id: string; session_id: string };
+		const eventType = stripNamespace(method);
+		const notification = {
+			type: eventType,
+			...rest,
+		} as ServerNotification;
 
-	// Mark session as unread if not currently viewing it
-	const sessionId = notification.session_id;
-	if (
-		sessionId &&
-		!unreadActions.isViewing(sessionId) &&
-		!SILENT_EVENTS.has(eventType as ServerMethod) &&
-		sessionExistsChecker?.(sessionId)
-	) {
-		unreadActions.markUnread(sessionId);
-	}
+		const sessionId = notification.session_id;
+		if (sessionId) {
+			// Mark as unread if not viewing
+			if (
+				!unreadActions.isViewing(sessionId) &&
+				!SILENT_EVENTS.has(eventType as ServerMethod) &&
+				sessionExistsChecker?.(sessionId)
+			) {
+				unreadActions.markUnread(sessionId);
+			}
+		}
 
-	for (const listener of notificationListeners) {
-		listener(notification);
+		// Route by subscription ID (consistent with other watchers)
+		chatMessagesCallbacks.get(id)?.(notification);
 	}
 }
 
@@ -420,13 +432,6 @@ export const useWSStore = create<WSState>((set, get) => ({
 			}
 		},
 
-		subscribeNotification: (listener: NotificationListener) => {
-			notificationListeners.add(listener);
-			return () => {
-				notificationListeners.delete(listener);
-			};
-		},
-
 		fsSubscribe: async (path: string, callback: () => void) => {
 			const client = getClient();
 			if (!client) {
@@ -555,6 +560,33 @@ export const useWSStore = create<WSState>((set, get) => ({
 			}
 		},
 
+		chatMessagesSubscribe: async (
+			sessionId: string,
+			callback: (notification: ServerNotification) => void,
+		) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			const result = (await client.request("chat.messages.subscribe", {
+				session_id: sessionId,
+			})) as ChatMessagesSubscribeResult;
+			chatMessagesCallbacks.set(result.id, callback);
+			return { id: result.id, initial: result };
+		},
+
+		chatMessagesUnsubscribe: async (id: string) => {
+			chatMessagesCallbacks.delete(id);
+			const client = getClient();
+			if (client) {
+				try {
+					await client.request("chat.messages.unsubscribe", { id });
+				} catch {
+					// Ignore errors (connection might be closed)
+				}
+			}
+		},
+
 		// Spread namespace-specific actions
 		...chatActions,
 		...commandActions,
@@ -631,12 +663,12 @@ export function resetWSStore() {
 		reconnectTimeout = undefined;
 	}
 	reconnectAttempts = 0;
-	notificationListeners.clear();
 	fsWatchCallbacks.clear();
 	gitWatchCallbacks.clear();
 	gitDiffWatchCallbacks.clear();
 	worktreeWatchCallbacks.clear();
 	sessionListWatchCallbacks.clear();
+	chatMessagesCallbacks.clear();
 	sessionExistsChecker = null;
 	worktreeDeletedListener = null;
 	onWorktreeSwitched = null;

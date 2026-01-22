@@ -1,7 +1,5 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type {
-	AttachParams,
-	AttachResult,
 	InterruptParams,
 	MessageParams,
 	PermissionResponseParams,
@@ -9,7 +7,6 @@ import type {
 } from "../../types/message";
 
 export interface ChatActions {
-	attach: (sessionId: string) => Promise<AttachResult>;
 	sendMessage: (sessionId: string, content: string) => Promise<void>;
 	interrupt: (sessionId: string) => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
@@ -28,12 +25,6 @@ export function createChatActions(
 	};
 
 	return {
-		attach: async (sessionId: string): Promise<AttachResult> => {
-			return requireClient().request("chat.attach", {
-				session_id: sessionId,
-			} as AttachParams);
-		},
-
 		sendMessage: async (sessionId: string, content: string): Promise<void> => {
 			await requireClient().request("chat.message", {
 				session_id: sessionId,

@@ -34,8 +34,8 @@ class MockWebSocket {
 				let result: Record<string, unknown> = {};
 				if (parsed.method === "auth") {
 					result = { version: "test" };
-				} else if (parsed.method === "chat.attach") {
-					result = { process_running: false };
+				} else if (parsed.method === "chat.messages.subscribe") {
+					result = { id: "sub-1", history: [], process_running: false };
 				}
 				this.simulateMessage({
 					jsonrpc: "2.0",
@@ -300,16 +300,6 @@ describe("wsStore", () => {
 			});
 		});
 
-		it("attach returns result", async () => {
-			const wsActions = await getWsActions();
-
-			await connectAndAuth();
-
-			const result = await wsActions.attach("test-session");
-
-			expect(result).toEqual({ process_running: false });
-		});
-
 		it("throws when not connected", async () => {
 			const wsActions = await getWsActions();
 
@@ -320,35 +310,11 @@ describe("wsStore", () => {
 	});
 
 	describe("notification handling", () => {
-		it("notifies listeners on JSON-RPC notification", async () => {
-			const wsActions = await getWsActions();
-			const listener = vi.fn();
-			wsActions.subscribeNotification(listener);
-
-			await connectAndAuth();
-			getMockWs()?.simulateNotification("chat.text", {
-				session_id: "test",
-				content: "hello",
-			});
-
-			expect(listener).toHaveBeenCalledWith({
-				type: "text",
-				session_id: "test",
-				content: "hello",
-			});
-		});
-
 		it("handles invalid JSON gracefully", async () => {
-			const wsActions = await getWsActions();
-			const listener = vi.fn();
-			wsActions.subscribeNotification(listener);
-
 			await connectAndAuth();
 
-			// Send raw invalid JSON
+			// Send raw invalid JSON - should not throw
 			getMockWs()?.onmessage?.({ data: "not json" });
-
-			expect(listener).not.toHaveBeenCalled();
 		});
 
 		it("does not mark unread for non-existent session", async () => {

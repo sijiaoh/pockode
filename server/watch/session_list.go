@@ -77,7 +77,6 @@ func (w *SessionListWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (stri
 	id := w.GenerateID()
 	sub := &Subscription{
 		ID:     id,
-		Path:   "*",
 		ConnID: connID,
 		Conn:   conn,
 	}

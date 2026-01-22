@@ -26,14 +26,6 @@ type AuthResult struct {
 	WorktreeName string `json:"worktree_name"`
 }
 
-type AttachParams struct {
-	SessionID string `json:"session_id"`
-}
-
-type AttachResult struct {
-	ProcessRunning bool `json:"process_running"`
-}
-
 type MessageParams struct {
 	SessionID string `json:"session_id"`
 	Content   string `json:"content"`
@@ -68,10 +60,6 @@ type SessionDeleteParams struct {
 type SessionUpdateTitleParams struct {
 	SessionID string `json:"session_id"`
 	Title     string `json:"title"`
-}
-
-type SessionGetHistoryParams struct {
-	SessionID string `json:"session_id"`
 }
 
 // File namespace
@@ -156,6 +144,22 @@ type SessionListSubscribeResult struct {
 }
 
 type SessionListUnsubscribeParams struct {
+	ID string `json:"id"`
+}
+
+// Chat messages watch (subscription for chat messages)
+
+type ChatMessagesSubscribeParams struct {
+	SessionID string `json:"session_id"`
+}
+
+type ChatMessagesSubscribeResult struct {
+	ID             string            `json:"id"`
+	History        []json.RawMessage `json:"history"`
+	ProcessRunning bool              `json:"process_running"`
+}
+
+type ChatMessagesUnsubscribeParams struct {
 	ID string `json:"id"`
 }
 

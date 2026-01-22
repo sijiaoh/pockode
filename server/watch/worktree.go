@@ -51,7 +51,6 @@ func (w *WorktreeWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (string,
 
 	sub := &Subscription{
 		ID:     id,
-		Path:   "*",
 		ConnID: connID,
 		Conn:   conn,
 	}

@@ -184,14 +184,6 @@ export interface AuthResult {
 	work_dir: string;
 }
 
-export interface AttachParams {
-	session_id: string;
-}
-
-export interface AttachResult {
-	process_running: boolean;
-}
-
 export interface MessageParams {
 	session_id: string;
 	content: string;
@@ -228,10 +220,6 @@ export interface SessionUpdateTitleParams {
 	title: string;
 }
 
-export interface SessionGetHistoryParams {
-	session_id: string;
-}
-
 export interface SessionListSubscribeResult {
 	id: string;
 	sessions: SessionMeta[];
@@ -246,8 +234,16 @@ export type SessionListChangedNotification =
 	| { id: string; operation: "update"; session: SessionMeta }
 	| { id: string; operation: "delete"; sessionId: string };
 
-export interface SessionGetHistoryResult {
+// Chat messages watch (subscription for chat messages)
+
+export interface ChatMessagesSubscribeParams {
+	session_id: string;
+}
+
+export interface ChatMessagesSubscribeResult {
+	id: string;
 	history: unknown[];
+	process_running: boolean;
 }
 
 // JSON-RPC 2.0 Notification Params (Server → Client)

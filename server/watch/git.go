@@ -53,7 +53,6 @@ func (w *GitWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (string, erro
 
 	sub := &Subscription{
 		ID:     id,
-		Path:   "*", // GitWatcher watches all git changes
 		ConnID: connID,
 		Conn:   conn,
 	}

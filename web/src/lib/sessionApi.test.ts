@@ -6,16 +6,10 @@ vi.mock("./wsStore", () => ({
 		createSession: vi.fn(),
 		deleteSession: vi.fn(),
 		updateSessionTitle: vi.fn(),
-		getHistory: vi.fn(),
 	},
 }));
 
-import {
-	createSession,
-	deleteSession,
-	getHistory,
-	updateSessionTitle,
-} from "./sessionApi";
+import { createSession, deleteSession, updateSessionTitle } from "./sessionApi";
 import { wsActions } from "./wsStore";
 
 describe("sessionApi", () => {
@@ -60,18 +54,6 @@ describe("sessionApi", () => {
 				"session-123",
 				"New Title",
 			);
-		});
-	});
-
-	describe("getHistory", () => {
-		it("calls wsActions.getHistory with sessionId", async () => {
-			const mockHistory = [{ type: "message", content: "hello" }];
-			vi.mocked(wsActions.getHistory).mockResolvedValue(mockHistory);
-
-			const result = await getHistory("session-123");
-
-			expect(wsActions.getHistory).toHaveBeenCalledWith("session-123");
-			expect(result).toEqual(mockHistory);
 		});
 	});
 });

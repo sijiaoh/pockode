@@ -8,26 +8,21 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/logger"
-	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
-	"github.com/sourcegraph/jsonrpc2"
 )
 
-// Manager manages agent processes and JSON-RPC subscriptions.
-// Processes and subscriptions have independent lifecycles.
+// Manager manages agent processes.
 type Manager struct {
 	agent        agent.Agent
 	workDir      string
 	sessionStore session.Store
 	idleTimeout  time.Duration
 
-	// Process management: sessionID -> running process
 	processesMu sync.Mutex
 	processes   map[string]*Process
 
-	// Subscription management: sessionID -> subscribed JSON-RPC connections
-	subsMu sync.Mutex
-	subs   map[string][]*jsonrpc2.Conn
+	// Message listener (ChatMessagesWatcher)
+	messageListener ChatMessageListener
 
 	// Called when a process ends (for cleanup coordination)
 	onProcessEnd func()
@@ -56,12 +51,26 @@ func NewManager(ag agent.Agent, workDir string, store session.Store, idleTimeout
 		sessionStore: store,
 		idleTimeout:  idleTimeout,
 		processes:    make(map[string]*Process),
-		subs:         make(map[string][]*jsonrpc2.Conn),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
 	go m.runIdleReaper()
 	return m
+}
+
+// SetMessageListener sets the listener for chat messages.
+func (m *Manager) SetMessageListener(l ChatMessageListener) {
+	m.messageListener = l
+}
+
+// EmitMessage sends a message to the listener.
+func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent) {
+	if m.messageListener != nil {
+		m.messageListener.OnChatMessage(ChatMessage{
+			SessionID: sessionID,
+			Event:     event,
+		})
+	}
 }
 
 // GetOrCreateProcess returns an existing process or creates a new one.
@@ -137,87 +146,6 @@ func (m *Manager) Touch(sessionID string) {
 	defer m.processesMu.Unlock()
 	if proc, exists := m.processes[sessionID]; exists {
 		proc.touch()
-	}
-}
-
-// SubscribeRPC adds a JSON-RPC connection to receive events for a session.
-// The connection will receive events from any process started for this session.
-// Returns true if this is a new subscription (not already subscribed).
-func (m *Manager) SubscribeRPC(sessionID string, conn *jsonrpc2.Conn) bool {
-	m.subsMu.Lock()
-	defer m.subsMu.Unlock()
-
-	// Check if already subscribed
-	for _, c := range m.subs[sessionID] {
-		if c == conn {
-			return false
-		}
-	}
-
-	m.subs[sessionID] = append(m.subs[sessionID], conn)
-	slog.Debug("subscribed to session", "sessionId", sessionID, "totalSubs", len(m.subs[sessionID]))
-	return true
-}
-
-// UnsubscribeRPC removes a JSON-RPC connection from receiving events.
-func (m *Manager) UnsubscribeRPC(sessionID string, conn *jsonrpc2.Conn) {
-	m.subsMu.Lock()
-	defer m.subsMu.Unlock()
-
-	conns := m.subs[sessionID]
-	newConns := make([]*jsonrpc2.Conn, 0, len(conns))
-	for _, c := range conns {
-		if c != conn {
-			newConns = append(newConns, c)
-		}
-	}
-
-	if len(newConns) == 0 {
-		delete(m.subs, sessionID)
-	} else {
-		m.subs[sessionID] = newConns
-	}
-	slog.Debug("unsubscribed from session", "sessionId", sessionID, "totalSubs", len(newConns))
-}
-
-// UnsubscribeConn removes a connection from all session subscriptions.
-// Used when a connection disconnects or switches worktrees.
-func (m *Manager) UnsubscribeConn(conn *jsonrpc2.Conn) {
-	m.subsMu.Lock()
-	defer m.subsMu.Unlock()
-
-	for sessionID, conns := range m.subs {
-		newConns := make([]*jsonrpc2.Conn, 0, len(conns))
-		for _, c := range conns {
-			if c != conn {
-				newConns = append(newConns, c)
-			}
-		}
-		if len(newConns) == 0 {
-			delete(m.subs, sessionID)
-		} else {
-			m.subs[sessionID] = newConns
-		}
-	}
-}
-
-// GetSubscribers returns a copy of the subscribers for a session.
-func (m *Manager) GetSubscribers(sessionID string) []*jsonrpc2.Conn {
-	m.subsMu.Lock()
-	defer m.subsMu.Unlock()
-	conns := make([]*jsonrpc2.Conn, len(m.subs[sessionID]))
-	copy(conns, m.subs[sessionID])
-	return conns
-}
-
-// Notify sends a JSON-RPC notification to all subscribers of a session.
-func (m *Manager) Notify(ctx context.Context, sessionID string, method string, params interface{}) {
-	conns := m.GetSubscribers(sessionID)
-
-	for _, conn := range conns {
-		if err := conn.Notify(ctx, method, params); err != nil {
-			slog.Debug("notify failed", "error", err, "method", method)
-		}
 	}
 }
 
@@ -317,7 +245,7 @@ func (p *Process) getLastActive() time.Time {
 	return p.lastActive
 }
 
-// streamEvents routes events to history and broadcasts to all subscribed connections.
+// streamEvents routes events to history and emits to the event listener.
 func (p *Process) streamEvents(ctx context.Context) {
 	log := slog.With("sessionId", p.sessionID)
 
@@ -325,14 +253,13 @@ func (p *Process) streamEvents(ctx context.Context) {
 		eventType := event.EventType()
 		log.Debug("streaming event", "type", eventType)
 
-		// Persist event to history (with type field for replay)
+		// Persist to history
 		if err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewHistoryRecord(event)); err != nil {
 			log.Error("failed to append to history", "error", err)
 		}
 
-		// Send as JSON-RPC notification
-		params := rpc.NewNotifyParams(p.sessionID, event)
-		p.manager.Notify(ctx, p.sessionID, "chat."+string(eventType), params)
+		// Emit to listener (ChatMessagesWatcher)
+		p.manager.EmitMessage(p.sessionID, event)
 	}
 
 	log.Info("event stream ended")

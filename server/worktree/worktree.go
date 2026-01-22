@@ -20,6 +20,7 @@ type Worktree struct {
 	GitWatcher         *watch.GitWatcher
 	GitDiffWatcher     *watch.GitDiffWatcher
 	SessionListWatcher *watch.SessionListWatcher
+	ChatMessagesWatcher *watch.ChatMessagesWatcher
 	ProcessManager     *process.Manager
 
 	watchers []watch.Watcher // for unified lifecycle management
@@ -43,7 +44,6 @@ func (w *Worktree) Unsubscribe(conn *jsonrpc2.Conn) {
 
 // UnsubscribeConnection removes all subscriptions for a connection.
 func (w *Worktree) UnsubscribeConnection(conn *jsonrpc2.Conn, connID string) {
-	w.ProcessManager.UnsubscribeConn(conn)
 	for _, watcher := range w.watchers {
 		watcher.CleanupConnection(connID)
 	}

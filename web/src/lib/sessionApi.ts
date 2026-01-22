@@ -15,7 +15,3 @@ export async function updateSessionTitle(
 ): Promise<void> {
 	return wsActions.updateSessionTitle(sessionId, title);
 }
-
-export async function getHistory(sessionId: string): Promise<unknown[]> {
-	return wsActions.getHistory(sessionId);
-}

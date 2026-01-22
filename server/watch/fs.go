@@ -21,7 +21,8 @@ type FSWatcher struct {
 	watcher *fsnotify.Watcher
 
 	pathMu       sync.RWMutex
-	pathToIDs    map[string][]string
+	pathToIDs    map[string][]string // path -> subscription IDs
+	idToPath     map[string]string   // subscription ID -> path
 	pathRefCount map[string]int
 
 	timerMu  sync.Mutex
@@ -33,6 +34,7 @@ func NewFSWatcher(workDir string) *FSWatcher {
 		BaseWatcher:  NewBaseWatcher("f"),
 		workDir:      workDir,
 		pathToIDs:    make(map[string][]string),
+		idToPath:     make(map[string]string),
 		pathRefCount: make(map[string]int),
 		timerMap:     make(map[string]*time.Timer),
 	}
@@ -75,62 +77,72 @@ func (w *FSWatcher) Subscribe(path string, conn *jsonrpc2.Conn, connID string) (
 		return "", err
 	}
 
-	// Add subscription first to avoid race where event fires before subscription is registered
-	sub := &Subscription{ID: id, Path: path, ConnID: connID, Conn: conn}
-	w.AddSubscription(sub)
+	sub := &Subscription{ID: id, ConnID: connID, Conn: conn}
 
+	// Lock order: pathMu → subMu (consistent with Unsubscribe/CleanupConnection)
 	w.pathMu.Lock()
 
 	// Start fsnotify watch if first subscriber for this path
 	if w.pathRefCount[path] == 0 {
 		if err := w.watcher.Add(fullPath); err != nil {
 			w.pathMu.Unlock()
-			// Rollback subscription
-			w.RemoveSubscription(id)
 			return "", err
 		}
 		slog.Debug("started watching path", "path", path)
 	}
 
 	w.pathToIDs[path] = append(w.pathToIDs[path], id)
+	w.idToPath[id] = path
 	w.pathRefCount[path]++
 	w.pathMu.Unlock()
+
+	// Add to BaseWatcher after path mapping is set up
+	w.AddSubscription(sub)
 
 	return id, nil
 }
 
 // Unsubscribe overrides BaseWatcher.Unsubscribe to also clean up fsnotify watches.
 func (w *FSWatcher) Unsubscribe(id string) {
-	sub := w.RemoveSubscription(id)
-	if sub == nil {
-		return
-	}
-
 	w.pathMu.Lock()
-	defer w.pathMu.Unlock()
-	w.removePathMapping(id, sub.Path)
+	path, ok := w.idToPath[id]
+	if ok {
+		w.removePathMapping(id, path)
+	}
+	w.pathMu.Unlock()
+
+	w.RemoveSubscription(id)
 }
 
 func (w *FSWatcher) CleanupConnection(connID string) {
-	// Get subscriptions before BaseWatcher removes them
+	// Get subscription IDs first (releases subMu before acquiring pathMu)
 	subs := w.GetSubscriptionsByConnID(connID)
 	if len(subs) == 0 {
 		return
 	}
 
-	// Clean up path mappings first
+	// Collect IDs to avoid holding lock during iteration
+	ids := make([]string, len(subs))
+	for i, sub := range subs {
+		ids[i] = sub.ID
+	}
+
+	// Lock order: pathMu → subMu (consistent with Subscribe/Unsubscribe)
 	w.pathMu.Lock()
-	for _, sub := range subs {
-		w.removePathMapping(sub.ID, sub.Path)
+	for _, id := range ids {
+		if path, ok := w.idToPath[id]; ok {
+			w.removePathMapping(id, path)
+		}
 	}
 	w.pathMu.Unlock()
 
-	// Then let BaseWatcher clean up the subscriptions
 	w.BaseWatcher.CleanupConnection(connID)
 }
 
 // removePathMapping removes path tracking. Caller must hold pathMu.
 func (w *FSWatcher) removePathMapping(id, path string) {
+	delete(w.idToPath, id)
+
 	ids := w.pathToIDs[path]
 	for i, v := range ids {
 		if v == id {
@@ -205,23 +217,19 @@ func (w *FSWatcher) notifyPath(path string) {
 		return
 	}
 
-	allSubs := w.GetAllSubscriptions()
-	subsMap := make(map[string]*Subscription, len(allSubs))
-	for _, sub := range allSubs {
-		subsMap[sub.ID] = sub
-	}
-
 	var notified int
 	for _, id := range ids {
-		if sub, ok := subsMap[id]; ok {
-			err := sub.Conn.Notify(context.Background(), "fs.changed", map[string]any{
-				"id": sub.ID,
-			})
-			if err != nil {
-				slog.Debug("failed to notify subscriber", "watchId", sub.ID, "error", err)
-			}
-			notified++
+		sub := w.GetSubscription(id)
+		if sub == nil {
+			continue
 		}
+		err := sub.Conn.Notify(context.Background(), "fs.changed", map[string]any{
+			"id": sub.ID,
+		})
+		if err != nil {
+			slog.Debug("failed to notify subscriber", "watchId", sub.ID, "error", err)
+		}
+		notified++
 	}
 
 	slog.Debug("notified path change", "path", path, "subscribers", notified)

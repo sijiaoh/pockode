@@ -5,7 +5,7 @@ import "testing"
 func TestBaseWatcher_AddRemoveSubscription(t *testing.T) {
 	b := NewBaseWatcher("test")
 
-	sub := &Subscription{ID: "test_1", ConnID: "conn1", Path: "/path"}
+	sub := &Subscription{ID: "test_1", ConnID: "conn1"}
 	b.AddSubscription(sub)
 
 	if !b.HasSubscriptions() {
@@ -33,9 +33,9 @@ func TestBaseWatcher_AddRemoveSubscription(t *testing.T) {
 func TestBaseWatcher_CleanupConnection(t *testing.T) {
 	b := NewBaseWatcher("test")
 
-	b.AddSubscription(&Subscription{ID: "test_1", ConnID: "conn1", Path: "/a"})
-	b.AddSubscription(&Subscription{ID: "test_2", ConnID: "conn1", Path: "/b"})
-	b.AddSubscription(&Subscription{ID: "test_3", ConnID: "conn2", Path: "/c"})
+	b.AddSubscription(&Subscription{ID: "test_1", ConnID: "conn1"})
+	b.AddSubscription(&Subscription{ID: "test_2", ConnID: "conn1"})
+	b.AddSubscription(&Subscription{ID: "test_3", ConnID: "conn2"})
 
 	if len(b.GetAllSubscriptions()) != 3 {
 		t.Errorf("expected 3 subscriptions, got %d", len(b.GetAllSubscriptions()))
@@ -57,9 +57,9 @@ func TestBaseWatcher_CleanupConnection(t *testing.T) {
 func TestBaseWatcher_GetSubscriptionsByConnID(t *testing.T) {
 	b := NewBaseWatcher("test")
 
-	b.AddSubscription(&Subscription{ID: "test_1", ConnID: "conn1", Path: "/a"})
-	b.AddSubscription(&Subscription{ID: "test_2", ConnID: "conn1", Path: "/b"})
-	b.AddSubscription(&Subscription{ID: "test_3", ConnID: "conn2", Path: "/c"})
+	b.AddSubscription(&Subscription{ID: "test_1", ConnID: "conn1"})
+	b.AddSubscription(&Subscription{ID: "test_2", ConnID: "conn1"})
+	b.AddSubscription(&Subscription{ID: "test_3", ConnID: "conn2"})
 
 	subs := b.GetSubscriptionsByConnID("conn1")
 	if len(subs) != 2 {
@@ -80,8 +80,8 @@ func TestBaseWatcher_GetSubscriptionsByConnID(t *testing.T) {
 func TestBaseWatcher_RemoveSubscription_CleansConnToIDs(t *testing.T) {
 	b := NewBaseWatcher("test")
 
-	b.AddSubscription(&Subscription{ID: "test_1", ConnID: "conn1", Path: "/a"})
-	b.AddSubscription(&Subscription{ID: "test_2", ConnID: "conn1", Path: "/b"})
+	b.AddSubscription(&Subscription{ID: "test_1", ConnID: "conn1"})
+	b.AddSubscription(&Subscription{ID: "test_2", ConnID: "conn1"})
 
 	b.RemoveSubscription("test_1")
 

@@ -10,7 +10,6 @@ import (
 
 type Subscription struct {
 	ID     string
-	Path   string
 	ConnID string
 	Conn   *jsonrpc2.Conn
 }
@@ -103,6 +102,12 @@ func (b *BaseWatcher) GetAllSubscriptions() []*Subscription {
 		subs = append(subs, sub)
 	}
 	return subs
+}
+
+func (b *BaseWatcher) GetSubscription(id string) *Subscription {
+	b.subMu.RLock()
+	defer b.subMu.RUnlock()
+	return b.subscriptions[id]
 }
 
 func (b *BaseWatcher) NotifyAll(method string, makeParams func(sub *Subscription) any) int {

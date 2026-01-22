@@ -16,6 +16,7 @@ const gitDiffPollInterval = 3 * time.Second
 
 // gitDiffSubscription holds additional data for a diff subscription.
 type gitDiffSubscription struct {
+	path     string
 	staged   bool
 	lastHash string
 }
@@ -25,7 +26,7 @@ type GitDiffWatcher struct {
 	*BaseWatcher
 	workDir string
 
-	subMu   sync.RWMutex
+	dataMu  sync.RWMutex
 	subData map[string]*gitDiffSubscription // subscription ID -> extra data
 }
 
@@ -61,38 +62,49 @@ func (w *GitDiffWatcher) Subscribe(path string, staged bool, conn *jsonrpc2.Conn
 
 	sub := &Subscription{
 		ID:     id,
-		Path:   path,
 		ConnID: connID,
 		Conn:   conn,
 	}
 
-	w.subMu.Lock()
+	w.dataMu.Lock()
 	w.subData[id] = &gitDiffSubscription{
+		path:     path,
 		staged:   staged,
 		lastHash: hash,
 	}
-	w.subMu.Unlock()
+	w.dataMu.Unlock()
 
 	w.AddSubscription(sub)
 	return id, result, nil
 }
 
 func (w *GitDiffWatcher) Unsubscribe(id string) {
-	w.subMu.Lock()
+	w.dataMu.Lock()
 	delete(w.subData, id)
-	w.subMu.Unlock()
+	w.dataMu.Unlock()
 
 	w.RemoveSubscription(id)
 }
 
 func (w *GitDiffWatcher) CleanupConnection(connID string) {
+	// Get subscription IDs first (releases subMu before acquiring dataMu)
 	subs := w.GetSubscriptionsByConnID(connID)
-
-	w.subMu.Lock()
-	for _, sub := range subs {
-		delete(w.subData, sub.ID)
+	if len(subs) == 0 {
+		return
 	}
-	w.subMu.Unlock()
+
+	// Collect IDs to avoid holding lock during iteration
+	ids := make([]string, len(subs))
+	for i, sub := range subs {
+		ids[i] = sub.ID
+	}
+
+	// Lock order: dataMu → subMu (consistent with Subscribe/Unsubscribe)
+	w.dataMu.Lock()
+	for _, id := range ids {
+		delete(w.subData, id)
+	}
+	w.dataMu.Unlock()
 
 	w.BaseWatcher.CleanupConnection(connID)
 }
@@ -118,28 +130,26 @@ func (w *GitDiffWatcher) checkAll() {
 	subs := w.GetAllSubscriptions()
 
 	for _, sub := range subs {
-		w.subMu.RLock()
-		data := w.subData[sub.ID]
-		var staged bool
-		var lastHash string
-		if data != nil {
-			staged = data.staged
-			lastHash = data.lastHash
-		}
-		w.subMu.RUnlock()
-
-		if data == nil {
-			continue
-		}
-
-		w.checkAndNotify(sub, staged, lastHash)
+		w.checkOne(sub)
 	}
 }
 
-func (w *GitDiffWatcher) checkAndNotify(sub *Subscription, staged bool, lastHash string) {
-	result, err := git.DiffWithContent(w.workDir, sub.Path, staged)
+func (w *GitDiffWatcher) checkOne(sub *Subscription) {
+	w.dataMu.RLock()
+	data := w.subData[sub.ID]
+	if data == nil {
+		w.dataMu.RUnlock()
+		return
+	}
+	// Copy values needed for diff check
+	path := data.path
+	staged := data.staged
+	lastHash := data.lastHash
+	w.dataMu.RUnlock()
+
+	result, err := git.DiffWithContent(w.workDir, path, staged)
 	if err != nil {
-		slog.Debug("git diff failed", "path", sub.Path, "staged", staged, "error", err)
+		slog.Debug("git diff failed", "path", path, "staged", staged, "error", err)
 		return
 	}
 
@@ -148,12 +158,15 @@ func (w *GitDiffWatcher) checkAndNotify(sub *Subscription, staged bool, lastHash
 		return
 	}
 
-	w.subMu.Lock()
-	data := w.subData[sub.ID]
-	if data != nil {
-		data.lastHash = hash
+	// Update hash and notify (re-check data still exists)
+	w.dataMu.Lock()
+	data = w.subData[sub.ID]
+	if data == nil {
+		w.dataMu.Unlock()
+		return
 	}
-	w.subMu.Unlock()
+	data.lastHash = hash
+	w.dataMu.Unlock()
 
 	params := map[string]any{
 		"id":          sub.ID,

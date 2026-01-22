@@ -13,8 +13,10 @@ const mockState = vi.hoisted(() => ({
 	interrupt: vi.fn(() => Promise.resolve()),
 	permissionResponse: vi.fn(() => Promise.resolve()),
 	questionResponse: vi.fn(() => Promise.resolve()),
-	attach: vi.fn(() => Promise.resolve({ process_running: false })),
+	chatMessagesSubscribe: vi.fn(),
+	chatMessagesUnsubscribe: vi.fn(),
 	onNotification: null as ((notification: ServerNotification) => void) | null,
+	mockHistory: [] as unknown[],
 	uuidCounter: 0,
 }));
 
@@ -22,19 +24,18 @@ vi.mock("../../lib/wsStore", () => {
 	const createMockActions = () => ({
 		connect: vi.fn(),
 		disconnect: vi.fn(),
-		attach: mockState.attach,
 		sendMessage: mockState.sendMessage,
 		interrupt: mockState.interrupt,
 		permissionResponse: mockState.permissionResponse,
 		questionResponse: mockState.questionResponse,
-		subscribeNotification: (
+		chatMessagesSubscribe: (
+			_sessionId: string,
 			listener: (notification: ServerNotification) => void,
 		) => {
 			mockState.onNotification = listener;
-			return () => {
-				mockState.onNotification = null;
-			};
+			return mockState.chatMessagesSubscribe(_sessionId, listener);
 		},
+		chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
 	});
 
 	const mockStore = ((selector: (state: unknown) => unknown) => {
@@ -63,11 +64,6 @@ vi.mock("../../utils/uuid", () => ({
 	generateUUID: () => `uuid-${++mockState.uuidCounter}`,
 }));
 
-const mockGetHistory = vi.fn((): Promise<unknown[]> => Promise.resolve([]));
-vi.mock("../../lib/sessionApi", () => ({
-	getHistory: () => mockGetHistory(),
-}));
-
 describe("ChatPanel", () => {
 	const defaultProps = {
 		sessionId: "test-session",
@@ -80,7 +76,15 @@ describe("ChatPanel", () => {
 		mockState.sendMessage.mockResolvedValue(undefined);
 		mockState.onNotification = null;
 		mockState.uuidCounter = 0;
-		mockGetHistory.mockResolvedValue([]);
+		mockState.mockHistory = [];
+		// Default: subscribe returns empty history and not running
+		mockState.chatMessagesSubscribe.mockImplementation(() =>
+			Promise.resolve({
+				id: "sub-1",
+				initial: { history: mockState.mockHistory, process_running: false },
+			}),
+		);
+		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
 	});
 
 	// Helper to wait for history loading to complete
@@ -381,7 +385,7 @@ describe("ChatPanel", () => {
 	describe("history replay", () => {
 		it("loads and displays history on mount", async () => {
 			const user = userEvent.setup();
-			mockGetHistory.mockResolvedValue([
+			mockState.mockHistory = [
 				{ type: "message", content: "Hello" },
 				{ type: "text", content: "Hi there!" },
 				{
@@ -392,7 +396,7 @@ describe("ChatPanel", () => {
 				},
 				{ type: "tool_result", tool_use_id: "tool-1", tool_result: "file.txt" },
 				{ type: "done" },
-			]);
+			];
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();

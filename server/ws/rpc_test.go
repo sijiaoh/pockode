@@ -159,11 +159,16 @@ func (e *testEnv) readNotification() rpcNotification {
 	return notif
 }
 
-func (e *testEnv) attach(sessionID string) {
-	resp := e.call("chat.attach", rpc.AttachParams{SessionID: sessionID})
+func (e *testEnv) subscribeChatMessages(sessionID string) rpc.ChatMessagesSubscribeResult {
+	resp := e.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{SessionID: sessionID})
 	if resp.Error != nil {
-		e.t.Fatalf("attach failed: %s", resp.Error.Message)
+		e.t.Fatalf("subscribe failed: %s", resp.Error.Message)
 	}
+	var result rpc.ChatMessagesSubscribeResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		e.t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	return result
 }
 
 func (e *testEnv) sendMessage(sessionID, content string) {
@@ -249,7 +254,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "attach", Params: rpc.AttachParams{SessionID: "sess"}}
+	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "chat.messages.subscribe", Params: rpc.ChatMessagesSubscribeParams{SessionID: "sess"}}
 	data, _ := json.Marshal(req)
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 		t.Fatalf("failed to send: %v", err)
@@ -273,27 +278,21 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	}
 }
 
-func TestHandler_Attach(t *testing.T) {
+func TestHandler_ChatMessagesSubscribe(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
 
-	resp := env.call("chat.attach", rpc.AttachParams{SessionID: "sess"})
-
-	if resp.Error != nil {
-		t.Errorf("unexpected error: %s", resp.Error.Message)
-	}
-
-	var result rpc.AttachResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("failed to unmarshal result: %v", err)
-	}
+	result := env.subscribeChatMessages("sess")
 
 	if result.ProcessRunning {
 		t.Error("expected process_running=false before message")
 	}
+	if result.ID == "" {
+		t.Error("expected subscription ID")
+	}
 }
 
-func TestHandler_Attach_ProcessRunning(t *testing.T) {
+func TestHandler_ChatMessagesSubscribe_ProcessRunning(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
 			agent.TextEvent{Content: "Response"},
@@ -305,7 +304,7 @@ func TestHandler_Attach_ProcessRunning(t *testing.T) {
 	wt.SessionStore.Create(bgCtx, "sess")
 
 	// Start process by sending message
-	env.attach("sess")
+	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "hello")
 	env.skipN(2) // Text + Done notifications
 
@@ -314,26 +313,17 @@ func TestHandler_Attach_ProcessRunning(t *testing.T) {
 		t.Fatal("expected process to be running")
 	}
 
-	// New attach should show process_running=true
-	resp := env.call("chat.attach", rpc.AttachParams{SessionID: "sess"})
-	if resp.Error != nil {
-		t.Fatalf("unexpected error: %s", resp.Error.Message)
-	}
-
-	var result rpc.AttachResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("failed to unmarshal result: %v", err)
-	}
-
+	// New subscribe should show process_running=true
+	result := env.subscribeChatMessages("sess")
 	if !result.ProcessRunning {
 		t.Error("expected process_running=true after message")
 	}
 }
 
-func TestHandler_Attach_InvalidSession(t *testing.T) {
+func TestHandler_ChatMessagesSubscribe_InvalidSession(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	resp := env.call("chat.attach", rpc.AttachParams{SessionID: "non-existent"})
+	resp := env.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{SessionID: "non-existent"})
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
 		t.Errorf("expected session not found error, got %+v", resp)
@@ -350,7 +340,7 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 	env := newTestEnv(t, mock)
 	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
 
-	env.attach("sess")
+	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "Hello AI")
 
 	// Read notifications
@@ -377,8 +367,8 @@ func TestHandler_MultipleSessions(t *testing.T) {
 	store.Create(bgCtx, "session-A")
 	store.Create(bgCtx, "session-B")
 
-	env.attach("session-A")
-	env.attach("session-B")
+	env.subscribeChatMessages("session-A")
+	env.subscribeChatMessages("session-B")
 	env.sendMessage("session-A", "Hello from A")
 	env.skipN(2)
 	env.sendMessage("session-B", "Hello from B")
@@ -409,7 +399,7 @@ func TestHandler_PermissionRequest(t *testing.T) {
 	env := newTestEnv(t, mock)
 	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
 
-	env.attach("sess")
+	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "run ls")
 	notif := env.readNotification()
 
@@ -437,7 +427,7 @@ func TestHandler_AgentStartError(t *testing.T) {
 	env := newTestEnv(t, mock)
 	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
 
-	env.attach("sess")
+	env.subscribeChatMessages("sess")
 	resp := env.call("chat.message", rpc.MessageParams{SessionID: "sess", Content: "hello"})
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "failed to start agent") {
@@ -455,7 +445,7 @@ func TestHandler_Interrupt(t *testing.T) {
 	env := newTestEnv(t, mock)
 	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
 
-	env.attach("sess")
+	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "hello")
 	env.skipN(2)
 
@@ -497,7 +487,7 @@ func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 	store := env.getMainWorktree().SessionStore
 	store.Create(bgCtx, "new-session")
 
-	env.attach("new-session")
+	env.subscribeChatMessages("new-session")
 	env.sendMessage("new-session", "hello")
 	env.skipN(2)
 
@@ -523,7 +513,7 @@ func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 	store.Create(bgCtx, "activated-session")
 	store.Activate(bgCtx, "activated-session")
 
-	env.attach("activated-session")
+	env.subscribeChatMessages("activated-session")
 	env.sendMessage("activated-session", "hello")
 	env.skipN(2)
 
@@ -553,7 +543,7 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 	env := newTestEnv(t, mock)
 	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
 
-	env.attach("sess")
+	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "ask me")
 	notif := env.readNotification()
 
@@ -739,24 +729,13 @@ func TestHandler_SessionUpdateTitle_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandler_SessionGetHistory(t *testing.T) {
+func TestHandler_ChatMessagesSubscribe_History(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
 	sess, _ := store.Create(bgCtx, "with-history")
 	store.AppendToHistory(bgCtx, sess.ID, map[string]string{"type": "message", "content": "hello"})
 
-	resp := env.call("session.get_history", rpc.SessionGetHistoryParams{SessionID: sess.ID})
-
-	if resp.Error != nil {
-		t.Errorf("unexpected error: %s", resp.Error.Message)
-	}
-
-	var result struct {
-		History []json.RawMessage `json:"history"`
-	}
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("failed to unmarshal result: %v", err)
-	}
+	result := env.subscribeChatMessages(sess.ID)
 
 	if len(result.History) != 1 {
 		t.Errorf("expected 1 history record, got %d", len(result.History))

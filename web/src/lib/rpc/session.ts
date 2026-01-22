@@ -1,8 +1,6 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type {
 	SessionDeleteParams,
-	SessionGetHistoryParams,
-	SessionGetHistoryResult,
 	SessionMeta,
 	SessionUpdateTitleParams,
 } from "../../types/message";
@@ -11,7 +9,6 @@ export interface SessionActions {
 	createSession: () => Promise<SessionMeta>;
 	deleteSession: (sessionId: string) => Promise<void>;
 	updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
-	getHistory: (sessionId: string) => Promise<unknown[]>;
 }
 
 export function createSessionActions(
@@ -44,16 +41,6 @@ export function createSessionActions(
 				session_id: sessionId,
 				title,
 			} as SessionUpdateTitleParams);
-		},
-
-		getHistory: async (sessionId: string): Promise<unknown[]> => {
-			const result: SessionGetHistoryResult = await requireClient().request(
-				"session.get_history",
-				{
-					session_id: sessionId,
-				} as SessionGetHistoryParams,
-			);
-			return result.history;
 		},
 	};
 }

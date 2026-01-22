@@ -68,9 +68,8 @@ func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 	log.Info("new connection")
 
 	state := &rpcConnState{
-		connID:     connID,
-		subscribed: make(map[string]struct{}),
-		log:        log,
+		connID: connID,
+		log:    log,
 		// worktree is set after auth
 	}
 
@@ -87,17 +86,16 @@ func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 	<-rpcConn.DisconnectNotify()
 
 	state.cleanup(h.worktreeManager)
-	log.Info("connection closed", "subscriptions", len(state.subscribed))
+	log.Info("connection closed")
 }
 
 // rpcConnState tracks per-connection state.
 type rpcConnState struct {
-	mu         sync.Mutex
-	connID     string
-	subscribed map[string]struct{}
-	conn       *jsonrpc2.Conn
-	log        *slog.Logger
-	worktree   *worktree.Worktree // set after auth
+	mu       sync.Mutex
+	connID   string
+	conn     *jsonrpc2.Conn
+	log      *slog.Logger
+	worktree *worktree.Worktree // set after auth
 }
 
 func (s *rpcConnState) getConnID() string {
@@ -116,14 +114,6 @@ func (s *rpcConnState) setConn(conn *jsonrpc2.Conn) {
 	s.mu.Unlock()
 }
 
-func (s *rpcConnState) subscribe(sessionID string, conn *jsonrpc2.Conn) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.subscribed[sessionID]; !exists {
-		s.worktree.ProcessManager.SubscribeRPC(sessionID, conn)
-		s.subscribed[sessionID] = struct{}{}
-	}
-}
 
 func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
 	s.mu.Lock()
@@ -141,7 +131,6 @@ func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
 
 	// Reset state (safe even for connection close - no harm in resetting)
 	s.worktree = nil
-	s.subscribed = make(map[string]struct{})
 }
 
 type rpcMethodHandler struct {
@@ -206,8 +195,10 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	// Dispatch to method handlers
 	switch req.Method {
 	// chat namespace
-	case "chat.attach":
-		h.handleAttach(ctx, conn, req)
+	case "chat.messages.subscribe":
+		h.handleChatMessagesSubscribe(ctx, conn, req)
+	case "chat.messages.unsubscribe":
+		h.handleWatcherUnsubscribe(ctx, conn, req, h.state.worktree.ChatMessagesWatcher, "chat-messages")
 	case "chat.message":
 		h.handleMessage(ctx, conn, req)
 	case "chat.interrupt":
@@ -223,8 +214,6 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSessionDelete(ctx, conn, req)
 	case "session.update_title":
 		h.handleSessionUpdateTitle(ctx, conn, req)
-	case "session.get_history":
-		h.handleSessionGetHistory(ctx, conn, req)
 	case "session.list.subscribe":
 		h.handleSessionListSubscribe(ctx, conn, req)
 	case "session.list.unsubscribe":

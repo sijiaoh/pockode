@@ -2,7 +2,6 @@ package ws
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
@@ -72,28 +71,6 @@ func (h *rpcMethodHandler) handleSessionUpdateTitle(ctx context.Context, conn *j
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		h.log.Error("failed to send session update response", "error", err)
-	}
-}
-
-func (h *rpcMethodHandler) handleSessionGetHistory(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	var params rpc.SessionGetHistoryParams
-	if err := unmarshalParams(req, &params); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
-		return
-	}
-
-	history, err := h.state.worktree.SessionStore.GetHistory(ctx, params.SessionID)
-	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to get history")
-		return
-	}
-
-	result := struct {
-		History []json.RawMessage `json:"history"`
-	}{History: history}
-
-	if err := conn.Reply(ctx, req.ID, result); err != nil {
-		h.log.Error("failed to send history response", "error", err)
 	}
 }
 

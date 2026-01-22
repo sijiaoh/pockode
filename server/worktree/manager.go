@@ -163,7 +163,9 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	gitWatcher := watch.NewGitWatcher(workDir)
 	gitDiffWatcher := watch.NewGitDiffWatcher(workDir)
 	sessionListWatcher := watch.NewSessionListWatcher(sessionStore)
+	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore)
 	processManager := process.NewManager(m.agent, workDir, sessionStore, m.idleTimeout)
+	processManager.SetMessageListener(chatMessagesWatcher)
 
 	wt := &Worktree{
 		Name:               name,
@@ -173,8 +175,9 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		GitWatcher:         gitWatcher,
 		GitDiffWatcher:     gitDiffWatcher,
 		SessionListWatcher: sessionListWatcher,
-		ProcessManager:     processManager,
-		watchers:           []watch.Watcher{fsWatcher, gitWatcher, gitDiffWatcher, sessionListWatcher},
+		ChatMessagesWatcher: chatMessagesWatcher,
+		ProcessManager:      processManager,
+		watchers:            []watch.Watcher{fsWatcher, gitWatcher, gitDiffWatcher, sessionListWatcher, chatMessagesWatcher},
 		subscribers:        make(map[*jsonrpc2.Conn]struct{}),
 	}
 

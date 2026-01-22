@@ -11,8 +11,8 @@ import (
 	"github.com/sourcegraph/jsonrpc2"
 )
 
-func (h *rpcMethodHandler) handleAttach(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	var params rpc.AttachParams
+func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.ChatMessagesSubscribeParams
 	if err := unmarshalParams(req, &params); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
 		return
@@ -31,19 +31,25 @@ func (h *rpcMethodHandler) handleAttach(ctx context.Context, conn *jsonrpc2.Conn
 		return
 	}
 
-	// Subscribe to session events
-	h.state.subscribe(params.SessionID, conn)
-
-	// Return whether process is running
-	processRunning := h.state.worktree.ProcessManager.HasProcess(params.SessionID)
-	result := rpc.AttachResult{ProcessRunning: processRunning}
-
-	if err := conn.Reply(ctx, req.ID, result); err != nil {
-		log.Error("failed to send attach response", "error", err)
+	id, history, err := h.state.worktree.ChatMessagesWatcher.Subscribe(conn, h.state.connID, params.SessionID)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
 
-	log.Info("subscribed to session", "processRunning", processRunning)
+	processRunning := h.state.worktree.ProcessManager.HasProcess(params.SessionID)
+
+	result := rpc.ChatMessagesSubscribeResult{
+		ID:             id,
+		History:        history,
+		ProcessRunning: processRunning,
+	}
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		log.Error("failed to send subscribe response", "error", err)
+		return
+	}
+
+	log.Info("subscribed to chat messages", "subscriptionId", id, "processRunning", processRunning)
 }
 
 func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {

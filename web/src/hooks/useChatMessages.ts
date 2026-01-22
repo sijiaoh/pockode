@@ -6,7 +6,6 @@ import {
 	updatePermissionRequestStatus,
 	updateQuestionStatus as updateQuestionStatusReducer,
 } from "../lib/messageReducer";
-import { getHistory } from "../lib/sessionApi";
 import { type ConnectionStatus, useWSStore } from "../lib/wsStore";
 import type {
 	AssistantMessage,
@@ -47,7 +46,7 @@ interface UseChatMessagesReturn {
 }
 
 // Actions are stable references - get once at module level
-const { attach, sendMessage, subscribeNotification } =
+const { sendMessage, chatMessagesSubscribe, chatMessagesUnsubscribe } =
 	useWSStore.getState().actions;
 
 export function useChatMessages({
@@ -56,75 +55,77 @@ export function useChatMessages({
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 	const [isProcessRunning, setIsProcessRunning] = useState(false);
-	const hasConnectedOnceRef = useRef(false);
+	const subscriptionIdRef = useRef<string | null>(null);
 
 	const status = useWSStore((state) => state.status);
 	const actions = useWSStore((state) => state.actions);
 
-	const handleNotification = useCallback(
-		(notification: ServerNotification) => {
-			if (notification.session_id !== sessionId) {
-				return;
-			}
+	const handleNotification = useCallback((notification: ServerNotification) => {
+		// Update process running state
+		if (notification.type === "process_ended") {
+			setIsProcessRunning(false);
+		} else {
+			// Any event from process means it's running
+			setIsProcessRunning(true);
+		}
 
-			// Update process running state
-			if (notification.type === "process_ended") {
-				setIsProcessRunning(false);
-			} else {
-				// Any event from process means it's running
-				setIsProcessRunning(true);
-			}
+		const event = normalizeEvent(notification);
+		setMessages((prev) => applyServerEvent(prev, event));
+	}, []);
 
-			const event = normalizeEvent(notification);
-			setMessages((prev) => applyServerEvent(prev, event));
-		},
-		[sessionId],
-	);
-
-	// Subscribe to notifications
-	useEffect(() => {
-		return subscribeNotification(handleNotification);
-	}, [handleNotification]);
-
+	// Reset state when sessionId changes
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on sessionId change
 	useEffect(() => {
 		setMessages([]);
 		setIsProcessRunning(false);
-		hasConnectedOnceRef.current = false;
-
-		async function loadHistory() {
-			setIsLoadingHistory(true);
-			try {
-				const history = await getHistory(sessionId);
-				const replayedMessages = replayHistory(history);
-				setMessages(replayedMessages);
-			} catch (err) {
-				console.error("Failed to load history:", err);
-			} finally {
-				setIsLoadingHistory(false);
-			}
-		}
-
-		loadHistory();
 	}, [sessionId]);
 
-	// Attach to session when connected (enables receiving events without sending a message)
+	// Subscribe to chat events when connected
 	useEffect(() => {
-		if (status === "connected") {
-			attach(sessionId)
-				.then((result) => {
-					setIsProcessRunning(result.process_running);
-				})
-				.catch((err) => console.error("Attach failed:", err));
-
-			// On reconnect, reload history to sync messages missed during disconnect
-			if (hasConnectedOnceRef.current) {
-				getHistory(sessionId)
-					.then((history) => setMessages(replayHistory(history)))
-					.catch((err) => console.error("History sync failed:", err));
-			}
-			hasConnectedOnceRef.current = true;
+		if (status !== "connected") {
+			return;
 		}
-	}, [status, sessionId]);
+
+		let cancelled = false;
+
+		async function subscribe() {
+			setIsLoadingHistory(true);
+			try {
+				const result = await chatMessagesSubscribe(
+					sessionId,
+					handleNotification,
+				);
+				if (cancelled) {
+					// Cleanup if component unmounted during subscribe
+					await chatMessagesUnsubscribe(result.id);
+					return;
+				}
+				subscriptionIdRef.current = result.id;
+				if (result.initial) {
+					setIsProcessRunning(result.initial.process_running);
+					setMessages(replayHistory(result.initial.history));
+				}
+			} catch (err) {
+				console.error("Failed to subscribe to chat messages:", err);
+			} finally {
+				if (!cancelled) {
+					setIsLoadingHistory(false);
+				}
+			}
+		}
+
+		subscribe();
+
+		return () => {
+			cancelled = true;
+			if (subscriptionIdRef.current) {
+				chatMessagesUnsubscribe(subscriptionIdRef.current).catch(() => {
+					// Ignore errors (connection might be closed)
+				});
+				subscriptionIdRef.current = null;
+			}
+		};
+	}, [status, sessionId, handleNotification]);
 
 	const sendUserMessageHandler = useCallback(
 		async (content: string): Promise<boolean> => {
