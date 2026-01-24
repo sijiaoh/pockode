@@ -100,7 +100,7 @@ React SPA (前端)
 
 ## 参考资料
 
-**参考项目**（按需克隆到 `./tmp/`）：
+**参考项目**（按需克隆到 `./refs/`）：
 - [happy-cli](https://github.com/slopus/happy-cli) — schema 及实现参考
 - [claude-code-chat](https://github.com/andrepimenta/claude-code-chat) — stream-json 实现参考
 - [anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go) — API 类型定义参考

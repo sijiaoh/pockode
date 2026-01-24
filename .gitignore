@@ -20,8 +20,8 @@ Thumbs.db
 # Logs
 *.log
 
-# Temp files
-tmp/
+# Reference projects (cloned for development reference only)
+refs/
 
 # Data directory
 .pockode/
