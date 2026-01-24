@@ -44,6 +44,14 @@ export function useRouteState(): RouteInfo {
 		from: WT_ROUTES.files,
 		shouldThrow: false,
 	});
+	const settingsMatch = useMatch({
+		from: ROUTES.settings,
+		shouldThrow: false,
+	});
+	const wtSettingsMatch = useMatch({
+		from: WT_ROUTES.settings,
+		shouldThrow: false,
+	});
 
 	const sessionId =
 		sessionMatch?.params.sessionId ?? wtSessionMatch?.params.sessionId ?? null;
@@ -80,6 +88,16 @@ export function useRouteState(): RouteInfo {
 			wtFileMatch?.search) as OverlaySearchParams;
 		return {
 			overlay: { type: "file", path: filePath },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	if (settingsMatch || wtSettingsMatch) {
+		const search = (settingsMatch?.search ??
+			wtSettingsMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "settings" },
 			sessionId: search.session ?? null,
 			worktree,
 		};

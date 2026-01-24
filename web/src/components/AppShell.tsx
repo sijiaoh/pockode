@@ -245,6 +245,17 @@ function AppShell() {
 		}
 	}, [navigate, urlWorktree, currentSessionId]);
 
+	const handleOpenSettings = useCallback(() => {
+		navigate(
+			buildNavigation({
+				type: "overlay",
+				worktree: urlWorktree,
+				overlayType: "settings",
+				sessionId: currentSessionId ?? undefined,
+			}),
+		);
+	}, [navigate, urlWorktree, currentSessionId]);
+
 	if (!hasAuthToken) {
 		return <TokenInput onSubmit={handleTokenSubmit} />;
 	}
@@ -301,6 +312,7 @@ function AppShell() {
 				onUpdateTitle={(title) => updateTitle(currentSessionId, title)}
 				onLogout={authActions.logout}
 				onOpenSidebar={handleOpenSidebar}
+				onOpenSettings={handleOpenSettings}
 				overlay={overlay}
 				onCloseOverlay={handleCloseOverlay}
 			/>

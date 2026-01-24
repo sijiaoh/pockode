@@ -10,6 +10,7 @@ const BASE = {
 	staged: "/staged/$",
 	unstaged: "/unstaged/$",
 	files: "/files/$",
+	settings: "/settings",
 } as const;
 
 const WT_PREFIX = "/w/$worktree";
@@ -28,4 +29,5 @@ export const WT_ROUTES = {
 	staged: `${WT_PREFIX}${BASE.staged}`,
 	unstaged: `${WT_PREFIX}${BASE.unstaged}`,
 	files: `${WT_PREFIX}${BASE.files}`,
+	settings: `${WT_PREFIX}${BASE.settings}`,
 } as const;

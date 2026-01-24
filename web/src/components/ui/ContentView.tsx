@@ -1,3 +1,6 @@
+// TODO: Overlay structure is duplicated across FileView, DiffView, SettingsPage.
+// When a 4th overlay is needed, extract a shared Overlay component.
+
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { splitPath } from "../../utils/path";

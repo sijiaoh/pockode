@@ -1,20 +1,27 @@
 import { ROUTES, WT_ROUTES } from "./routes";
 
-type OverlayType = "staged" | "unstaged" | "file";
-
 interface NavToSession {
 	type: "session";
 	worktree: string;
 	sessionId: string;
 }
 
-interface NavToOverlay {
+interface NavToFileOverlay {
 	type: "overlay";
 	worktree: string;
-	overlayType: OverlayType;
+	overlayType: "staged" | "unstaged" | "file";
 	path: string;
 	sessionId?: string;
 }
+
+interface NavToSettingsOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "settings";
+	sessionId?: string;
+}
+
+type NavToOverlay = NavToFileOverlay | NavToSettingsOverlay;
 
 interface NavToHome {
 	type: "home";
@@ -64,19 +71,29 @@ export function buildNavigation(
 		}
 
 		case "overlay": {
-			const routeMap = {
-				staged: isMain ? ROUTES.staged : WT_ROUTES.staged,
-				unstaged: isMain ? ROUTES.unstaged : WT_ROUTES.unstaged,
-				file: isMain ? ROUTES.files : WT_ROUTES.files,
-			} as const;
+			if (target.overlayType === "settings") {
+				result.to = isMain ? ROUTES.settings : WT_ROUTES.settings;
+				if (!isMain) {
+					result.params = { worktree: target.worktree };
+				}
+				if (target.sessionId) {
+					result.search = { session: target.sessionId };
+				}
+			} else {
+				const routeMap = {
+					staged: isMain ? ROUTES.staged : WT_ROUTES.staged,
+					unstaged: isMain ? ROUTES.unstaged : WT_ROUTES.unstaged,
+					file: isMain ? ROUTES.files : WT_ROUTES.files,
+				} as const;
 
-			result.to = routeMap[target.overlayType];
-			result.params = { _splat: target.path };
-			if (!isMain) {
-				result.params.worktree = target.worktree;
-			}
-			if (target.sessionId) {
-				result.search = { session: target.sessionId };
+				result.to = routeMap[target.overlayType];
+				result.params = { _splat: target.path };
+				if (!isMain) {
+					result.params.worktree = target.worktree;
+				}
+				if (target.sessionId) {
+					result.search = { session: target.sessionId };
+				}
 			}
 			break;
 		}

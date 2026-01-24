@@ -74,6 +74,33 @@ describe("buildNavigation", () => {
 				params: { _splat: "README.md" },
 			});
 		});
+
+		it("builds main worktree settings route", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "",
+				overlayType: "settings",
+			});
+
+			expect(result).toEqual({
+				to: "/settings",
+			});
+		});
+
+		it("builds named worktree settings route with session", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "feature-x",
+				overlayType: "settings",
+				sessionId: "sess123",
+			});
+
+			expect(result).toEqual({
+				to: "/w/$worktree/settings",
+				params: { worktree: "feature-x" },
+				search: { session: "sess123" },
+			});
+		});
 	});
 
 	describe("home", () => {

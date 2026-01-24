@@ -1,17 +1,17 @@
-import { Menu } from "lucide-react";
-import { ConnectionStatus, ThemeSwitcher } from "../ui";
+import { Menu, Settings } from "lucide-react";
+import { ConnectionStatus } from "../ui";
 
 interface Props {
 	children: React.ReactNode;
 	onOpenSidebar?: () => void;
-	onLogout?: () => void;
+	onOpenSettings?: () => void;
 	title?: string;
 }
 
 function MainContainer({
 	children,
 	onOpenSidebar,
-	onLogout,
+	onOpenSettings,
 	title = "Pockode",
 }: Props) {
 	return (
@@ -22,7 +22,7 @@ function MainContainer({
 						<button
 							type="button"
 							onClick={onOpenSidebar}
-							className="-ml-1 flex h-8 w-8 items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary md:hidden"
+							className="-ml-2 flex h-11 w-11 items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary md:hidden"
 							aria-label="Open menu"
 						>
 							<Menu className="h-5 w-5" aria-hidden="true" />
@@ -34,14 +34,14 @@ function MainContainer({
 				</div>
 				<div className="flex items-center gap-2">
 					<ConnectionStatus />
-					<ThemeSwitcher />
-					{onLogout && (
+					{onOpenSettings && (
 						<button
 							type="button"
-							onClick={onLogout}
-							className="rounded px-2 py-1 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
+							onClick={onOpenSettings}
+							className="-mr-1 flex h-11 w-11 items-center justify-center rounded text-th-text-muted transition-transform hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
+							aria-label="Settings"
 						>
-							Logout
+							<Settings className="h-5 w-5" aria-hidden="true" />
 						</button>
 					)}
 				</div>

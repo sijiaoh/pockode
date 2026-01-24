@@ -10,6 +10,7 @@ import type { OverlayState } from "../../types/overlay";
 import { FileView } from "../Files";
 import { DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
+import { SettingsPage } from "../Settings";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
 
@@ -19,6 +20,7 @@ interface Props {
 	onUpdateTitle: (title: string) => void;
 	onLogout?: () => void;
 	onOpenSidebar?: () => void;
+	onOpenSettings?: () => void;
 	overlay?: OverlayState;
 	onCloseOverlay?: () => void;
 }
@@ -29,6 +31,7 @@ function ChatPanel({
 	onUpdateTitle,
 	onLogout,
 	onOpenSidebar,
+	onOpenSettings,
 	overlay,
 	onCloseOverlay,
 }: Props) {
@@ -156,6 +159,13 @@ function ChatPanel({
 				return (
 					<FileView path={overlay.path} onBack={onCloseOverlay ?? (() => {})} />
 				);
+			case "settings":
+				return (
+					<SettingsPage
+						onBack={onCloseOverlay ?? (() => {})}
+						onLogout={onLogout ?? (() => {})}
+					/>
+				);
 		}
 	};
 
@@ -163,7 +173,7 @@ function ChatPanel({
 		<MainContainer
 			title={projectTitle}
 			onOpenSidebar={onOpenSidebar}
-			onLogout={onLogout}
+			onOpenSettings={onOpenSettings}
 		>
 			{renderContent()}
 			<InputBar

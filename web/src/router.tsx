@@ -46,6 +46,12 @@ const fileViewRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const settingsRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: ROUTES.settings,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 // Worktree-prefixed routes
 const worktreeLayoutRoute = createRoute({
 	getParentRoute: () => rootRoute,
@@ -80,18 +86,26 @@ const wtFileViewRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const wtSettingsRoute = createRoute({
+	getParentRoute: () => worktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.settings,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 const routeTree = rootRoute.addChildren([
 	indexRoute,
 	sessionRoute,
 	stagedDiffRoute,
 	unstagedDiffRoute,
 	fileViewRoute,
+	settingsRoute,
 	worktreeLayoutRoute.addChildren([
 		wtIndexRoute,
 		wtSessionRoute,
 		wtStagedDiffRoute,
 		wtUnstagedDiffRoute,
 		wtFileViewRoute,
+		wtSettingsRoute,
 	]),
 ]);
 
