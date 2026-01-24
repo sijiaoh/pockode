@@ -15,7 +15,38 @@ const SCROLL_OFFSET = 16;
 export default function SettingsNav({ items, scrollContainerRef }: Props) {
 	const [activeId, setActiveId] = useState(items[0]?.id ?? "");
 	const navRef = useRef<HTMLDivElement>(null);
-	const isClickScrolling = useRef(false);
+	const isScrollingToSection = useRef(false);
+
+	const getActiveIdByPosition = useCallback(() => {
+		const container = scrollContainerRef.current;
+		if (!container || items.length === 0) return items[0]?.id ?? "";
+
+		// If scrolled to bottom, activate the last item
+		const isAtBottom =
+			Math.abs(
+				container.scrollHeight - container.scrollTop - container.clientHeight,
+			) < 1;
+		if (isAtBottom) {
+			return items[items.length - 1].id;
+		}
+
+		// Find the topmost section that has scrolled past the threshold
+		const containerRect = container.getBoundingClientRect();
+		let currentId = items[0].id;
+
+		for (const item of items) {
+			const section = document.getElementById(item.id);
+			if (!section) continue;
+
+			const sectionTop =
+				section.getBoundingClientRect().top - containerRect.top;
+			if (sectionTop <= SCROLL_OFFSET * 2) {
+				currentId = item.id;
+			}
+		}
+
+		return currentId;
+	}, [items, scrollContainerRef]);
 
 	const scrollToSection = useCallback(
 		(id: string) => {
@@ -23,7 +54,7 @@ export default function SettingsNav({ items, scrollContainerRef }: Props) {
 			const section = document.getElementById(id);
 			if (!container || !section) return;
 
-			isClickScrolling.current = true;
+			isScrollingToSection.current = true;
 			setActiveId(id);
 
 			const containerRect = container.getBoundingClientRect();
@@ -34,10 +65,6 @@ export default function SettingsNav({ items, scrollContainerRef }: Props) {
 				top: offset - SCROLL_OFFSET,
 				behavior: "smooth",
 			});
-
-			setTimeout(() => {
-				isClickScrolling.current = false;
-			}, 500);
 		},
 		[scrollContainerRef],
 	);
@@ -46,31 +73,59 @@ export default function SettingsNav({ items, scrollContainerRef }: Props) {
 		const container = scrollContainerRef.current;
 		if (!container) return;
 
+		let scrollEndTimeout: ReturnType<typeof setTimeout> | undefined;
+		const supportsScrollEnd = "onscrollend" in window;
+
 		const handleScroll = () => {
-			if (isClickScrolling.current) return;
+			if (isScrollingToSection.current) return;
+			setActiveId(getActiveIdByPosition());
+		};
 
-			const containerRect = container.getBoundingClientRect();
-			let currentId = items[0]?.id ?? "";
+		const handleScrollEnd = () => {
+			isScrollingToSection.current = false;
+		};
 
-			for (const item of items) {
-				const section = document.getElementById(item.id);
-				if (!section) continue;
-
-				const sectionRect = section.getBoundingClientRect();
-				const sectionTop = sectionRect.top - containerRect.top;
-
-				if (sectionTop <= SCROLL_OFFSET * 2) {
-					currentId = item.id;
-				}
+		const handlePointerDown = () => {
+			if (isScrollingToSection.current) {
+				isScrollingToSection.current = false;
+				setActiveId(getActiveIdByPosition());
 			}
+		};
 
-			setActiveId(currentId);
+		// Fallback: detect scroll end via debounce for browsers without scrollend
+		const handleScrollEndFallback = () => {
+			clearTimeout(scrollEndTimeout);
+			scrollEndTimeout = setTimeout(handleScrollEnd, 150);
 		};
 
 		container.addEventListener("scroll", handleScroll, { passive: true });
-		return () => container.removeEventListener("scroll", handleScroll);
-	}, [items, scrollContainerRef]);
+		container.addEventListener("pointerdown", handlePointerDown, {
+			passive: true,
+		});
 
+		if (supportsScrollEnd) {
+			container.addEventListener("scrollend", handleScrollEnd, {
+				passive: true,
+			});
+		} else {
+			container.addEventListener("scroll", handleScrollEndFallback, {
+				passive: true,
+			});
+		}
+
+		return () => {
+			container.removeEventListener("scroll", handleScroll);
+			container.removeEventListener("pointerdown", handlePointerDown);
+			if (supportsScrollEnd) {
+				container.removeEventListener("scrollend", handleScrollEnd);
+			} else {
+				container.removeEventListener("scroll", handleScrollEndFallback);
+				clearTimeout(scrollEndTimeout);
+			}
+		};
+	}, [scrollContainerRef, getActiveIdByPosition]);
+
+	// Center active button in nav
 	useEffect(() => {
 		const nav = navRef.current;
 		const activeButton = nav?.querySelector(`[data-id="${activeId}"]`);
