@@ -1,5 +1,3 @@
-// Tool result parsing utilities
-
 export interface ParsedLine {
 	lineNumber: number;
 	content: string;

@@ -62,6 +62,11 @@ type SessionUpdateTitleParams struct {
 	Title     string `json:"title"`
 }
 
+type SessionSetModeParams struct {
+	SessionID string       `json:"session_id"`
+	Mode      session.Mode `json:"mode"`
+}
+
 // File namespace
 
 type FileGetParams struct {
@@ -162,6 +167,7 @@ type ChatMessagesSubscribeResult struct {
 	ID             string            `json:"id"`
 	History        []json.RawMessage `json:"history"`
 	ProcessRunning bool              `json:"process_running"`
+	Mode           session.Mode      `json:"mode"`
 }
 
 type ChatMessagesUnsubscribeParams struct {
@@ -210,41 +216,7 @@ type WorktreeSwitchResult struct {
 	WorktreeName string `json:"worktree_name"`
 }
 
-// Server → Client
-
-// SessionParams is the params for done, interrupted, and process_ended notifications.
-type SessionParams struct {
-	SessionID string `json:"session_id"`
-}
-
-type TextParams struct {
-	SessionID string `json:"session_id"`
-	Content   string `json:"content"`
-}
-
-type ToolCallParams struct {
-	SessionID string          `json:"session_id"`
-	ToolName  string          `json:"tool_name"`
-	ToolInput json.RawMessage `json:"tool_input"`
-	ToolUseID string          `json:"tool_use_id"`
-}
-
-type ToolResultParams struct {
-	SessionID  string `json:"session_id"`
-	ToolUseID  string `json:"tool_use_id"`
-	ToolResult string `json:"tool_result"`
-}
-
-type WarningParams struct {
-	SessionID string `json:"session_id"`
-	Message   string `json:"message"`
-	Code      string `json:"code"`
-}
-
-type ErrorParams struct {
-	SessionID string `json:"session_id"`
-	Error     string `json:"error"`
-}
+// Server → Client (used in tests for notification parsing)
 
 type PermissionRequestParams struct {
 	SessionID             string                   `json:"session_id"`
@@ -255,24 +227,9 @@ type PermissionRequestParams struct {
 	PermissionSuggestions []agent.PermissionUpdate `json:"permission_suggestions,omitempty"`
 }
 
-type RequestCancelledParams struct {
-	SessionID string `json:"session_id"`
-	RequestID string `json:"request_id"`
-}
-
 type AskUserQuestionParams struct {
 	SessionID string                  `json:"session_id"`
 	RequestID string                  `json:"request_id"`
 	ToolUseID string                  `json:"tool_use_id"`
 	Questions []agent.AskUserQuestion `json:"questions"`
-}
-
-type SystemParams struct {
-	SessionID string `json:"session_id"`
-	Content   string `json:"content"`
-}
-
-type RawParams struct {
-	SessionID string `json:"session_id"`
-	Content   string `json:"content"`
 }

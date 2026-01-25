@@ -13,6 +13,7 @@ import MainContainer from "../Layout/MainContainer";
 import { SettingsPage } from "../Settings";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
+import ModeSelector from "./ModeSelector";
 
 interface Props {
 	sessionId: string;
@@ -42,11 +43,13 @@ function ChatPanel({
 		isLoadingHistory,
 		isStreaming,
 		isProcessRunning,
+		mode,
 		status,
 		sendUserMessage,
 		interrupt,
 		permissionResponse,
 		questionResponse,
+		setMode,
 		updatePermissionStatus,
 		updateQuestionStatus,
 	} = useChatMessages({
@@ -176,6 +179,16 @@ function ChatPanel({
 			onOpenSettings={onOpenSettings}
 		>
 			{renderContent()}
+			{/* Session action bar - only shown when not in overlay */}
+			{!overlay && (
+				<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
+					<ModeSelector
+						mode={mode}
+						onModeChange={setMode}
+						disabled={isStreaming}
+					/>
+				</div>
+			)}
 			<InputBar
 				sessionId={sessionId}
 				onSend={handleSend}

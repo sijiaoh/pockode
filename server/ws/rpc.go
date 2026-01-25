@@ -213,6 +213,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSessionDelete(ctx, conn, req)
 	case "session.update_title":
 		h.handleSessionUpdateTitle(ctx, conn, req)
+	case "session.set_mode":
+		h.handleSessionSetMode(ctx, conn, req)
 	case "session.list.subscribe":
 		h.handleSessionListSubscribe(ctx, conn, req)
 	case "session.list.unsubscribe":

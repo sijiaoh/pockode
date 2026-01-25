@@ -18,6 +18,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/session"
 )
 
 const (
@@ -35,25 +36,34 @@ func New() *Agent {
 }
 
 // Start launches a persistent Claude CLI process.
-func (a *Agent) Start(ctx context.Context, workDir string, sessionID string, resume bool) (agent.Session, error) {
+func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	procCtx, cancel := context.WithCancel(ctx)
 
 	args := []string{
 		"--output-format", "stream-json",
 		"--input-format", "stream-json",
-		"--permission-prompt-tool", "stdio",
 		"--verbose",
 	}
-	if sessionID != "" {
-		if resume {
-			args = append(args, "--resume", sessionID)
+
+	// Add mode-specific options
+	switch opts.Mode {
+	case session.ModeYolo:
+		args = append(args, "--dangerously-skip-permissions")
+	default:
+		// Default mode: use permission prompt tool
+		args = append(args, "--permission-prompt-tool", "stdio")
+	}
+
+	if opts.SessionID != "" {
+		if opts.Resume {
+			args = append(args, "--resume", opts.SessionID)
 		} else {
-			args = append(args, "--session-id", sessionID)
+			args = append(args, "--session-id", opts.SessionID)
 		}
 	}
 
 	cmd := exec.CommandContext(procCtx, Binary, args...)
-	cmd.Dir = workDir
+	cmd.Dir = opts.WorkDir
 
 	// stdin ownership is transferred to session; closed by session.Close()
 	stdin, err := cmd.StdinPipe()
@@ -85,13 +95,13 @@ func (a *Agent) Start(ctx context.Context, workDir string, sessionID string, res
 		return nil, fmt.Errorf("failed to start claude: %w", err)
 	}
 
-	log := slog.With("sessionId", sessionID)
-	log.Info("claude process started", "pid", cmd.Process.Pid)
+	log := slog.With("sessionId", opts.SessionID)
+	log.Info("claude process started", "pid", cmd.Process.Pid, "mode", opts.Mode)
 
 	events := make(chan agent.AgentEvent)
 	pendingRequests := &sync.Map{}
 
-	sess := &session{
+	sess := &cliSession{
 		log:             log,
 		events:          events,
 		stdin:           stdin,
@@ -105,7 +115,7 @@ func (a *Agent) Start(ctx context.Context, workDir string, sessionID string, res
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.LogPanic(r, "claude process crashed", "sessionId", sessionID)
+				logger.LogPanic(r, "claude process crashed", "sessionId", opts.SessionID)
 			}
 		}()
 		defer close(events)
@@ -128,7 +138,7 @@ func (a *Agent) Start(ctx context.Context, workDir string, sessionID string, res
 }
 
 // session implements agent.Session for Claude CLI.
-type session struct {
+type cliSession struct {
 	log             *slog.Logger
 	events          chan agent.AgentEvent
 	stdin           io.WriteCloser
@@ -139,12 +149,12 @@ type session struct {
 }
 
 // Events returns the event channel.
-func (s *session) Events() <-chan agent.AgentEvent {
+func (s *cliSession) Events() <-chan agent.AgentEvent {
 	return s.events
 }
 
 // SendMessage sends a message to Claude.
-func (s *session) SendMessage(prompt string) error {
+func (s *cliSession) SendMessage(prompt string) error {
 	msg := userMessage{
 		Type: "user",
 		Message: userContent{
@@ -161,7 +171,7 @@ func (s *session) SendMessage(prompt string) error {
 }
 
 // SendPermissionResponse sends a permission response to Claude.
-func (s *session) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
+func (s *cliSession) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
 	var content controlResponseContent
 
 	switch choice {
@@ -188,7 +198,7 @@ func (s *session) SendPermissionResponse(data agent.PermissionRequestData, choic
 
 // SendQuestionResponse sends answers to user questions.
 // If answers is nil, sends a cancel (deny) response.
-func (s *session) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
+func (s *cliSession) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
 	var content controlResponseContent
 
 	if answers == nil {
@@ -213,7 +223,7 @@ func (s *session) SendQuestionResponse(data agent.QuestionRequestData, answers m
 	return s.sendControlResponse(data.RequestID, content)
 }
 
-func (s *session) sendControlResponse(requestID string, content controlResponseContent) error {
+func (s *cliSession) sendControlResponse(requestID string, content controlResponseContent) error {
 	response := controlResponse{
 		Type: "control_response",
 		Response: controlResponsePayload{
@@ -237,7 +247,7 @@ func (s *session) sendControlResponse(requestID string, content controlResponseC
 type interruptMarker struct{}
 
 // SendInterrupt sends an interrupt signal to stop the current task.
-func (s *session) SendInterrupt() error {
+func (s *cliSession) SendInterrupt() error {
 	requestID := generateRequestID()
 	request := interruptRequest{
 		Type:      "control_request",
@@ -274,7 +284,7 @@ func generateRequestID() string {
 }
 
 // Close terminates the Claude process. Safe to call multiple times.
-func (s *session) Close() {
+func (s *cliSession) Close() {
 	s.closeOnce.Do(func() {
 		s.log.Info("terminating claude process")
 		s.cancel()
@@ -285,7 +295,7 @@ func (s *session) Close() {
 }
 
 // writeStdin writes data to stdin with mutex protection.
-func (s *session) writeStdin(data []byte) error {
+func (s *cliSession) writeStdin(data []byte) error {
 	s.stdinMu.Lock()
 	defer s.stdinMu.Unlock()
 	_, err := s.stdin.Write(append(data, '\n'))

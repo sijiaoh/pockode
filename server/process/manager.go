@@ -74,7 +74,7 @@ func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent) {
 }
 
 // GetOrCreateProcess returns an existing process or creates a new one.
-func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resume bool) (*Process, bool, error) {
+func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resume bool, mode session.Mode) (*Process, bool, error) {
 	m.processesMu.Lock()
 	defer m.processesMu.Unlock()
 
@@ -84,7 +84,13 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 	}
 
 	// Use manager's context for process lifecycle, not request context
-	sess, err := m.agent.Start(m.ctx, m.workDir, sessionID, resume)
+	opts := agent.StartOptions{
+		WorkDir:   m.workDir,
+		SessionID: sessionID,
+		Resume:    resume,
+		Mode:      mode,
+	}
+	sess, err := m.agent.Start(m.ctx, opts)
 	if err != nil {
 		return nil, false, err
 	}
@@ -109,7 +115,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 		proc.streamEvents(m.ctx)
 	}()
 
-	slog.Info("process created", "sessionId", sessionID, "resume", resume)
+	slog.Info("process created", "sessionId", sessionID, "resume", resume, "mode", mode)
 	return proc, true, nil
 }
 

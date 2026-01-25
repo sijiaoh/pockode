@@ -22,6 +22,7 @@ type Store interface {
 	Delete(ctx context.Context, sessionID string) error
 	Update(ctx context.Context, sessionID string, title string) error
 	Activate(ctx context.Context, sessionID string) error
+	SetMode(ctx context.Context, sessionID string, mode Mode) error
 
 	// History persistence
 	GetHistory(ctx context.Context, sessionID string) ([]json.RawMessage, error)
@@ -81,6 +82,14 @@ func (s *FileStore) readIndexFromDisk() (indexData, error) {
 	if err := json.Unmarshal(data, &idx); err != nil {
 		return indexData{}, err
 	}
+
+	// Migrate: ensure all sessions have a valid mode
+	for i := range idx.Sessions {
+		if idx.Sessions[i].Mode == "" {
+			idx.Sessions[i].Mode = ModeDefault
+		}
+	}
+
 	return idx, nil
 }
 
@@ -145,6 +154,7 @@ func (s *FileStore) Create(ctx context.Context, sessionID string) (SessionMeta, 
 		Title:     "New Chat",
 		CreatedAt: now,
 		UpdatedAt: now,
+		Mode:      ModeDefault,
 	}
 
 	s.sessions = append([]SessionMeta{session}, s.sessions...)
@@ -222,6 +232,29 @@ func (s *FileStore) Activate(ctx context.Context, sessionID string) error {
 	for i := range s.sessions {
 		if s.sessions[i].ID == sessionID {
 			s.sessions[i].Activated = true
+			s.sessions[i].UpdatedAt = time.Now()
+			if err := s.persistIndex(); err != nil {
+				return err
+			}
+			s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
+			return nil
+		}
+	}
+
+	return ErrSessionNotFound
+}
+
+func (s *FileStore) SetMode(ctx context.Context, sessionID string, mode Mode) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.sessions {
+		if s.sessions[i].ID == sessionID {
+			s.sessions[i].Mode = mode
 			s.sessions[i].UpdatedAt = time.Now()
 			if err := s.persistIndex(); err != nil {
 				return err

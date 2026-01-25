@@ -1,10 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
-import {
-	createSession,
-	deleteSession,
-	updateSessionTitle,
-} from "../lib/sessionApi";
 import { prependSession, useSessionStore } from "../lib/sessionStore";
+import { wsActions } from "../lib/wsStore";
 import { useSessionSubscription } from "./useSessionSubscription";
 
 interface UseSessionOptions {
@@ -24,7 +20,7 @@ export function useSession({
 	const { refresh } = useSessionSubscription(enabled);
 
 	const createMutation = useMutation({
-		mutationFn: createSession,
+		mutationFn: wsActions.createSession,
 		onSuccess: (newSession) => {
 			// Optimistically add session to avoid redirect race condition.
 			// The subscription notification will deduplicate.
@@ -33,12 +29,12 @@ export function useSession({
 	});
 
 	const deleteMutation = useMutation({
-		mutationFn: deleteSession,
+		mutationFn: wsActions.deleteSession,
 	});
 
 	const updateTitleMutation = useMutation({
 		mutationFn: ({ id, title }: { id: string; title: string }) =>
-			updateSessionTitle(id, title),
+			wsActions.updateSessionTitle(id, title),
 	});
 
 	const currentSessionId = routeSessionId ?? null;

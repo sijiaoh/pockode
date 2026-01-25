@@ -1,12 +1,13 @@
-// Session metadata
+export type SessionMode = "default" | "yolo";
+
 export interface SessionMeta {
 	id: string;
 	title: string;
 	created_at: string;
 	updated_at: string;
+	mode: SessionMode;
 }
 
-// Message status
 export type MessageStatus =
 	| "sending"
 	| "streaming"
@@ -15,7 +16,6 @@ export type MessageStatus =
 	| "interrupted"
 	| "process_ended";
 
-// Tool call
 export interface ToolCall {
 	id: string;
 	name: string;
@@ -23,13 +23,10 @@ export interface ToolCall {
 	result?: string;
 }
 
-// Permission request status
 export type PermissionStatus = "pending" | "allowed" | "denied";
 
-// Question status
 export type QuestionStatus = "pending" | "answered" | "cancelled";
 
-// Content part - represents a piece of content in timeline order
 export type ContentPart =
 	| { type: "text"; content: string }
 	| { type: "tool_call"; tool: ToolCall }
@@ -49,7 +46,6 @@ export type ContentPart =
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
 
-// User message - plain text content
 export interface UserMessage {
 	id: string;
 	role: "user";
@@ -58,7 +54,6 @@ export interface UserMessage {
 	createdAt: Date;
 }
 
-// Assistant message - structured parts (text, tool calls, system)
 export interface AssistantMessage {
 	id: string;
 	role: "assistant";
@@ -68,7 +63,6 @@ export interface AssistantMessage {
 	createdAt: Date;
 }
 
-// Discriminated union by role
 export type Message = UserMessage | AssistantMessage;
 
 export type PermissionBehavior = "allow" | "deny" | "ask";
@@ -127,7 +121,6 @@ export interface PermissionRequest {
 	permissionSuggestions?: PermissionUpdate[];
 }
 
-// AskUserQuestion types
 export interface QuestionOption {
 	label: string;
 	description: string;
@@ -153,7 +146,6 @@ export interface AuthParams {
 	worktree?: string;
 }
 
-// Worktree types
 export interface WorktreeInfo {
 	name: string;
 	path: string;
@@ -209,8 +201,6 @@ export interface QuestionResponseParams {
 	answers: Record<string, string> | null; // null = cancel
 }
 
-// Session management RPC params
-
 export interface SessionDeleteParams {
 	session_id: string;
 }
@@ -234,8 +224,6 @@ export type SessionListChangedNotification =
 	| { id: string; operation: "update"; session: SessionMeta }
 	| { id: string; operation: "delete"; sessionId: string };
 
-// Chat messages watch (subscription for chat messages)
-
 export interface ChatMessagesSubscribeParams {
 	session_id: string;
 }
@@ -244,12 +232,17 @@ export interface ChatMessagesSubscribeResult {
 	id: string;
 	history: unknown[];
 	process_running: boolean;
+	mode: SessionMode;
+}
+
+export interface SessionSetModeParams {
+	session_id: string;
+	mode: SessionMode;
 }
 
 // JSON-RPC 2.0 Notification Params (Server → Client)
 // These match the EventRecord format from the server.
 
-// Server notification event types
 export type ServerMethod =
 	| "text"
 	| "tool_call"
@@ -265,7 +258,6 @@ export type ServerMethod =
 	| "system"
 	| "command_output";
 
-// Server notification with type field for discriminated union
 export type ServerNotification =
 	| { type: "text"; content: string }
 	| {

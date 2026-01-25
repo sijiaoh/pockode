@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/session"
 )
 
 type mockSession struct {
@@ -61,6 +62,7 @@ func (s *mockSession) Close() {
 type startCall struct {
 	sessionID string
 	resume    bool
+	mode      session.Mode
 }
 
 type mockAgent struct {
@@ -75,9 +77,9 @@ type mockAgent struct {
 	startCalls        []startCall
 }
 
-func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string, resume bool) (agent.Session, error) {
+func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	m.mu.Lock()
-	m.startCalls = append(m.startCalls, startCall{sessionID: sessionID, resume: resume})
+	m.startCalls = append(m.startCalls, startCall{sessionID: opts.SessionID, resume: opts.Resume, mode: opts.Mode})
 	m.mu.Unlock()
 
 	if m.startErr != nil {
@@ -87,7 +89,7 @@ func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string,
 	eventsChan := make(chan agent.AgentEvent, 100)
 	messageQueue := make(chan string, 10)
 
-	effectiveSessionID := sessionID
+	effectiveSessionID := opts.SessionID
 	if effectiveSessionID == "" {
 		effectiveSessionID = m.sessionID
 	}

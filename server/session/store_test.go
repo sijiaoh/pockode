@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -286,5 +288,36 @@ func TestFileStore_Delete_RemovesHistory(t *testing.T) {
 	history, _ = store.GetHistory(ctx, sessionID)
 	if len(history) != 0 {
 		t.Errorf("expected history to be deleted, got %d records", len(history))
+	}
+}
+
+func TestFileStore_MigratesEmptyMode(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		t.Fatalf("failed to create sessions dir: %v", err)
+	}
+
+	// Write index.json with session that has no mode field (legacy data)
+	indexContent := `{"sessions":[{"id":"legacy-session","title":"Legacy","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}]}`
+	indexPath := filepath.Join(sessionsDir, "index.json")
+	if err := os.WriteFile(indexPath, []byte(indexContent), 0644); err != nil {
+		t.Fatalf("failed to write index: %v", err)
+	}
+
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	sess, found, err := store.Get("legacy-session")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected session to be found")
+	}
+	if sess.Mode != ModeDefault {
+		t.Errorf("expected mode to be migrated to %q, got %q", ModeDefault, sess.Mode)
 	}
 }

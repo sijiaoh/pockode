@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/pockode/server/session"
 )
 
 // PermissionChoice represents the user's decision on a permission request.
@@ -28,11 +30,19 @@ type QuestionRequestData struct {
 	ToolUseID string
 }
 
+// StartOptions contains options for starting an agent session.
+type StartOptions struct {
+	WorkDir   string
+	SessionID string
+	Resume    bool
+	Mode      session.Mode
+}
+
 // Agent defines the interface for an AI agent.
 type Agent interface {
 	// Start launches a persistent agent process and returns a Session.
 	// The process stays alive until the context is cancelled or Close is called.
-	Start(ctx context.Context, workDir string, sessionID string, resume bool) (Session, error)
+	Start(ctx context.Context, opts StartOptions) (Session, error)
 }
 
 // Session represents an active agent session with bidirectional communication.

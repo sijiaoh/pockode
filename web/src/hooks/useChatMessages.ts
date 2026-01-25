@@ -6,6 +6,7 @@ import {
 	updatePermissionRequestStatus,
 	updateQuestionStatus as updateQuestionStatusReducer,
 } from "../lib/messageReducer";
+import { useSessionStore } from "../lib/sessionStore";
 import { type ConnectionStatus, useWSStore } from "../lib/wsStore";
 import type {
 	AssistantMessage,
@@ -14,6 +15,7 @@ import type {
 	QuestionResponseParams,
 	QuestionStatus,
 	ServerNotification,
+	SessionMode,
 	UserMessage,
 } from "../types/message";
 import { generateUUID } from "../utils/uuid";
@@ -29,11 +31,13 @@ interface UseChatMessagesReturn {
 	isLoadingHistory: boolean;
 	isStreaming: boolean;
 	isProcessRunning: boolean;
+	mode: SessionMode;
 	status: ConnectionStatus;
 	sendUserMessage: (content: string) => Promise<boolean>;
 	interrupt: () => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
 	questionResponse: (params: QuestionResponseParams) => Promise<void>;
+	setMode: (mode: SessionMode) => Promise<void>;
 	updatePermissionStatus: (
 		requestId: string,
 		status: "allowed" | "denied",
@@ -55,10 +59,21 @@ export function useChatMessages({
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 	const [isProcessRunning, setIsProcessRunning] = useState(false);
+	const [mode, setModeState] = useState<SessionMode>("default");
 	const subscriptionIdRef = useRef<string | null>(null);
 
 	const status = useWSStore((state) => state.status);
 	const actions = useWSStore((state) => state.actions);
+
+	// Sync mode from session store (updated via session list notifications)
+	const sessionModeFromStore = useSessionStore(
+		(state) => state.sessions.find((s) => s.id === sessionId)?.mode,
+	);
+	useEffect(() => {
+		if (sessionModeFromStore !== undefined) {
+			setModeState(sessionModeFromStore);
+		}
+	}, [sessionModeFromStore]);
 
 	const handleNotification = useCallback((notification: ServerNotification) => {
 		// Update process running state
@@ -78,6 +93,7 @@ export function useChatMessages({
 	useEffect(() => {
 		setMessages([]);
 		setIsProcessRunning(false);
+		setModeState("default");
 	}, [sessionId]);
 
 	// Subscribe to chat events when connected
@@ -103,6 +119,7 @@ export function useChatMessages({
 				subscriptionIdRef.current = result.id;
 				if (result.initial) {
 					setIsProcessRunning(result.initial.process_running);
+					setModeState(result.initial.mode);
 					setMessages(replayHistory(result.initial.history));
 				}
 			} catch (err) {
@@ -206,11 +223,25 @@ export function useChatMessages({
 		last?.role === "assistant" && last.status === "streaming";
 	const isStreaming = lastIsSending || (lastIsStreaming && isProcessRunning);
 
+	const setMode = useCallback(
+		async (newMode: SessionMode) => {
+			try {
+				await actions.setSessionMode(sessionId, newMode);
+				setModeState(newMode);
+			} catch (error) {
+				console.error("Failed to set mode:", error);
+				throw error;
+			}
+		},
+		[actions, sessionId],
+	);
+
 	return {
 		messages,
 		isLoadingHistory,
 		isStreaming,
 		isProcessRunning,
+		mode,
 		status,
 		sendUserMessage: sendUserMessageHandler,
 		interrupt: useCallback(
@@ -219,6 +250,7 @@ export function useChatMessages({
 		),
 		permissionResponse: actions.permissionResponse,
 		questionResponse: actions.questionResponse,
+		setMode,
 		updatePermissionStatus,
 		updateQuestionStatus,
 	};

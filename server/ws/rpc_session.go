@@ -74,6 +74,37 @@ func (h *rpcMethodHandler) handleSessionUpdateTitle(ctx context.Context, conn *j
 	}
 }
 
+func (h *rpcMethodHandler) handleSessionSetMode(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.SessionSetModeParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if !params.Mode.IsValid() {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid mode")
+		return
+	}
+
+	// Close any running process for this session (mode change requires restart)
+	h.state.worktree.ProcessManager.Close(params.SessionID)
+
+	if err := h.state.worktree.SessionStore.SetMode(ctx, params.SessionID, params.Mode); err != nil {
+		if errors.Is(err, session.ErrSessionNotFound) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+			return
+		}
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to set mode")
+		return
+	}
+
+	h.log.Info("session mode changed", "sessionId", params.SessionID, "mode", params.Mode)
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send session set mode response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	connID := h.state.getConnID()
 	id, sessions, err := h.state.worktree.SessionListWatcher.Subscribe(conn, connID)

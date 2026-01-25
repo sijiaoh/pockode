@@ -20,8 +20,8 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	// Verify session exists
-	_, found, err := h.state.worktree.SessionStore.Get(params.SessionID)
+	// Verify session exists and get mode
+	meta, found, err := h.state.worktree.SessionStore.Get(params.SessionID)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to get session")
 		return
@@ -43,13 +43,14 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		ID:             id,
 		History:        history,
 		ProcessRunning: processRunning,
+		Mode:           meta.Mode,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)
 		return
 	}
 
-	log.Info("subscribed to chat messages", "subscriptionId", id, "processRunning", processRunning)
+	log.Info("subscribed to chat messages", "subscriptionId", id, "processRunning", processRunning, "mode", meta.Mode)
 }
 
 func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
@@ -238,7 +239,7 @@ func (h *rpcMethodHandler) getOrCreateProcess(ctx context.Context, log *slog.Log
 	}
 
 	resume := meta.Activated
-	proc, created, err := h.state.worktree.ProcessManager.GetOrCreateProcess(ctx, sessionID, resume)
+	proc, created, err := h.state.worktree.ProcessManager.GetOrCreateProcess(ctx, sessionID, resume, meta.Mode)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +252,7 @@ func (h *rpcMethodHandler) getOrCreateProcess(ctx context.Context, log *slog.Log
 	}
 
 	if created {
-		log.Info("process created", "resume", resume)
+		log.Info("process created", "resume", resume, "mode", meta.Mode)
 	}
 
 	return proc.AgentSession(), nil

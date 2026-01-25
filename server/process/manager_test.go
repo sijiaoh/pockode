@@ -19,13 +19,14 @@ type mockAgent struct {
 type startCall struct {
 	sessionID string
 	resume    bool
+	mode      session.Mode
 }
 
-func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string, resume bool) (agent.Session, error) {
+func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.startCalls = append(m.startCalls, startCall{sessionID, resume})
+	m.startCalls = append(m.startCalls, startCall{opts.SessionID, opts.Resume, opts.Mode})
 
 	if m.sessions == nil {
 		m.sessions = make(map[string]*mockSession)
@@ -34,7 +35,7 @@ func (m *mockAgent) Start(ctx context.Context, workDir string, sessionID string,
 	sess := &mockSession{
 		events: make(chan agent.AgentEvent, 10),
 	}
-	m.sessions[sessionID] = sess
+	m.sessions[opts.SessionID] = sess
 	return sess, nil
 }
 
@@ -73,7 +74,7 @@ func TestManager_GetOrCreateProcess_NewSession(t *testing.T) {
 	m := NewManager(mock, "/tmp", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	proc, created, err := m.GetOrCreateProcess(context.Background(), "sess-1", false)
+	proc, created, err := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -100,8 +101,8 @@ func TestManager_GetOrCreateProcess_ExistingSession(t *testing.T) {
 	m := NewManager(mock, "/tmp", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	proc1, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false)
-	proc2, created, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false)
+	proc1, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	proc2, created, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
 
 	if created {
 		t.Error("expected created=false for existing session")
@@ -121,7 +122,7 @@ func TestManager_IdleReaper(t *testing.T) {
 	m := NewManager(mock, "/tmp", store, idleTimeout)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
 
 	time.Sleep(idleTimeout * 2)
 
@@ -140,7 +141,7 @@ func TestManager_Touch_PreventsReaping(t *testing.T) {
 	m := NewManager(mock, "/tmp", store, idleTimeout)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
 
 	// Touch periodically for 2x idleTimeout
 	// Reaper runs multiple times, but process survives due to Touch
@@ -163,8 +164,8 @@ func TestManager_Shutdown_ClosesAllProcesses(t *testing.T) {
 	mock := &mockAgent{}
 	m := NewManager(mock, "/tmp", store, 10*time.Minute)
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false)
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-2", false)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-2", false, session.ModeDefault)
 
 	m.Shutdown()
 
@@ -188,8 +189,8 @@ func TestManager_Close_SpecificProcess(t *testing.T) {
 	m := NewManager(mock, "/tmp", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false)
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-2", false)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-2", false, session.ModeDefault)
 
 	m.Close("sess-1")
 
@@ -219,7 +220,7 @@ func TestManager_HasProcess(t *testing.T) {
 	}
 
 	// Create process
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
 
 	if !m.HasProcess("sess-1") {
 		t.Error("expected HasProcess to return true after process creation")

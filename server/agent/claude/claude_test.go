@@ -349,7 +349,7 @@ func testLogger() *slog.Logger {
 
 func TestSession_SendPermissionResponse_Allow(t *testing.T) {
 	var buf bytes.Buffer
-	sess := &session{
+	sess := &cliSession{
 		log:             testLogger(),
 		stdin:           nopWriteCloser{&buf},
 		pendingRequests: &sync.Map{},
@@ -376,7 +376,7 @@ func TestSession_SendPermissionResponse_Allow(t *testing.T) {
 
 func TestSession_SendPermissionResponse_Deny(t *testing.T) {
 	var buf bytes.Buffer
-	sess := &session{
+	sess := &cliSession{
 		log:             testLogger(),
 		stdin:           nopWriteCloser{&buf},
 		pendingRequests: &sync.Map{},
@@ -405,7 +405,7 @@ func TestSession_SendPermissionResponse_Deny(t *testing.T) {
 
 func TestSession_SendPermissionResponse_AlwaysAllow(t *testing.T) {
 	var buf bytes.Buffer
-	sess := &session{
+	sess := &cliSession{
 		log:             testLogger(),
 		stdin:           nopWriteCloser{&buf},
 		pendingRequests: &sync.Map{},
@@ -444,7 +444,7 @@ func TestSession_SendPermissionResponse_AlwaysAllow(t *testing.T) {
 
 func TestSession_SendMessage(t *testing.T) {
 	var buf bytes.Buffer
-	sess := &session{
+	sess := &cliSession{
 		log:   testLogger(),
 		stdin: nopWriteCloser{&buf},
 	}
@@ -478,7 +478,7 @@ func TestSession_SendMessage(t *testing.T) {
 
 func TestSession_SendQuestionResponse(t *testing.T) {
 	var buf bytes.Buffer
-	sess := &session{
+	sess := &cliSession{
 		log:             testLogger(),
 		stdin:           nopWriteCloser{&buf},
 		pendingRequests: &sync.Map{},
@@ -521,7 +521,7 @@ func TestSession_SendQuestionResponse(t *testing.T) {
 
 func TestSession_SendQuestionResponse_Cancel(t *testing.T) {
 	var buf bytes.Buffer
-	sess := &session{
+	sess := &cliSession{
 		log:             testLogger(),
 		stdin:           nopWriteCloser{&buf},
 		pendingRequests: &sync.Map{},

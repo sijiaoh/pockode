@@ -50,6 +50,10 @@ func (m *mockSessionStore) Touch(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+func (m *mockSessionStore) SetMode(ctx context.Context, sessionID string, mode session.Mode) error {
+	return nil
+}
+
 func (m *mockSessionStore) SetOnChangeListener(listener session.OnChangeListener) {
 	m.listener = listener
 }

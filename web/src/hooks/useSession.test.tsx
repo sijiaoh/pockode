@@ -28,6 +28,9 @@ const mockSubscribe = vi.fn(
 	},
 );
 const mockUnsubscribe = vi.fn();
+const mockCreateSession = vi.fn();
+const mockDeleteSession = vi.fn();
+const mockUpdateSessionTitle = vi.fn();
 
 vi.mock("../lib/wsStore", () => ({
 	useWSStore: vi.fn((selector) => {
@@ -40,12 +43,12 @@ vi.mock("../lib/wsStore", () => ({
 		};
 		return selector(state);
 	}),
-}));
-
-vi.mock("../lib/sessionApi", () => ({
-	createSession: vi.fn(),
-	deleteSession: vi.fn(),
-	updateSessionTitle: vi.fn(),
+	wsActions: {
+		createSession: () => mockCreateSession(),
+		deleteSession: (id: string) => mockDeleteSession(id),
+		updateSessionTitle: (id: string, title: string) =>
+			mockUpdateSessionTitle(id, title),
+	},
 }));
 
 function createWrapper(queryClient: QueryClient) {
@@ -217,9 +220,8 @@ describe("useSession", () => {
 	describe("mutations", () => {
 		describe("createSession", () => {
 			it("optimistically adds session", async () => {
-				const { createSession: mockCreate } = await import("../lib/sessionApi");
 				const newSession = mockSession("new-id", "New");
-				vi.mocked(mockCreate).mockResolvedValue(newSession);
+				mockCreateSession.mockResolvedValue(newSession);
 
 				mockSessions = [mockSession("1")];
 
