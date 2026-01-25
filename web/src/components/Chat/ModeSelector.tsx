@@ -14,19 +14,23 @@ const MODE_CONFIG: Record<
 		label: string;
 		description: string;
 		icon: typeof Shield;
-		warning?: boolean;
+		iconColor: string;
+		labelColor: string;
 	}
 > = {
 	default: {
 		label: "Default",
 		description: "Ask before actions",
 		icon: Shield,
+		iconColor: "text-th-text-secondary group-hover:text-th-text-primary",
+		labelColor: "text-th-text-primary",
 	},
 	yolo: {
 		label: "YOLO",
 		description: "Skip all permissions",
 		icon: Zap,
-		warning: true,
+		iconColor: "text-th-warning",
+		labelColor: "text-th-warning",
 	},
 };
 
@@ -45,7 +49,6 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 	};
 
 	const currentConfig = MODE_CONFIG[mode] ?? MODE_CONFIG.default;
-	const isWarningMode = currentConfig.warning;
 
 	// Close dropdown on Escape key
 	useEffect(() => {
@@ -67,14 +70,13 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 				type="button"
 				onClick={() => setIsOpen(!isOpen)}
 				disabled={disabled}
-				className={`flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary h-8 w-8 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent hover:border-th-border-focus active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${
-					isWarningMode
-						? "text-th-warning"
-						: "text-th-text-secondary hover:text-th-text-primary"
-				}`}
+				className="group flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary h-8 w-8 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 hover:border-th-border-focus"
 				aria-label={currentConfig.label}
 			>
-				<currentConfig.icon className="h-4 w-4" aria-hidden="true" />
+				<currentConfig.icon
+					className={`h-4 w-4 ${currentConfig.iconColor}`}
+					aria-hidden="true"
+				/>
 			</button>
 
 			{isOpen && (
@@ -123,11 +125,7 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 									</div>
 									<div className="flex-1">
 										<div
-											className={`flex items-center gap-1.5 text-sm font-medium ${
-												config.warning
-													? "text-th-warning"
-													: "text-th-text-primary"
-											}`}
+											className={`flex items-center gap-1.5 text-sm font-medium ${config.labelColor}`}
 										>
 											<config.icon className="h-3.5 w-3.5" aria-hidden="true" />
 											{config.label}
