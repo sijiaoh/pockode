@@ -14,6 +14,7 @@ const mockSession = (id: string, title = "Test Session"): SessionMeta => ({
 	title,
 	created_at: "2024-01-01T00:00:00Z",
 	updated_at: "2024-01-01T00:00:00Z",
+	mode: "default",
 });
 
 let notificationCallback: ((p: SessionListChangedNotification) => void) | null =
