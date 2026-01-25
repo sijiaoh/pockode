@@ -70,7 +70,7 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 				type="button"
 				onClick={() => setIsOpen(!isOpen)}
 				disabled={disabled}
-				className="group flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary h-8 w-8 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 hover:border-th-border-focus"
+				className="group flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary h-8 w-8 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50"
 				aria-label={currentConfig.label}
 			>
 				<currentConfig.icon
