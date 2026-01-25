@@ -93,8 +93,8 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 									key={modeKey}
 									type="button"
 									onClick={() => handleSelect(modeKey)}
-									className={`flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-th-bg-tertiary ${
-										isSelected ? "bg-th-bg-tertiary" : ""
+									className={`flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors ${
+										isSelected ? "bg-th-accent/15" : "hover:bg-th-bg-tertiary"
 									}`}
 								>
 									<div
