@@ -13,7 +13,7 @@ echo "Building Pockode $VERSION"
 echo "Building frontend..."
 cd web
 npm ci
-npm run build -- --outDir ../server/static --emptyOutDir
+VERSION=$VERSION npm run build -- --outDir ../server/static --emptyOutDir
 cd ..
 touch server/static/.keep
 
