@@ -70,10 +70,7 @@ function MessageList({
 		setShowScrollButton(!atBottom);
 	}, []);
 
-	const followOutput = useCallback(
-		(isAtBottom: boolean) => isAtBottom,
-		[],
-	);
+	const followOutput = useCallback((isAtBottom: boolean) => isAtBottom, []);
 
 	const handleScrollToBottom = useCallback(() => {
 		virtuosoRef.current?.scrollToIndex({
