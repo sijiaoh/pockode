@@ -35,10 +35,6 @@ func (s *Store) Get() Settings {
 }
 
 func (s *Store) Update(settings Settings) error {
-	if err := settings.Validate(); err != nil {
-		return err
-	}
-
 	s.dataMu.Lock()
 	defer s.dataMu.Unlock()
 
@@ -62,11 +58,6 @@ func (s *Store) load() error {
 	var settings Settings
 	if err := json.Unmarshal(data, &settings); err != nil {
 		// Fall back to default for corrupted JSON
-		return nil
-	}
-
-	// Fall back to default for invalid values
-	if err := settings.Validate(); err != nil {
 		return nil
 	}
 

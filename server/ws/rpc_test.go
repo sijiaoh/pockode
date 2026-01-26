@@ -17,6 +17,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/settings"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -44,11 +45,15 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 	if err != nil {
 		t.Fatalf("failed to create command store: %v", err)
 	}
+	settingsStore, err := settings.NewStore(dataDir)
+	if err != nil {
+		t.Fatalf("failed to create settings store: %v", err)
+	}
 
 	registry := worktree.NewRegistry(workDir)
 	worktreeManager := worktree.NewManager(registry, mock, dataDir, 10*time.Minute)
 
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore)
 	server := httptest.NewServer(h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -190,11 +195,12 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	dataDir := t.TempDir()
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
+	settingsStore, _ := settings.NewStore(dataDir)
 	registry := worktree.NewRegistry(workDir)
 	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
 	defer worktreeManager.Shutdown()
 
-	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager)
+	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -236,11 +242,12 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	dataDir := t.TempDir()
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
+	settingsStore, _ := settings.NewStore(dataDir)
 	registry := worktree.NewRegistry(workDir)
 	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
 	defer worktreeManager.Shutdown()
 
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 

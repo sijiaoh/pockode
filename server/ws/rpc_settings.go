@@ -2,10 +2,8 @@ package ws
 
 import (
 	"context"
-	"errors"
 
 	"github.com/pockode/server/rpc"
-	"github.com/pockode/server/settings"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
@@ -24,10 +22,6 @@ func (h *rpcMethodHandler) handleSettingsUpdate(ctx context.Context, conn *jsonr
 	}
 
 	if err := h.settingsStore.Update(params.Settings); err != nil {
-		if errors.Is(err, settings.ErrInvalidSandboxMode) {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid sandbox mode")
-			return
-		}
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to update settings")
 		return
 	}
