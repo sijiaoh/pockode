@@ -1,17 +1,24 @@
 import { useRef } from "react";
 import BackToChatButton from "../ui/BackToChatButton";
 import SettingsNav from "./SettingsNav";
-import { AccountSection, AppearanceSection, ThemeSection } from "./sections";
+import {
+	AccountSection,
+	AppearanceSection,
+	SandboxSection,
+	ThemeSection,
+} from "./sections";
 
 const SECTION_IDS = {
 	appearance: "appearance",
 	theme: "theme",
+	sandbox: "sandbox",
 	account: "account",
 } as const;
 
 const NAV_ITEMS = [
 	{ id: SECTION_IDS.appearance, label: "Appearance" },
 	{ id: SECTION_IDS.theme, label: "Theme" },
+	{ id: SECTION_IDS.sandbox, label: "Sandbox" },
 	{ id: SECTION_IDS.account, label: "Account" },
 ];
 
@@ -38,6 +45,7 @@ export default function SettingsPage({ onBack, onLogout }: Props) {
 				<div className="mx-auto max-w-2xl px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
 					<AppearanceSection id={SECTION_IDS.appearance} />
 					<ThemeSection id={SECTION_IDS.theme} />
+					<SandboxSection id={SECTION_IDS.sandbox} />
 					<AccountSection id={SECTION_IDS.account} onLogout={onLogout} />
 				</div>
 			</main>

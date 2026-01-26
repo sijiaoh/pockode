@@ -25,6 +25,7 @@ import (
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/relay"
+	"github.com/pockode/server/settings"
 	"github.com/pockode/server/startup"
 	"github.com/pockode/server/worktree"
 	"github.com/pockode/server/ws"
@@ -250,6 +251,13 @@ func main() {
 		}
 	}
 
+	// Initialize settings store
+	settingsStore, err := settings.NewStore(dataDir)
+	if err != nil {
+		slog.Error("failed to initialize settings store", "error", err)
+		os.Exit(1)
+	}
+
 	// Initialize worktree registry and manager
 	claudeAgent := claude.New()
 	registry := worktree.NewRegistry(workDir)
@@ -258,7 +266,7 @@ func main() {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
 
-	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager)
+	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore)
 	handler := newHandler(token, devMode, wsHandler)
 
 	portStr := strconv.Itoa(port)

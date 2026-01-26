@@ -10,6 +10,7 @@ import (
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/settings"
 )
 
 // Client → Server
@@ -232,4 +233,10 @@ type AskUserQuestionParams struct {
 	RequestID string                  `json:"request_id"`
 	ToolUseID string                  `json:"tool_use_id"`
 	Questions []agent.AskUserQuestion `json:"questions"`
+}
+
+// Settings namespace
+
+type SettingsUpdateParams struct {
+	Settings settings.Settings `json:"settings"`
 }

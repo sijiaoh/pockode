@@ -22,10 +22,12 @@ import {
 	createFileActions,
 	createGitActions,
 	createSessionActions,
+	createSettingsActions,
 	createWorktreeActions,
 	type FileActions,
 	type GitActions,
 	type SessionActions,
+	type SettingsActions,
 	type WorktreeActions,
 } from "./rpc";
 import { APP_VERSION } from "./version";
@@ -83,6 +85,7 @@ type RPCActions = ConnectionActions &
 	ChatActions &
 	CommandActions &
 	SessionActions &
+	SettingsActions &
 	FileActions &
 	GitActions &
 	WatchActions &
@@ -234,6 +237,7 @@ function handleNotification(method: string, params: unknown): void {
 const chatActions = createChatActions(getClient);
 const commandActions = createCommandActions(getClient);
 const sessionActions = createSessionActions(getClient);
+const settingsActions = createSettingsActions(getClient);
 const fileActions = createFileActions(getClient);
 const gitActions = createGitActions(getClient);
 const worktreeRpcActions = createWorktreeActions(getClient);
@@ -569,6 +573,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		...chatActions,
 		...commandActions,
 		...sessionActions,
+		...settingsActions,
 		...fileActions,
 		...gitActions,
 		...worktreeRpcActions,

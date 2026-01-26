@@ -15,6 +15,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/settings"
 	"github.com/pockode/server/watch"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
@@ -27,15 +28,17 @@ type RPCHandler struct {
 	devMode         bool
 	commandStore    *command.Store
 	worktreeManager *worktree.Manager
+	settingsStore   *settings.Store
 }
 
-func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager) *RPCHandler {
+func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store) *RPCHandler {
 	return &RPCHandler{
 		token:           token,
 		version:         version,
 		devMode:         devMode,
 		commandStore:    commandStore,
 		worktreeManager: worktreeManager,
+		settingsStore:   settingsStore,
 	}
 }
 
@@ -182,6 +185,12 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "command.list":
 		h.handleCommandList(ctx, conn, req)
+		return
+	case "settings.get":
+		h.handleSettingsGet(ctx, conn, req)
+		return
+	case "settings.update":
+		h.handleSettingsUpdate(ctx, conn, req)
 		return
 	}
 
