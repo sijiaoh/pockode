@@ -1,12 +1,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SessionMeta } from "../types/message";
-import { useSettingsStore } from "./settingsStore";
 import {
 	prependSession,
 	useFilteredSessions,
 	useSessionStore,
 } from "./sessionStore";
+import { useSettingsStore } from "./settingsStore";
 
 const mockSession = (
 	id: string,

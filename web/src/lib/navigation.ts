@@ -52,7 +52,9 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
-					overlayType: overlay.staged ? ("staged" as const) : ("unstaged" as const),
+					overlayType: overlay.staged
+						? ("staged" as const)
+						: ("unstaged" as const),
 					path: overlay.path,
 					sessionId,
 				};
