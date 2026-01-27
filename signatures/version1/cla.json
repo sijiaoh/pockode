@@ -1,3 +1,12 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "natsuki-engr",
+      "id": 63272932,
+      "comment_id": 3802364302,
+      "created_at": "2026-01-27T00:02:30Z",
+      "repoId": 1120053899,
+      "pullRequestNo": 19
+    }
+  ]
 }
