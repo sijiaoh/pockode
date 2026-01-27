@@ -25,7 +25,7 @@ jobs:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/${{ github.repository }}/blob/main/CLA.md'
           branch: 'main'
-          allowlist: bot*,dependabot*
+          allowlist: sijiaoh,bot*,dependabot*
           custom-notsigned-prcomment: |
             Thank you for your contribution! Before we can merge this PR, please read and agree to our [Contributor License Agreement](https://github.com/${{ github.repository }}/blob/main/CLA.md).
 
