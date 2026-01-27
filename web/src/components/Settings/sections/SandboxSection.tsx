@@ -61,22 +61,20 @@ export function SandboxSection({ id }: { id: string }) {
 					/>
 				</div>
 			</button>
-			{isEnabled && (
-				<p className="mt-3 text-xs text-th-text-secondary">
-					<span className="text-th-warning">Authentication required</span>
-					<br />
-					Run{" "}
-					<code className="rounded bg-th-bg-tertiary px-1 py-0.5">
-						docker sandbox run --credentials host claude
-					</code>{" "}
-					in your project directory.
-					<br />
-					For worktrees:{" "}
-					<code className="rounded bg-th-bg-tertiary px-1 py-0.5">
-						../{"{project_name}"}-worktrees/{"{worktree_name}"}
-					</code>
-				</p>
-			)}
+			<p className="mt-3 text-xs text-th-text-secondary">
+				<span className="text-th-warning">Authentication required</span>
+				<br />
+				Run{" "}
+				<code className="rounded bg-th-bg-tertiary px-1 py-0.5">
+					docker sandbox run --credentials host claude
+				</code>{" "}
+				in your project directory.
+				<br />
+				For worktrees:{" "}
+				<code className="rounded bg-th-bg-tertiary px-1 py-0.5">
+					../{"{project_name}"}-worktrees/{"{worktree_name}"}
+				</code>
+			</p>
 		</SettingsSection>
 	);
 }
