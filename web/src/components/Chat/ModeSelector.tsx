@@ -1,5 +1,6 @@
 import { Shield, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useSettingsStore } from "../../lib/settingsStore";
 import type { SessionMode } from "../../types/message";
 
 interface Props {
@@ -8,34 +9,41 @@ interface Props {
 	disabled?: boolean;
 }
 
-const MODE_CONFIG: Record<
-	SessionMode,
-	{
-		label: string;
-		description: string;
-		icon: typeof Shield;
-		iconColor: string;
-		labelColor: string;
-	}
-> = {
-	default: {
-		label: "Default",
-		description: "Ask before actions",
-		icon: Shield,
-		iconColor: "text-th-text-secondary group-hover:text-th-text-primary",
-		labelColor: "text-th-text-primary",
-	},
-	yolo: {
-		label: "YOLO",
-		description: "Skip all permissions",
-		icon: Zap,
-		iconColor: "text-th-warning",
-		labelColor: "text-th-warning",
-	},
-};
+interface ModeConfig {
+	label: string;
+	description: string;
+	icon: typeof Shield;
+	iconColor: string;
+	labelColor: string;
+}
+
+function getModeConfig(sandbox: boolean): Record<SessionMode, ModeConfig> {
+	const yoloColor = sandbox ? "text-th-warning" : "text-th-error";
+	const yoloDescription = sandbox
+		? "Skip all permissions"
+		: "Skip all permissions\nRecommend: Enable Sandbox in Settings";
+	return {
+		default: {
+			label: "Default",
+			description: "Ask before actions",
+			icon: Shield,
+			iconColor: "text-th-text-secondary group-hover:text-th-text-primary",
+			labelColor: "text-th-text-primary",
+		},
+		yolo: {
+			label: "YOLO",
+			description: yoloDescription,
+			icon: Zap,
+			iconColor: yoloColor,
+			labelColor: yoloColor,
+		},
+	};
+}
 
 function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 	const [isOpen, setIsOpen] = useState(false);
+	const sandbox = useSettingsStore((s) => s.settings?.sandbox ?? false);
+	const modeConfig = getModeConfig(sandbox);
 
 	const handleSelect = async (newMode: SessionMode) => {
 		if (newMode !== mode) {
@@ -48,7 +56,7 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 		setIsOpen(false);
 	};
 
-	const currentConfig = MODE_CONFIG[mode] ?? MODE_CONFIG.default;
+	const currentConfig = modeConfig[mode] ?? modeConfig.default;
 
 	// Close dropdown on Escape key
 	useEffect(() => {
@@ -86,9 +94,9 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 						className="fixed inset-0 z-40"
 						onClick={() => setIsOpen(false)}
 					/>
-					<div className="absolute bottom-full left-0 z-50 mb-1 w-52 overflow-hidden rounded-lg border border-th-border bg-th-bg-secondary shadow-lg">
-						{(Object.keys(MODE_CONFIG) as SessionMode[]).map((modeKey) => {
-							const config = MODE_CONFIG[modeKey];
+					<div className="absolute bottom-full left-0 z-50 mb-1 min-w-52 overflow-hidden rounded-lg border border-th-border bg-th-bg-secondary shadow-lg">
+						{(Object.keys(modeConfig) as SessionMode[]).map((modeKey) => {
+							const config = modeConfig[modeKey];
 							const isSelected = mode === modeKey;
 							return (
 								<button
@@ -130,7 +138,7 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 											<config.icon className="h-3.5 w-3.5" aria-hidden="true" />
 											{config.label}
 										</div>
-										<div className="mt-0.5 text-xs text-th-text-muted">
+										<div className="mt-0.5 whitespace-pre text-xs text-th-text-muted">
 											{config.description}
 										</div>
 									</div>
