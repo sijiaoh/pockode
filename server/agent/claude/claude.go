@@ -37,6 +37,15 @@ func New() *Agent {
 
 // Start launches a persistent Claude CLI process.
 func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
+	var sandboxID string
+	if opts.Sandbox {
+		var err error
+		sandboxID, err = ensureSandboxRunning(ctx, opts.WorkDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start sandbox: %w", err)
+		}
+	}
+
 	procCtx, cancel := context.WithCancel(ctx)
 
 	claudeArgs := []string{
@@ -62,11 +71,9 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}
 	}
 
-	// Build command: use docker sandbox when sandbox mode is enabled
 	var cmd *exec.Cmd
 	if opts.Sandbox {
-		// docker sandbox run --credentials host claude [args...]
-		args := []string{"sandbox", "run", "--credentials", "host", Binary}
+		args := []string{"exec", "-i", sandboxID, Binary}
 		args = append(args, claudeArgs...)
 		cmd = exec.CommandContext(procCtx, "docker", args...)
 	} else {
@@ -818,4 +825,20 @@ func parseResultEvent(line []byte) agent.AgentEvent {
 	}
 
 	return agent.DoneEvent{}
+}
+
+// ensureSandboxRunning ensures the sandbox is running and returns its ID.
+// docker sandbox automatically identifies sandbox by current working directory.
+func ensureSandboxRunning(ctx context.Context, workDir string) (string, error) {
+	slog.Debug("ensuring sandbox is running", "workDir", workDir)
+	cmd := exec.CommandContext(ctx, "docker", "sandbox", "run", "-d",
+		"--credentials", "host",
+		Binary,
+	)
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("docker sandbox run failed: %w: %s", err, string(output))
+	}
+	return strings.TrimSpace(string(output)), nil
 }

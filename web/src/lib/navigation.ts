@@ -1,3 +1,4 @@
+import type { OverlayState } from "../types/overlay";
 import { ROUTES, WT_ROUTES } from "./routes";
 
 interface NavToSession {
@@ -11,14 +12,14 @@ interface NavToFileOverlay {
 	worktree: string;
 	overlayType: "staged" | "unstaged" | "file";
 	path: string;
-	sessionId?: string;
+	sessionId: string | null;
 }
 
 interface NavToSettingsOverlay {
 	type: "overlay";
 	worktree: string;
 	overlayType: "settings";
-	sessionId?: string;
+	sessionId: string | null;
 }
 
 type NavToOverlay = NavToFileOverlay | NavToSettingsOverlay;
@@ -38,11 +39,45 @@ interface NavigationResult {
 }
 
 /**
+ * Convert OverlayState to navigation result.
+ */
+export function overlayToNavigation(
+	overlay: NonNullable<OverlayState>,
+	worktree: string,
+	sessionId: string | null,
+): NavigationResult {
+	const target: NavToOverlay = (() => {
+		switch (overlay.type) {
+			case "diff":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: overlay.staged ? ("staged" as const) : ("unstaged" as const),
+					path: overlay.path,
+					sessionId,
+				};
+			case "file":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "file" as const,
+					path: overlay.path,
+					sessionId,
+				};
+			case "settings":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "settings" as const,
+					sessionId,
+				};
+		}
+	})();
+	return buildNavigation(target);
+}
+
+/**
  * Build navigation options for TanStack Router.
- *
- * Note: Returns a loosely-typed object because we dynamically choose
- * between main and worktree routes. Type safety is ensured by the
- * NavTarget discriminated union at the call site.
  */
 export function buildNavigation(
 	target: NavTarget,

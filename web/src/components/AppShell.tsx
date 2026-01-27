@@ -10,7 +10,7 @@ import {
 	selectHasAuthToken,
 	useAuthStore,
 } from "../lib/authStore";
-import { buildNavigation } from "../lib/navigation";
+import { buildNavigation, overlayToNavigation } from "../lib/navigation";
 import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
 import TokenInput from "./Auth/TokenInput";
@@ -112,18 +112,17 @@ function AppShell() {
 
 	useEffect(() => {
 		if (redirectSessionId) {
-			navigate(
-				buildNavigation(
-					{
+			// When overlay is active, preserve it and only update session query param
+			const navResult = overlay
+				? overlayToNavigation(overlay, urlWorktree, redirectSessionId)
+				: buildNavigation({
 						type: "session",
 						worktree: urlWorktree,
 						sessionId: redirectSessionId,
-					},
-					{ replace: true },
-				),
-			);
+					});
+			navigate({ ...navResult, replace: true });
 		}
-	}, [redirectSessionId, navigate, urlWorktree]);
+	}, [redirectSessionId, navigate, urlWorktree, overlay]);
 
 	useEffect(() => {
 		if (needsNewSession && !isCreatingSession.current) {
@@ -207,13 +206,11 @@ function AppShell() {
 	const handleSelectDiffFile = useCallback(
 		(path: string, staged: boolean) => {
 			navigate(
-				buildNavigation({
-					type: "overlay",
-					worktree: urlWorktree,
-					overlayType: staged ? "staged" : "unstaged",
-					path,
-					sessionId: currentSessionId ?? undefined,
-				}),
+				overlayToNavigation(
+					{ type: "diff", path, staged },
+					urlWorktree,
+					currentSessionId,
+				),
 			);
 		},
 		[navigate, urlWorktree, currentSessionId],
@@ -222,13 +219,11 @@ function AppShell() {
 	const handleSelectFile = useCallback(
 		(path: string) => {
 			navigate(
-				buildNavigation({
-					type: "overlay",
-					worktree: urlWorktree,
-					overlayType: "file",
-					path,
-					sessionId: currentSessionId ?? undefined,
-				}),
+				overlayToNavigation(
+					{ type: "file", path },
+					urlWorktree,
+					currentSessionId,
+				),
 			);
 		},
 		[navigate, urlWorktree, currentSessionId],
@@ -250,12 +245,7 @@ function AppShell() {
 
 	const handleOpenSettings = useCallback(() => {
 		navigate(
-			buildNavigation({
-				type: "overlay",
-				worktree: urlWorktree,
-				overlayType: "settings",
-				sessionId: currentSessionId ?? undefined,
-			}),
+			overlayToNavigation({ type: "settings" }, urlWorktree, currentSessionId),
 		);
 	}, [navigate, urlWorktree, currentSessionId]);
 

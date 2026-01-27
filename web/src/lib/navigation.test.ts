@@ -37,6 +37,7 @@ describe("buildNavigation", () => {
 				worktree: "",
 				overlayType: "staged",
 				path: "src/index.ts",
+				sessionId: null,
 			});
 
 			expect(result).toEqual({
@@ -67,6 +68,7 @@ describe("buildNavigation", () => {
 				worktree: "",
 				overlayType: "file",
 				path: "README.md",
+				sessionId: null,
 			});
 
 			expect(result).toEqual({
@@ -80,6 +82,7 @@ describe("buildNavigation", () => {
 				type: "overlay",
 				worktree: "",
 				overlayType: "settings",
+				sessionId: null,
 			});
 
 			expect(result).toEqual({

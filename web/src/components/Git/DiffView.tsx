@@ -5,7 +5,7 @@ import { useGitDiffWatch } from "../../hooks/useGitDiffWatch";
 import { useGitStage } from "../../hooks/useGitStage";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useRouteState } from "../../hooks/useRouteState";
-import { buildNavigation } from "../../lib/navigation";
+import { overlayToNavigation } from "../../lib/navigation";
 import { flattenGitStatus } from "../../types/git";
 import { BottomActionBar, ContentView } from "../ui";
 import DiffContent from "./DiffContent";
@@ -50,13 +50,11 @@ function DiffView({ path, staged, onBack }: Props) {
 
 	const navigateTo = (file: { path: string; staged: boolean }) => {
 		navigate(
-			buildNavigation({
-				type: "overlay",
+			overlayToNavigation(
+				{ type: "diff", path: file.path, staged: file.staged },
 				worktree,
-				overlayType: file.staged ? "staged" : "unstaged",
-				path: file.path,
-				sessionId: sessionId ?? undefined,
-			}),
+				sessionId,
+			),
 		);
 	};
 
@@ -66,27 +64,16 @@ function DiffView({ path, staged, onBack }: Props) {
 		try {
 			if (staged) {
 				await unstageMutation.mutateAsync([path]);
-				navigate(
-					buildNavigation({
-						type: "overlay",
-						worktree,
-						overlayType: "unstaged",
-						path,
-						sessionId: sessionId ?? undefined,
-					}),
-				);
 			} else {
 				await stageMutation.mutateAsync([path]);
-				navigate(
-					buildNavigation({
-						type: "overlay",
-						worktree,
-						overlayType: "staged",
-						path,
-						sessionId: sessionId ?? undefined,
-					}),
-				);
 			}
+			navigate(
+				overlayToNavigation(
+					{ type: "diff", path, staged: !staged },
+					worktree,
+					sessionId,
+				),
+			);
 		} catch {
 			// Error is already handled by React Query - user sees the error state
 		}
@@ -97,15 +84,7 @@ function DiffView({ path, staged, onBack }: Props) {
 	const stageButtonColor = staged ? "text-th-warning" : "text-th-success";
 
 	const handlePathClick = () => {
-		navigate(
-			buildNavigation({
-				type: "overlay",
-				worktree,
-				overlayType: "file",
-				path,
-				sessionId: sessionId ?? undefined,
-			}),
-		);
+		navigate(overlayToNavigation({ type: "file", path }, worktree, sessionId));
 	};
 
 	return (
