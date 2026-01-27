@@ -8,7 +8,11 @@ import type {
 
 export interface WorktreeActions {
 	listWorktrees: () => Promise<WorktreeInfo[]>;
-	createWorktree: (name: string, branch: string) => Promise<void>;
+	createWorktree: (
+		name: string,
+		branch: string,
+		baseBranch?: string,
+	) => Promise<void>;
 	deleteWorktree: (name: string) => Promise<void>;
 }
 
@@ -32,8 +36,15 @@ export function createWorktreeActions(
 			return result.worktrees;
 		},
 
-		createWorktree: async (name: string, branch: string): Promise<void> => {
+		createWorktree: async (
+			name: string,
+			branch: string,
+			baseBranch?: string,
+		): Promise<void> => {
 			const params: WorktreeCreateParams = { name, branch };
+			if (baseBranch) {
+				params.base_branch = baseBranch;
+			}
 			await requireClient().request("worktree.create", params);
 		},
 

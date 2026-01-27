@@ -23,8 +23,13 @@ async function listWorktrees(): Promise<WorktreeInfo[]> {
 async function createWorktree(params: {
 	name: string;
 	branch: string;
+	baseBranch?: string;
 }): Promise<void> {
-	return wsActions.createWorktree(params.name, params.branch);
+	return wsActions.createWorktree(
+		params.name,
+		params.branch,
+		params.baseBranch,
+	);
 }
 
 async function deleteWorktree(params: { name: string }): Promise<void> {
@@ -122,6 +127,12 @@ export function useWorktree({
 		},
 	});
 
+	const create = useCallback(
+		(name: string, branch: string, baseBranch?: string) =>
+			createMutation.mutateAsync({ name, branch, baseBranch }),
+		[createMutation],
+	);
+
 	const deleteMutation = useMutation({
 		mutationFn: deleteWorktree,
 		onSuccess: (_, { name }) => {
@@ -158,8 +169,7 @@ export function useWorktree({
 		isGitRepo,
 		refresh,
 		select: selectWorktree,
-		create: (name: string, branch: string) =>
-			createMutation.mutateAsync({ name, branch }),
+		create,
 		delete: (name: string) => deleteMutation.mutateAsync({ name }),
 		isCreating: createMutation.isPending,
 		isDeleting: deleteMutation.isPending,

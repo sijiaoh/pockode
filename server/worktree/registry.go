@@ -108,7 +108,7 @@ func (r *Registry) List() []Info {
 	return result
 }
 
-func (r *Registry) Create(name, branch string) (Info, error) {
+func (r *Registry) Create(name, branch, baseBranch string) (Info, error) {
 	if name == "" {
 		return Info{}, errors.New("name cannot be empty")
 	}
@@ -140,7 +140,12 @@ func (r *Registry) Create(name, branch string) (Info, error) {
 	// fall back to -b for new branches.
 	cmd := exec.Command("git", "-C", r.mainDir, "worktree", "add", worktreePath, branch)
 	if _, err := cmd.CombinedOutput(); err != nil {
-		cmd = exec.Command("git", "-C", r.mainDir, "worktree", "add", "-b", branch, worktreePath)
+		// Create new branch: git worktree add -b <branch> <path> [<base>]
+		args := []string{"-C", r.mainDir, "worktree", "add", "-b", branch, worktreePath}
+		if baseBranch != "" {
+			args = append(args, baseBranch)
+		}
+		cmd = exec.Command("git", args...)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return Info{}, fmt.Errorf("git worktree add failed: %s", strings.TrimSpace(string(output)))
 		}

@@ -4,7 +4,11 @@ import { createPortal } from "react-dom";
 
 interface Props {
 	onClose: () => void;
-	onCreate: (name: string, branch: string) => Promise<void>;
+	onCreate: (
+		name: string,
+		branch: string,
+		baseBranch?: string,
+	) => Promise<void>;
 	isCreating: boolean;
 	/** Whether in desktop mode (controls layout) */
 	isDesktop: boolean;
@@ -18,6 +22,7 @@ function WorktreeCreateSheet({
 }: Props) {
 	const [name, setName] = useState("");
 	const [branch, setBranch] = useState("");
+	const [baseBranch, setBaseBranch] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const nameInputRef = useRef<HTMLInputElement>(null);
 	const titleId = useId();
@@ -60,9 +65,10 @@ function WorktreeCreateSheet({
 
 		// Default branch to name if not specified
 		const trimmedBranch = branch.trim() || trimmedName;
+		const trimmedBaseBranch = baseBranch.trim() || undefined;
 
 		try {
-			await onCreate(trimmedName, trimmedBranch);
+			await onCreate(trimmedName, trimmedBranch, trimmedBaseBranch);
 		} catch (err) {
 			setError(
 				err instanceof Error ? err.message : "Failed to create worktree",
@@ -161,6 +167,32 @@ function WorktreeCreateSheet({
 								autoComplete="off"
 							/>
 							<p className="text-xs text-th-text-muted">Uses name if empty</p>
+						</div>
+
+						{/* Base Branch input */}
+						<div className="space-y-1.5">
+							<label
+								htmlFor="worktree-base-branch"
+								className="text-sm text-th-text-primary"
+							>
+								Base Branch{" "}
+								<span className="font-normal text-th-text-muted">
+									(optional)
+								</span>
+							</label>
+							<input
+								id="worktree-base-branch"
+								type="text"
+								value={baseBranch}
+								onChange={(e) => setBaseBranch(e.target.value)}
+								placeholder="main"
+								className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+								disabled={isCreating}
+								autoComplete="off"
+							/>
+							<p className="text-xs text-th-text-muted">
+								Base for new branch (ignored if branch exists)
+							</p>
 						</div>
 
 						{/* Error message */}

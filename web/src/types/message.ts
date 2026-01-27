@@ -160,6 +160,7 @@ export interface WorktreeListResult {
 export interface WorktreeCreateParams {
 	name: string;
 	branch: string;
+	base_branch?: string;
 }
 
 export interface WorktreeDeleteParams {

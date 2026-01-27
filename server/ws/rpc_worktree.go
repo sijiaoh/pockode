@@ -47,7 +47,7 @@ func (h *rpcMethodHandler) handleWorktreeCreate(ctx context.Context, conn *jsonr
 	}
 
 	registry := h.worktreeManager.Registry()
-	info, err := registry.Create(params.Name, params.Branch)
+	info, err := registry.Create(params.Name, params.Branch, params.BaseBranch)
 	if err != nil {
 		switch {
 		case errors.Is(err, worktree.ErrNotGitRepo):

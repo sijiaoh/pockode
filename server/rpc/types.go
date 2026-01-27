@@ -189,8 +189,9 @@ type WorktreeListResult struct {
 }
 
 type WorktreeCreateParams struct {
-	Name   string `json:"name"`
-	Branch string `json:"branch"`
+	Name       string `json:"name"`
+	Branch     string `json:"branch"`
+	BaseBranch string `json:"base_branch,omitempty"`
 }
 
 type WorktreeCreateResult struct {
