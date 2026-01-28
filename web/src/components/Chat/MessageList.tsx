@@ -1,5 +1,5 @@
 import { ArrowDown } from "lucide-react";
-import { forwardRef, useCallback, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import { type Components, Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type {
 	AskUserQuestionRequest,
@@ -55,9 +55,19 @@ function MessageList({
 	const [showScrollButton, setShowScrollButton] = useState(false);
 	const isAtBottomRef = useRef(true);
 
-	// Shiki renders asynchronously, causing height changes after initial render
+	// Shiki syntax highlighting loads async and changes content height.
+	// Force scroll-to-bottom for 500ms to ensure we stay at bottom during this.
+	const forceScrollToBottomRef = useRef(true);
+	useEffect(() => {
+		forceScrollToBottomRef.current = true;
+		const timer = setTimeout(() => {
+			forceScrollToBottomRef.current = false;
+		}, 500);
+		return () => clearTimeout(timer);
+	}, []);
+
 	const handleTotalListHeightChanged = useCallback(() => {
-		if (isAtBottomRef.current) {
+		if (isAtBottomRef.current || forceScrollToBottomRef.current) {
 			virtuosoRef.current?.scrollToIndex({
 				index: "LAST",
 				align: "end",
