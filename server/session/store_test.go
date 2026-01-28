@@ -30,6 +30,28 @@ func TestFileStore_Create(t *testing.T) {
 	if sess.CreatedAt.IsZero() {
 		t.Error("expected non-zero CreatedAt")
 	}
+	if sess.Mode != ModeDefault {
+		t.Errorf("expected non-sandbox session mode to be %q, got %q", ModeDefault, sess.Mode)
+	}
+}
+
+func TestFileStore_Create_SandboxDefaultsToYolo(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	sess, err := store.Create(ctx, "sandbox-session", true)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if !sess.Sandbox {
+		t.Error("expected Sandbox to be true")
+	}
+	if sess.Mode != ModeYolo {
+		t.Errorf("expected sandbox session mode to default to %q, got %q", ModeYolo, sess.Mode)
+	}
 }
 
 func TestFileStore_List(t *testing.T) {

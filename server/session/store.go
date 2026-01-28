@@ -149,12 +149,16 @@ func (s *FileStore) Create(ctx context.Context, sessionID string, sandbox bool) 
 	defer s.mu.Unlock()
 
 	now := time.Now()
+	mode := ModeDefault
+	if sandbox {
+		mode = ModeYolo
+	}
 	session := SessionMeta{
 		ID:        sessionID,
 		Title:     "New Chat",
 		CreatedAt: now,
 		UpdatedAt: now,
-		Mode:      ModeDefault,
+		Mode:      mode,
 		Sandbox:   sandbox,
 	}
 
