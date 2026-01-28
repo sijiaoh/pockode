@@ -80,7 +80,7 @@ function WorktreeCreateSheet({
 
 	return createPortal(
 		<div
-			className="fixed inset-0 z-50 flex items-end justify-center bg-th-bg-overlay sm:items-center"
+			className="fixed inset-0 z-50 flex items-end justify-center bg-th-bg-overlay md:items-center"
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby={titleId}
@@ -91,7 +91,7 @@ function WorktreeCreateSheet({
 
 			{/* Content */}
 			<div
-				className={`relative w-full bg-th-bg-secondary shadow-xl ${
+				className={`relative flex w-full flex-col bg-th-bg-secondary shadow-xl ${
 					mobile ? "max-h-[90dvh] rounded-t-2xl" : "mx-4 max-w-md rounded-xl"
 				}`}
 			>
@@ -103,7 +103,7 @@ function WorktreeCreateSheet({
 				)}
 
 				{/* Header */}
-				<div className="flex items-center justify-between border-b border-th-border px-4 py-3">
+				<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
 					<h2 id={titleId} className="text-base font-bold text-th-text-primary">
 						New Worktree
 					</h2>
@@ -118,8 +118,8 @@ function WorktreeCreateSheet({
 				</div>
 
 				{/* Form */}
-				<form onSubmit={handleSubmit}>
-					<div className="space-y-4 p-4">
+				<form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+					<div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
 						{/* Name input */}
 						<div className="space-y-1.5">
 							<label
@@ -204,7 +204,7 @@ function WorktreeCreateSheet({
 					</div>
 
 					{/* Footer */}
-					<div className="flex gap-3 border-t border-th-border p-4">
+					<div className="flex shrink-0 gap-3 border-t border-th-border p-4">
 						<button
 							type="button"
 							onClick={onClose}
