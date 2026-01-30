@@ -168,39 +168,6 @@ describe("InputBar", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
-	it("shows Stop button when streaming", () => {
-		render(
-			<InputBar
-				sessionId={TEST_SESSION_ID}
-				onSend={() => {}}
-				isStreaming
-				onInterrupt={() => {}}
-			/>,
-		);
-
-		expect(screen.getByRole("button", { name: /Stop/ })).toBeInTheDocument();
-		expect(
-			screen.queryByRole("button", { name: /Send/ }),
-		).not.toBeInTheDocument();
-	});
-
-	it("calls onInterrupt when Stop button clicked", async () => {
-		const user = userEvent.setup();
-		const onInterrupt = vi.fn();
-		render(
-			<InputBar
-				sessionId={TEST_SESSION_ID}
-				onSend={() => {}}
-				isStreaming
-				onInterrupt={onInterrupt}
-			/>,
-		);
-
-		await user.click(screen.getByRole("button", { name: /Stop/ }));
-
-		expect(onInterrupt).toHaveBeenCalled();
-	});
-
 	it("preserves input across re-renders with same sessionId", () => {
 		const { rerender } = render(
 			<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />,

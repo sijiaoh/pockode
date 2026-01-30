@@ -1,3 +1,4 @@
+import { Square } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { unreadActions } from "../../lib/unreadStore";
@@ -195,14 +196,23 @@ function ChatPanel({
 						onModeChange={setMode}
 						disabled={isStreaming}
 					/>
+					{isStreaming && (
+						<button
+							type="button"
+							onClick={handleInterrupt}
+							aria-label="Stop"
+							className="flex h-8 items-center gap-1.5 rounded bg-th-error px-2.5 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
+						>
+							<Square className="size-3.5 fill-current" />
+							<span className="text-xs opacity-80">Esc</span>
+						</button>
+					)}
 				</div>
 			)}
 			<InputBar
 				sessionId={sessionId}
 				onSend={handleSend}
 				canSend={status === "connected" && !isLoadingHistory}
-				isStreaming={isStreaming}
-				onInterrupt={handleInterrupt}
 			/>
 		</MainContainer>
 	);

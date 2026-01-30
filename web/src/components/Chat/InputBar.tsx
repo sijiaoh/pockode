@@ -19,21 +19,13 @@ interface Props {
 	sessionId: string;
 	onSend: (content: string) => void;
 	canSend?: boolean;
-	isStreaming?: boolean;
-	onInterrupt?: () => void;
 }
 
 // Slash command pattern per Claude Code naming conventions.
 // Keep in sync with server/command/store.go namePattern.
 const COMMAND_PATTERN = /^\/([a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)?)?$/;
 
-function InputBar({
-	sessionId,
-	onSend,
-	canSend = true,
-	isStreaming = false,
-	onInterrupt,
-}: Props) {
+function InputBar({ sessionId, onSend, canSend = true }: Props) {
 	const input = useInputStore((state) => state.inputs[sessionId] ?? "");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -136,7 +128,7 @@ function InputBar({
 
 	const handleSend = useCallback(() => {
 		const trimmed = input.trim();
-		if (trimmed && canSend && !isStreaming) {
+		if (trimmed && canSend) {
 			saveToHistory(trimmed);
 			resetNavigation();
 			onSend(trimmed);
@@ -150,7 +142,6 @@ function InputBar({
 		input,
 		onSend,
 		canSend,
-		isStreaming,
 		sessionId,
 		saveToHistory,
 		resetNavigation,
@@ -323,25 +314,14 @@ function InputBar({
 					autoCapitalize="off"
 					className="min-h-9 max-h-[40vh] flex-1 resize-none overflow-y-auto rounded-lg bg-th-bg-secondary px-3 py-1.5 text-th-text-primary placeholder:text-th-text-muted focus:outline-none focus:ring-2 focus:ring-th-border-focus sm:max-h-[200px] sm:px-4"
 				/>
-				{isStreaming ? (
-					<button
-						type="button"
-						onClick={onInterrupt}
-						className="h-9 rounded-lg bg-th-error px-3 text-th-text-inverse hover:opacity-90 sm:px-4"
-					>
-						Stop
-						<span className="hidden text-xs opacity-70 sm:inline"> Esc</span>
-					</button>
-				) : (
-					<button
-						type="button"
-						onClick={handleSend}
-						disabled={!canSend || !input.trim()}
-						className="h-9 rounded-lg bg-th-accent px-3 text-th-accent-text hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
-					>
-						Send
-					</button>
-				)}
+				<button
+					type="button"
+					onClick={handleSend}
+					disabled={!canSend || !input.trim()}
+					className="h-9 rounded-lg bg-th-accent px-3 text-th-accent-text hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
+				>
+					Send
+				</button>
 			</div>
 		</div>
 	);
