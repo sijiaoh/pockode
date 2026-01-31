@@ -115,8 +115,7 @@ function MessageList({
 				computeItemKey={computeItemKey}
 				itemContent={itemContent}
 				components={virtuosoComponents}
-				// Start scrolled to bottom
-				initialTopMostItemIndex={messages.length - 1}
+				initialTopMostItemIndex={{ index: "LAST", align: "end" }}
 				// Align items to bottom when list is shorter than viewport
 				alignToBottom
 				// Auto-scroll when new items added (only if already at bottom)
