@@ -33,6 +33,11 @@ export function getLanguageFromPath(path: string): string | undefined {
 	return ext ? EXT_MAP[ext] : undefined;
 }
 
+export function isMarkdownFile(path: string): boolean {
+	const ext = path.split(".").pop()?.toLowerCase();
+	return ext === "md" || ext === "mdx";
+}
+
 let highlighterPromise: ReturnType<typeof getDiffViewHighlighter> | null = null;
 
 export function getDiffHighlighter() {

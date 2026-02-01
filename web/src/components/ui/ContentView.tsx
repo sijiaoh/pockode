@@ -54,6 +54,12 @@ function PathDisplay({
 	return <div className="min-w-0 max-w-full px-2">{content}</div>;
 }
 
+export const navButtonClass =
+	"flex items-center justify-center rounded-md border border-th-border bg-th-bg-tertiary min-h-[44px] min-w-[44px] p-2 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent text-th-text-secondary hover:border-th-border-focus hover:text-th-text-primary active:scale-95";
+
+export const navButtonActiveClass =
+	"flex items-center justify-center rounded-md border border-th-accent bg-th-accent text-th-bg min-h-[44px] min-w-[44px] p-2 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95";
+
 const actionButtonBase =
 	"flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95";
 

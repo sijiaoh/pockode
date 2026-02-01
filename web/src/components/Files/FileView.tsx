@@ -1,17 +1,20 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Pencil } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { Code, Pencil } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFSWatch } from "../../hooks/useFSWatch";
 import { useCurrentWorktree, useRouteState } from "../../hooks/useRouteState";
 import { overlayToNavigation } from "../../lib/navigation";
+import { isMarkdownFile } from "../../lib/shikiUtils";
 import { isFileContent } from "../../types/contents";
 import {
 	actionIconButtonClass,
 	BottomActionBar,
 	ContentView,
 	FileContentDisplay,
+	navButtonActiveClass,
+	navButtonClass,
 } from "../ui";
 
 interface Props {
@@ -25,6 +28,8 @@ function FileView({ path, onBack }: Props) {
 	const worktree = useCurrentWorktree();
 	const { sessionId } = useRouteState();
 	const { data, isLoading, error } = useContents(path);
+	const [showRaw, setShowRaw] = useState(false);
+	const isMarkdown = isMarkdownFile(path);
 
 	const isBinary = data && isFileContent(data) && data.encoding !== "text";
 
@@ -37,6 +42,11 @@ function FileView({ path, onBack }: Props) {
 			),
 		);
 	}, [navigate, path, worktree, sessionId]);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset showRaw when path changes
+	useEffect(() => {
+		setShowRaw(false);
+	}, [path]);
 
 	useFSWatch({
 		path,
@@ -87,10 +97,26 @@ function FileView({ path, onBack }: Props) {
 
 		return (
 			<div className="p-2">
-				<FileContentDisplay content={data.content} filePath={path} />
+				<FileContentDisplay
+					content={data.content}
+					filePath={path}
+					showRaw={showRaw}
+				/>
 			</div>
 		);
-	}, [data, path]);
+	}, [data, path, showRaw]);
+
+	const headerActions = isMarkdown ? (
+		<button
+			type="button"
+			onClick={() => setShowRaw(!showRaw)}
+			className={showRaw ? navButtonActiveClass : navButtonClass}
+			aria-label={showRaw ? "Show rendered" : "Show raw"}
+			aria-pressed={showRaw}
+		>
+			<Code className="h-5 w-5" aria-hidden="true" />
+		</button>
+	) : null;
 
 	const showActionBar = !isBinary;
 
@@ -101,6 +127,7 @@ function FileView({ path, onBack }: Props) {
 				isLoading={isLoading}
 				error={error instanceof Error ? error : null}
 				onBack={onBack}
+				headerActions={headerActions}
 			>
 				{content}
 			</ContentView>
