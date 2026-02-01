@@ -38,7 +38,9 @@ let highlighterPromise: ReturnType<typeof getDiffViewHighlighter> | null = null;
 
 export function getDiffHighlighter() {
 	if (!highlighterPromise) {
-		highlighterPromise = getDiffViewHighlighter({ langs: bundledLanguages });
+		highlighterPromise = getDiffViewHighlighter(
+			Object.keys(bundledLanguages) as BundledLanguage[],
+		);
 	}
 	return highlighterPromise;
 }
