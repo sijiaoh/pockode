@@ -50,7 +50,7 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 		t.Fatalf("failed to create settings store: %v", err)
 	}
 
-	registry := worktree.NewRegistry(workDir)
+	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, mock, dataDir, 10*time.Minute)
 
 	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore)
@@ -196,7 +196,7 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
-	registry := worktree.NewRegistry(workDir)
+	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
 	defer worktreeManager.Shutdown()
 
@@ -243,7 +243,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
-	registry := worktree.NewRegistry(workDir)
+	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
 	defer worktreeManager.Shutdown()
 

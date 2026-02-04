@@ -258,9 +258,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize worktree setup hook
+	if err := worktree.InitSetupHook(dataDir); err != nil {
+		slog.Error("failed to initialize worktree setup hook", "error", err)
+		os.Exit(1)
+	}
+
 	// Initialize worktree registry and manager
 	claudeAgent := claude.New()
-	registry := worktree.NewRegistry(workDir)
+	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)

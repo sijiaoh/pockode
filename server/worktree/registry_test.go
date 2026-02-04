@@ -11,7 +11,7 @@ import (
 func TestNewRegistry_NonGitRepo(t *testing.T) {
 	dir := resolveSymlinks(t, t.TempDir())
 
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	if r.IsGitRepo() {
 		t.Error("expected IsGitRepo() = false for non-git directory")
@@ -24,7 +24,7 @@ func TestNewRegistry_NonGitRepo(t *testing.T) {
 func TestNewRegistry_GitRepo(t *testing.T) {
 	dir := initGitRepo(t)
 
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	if !r.IsGitRepo() {
 		t.Error("expected IsGitRepo() = true for git repository")
@@ -33,7 +33,7 @@ func TestNewRegistry_GitRepo(t *testing.T) {
 
 func TestResolve_MainWorktree(t *testing.T) {
 	dir := resolveSymlinks(t, t.TempDir())
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	path, err := r.Resolve("")
 	if err != nil {
@@ -46,7 +46,7 @@ func TestResolve_MainWorktree(t *testing.T) {
 
 func TestResolve_NonGitRepo(t *testing.T) {
 	dir := t.TempDir()
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	_, err := r.Resolve("some-worktree")
 	if err != ErrNotGitRepo {
@@ -56,7 +56,7 @@ func TestResolve_NonGitRepo(t *testing.T) {
 
 func TestResolve_NotFound(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	_, err := r.Resolve("nonexistent")
 	if err != ErrWorktreeNotFound {
@@ -66,7 +66,7 @@ func TestResolve_NotFound(t *testing.T) {
 
 func TestList_NonGitRepo(t *testing.T) {
 	dir := t.TempDir()
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	list := r.List()
 
@@ -83,7 +83,7 @@ func TestList_NonGitRepo(t *testing.T) {
 
 func TestList_GitRepo(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	list := r.List()
 
@@ -105,7 +105,7 @@ func TestList_GitRepo(t *testing.T) {
 
 func TestCreate_Success(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	info, err := r.Create("feature", "feature-branch", "")
 	if err != nil {
@@ -141,7 +141,7 @@ func TestCreate_Success(t *testing.T) {
 
 func TestCreate_ExistingBranch(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	cmd := exec.Command("git", "-C", dir, "branch", "existing-branch")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -159,7 +159,7 @@ func TestCreate_ExistingBranch(t *testing.T) {
 
 func TestCreate_RemoteBranch(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	cmd := exec.Command("git", "-C", dir, "remote", "add", "origin", "https://example.com/repo.git")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -181,7 +181,7 @@ func TestCreate_RemoteBranch(t *testing.T) {
 
 func TestCreate_WithBaseBranch(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	// Set up: base-branch and main diverge so we can verify which one is used
 	cmd := exec.Command("git", "-C", dir, "checkout", "-b", "base-branch")
@@ -227,7 +227,7 @@ func TestCreate_WithBaseBranch(t *testing.T) {
 
 func TestCreate_EmptyName(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	_, err := r.Create("", "branch", "")
 	if err == nil {
@@ -237,7 +237,7 @@ func TestCreate_EmptyName(t *testing.T) {
 
 func TestCreate_EmptyBranch(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	_, err := r.Create("feature", "", "")
 	if err == nil {
@@ -247,7 +247,7 @@ func TestCreate_EmptyBranch(t *testing.T) {
 
 func TestCreate_Duplicate(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	_, err := r.Create("feature", "branch1", "")
 	if err != nil {
@@ -262,7 +262,7 @@ func TestCreate_Duplicate(t *testing.T) {
 
 func TestCreate_PathTraversal(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	_, err := r.Create("../escape", "branch", "")
 	if err == nil {
@@ -275,7 +275,7 @@ func TestCreate_PathTraversal(t *testing.T) {
 
 func TestCreate_NonGitRepo(t *testing.T) {
 	dir := t.TempDir()
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	_, err := r.Create("feature", "branch", "")
 	if err != ErrNotGitRepo {
@@ -283,9 +283,42 @@ func TestCreate_NonGitRepo(t *testing.T) {
 	}
 }
 
+func TestCreate_SetupHookFailure_CleansUpWorktree(t *testing.T) {
+	dir := initGitRepo(t)
+	dataDir := t.TempDir()
+
+	hookScript := `#!/bin/bash
+exit 1
+`
+	hookPath := filepath.Join(dataDir, "worktree-setup.sh")
+	if err := os.WriteFile(hookPath, []byte(hookScript), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry(dir, dataDir)
+
+	_, err := r.Create("feature", "feature-branch", "")
+	if err == nil {
+		t.Fatal("Create() should fail when setup hook fails")
+	}
+	if !strings.Contains(err.Error(), "setup hook failed") {
+		t.Errorf("expected setup hook error, got: %v", err)
+	}
+
+	worktreePath := filepath.Join(r.worktreesDir(), "feature")
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Error("worktree should be cleaned up after hook failure")
+	}
+
+	_, err = r.Resolve("feature")
+	if err != ErrWorktreeNotFound {
+		t.Errorf("Resolve() error = %v, want ErrWorktreeNotFound", err)
+	}
+}
+
 func TestDelete_Success(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	info, err := r.Create("to-delete", "delete-branch", "")
 	if err != nil {
@@ -311,7 +344,7 @@ func TestDelete_Success(t *testing.T) {
 
 func TestDelete_WithModifiedTrackedFile(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	info, err := r.Create("dirty-worktree", "dirty-branch", "")
 	if err != nil {
@@ -348,7 +381,7 @@ func TestDelete_WithModifiedTrackedFile(t *testing.T) {
 
 func TestDelete_MainWorktree(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	err := r.Delete("")
 	if err != ErrMainWorktree {
@@ -358,7 +391,7 @@ func TestDelete_MainWorktree(t *testing.T) {
 
 func TestDelete_NotFound(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	err := r.Delete("nonexistent")
 	if err != ErrWorktreeNotFound {
@@ -368,7 +401,7 @@ func TestDelete_NotFound(t *testing.T) {
 
 func TestDelete_ExternalWorktreeNotVisible(t *testing.T) {
 	dir := initGitRepo(t)
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	// Create worktree outside of worktreesDir
 	externalPath := filepath.Join(filepath.Dir(dir), "external-worktree")
@@ -399,7 +432,7 @@ func TestDelete_ExternalWorktreeNotVisible(t *testing.T) {
 
 func TestDelete_NonGitRepo(t *testing.T) {
 	dir := t.TempDir()
-	r := NewRegistry(dir)
+	r := NewRegistry(dir, "")
 
 	err := r.Delete("feature")
 	if err != ErrNotGitRepo {
@@ -408,7 +441,7 @@ func TestDelete_NonGitRepo(t *testing.T) {
 }
 
 func TestWorktreesDir(t *testing.T) {
-	r := NewRegistry("/path/to/myproject")
+	r := NewRegistry("/path/to/myproject", "")
 
 	got := r.worktreesDir()
 	want := "/path/to/myproject-worktrees"

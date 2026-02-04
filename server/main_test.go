@@ -41,7 +41,7 @@ func TestHealthEndpoint(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
-	registry := worktree.NewRegistry(workDir)
+	registry := worktree.NewRegistry(workDir, dataDir)
 	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute)
 	defer scopeManager.Shutdown()
 
@@ -66,7 +66,7 @@ func TestPingEndpoint(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
-	registry := worktree.NewRegistry(workDir)
+	registry := worktree.NewRegistry(workDir, dataDir)
 	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute)
 	defer scopeManager.Shutdown()
 

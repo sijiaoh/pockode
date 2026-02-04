@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,7 @@ type Info struct {
 // Registry manages worktree discovery with TTL-based caching.
 type Registry struct {
 	mainDir string
+	dataDir string
 
 	cacheMu   sync.RWMutex
 	cache     map[string]Info
@@ -36,7 +38,7 @@ type Registry struct {
 	cacheTTL  time.Duration
 }
 
-func NewRegistry(mainDir string) *Registry {
+func NewRegistry(mainDir, dataDir string) *Registry {
 	// Resolve symlinks for consistent path comparison (e.g., /var -> /private/var on macOS)
 	if resolved, err := filepath.EvalSymlinks(mainDir); err == nil {
 		mainDir = resolved
@@ -44,6 +46,7 @@ func NewRegistry(mainDir string) *Registry {
 
 	return &Registry{
 		mainDir:  mainDir,
+		dataDir:  dataDir,
 		cache:    make(map[string]Info),
 		cacheTTL: 3 * time.Second,
 	}
@@ -160,6 +163,13 @@ func (r *Registry) Create(name, branch, baseBranch string) (Info, error) {
 
 	if !ok {
 		return Info{}, errors.New("worktree created but not found in list")
+	}
+
+	if err := RunSetupHook(r.dataDir, r.mainDir, info.Path, name); err != nil {
+		if delErr := r.Delete(name); delErr != nil {
+			slog.Warn("failed to cleanup worktree after setup hook failure", "name", name, "error", delErr)
+		}
+		return Info{}, fmt.Errorf("setup hook failed: %s", err)
 	}
 
 	return info, nil

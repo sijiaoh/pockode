@@ -1,6 +1,8 @@
 import type { OverlayState } from "../types/overlay";
 import { ROUTES, WT_ROUTES } from "./routes";
 
+export const SETUP_HOOK_PATH = ".pockode/worktree-setup.sh";
+
 interface NavToSession {
 	type: "session";
 	worktree: string;

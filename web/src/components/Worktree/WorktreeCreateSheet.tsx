@@ -1,6 +1,8 @@
+import { useNavigate } from "@tanstack/react-router";
 import { X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { SETUP_HOOK_PATH, overlayToNavigation } from "../../lib/navigation";
 
 interface Props {
 	onClose: () => void;
@@ -20,6 +22,7 @@ function WorktreeCreateSheet({
 	isCreating,
 	isDesktop,
 }: Props) {
+	const navigate = useNavigate();
 	const [name, setName] = useState("");
 	const [branch, setBranch] = useState("");
 	const [baseBranch, setBaseBranch] = useState("");
@@ -194,6 +197,27 @@ function WorktreeCreateSheet({
 								Base for new branch (ignored if branch exists)
 							</p>
 						</div>
+
+						{/* Info */}
+						<p className="rounded-lg bg-th-bg-tertiary px-3 py-2 text-sm text-th-text-secondary">
+							Setup script runs after creation.{" "}
+							<button
+								type="button"
+								className="text-th-accent hover:underline"
+								onClick={() => {
+									onClose();
+									navigate(
+										overlayToNavigation(
+											{ type: "file", path: SETUP_HOOK_PATH, edit: true },
+											"",
+											null,
+										),
+									);
+								}}
+							>
+								Customize
+							</button>
+						</p>
 
 						{/* Error message */}
 						{error && (
