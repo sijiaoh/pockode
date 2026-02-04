@@ -3,6 +3,7 @@ import { useCallback, useEffect } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { unreadActions } from "../../lib/unreadStore";
 import { useWSStore } from "../../lib/wsStore";
+import { hasCoarsePointer } from "../../utils/breakpoints";
 import type {
 	AskUserQuestionRequest,
 	PermissionRequest,
@@ -212,7 +213,9 @@ function ChatPanel({
 							className="flex h-8 items-center gap-1.5 rounded bg-th-error px-2.5 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
 						>
 							<Square className="size-3.5 fill-current" />
-							<span className="text-xs opacity-80">Esc</span>
+							{!hasCoarsePointer() && (
+								<span className="text-xs opacity-80">Esc</span>
+							)}
 						</button>
 					)}
 				</div>
