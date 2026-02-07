@@ -97,11 +97,9 @@ function Sidebar({ isOpen, onClose, children, isDesktop }: Props) {
 		);
 	}
 
-	// Mobile: overlay drawer
-	if (!isOpen) return null;
-
+	// Mobile: overlay drawer (use CSS hiding to preserve scroll position)
 	return (
-		<>
+		<div className={isOpen ? undefined : "hidden"}>
 			<button
 				type="button"
 				className="fixed inset-0 z-40 bg-th-bg-overlay"
@@ -112,7 +110,7 @@ function Sidebar({ isOpen, onClose, children, isDesktop }: Props) {
 			<div className="fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-th-bg-secondary">
 				<div className="flex flex-1 flex-col overflow-hidden">{children}</div>
 			</div>
-		</>
+		</div>
 	);
 }
 
