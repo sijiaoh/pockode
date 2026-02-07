@@ -14,7 +14,7 @@ gofmt -w .                              # 格式化
 go vet ./...                            # 静态检查
 
 # 构建（含前端）
-cd ../web && npm run build && cp -r dist ../server/static
+cd ../web && pnpm run build && cp -r dist ../server/static
 go build -o server .
 
 # 集成测试（消耗 token）

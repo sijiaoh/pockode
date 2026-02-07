@@ -251,6 +251,6 @@ describe("race condition handling", () => {
 
 ## 検証手順
 
-1. `npm test -- useSubscription` でテスト実行
+1. `pnpm test -- useSubscription` でテスト実行
 2. Diff View で素早くファイル切り替えを繰り返し、flash が発生しないことを確認
 3. Worktree 切り替え時も同様に確認

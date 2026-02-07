@@ -24,4 +24,4 @@ echo "  Frontend: http://localhost:$WEB_PORT"
 echo "  Token:    $AUTH_TOKEN"
 echo ""
 
-cd "$PROJECT_DIR" && npm run dev
+cd "$PROJECT_DIR" && pnpm run dev

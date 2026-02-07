@@ -7,13 +7,13 @@ React 19 + TypeScript + Vite 7 + Tailwind 4 + Biome + Vitest
 ## 命令
 
 ```bash
-npm run dev              # 开发服务器
-npm run build            # 构建
-npm run lint             # Lint 检查
-npm run format           # 格式化
-npm run test             # 测试
-npm run test:watch       # 测试（监视模式）
-npx tsc -b               # 类型检查
+pnpm run dev             # 开发服务器
+pnpm run build           # 构建
+pnpm run lint            # Lint 检查
+pnpm run format          # 格式化
+pnpm run test            # 测试
+pnpm run test:watch      # 测试（监视模式）
+pnpm exec tsc -b         # 类型检查
 ```
 
 ## 结构
@@ -102,11 +102,11 @@ describe("MyComponent", () => {
 
 ## 边界
 
-✅ **Always**: `npm run lint` + `npm run build` + `npm run test` · 函数组件 · Props 定义类型
+✅ **Always**: `pnpm run lint` + `pnpm run build` + `pnpm run test` · 函数组件 · Props 定义类型
 
-⚠️ **Ask First**: 添加 npm 依赖 · 修改 Vite/TS 配置 · 新建全局 store
+⚠️ **Ask First**: 添加 pnpm 依赖 · 修改 Vite/TS 配置 · 新建全局 store
 
-🚫 **Never**: `any`（用 `unknown`） · `!` 非空断言 · 硬编码颜色/API 地址 · 提交 `console.log` · 编辑 `package-lock.json`
+🚫 **Never**: `any`（用 `unknown`） · `!` 非空断言 · 硬编码颜色/API 地址 · 提交 `console.log` · 编辑 `pnpm-lock.yaml`
 
 ## 注释
 

@@ -12,8 +12,8 @@ echo "Building Pockode $VERSION"
 # Build frontend directly to server/static
 echo "Building frontend..."
 cd web
-npm ci
-npm run build -- --outDir ../server/static --emptyOutDir
+pnpm install --frozen-lockfile
+pnpm run build -- --outDir ../server/static --emptyOutDir
 cd ..
 touch server/static/.keep
 

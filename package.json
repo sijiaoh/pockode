@@ -3,9 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently --kill-others -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+    "dev": "concurrently --kill-others -n server,web -c blue,green \"pnpm:dev:server\" \"pnpm:dev:web\"",
     "dev:server": "cd server && go run .",
-    "dev:web": "cd web && npm run dev"
+    "dev:web": "cd web && pnpm run dev"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
