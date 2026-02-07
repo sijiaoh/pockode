@@ -256,6 +256,8 @@ func (p *Process) streamEvents(ctx context.Context) {
 	log := slog.With("sessionId", p.sessionID)
 
 	for event := range p.agentSession.Events() {
+		p.touch()
+
 		eventType := event.EventType()
 		log.Debug("streaming event", "type", eventType)
 

@@ -68,6 +68,7 @@ func (s *mockSession) isClosed() bool {
 	return s.closed
 }
 
+
 func TestManager_GetOrCreateProcess_NewSession(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
@@ -224,5 +225,33 @@ func TestManager_HasProcess(t *testing.T) {
 
 	if !m.HasProcess("sess-1") {
 		t.Error("expected HasProcess to return true after process creation")
+	}
+}
+
+func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	idleTimeout := 50 * time.Millisecond
+	m := NewManager(mock, "/tmp", store, idleTimeout)
+	defer m.Shutdown()
+
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+
+	// Send events periodically for 2x idleTimeout
+	// Process should survive because streamEvents calls touch() on each event
+	for i := 0; i < 4; i++ {
+		time.Sleep(idleTimeout / 2)
+		mock.sessions["sess-1"].events <- agent.TextEvent{Content: "test"}
+	}
+	// Total elapsed: 4 * 25ms = 100ms = 2x idleTimeout
+
+	// Give streamEvents goroutine time to process the events
+	time.Sleep(10 * time.Millisecond)
+
+	if proc := m.GetProcess("sess-1"); proc == nil {
+		t.Error("expected process to still exist while streaming events")
+	}
+	if mock.sessions["sess-1"].isClosed() {
+		t.Error("expected process to not be closed while streaming events")
 	}
 }
