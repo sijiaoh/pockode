@@ -39,11 +39,7 @@ function SidebarListItem({
 			>
 				{leftSlot}
 				<div className="min-w-0 flex-1">
-					<div
-						className={`truncate text-sm text-th-text-primary ${hasChanges ? "" : ""}`}
-					>
-						{title}
-					</div>
+					<div className="truncate text-sm text-th-text-primary">{title}</div>
 					{subtitle && (
 						<div className="truncate text-xs text-th-text-muted">
 							{subtitle}

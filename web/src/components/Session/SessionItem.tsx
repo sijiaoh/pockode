@@ -4,6 +4,25 @@ import type { SessionListItem } from "../../types/message";
 import DeleteButton from "../common/DeleteButton";
 import SidebarListItem from "../common/SidebarListItem";
 
+function formatDate(dateString: string): string {
+	const date = new Date(dateString);
+	const now = new Date();
+	const isToday = date.toDateString() === now.toDateString();
+
+	if (isToday) {
+		return date.toLocaleTimeString(undefined, {
+			hour: "2-digit",
+			minute: "2-digit",
+		});
+	}
+	return date.toLocaleDateString(undefined, {
+		month: "short",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
+	});
+}
+
 interface Props {
 	session: SessionListItem;
 	isActive: boolean;
@@ -22,7 +41,7 @@ const SessionItem = memo(function SessionItem({
 	return (
 		<SidebarListItem
 			title={session.title}
-			subtitle={new Date(session.created_at).toLocaleDateString()}
+			subtitle={formatDate(session.updated_at)}
 			isActive={isActive}
 			hasChanges={hasUnread}
 			isRunning={session.state === "running"}
