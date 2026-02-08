@@ -4,21 +4,22 @@ import { useSessionStore } from "../lib/sessionStore";
 import { useUnreadStore } from "../lib/unreadStore";
 import type {
 	SessionListChangedNotification,
-	SessionMeta,
+	SessionListItem,
 } from "../types/message";
 import { useSessionSubscription } from "./useSessionSubscription";
 
-const mockSession = (id: string, title = "Test"): SessionMeta => ({
+const mockSessionItem = (id: string, title = "Test"): SessionListItem => ({
 	id,
 	title,
 	created_at: "2024-01-01T00:00:00Z",
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default",
+	state: "ended",
 });
 
 let notificationCallback: ((p: SessionListChangedNotification) => void) | null =
 	null;
-let mockSessions: SessionMeta[] = [];
+let mockSessions: SessionListItem[] = [];
 let mockStatus = "connected";
 
 const mockSubscribe = vi.fn(
@@ -61,7 +62,7 @@ describe("useSessionSubscription", () => {
 
 	describe("subscription lifecycle", () => {
 		it("subscribes when enabled and connected", async () => {
-			mockSessions = [mockSession("1")];
+			mockSessions = [mockSessionItem("1")];
 
 			renderHook(() => useSessionSubscription(true));
 
@@ -90,7 +91,7 @@ describe("useSessionSubscription", () => {
 		});
 
 		it("unsubscribes on unmount", async () => {
-			mockSessions = [mockSession("1")];
+			mockSessions = [mockSessionItem("1")];
 
 			const { unmount } = renderHook(() => useSessionSubscription(true));
 
@@ -106,7 +107,7 @@ describe("useSessionSubscription", () => {
 
 	describe("notification handling", () => {
 		it("handles create notification", async () => {
-			mockSessions = [mockSession("1")];
+			mockSessions = [mockSessionItem("1")];
 
 			renderHook(() => useSessionSubscription(true));
 
@@ -118,7 +119,7 @@ describe("useSessionSubscription", () => {
 				notificationCallback?.({
 					id: "watch-1",
 					operation: "create",
-					session: mockSession("2"),
+					session: mockSessionItem("2"),
 				});
 			});
 
@@ -127,7 +128,7 @@ describe("useSessionSubscription", () => {
 		});
 
 		it("handles update notification", async () => {
-			mockSessions = [mockSession("1", "Old")];
+			mockSessions = [mockSessionItem("1", "Old")];
 
 			renderHook(() => useSessionSubscription(true));
 
@@ -139,15 +140,15 @@ describe("useSessionSubscription", () => {
 				notificationCallback?.({
 					id: "watch-1",
 					operation: "update",
-					session: mockSession("1", "New"),
+					session: mockSessionItem("1", "New"),
 				});
 			});
 
 			expect(useSessionStore.getState().sessions[0].title).toBe("New");
 		});
 
-		it("marks session as unread on update when not viewing", async () => {
-			mockSessions = [mockSession("1")];
+		it("marks session as unread on content update when not viewing", async () => {
+			mockSessions = [mockSessionItem("1")];
 
 			renderHook(() => useSessionSubscription(true));
 
@@ -159,15 +160,38 @@ describe("useSessionSubscription", () => {
 				notificationCallback?.({
 					id: "watch-1",
 					operation: "update",
-					session: mockSession("1", "Updated"),
+					session: {
+						...mockSessionItem("1", "Updated"),
+						updated_at: "2024-01-01T01:00:00Z", // Changed timestamp
+					},
 				});
 			});
 
 			expect(useUnreadStore.getState().unreadSessionIds.has("1")).toBe(true);
 		});
 
-		it("does not mark session as unread on update when viewing", async () => {
-			mockSessions = [mockSession("1")];
+		it("does not mark session as unread on state-only update", async () => {
+			mockSessions = [mockSessionItem("1")];
+
+			renderHook(() => useSessionSubscription(true));
+
+			await waitFor(() => {
+				expect(useSessionStore.getState().sessions.length).toBe(1);
+			});
+
+			act(() => {
+				notificationCallback?.({
+					id: "watch-1",
+					operation: "update",
+					session: { ...mockSessionItem("1"), state: "running" }, // Same updated_at
+				});
+			});
+
+			expect(useUnreadStore.getState().unreadSessionIds.has("1")).toBe(false);
+		});
+
+		it("does not mark session as unread on content update when viewing", async () => {
+			mockSessions = [mockSessionItem("1")];
 			useUnreadStore.setState({ viewingSessionId: "1" });
 
 			renderHook(() => useSessionSubscription(true));
@@ -180,7 +204,10 @@ describe("useSessionSubscription", () => {
 				notificationCallback?.({
 					id: "watch-1",
 					operation: "update",
-					session: mockSession("1", "Updated"),
+					session: {
+						...mockSessionItem("1", "Updated"),
+						updated_at: "2024-01-01T01:00:00Z",
+					},
 				});
 			});
 
@@ -200,7 +227,7 @@ describe("useSessionSubscription", () => {
 				notificationCallback?.({
 					id: "watch-1",
 					operation: "create",
-					session: mockSession("1"),
+					session: mockSessionItem("1"),
 				});
 			});
 
@@ -208,7 +235,7 @@ describe("useSessionSubscription", () => {
 		});
 
 		it("handles delete notification", async () => {
-			mockSessions = [mockSession("1"), mockSession("2")];
+			mockSessions = [mockSessionItem("1"), mockSessionItem("2")];
 
 			renderHook(() => useSessionSubscription(true));
 
@@ -227,11 +254,31 @@ describe("useSessionSubscription", () => {
 			expect(useSessionStore.getState().sessions.length).toBe(1);
 			expect(useSessionStore.getState().sessions[0].id).toBe("2");
 		});
+
+		it("handles update notification with state change", async () => {
+			mockSessions = [mockSessionItem("1")];
+
+			renderHook(() => useSessionSubscription(true));
+
+			await waitFor(() => {
+				expect(useSessionStore.getState().sessions[0].state).toBe("ended");
+			});
+
+			act(() => {
+				notificationCallback?.({
+					id: "watch-1",
+					operation: "update",
+					session: { ...mockSessionItem("1"), state: "running" },
+				});
+			});
+
+			expect(useSessionStore.getState().sessions[0].state).toBe("running");
+		});
 	});
 
 	describe("refresh", () => {
 		it("re-subscribes and gets fresh data", async () => {
-			mockSessions = [mockSession("1")];
+			mockSessions = [mockSessionItem("1")];
 
 			const { result } = renderHook(() => useSessionSubscription(true));
 
@@ -239,7 +286,7 @@ describe("useSessionSubscription", () => {
 				expect(useSessionStore.getState().sessions.length).toBe(1);
 			});
 
-			mockSessions = [mockSession("2"), mockSession("1")];
+			mockSessions = [mockSessionItem("2"), mockSessionItem("1")];
 
 			await act(async () => {
 				await result.current.refresh();

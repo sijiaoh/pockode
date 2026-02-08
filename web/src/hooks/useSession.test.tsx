@@ -5,21 +5,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionStore } from "../lib/sessionStore";
 import type {
 	SessionListChangedNotification,
-	SessionMeta,
+	SessionListItem,
 } from "../types/message";
 import { useSession } from "./useSession";
 
-const mockSession = (id: string, title = "Test Session"): SessionMeta => ({
+const mockSession = (id: string, title = "Test Session"): SessionListItem => ({
 	id,
 	title,
 	created_at: "2024-01-01T00:00:00Z",
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default",
+	state: "ended",
 });
 
 let notificationCallback: ((p: SessionListChangedNotification) => void) | null =
 	null;
-let mockSessions: SessionMeta[] = [];
+let mockSessions: SessionListItem[] = [];
 let mockStatus = "connected";
 
 const mockSubscribe = vi.fn(

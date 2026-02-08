@@ -11,7 +11,6 @@ import (
 	"github.com/pockode/server/session"
 )
 
-// ProcessState represents the current state of an agent process.
 type ProcessState string
 
 const (
@@ -19,6 +18,11 @@ const (
 	ProcessStateRunning ProcessState = "running" // AI is generating a response
 	ProcessStateEnded   ProcessState = "ended"   // Process has ended (not in map)
 )
+
+type StateChangeEvent struct {
+	SessionID string
+	State     ProcessState
+}
 
 // Manager manages agent processes.
 type Manager struct {
@@ -35,6 +39,9 @@ type Manager struct {
 
 	// Called when a process ends (for cleanup coordination)
 	onProcessEnd func()
+
+	// Called when process running state changes
+	onStateChange func(StateChangeEvent)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -71,6 +78,16 @@ func NewManager(ag agent.Agent, workDir string, store session.Store, idleTimeout
 // SetMessageListener sets the listener for chat messages.
 func (m *Manager) SetMessageListener(l ChatMessageListener) {
 	m.messageListener = l
+}
+
+func (m *Manager) SetOnStateChange(fn func(StateChangeEvent)) {
+	m.onStateChange = fn
+}
+
+func (m *Manager) emitStateChange(sessionID string, state ProcessState) {
+	if m.onStateChange != nil {
+		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: state})
+	}
 }
 
 // EmitMessage sends a message to the listener.
@@ -121,11 +138,13 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 				logger.LogPanic(r, "session crashed", "sessionId", sessionID)
 			}
 			m.remove(sessionID)
+			m.emitStateChange(sessionID, ProcessStateEnded)
 			slog.Info("process ended", "sessionId", sessionID)
 		}()
 		proc.streamEvents(m.ctx)
 	}()
 
+	m.emitStateChange(sessionID, ProcessStateIdle)
 	slog.Info("process created", "sessionId", sessionID, "resume", resume, "mode", mode)
 	return proc, true, nil
 }
@@ -138,9 +157,19 @@ func (m *Manager) GetProcess(sessionID string) *Process {
 	return m.processes[sessionID]
 }
 
-// HasProcess returns whether a process is running for the given session.
+// HasProcess returns whether a process exists for the given session.
 func (m *Manager) HasProcess(sessionID string) bool {
 	return m.GetProcess(sessionID) != nil
+}
+
+// GetProcessState returns the state of a process for the given session.
+// Returns "ended" if no process exists.
+func (m *Manager) GetProcessState(sessionID string) string {
+	proc := m.GetProcess(sessionID)
+	if proc == nil {
+		return string(ProcessStateEnded)
+	}
+	return string(proc.State())
 }
 
 // ProcessCount returns the number of running processes.
@@ -287,6 +316,7 @@ func (p *Process) streamEvents(ctx context.Context) {
 		// Set to running on first event after idle
 		if p.State() == ProcessStateIdle {
 			p.SetState(ProcessStateRunning)
+			p.manager.emitStateChange(p.sessionID, ProcessStateRunning)
 		}
 
 		// Persist to history
@@ -296,6 +326,7 @@ func (p *Process) streamEvents(ctx context.Context) {
 
 		if eventType.AwaitsUserInput() {
 			p.SetState(ProcessStateIdle)
+			p.manager.emitStateChange(p.sessionID, ProcessStateIdle)
 			if err := p.sessionStore.Touch(ctx, p.sessionID); err != nil {
 				log.Error("failed to touch session", "error", err)
 			}

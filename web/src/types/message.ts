@@ -1,11 +1,13 @@
 export type SessionMode = "default" | "yolo";
+export type ProcessState = "idle" | "running" | "ended";
 
-export interface SessionMeta {
+export interface SessionListItem {
 	id: string;
 	title: string;
 	created_at: string;
 	updated_at: string;
 	mode: SessionMode;
+	state: ProcessState;
 }
 
 export type MessageStatus =
@@ -213,7 +215,7 @@ export interface SessionUpdateTitleParams {
 
 export interface SessionListSubscribeResult {
 	id: string;
-	sessions: SessionMeta[];
+	sessions: SessionListItem[];
 }
 
 export interface SessionListUnsubscribeParams {
@@ -221,15 +223,12 @@ export interface SessionListUnsubscribeParams {
 }
 
 export type SessionListChangedNotification =
-	| { id: string; operation: "create"; session: SessionMeta }
-	| { id: string; operation: "update"; session: SessionMeta }
+	| { id: string; operation: "create" | "update"; session: SessionListItem }
 	| { id: string; operation: "delete"; sessionId: string };
 
 export interface ChatMessagesSubscribeParams {
 	session_id: string;
 }
-
-export type ProcessState = "idle" | "running" | "ended";
 
 export interface ChatMessagesSubscribeResult {
 	id: string;

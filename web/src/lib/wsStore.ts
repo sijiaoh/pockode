@@ -10,8 +10,8 @@ import type {
 	ChatMessagesSubscribeResult,
 	ServerNotification,
 	SessionListChangedNotification,
+	SessionListItem,
 	SessionListSubscribeResult,
-	SessionMeta,
 } from "../types/message";
 import type {
 	Settings,
@@ -77,7 +77,7 @@ export interface WatchActions {
 	worktreeUnsubscribe: (id: string) => Promise<void>;
 	sessionListSubscribe: (
 		callback: (params: SessionListChangedNotification) => void,
-	) => Promise<WatchSubscribeResult<SessionMeta[]>>;
+	) => Promise<WatchSubscribeResult<SessionListItem[]>>;
 	sessionListUnsubscribe: (id: string) => Promise<void>;
 	chatMessagesSubscribe: (
 		sessionId: string,

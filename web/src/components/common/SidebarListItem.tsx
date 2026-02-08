@@ -5,6 +5,7 @@ interface Props {
 	subtitle?: string;
 	isActive: boolean;
 	hasChanges?: boolean;
+	isRunning?: boolean;
 	leftSlot?: ReactNode;
 	actions?: ReactNode;
 	onSelect: () => void;
@@ -16,6 +17,7 @@ function SidebarListItem({
 	subtitle,
 	isActive,
 	hasChanges,
+	isRunning,
 	leftSlot,
 	actions,
 	onSelect,
@@ -48,11 +50,18 @@ function SidebarListItem({
 						</div>
 					)}
 				</div>
-				{hasChanges && (
+				{isRunning ? (
 					<span
-						className="h-2 w-2 shrink-0 rounded-full bg-th-accent"
-						aria-hidden="true"
+						className="h-3 w-3 shrink-0 rounded-full border-2 border-th-accent border-t-transparent animate-spin"
+						aria-label="AI responding"
 					/>
+				) : (
+					hasChanges && (
+						<span
+							className="h-2 w-2 shrink-0 rounded-full bg-th-accent"
+							aria-hidden="true"
+						/>
+					)
 				)}
 			</button>
 			{actions && <div className="flex items-center gap-1 pr-2">{actions}</div>}

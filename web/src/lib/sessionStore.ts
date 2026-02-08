@@ -1,15 +1,15 @@
 import { create } from "zustand";
-import type { SessionMeta } from "../types/message";
+import type { SessionListItem } from "../types/message";
 
 interface SessionState {
-	sessions: SessionMeta[];
+	sessions: SessionListItem[];
 	isLoading: boolean;
 	isSuccess: boolean;
 }
 
 interface SessionActions {
-	setSessions: (sessions: SessionMeta[]) => void;
-	updateSessions: (updater: (old: SessionMeta[]) => SessionMeta[]) => void;
+	setSessions: (sessions: SessionListItem[]) => void;
+	updateSessions: (updater: (old: SessionListItem[]) => SessionListItem[]) => void;
 	reset: () => void;
 }
 
@@ -31,8 +31,8 @@ export const useSessionStore = create<SessionStore>((set) => ({
  * Used for both create notifications and optimistic updates.
  */
 export function prependSession(
-	sessions: SessionMeta[],
-	session: SessionMeta,
-): SessionMeta[] {
+	sessions: SessionListItem[],
+	session: SessionListItem,
+): SessionListItem[] {
 	return [session, ...sessions.filter((s) => s.id !== session.id)];
 }

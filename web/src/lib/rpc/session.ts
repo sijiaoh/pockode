@@ -1,14 +1,14 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type {
 	SessionDeleteParams,
-	SessionMeta,
+	SessionListItem,
 	SessionMode,
 	SessionSetModeParams,
 	SessionUpdateTitleParams,
 } from "../../types/message";
 
 export interface SessionActions {
-	createSession: () => Promise<SessionMeta>;
+	createSession: () => Promise<SessionListItem>;
 	deleteSession: (sessionId: string) => Promise<void>;
 	updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
 	setSessionMode: (sessionId: string, mode: SessionMode) => Promise<void>;
@@ -26,7 +26,7 @@ export function createSessionActions(
 	};
 
 	return {
-		createSession: async (): Promise<SessionMeta> => {
+		createSession: async (): Promise<SessionListItem> => {
 			return requireClient().request("session.create", {});
 		},
 

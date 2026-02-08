@@ -166,6 +166,10 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore)
 	processManager := process.NewManager(m.agent, workDir, sessionStore, m.idleTimeout)
 	processManager.SetMessageListener(chatMessagesWatcher)
+	sessionListWatcher.SetProcessStateGetter(processManager)
+	processManager.SetOnStateChange(func(e process.StateChangeEvent) {
+		sessionListWatcher.NotifyProcessStateChange(e.SessionID, string(e.State))
+	})
 
 	wt := &Worktree{
 		Name:                name,

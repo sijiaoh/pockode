@@ -154,9 +154,14 @@ type WorktreeUnsubscribeParams struct {
 
 // Session list watch (subscription for session list changes)
 
+type SessionListItem struct {
+	session.SessionMeta
+	State string `json:"state"` // "idle" | "running" | "ended"
+}
+
 type SessionListSubscribeResult struct {
-	ID       string                `json:"id"`
-	Sessions []session.SessionMeta `json:"sessions"`
+	ID       string            `json:"id"`
+	Sessions []SessionListItem `json:"sessions"`
 }
 
 type SessionListUnsubscribeParams struct {

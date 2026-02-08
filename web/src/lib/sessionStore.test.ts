@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { SessionMeta } from "../types/message";
+import type { SessionListItem } from "../types/message";
 import { prependSession, useSessionStore } from "./sessionStore";
 
-const mockSession = (id: string, title = "Test"): SessionMeta => ({
+const mockSession = (id: string, title = "Test"): SessionListItem => ({
 	id,
 	title,
 	created_at: "2024-01-01T00:00:00Z",
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default",
+	state: "ended",
 });
 
 describe("prependSession", () => {

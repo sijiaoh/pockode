@@ -1,11 +1,11 @@
 import { memo } from "react";
 import { useHasUnread } from "../../lib/unreadStore";
-import type { SessionMeta } from "../../types/message";
+import type { SessionListItem } from "../../types/message";
 import DeleteButton from "../common/DeleteButton";
 import SidebarListItem from "../common/SidebarListItem";
 
 interface Props {
-	session: SessionMeta;
+	session: SessionListItem;
 	isActive: boolean;
 	onSelect: (id: string) => void;
 	onDelete: (id: string) => void;
@@ -25,6 +25,7 @@ const SessionItem = memo(function SessionItem({
 			subtitle={new Date(session.created_at).toLocaleDateString()}
 			isActive={isActive}
 			hasChanges={hasUnread}
+			isRunning={session.state === "running"}
 			onSelect={() => onSelect(session.id)}
 			actions={
 				<DeleteButton

@@ -4,7 +4,7 @@ import { unreadActions } from "../lib/unreadStore";
 import { useWSStore } from "../lib/wsStore";
 import type {
 	SessionListChangedNotification,
-	SessionMeta,
+	SessionListItem,
 } from "../types/message";
 import { useSubscription } from "./useSubscription";
 
@@ -26,12 +26,15 @@ export function useSessionSubscription(enabled: boolean) {
 
 	const handleNotification = useCallback(
 		(params: SessionListChangedNotification) => {
-			// Mark as unread when session is updated and user is not viewing it
-			if (
-				params.operation === "update" &&
-				!unreadActions.isViewing(params.session.id)
-			) {
-				unreadActions.markUnread(params.session.id);
+			// Mark as unread when session content is updated (not just state change)
+			if (params.operation === "update") {
+				const sessions = useSessionStore.getState().sessions;
+				const existing = sessions.find((s) => s.id === params.session.id);
+				const isContentUpdate =
+					existing && existing.updated_at !== params.session.updated_at;
+				if (isContentUpdate && !unreadActions.isViewing(params.session.id)) {
+					unreadActions.markUnread(params.session.id);
+				}
 			}
 
 			updateSessions((old) => {
@@ -52,7 +55,7 @@ export function useSessionSubscription(enabled: boolean) {
 
 	const { refresh } = useSubscription<
 		SessionListChangedNotification,
-		SessionMeta[]
+		SessionListItem[]
 	>(sessionListSubscribe, sessionListUnsubscribe, handleNotification, {
 		enabled,
 		onSubscribed: setSessions,

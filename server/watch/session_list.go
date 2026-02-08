@@ -3,17 +3,23 @@ package watch
 import (
 	"log/slog"
 
+	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/sourcegraph/jsonrpc2"
 )
+
+type ProcessStateGetter interface {
+	GetProcessState(sessionID string) string
+}
 
 // SessionListWatcher notifies subscribers when the session list changes.
 // Uses a channel-based async notification pattern to avoid blocking the session
 // store's mutex during network I/O.
 type SessionListWatcher struct {
 	*BaseWatcher
-	store   session.Store
-	eventCh chan session.SessionChangeEvent
+	store              session.Store
+	processStateGetter ProcessStateGetter
+	eventCh            chan session.SessionChangeEvent
 }
 
 func NewSessionListWatcher(store session.Store) *SessionListWatcher {
@@ -24,6 +30,10 @@ func NewSessionListWatcher(store session.Store) *SessionListWatcher {
 	}
 	store.SetOnChangeListener(w)
 	return w
+}
+
+func (w *SessionListWatcher) SetProcessStateGetter(psg ProcessStateGetter) {
+	w.processStateGetter = psg
 }
 
 func (w *SessionListWatcher) Start() error {
@@ -63,7 +73,10 @@ func (w *SessionListWatcher) notifyChange(event session.SessionChangeEvent) {
 		if event.Op == session.OperationDelete {
 			params.SessionID = event.Session.ID
 		} else {
-			params.Session = &event.Session
+			params.Session = &rpc.SessionListItem{
+				SessionMeta: event.Session,
+				State:       w.processStateGetter.GetProcessState(event.Session.ID),
+			}
 		}
 		return params
 	})
@@ -72,8 +85,8 @@ func (w *SessionListWatcher) notifyChange(event session.SessionChangeEvent) {
 }
 
 // Subscribe registers a subscriber and returns the subscription ID along with
-// the current session list.
-func (w *SessionListWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (string, []session.SessionMeta, error) {
+// the current session list enriched with runtime state.
+func (w *SessionListWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (string, []rpc.SessionListItem, error) {
 	id := w.GenerateID()
 	sub := &Subscription{
 		ID:     id,
@@ -90,14 +103,47 @@ func (w *SessionListWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (stri
 		return "", nil, err
 	}
 
-	return id, sessions, nil
+	items := make([]rpc.SessionListItem, len(sessions))
+	for i, sess := range sessions {
+		items[i] = rpc.SessionListItem{
+			SessionMeta: sess,
+			State:       w.processStateGetter.GetProcessState(sess.ID),
+		}
+	}
+
+	return id, items, nil
 }
 
 type sessionListChangedParams struct {
 	ID        string               `json:"id"`
 	Operation string               `json:"operation"`
-	Session   *session.SessionMeta `json:"session,omitempty"`
+	Session   *rpc.SessionListItem `json:"session,omitempty"`
 	SessionID string               `json:"sessionId,omitempty"`
+}
+
+func (w *SessionListWatcher) NotifyProcessStateChange(sessionID string, state string) {
+	if !w.HasSubscriptions() {
+		return
+	}
+
+	meta, found, err := w.store.Get(sessionID)
+	if err != nil || !found {
+		slog.Warn("failed to get session for state change", "sessionId", sessionID, "error", err)
+		return
+	}
+
+	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
+		return sessionListChangedParams{
+			ID:        sub.ID,
+			Operation: "update",
+			Session: &rpc.SessionListItem{
+				SessionMeta: meta,
+				State:       state,
+			},
+		}
+	})
+
+	slog.Debug("notified process state change", "sessionId", sessionID, "state", state)
 }
 
 // OnSessionChange implements session.OnChangeListener.

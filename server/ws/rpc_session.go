@@ -22,7 +22,12 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 
 	h.log.Info("session created", "sessionId", sessionID)
 
-	if err := conn.Reply(ctx, req.ID, sess); err != nil {
+	result := rpc.SessionListItem{
+		SessionMeta: sess,
+		State:       wt.ProcessManager.GetProcessState(sessionID),
+	}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session create response", "error", err)
 	}
 }

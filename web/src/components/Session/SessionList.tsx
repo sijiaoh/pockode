@@ -1,8 +1,8 @@
-import type { SessionMeta } from "../../types/message";
+import type { SessionListItem } from "../../types/message";
 import SessionItem from "./SessionItem";
 
 interface Props {
-	sessions: SessionMeta[];
+	sessions: SessionListItem[];
 	currentSessionId: string | null;
 	onSelectSession: (id: string) => void;
 	onDeleteSession: (id: string) => void;

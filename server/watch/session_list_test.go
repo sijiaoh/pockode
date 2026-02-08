@@ -67,6 +67,12 @@ func (m *mockSessionStoreWithError) List() ([]session.SessionMeta, error) {
 	return nil, m.err
 }
 
+type mockProcessStateGetter struct{}
+
+func (m *mockProcessStateGetter) GetProcessState(sessionID string) string {
+	return "ended"
+}
+
 func TestSessionListWatcher_Subscribe(t *testing.T) {
 	store := &mockSessionStore{
 		sessions: []session.SessionMeta{
@@ -75,6 +81,7 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 		},
 	}
 	w := NewSessionListWatcher(store)
+	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	id, sessions, err := w.Subscribe(nil, "conn1")
 	if err != nil {
@@ -89,6 +96,13 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 		t.Errorf("expected 2 sessions, got %d", len(sessions))
 	}
 
+	// Verify sessions are enriched with state
+	for _, s := range sessions {
+		if s.State != "ended" {
+			t.Errorf("expected state 'ended', got %q", s.State)
+		}
+	}
+
 	if !w.HasSubscriptions() {
 		t.Error("expected HasSubscriptions to be true")
 	}
@@ -97,6 +111,7 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 func TestSessionListWatcher_Unsubscribe(t *testing.T) {
 	store := &mockSessionStore{}
 	w := NewSessionListWatcher(store)
+	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	id, _, _ := w.Subscribe(nil, "conn1")
 
@@ -147,6 +162,7 @@ func TestSessionListWatcher_OnSessionChange_AfterStop(t *testing.T) {
 func TestSessionListWatcher_Subscribe_ListError(t *testing.T) {
 	store := &mockSessionStoreWithError{err: errors.New("list failed")}
 	w := NewSessionListWatcher(store)
+	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	_, _, err := w.Subscribe(nil, "conn1")
 	if err == nil {
@@ -156,4 +172,12 @@ func TestSessionListWatcher_Subscribe_ListError(t *testing.T) {
 	if w.HasSubscriptions() {
 		t.Error("expected no subscriptions after error")
 	}
+}
+
+func TestSessionListWatcher_NotifyProcessStateChange_NoSubscribers(t *testing.T) {
+	store := &mockSessionStore{}
+	w := NewSessionListWatcher(store)
+
+	// Should not panic when no subscribers
+	w.NotifyProcessStateChange("sess-1", "running")
 }
