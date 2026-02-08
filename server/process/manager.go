@@ -274,9 +274,27 @@ func (m *Manager) reapIdle() {
 	}
 }
 
-// AgentSession returns the underlying agent session.
-func (p *Process) AgentSession() agent.Session {
-	return p.agentSession
+// SendMessage sends a message to the agent and sets running state.
+func (p *Process) SendMessage(prompt string) error {
+	p.SetRunning()
+	return p.agentSession.SendMessage(prompt)
+}
+
+// SendPermissionResponse sends a permission response and sets running state.
+func (p *Process) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
+	p.SetRunning()
+	return p.agentSession.SendPermissionResponse(data, choice)
+}
+
+// SendQuestionResponse sends a question response and sets running state.
+func (p *Process) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
+	p.SetRunning()
+	return p.agentSession.SendQuestionResponse(data, answers)
+}
+
+// SendInterrupt sends an interrupt signal to the agent.
+func (p *Process) SendInterrupt() error {
+	return p.agentSession.SendInterrupt()
 }
 
 func (p *Process) touch() {

@@ -39,18 +39,10 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		return
 	}
 
-	proc := wt.ProcessManager.GetProcess(params.SessionID)
-	var state process.ProcessState
-	if proc == nil {
-		state = process.ProcessStateEnded
-	} else {
-		state = proc.State()
-	}
-
 	result := rpc.ChatMessagesSubscribeResult{
 		ID:      id,
 		History: history,
-		State:   string(state),
+		State:   wt.ProcessManager.GetProcessState(params.SessionID),
 		Mode:    meta.Mode,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
@@ -58,7 +50,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		return
 	}
 
-	log.Info("subscribed to chat messages", "subscriptionId", id, "state", state, "mode", meta.Mode)
+	log.Info("subscribed to chat messages", "subscriptionId", id, "state", result.State, "mode", meta.Mode)
 }
 
 func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
@@ -86,8 +78,7 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 		log.Error("failed to append to history", "error", err)
 	}
 
-	proc.SetRunning()
-	if err := proc.AgentSession().SendMessage(params.Content); err != nil {
+	if err := proc.SendMessage(params.Content); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
@@ -112,7 +103,7 @@ func (h *rpcMethodHandler) handleInterrupt(ctx context.Context, conn *jsonrpc2.C
 		return
 	}
 
-	if err := proc.AgentSession().SendInterrupt(); err != nil {
+	if err := proc.SendInterrupt(); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
@@ -146,9 +137,7 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 		PermissionSuggestions: params.PermissionSuggestions,
 	}
 	choice := parsePermissionChoice(params.Choice)
-	proc.SetRunning()
-
-	if err := proc.AgentSession().SendPermissionResponse(data, choice); err != nil {
+	if err := proc.SendPermissionResponse(data, choice); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
@@ -185,9 +174,7 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 		RequestID: params.RequestID,
 		ToolUseID: params.ToolUseID,
 	}
-	proc.SetRunning()
-
-	if err := proc.AgentSession().SendQuestionResponse(data, params.Answers); err != nil {
+	if err := proc.SendQuestionResponse(data, params.Answers); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}

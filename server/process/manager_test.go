@@ -313,3 +313,30 @@ func TestProcess_SetIdle_EmitsStateChange(t *testing.T) {
 		t.Errorf("expected no duplicate event, got %d events", len(events))
 	}
 }
+
+func TestProcess_SendMessage_SetsRunning(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mock, "/tmp", store, 10*time.Minute)
+	defer m.Shutdown()
+
+	var events []StateChangeEvent
+	m.SetOnStateChange(func(e StateChangeEvent) {
+		events = append(events, e)
+	})
+
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+
+	if proc.State() != ProcessStateIdle {
+		t.Fatalf("expected initial state to be idle")
+	}
+
+	_ = proc.SendMessage("hello")
+
+	if proc.State() != ProcessStateRunning {
+		t.Errorf("expected state to be running after SendMessage")
+	}
+	if len(events) != 2 || events[1].State != ProcessStateRunning {
+		t.Errorf("expected running event after SendMessage, got %v", events)
+	}
+}
