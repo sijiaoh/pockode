@@ -255,3 +255,61 @@ func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
 		t.Error("expected process to not be closed while streaming events")
 	}
 }
+
+func TestProcess_SetRunning_EmitsStateChange(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mock, "/tmp", store, 10*time.Minute)
+	defer m.Shutdown()
+
+	var events []StateChangeEvent
+	m.SetOnStateChange(func(e StateChangeEvent) {
+		events = append(events, e)
+	})
+
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+
+	// Initial state is idle, creation emits idle
+	if len(events) != 1 || events[0].State != ProcessStateIdle {
+		t.Fatalf("expected initial idle event, got %v", events)
+	}
+
+	// SetRunning should emit running
+	proc.SetRunning()
+	if len(events) != 2 || events[1].State != ProcessStateRunning {
+		t.Errorf("expected running event, got %v", events)
+	}
+
+	// Duplicate SetRunning should not emit
+	proc.SetRunning()
+	if len(events) != 2 {
+		t.Errorf("expected no duplicate event, got %d events", len(events))
+	}
+}
+
+func TestProcess_SetIdle_EmitsStateChange(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mock, "/tmp", store, 10*time.Minute)
+	defer m.Shutdown()
+
+	var events []StateChangeEvent
+	m.SetOnStateChange(func(e StateChangeEvent) {
+		events = append(events, e)
+	})
+
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	proc.SetRunning()
+
+	// SetIdle should emit idle
+	proc.SetIdle()
+	if len(events) != 3 || events[2].State != ProcessStateIdle {
+		t.Errorf("expected idle event, got %v", events)
+	}
+
+	// Duplicate SetIdle should not emit
+	proc.SetIdle()
+	if len(events) != 3 {
+		t.Errorf("expected no duplicate event, got %d events", len(events))
+	}
+}

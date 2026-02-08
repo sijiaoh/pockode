@@ -70,7 +70,7 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	sess, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
+	proc, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
@@ -86,8 +86,8 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 		log.Error("failed to append to history", "error", err)
 	}
 
-	// Send message to agent
-	if err := sess.SendMessage(params.Content); err != nil {
+	proc.SetRunning()
+	if err := proc.AgentSession().SendMessage(params.Content); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
@@ -106,13 +106,13 @@ func (h *rpcMethodHandler) handleInterrupt(ctx context.Context, conn *jsonrpc2.C
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	sess, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
+	proc, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
 
-	if err := sess.SendInterrupt(); err != nil {
+	if err := proc.AgentSession().SendInterrupt(); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
@@ -133,7 +133,7 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	sess, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
+	proc, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
@@ -146,8 +146,9 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 		PermissionSuggestions: params.PermissionSuggestions,
 	}
 	choice := parsePermissionChoice(params.Choice)
+	proc.SetRunning()
 
-	if err := sess.SendPermissionResponse(data, choice); err != nil {
+	if err := proc.AgentSession().SendPermissionResponse(data, choice); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
@@ -174,7 +175,7 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	sess, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
+	proc, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
@@ -184,8 +185,9 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 		RequestID: params.RequestID,
 		ToolUseID: params.ToolUseID,
 	}
+	proc.SetRunning()
 
-	if err := sess.SendQuestionResponse(data, params.Answers); err != nil {
+	if err := proc.AgentSession().SendQuestionResponse(data, params.Answers); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
@@ -237,7 +239,7 @@ func isWhitespace(r rune) bool {
 	return unicode.IsSpace(r)
 }
 
-func (h *rpcMethodHandler) getOrCreateProcess(ctx context.Context, log *slog.Logger, wt *worktree.Worktree, sessionID string) (agent.Session, error) {
+func (h *rpcMethodHandler) getOrCreateProcess(ctx context.Context, log *slog.Logger, wt *worktree.Worktree, sessionID string) (*process.Process, error) {
 	meta, found, err := wt.SessionStore.Get(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)
@@ -263,5 +265,5 @@ func (h *rpcMethodHandler) getOrCreateProcess(ctx context.Context, log *slog.Log
 		log.Info("process created", "resume", resume, "mode", meta.Mode)
 	}
 
-	return proc.AgentSession(), nil
+	return proc, nil
 }

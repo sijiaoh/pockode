@@ -297,10 +297,28 @@ func (p *Process) State() ProcessState {
 	return p.state
 }
 
-func (p *Process) SetState(state ProcessState) {
+func (p *Process) setState(state ProcessState) {
 	p.mu.Lock()
 	p.state = state
 	p.mu.Unlock()
+}
+
+// SetRunning transitions the process to running state and notifies subscribers.
+func (p *Process) SetRunning() {
+	if p.State() == ProcessStateRunning {
+		return
+	}
+	p.setState(ProcessStateRunning)
+	p.manager.emitStateChange(p.sessionID, ProcessStateRunning)
+}
+
+// SetIdle transitions the process to idle state and notifies subscribers.
+func (p *Process) SetIdle() {
+	if p.State() == ProcessStateIdle {
+		return
+	}
+	p.setState(ProcessStateIdle)
+	p.manager.emitStateChange(p.sessionID, ProcessStateIdle)
 }
 
 // streamEvents routes events to history and emits to the event listener.
@@ -313,11 +331,8 @@ func (p *Process) streamEvents(ctx context.Context) {
 		eventType := event.EventType()
 		log.Debug("streaming event", "type", eventType)
 
-		// Set to running on first event after idle
-		if p.State() == ProcessStateIdle {
-			p.SetState(ProcessStateRunning)
-			p.manager.emitStateChange(p.sessionID, ProcessStateRunning)
-		}
+		// Ensure running state on event (handles edge cases like resumed sessions)
+		p.SetRunning()
 
 		// Persist to history
 		if err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event)); err != nil {
@@ -325,8 +340,7 @@ func (p *Process) streamEvents(ctx context.Context) {
 		}
 
 		if eventType.AwaitsUserInput() {
-			p.SetState(ProcessStateIdle)
-			p.manager.emitStateChange(p.sessionID, ProcessStateIdle)
+			p.SetIdle()
 			if err := p.sessionStore.Touch(ctx, p.sessionID); err != nil {
 				log.Error("failed to touch session", "error", err)
 			}
