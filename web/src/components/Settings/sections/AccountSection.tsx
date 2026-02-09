@@ -4,7 +4,7 @@ import SettingsSection from "../SettingsSection";
 
 interface Props {
 	id: string;
-	onLogout: () => void;
+	onLogout?: () => void;
 }
 
 export default function AccountSection({ id, onLogout }: Props) {
@@ -16,7 +16,7 @@ export default function AccountSection({ id, onLogout }: Props) {
 
 	const handleConfirm = () => {
 		setShowConfirm(false);
-		onLogout();
+		onLogout?.();
 	};
 
 	const handleCancel = () => {

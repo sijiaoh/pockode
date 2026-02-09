@@ -1,26 +1,7 @@
 import { useRef } from "react";
+import { useSettingsSections } from "../../lib/registries/settingsRegistry";
 import BackToChatButton from "../ui/BackToChatButton";
 import SettingsNav from "./SettingsNav";
-import {
-	AccountSection,
-	AppearanceSection,
-	ThemeSection,
-	WorktreeSection,
-} from "./sections";
-
-const SECTION_IDS = {
-	appearance: "appearance",
-	theme: "theme",
-	worktree: "worktree",
-	account: "account",
-} as const;
-
-const NAV_ITEMS = [
-	{ id: SECTION_IDS.appearance, label: "Appearance" },
-	{ id: SECTION_IDS.theme, label: "Theme" },
-	{ id: SECTION_IDS.worktree, label: "Worktree" },
-	{ id: SECTION_IDS.account, label: "Account" },
-];
 
 interface Props {
 	onBack: () => void;
@@ -29,6 +10,12 @@ interface Props {
 
 export default function SettingsPage({ onBack, onLogout }: Props) {
 	const scrollContainerRef = useRef<HTMLElement>(null);
+	const sections = useSettingsSections();
+
+	const navItems = sections.map((section) => ({
+		id: section.id,
+		label: section.label,
+	}));
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
@@ -39,14 +26,18 @@ export default function SettingsPage({ onBack, onLogout }: Props) {
 				</h1>
 			</header>
 
-			<SettingsNav items={NAV_ITEMS} scrollContainerRef={scrollContainerRef} />
+			<SettingsNav items={navItems} scrollContainerRef={scrollContainerRef} />
 
 			<main ref={scrollContainerRef} className="min-h-0 flex-1 overflow-auto">
 				<div className="mx-auto max-w-2xl px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-					<AppearanceSection id={SECTION_IDS.appearance} />
-					<ThemeSection id={SECTION_IDS.theme} />
-					<WorktreeSection id={SECTION_IDS.worktree} />
-					<AccountSection id={SECTION_IDS.account} onLogout={onLogout} />
+					{sections.map((section) => {
+						const Component = section.component;
+						// Pass extra props for specific sections
+						const extraProps = section.id === "account" ? { onLogout } : {};
+						return (
+							<Component key={section.id} id={section.id} {...extraProps} />
+						);
+					})}
 				</div>
 			</main>
 		</div>
