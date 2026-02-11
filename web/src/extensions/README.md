@@ -16,15 +16,16 @@ This directory contains UI extensions that customize Pockode's interface.
    ```ts
    // extensions/YourExtension/index.ts
    import type { ExtensionContext } from "../../lib/extensions";
+   import { DEFAULT_PRIORITY } from "../../lib/registries/settingsRegistry";
    import YourSection from "./YourSection";
 
    export const id = "your-extension";  // Unique extension ID
 
    export function activate(ctx: ExtensionContext) {
      ctx.settings.register({
-       id: "your-section",      // Unique section identifier
-       label: "Your Section",   // Navigation label
-       priority: 50,            // Sort order (lower = higher)
+       id: "your-section",        // Unique section identifier
+       label: "Your Section",     // Navigation label
+       priority: DEFAULT_PRIORITY, // Sort order (lower = higher)
        component: YourSection,
      });
    }

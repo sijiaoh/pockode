@@ -1,6 +1,8 @@
 import type { ComponentType } from "react";
 import { useSyncExternalStore } from "react";
 
+export const DEFAULT_PRIORITY = 100;
+
 export interface SettingsSectionConfig {
 	id: string;
 	label: string;

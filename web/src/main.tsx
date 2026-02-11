@@ -5,13 +5,11 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import { loadAllExtensions } from "./lib/extensions";
 import { createQueryClient } from "./lib/queryClient";
-import { registerBuiltinSettings } from "./lib/registries/builtinSettings";
 import { themeActions } from "./lib/themeStore";
 import { router } from "./router";
 
 const queryClient = createQueryClient();
 themeActions.init();
-registerBuiltinSettings();
 loadAllExtensions();
 
 const root = document.getElementById("root");
