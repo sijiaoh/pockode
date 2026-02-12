@@ -152,9 +152,9 @@ func TestParseLine(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:     "unknown event type returns RawEvent",
+			name:     "unknown event type is ignored",
 			input:    `{"type":"unknown_event"}`,
-			expected: []agent.AgentEvent{agent.RawEvent{Content: `{"type":"unknown_event"}`}},
+			expected: nil,
 		},
 		{
 			name:  "control_request permission request",
