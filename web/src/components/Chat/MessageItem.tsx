@@ -6,6 +6,7 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useMemo, useState } from "react";
+import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useWSStore } from "../../lib/wsStore";
 import type {
 	AskUserQuestionRequest,
@@ -511,20 +512,32 @@ const MessageItem = memo(function MessageItem({
 	onPermissionRespond,
 	onQuestionRespond,
 }: Props) {
+	const chatUIConfig = useChatUIConfig();
+	const UserAvatar = chatUIConfig.UserAvatar;
+	const AssistantAvatar = chatUIConfig.AssistantAvatar;
+	const userBubbleClass = chatUIConfig.userBubbleClass ?? "";
+	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
+
 	if (message.role === "user") {
 		return (
-			<div className="flex justify-end">
-				<div className="max-w-full min-w-0 overflow-hidden rounded-lg bg-th-user-bubble p-2.5 text-th-user-bubble-text sm:max-w-[80%] sm:p-3">
+			<div className="flex items-end justify-end gap-2">
+				<div
+					className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-user-bubble p-2.5 text-th-user-bubble-text sm:p-3 ${userBubbleClass}`}
+				>
 					<p className="whitespace-pre-wrap">{message.content}</p>
 				</div>
+				{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
 			</div>
 		);
 	}
 
 	// Assistant message
 	return (
-		<div className="flex justify-start">
-			<div className="max-w-full min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:max-w-[80%] sm:p-3">
+		<div className="flex items-end justify-start gap-2">
+			{AssistantAvatar && <AssistantAvatar className="size-10 shrink-0" />}
+			<div
+				className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3 ${assistantBubbleClass}`}
+			>
 				{message.parts.length > 0 && (
 					<div className="space-y-2">
 						{message.parts.map((part, index) => {

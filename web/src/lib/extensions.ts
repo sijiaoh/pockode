@@ -1,4 +1,9 @@
 import {
+	type ChatUIConfig,
+	resetChatUIConfig,
+	setChatUIConfig,
+} from "./registries/chatUIRegistry";
+import {
 	registerSettingsSection,
 	type SettingsSectionConfig,
 } from "./registries/settingsRegistry";
@@ -7,6 +12,9 @@ export interface ExtensionContext {
 	readonly id: string;
 	readonly settings: {
 		register(config: SettingsSectionConfig): void;
+	};
+	readonly chatUI: {
+		configure(config: Partial<ChatUIConfig>): void;
 	};
 }
 
@@ -23,6 +31,12 @@ function createExtensionContext(extensionId: string): InternalExtensionContext {
 			register(config) {
 				const unregister = registerSettingsSection(config);
 				disposables.push(unregister);
+			},
+		},
+		chatUI: {
+			configure(config) {
+				setChatUIConfig(config);
+				disposables.push(() => resetChatUIConfig());
 			},
 		},
 		dispose() {
