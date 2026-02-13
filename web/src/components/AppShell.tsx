@@ -303,7 +303,6 @@ function AppShell() {
 				sessionId={currentSessionId}
 				sessionTitle={currentSession.title}
 				onUpdateTitle={(title) => updateTitle(currentSessionId, title)}
-				onLogout={authActions.logout}
 				onOpenSidebar={handleOpenSidebar}
 				onOpenSettings={handleOpenSettings}
 				overlay={overlay}

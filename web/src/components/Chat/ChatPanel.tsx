@@ -21,7 +21,6 @@ interface Props {
 	sessionId: string;
 	sessionTitle: string;
 	onUpdateTitle: (title: string) => void;
-	onLogout?: () => void;
 	onOpenSidebar?: () => void;
 	onOpenSettings?: () => void;
 	overlay?: OverlayState;
@@ -32,7 +31,6 @@ function ChatPanel({
 	sessionId,
 	sessionTitle,
 	onUpdateTitle,
-	onLogout,
 	onOpenSidebar,
 	onOpenSettings,
 	overlay,
@@ -181,12 +179,7 @@ function ChatPanel({
 					<FileView path={overlay.path} onBack={onCloseOverlay ?? (() => {})} />
 				);
 			case "settings":
-				return (
-					<SettingsPage
-						onBack={onCloseOverlay ?? (() => {})}
-						onLogout={onLogout ?? (() => {})}
-					/>
-				);
+				return <SettingsPage onBack={onCloseOverlay ?? (() => {})} />;
 		}
 	};
 

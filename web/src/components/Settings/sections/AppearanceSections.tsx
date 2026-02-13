@@ -7,7 +7,6 @@ import {
 	type ThemeName,
 	useTheme,
 } from "../../../lib/themeStore";
-import SettingsSection from "../SettingsSection";
 
 const MODE_OPTIONS: { value: ThemeMode; label: string; icon: ReactNode }[] = [
 	{
@@ -86,93 +85,89 @@ function ThemePreview({
 	);
 }
 
-export function AppearanceSection({ id }: { id: string }) {
+export function AppearanceSection() {
 	const { mode, setMode } = useTheme();
 
 	return (
-		<SettingsSection id={id} title="Appearance">
-			{/* biome-ignore lint/a11y/useSemanticElements: fieldset is for forms; this is an instant-apply toggle group */}
-			<div
-				role="group"
-				aria-label="Appearance mode"
-				className="flex gap-1 rounded-lg bg-th-bg-secondary p-1"
-			>
-				{MODE_OPTIONS.map((option) => (
-					<button
-						key={option.value}
-						type="button"
-						onClick={() => setMode(option.value)}
-						aria-pressed={mode === option.value}
-						className={`flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
-							mode === option.value
-								? "bg-th-bg-tertiary text-th-text-primary shadow-sm"
-								: "text-th-text-muted hover:text-th-text-secondary"
-						}`}
-					>
-						{option.icon}
-						<span>{option.label}</span>
-					</button>
-				))}
-			</div>
-		</SettingsSection>
+		// biome-ignore lint/a11y/useSemanticElements: fieldset is for forms; this is an instant-apply toggle group
+		<div
+			role="group"
+			aria-label="Appearance mode"
+			className="flex gap-1 rounded-lg bg-th-bg-secondary p-1"
+		>
+			{MODE_OPTIONS.map((option) => (
+				<button
+					key={option.value}
+					type="button"
+					onClick={() => setMode(option.value)}
+					aria-pressed={mode === option.value}
+					className={`flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
+						mode === option.value
+							? "bg-th-bg-tertiary text-th-text-primary shadow-sm"
+							: "text-th-text-muted hover:text-th-text-secondary"
+					}`}
+				>
+					{option.icon}
+					<span>{option.label}</span>
+				</button>
+			))}
+		</div>
 	);
 }
 
-export function ThemeSection({ id }: { id: string }) {
+export function ThemeSection() {
 	const { theme, setTheme, resolvedMode: mode } = useTheme();
 
 	return (
-		<SettingsSection id={id} title="Theme">
-			{/* biome-ignore lint/a11y/useSemanticElements: fieldset is for forms; this is an instant-apply selection */}
-			<div
-				role="group"
-				aria-label="Theme selection"
-				className="grid grid-cols-1 gap-2"
-			>
-				{THEME_NAMES.map((name) => {
-					const info = THEME_INFO[name];
-					const isSelected = theme === name;
-					return (
-						<button
-							key={name}
-							type="button"
-							onClick={() => setTheme(name)}
-							aria-pressed={isSelected}
-							className={`group overflow-hidden rounded-lg border text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-2 active:scale-[0.98] ${
-								isSelected
-									? "border-th-accent ring-1 ring-th-accent"
-									: "border-th-border hover:border-th-text-muted"
-							}`}
+		// biome-ignore lint/a11y/useSemanticElements: fieldset is for forms; this is an instant-apply selection
+		<div
+			role="group"
+			aria-label="Theme selection"
+			className="grid grid-cols-1 gap-2"
+		>
+			{THEME_NAMES.map((name) => {
+				const info = THEME_INFO[name];
+				const isSelected = theme === name;
+				return (
+					<button
+						key={name}
+						type="button"
+						onClick={() => setTheme(name)}
+						aria-pressed={isSelected}
+						className={`group overflow-hidden rounded-lg border text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-2 active:scale-[0.98] ${
+							isSelected
+								? "border-th-accent ring-1 ring-th-accent"
+								: "border-th-border hover:border-th-text-muted"
+						}`}
+					>
+						<ThemePreview
+							themeName={name}
+							isSelected={isSelected}
+							mode={mode}
+						/>
+						<div
+							className="flex min-h-12 items-center justify-between px-3 py-2"
+							style={{ backgroundColor: info.bg[mode] }}
 						>
-							<ThemePreview
-								themeName={name}
-								isSelected={isSelected}
-								mode={mode}
-							/>
-							<div
-								className="flex min-h-12 items-center justify-between px-3 py-2"
-								style={{ backgroundColor: info.bg[mode] }}
-							>
-								<div>
-									<div className="text-sm" style={{ color: info.text[mode] }}>
-										{info.label}
-									</div>
-									<div
-										className="text-xs"
-										style={{ color: info.textMuted[mode] }}
-									>
-										{info.description}
-									</div>
+							<div>
+								<div className="text-sm" style={{ color: info.text[mode] }}>
+									{info.label}
 								</div>
 								<div
-									className="h-4 w-4 rounded-full"
-									style={{ backgroundColor: info.accent[mode] }}
-								/>
+									className="text-xs"
+									style={{ color: info.textMuted[mode] }}
+								>
+									{info.description}
+								</div>
 							</div>
-						</button>
-					);
-				})}
-			</div>
-		</SettingsSection>
+							<div
+								className="h-4 w-4 rounded-full"
+								style={{ backgroundColor: info.accent[mode] }}
+							/>
+						</div>
+					</button>
+				);
+			})}
+		</div>
 	);
 }
