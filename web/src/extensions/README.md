@@ -50,6 +50,38 @@ export default function YourSection() {
 }
 ```
 
+### ctx.chatUI.configure()
+
+Customize the chat interface by replacing default components or hiding elements.
+
+```ts
+ctx.chatUI.configure({
+  // Custom avatar components
+  UserAvatar: CustomUserAvatar,
+  AssistantAvatar: CustomAssistantAvatar,
+
+  // Replace the input bar
+  InputBar: CustomInputBar,
+
+  // Replace the empty state (shown when no messages)
+  EmptyState: CustomEmptyState,
+
+  // Add content above the message list
+  ChatTopContent: CustomChatTopContent,
+
+  // Set to null to hide, or provide custom component
+  ModeSelector: null,
+  StopButton: null,
+
+  // Style customization
+  maxWidth: "800px",
+  userBubbleClass: "custom-user-bubble",
+  assistantBubbleClass: "custom-assistant-bubble",
+});
+```
+
+See `chatUIRegistry.ts` for prop interfaces (`AvatarProps`, `InputBarProps`, etc.).
+
 ## How It Works
 
 Extensions are automatically discovered and loaded at startup via Vite's `import.meta.glob`.
@@ -57,4 +89,8 @@ Any directory under `extensions/` with an `index.ts` exporting `id` and `activat
 
 ## Example
 
-See `ExampleExtension/` for a working example that adds an "About" section to Settings.
+See `ExampleExtension/` for working examples:
+- `settings/` - Adds an "About" section to Settings
+- `chatUI/` - Custom chat UI components (avatars, input bar, empty state, etc.)
+
+Note: The chatUI customization in `ExampleExtension/index.ts` is commented out by default. Uncomment the imports and `ctx.chatUI.configure()` call to enable it.
