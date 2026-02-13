@@ -44,4 +44,4 @@ export const activate: Extension["activate"] = (ctx) => {
 		priority: PRIORITY.ACCOUNT,
 		component: AccountSection,
 	});
-}
+};

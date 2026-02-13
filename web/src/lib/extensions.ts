@@ -1,7 +1,7 @@
 import {
 	DEFAULT_PRIORITY,
-	type SettingsSectionConfig,
 	registerSettingsSection,
+	type SettingsSectionConfig,
 } from "./registries/settingsRegistry";
 
 export { DEFAULT_PRIORITY };
