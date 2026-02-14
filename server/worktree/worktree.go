@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/pockode/server/chat"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/watch"
@@ -22,6 +23,7 @@ type Worktree struct {
 	SessionListWatcher  *watch.SessionListWatcher
 	ChatMessagesWatcher *watch.ChatMessagesWatcher
 	ProcessManager      *process.Manager
+	ChatClient          *chat.Client
 
 	watchers []watch.Watcher // for unified lifecycle management
 
