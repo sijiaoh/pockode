@@ -3,6 +3,7 @@ import type {
 	Ticket,
 	TicketCreateParams,
 	TicketDeleteParams,
+	TicketListChangedNotification,
 	TicketStartParams,
 	TicketStartResult,
 	TicketStatus,
@@ -19,14 +20,17 @@ export interface TicketActions {
 	deleteTicket: (ticketId: string) => Promise<void>;
 	startTicket: (ticketId: string) => Promise<TicketStartResult>;
 	ticketListSubscribe: (
-		onNotification: (params: unknown) => void,
+		onNotification: (params: TicketListChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<Ticket[]>>;
 	ticketListUnsubscribe: (id: string) => Promise<void>;
 }
 
 export function createTicketActions(
 	getClient: () => JSONRPCRequester<void> | null,
-	registerCallback: (id: string, callback: (params: unknown) => void) => void,
+	registerCallback: (
+		id: string,
+		callback: (params: TicketListChangedNotification) => void,
+	) => void,
 	unregisterCallback: (id: string) => void,
 ): TicketActions {
 	const requireClient = (): JSONRPCRequester<void> => {
@@ -65,7 +69,7 @@ export function createTicketActions(
 		},
 
 		ticketListSubscribe: async (
-			onNotification: (params: unknown) => void,
+			onNotification: (params: TicketListChangedNotification) => void,
 		): Promise<WatchSubscribeResult<Ticket[]>> => {
 			const result = (await requireClient().request(
 				"ticket.list.subscribe",

@@ -12,6 +12,7 @@ import type {
 	SessionListChangedNotification,
 	SessionListItem,
 	SessionListSubscribeResult,
+	TicketListChangedNotification,
 	WatchSubscribeResult,
 } from "../types/message";
 import type {
@@ -271,11 +272,7 @@ const fileActions = createFileActions(getClient);
 const gitActions = createGitActions(getClient);
 const ticketActions = createTicketActions(
 	getClient,
-	(id, cb) =>
-		ticketListWatchCallbacks.set(
-			id,
-			cb as (p: TicketListChangedNotification) => void,
-		),
+	(id, cb) => ticketListWatchCallbacks.set(id, cb),
 	(id) => ticketListWatchCallbacks.delete(id),
 );
 const worktreeRpcActions = createWorktreeActions(getClient);

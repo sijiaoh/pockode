@@ -323,6 +323,7 @@ function AppShell() {
 				onOpenSettings={handleOpenSettings}
 				overlay={overlay}
 				onCloseOverlay={handleCloseOverlay}
+				onSelectSession={handleSelectSession}
 			/>
 		</div>
 	);

@@ -49,9 +49,9 @@ function SessionSidebar({
 				icon: MessageSquare,
 				showBadge: hasAnyUnread,
 			},
-			{ id: "team", label: "Team", icon: Users },
 			{ id: "files", label: "Files", icon: FolderOpen },
 			{ id: "git", label: "Git", icon: GitCompare },
+			{ id: "team", label: "Team", icon: Users },
 		],
 		[hasAnyUnread],
 	);
@@ -106,7 +106,7 @@ function SessionSidebar({
 				onCreateSession={onCreateSession}
 				onDeleteSession={onDeleteSession}
 			/>
-			<TeamTab onSelectSession={handleSelectSession} />
+			<TeamTab />
 			<FilesTab
 				onSelectFile={handleSelectFile}
 				activeFilePath={activeFilePath}

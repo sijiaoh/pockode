@@ -190,6 +190,62 @@ describe("buildNavigation", () => {
 				search: { session: "sess123" },
 			});
 		});
+
+		it("builds main worktree tickets route", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "",
+				overlayType: "tickets",
+				sessionId: null,
+			});
+
+			expect(result).toEqual({
+				to: "/tickets",
+			});
+		});
+
+		it("builds named worktree tickets route with session", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "feature-x",
+				overlayType: "tickets",
+				sessionId: "sess123",
+			});
+
+			expect(result).toEqual({
+				to: "/w/$worktree/tickets",
+				params: { worktree: "feature-x" },
+				search: { session: "sess123" },
+			});
+		});
+
+		it("builds main worktree agent-roles route", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "",
+				overlayType: "agent-roles",
+				sessionId: null,
+			});
+
+			expect(result).toEqual({
+				to: "/agent-roles",
+			});
+		});
+
+		it("builds named worktree agent-roles route with session", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "feature-x",
+				overlayType: "agent-roles",
+				sessionId: "sess123",
+			});
+
+			expect(result).toEqual({
+				to: "/w/$worktree/agent-roles",
+				params: { worktree: "feature-x" },
+				search: { session: "sess123" },
+			});
+		});
 	});
 
 	describe("home", () => {

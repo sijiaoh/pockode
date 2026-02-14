@@ -68,6 +68,22 @@ export function useRouteState(): RouteInfo {
 		from: WT_ROUTES.settings,
 		shouldThrow: false,
 	});
+	const ticketsMatch = useMatch({
+		from: ROUTES.tickets,
+		shouldThrow: false,
+	});
+	const wtTicketsMatch = useMatch({
+		from: WT_ROUTES.tickets,
+		shouldThrow: false,
+	});
+	const agentRolesMatch = useMatch({
+		from: ROUTES.agentRoles,
+		shouldThrow: false,
+	});
+	const wtAgentRolesMatch = useMatch({
+		from: WT_ROUTES.agentRoles,
+		shouldThrow: false,
+	});
 
 	const sessionId =
 		sessionMatch?.params.sessionId ?? wtSessionMatch?.params.sessionId ?? null;
@@ -138,6 +154,26 @@ export function useRouteState(): RouteInfo {
 			wtSettingsMatch?.search) as OverlaySearchParams;
 		return {
 			overlay: { type: "settings" },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	if (ticketsMatch || wtTicketsMatch) {
+		const search = (ticketsMatch?.search ??
+			wtTicketsMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "tickets" },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	if (agentRolesMatch || wtAgentRolesMatch) {
+		const search = (agentRolesMatch?.search ??
+			wtAgentRolesMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "agent-roles" },
 			sessionId: search.session ?? null,
 			worktree,
 		};

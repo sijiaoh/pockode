@@ -13,6 +13,7 @@ import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
 import { SettingsPage } from "../Settings";
+import { AgentRolesPage, TicketDashboardPage } from "../Team";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
@@ -25,6 +26,7 @@ interface Props {
 	onOpenSettings?: () => void;
 	overlay?: OverlayState;
 	onCloseOverlay?: () => void;
+	onSelectSession?: (sessionId: string) => void;
 }
 
 function ChatPanel({
@@ -35,6 +37,7 @@ function ChatPanel({
 	onOpenSettings,
 	overlay,
 	onCloseOverlay,
+	onSelectSession,
 }: Props) {
 	const projectTitle = useWSStore((state) => state.projectTitle);
 
@@ -189,6 +192,15 @@ function ChatPanel({
 				return <CommitDiffView hash={overlay.hash} path={overlay.path} />;
 			case "settings":
 				return <SettingsPage onBack={onCloseOverlay ?? (() => {})} />;
+			case "tickets":
+				return (
+					<TicketDashboardPage
+						onBack={onCloseOverlay ?? (() => {})}
+						onSelectSession={onSelectSession}
+					/>
+				);
+			case "agent-roles":
+				return <AgentRolesPage onBack={onCloseOverlay ?? (() => {})} />;
 		}
 	};
 

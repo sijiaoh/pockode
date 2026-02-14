@@ -44,7 +44,25 @@ interface NavToSettingsOverlay {
 	sessionId: string | null;
 }
 
-type NavToOverlay = NavToFileOverlay | NavToSettingsOverlay;
+interface NavToTicketsOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "tickets";
+	sessionId: string | null;
+}
+
+interface NavToAgentRolesOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "agent-roles";
+	sessionId: string | null;
+}
+
+type NavToOverlay =
+	| NavToFileOverlay
+	| NavToSettingsOverlay
+	| NavToTicketsOverlay
+	| NavToAgentRolesOverlay;
 
 interface NavToHome {
 	type: "home";
@@ -113,6 +131,20 @@ export function overlayToNavigation(
 					overlayType: "settings" as const,
 					sessionId,
 				};
+			case "tickets":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "tickets" as const,
+					sessionId,
+				};
+			case "agent-roles":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "agent-roles" as const,
+					sessionId,
+				};
 		}
 	})();
 	return buildNavigation(target);
@@ -150,6 +182,22 @@ export function buildNavigation(
 		case "overlay": {
 			if (target.overlayType === "settings") {
 				result.to = isMain ? ROUTES.settings : WT_ROUTES.settings;
+				if (!isMain) {
+					result.params = { worktree: target.worktree };
+				}
+				if (target.sessionId) {
+					result.search = { session: target.sessionId };
+				}
+			} else if (target.overlayType === "tickets") {
+				result.to = isMain ? ROUTES.tickets : WT_ROUTES.tickets;
+				if (!isMain) {
+					result.params = { worktree: target.worktree };
+				}
+				if (target.sessionId) {
+					result.search = { session: target.sessionId };
+				}
+			} else if (target.overlayType === "agent-roles") {
+				result.to = isMain ? ROUTES.agentRoles : WT_ROUTES.agentRoles;
 				if (!isMain) {
 					result.params = { worktree: target.worktree };
 				}
