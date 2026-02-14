@@ -42,6 +42,7 @@ export function useTicketSubscription(enabled: boolean) {
 		handleNotification,
 		{
 			enabled,
+			resubscribeOnWorktreeChange: false, // Tickets are global, not worktree-scoped
 			onSubscribed: setTickets,
 			onReset: reset,
 		},

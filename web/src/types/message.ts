@@ -1,6 +1,12 @@
 export type SessionMode = "default" | "yolo";
 export type ProcessState = "idle" | "running" | "ended";
 
+/** Base result for all watch subscriptions */
+export interface WatchSubscribeResult<TInitial = void> {
+	id: string;
+	initial?: TInitial;
+}
+
 // Ticket types
 export type TicketStatus = "open" | "in_progress" | "done";
 
@@ -47,11 +53,6 @@ export interface TicketStartParams {
 
 export interface TicketStartResult {
 	session_id: string;
-}
-
-export interface TicketListSubscribeResult {
-	id: string;
-	tickets: Ticket[];
 }
 
 export type TicketListChangedNotification =

@@ -3,11 +3,11 @@ import type {
 	Ticket,
 	TicketCreateParams,
 	TicketDeleteParams,
-	TicketListSubscribeResult,
 	TicketStartParams,
 	TicketStartResult,
 	TicketStatus,
 	TicketUpdateParams,
+	WatchSubscribeResult,
 } from "../../types/message";
 
 export interface TicketActions {
@@ -20,7 +20,7 @@ export interface TicketActions {
 	startTicket: (ticketId: string) => Promise<TicketStartResult>;
 	ticketListSubscribe: (
 		onNotification: (params: unknown) => void,
-	) => Promise<TicketListSubscribeResult>;
+	) => Promise<WatchSubscribeResult<Ticket[]>>;
 	ticketListUnsubscribe: (id: string) => Promise<void>;
 }
 
@@ -66,13 +66,13 @@ export function createTicketActions(
 
 		ticketListSubscribe: async (
 			onNotification: (params: unknown) => void,
-		): Promise<TicketListSubscribeResult> => {
-			const result: TicketListSubscribeResult = await requireClient().request(
+		): Promise<WatchSubscribeResult<Ticket[]>> => {
+			const result = (await requireClient().request(
 				"ticket.list.subscribe",
 				{},
-			);
+			)) as { id: string; tickets: Ticket[] };
 			registerCallback(result.id, onNotification);
-			return result;
+			return { id: result.id, initial: result.tickets };
 		},
 
 		ticketListUnsubscribe: async (id: string): Promise<void> => {

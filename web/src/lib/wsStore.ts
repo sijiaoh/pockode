@@ -12,9 +12,7 @@ import type {
 	SessionListChangedNotification,
 	SessionListItem,
 	SessionListSubscribeResult,
-	Ticket,
-	TicketListChangedNotification,
-	TicketListSubscribeResult,
+	WatchSubscribeResult,
 } from "../types/message";
 import type {
 	Settings,
@@ -60,12 +58,6 @@ interface ConnectionActions {
 // TODO: Implement retry logic for watcher subscriptions.
 // Currently callers must handle failures; retry only happens on WebSocket reconnect.
 
-/** Base result for all watch subscriptions */
-export interface WatchSubscribeResult<TInitial = void> {
-	id: string;
-	initial?: TInitial;
-}
-
 export interface WatchActions {
 	fsSubscribe: (
 		path: string,
@@ -95,10 +87,6 @@ export interface WatchActions {
 		callback: (params: SettingsChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<Settings>>;
 	settingsUnsubscribe: (id: string) => Promise<void>;
-	ticketListSubscribe: (
-		callback: (params: TicketListChangedNotification) => void,
-	) => Promise<WatchSubscribeResult<Ticket[]>>;
-	ticketListUnsubscribe: (id: string) => Promise<void>;
 }
 
 type RPCActions = ConnectionActions &
@@ -640,33 +628,6 @@ export const useWSStore = create<WSState>((set, get) => ({
 			if (client) {
 				try {
 					await client.request("settings.unsubscribe", { id });
-				} catch {
-					// Ignore errors (connection might be closed)
-				}
-			}
-		},
-
-		ticketListSubscribe: async (
-			callback: (params: TicketListChangedNotification) => void,
-		) => {
-			const client = getClient();
-			if (!client) {
-				throw new Error("Not connected");
-			}
-			const result = (await client.request(
-				"ticket.list.subscribe",
-				{},
-			)) as TicketListSubscribeResult;
-			ticketListWatchCallbacks.set(result.id, callback);
-			return { id: result.id, initial: result.tickets };
-		},
-
-		ticketListUnsubscribe: async (id: string) => {
-			ticketListWatchCallbacks.delete(id);
-			const client = getClient();
-			if (client) {
-				try {
-					await client.request("ticket.list.unsubscribe", { id });
 				} catch {
 					// Ignore errors (connection might be closed)
 				}
