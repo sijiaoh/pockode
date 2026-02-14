@@ -4,7 +4,6 @@ import (
 	"log/slog"
 
 	"github.com/pockode/server/settings"
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 // SettingsWatcher notifies subscribers when settings are updated.
@@ -65,12 +64,11 @@ func (w *SettingsWatcher) notifyChange(s settings.Settings) {
 
 // Subscribe registers a subscriber and returns the subscription ID along with
 // the current settings.
-func (w *SettingsWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (string, settings.Settings) {
+func (w *SettingsWatcher) Subscribe(notifier Notifier) (string, settings.Settings) {
 	id := w.GenerateID()
 	sub := &Subscription{
-		ID:     id,
-		ConnID: connID,
-		Conn:   conn,
+		ID:       id,
+		Notifier: notifier,
 	}
 	w.AddSubscription(sub)
 

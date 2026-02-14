@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/chat"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/watch"
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 const idleReleaseDelay = 30 * time.Second
@@ -171,6 +171,8 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		sessionListWatcher.NotifyProcessStateChange(e.SessionID, string(e.State))
 	})
 
+	chatClient := chat.NewClient(sessionStore, processManager)
+
 	wt := &Worktree{
 		Name:                name,
 		WorkDir:             workDir,
@@ -181,8 +183,9 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		SessionListWatcher:  sessionListWatcher,
 		ChatMessagesWatcher: chatMessagesWatcher,
 		ProcessManager:      processManager,
+		ChatClient:          chatClient,
 		watchers:            []watch.Watcher{fsWatcher, gitWatcher, gitDiffWatcher, sessionListWatcher, chatMessagesWatcher},
-		subscribers:         make(map[*jsonrpc2.Conn]struct{}),
+		subscribers:         make(map[watch.Notifier]struct{}),
 	}
 
 	processManager.SetOnProcessEnd(func() {

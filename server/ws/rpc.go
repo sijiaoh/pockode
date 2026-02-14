@@ -99,17 +99,19 @@ func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 
 	<-rpcConn.DisconnectNotify()
 
-	state.cleanup(h.worktreeManager, h.settingsWatcher)
+	state.cleanup(h.worktreeManager)
 	log.Info("connection closed")
 }
 
 // rpcConnState tracks per-connection state.
 type rpcConnState struct {
-	mu       sync.Mutex
-	connID   string
-	conn     *jsonrpc2.Conn
-	log      *slog.Logger
-	worktree *worktree.Worktree // set after auth
+	mu            sync.Mutex
+	connID        string
+	conn          *jsonrpc2.Conn
+	notifier      *JSONRPCNotifier
+	log           *slog.Logger
+	worktree      *worktree.Worktree       // set after auth
+	subscriptions map[string]watch.Watcher // subID → watcher for cleanup
 }
 
 func (s *rpcConnState) getConnID() string {
@@ -125,22 +127,67 @@ func (s *rpcConnState) getWorktree() *worktree.Worktree {
 func (s *rpcConnState) setConn(conn *jsonrpc2.Conn) {
 	s.mu.Lock()
 	s.conn = conn
+	s.notifier = NewJSONRPCNotifier(conn)
+	s.subscriptions = make(map[string]watch.Watcher)
 	s.mu.Unlock()
 }
 
-func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager, settingsWatcher watch.Watcher) {
+func (s *rpcConnState) getNotifier() watch.Notifier {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.notifier
+}
+
+func (s *rpcConnState) trackSubscription(id string, watcher watch.Watcher) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscriptions[id] = watcher
+}
+
+func (s *rpcConnState) untrackSubscription(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subscriptions, id)
+}
+
+// unsubscribeWorktreeWatchers removes and unsubscribes all subscriptions
+// belonging to watchers of the given worktree.
+func (s *rpcConnState) unsubscribeWorktreeWatchers(wt *worktree.Worktree) {
+	if wt == nil {
+		return
+	}
+
+	wtWatchers := make(map[watch.Watcher]struct{}, len(wt.Watchers()))
+	for _, w := range wt.Watchers() {
+		wtWatchers[w] = struct{}{}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Cleanup manager-level watchers (not worktree-specific)
-	worktreeManager.WorktreeWatcher.CleanupConnection(s.connID)
-	settingsWatcher.CleanupConnection(s.connID)
+	for id, watcher := range s.subscriptions {
+		if _, belongs := wtWatchers[watcher]; belongs {
+			watcher.Unsubscribe(id)
+			delete(s.subscriptions, id)
+		}
+	}
+}
+
+func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Unsubscribe all tracked subscriptions
+	for id, watcher := range s.subscriptions {
+		watcher.Unsubscribe(id)
+	}
+	s.subscriptions = nil
 
 	if s.worktree == nil {
 		return // Not authenticated yet (e.g., connection closed before auth)
 	}
 
-	s.worktree.UnsubscribeConnection(s.conn, s.connID)
+	s.worktree.Unsubscribe(s.notifier)
 	worktreeManager.Release(s.worktree)
 
 	// Reset state (safe even for connection close - no harm in resetting)
@@ -313,7 +360,7 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 	h.state.worktree = wt
 	h.state.mu.Unlock()
 
-	wt.Subscribe(conn)
+	wt.Subscribe(h.state.getNotifier())
 
 	h.setAuthenticated()
 	h.log.Info("authenticated", "worktree", wt.Name, "workDir", wt.WorkDir)
@@ -369,6 +416,7 @@ func (h *rpcMethodHandler) handleWatcherUnsubscribe(
 	}
 
 	watcher.Unsubscribe(params.ID)
+	h.state.untrackSubscription(params.ID)
 	h.log.Debug("unsubscribed", "watcher", logName, "watchId", params.ID)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {

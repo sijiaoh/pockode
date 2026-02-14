@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 const debounceInterval = 100 * time.Millisecond
@@ -69,7 +68,7 @@ func (w *FSWatcher) Stop() {
 	slog.Info("FSWatcher stopped")
 }
 
-func (w *FSWatcher) Subscribe(path string, conn *jsonrpc2.Conn, connID string) (string, error) {
+func (w *FSWatcher) Subscribe(path string, notifier Notifier) (string, error) {
 	id := w.GenerateID()
 
 	fullPath := filepath.Join(w.workDir, path)
@@ -77,9 +76,8 @@ func (w *FSWatcher) Subscribe(path string, conn *jsonrpc2.Conn, connID string) (
 		return "", err
 	}
 
-	sub := &Subscription{ID: id, ConnID: connID, Conn: conn}
+	sub := &Subscription{ID: id, Notifier: notifier}
 
-	// Lock order: pathMu → subMu (consistent with Unsubscribe/CleanupConnection)
 	w.pathMu.Lock()
 
 	// Start fsnotify watch if first subscriber for this path
@@ -112,31 +110,6 @@ func (w *FSWatcher) Unsubscribe(id string) {
 	w.pathMu.Unlock()
 
 	w.RemoveSubscription(id)
-}
-
-func (w *FSWatcher) CleanupConnection(connID string) {
-	// Get subscription IDs first (releases subMu before acquiring pathMu)
-	subs := w.GetSubscriptionsByConnID(connID)
-	if len(subs) == 0 {
-		return
-	}
-
-	// Collect IDs to avoid holding lock during iteration
-	ids := make([]string, len(subs))
-	for i, sub := range subs {
-		ids[i] = sub.ID
-	}
-
-	// Lock order: pathMu → subMu (consistent with Subscribe/Unsubscribe)
-	w.pathMu.Lock()
-	for _, id := range ids {
-		if path, ok := w.idToPath[id]; ok {
-			w.removePathMapping(id, path)
-		}
-	}
-	w.pathMu.Unlock()
-
-	w.BaseWatcher.CleanupConnection(connID)
 }
 
 // removePathMapping removes path tracking. Caller must hold pathMu.
@@ -230,10 +203,11 @@ func (w *FSWatcher) notifyPath(changedPath string) {
 		if sub == nil {
 			continue
 		}
-		err := sub.Conn.Notify(context.Background(), "fs.changed", map[string]any{
-			"id": sub.ID,
-		})
-		if err != nil {
+		n := Notification{
+			Method: "fs.changed",
+			Params: map[string]any{"id": sub.ID},
+		}
+		if err := sub.Notifier.Notify(context.Background(), n); err != nil {
 			slog.Debug("failed to notify subscriber", "watchId", sub.ID, "error", err)
 		}
 		notified++
