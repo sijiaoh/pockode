@@ -10,6 +10,7 @@ import (
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/ticket"
 	"github.com/pockode/server/worktree"
 	"github.com/pockode/server/ws"
 )
@@ -41,8 +42,10 @@ func TestHealthEndpoint(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
+	ticketStore, _ := ticket.NewFileStore(dataDir)
+	roleStore, _ := ticket.NewFileRoleStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute)
+	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute, ticketStore, roleStore)
 	defer scopeManager.Shutdown()
 
 	wsHandler := ws.NewRPCHandler("test-token", "test", true, cmdStore, scopeManager, settingsStore)
@@ -66,8 +69,10 @@ func TestPingEndpoint(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
+	ticketStore, _ := ticket.NewFileStore(dataDir)
+	roleStore, _ := ticket.NewFileRoleStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute)
+	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute, ticketStore, roleStore)
 	defer scopeManager.Shutdown()
 
 	wsHandler := ws.NewRPCHandler(token, "test", true, cmdStore, scopeManager, settingsStore)

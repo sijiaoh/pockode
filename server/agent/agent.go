@@ -32,10 +32,11 @@ type QuestionRequestData struct {
 
 // StartOptions contains options for starting an agent session.
 type StartOptions struct {
-	WorkDir   string
-	SessionID string
-	Resume    bool
-	Mode      session.Mode
+	WorkDir      string
+	SessionID    string
+	Resume       bool
+	Mode         session.Mode
+	SystemPrompt string // Custom system prompt (overrides default)
 }
 
 // Agent defines the interface for an AI agent.

@@ -62,6 +62,10 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}
 	}
 
+	if opts.SystemPrompt != "" {
+		claudeArgs = append(claudeArgs, "--system-prompt", opts.SystemPrompt)
+	}
+
 	cmd := exec.CommandContext(procCtx, Binary, claudeArgs...)
 	cmd.Dir = opts.WorkDir
 

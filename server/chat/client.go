@@ -25,7 +25,12 @@ func NewClient(store session.Store, pm *process.Manager) *Client {
 }
 
 func (c *Client) SendMessage(ctx context.Context, sessionID, content string) error {
-	proc, err := c.getOrCreateProcess(ctx, sessionID)
+	return c.SendMessageWithOptions(ctx, sessionID, content, process.ProcessOptions{})
+}
+
+// SendMessageWithOptions sends a message with custom process options (e.g., system prompt).
+func (c *Client) SendMessageWithOptions(ctx context.Context, sessionID, content string, procOpts process.ProcessOptions) error {
+	proc, err := c.getOrCreateProcessWithOptions(ctx, sessionID, procOpts)
 	if err != nil {
 		return err
 	}
@@ -93,6 +98,11 @@ func (c *Client) Interrupt(ctx context.Context, sessionID string) error {
 
 // getOrCreateProcess handles session validation, process creation, and activation.
 func (c *Client) getOrCreateProcess(ctx context.Context, sessionID string) (*process.Process, error) {
+	return c.getOrCreateProcessWithOptions(ctx, sessionID, process.ProcessOptions{})
+}
+
+// getOrCreateProcessWithOptions handles session validation, process creation with custom options, and activation.
+func (c *Client) getOrCreateProcessWithOptions(ctx context.Context, sessionID string, procOpts process.ProcessOptions) (*process.Process, error) {
 	meta, found, err := c.store.Get(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
@@ -101,14 +111,19 @@ func (c *Client) getOrCreateProcess(ctx context.Context, sessionID string) (*pro
 		return nil, ErrSessionNotFound
 	}
 
-	resume := meta.Activated
-	proc, created, err := c.pm.GetOrCreateProcess(ctx, sessionID, resume, meta.Mode)
+	// Use session's mode unless overridden
+	if procOpts.Mode == "" {
+		procOpts.Mode = meta.Mode
+	}
+	procOpts.Resume = meta.Activated
+
+	proc, created, err := c.pm.GetOrCreateProcessWithOptions(ctx, sessionID, procOpts)
 	if err != nil {
 		return nil, err
 	}
 
 	// Activate session on first process creation
-	if created && !resume {
+	if created && !procOpts.Resume {
 		if err := c.store.Activate(ctx, sessionID); err != nil {
 			slog.Error("failed to activate session", "sessionId", sessionID, "error", err)
 		}

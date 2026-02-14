@@ -1,6 +1,83 @@
 export type SessionMode = "default" | "yolo";
 export type ProcessState = "idle" | "running" | "ended";
 
+// Ticket types
+export type TicketStatus = "open" | "in_progress" | "done";
+
+export interface Ticket {
+	id: string;
+	parent_id?: string;
+	title: string;
+	description: string;
+	role_id: string;
+	status: TicketStatus;
+	session_id?: string;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface AgentRole {
+	id: string;
+	name: string;
+	system_prompt: string;
+}
+
+// Ticket RPC params
+export interface TicketCreateParams {
+	parent_id?: string;
+	title: string;
+	description: string;
+	role_id: string;
+}
+
+export interface TicketUpdateParams {
+	ticket_id: string;
+	title?: string;
+	description?: string;
+	status?: TicketStatus;
+}
+
+export interface TicketDeleteParams {
+	ticket_id: string;
+}
+
+export interface TicketStartParams {
+	ticket_id: string;
+}
+
+export interface TicketStartResult {
+	session_id: string;
+}
+
+export interface TicketListSubscribeResult {
+	id: string;
+	tickets: Ticket[];
+}
+
+export type TicketListChangedNotification =
+	| { id: string; operation: "create" | "update"; ticket: Ticket }
+	| { id: string; operation: "delete"; ticketId: string };
+
+// Agent role RPC params
+export interface AgentRoleListResult {
+	roles: AgentRole[];
+}
+
+export interface AgentRoleCreateParams {
+	name: string;
+	system_prompt: string;
+}
+
+export interface AgentRoleUpdateParams {
+	role_id: string;
+	name: string;
+	system_prompt: string;
+}
+
+export interface AgentRoleDeleteParams {
+	role_id: string;
+}
+
 export interface SessionListItem {
 	id: string;
 	title: string;

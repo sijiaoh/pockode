@@ -14,6 +14,7 @@ import (
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/ticket"
 	"github.com/pockode/server/watch"
 )
 
@@ -26,18 +27,25 @@ type Manager struct {
 	dataDir         string
 	idleTimeout     time.Duration
 	WorktreeWatcher *watch.WorktreeWatcher
+	TicketStore     ticket.Store
+	RoleStore       ticket.RoleStore
+	TicketWatcher   *watch.TicketWatcher
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
 }
 
-func NewManager(registry *Registry, ag agent.Agent, dataDir string, idleTimeout time.Duration) *Manager {
+func NewManager(registry *Registry, ag agent.Agent, dataDir string, idleTimeout time.Duration, ticketStore ticket.Store, roleStore ticket.RoleStore) *Manager {
+	ticketWatcher := watch.NewTicketWatcher(ticketStore)
 	return &Manager{
 		registry:        registry,
 		agent:           ag,
 		dataDir:         dataDir,
 		idleTimeout:     idleTimeout,
 		WorktreeWatcher: watch.NewWorktreeWatcher(registry.MainDir()),
+		TicketStore:     ticketStore,
+		RoleStore:       roleStore,
+		TicketWatcher:   ticketWatcher,
 		worktrees:       make(map[string]*Worktree),
 	}
 }
@@ -47,7 +55,10 @@ func (m *Manager) Registry() *Registry {
 }
 
 func (m *Manager) Start() error {
-	return m.WorktreeWatcher.Start()
+	if err := m.WorktreeWatcher.Start(); err != nil {
+		return err
+	}
+	return m.TicketWatcher.Start()
 }
 
 // Get returns (or creates) the worktree for the given name and increments the reference count.
@@ -130,6 +141,7 @@ func (m *Manager) ForceShutdown(name string) {
 
 func (m *Manager) Shutdown() {
 	m.WorktreeWatcher.Stop()
+	m.TicketWatcher.Stop()
 
 	m.mu.Lock()
 	worktrees := make([]*Worktree, 0, len(m.worktrees))

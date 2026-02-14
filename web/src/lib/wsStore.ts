@@ -12,6 +12,9 @@ import type {
 	SessionListChangedNotification,
 	SessionListItem,
 	SessionListSubscribeResult,
+	Ticket,
+	TicketListChangedNotification,
+	TicketListSubscribeResult,
 } from "../types/message";
 import type {
 	Settings,
@@ -20,19 +23,23 @@ import type {
 } from "../types/settings";
 import { getWebSocketUrl } from "../utils/config";
 import {
+	type AgentRoleActions,
 	type ChatActions,
 	type CommandActions,
+	createAgentRoleActions,
 	createChatActions,
 	createCommandActions,
 	createFileActions,
 	createGitActions,
 	createSessionActions,
 	createSettingsActions,
+	createTicketActions,
 	createWorktreeActions,
 	type FileActions,
 	type GitActions,
 	type SessionActions,
 	type SettingsActions,
+	type TicketActions,
 	type WorktreeActions,
 } from "./rpc";
 import { APP_VERSION } from "./version";
@@ -88,15 +95,21 @@ export interface WatchActions {
 		callback: (params: SettingsChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<Settings>>;
 	settingsUnsubscribe: (id: string) => Promise<void>;
+	ticketListSubscribe: (
+		callback: (params: TicketListChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<Ticket[]>>;
+	ticketListUnsubscribe: (id: string) => Promise<void>;
 }
 
 type RPCActions = ConnectionActions &
+	AgentRoleActions &
 	ChatActions &
 	CommandActions &
 	SessionActions &
 	SettingsActions &
 	FileActions &
 	GitActions &
+	TicketActions &
 	WatchActions &
 	WorktreeActions;
 
@@ -133,6 +146,10 @@ const chatMessagesCallbacks = new Map<
 const settingsWatchCallbacks = new Map<
 	string,
 	(params: SettingsChangedNotification) => void
+>();
+const ticketListWatchCallbacks = new Map<
+	string,
+	(params: TicketListChangedNotification) => void
 >();
 
 /**
@@ -228,6 +245,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 		settingsWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
+	"ticket.list.changed": (params) => {
+		const changedParams = params as TicketListChangedNotification;
+		ticketListWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
 };
 
 function handleNotification(method: string, params: unknown): void {
@@ -252,12 +274,22 @@ function handleNotification(method: string, params: unknown): void {
 }
 
 // Create namespace-specific actions
+const agentRoleActions = createAgentRoleActions(getClient);
 const chatActions = createChatActions(getClient);
 const commandActions = createCommandActions(getClient);
 const sessionActions = createSessionActions(getClient);
 const settingsActions = createSettingsActions(getClient);
 const fileActions = createFileActions(getClient);
 const gitActions = createGitActions(getClient);
+const ticketActions = createTicketActions(
+	getClient,
+	(id, cb) =>
+		ticketListWatchCallbacks.set(
+			id,
+			cb as (p: TicketListChangedNotification) => void,
+		),
+	(id) => ticketListWatchCallbacks.delete(id),
+);
 const worktreeRpcActions = createWorktreeActions(getClient);
 
 // Listener for worktree deleted notification
@@ -614,13 +646,42 @@ export const useWSStore = create<WSState>((set, get) => ({
 			}
 		},
 
+		ticketListSubscribe: async (
+			callback: (params: TicketListChangedNotification) => void,
+		) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			const result = (await client.request(
+				"ticket.list.subscribe",
+				{},
+			)) as TicketListSubscribeResult;
+			ticketListWatchCallbacks.set(result.id, callback);
+			return { id: result.id, initial: result.tickets };
+		},
+
+		ticketListUnsubscribe: async (id: string) => {
+			ticketListWatchCallbacks.delete(id);
+			const client = getClient();
+			if (client) {
+				try {
+					await client.request("ticket.list.unsubscribe", { id });
+				} catch {
+					// Ignore errors (connection might be closed)
+				}
+			}
+		},
+
 		// Spread namespace-specific actions
+		...agentRoleActions,
 		...chatActions,
 		...commandActions,
 		...sessionActions,
 		...settingsActions,
 		...fileActions,
 		...gitActions,
+		...ticketActions,
 		...worktreeRpcActions,
 	},
 }));
@@ -699,6 +760,7 @@ export function resetWSStore() {
 	sessionListWatchCallbacks.clear();
 	chatMessagesCallbacks.clear();
 	settingsWatchCallbacks.clear();
+	ticketListWatchCallbacks.clear();
 	worktreeDeletedListener = null;
 	onWorktreeSwitched = null;
 	useWSStore.setState({

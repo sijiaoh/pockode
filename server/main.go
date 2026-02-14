@@ -27,6 +27,7 @@ import (
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/startup"
+	"github.com/pockode/server/ticket"
 	"github.com/pockode/server/worktree"
 	"github.com/pockode/server/ws"
 )
@@ -264,10 +265,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize ticket and role stores
+	ticketStore, err := ticket.NewFileStore(dataDir)
+	if err != nil {
+		slog.Error("failed to initialize ticket store", "error", err)
+		os.Exit(1)
+	}
+	roleStore, err := ticket.NewFileRoleStore(dataDir)
+	if err != nil {
+		slog.Error("failed to initialize role store", "error", err)
+		os.Exit(1)
+	}
+
 	// Initialize worktree registry and manager
 	claudeAgent := claude.New()
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout)
+	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout, ticketStore, roleStore)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}

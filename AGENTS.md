@@ -15,6 +15,10 @@ Pockode 是一个移动端编程平台，核心理念是「AI 编辑为主，手
 | 通信    | WebSocket JSON-RPC 2.0（[设计](docs/websocket-rpc-design.md)） |
 | AI 调用 | CLI 子进程（非 SDK 绑定）  |
 
+## 機能ドキュメント
+
+- [Agent Team](docs/agent-team.md) — Ticket 駆動のマルチエージェント協調機能
+
 ## 项目结构
 
 ```

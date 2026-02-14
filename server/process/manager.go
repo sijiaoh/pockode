@@ -100,8 +100,20 @@ func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent) {
 	}
 }
 
+// ProcessOptions contains options for creating a new process.
+type ProcessOptions struct {
+	Resume       bool
+	Mode         session.Mode
+	SystemPrompt string
+}
+
 // GetOrCreateProcess returns an existing process or creates a new one.
 func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resume bool, mode session.Mode) (*Process, bool, error) {
+	return m.GetOrCreateProcessWithOptions(ctx, sessionID, ProcessOptions{Resume: resume, Mode: mode})
+}
+
+// GetOrCreateProcessWithOptions returns an existing process or creates a new one with full options.
+func (m *Manager) GetOrCreateProcessWithOptions(ctx context.Context, sessionID string, procOpts ProcessOptions) (*Process, bool, error) {
 	m.processesMu.Lock()
 	defer m.processesMu.Unlock()
 
@@ -112,10 +124,11 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 
 	// Use manager's context for process lifecycle, not request context
 	opts := agent.StartOptions{
-		WorkDir:   m.workDir,
-		SessionID: sessionID,
-		Resume:    resume,
-		Mode:      mode,
+		WorkDir:      m.workDir,
+		SessionID:    sessionID,
+		Resume:       procOpts.Resume,
+		Mode:         procOpts.Mode,
+		SystemPrompt: procOpts.SystemPrompt,
 	}
 	sess, err := m.agent.Start(m.ctx, opts)
 	if err != nil {
@@ -145,7 +158,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 	}()
 
 	m.emitStateChange(sessionID, ProcessStateIdle)
-	slog.Info("process created", "sessionId", sessionID, "resume", resume, "mode", mode)
+	slog.Info("process created", "sessionId", sessionID, "resume", procOpts.Resume, "mode", procOpts.Mode)
 	return proc, true, nil
 }
 

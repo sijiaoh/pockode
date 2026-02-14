@@ -18,6 +18,7 @@ import (
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/ticket"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -50,8 +51,17 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 		t.Fatalf("failed to create settings store: %v", err)
 	}
 
+	ticketStore, err := ticket.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("failed to create ticket store: %v", err)
+	}
+	roleStore, err := ticket.NewFileRoleStore(dataDir)
+	if err != nil {
+		t.Fatalf("failed to create role store: %v", err)
+	}
+
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, mock, dataDir, 10*time.Minute)
+	worktreeManager := worktree.NewManager(registry, mock, dataDir, 10*time.Minute, ticketStore, roleStore)
 
 	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore)
 	server := httptest.NewServer(h)
@@ -196,8 +206,10 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
+	ticketStore, _ := ticket.NewFileStore(dataDir)
+	roleStore, _ := ticket.NewFileRoleStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
+	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute, ticketStore, roleStore)
 	defer worktreeManager.Shutdown()
 
 	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore)
@@ -243,8 +255,10 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
+	ticketStore, _ := ticket.NewFileStore(dataDir)
+	roleStore, _ := ticket.NewFileRoleStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
+	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute, ticketStore, roleStore)
 	defer worktreeManager.Shutdown()
 
 	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore)

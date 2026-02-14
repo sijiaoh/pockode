@@ -1,9 +1,10 @@
-import { FolderOpen, GitCompare, MessageSquare } from "lucide-react";
+import { FolderOpen, GitCompare, MessageSquare, Users } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { unreadActions, useHasAnyUnread } from "../../lib/unreadStore";
 import { FilesTab } from "../Files";
 import { DiffTab } from "../Git";
 import { TabbedSidebar, type TabConfig } from "../Layout";
+import { TeamTab } from "../Team";
 import { WorktreeSwitcher } from "../Worktree";
 import SessionsTab from "./SessionsTab";
 
@@ -48,6 +49,7 @@ function SessionSidebar({
 				icon: MessageSquare,
 				showBadge: hasAnyUnread,
 			},
+			{ id: "team", label: "Team", icon: Users },
 			{ id: "files", label: "Files", icon: FolderOpen },
 			{ id: "git", label: "Git", icon: GitCompare },
 		],
@@ -104,6 +106,7 @@ function SessionSidebar({
 				onCreateSession={onCreateSession}
 				onDeleteSession={onDeleteSession}
 			/>
+			<TeamTab onSelectSession={handleSelectSession} />
 			<FilesTab
 				onSelectFile={handleSelectFile}
 				activeFilePath={activeFilePath}

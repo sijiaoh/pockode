@@ -11,6 +11,7 @@ import (
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/ticket"
 )
 
 // Client → Server
@@ -282,4 +283,62 @@ type SettingsSubscribeResult struct {
 
 type SettingsUpdateParams struct {
 	Settings settings.Settings `json:"settings"`
+}
+
+// Ticket namespace
+
+type TicketCreateParams struct {
+	ParentID    string `json:"parent_id,omitempty"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	RoleID      string `json:"role_id"`
+}
+
+type TicketUpdateParams struct {
+	TicketID    string              `json:"ticket_id"`
+	Title       *string             `json:"title,omitempty"`
+	Description *string             `json:"description,omitempty"`
+	Status      *ticket.TicketStatus `json:"status,omitempty"`
+}
+
+type TicketDeleteParams struct {
+	TicketID string `json:"ticket_id"`
+}
+
+type TicketStartParams struct {
+	TicketID string `json:"ticket_id"`
+}
+
+type TicketStartResult struct {
+	SessionID string `json:"session_id"`
+}
+
+type TicketListSubscribeResult struct {
+	ID      string          `json:"id"`
+	Tickets []ticket.Ticket `json:"tickets"`
+}
+
+type TicketListUnsubscribeParams struct {
+	ID string `json:"id"`
+}
+
+// Agent role namespace
+
+type AgentRoleListResult struct {
+	Roles []ticket.AgentRole `json:"roles"`
+}
+
+type AgentRoleCreateParams struct {
+	Name         string `json:"name"`
+	SystemPrompt string `json:"system_prompt"`
+}
+
+type AgentRoleUpdateParams struct {
+	RoleID       string `json:"role_id"`
+	Name         string `json:"name"`
+	SystemPrompt string `json:"system_prompt"`
+}
+
+type AgentRoleDeleteParams struct {
+	RoleID string `json:"role_id"`
 }

@@ -254,6 +254,35 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "settings.update":
 		h.handleSettingsUpdate(ctx, conn, req)
 		return
+	// ticket namespace (manager-level, worktree-independent)
+	case "ticket.create":
+		h.handleTicketCreate(ctx, conn, req)
+		return
+	case "ticket.update":
+		h.handleTicketUpdate(ctx, conn, req)
+		return
+	case "ticket.delete":
+		h.handleTicketDelete(ctx, conn, req)
+		return
+	case "ticket.list.subscribe":
+		h.handleTicketListSubscribe(ctx, conn, req)
+		return
+	case "ticket.list.unsubscribe":
+		h.handleWatcherUnsubscribe(ctx, conn, req, h.worktreeManager.TicketWatcher, "ticket list")
+		return
+	// agent.role namespace (manager-level)
+	case "agent.role.list":
+		h.handleAgentRoleList(ctx, conn, req)
+		return
+	case "agent.role.create":
+		h.handleAgentRoleCreate(ctx, conn, req)
+		return
+	case "agent.role.update":
+		h.handleAgentRoleUpdate(ctx, conn, req)
+		return
+	case "agent.role.delete":
+		h.handleAgentRoleDelete(ctx, conn, req)
+		return
 	}
 
 	// All other methods require a valid worktree
@@ -322,6 +351,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleFSSubscribe(ctx, conn, req, wt)
 	case "fs.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, wt.FSWatcher, "fs")
+	// ticket namespace (worktree-required)
+	case "ticket.start":
+		h.handleTicketStart(ctx, conn, req, wt)
 	default:
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeMethodNotFound, "method not found: "+req.Method)
 	}
