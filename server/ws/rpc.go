@@ -315,6 +315,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitLog(ctx, conn, req, wt)
 	case "git.show":
 		h.handleGitShow(ctx, conn, req, wt)
+	case "git.show.diff":
+		h.handleGitShowDiff(ctx, conn, req, wt)
 	// fs namespace
 	case "fs.subscribe":
 		h.handleFSSubscribe(ctx, conn, req, wt)

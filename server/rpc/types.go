@@ -130,6 +130,15 @@ type GitShowParams struct {
 // GitShowResult is the result of git.show request.
 type GitShowResult = git.ShowResult
 
+// GitShowDiffParams is the params for git.show.diff request.
+type GitShowDiffParams struct {
+	Hash string `json:"hash"`
+	Path string `json:"path"`
+}
+
+// GitShowDiffResult is the result of git.show.diff request.
+type GitShowDiffResult = git.DiffResult
+
 // Command namespace
 
 type CommandListResult struct {

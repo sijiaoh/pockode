@@ -9,14 +9,33 @@ interface NavToSession {
 	sessionId: string;
 }
 
-interface NavToFileOverlay {
+interface NavToOverlayBase {
 	type: "overlay";
 	worktree: string;
-	overlayType: "staged" | "unstaged" | "file" | "commit";
-	path: string;
 	sessionId: string | null;
+}
+
+interface NavToPathOverlay extends NavToOverlayBase {
+	overlayType: "staged" | "unstaged" | "file";
+	path: string;
 	edit?: boolean;
 }
+
+interface NavToCommitOverlay extends NavToOverlayBase {
+	overlayType: "commit";
+	hash: string;
+}
+
+interface NavToCommitDiffOverlay extends NavToOverlayBase {
+	overlayType: "commit-diff";
+	hash: string;
+	path: string;
+}
+
+type NavToFileOverlay =
+	| NavToPathOverlay
+	| NavToCommitOverlay
+	| NavToCommitDiffOverlay;
 
 interface NavToSettingsOverlay {
 	type: "overlay";
@@ -75,7 +94,16 @@ export function overlayToNavigation(
 					type: "overlay" as const,
 					worktree,
 					overlayType: "commit" as const,
-					path: overlay.hash,
+					hash: overlay.hash,
+					sessionId,
+				};
+			case "commit-diff":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "commit-diff" as const,
+					path: overlay.path,
+					hash: overlay.hash,
 					sessionId,
 				};
 			case "settings":
@@ -128,12 +156,29 @@ export function buildNavigation(
 				if (target.sessionId) {
 					result.search = { session: target.sessionId };
 				}
+			} else if (target.overlayType === "commit") {
+				result.to = isMain ? ROUTES.commit : WT_ROUTES.commit;
+				result.params = { _splat: target.hash };
+				if (!isMain) {
+					result.params.worktree = target.worktree;
+				}
+				if (target.sessionId) {
+					result.search = { session: target.sessionId };
+				}
+			} else if (target.overlayType === "commit-diff") {
+				result.to = isMain ? ROUTES.commitDiff : WT_ROUTES.commitDiff;
+				result.params = { hash: target.hash, _splat: target.path };
+				if (!isMain) {
+					result.params.worktree = target.worktree;
+				}
+				if (target.sessionId) {
+					result.search = { session: target.sessionId };
+				}
 			} else {
 				const routeMap = {
 					staged: isMain ? ROUTES.staged : WT_ROUTES.staged,
 					unstaged: isMain ? ROUTES.unstaged : WT_ROUTES.unstaged,
 					file: isMain ? ROUTES.files : WT_ROUTES.files,
-					commit: isMain ? ROUTES.commit : WT_ROUTES.commit,
 				} as const;
 
 				result.to = routeMap[target.overlayType];

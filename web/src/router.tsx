@@ -53,6 +53,12 @@ const commitRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const commitDiffRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: ROUTES.commitDiff,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 const settingsRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.settings,
@@ -99,6 +105,12 @@ const wtCommitRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const wtCommitDiffRoute = createRoute({
+	getParentRoute: () => worktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.commitDiff,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 const wtSettingsRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.settings,
@@ -111,6 +123,7 @@ const routeTree = rootRoute.addChildren([
 	stagedDiffRoute,
 	unstagedDiffRoute,
 	fileViewRoute,
+	commitDiffRoute, // Must be before commitRoute (more specific path)
 	commitRoute,
 	settingsRoute,
 	worktreeLayoutRoute.addChildren([
@@ -119,6 +132,7 @@ const routeTree = rootRoute.addChildren([
 		wtStagedDiffRoute,
 		wtUnstagedDiffRoute,
 		wtFileViewRoute,
+		wtCommitDiffRoute, // Must be before wtCommitRoute (more specific path)
 		wtCommitRoute,
 		wtSettingsRoute,
 	]),

@@ -400,3 +400,140 @@ func TestValidatePath(t *testing.T) {
 		})
 	}
 }
+
+func TestShowFileDiff(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Create and commit initial file
+	testFile := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("line1\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	runGit(t, dir, "add", "test.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+
+	// Modify and commit
+	if err := os.WriteFile(testFile, []byte("line1\nline2\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	runGit(t, dir, "add", "test.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "add line2")
+
+	// Get latest commit hash
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	hashBytes, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("failed to get commit hash: %v", err)
+	}
+	hash := strings.TrimSpace(string(hashBytes))
+
+	result, err := ShowFileDiff(dir, hash, "test.txt")
+	if err != nil {
+		t.Fatalf("ShowFileDiff() error: %v", err)
+	}
+
+	if result.Diff == "" {
+		t.Error("expected non-empty diff")
+	}
+	if !strings.Contains(result.Diff, "+line2") {
+		t.Errorf("diff should contain '+line2', got: %s", result.Diff)
+	}
+	if result.OldContent != "line1\n" {
+		t.Errorf("OldContent = %q, want %q", result.OldContent, "line1\n")
+	}
+	if result.NewContent != "line1\nline2\n" {
+		t.Errorf("NewContent = %q, want %q", result.NewContent, "line1\nline2\n")
+	}
+}
+
+func TestShowFileDiff_DeletedFile(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Create and commit a file
+	testFile := filepath.Join(dir, "to-delete.txt")
+	if err := os.WriteFile(testFile, []byte("delete me\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	runGit(t, dir, "add", "to-delete.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "add file")
+
+	// Delete and commit
+	if err := os.Remove(testFile); err != nil {
+		t.Fatalf("failed to delete file: %v", err)
+	}
+	runGit(t, dir, "add", "to-delete.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "delete file")
+
+	// Get latest commit hash
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	hashBytes, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("failed to get commit hash: %v", err)
+	}
+	hash := strings.TrimSpace(string(hashBytes))
+
+	result, err := ShowFileDiff(dir, hash, "to-delete.txt")
+	if err != nil {
+		t.Fatalf("ShowFileDiff() error: %v", err)
+	}
+
+	if result.Diff == "" {
+		t.Error("expected non-empty diff")
+	}
+	if result.OldContent != "delete me\n" {
+		t.Errorf("OldContent = %q, want %q", result.OldContent, "delete me\n")
+	}
+	if result.NewContent != "" {
+		t.Errorf("NewContent = %q, want empty", result.NewContent)
+	}
+}
+
+func TestShowFileDiff_NewFile(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Create initial commit
+	dummyFile := filepath.Join(dir, "dummy.txt")
+	if err := os.WriteFile(dummyFile, []byte("dummy\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	runGit(t, dir, "add", "dummy.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+
+	// Create and commit a new file
+	testFile := filepath.Join(dir, "new.txt")
+	if err := os.WriteFile(testFile, []byte("new content\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	runGit(t, dir, "add", "new.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "add new file")
+
+	// Get latest commit hash
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	hashBytes, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("failed to get commit hash: %v", err)
+	}
+	hash := strings.TrimSpace(string(hashBytes))
+
+	result, err := ShowFileDiff(dir, hash, "new.txt")
+	if err != nil {
+		t.Fatalf("ShowFileDiff() error: %v", err)
+	}
+
+	if result.Diff == "" {
+		t.Error("expected non-empty diff")
+	}
+	// Old content should be empty for new file
+	if result.OldContent != "" {
+		t.Errorf("OldContent = %q, want empty", result.OldContent)
+	}
+	if result.NewContent != "new content\n" {
+		t.Errorf("NewContent = %q, want %q", result.NewContent, "new content\n")
+	}
+}

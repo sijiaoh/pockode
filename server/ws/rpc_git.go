@@ -191,3 +191,26 @@ func (h *rpcMethodHandler) handleGitShow(ctx context.Context, conn *jsonrpc2.Con
 		h.log.Error("failed to send git show response", "error", err)
 	}
 }
+
+func (h *rpcMethodHandler) handleGitShowDiff(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.GitShowDiffParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.Hash == "" || params.Path == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "hash and path required")
+		return
+	}
+
+	result, err := git.ShowFileDiff(wt.WorkDir, params.Hash, params.Path)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send git show diff response", "error", err)
+	}
+}

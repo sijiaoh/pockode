@@ -11,6 +11,7 @@ const BASE = {
 	unstaged: "/unstaged/$",
 	files: "/files/$",
 	commit: "/commit/$",
+	commitDiff: "/commit/$hash/diff/$",
 	settings: "/settings",
 } as const;
 
@@ -31,5 +32,6 @@ export const WT_ROUTES = {
 	unstaged: `${WT_PREFIX}${BASE.unstaged}`,
 	files: `${WT_PREFIX}${BASE.files}`,
 	commit: `${WT_PREFIX}${BASE.commit}`,
+	commitDiff: `${WT_PREFIX}${BASE.commitDiff}`,
 	settings: `${WT_PREFIX}${BASE.settings}`,
 } as const;

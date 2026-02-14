@@ -799,6 +799,37 @@ func parseNameStatus(output string) []FileChange {
 	return files
 }
 
+// ShowFileDiff returns the diff of a specific file in a commit.
+func ShowFileDiff(dir, hash, path string) (*DiffResult, error) {
+	if err := validateCommitHash(hash); err != nil {
+		return nil, err
+	}
+	if err := validatePath(path); err != nil {
+		return nil, err
+	}
+
+	// Get the diff using git show
+	cmd := exec.Command("git", "show", "--format=", hash, "--", path)
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show failed: %w", err)
+	}
+
+	diff := string(output)
+
+	// Get old content (parent commit)
+	oldContent, _ := getFileFromRef(dir, hash+"^", path)
+	// Get new content (the commit itself)
+	newContent, _ := getFileFromRef(dir, hash, path)
+
+	return &DiffResult{
+		Diff:       diff,
+		OldContent: oldContent,
+		NewContent: newContent,
+	}, nil
+}
+
 // validateCommitHash validates a git commit hash to prevent injection.
 func validateCommitHash(hash string) error {
 	if hash == "" {

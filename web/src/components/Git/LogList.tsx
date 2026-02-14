@@ -55,7 +55,9 @@ function CommitItem({
 			</div>
 			<div className="flex items-center gap-1.5 text-xs text-th-text-muted">
 				<span className="font-mono shrink-0">{shortHash}</span>
-				<span className="truncate">{commit.author}, {formatRelativeDate(commit.date)}</span>
+				<span className="truncate">
+					{commit.author}, {formatRelativeDate(commit.date)}
+				</span>
 			</div>
 		</button>
 	);

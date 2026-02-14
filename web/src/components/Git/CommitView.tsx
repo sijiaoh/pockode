@@ -52,7 +52,13 @@ function CommitView({ hash, onBack }: Props) {
 	const shortHash = hash.substring(0, 7);
 
 	const handleFileClick = (path: string) => {
-		navigate(overlayToNavigation({ type: "file", path }, worktree, sessionId));
+		navigate(
+			overlayToNavigation(
+				{ type: "commit-diff", hash, path },
+				worktree,
+				sessionId,
+			),
+		);
 	};
 
 	return (

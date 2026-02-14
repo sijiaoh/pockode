@@ -52,6 +52,14 @@ export function useRouteState(): RouteInfo {
 		from: WT_ROUTES.commit,
 		shouldThrow: false,
 	});
+	const commitDiffMatch = useMatch({
+		from: ROUTES.commitDiff,
+		shouldThrow: false,
+	});
+	const wtCommitDiffMatch = useMatch({
+		from: WT_ROUTES.commitDiff,
+		shouldThrow: false,
+	});
 	const settingsMatch = useMatch({
 		from: ROUTES.settings,
 		shouldThrow: false,
@@ -107,6 +115,19 @@ export function useRouteState(): RouteInfo {
 			wtCommitMatch?.search) as OverlaySearchParams;
 		return {
 			overlay: { type: "commit", hash: commitHash },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	const commitDiffParams = commitDiffMatch?.params ?? wtCommitDiffMatch?.params;
+	if (commitDiffParams) {
+		const hash = (commitDiffParams as { hash: string }).hash;
+		const path = (commitDiffParams as { _splat: string })._splat;
+		const search = (commitDiffMatch?.search ??
+			wtCommitDiffMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "commit-diff", hash, path },
 			sessionId: search.session ?? null,
 			worktree,
 		};
