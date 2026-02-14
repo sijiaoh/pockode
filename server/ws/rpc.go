@@ -157,12 +157,9 @@ func (s *rpcConnState) unsubscribeWorktreeWatchers(wt *worktree.Worktree) {
 		return
 	}
 
-	wtWatchers := map[watch.Watcher]struct{}{
-		wt.FSWatcher:           {},
-		wt.GitWatcher:          {},
-		wt.GitDiffWatcher:      {},
-		wt.SessionListWatcher:  {},
-		wt.ChatMessagesWatcher: {},
+	wtWatchers := make(map[watch.Watcher]struct{}, len(wt.Watchers()))
+	for _, w := range wt.Watchers() {
+		wtWatchers[w] = struct{}{}
 	}
 
 	s.mu.Lock()

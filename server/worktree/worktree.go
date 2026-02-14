@@ -82,3 +82,8 @@ func (w *Worktree) Stop() {
 	}
 	w.ProcessManager.Shutdown()
 }
+
+// Watchers returns all watchers managed by this worktree.
+func (w *Worktree) Watchers() []watch.Watcher {
+	return w.watchers
+}
