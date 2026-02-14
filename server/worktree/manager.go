@@ -176,7 +176,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	gitDiffWatcher := watch.NewGitDiffWatcher(workDir)
 	sessionListWatcher := watch.NewSessionListWatcher(sessionStore)
 	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore)
-	processManager := process.NewManager(m.agent, workDir, sessionStore, m.idleTimeout)
+	processManager := process.NewManager(m.agent, workDir, sessionStore, m.idleTimeout, m.dataDir)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetProcessStateGetter(processManager)
 	processManager.SetOnStateChange(func(e process.StateChangeEvent) {

@@ -89,6 +89,11 @@ server/
     types.go        # Ticket, AgentRole, TicketStatus, Operation
     store.go        # FileStore (implements Store interface)
     role_store.go   # FileRoleStore (implements RoleStore interface)
+  mcp/
+    server.go       # MCP server (stdio transport)
+    tools.go        # Tool definitions
+    handlers.go     # Tool handlers
+    errors.go       # Structured error types
   watch/
     ticket.go       # TicketWatcher (real-time notifications)
   ws/
@@ -127,9 +132,44 @@ web/src/
 4. Backend sends initial message (description or title) with role's system_prompt
 5. Frontend navigates to the session
 
+## MCP Integration
+
+Agents access tickets via MCP tools. The `pockode mcp` subcommand runs an MCP server (stdio transport).
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `ticket_list` | List all tickets |
+| `ticket_get` | Get single ticket by ID |
+| `ticket_create` | Create new ticket |
+| `ticket_update` | Update ticket (title, description, status) |
+| `ticket_delete` | Delete ticket |
+| `role_list` | List available agent roles |
+
+### Configuration
+
+Claude receives MCP config via `--mcp-config`:
+
+```json
+{
+  "mcpServers": {
+    "pockode-ticket": {
+      "command": "/path/to/pockode",
+      "args": ["mcp"],
+      "env": {"POCKODE_DATA_DIR": "/path/to/data"}
+    }
+  }
+}
+```
+
+### Sync
+
+FileStore uses fsnotify to detect external changes (from MCP). When MCP modifies tickets, the WebSocket server reloads and notifies connected clients.
+
 ## Design Decisions
 
-- **Store interface decoupled from RPC** — Enables future MCP tool integration
+- **Store interface decoupled from transport** — Same Store used by WebSocket RPC and MCP
 - **Tickets are global** (not per-worktree) — Single ticket store at Manager level
 - **Roles are also global** — Shared across worktrees
 - **System prompt via CLI flag** — `claude --system-prompt "..."`

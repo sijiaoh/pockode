@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -64,6 +65,12 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 	if opts.SystemPrompt != "" {
 		claudeArgs = append(claudeArgs, "--system-prompt", opts.SystemPrompt)
+	}
+
+	// Add MCP server configuration if data directory is provided
+	if opts.MCPDataDir != "" {
+		mcpConfig := buildMCPConfig(os.Args[0], opts.MCPDataDir)
+		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfig)
 	}
 
 	cmd := exec.CommandContext(procCtx, Binary, claudeArgs...)
@@ -813,4 +820,21 @@ func parseResultEvent(line []byte) agent.AgentEvent {
 	}
 
 	return agent.DoneEvent{}
+}
+
+// buildMCPConfig builds a properly escaped MCP configuration JSON string.
+func buildMCPConfig(command, dataDir string) string {
+	config := map[string]any{
+		"mcpServers": map[string]any{
+			"pockode-ticket": map[string]any{
+				"command": command,
+				"args":    []string{"mcp"},
+				"env": map[string]string{
+					"POCKODE_DATA_DIR": dataDir,
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(config)
+	return string(data)
 }

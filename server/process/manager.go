@@ -28,6 +28,7 @@ type StateChangeEvent struct {
 type Manager struct {
 	agent        agent.Agent
 	workDir      string
+	dataDir      string // Data directory for MCP tools
 	sessionStore session.Store
 	idleTimeout  time.Duration
 
@@ -60,11 +61,12 @@ type Process struct {
 }
 
 // NewManager creates a new manager with the given idle timeout.
-func NewManager(ag agent.Agent, workDir string, store session.Store, idleTimeout time.Duration) *Manager {
+func NewManager(ag agent.Agent, workDir string, store session.Store, idleTimeout time.Duration, dataDir string) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		agent:        ag,
 		workDir:      workDir,
+		dataDir:      dataDir,
 		sessionStore: store,
 		idleTimeout:  idleTimeout,
 		processes:    make(map[string]*Process),
@@ -129,6 +131,7 @@ func (m *Manager) GetOrCreateProcessWithOptions(ctx context.Context, sessionID s
 		Resume:       procOpts.Resume,
 		Mode:         procOpts.Mode,
 		SystemPrompt: procOpts.SystemPrompt,
+		MCPDataDir:   m.dataDir,
 	}
 	sess, err := m.agent.Start(m.ctx, opts)
 	if err != nil {

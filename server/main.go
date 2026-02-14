@@ -23,6 +23,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/logger"
+	mcpserver "github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/settings"
@@ -157,6 +158,20 @@ func findAvailablePort(startPort int) int {
 }
 
 func main() {
+	// Handle "mcp" subcommand before flag parsing
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		dataDir := os.Getenv("POCKODE_DATA_DIR")
+		if dataDir == "" {
+			fmt.Fprintln(os.Stderr, "POCKODE_DATA_DIR is required for MCP mode")
+			os.Exit(1)
+		}
+		if err := mcpserver.RunMCPServer(dataDir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	portFlag := flag.Int("port", 0, fmt.Sprintf("server port (default %d)", defaultPort))
 	tokenFlag := flag.String("auth-token", "", "authentication token (required)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")

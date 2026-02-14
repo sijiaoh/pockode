@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/google/uuid"
 )
 
@@ -46,6 +48,11 @@ type FileStore struct {
 	mu       sync.RWMutex
 	tickets  []Ticket
 	listener OnChangeListener
+
+	watcher   *fsnotify.Watcher
+	stopCh    chan struct{}
+	lastWrite time.Time // To ignore self-triggered events
+	writingMu sync.Mutex
 }
 
 // NewFileStore creates a new file-based ticket store.
@@ -55,7 +62,10 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 		return nil, err
 	}
 
-	store := &FileStore{dataDir: dataDir}
+	store := &FileStore{
+		dataDir: dataDir,
+		stopCh:  make(chan struct{}),
+	}
 
 	idx, err := store.readIndexFromDisk()
 	if err != nil {
@@ -63,7 +73,138 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	}
 	store.tickets = idx.Tickets
 
+	// Start file watcher for external changes (e.g., from MCP)
+	if err := store.startWatcher(); err != nil {
+		slog.Warn("failed to start ticket file watcher", "error", err)
+	}
+
 	return store, nil
+}
+
+func (s *FileStore) startWatcher() error {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+	s.watcher = watcher
+
+	// Watch the tickets directory
+	ticketsDir := filepath.Join(s.dataDir, "tickets")
+	if err := watcher.Add(ticketsDir); err != nil {
+		watcher.Close()
+		return err
+	}
+
+	go s.watchLoop()
+	slog.Info("ticket file watcher started", "path", ticketsDir)
+	return nil
+}
+
+func (s *FileStore) watchLoop() {
+	const debounceInterval = 100 * time.Millisecond
+	var debounceTimer *time.Timer
+
+	for {
+		select {
+		case <-s.stopCh:
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			return
+		case event, ok := <-s.watcher.Events:
+			if !ok {
+				return
+			}
+			// Only care about index.json writes
+			if filepath.Base(event.Name) != "index.json" {
+				continue
+			}
+			if event.Op&(fsnotify.Write|fsnotify.Create) == 0 {
+				continue
+			}
+
+			// Check if this is a self-triggered write
+			s.writingMu.Lock()
+			if time.Since(s.lastWrite) < 200*time.Millisecond {
+				s.writingMu.Unlock()
+				continue
+			}
+			s.writingMu.Unlock()
+
+			// Debounce rapid changes
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			debounceTimer = time.AfterFunc(debounceInterval, func() {
+				s.reloadFromDisk()
+			})
+		case err, ok := <-s.watcher.Errors:
+			if !ok {
+				return
+			}
+			slog.Warn("ticket file watcher error", "error", err)
+		}
+	}
+}
+
+func (s *FileStore) reloadFromDisk() {
+	idx, err := s.readIndexFromDisk()
+	if err != nil {
+		slog.Error("failed to reload tickets from disk", "error", err)
+		return
+	}
+
+	s.mu.Lock()
+	oldTickets := s.tickets
+	s.tickets = idx.Tickets
+	s.mu.Unlock()
+
+	// Compute and notify changes
+	s.notifyExternalChanges(oldTickets, idx.Tickets)
+	slog.Debug("tickets reloaded from disk", "count", len(idx.Tickets))
+}
+
+func (s *FileStore) notifyExternalChanges(oldTickets, newTickets []Ticket) {
+	oldMap := make(map[string]Ticket)
+	for _, t := range oldTickets {
+		oldMap[t.ID] = t
+	}
+
+	newMap := make(map[string]Ticket)
+	for _, t := range newTickets {
+		newMap[t.ID] = t
+	}
+
+	// Find created and updated
+	for _, t := range newTickets {
+		old, exists := oldMap[t.ID]
+		if !exists {
+			s.notifyChange(TicketChangeEvent{Op: OperationCreate, Ticket: t})
+		} else if t.UpdatedAt != old.UpdatedAt {
+			s.notifyChange(TicketChangeEvent{Op: OperationUpdate, Ticket: t})
+		}
+	}
+
+	// Find deleted
+	for _, t := range oldTickets {
+		if _, exists := newMap[t.ID]; !exists {
+			s.notifyChange(TicketChangeEvent{Op: OperationDelete, Ticket: t})
+		}
+	}
+}
+
+// Stop is safe to call multiple times.
+func (s *FileStore) Stop() {
+	if s.watcher == nil {
+		return
+	}
+	select {
+	case <-s.stopCh:
+		// Already closed
+	default:
+		close(s.stopCh)
+	}
+	s.watcher.Close()
 }
 
 func (s *FileStore) indexPath() string {
@@ -93,6 +234,12 @@ func (s *FileStore) persistIndex() error {
 	if err != nil {
 		return err
 	}
+
+	// Mark as self-write to ignore the fsnotify event
+	s.writingMu.Lock()
+	s.lastWrite = time.Now()
+	s.writingMu.Unlock()
+
 	return os.WriteFile(s.indexPath(), data, 0644)
 }
 
