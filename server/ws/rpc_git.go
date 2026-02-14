@@ -148,3 +148,46 @@ func (h *rpcMethodHandler) handleGitReset(ctx context.Context, conn *jsonrpc2.Co
 		h.log.Error("failed to send git reset response", "error", err)
 	}
 }
+
+func (h *rpcMethodHandler) handleGitLog(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.GitLogParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	commits, err := git.Log(wt.WorkDir, params.Limit)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return
+	}
+
+	result := rpc.GitLogResult{Commits: commits}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send git log response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleGitShow(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.GitShowParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.Hash == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "hash required")
+		return
+	}
+
+	result, err := git.Show(wt.WorkDir, params.Hash)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send git show response", "error", err)
+	}
+}

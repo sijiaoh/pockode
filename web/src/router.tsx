@@ -47,6 +47,12 @@ const fileViewRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const commitRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: ROUTES.commit,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 const settingsRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.settings,
@@ -87,6 +93,12 @@ const wtFileViewRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const wtCommitRoute = createRoute({
+	getParentRoute: () => worktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.commit,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 const wtSettingsRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.settings,
@@ -99,6 +111,7 @@ const routeTree = rootRoute.addChildren([
 	stagedDiffRoute,
 	unstagedDiffRoute,
 	fileViewRoute,
+	commitRoute,
 	settingsRoute,
 	worktreeLayoutRoute.addChildren([
 		wtIndexRoute,
@@ -106,6 +119,7 @@ const routeTree = rootRoute.addChildren([
 		wtStagedDiffRoute,
 		wtUnstagedDiffRoute,
 		wtFileViewRoute,
+		wtCommitRoute,
 		wtSettingsRoute,
 	]),
 ]);

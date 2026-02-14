@@ -12,7 +12,7 @@ interface NavToSession {
 interface NavToFileOverlay {
 	type: "overlay";
 	worktree: string;
-	overlayType: "staged" | "unstaged" | "file";
+	overlayType: "staged" | "unstaged" | "file" | "commit";
 	path: string;
 	sessionId: string | null;
 	edit?: boolean;
@@ -70,6 +70,14 @@ export function overlayToNavigation(
 					sessionId,
 					edit: overlay.edit,
 				};
+			case "commit":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "commit" as const,
+					path: overlay.hash,
+					sessionId,
+				};
 			case "settings":
 				return {
 					type: "overlay" as const,
@@ -125,6 +133,7 @@ export function buildNavigation(
 					staged: isMain ? ROUTES.staged : WT_ROUTES.staged,
 					unstaged: isMain ? ROUTES.unstaged : WT_ROUTES.unstaged,
 					file: isMain ? ROUTES.files : WT_ROUTES.files,
+					commit: isMain ? ROUTES.commit : WT_ROUTES.commit,
 				} as const;
 
 				result.to = routeMap[target.overlayType];

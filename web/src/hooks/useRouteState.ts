@@ -44,6 +44,14 @@ export function useRouteState(): RouteInfo {
 		from: WT_ROUTES.files,
 		shouldThrow: false,
 	});
+	const commitMatch = useMatch({
+		from: ROUTES.commit,
+		shouldThrow: false,
+	});
+	const wtCommitMatch = useMatch({
+		from: WT_ROUTES.commit,
+		shouldThrow: false,
+	});
 	const settingsMatch = useMatch({
 		from: ROUTES.settings,
 		shouldThrow: false,
@@ -88,6 +96,17 @@ export function useRouteState(): RouteInfo {
 			wtFileMatch?.search) as OverlaySearchParams;
 		return {
 			overlay: { type: "file", path: filePath, edit: search.mode === "edit" },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	const commitHash = commitMatch?.params._splat ?? wtCommitMatch?.params._splat;
+	if (commitHash !== undefined) {
+		const search = (commitMatch?.search ??
+			wtCommitMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "commit", hash: commitHash },
 			sessionId: search.session ?? null,
 			worktree,
 		};

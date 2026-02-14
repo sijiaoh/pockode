@@ -23,6 +23,40 @@ export interface GitDiffChangedNotification extends GitDiffData {
 	id: string;
 }
 
+export interface GitCommit {
+	hash: string;
+	subject: string;
+	body?: string;
+	author: string;
+	date: string;
+}
+
+export interface GitLogResult {
+	commits: GitCommit[];
+}
+
+export interface FileChange {
+	path: string;
+	status: "M" | "A" | "D" | "R";
+}
+
+export type GitFileStatus = "M" | "A" | "D" | "R" | "?";
+
+export const GIT_STATUS_INFO: Record<
+	GitFileStatus,
+	{ label: string; color: string }
+> = {
+	M: { label: "Modified", color: "text-th-warning" },
+	A: { label: "Added", color: "text-th-success" },
+	D: { label: "Deleted", color: "text-th-error" },
+	R: { label: "Renamed", color: "text-th-accent" },
+	"?": { label: "Untracked", color: "text-th-text-muted" },
+};
+
+export interface GitShowResult extends GitCommit {
+	files: FileChange[];
+}
+
 /**
  * Flatten GitStatus into a list of files with full paths.
  * Submodule files are prefixed with their submodule path.

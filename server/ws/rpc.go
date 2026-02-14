@@ -311,6 +311,10 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitAdd(ctx, conn, req, wt)
 	case "git.reset":
 		h.handleGitReset(ctx, conn, req, wt)
+	case "git.log":
+		h.handleGitLog(ctx, conn, req, wt)
+	case "git.show":
+		h.handleGitShow(ctx, conn, req, wt)
 	// fs namespace
 	case "fs.subscribe":
 		h.handleFSSubscribe(ctx, conn, req, wt)
