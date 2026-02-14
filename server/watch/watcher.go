@@ -7,7 +7,6 @@ type Watcher interface {
 	Start() error
 	Stop()
 	Unsubscribe(id string)
-	CleanupConnection(connID string)
 }
 
 var (
@@ -17,4 +16,5 @@ var (
 	_ Watcher = (*WorktreeWatcher)(nil)
 	_ Watcher = (*SessionListWatcher)(nil)
 	_ Watcher = (*SettingsWatcher)(nil)
+	_ Watcher = (*ChatMessagesWatcher)(nil)
 )

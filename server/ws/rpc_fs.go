@@ -15,12 +15,13 @@ func (h *rpcMethodHandler) handleFSSubscribe(ctx context.Context, conn *jsonrpc2
 		return
 	}
 
-	connID := h.state.getConnID()
-	id, err := wt.FSWatcher.Subscribe(params.Path, conn, connID)
+	notifier := h.state.getNotifier()
+	id, err := wt.FSWatcher.Subscribe(params.Path, notifier)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 		return
 	}
+	h.state.trackSubscription(id, wt.FSWatcher)
 	h.log.Debug("subscribed", "watcher", "fs", "watchId", id, "path", params.Path)
 
 	if err := conn.Reply(ctx, req.ID, rpc.FSSubscribeResult{ID: id}); err != nil {

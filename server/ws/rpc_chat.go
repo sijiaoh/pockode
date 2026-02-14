@@ -32,11 +32,13 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		return
 	}
 
-	id, history, err := wt.ChatMessagesWatcher.Subscribe(conn, h.state.connID, params.SessionID)
+	notifier := h.state.getNotifier()
+	id, history, err := wt.ChatMessagesWatcher.Subscribe(notifier, params.SessionID)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
+	h.state.trackSubscription(id, wt.ChatMessagesWatcher)
 
 	result := rpc.ChatMessagesSubscribeResult{
 		ID:      id,

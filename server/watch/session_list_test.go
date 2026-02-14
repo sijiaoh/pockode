@@ -83,7 +83,7 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 	w := NewSessionListWatcher(store)
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
-	id, sessions, err := w.Subscribe(nil, "conn1")
+	id, sessions, err := w.Subscribe(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestSessionListWatcher_Unsubscribe(t *testing.T) {
 	w := NewSessionListWatcher(store)
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
-	id, _, _ := w.Subscribe(nil, "conn1")
+	id, _, _ := w.Subscribe(nil)
 
 	if !w.HasSubscriptions() {
 		t.Error("expected HasSubscriptions to be true")
@@ -164,7 +164,7 @@ func TestSessionListWatcher_Subscribe_ListError(t *testing.T) {
 	w := NewSessionListWatcher(store)
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
-	_, _, err := w.Subscribe(nil, "conn1")
+	_, _, err := w.Subscribe(nil)
 	if err == nil {
 		t.Error("expected error")
 	}

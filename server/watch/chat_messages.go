@@ -9,7 +9,6 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 // ChatMessagesWatcher manages subscriptions for chat messages.
@@ -105,7 +104,8 @@ func (w *ChatMessagesWatcher) notifyMessage(msg process.ChatMessage) {
 			EventRecord: record,
 		}
 
-		if err := sub.Conn.Notify(context.Background(), method, params); err != nil {
+		n := Notification{Method: method, Params: params}
+		if err := sub.Notifier.Notify(context.Background(), n); err != nil {
 			slog.Debug("failed to notify subscriber",
 				"id", sub.ID,
 				"sessionId", sessionID,
@@ -123,18 +123,15 @@ type notifyParams struct {
 // Subscribe registers a subscriber for a specific session.
 // Returns subscription ID and history.
 func (w *ChatMessagesWatcher) Subscribe(
-	conn *jsonrpc2.Conn,
-	connID string,
+	notifier Notifier,
 	sessionID string,
 ) (string, []json.RawMessage, error) {
 	id := w.GenerateID()
 	sub := &Subscription{
-		ID:     id,
-		ConnID: connID,
-		Conn:   conn,
+		ID:       id,
+		Notifier: notifier,
 	}
 
-	// Lock order: sessionMu → subMu (consistent with Unsubscribe/CleanupConnection)
 	w.sessionMu.Lock()
 	w.sessionToIDs[sessionID] = append(w.sessionToIDs[sessionID], id)
 	w.idToSession[id] = sessionID
@@ -160,30 +157,6 @@ func (w *ChatMessagesWatcher) Unsubscribe(id string) {
 	w.sessionMu.Unlock()
 
 	w.RemoveSubscription(id)
-}
-
-// CleanupConnection removes all subscriptions for a connection.
-func (w *ChatMessagesWatcher) CleanupConnection(connID string) {
-	// Get subscription IDs first (releases subMu before acquiring sessionMu)
-	subs := w.GetSubscriptionsByConnID(connID)
-	if len(subs) == 0 {
-		return
-	}
-
-	// Collect IDs to avoid holding lock during iteration
-	ids := make([]string, len(subs))
-	for i, sub := range subs {
-		ids[i] = sub.ID
-	}
-
-	// Lock order: sessionMu → subMu (consistent with Subscribe/Unsubscribe)
-	w.sessionMu.Lock()
-	for _, id := range ids {
-		w.removeSessionMapping(id)
-	}
-	w.sessionMu.Unlock()
-
-	w.BaseWatcher.CleanupConnection(connID)
 }
 
 // removeSessionMapping removes session mapping for a subscription. Caller must hold sessionMu.

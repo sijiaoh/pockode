@@ -9,7 +9,6 @@ import (
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/watch"
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 // Worktree holds all resources (session store, watchers, processes) for a single worktree.
@@ -29,39 +28,32 @@ type Worktree struct {
 
 	mu          sync.Mutex // protects subscribers only
 	refCount    int        // protected by Manager.mu, not Worktree.mu
-	subscribers map[*jsonrpc2.Conn]struct{}
+	subscribers map[watch.Notifier]struct{}
 }
 
-func (w *Worktree) Subscribe(conn *jsonrpc2.Conn) {
+func (w *Worktree) Subscribe(notifier watch.Notifier) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.subscribers[conn] = struct{}{}
+	w.subscribers[notifier] = struct{}{}
 }
 
-func (w *Worktree) Unsubscribe(conn *jsonrpc2.Conn) {
+func (w *Worktree) Unsubscribe(notifier watch.Notifier) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	delete(w.subscribers, conn)
-}
-
-// UnsubscribeConnection removes all subscriptions for a connection.
-func (w *Worktree) UnsubscribeConnection(conn *jsonrpc2.Conn, connID string) {
-	for _, watcher := range w.watchers {
-		watcher.CleanupConnection(connID)
-	}
-	w.Unsubscribe(conn)
+	delete(w.subscribers, notifier)
 }
 
 func (w *Worktree) NotifyAll(ctx context.Context, method string, params any) {
 	w.mu.Lock()
-	conns := make([]*jsonrpc2.Conn, 0, len(w.subscribers))
-	for conn := range w.subscribers {
-		conns = append(conns, conn)
+	notifiers := make([]watch.Notifier, 0, len(w.subscribers))
+	for notifier := range w.subscribers {
+		notifiers = append(notifiers, notifier)
 	}
 	w.mu.Unlock()
 
-	for _, conn := range conns {
-		conn.Notify(ctx, method, params)
+	n := watch.Notification{Method: method, Params: params}
+	for _, notifier := range notifiers {
+		notifier.Notify(ctx, n)
 	}
 }
 

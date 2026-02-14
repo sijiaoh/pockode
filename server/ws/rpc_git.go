@@ -45,8 +45,8 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 		return
 	}
 
-	connID := h.state.getConnID()
-	id, result, err := wt.GitDiffWatcher.Subscribe(params.Path, params.Staged, conn, connID)
+	notifier := h.state.getNotifier()
+	id, result, err := wt.GitDiffWatcher.Subscribe(params.Path, params.Staged, notifier)
 	if err != nil {
 		if strings.Contains(err.Error(), "file not found") {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
@@ -55,6 +55,7 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
+	h.state.trackSubscription(id, wt.GitDiffWatcher)
 
 	h.log.Debug("subscribed", "watcher", "git-diff", "watchId", id, "path", params.Path, "staged", params.Staged)
 
@@ -70,12 +71,9 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 }
 
 func (h *rpcMethodHandler) handleGitSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
-	connID := h.state.getConnID()
-	id, err := wt.GitWatcher.Subscribe(conn, connID)
-	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		return
-	}
+	notifier := h.state.getNotifier()
+	id := wt.GitWatcher.Subscribe(notifier)
+	h.state.trackSubscription(id, wt.GitWatcher)
 	h.log.Debug("subscribed", "watcher", "git", "watchId", id)
 
 	if err := conn.Reply(ctx, req.ID, rpc.GitSubscribeResult{ID: id}); err != nil {

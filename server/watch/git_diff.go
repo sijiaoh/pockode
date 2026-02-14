@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/pockode/server/git"
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 const gitDiffPollInterval = 3 * time.Second
@@ -51,7 +50,7 @@ func (w *GitDiffWatcher) Stop() {
 
 // Subscribe starts watching diff changes for a specific file.
 // Returns subscription ID and initial diff content.
-func (w *GitDiffWatcher) Subscribe(path string, staged bool, conn *jsonrpc2.Conn, connID string) (string, *git.DiffResult, error) {
+func (w *GitDiffWatcher) Subscribe(path string, staged bool, notifier Notifier) (string, *git.DiffResult, error) {
 	result, err := git.DiffWithContent(w.workDir, path, staged)
 	if err != nil {
 		return "", nil, err
@@ -61,9 +60,8 @@ func (w *GitDiffWatcher) Subscribe(path string, staged bool, conn *jsonrpc2.Conn
 	hash := w.hashDiff(result)
 
 	sub := &Subscription{
-		ID:     id,
-		ConnID: connID,
-		Conn:   conn,
+		ID:       id,
+		Notifier: notifier,
 	}
 
 	w.dataMu.Lock()
@@ -84,29 +82,6 @@ func (w *GitDiffWatcher) Unsubscribe(id string) {
 	w.dataMu.Unlock()
 
 	w.RemoveSubscription(id)
-}
-
-func (w *GitDiffWatcher) CleanupConnection(connID string) {
-	// Get subscription IDs first (releases subMu before acquiring dataMu)
-	subs := w.GetSubscriptionsByConnID(connID)
-	if len(subs) == 0 {
-		return
-	}
-
-	// Collect IDs to avoid holding lock during iteration
-	ids := make([]string, len(subs))
-	for i, sub := range subs {
-		ids[i] = sub.ID
-	}
-
-	// Lock order: dataMu → subMu (consistent with Subscribe/Unsubscribe)
-	w.dataMu.Lock()
-	for _, id := range ids {
-		delete(w.subData, id)
-	}
-	w.dataMu.Unlock()
-
-	w.BaseWatcher.CleanupConnection(connID)
 }
 
 func (w *GitDiffWatcher) pollLoop() {
@@ -168,13 +143,16 @@ func (w *GitDiffWatcher) checkOne(sub *Subscription) {
 	data.lastHash = hash
 	w.dataMu.Unlock()
 
-	params := map[string]any{
-		"id":          sub.ID,
-		"diff":        result.Diff,
-		"old_content": result.OldContent,
-		"new_content": result.NewContent,
+	n := Notification{
+		Method: "git.diff.changed",
+		Params: map[string]any{
+			"id":          sub.ID,
+			"diff":        result.Diff,
+			"old_content": result.OldContent,
+			"new_content": result.NewContent,
+		},
 	}
-	if err := sub.Conn.Notify(context.Background(), "git.diff.changed", params); err != nil {
+	if err := sub.Notifier.Notify(context.Background(), n); err != nil {
 		slog.Debug("failed to notify git diff change", "id", sub.ID, "error", err)
 	}
 }

@@ -8,7 +8,9 @@ import (
 )
 
 func (h *rpcMethodHandler) handleSettingsSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	id, settings := h.settingsWatcher.Subscribe(conn, h.state.getConnID())
+	notifier := h.state.getNotifier()
+	id, settings := h.settingsWatcher.Subscribe(notifier)
+	h.state.trackSubscription(id, h.settingsWatcher)
 	h.log.Debug("subscribed to settings", "watchId", id)
 
 	result := rpc.SettingsSubscribeResult{

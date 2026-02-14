@@ -5,7 +5,6 @@ import (
 
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 type ProcessStateGetter interface {
@@ -86,12 +85,11 @@ func (w *SessionListWatcher) notifyChange(event session.SessionChangeEvent) {
 
 // Subscribe registers a subscriber and returns the subscription ID along with
 // the current session list enriched with runtime state.
-func (w *SessionListWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (string, []rpc.SessionListItem, error) {
+func (w *SessionListWatcher) Subscribe(notifier Notifier) (string, []rpc.SessionListItem, error) {
 	id := w.GenerateID()
 	sub := &Subscription{
-		ID:     id,
-		ConnID: connID,
-		Conn:   conn,
+		ID:       id,
+		Notifier: notifier,
 	}
 	// Add subscription BEFORE getting the list to avoid missing events
 	// that occur between List() and AddSubscription().

@@ -8,8 +8,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 const gitPollInterval = 3 * time.Second
@@ -48,16 +46,15 @@ func (w *GitWatcher) Stop() {
 	slog.Info("GitWatcher stopped")
 }
 
-func (w *GitWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (string, error) {
+func (w *GitWatcher) Subscribe(notifier Notifier) string {
 	id := w.GenerateID()
 
 	sub := &Subscription{
-		ID:     id,
-		ConnID: connID,
-		Conn:   conn,
+		ID:       id,
+		Notifier: notifier,
 	}
 	w.AddSubscription(sub)
-	return id, nil
+	return id
 }
 
 func (w *GitWatcher) pollLoop() {
