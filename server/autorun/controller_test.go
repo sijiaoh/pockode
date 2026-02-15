@@ -210,3 +210,66 @@ func TestController_OnSettingsChange_AutorunDisabled(t *testing.T) {
 		}
 	}
 }
+
+func TestController_OnTicketChange_Create_AutorunDisabled(t *testing.T) {
+	ticketStore := newMockTicketStore()
+	ticketStore.addTicket(ticket.Ticket{
+		ID:     "tk-1",
+		Status: ticket.TicketStatusOpen,
+	})
+
+	ctrl := &Controller{
+		ticketStore:   ticketStore,
+		settingsStore: nil, // autorun disabled
+	}
+
+	ctrl.OnTicketChange(ticket.TicketChangeEvent{
+		Op:     ticket.OperationCreate,
+		Ticket: ticket.Ticket{ID: "tk-1", Status: ticket.TicketStatusOpen},
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	tickets, _ := ticketStore.List()
+	for _, tk := range tickets {
+		if tk.Status == ticket.TicketStatusInProgress {
+			t.Errorf("expected no in_progress tickets when autorun disabled, but found %s", tk.ID)
+		}
+	}
+}
+
+func TestController_OnTicketChange_Create_SkipsWhenInProgressExists(t *testing.T) {
+	ticketStore := newMockTicketStore()
+	ticketStore.addTicket(ticket.Ticket{
+		ID:     "tk-1",
+		Status: ticket.TicketStatusInProgress,
+	})
+	ticketStore.addTicket(ticket.Ticket{
+		ID:     "tk-2",
+		Status: ticket.TicketStatusOpen,
+	})
+
+	settingsStore, _ := settings.NewStore(t.TempDir())
+	_ = settingsStore.Update(settings.Settings{Autorun: true})
+
+	ctrl := &Controller{
+		ticketStore:   ticketStore,
+		settingsStore: settingsStore,
+	}
+
+	// Simulate a new ticket being created while another is in progress
+	ctrl.OnTicketChange(ticket.TicketChangeEvent{
+		Op:     ticket.OperationCreate,
+		Ticket: ticket.Ticket{ID: "tk-2", Status: ticket.TicketStatusOpen},
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	// tk-2 should remain open because tk-1 is already in_progress
+	tickets, _ := ticketStore.List()
+	for _, tk := range tickets {
+		if tk.ID == "tk-2" && tk.Status != ticket.TicketStatusOpen {
+			t.Errorf("expected tk-2 to remain open when another ticket is in_progress, got %s", tk.Status)
+		}
+	}
+}

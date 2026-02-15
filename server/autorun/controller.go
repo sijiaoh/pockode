@@ -89,13 +89,14 @@ func (c *Controller) handleIdleState(sessionID string) {
 }
 
 // OnTicketChange handles ticket state changes.
-// When a ticket becomes done, starts the next open ticket if autorun is enabled.
+// Starts the next open ticket when a ticket becomes done or a new ticket is created.
 func (c *Controller) OnTicketChange(event ticket.TicketChangeEvent) {
 	if !c.isEnabled() {
 		return
 	}
 
-	if event.Op == ticket.OperationUpdate && event.Ticket.Status == ticket.TicketStatusDone {
+	if (event.Op == ticket.OperationUpdate && event.Ticket.Status == ticket.TicketStatusDone) ||
+		event.Op == ticket.OperationCreate {
 		go c.startNextOpenTicket()
 	}
 }
