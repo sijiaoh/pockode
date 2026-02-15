@@ -57,12 +57,14 @@ func (c *Controller) IsEnabled() bool {
 // OnProcessStateChange handles process state changes.
 // When a session becomes idle, prompts the agent to continue or close the ticket
 // if autorun is enabled and the session is associated with an in_progress ticket.
+// Initial idle events (when a process is first created) are ignored to avoid
+// sending continue messages before the initial ticket message.
 func (c *Controller) OnProcessStateChange(event process.StateChangeEvent) {
 	if !c.IsEnabled() {
 		return
 	}
 
-	if event.State == process.ProcessStateIdle {
+	if event.State == process.ProcessStateIdle && !event.IsInitial {
 		go c.handleIdleState(event.SessionID)
 	}
 }

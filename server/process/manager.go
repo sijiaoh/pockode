@@ -22,6 +22,7 @@ const (
 type StateChangeEvent struct {
 	SessionID string
 	State     ProcessState
+	IsInitial bool // True when this is the initial state on process creation
 }
 
 // Manager manages agent processes.
@@ -86,9 +87,9 @@ func (m *Manager) SetOnStateChange(fn func(StateChangeEvent)) {
 	m.onStateChange = fn
 }
 
-func (m *Manager) emitStateChange(sessionID string, state ProcessState) {
+func (m *Manager) emitStateChange(sessionID string, state ProcessState, isInitial bool) {
 	if m.onStateChange != nil {
-		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: state})
+		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: state, IsInitial: isInitial})
 	}
 }
 
@@ -154,13 +155,13 @@ func (m *Manager) GetOrCreateProcessWithOptions(ctx context.Context, sessionID s
 				logger.LogPanic(r, "session crashed", "sessionId", sessionID)
 			}
 			m.remove(sessionID)
-			m.emitStateChange(sessionID, ProcessStateEnded)
+			m.emitStateChange(sessionID, ProcessStateEnded, false)
 			slog.Info("process ended", "sessionId", sessionID)
 		}()
 		proc.streamEvents(m.ctx)
 	}()
 
-	m.emitStateChange(sessionID, ProcessStateIdle)
+	m.emitStateChange(sessionID, ProcessStateIdle, true)
 	slog.Info("process created", "sessionId", sessionID, "resume", procOpts.Resume, "mode", procOpts.Mode)
 	return proc, true, nil
 }
@@ -343,7 +344,7 @@ func (p *Process) SetRunning() {
 		return
 	}
 	p.setState(ProcessStateRunning)
-	p.manager.emitStateChange(p.sessionID, ProcessStateRunning)
+	p.manager.emitStateChange(p.sessionID, ProcessStateRunning, false)
 }
 
 // SetIdle transitions the process to idle state and notifies subscribers.
@@ -352,7 +353,7 @@ func (p *Process) SetIdle() {
 		return
 	}
 	p.setState(ProcessStateIdle)
-	p.manager.emitStateChange(p.sessionID, ProcessStateIdle)
+	p.manager.emitStateChange(p.sessionID, ProcessStateIdle, false)
 }
 
 // streamEvents routes events to history and emits to the event listener.

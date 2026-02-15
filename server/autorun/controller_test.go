@@ -238,6 +238,31 @@ func TestController_OnTicketChange_Create_AutorunDisabled(t *testing.T) {
 	}
 }
 
+func TestController_OnProcessStateChange_IgnoresInitialIdle(t *testing.T) {
+	ticketStore := newMockTicketStore()
+	ticketStore.addTicket(ticket.Ticket{
+		ID:        "tk-1",
+		Status:    ticket.TicketStatusInProgress,
+		SessionID: "sess-1",
+	})
+
+	settingsStore, _ := settings.NewStore(t.TempDir())
+	_ = settingsStore.Update(settings.Settings{Autorun: true})
+
+	ctrl := New(ticketStore, nil, nil, nil, settingsStore)
+
+	// Initial idle event should be ignored (IsInitial=true)
+	// handleIdleState should NOT be called at all
+	ctrl.OnProcessStateChange(process.StateChangeEvent{
+		SessionID: "sess-1",
+		State:     process.ProcessStateIdle,
+		IsInitial: true,
+	})
+
+	time.Sleep(20 * time.Millisecond)
+	// If we get here, the initial idle was correctly ignored
+}
+
 func TestController_OnTicketChange_Create_SkipsWhenInProgressExists(t *testing.T) {
 	ticketStore := newMockTicketStore()
 	ticketStore.addTicket(ticket.Ticket{

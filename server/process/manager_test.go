@@ -268,15 +268,15 @@ func TestProcess_SetRunning_EmitsStateChange(t *testing.T) {
 
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
 
-	// Initial state is idle, creation emits idle
-	if len(events) != 1 || events[0].State != ProcessStateIdle {
-		t.Fatalf("expected initial idle event, got %v", events)
+	// Initial state is idle, creation emits idle with IsInitial=true
+	if len(events) != 1 || events[0].State != ProcessStateIdle || !events[0].IsInitial {
+		t.Fatalf("expected initial idle event with IsInitial=true, got %v", events)
 	}
 
-	// SetRunning should emit running
+	// SetRunning should emit running with IsInitial=false
 	proc.SetRunning()
-	if len(events) != 2 || events[1].State != ProcessStateRunning {
-		t.Errorf("expected running event, got %v", events)
+	if len(events) != 2 || events[1].State != ProcessStateRunning || events[1].IsInitial {
+		t.Errorf("expected running event with IsInitial=false, got %v", events)
 	}
 
 	// Duplicate SetRunning should not emit
@@ -300,10 +300,10 @@ func TestProcess_SetIdle_EmitsStateChange(t *testing.T) {
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
 	proc.SetRunning()
 
-	// SetIdle should emit idle
+	// SetIdle should emit idle with IsInitial=false (not initial, it's after running)
 	proc.SetIdle()
-	if len(events) != 3 || events[2].State != ProcessStateIdle {
-		t.Errorf("expected idle event, got %v", events)
+	if len(events) != 3 || events[2].State != ProcessStateIdle || events[2].IsInitial {
+		t.Errorf("expected idle event with IsInitial=false, got %v", events)
 	}
 
 	// Duplicate SetIdle should not emit
