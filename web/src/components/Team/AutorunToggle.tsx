@@ -4,8 +4,7 @@ import { useWSStore } from "../../lib/wsStore";
 
 export default function AutorunToggle() {
 	const updateSettings = useWSStore((s) => s.actions.updateSettings);
-	const settings = useSettingsStore((s) => s.settings);
-	const enabled = settings?.autorun ?? false;
+	const enabled = useSettingsStore((s) => s.settings?.autorun ?? false);
 
 	const handleToggle = async () => {
 		try {
