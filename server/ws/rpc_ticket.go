@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/google/uuid"
-	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
-	"github.com/pockode/server/session"
 	"github.com/pockode/server/ticket"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
@@ -134,7 +131,6 @@ func (h *rpcMethodHandler) handleTicketStart(ctx context.Context, conn *jsonrpc2
 		return
 	}
 
-	// Get the ticket
 	tk, found, err := h.worktreeManager.TicketStore.Get(params.TicketID)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to get ticket")
@@ -145,57 +141,16 @@ func (h *rpcMethodHandler) handleTicketStart(ctx context.Context, conn *jsonrpc2
 		return
 	}
 
-	// Only open tickets can be started
 	if tk.Status != ticket.TicketStatusOpen {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "ticket is not open")
 		return
 	}
 
-	// Get the role for system prompt
-	role, found, err := h.worktreeManager.RoleStore.Get(tk.RoleID)
+	sessionID, err := h.worktreeManager.TicketStarter.Start(ctx, tk, wt.SessionStore, wt.ChatClient)
 	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to get role")
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to start ticket: "+err.Error())
 		return
 	}
-	if !found {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "role not found")
-		return
-	}
-
-	// Create a new session
-	sessionID := uuid.Must(uuid.NewV7()).String()
-	if _, err := wt.SessionStore.Create(ctx, sessionID); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to create session")
-		return
-	}
-
-	// Update session title to match ticket
-	if err := wt.SessionStore.Update(ctx, sessionID, tk.Title); err != nil {
-		h.log.Warn("failed to set session title", "error", err)
-	}
-
-	// Update ticket with session ID and status
-	inProgress := ticket.TicketStatusInProgress
-	_, err = h.worktreeManager.TicketStore.Update(ctx, params.TicketID, ticket.TicketUpdate{
-		Status:    &inProgress,
-		SessionID: &sessionID,
-	})
-	if err != nil {
-		h.log.Warn("failed to update ticket status", "error", err)
-	}
-
-	// Send the initial message with custom system prompt
-	// Ticket details are in the system prompt; initial message triggers the agent to start work
-	procOpts := process.ProcessOptions{
-		Mode:         session.ModeYolo,
-		SystemPrompt: ticket.BuildAgentSystemPrompt(tk, role),
-	}
-	if err := wt.ChatClient.SendMessageWithOptions(ctx, sessionID, tk.Title, procOpts); err != nil {
-		h.log.Error("failed to send initial message", "error", err)
-		// Don't fail the request - session is created, user can send message manually
-	}
-
-	h.log.Info("ticket started", "ticketId", params.TicketID, "sessionId", sessionID)
 
 	result := rpc.TicketStartResult{SessionID: sessionID}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/google/uuid"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
@@ -21,7 +20,7 @@ import (
 // - Starts the next open ticket when autorun is enabled (if no ticket is in progress)
 type Controller struct {
 	ticketStore   ticket.Store
-	roleStore     ticket.RoleStore
+	ticketStarter *ticket.StartService
 	sessionStore  session.Store
 	chatClient    *chat.Client
 	settingsStore *settings.Store
@@ -33,14 +32,14 @@ type Controller struct {
 // New creates a new autorun controller.
 func New(
 	ticketStore ticket.Store,
-	roleStore ticket.RoleStore,
+	ticketStarter *ticket.StartService,
 	sessionStore session.Store,
 	chatClient *chat.Client,
 	settingsStore *settings.Store,
 ) *Controller {
 	return &Controller{
 		ticketStore:   ticketStore,
-		roleStore:     roleStore,
+		ticketStarter: ticketStarter,
 		sessionStore:  sessionStore,
 		chatClient:    chatClient,
 		settingsStore: settingsStore,
@@ -156,58 +155,6 @@ func (c *Controller) StartNextOpenTicket() {
 }
 
 func (c *Controller) startTicket(tk ticket.Ticket) error {
-	ctx := context.Background()
-
-	role, found, err := c.roleStore.Get(tk.RoleID)
-	if err != nil {
-		return err
-	}
-	if !found {
-		slog.Warn("autorun: role not found", "roleId", tk.RoleID)
-		role = ticket.AgentRole{}
-	}
-
-	// Create session first - if this fails, no state to rollback
-	sessionID := uuid.Must(uuid.NewV7()).String()
-	if _, err := c.sessionStore.Create(ctx, sessionID); err != nil {
-		return err
-	}
-	if err := c.sessionStore.Update(ctx, sessionID, tk.Title); err != nil {
-		slog.Warn("autorun: failed to set session title", "error", err)
-	}
-
-	// Update ticket status - if this fails, orphan session is acceptable
-	inProgress := ticket.TicketStatusInProgress
-	if _, err := c.ticketStore.Update(ctx, tk.ID, ticket.TicketUpdate{
-		Status:    &inProgress,
-		SessionID: &sessionID,
-	}); err != nil {
-		return err
-	}
-
-	// Send message - rollback ticket status on failure to prevent zombie ticket
-	procOpts := process.ProcessOptions{
-		Mode:         session.ModeYolo,
-		SystemPrompt: ticket.BuildAgentSystemPrompt(tk, role),
-	}
-	if err := c.chatClient.SendMessageWithOptions(ctx, sessionID, tk.Title, procOpts); err != nil {
-		c.rollbackTicketStatus(ctx, tk.ID)
-		return err
-	}
-
-	slog.Info("autorun: ticket started", "ticketId", tk.ID, "sessionId", sessionID)
-	return nil
-}
-
-func (c *Controller) rollbackTicketStatus(ctx context.Context, ticketID string) {
-	openStatus := ticket.TicketStatusOpen
-	emptySession := ""
-	if _, err := c.ticketStore.Update(ctx, ticketID, ticket.TicketUpdate{
-		Status:    &openStatus,
-		SessionID: &emptySession,
-	}); err != nil {
-		slog.Error("autorun: failed to rollback ticket status", "ticketId", ticketID, "error", err)
-	} else {
-		slog.Warn("autorun: rolled back ticket to open", "ticketId", ticketID)
-	}
+	_, err := c.ticketStarter.Start(context.Background(), tk, c.sessionStore, c.chatClient)
+	return err
 }

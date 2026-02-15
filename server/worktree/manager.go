@@ -32,6 +32,7 @@ type Manager struct {
 	TicketStore     ticket.Store
 	RoleStore       ticket.RoleStore
 	TicketWatcher   *watch.TicketWatcher
+	TicketStarter   *ticket.StartService
 	settingsStore   *settings.Store
 	autorunCtrl     *autorun.Controller
 
@@ -50,6 +51,7 @@ func NewManager(registry *Registry, ag agent.Agent, dataDir string, idleTimeout 
 		TicketStore:     ticketStore,
 		RoleStore:       roleStore,
 		TicketWatcher:   ticketWatcher,
+		TicketStarter:   ticket.NewStartService(ticketStore, roleStore),
 		settingsStore:   settingsStore,
 		worktrees:       make(map[string]*Worktree),
 	}
@@ -212,7 +214,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		if isNew {
 			m.autorunCtrl = autorun.New(
 				m.TicketStore,
-				m.RoleStore,
+				m.TicketStarter,
 				sessionStore,
 				chatClient,
 				m.settingsStore,
