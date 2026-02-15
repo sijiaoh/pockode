@@ -121,7 +121,7 @@ export default function TicketDashboardPage({
 				<button
 					type="button"
 					onClick={() => setShowCreateDialog(true)}
-					className="flex items-center gap-1 rounded-lg bg-th-accent px-3 py-1.5 text-sm text-th-accent-text hover:bg-th-accent-hover"
+					className="flex items-center gap-1 rounded-lg bg-th-accent px-3 py-2 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 				>
 					<Plus className="h-4 w-4" />
 					New

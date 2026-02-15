@@ -26,7 +26,7 @@ const KanbanColumn = memo(function KanbanColumn({
 	onDeleteTicket,
 }: Props) {
 	return (
-		<div className="flex flex-col min-w-[280px] max-w-[320px] flex-1">
+		<div className="flex min-w-[260px] max-w-[320px] flex-1 flex-col">
 			<div className="flex items-center justify-between mb-2 px-1">
 				<h2 className="text-sm font-medium text-th-text-primary">
 					{STATUS_LABELS[status]}
@@ -35,7 +35,7 @@ const KanbanColumn = memo(function KanbanColumn({
 					{tickets.length}
 				</span>
 			</div>
-			<div className="flex flex-col gap-2 flex-1 overflow-y-auto">
+			<div className="flex flex-1 flex-col gap-3 overflow-y-auto">
 				{tickets.map((ticket) => (
 					<TicketCard
 						key={ticket.id}

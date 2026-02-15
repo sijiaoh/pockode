@@ -20,9 +20,9 @@ export default function AutorunToggle() {
 		<button
 			type="button"
 			onClick={handleToggle}
-			className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+			className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
 				enabled
-					? "bg-green-600 text-white hover:bg-green-700"
+					? "bg-th-success text-th-text-inverse hover:opacity-90"
 					: "bg-th-bg-tertiary text-th-text-muted hover:bg-th-border"
 			}`}
 			title={

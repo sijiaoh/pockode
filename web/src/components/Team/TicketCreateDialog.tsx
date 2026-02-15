@@ -94,14 +94,14 @@ function TicketCreateDialog({ onSubmit, onCancel }: Props) {
 					<button
 						type="button"
 						onClick={onCancel}
-						className="rounded-lg bg-th-bg-tertiary px-4 py-2 text-sm text-th-text-primary transition-colors hover:opacity-90"
+						className="rounded-lg bg-th-bg-tertiary px-4 py-2 text-sm text-th-text-primary transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 					>
 						Cancel
 					</button>
 					<button
 						type="submit"
 						disabled={!isValid}
-						className="rounded-lg bg-th-accent px-4 py-2 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover disabled:opacity-50 disabled:cursor-not-allowed"
+						className="rounded-lg bg-th-accent px-4 py-2 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						Create
 					</button>

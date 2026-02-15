@@ -92,7 +92,7 @@ export default function AgentRolesPage({ onBack }: Props) {
 						<button
 							type="button"
 							onClick={() => setIsCreating(true)}
-							className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-th-border p-3 text-sm text-th-text-muted transition-colors hover:border-th-accent hover:text-th-accent"
+							className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-th-border p-3 text-sm text-th-text-muted transition-colors hover:border-th-accent hover:text-th-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 						>
 							<Plus className="h-4 w-4" />
 							Add Role
@@ -137,22 +137,22 @@ function RoleItem({ role, onEdit, onDelete }: RoleItemProps) {
 						{role.system_prompt || "No system prompt"}
 					</p>
 				</div>
-				<div className="ml-2 flex items-center gap-1">
+				<div className="ml-2 flex items-center gap-0.5">
 					<button
 						type="button"
 						onClick={onEdit}
-						className="rounded p-1.5 text-th-text-muted hover:bg-th-bg-tertiary"
+						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 						title="Edit role"
 					>
-						<Pencil className="h-4 w-4" />
+						<Pencil className="h-5 w-5" />
 					</button>
 					<button
 						type="button"
 						onClick={onDelete}
-						className="rounded p-1.5 text-th-text-muted hover:bg-th-bg-tertiary hover:text-red-500"
+						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-error focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 						title="Delete role"
 					>
-						<Trash2 className="h-4 w-4" />
+						<Trash2 className="h-5 w-5" />
 					</button>
 				</div>
 			</div>
@@ -188,27 +188,27 @@ function RoleEditor({ role, onSave, onCancel }: RoleEditorProps) {
 				value={name}
 				onChange={(e) => setName(e.target.value)}
 				placeholder="Role name"
-				className="w-full rounded border border-th-border bg-th-bg-primary px-2 py-1.5 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+				className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
 			/>
 			<textarea
 				value={systemPrompt}
 				onChange={(e) => setSystemPrompt(e.target.value)}
 				placeholder="System prompt..."
 				rows={3}
-				className="w-full resize-none rounded border border-th-border bg-th-bg-primary px-2 py-1.5 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+				className="w-full resize-none rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
 			/>
-			<div className="flex justify-end gap-2">
+			<div className="flex justify-end gap-3 pt-2">
 				<button
 					type="button"
 					onClick={onCancel}
-					className="px-3 py-1 text-sm text-th-text-muted hover:text-th-text-primary"
+					className="rounded-lg bg-th-bg-tertiary px-4 py-2 text-sm text-th-text-primary transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 				>
 					Cancel
 				</button>
 				<button
 					type="submit"
 					disabled={!isValid}
-					className="rounded bg-th-accent px-3 py-1 text-sm text-th-accent-text hover:bg-th-accent-hover disabled:opacity-50"
+					className="rounded-lg bg-th-accent px-4 py-2 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					Save
 				</button>

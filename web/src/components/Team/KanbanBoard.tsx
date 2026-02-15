@@ -19,7 +19,7 @@ function KanbanBoard({
 	onDeleteTicket,
 }: Props) {
 	return (
-		<div className="flex gap-4 p-4 overflow-x-auto h-full">
+		<div className="flex h-full gap-4 overflow-x-auto">
 			{STATUSES.map((status) => (
 				<KanbanColumn
 					key={status}

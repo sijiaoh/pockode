@@ -151,7 +151,7 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 									: undefined
 							}
 							className={`w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none ${
-								!isPriorityEditable ? "opacity-50 cursor-not-allowed" : ""
+								!isPriorityEditable ? "cursor-not-allowed opacity-50" : ""
 							}`}
 						/>
 					</div>
@@ -161,14 +161,14 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 					<button
 						type="button"
 						onClick={onClose}
-						className="rounded-lg bg-th-bg-tertiary px-4 py-2 text-sm text-th-text-primary transition-colors hover:opacity-90"
+						className="rounded-lg bg-th-bg-tertiary px-4 py-2 text-sm text-th-text-primary transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 					>
 						Cancel
 					</button>
 					<button
 						type="submit"
 						disabled={!isValid}
-						className="rounded-lg bg-th-accent px-4 py-2 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover disabled:opacity-50 disabled:cursor-not-allowed"
+						className="rounded-lg bg-th-accent px-4 py-2 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						Save
 					</button>

@@ -55,35 +55,35 @@ const TicketCard = memo(function TicketCard({
 					{role?.name ?? "Unknown role"}
 				</span>
 
-				<div className="flex items-center gap-1">
+				<div className="flex items-center gap-0.5">
 					{canStart && onStart && (
 						<button
 							type="button"
 							onClick={() => onStart(ticket.id)}
-							className="p-1.5 rounded hover:bg-th-bg-tertiary text-th-accent"
+							className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-accent hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 							title="Start ticket"
 						>
-							<Play className="h-4 w-4" />
+							<Play className="h-5 w-5" />
 						</button>
 					)}
 					{hasSession && onView && (
 						<button
 							type="button"
 							onClick={() => onView(ticket.session_id as string)}
-							className="p-1.5 rounded hover:bg-th-bg-tertiary text-th-text-muted"
+							className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 							title="View session"
 						>
-							<Eye className="h-4 w-4" />
+							<Eye className="h-5 w-5" />
 						</button>
 					)}
 					{onEdit && (
 						<button
 							type="button"
 							onClick={() => onEdit(ticket)}
-							className="p-1.5 rounded hover:bg-th-bg-tertiary text-th-text-muted"
+							className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 							title="Edit ticket"
 						>
-							<Pencil className="h-4 w-4" />
+							<Pencil className="h-5 w-5" />
 						</button>
 					)}
 					{onDelete && (
@@ -91,7 +91,7 @@ const TicketCard = memo(function TicketCard({
 							itemName={ticket.title}
 							itemType="ticket"
 							onDelete={() => onDelete(ticket.id)}
-							className="p-1.5 rounded hover:bg-th-bg-tertiary text-th-text-muted hover:text-red-500"
+							className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-error focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 						/>
 					)}
 				</div>
