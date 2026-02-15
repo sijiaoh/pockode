@@ -63,10 +63,6 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}
 	}
 
-	if opts.SystemPrompt != "" {
-		claudeArgs = append(claudeArgs, "--system-prompt", opts.SystemPrompt)
-	}
-
 	// Add MCP server configuration if data directory is provided
 	if opts.MCPDataDir != "" {
 		mcpConfig := buildMCPConfig(os.Args[0], opts.MCPDataDir)

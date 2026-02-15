@@ -105,9 +105,8 @@ func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent) {
 
 // ProcessOptions contains options for creating a new process.
 type ProcessOptions struct {
-	Resume       bool
-	Mode         session.Mode
-	SystemPrompt string
+	Resume bool
+	Mode   session.Mode
 }
 
 // GetOrCreateProcess returns an existing process or creates a new one.
@@ -127,12 +126,11 @@ func (m *Manager) GetOrCreateProcessWithOptions(ctx context.Context, sessionID s
 
 	// Use manager's context for process lifecycle, not request context
 	opts := agent.StartOptions{
-		WorkDir:      m.workDir,
-		SessionID:    sessionID,
-		Resume:       procOpts.Resume,
-		Mode:         procOpts.Mode,
-		SystemPrompt: procOpts.SystemPrompt,
-		MCPDataDir:   m.dataDir,
+		WorkDir:    m.workDir,
+		SessionID:  sessionID,
+		Resume:     procOpts.Resume,
+		Mode:       procOpts.Mode,
+		MCPDataDir: m.dataDir,
 	}
 	sess, err := m.agent.Start(m.ctx, opts)
 	if err != nil {

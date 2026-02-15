@@ -32,12 +32,11 @@ type QuestionRequestData struct {
 
 // StartOptions contains options for starting an agent session.
 type StartOptions struct {
-	WorkDir      string
-	SessionID    string
-	Resume       bool
-	Mode         session.Mode
-	SystemPrompt string // Custom system prompt (overrides default)
-	MCPDataDir   string // If set, enables MCP tools with this data directory
+	WorkDir    string
+	SessionID  string
+	Resume     bool
+	Mode       session.Mode
+	MCPDataDir string // If set, enables MCP tools with this data directory
 }
 
 // Agent defines the interface for an AI agent.
