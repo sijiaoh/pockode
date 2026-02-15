@@ -258,3 +258,101 @@ func TestFileRoleStore_FileWatcher(t *testing.T) {
 		t.Errorf("got %d roles, want 2", len(roles))
 	}
 }
+
+func TestFileRoleStore_PromptFile(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx := context.Background()
+
+	store, err := NewFileRoleStore(dataDir)
+	if err != nil {
+		t.Fatalf("NewFileRoleStore: %v", err)
+	}
+	defer store.Stop()
+
+	t.Run("Create writes prompt file", func(t *testing.T) {
+		role, err := store.Create(ctx, "Test Role", "You are a test assistant.")
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		promptPath := store.GetPromptFilePath(role.ID)
+		content, err := os.ReadFile(promptPath)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+
+		if string(content) != "You are a test assistant." {
+			t.Errorf("got prompt %q, want %q", string(content), "You are a test assistant.")
+		}
+	})
+
+	t.Run("Update writes prompt file", func(t *testing.T) {
+		role, err := store.Create(ctx, "Update Test", "Original prompt")
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		_, err = store.Update(ctx, role.ID, "Update Test", "Updated prompt")
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+
+		promptPath := store.GetPromptFilePath(role.ID)
+		content, err := os.ReadFile(promptPath)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+
+		if string(content) != "Updated prompt" {
+			t.Errorf("got prompt %q, want %q", string(content), "Updated prompt")
+		}
+	})
+
+	t.Run("Delete removes prompt file", func(t *testing.T) {
+		role, err := store.Create(ctx, "Delete Test", "To be deleted")
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		promptPath := store.GetPromptFilePath(role.ID)
+
+		// Verify file exists
+		if _, err := os.Stat(promptPath); err != nil {
+			t.Fatalf("prompt file should exist: %v", err)
+		}
+
+		// Delete role
+		if err := store.Delete(ctx, role.ID); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+
+		// Verify file is removed
+		if _, err := os.Stat(promptPath); !os.IsNotExist(err) {
+			t.Errorf("prompt file should be deleted, got error: %v", err)
+		}
+	})
+
+	t.Run("Default role prompt file exists after init", func(t *testing.T) {
+		promptPath := store.GetPromptFilePath("default")
+		content, err := os.ReadFile(promptPath)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+
+		if string(content) != DefaultRole.SystemPrompt {
+			t.Errorf("got prompt %q, want %q", string(content), DefaultRole.SystemPrompt)
+		}
+	})
+}
+
+func TestFileRoleStore_GetPromptFilePath(t *testing.T) {
+	dataDir := "/tmp/test-data"
+	store := &FileRoleStore{dataDir: dataDir}
+
+	got := store.GetPromptFilePath("role-123")
+	want := "/tmp/test-data/roles/role-123/prompt.md"
+
+	if got != want {
+		t.Errorf("GetPromptFilePath() = %q, want %q", got, want)
+	}
+}

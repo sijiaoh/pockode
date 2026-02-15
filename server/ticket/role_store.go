@@ -28,6 +28,9 @@ type RoleStore interface {
 	Update(ctx context.Context, roleID, name, systemPrompt string) (AgentRole, error)
 	Delete(ctx context.Context, roleID string) error
 	SetOnChangeListener(listener OnRoleChangeListener)
+	// GetPromptFilePath returns the file path where the role's system prompt is stored.
+	// Agents can use this path with the Read tool to access the prompt.
+	GetPromptFilePath(roleID string) string
 }
 
 // FileRoleStore implements RoleStore with file-based persistence.
@@ -58,12 +61,12 @@ func NewFileRoleStore(dataDir string) (*FileRoleStore, error) {
 	// Create default role if none exist
 	if len(roles) == 0 {
 		roles = []AgentRole{DefaultRole}
-		store.roles = roles
-		if err := store.persist(); err != nil {
-			return nil, err
-		}
-	} else {
-		store.roles = roles
+	}
+	store.roles = roles
+
+	// Always persist to ensure prompt files are in sync
+	if err := store.persist(); err != nil {
+		return nil, err
 	}
 
 	// Start file watcher for external changes (e.g., from MCP)
@@ -76,6 +79,15 @@ func NewFileRoleStore(dataDir string) (*FileRoleStore, error) {
 
 func (s *FileRoleStore) filePath() string {
 	return filepath.Join(s.dataDir, "agent_roles.json")
+}
+
+func (s *FileRoleStore) rolesDir() string {
+	return filepath.Join(s.dataDir, "roles")
+}
+
+// GetPromptFilePath returns the file path where the role's system prompt is stored.
+func (s *FileRoleStore) GetPromptFilePath(roleID string) string {
+	return filepath.Join(s.rolesDir(), roleID, "prompt.md")
 }
 
 func (s *FileRoleStore) readFromDisk() ([]AgentRole, error) {
@@ -105,11 +117,46 @@ func (s *FileRoleStore) persist() error {
 		return err
 	}
 
+	// Write prompt files for each role
+	if err := s.writeAllPromptFiles(); err != nil {
+		return err
+	}
+
 	// Mark as self-write to ignore the fsnotify event
 	s.writingMu.Lock()
 	s.lastWrite = time.Now()
 	s.writingMu.Unlock()
 
+	return nil
+}
+
+func (s *FileRoleStore) writeAllPromptFiles() error {
+	for _, role := range s.roles {
+		if err := s.writePromptFile(role); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *FileRoleStore) writePromptFile(role AgentRole) error {
+	promptPath := s.GetPromptFilePath(role.ID)
+	promptDir := filepath.Dir(promptPath)
+
+	if err := os.MkdirAll(promptDir, 0755); err != nil {
+		return err
+	}
+
+	return os.WriteFile(promptPath, []byte(role.SystemPrompt), 0644)
+}
+
+func (s *FileRoleStore) deletePromptFile(roleID string) error {
+	roleDir := filepath.Join(s.rolesDir(), roleID)
+	// Remove the entire role directory (containing prompt.md)
+	err := os.RemoveAll(roleDir)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	return nil
 }
 
@@ -190,9 +237,32 @@ func (s *FileRoleStore) reloadFromDisk() {
 	s.roles = roles
 	s.mu.Unlock()
 
+	// Update prompt files to match reloaded data
+	if err := s.writeAllPromptFiles(); err != nil {
+		slog.Error("failed to write prompt files after reload", "error", err)
+	}
+
+	// Clean up prompt files for deleted roles
+	s.cleanupDeletedRolePromptFiles(oldRoles, roles)
+
 	// Compute and notify changes
 	s.notifyExternalChanges(oldRoles, roles)
 	slog.Debug("roles reloaded from disk", "count", len(roles))
+}
+
+func (s *FileRoleStore) cleanupDeletedRolePromptFiles(oldRoles, newRoles []AgentRole) {
+	newMap := make(map[string]struct{}, len(newRoles))
+	for _, r := range newRoles {
+		newMap[r.ID] = struct{}{}
+	}
+
+	for _, r := range oldRoles {
+		if _, exists := newMap[r.ID]; !exists {
+			if err := s.deletePromptFile(r.ID); err != nil {
+				slog.Warn("failed to delete prompt file for removed role", "role_id", r.ID, "error", err)
+			}
+		}
+	}
 }
 
 func (s *FileRoleStore) notifyExternalChanges(oldRoles, newRoles []AgentRole) {
@@ -353,6 +423,11 @@ func (s *FileRoleStore) Delete(ctx context.Context, roleID string) error {
 	if err := s.persist(); err != nil {
 		s.roles = oldRoles
 		return err
+	}
+
+	// Delete prompt file (best effort, don't fail the delete operation)
+	if err := s.deletePromptFile(roleID); err != nil {
+		slog.Warn("failed to delete prompt file", "role_id", roleID, "error", err)
 	}
 
 	s.notifyChange(RoleChangeEvent{Op: OperationDelete, Role: deleted})
