@@ -96,3 +96,23 @@ func TestBuildAgentSystemPrompt_EmptyDescription(t *testing.T) {
 		t.Error("prompt should contain role system prompt")
 	}
 }
+
+func TestBuildAgentStartMessage(t *testing.T) {
+	ticketID := "test-ticket-123"
+	rolePromptPath := "/data/roles/role-456/prompt.md"
+
+	msg := BuildAgentStartMessage(ticketID, rolePromptPath)
+
+	if !strings.Contains(msg, ticketID) {
+		t.Error("message should contain ticket ID")
+	}
+	if !strings.Contains(msg, "ticket_update") {
+		t.Error("message should contain ticket_update instruction")
+	}
+	if !strings.Contains(msg, "Scope Constraints") {
+		t.Error("message should contain scope constraints")
+	}
+	if !strings.Contains(msg, rolePromptPath) {
+		t.Error("message should contain role prompt file path")
+	}
+}

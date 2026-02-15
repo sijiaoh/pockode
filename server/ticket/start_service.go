@@ -28,14 +28,7 @@ func NewStartService(ticketStore Store, roleStore RoleStore) *StartService {
 // sessionStore and chatClient are passed per-call since they are worktree-specific.
 // Returns the session ID on success.
 func (s *StartService) Start(ctx context.Context, tk Ticket, sessionStore session.Store, chatClient *chat.Client) (string, error) {
-	role, found, err := s.roleStore.Get(tk.RoleID)
-	if err != nil {
-		return "", err
-	}
-	if !found {
-		slog.Warn("role not found, using empty role", "roleId", tk.RoleID)
-		role = AgentRole{}
-	}
+	rolePromptPath := s.roleStore.GetPromptFilePath(tk.RoleID)
 
 	sessionID := uuid.Must(uuid.NewV7()).String()
 	if _, err := sessionStore.Create(ctx, sessionID); err != nil {
@@ -53,11 +46,11 @@ func (s *StartService) Start(ctx context.Context, tk Ticket, sessionStore sessio
 		return "", err
 	}
 
+	startMessage := BuildAgentStartMessage(tk.ID, rolePromptPath)
 	procOpts := process.ProcessOptions{
-		Mode:         session.ModeYolo,
-		SystemPrompt: BuildAgentSystemPrompt(tk, role),
+		Mode: session.ModeYolo,
 	}
-	if err := chatClient.SendMessageWithOptions(ctx, sessionID, tk.Title, procOpts); err != nil {
+	if err := chatClient.SendMessageWithOptions(ctx, sessionID, startMessage, procOpts); err != nil {
 		s.rollbackTicketStatus(ctx, tk.ID)
 		return "", err
 	}

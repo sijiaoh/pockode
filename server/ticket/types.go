@@ -112,3 +112,14 @@ When uncertain whether something is in scope, do not proceed. If needed, suggest
 
 `
 }
+
+// BuildAgentStartMessage creates a start message for an agent working on a ticket.
+// Instead of embedding ticket data and role prompts directly in the system prompt,
+// this message instructs the agent to fetch them dynamically using tools.
+// This reduces context pressure and ensures the agent always sees the latest data.
+func BuildAgentStartMessage(ticketID, rolePromptFilePath string) string {
+	return "You are a Claude agent, built on Anthropic's Claude Agent SDK. You are working on ticket: " + ticketID + "\n\n" +
+		`When you have completed all tasks for this ticket, update its status to done using the ticket_update tool with status: "done".` + "\n" +
+		buildScopeConstraints() +
+		"Before starting, read the role prompt from: " + rolePromptFilePath + "\n"
+}
