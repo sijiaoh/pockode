@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/process"
@@ -185,7 +186,7 @@ func (h *rpcMethodHandler) handleTicketStart(ctx context.Context, conn *jsonrpc2
 	}
 	procOpts := process.ProcessOptions{
 		Mode:         session.ModeYolo,
-		SystemPrompt: role.SystemPrompt,
+		SystemPrompt: buildTicketSystemPrompt(tk.ID, role.SystemPrompt),
 	}
 	if err := wt.ChatClient.SendMessageWithOptions(ctx, sessionID, initialMessage, procOpts); err != nil {
 		h.log.Error("failed to send initial message", "error", err)
@@ -218,4 +219,18 @@ func (h *rpcMethodHandler) handleTicketListSubscribe(ctx context.Context, conn *
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send ticket list subscribe response", "error", err)
 	}
+}
+
+// buildTicketSystemPrompt combines Pockode's fixed prompt with the role's custom prompt.
+// The fixed prompt instructs the agent to update ticket status when work is complete.
+func buildTicketSystemPrompt(ticketID string, rolePrompt string) string {
+	const template = `You are working on ticket: %s
+
+When you have completed all tasks for this ticket, update its status to done using the ticket_update tool with status: "done".
+`
+	pockodePrompt := fmt.Sprintf(template, ticketID)
+	if rolePrompt == "" {
+		return pockodePrompt
+	}
+	return pockodePrompt + rolePrompt
 }
