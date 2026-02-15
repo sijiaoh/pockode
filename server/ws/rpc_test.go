@@ -128,9 +128,10 @@ func (e *testEnv) nextID() int {
 }
 
 func (e *testEnv) call(method string, params interface{}) rpcResponse {
+	reqID := e.nextID()
 	req := rpcRequest{
 		JSONRPC: "2.0",
-		ID:      e.nextID(),
+		ID:      reqID,
 		Method:  method,
 		Params:  params,
 	}
@@ -139,16 +140,24 @@ func (e *testEnv) call(method string, params interface{}) rpcResponse {
 		e.t.Fatalf("failed to send: %v", err)
 	}
 
-	_, respData, err := e.conn.Read(e.ctx)
-	if err != nil {
-		e.t.Fatalf("failed to read: %v", err)
-	}
+	// Read messages until we get the response with matching ID.
+	// This handles cases where notifications arrive before the response.
+	for {
+		_, respData, err := e.conn.Read(e.ctx)
+		if err != nil {
+			e.t.Fatalf("failed to read: %v", err)
+		}
 
-	var resp rpcResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		e.t.Fatalf("failed to unmarshal response: %v", err)
+		var resp rpcResponse
+		if err := json.Unmarshal(respData, &resp); err != nil {
+			e.t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if resp.ID == reqID {
+			return resp
+		}
+		// Skip notifications (ID=0) and continue waiting
 	}
-	return resp
 }
 
 func (e *testEnv) readNotification() rpcNotification {
