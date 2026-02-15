@@ -11,8 +11,7 @@ import type { Ticket, TicketStatus } from "../../types/message";
 import BackToChatButton from "../ui/BackToChatButton";
 import AutorunToggle from "./AutorunToggle";
 import KanbanBoard from "./KanbanBoard";
-import TicketCreateDialog from "./TicketCreateDialog";
-import TicketEditDialog from "./TicketEditDialog";
+import TicketEditorOverlay from "./TicketEditorOverlay";
 
 interface Props {
 	onBack: () => void;
@@ -166,17 +165,17 @@ export default function TicketDashboardPage({
 			</main>
 
 			{showCreateDialog && (
-				<TicketCreateDialog
-					onSubmit={handleCreate}
+				<TicketEditorOverlay
+					onSave={handleCreate}
 					onCancel={handleCancelCreate}
 				/>
 			)}
 
 			{editingTicket && (
-				<TicketEditDialog
+				<TicketEditorOverlay
 					ticket={editingTicket}
-					onClose={handleCloseEdit}
 					onSave={handleEdit}
+					onCancel={handleCloseEdit}
 				/>
 			)}
 		</div>
