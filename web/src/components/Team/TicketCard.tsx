@@ -1,4 +1,4 @@
-import { Eye, Pencil, Play } from "lucide-react";
+import { MessageSquare, Pencil, Play } from "lucide-react";
 import { memo, useMemo } from "react";
 import { selectRoleById, useRoleStore } from "../../lib/roleStore";
 import type { Ticket } from "../../types/message";
@@ -73,7 +73,7 @@ const TicketCard = memo(function TicketCard({
 							className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 							title="View session"
 						>
-							<Eye className="h-5 w-5" />
+							<MessageSquare className="h-5 w-5" />
 						</button>
 					)}
 					{onEdit && (
