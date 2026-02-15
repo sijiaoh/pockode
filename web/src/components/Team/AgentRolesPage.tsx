@@ -6,6 +6,7 @@ import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/message";
 import ConfirmDialog from "../common/ConfirmDialog";
 import BackToChatButton from "../ui/BackToChatButton";
+import RoleEditorOverlay from "./RoleEditorOverlay";
 
 interface Props {
 	onBack: () => void;
@@ -18,8 +19,9 @@ export default function AgentRolesPage({ onBack }: Props) {
 	const updateRoleAction = useWSStore((s) => s.actions.updateRole);
 	const deleteRoleAction = useWSStore((s) => s.actions.deleteRole);
 
-	const [editingRole, setEditingRole] = useState<AgentRole | null>(null);
-	const [isCreating, setIsCreating] = useState(false);
+	const [editorState, setEditorState] = useState<
+		{ mode: "edit"; role: AgentRole } | { mode: "create" } | null
+	>(null);
 	const [deletingRole, setDeletingRole] = useState<AgentRole | null>(null);
 
 	const affectedTicketCount = useMemo(() => {
@@ -31,20 +33,19 @@ export default function AgentRolesPage({ onBack }: Props) {
 		).length;
 	}, [deletingRole, tickets]);
 
-	const handleCreate = async (name: string, systemPrompt: string) => {
-		const role = await createRoleAction(name, systemPrompt);
-		addRole(role);
-		setIsCreating(false);
-	};
-
-	const handleUpdate = async (
-		roleId: string,
-		name: string,
-		systemPrompt: string,
-	) => {
-		const role = await updateRoleAction(roleId, name, systemPrompt);
-		updateRole(role);
-		setEditingRole(null);
+	const handleSave = async (name: string, systemPrompt: string) => {
+		if (editorState?.mode === "edit") {
+			const role = await updateRoleAction(
+				editorState.role.id,
+				name,
+				systemPrompt,
+			);
+			updateRole(role);
+		} else {
+			const role = await createRoleAction(name, systemPrompt);
+			addRole(role);
+		}
+		setEditorState(null);
 	};
 
 	const handleDelete = async () => {
@@ -65,41 +66,33 @@ export default function AgentRolesPage({ onBack }: Props) {
 
 			<main className="min-h-0 flex-1 overflow-auto p-4">
 				<div className="mx-auto max-w-lg space-y-3">
-					{roles.map((role) =>
-						editingRole?.id === role.id ? (
-							<RoleEditor
-								key={role.id}
-								role={role}
-								onSave={(name, prompt) => handleUpdate(role.id, name, prompt)}
-								onCancel={() => setEditingRole(null)}
-							/>
-						) : (
-							<RoleItem
-								key={role.id}
-								role={role}
-								onEdit={() => setEditingRole(role)}
-								onDelete={() => setDeletingRole(role)}
-							/>
-						),
-					)}
-
-					{isCreating ? (
-						<RoleEditor
-							onSave={handleCreate}
-							onCancel={() => setIsCreating(false)}
+					{roles.map((role) => (
+						<RoleItem
+							key={role.id}
+							role={role}
+							onEdit={() => setEditorState({ mode: "edit", role })}
+							onDelete={() => setDeletingRole(role)}
 						/>
-					) : (
-						<button
-							type="button"
-							onClick={() => setIsCreating(true)}
-							className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-th-border p-3 text-sm text-th-text-muted transition-colors hover:border-th-accent hover:text-th-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
-						>
-							<Plus className="h-4 w-4" />
-							Add Role
-						</button>
-					)}
+					))}
+
+					<button
+						type="button"
+						onClick={() => setEditorState({ mode: "create" })}
+						className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-th-border p-3 text-sm text-th-text-muted transition-colors hover:border-th-accent hover:text-th-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+					>
+						<Plus className="h-4 w-4" />
+						Add Role
+					</button>
 				</div>
 			</main>
+
+			{editorState && (
+				<RoleEditorOverlay
+					role={editorState.mode === "edit" ? editorState.role : undefined}
+					onSave={handleSave}
+					onCancel={() => setEditorState(null)}
+				/>
+			)}
 
 			{deletingRole && (
 				<ConfirmDialog
@@ -157,62 +150,5 @@ function RoleItem({ role, onEdit, onDelete }: RoleItemProps) {
 				</div>
 			</div>
 		</div>
-	);
-}
-
-interface RoleEditorProps {
-	role?: AgentRole;
-	onSave: (name: string, systemPrompt: string) => void;
-	onCancel: () => void;
-}
-
-function RoleEditor({ role, onSave, onCancel }: RoleEditorProps) {
-	const [name, setName] = useState(role?.name ?? "");
-	const [systemPrompt, setSystemPrompt] = useState(role?.system_prompt ?? "");
-
-	const isValid = name.trim().length > 0;
-
-	const handleSubmit = (e: React.FormEvent) => {
-		e.preventDefault();
-		if (!isValid) return;
-		onSave(name.trim(), systemPrompt.trim());
-	};
-
-	return (
-		<form
-			onSubmit={handleSubmit}
-			className="space-y-3 rounded-lg border border-th-accent bg-th-bg-secondary p-3"
-		>
-			<input
-				type="text"
-				value={name}
-				onChange={(e) => setName(e.target.value)}
-				placeholder="Role name"
-				className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
-			/>
-			<textarea
-				value={systemPrompt}
-				onChange={(e) => setSystemPrompt(e.target.value)}
-				placeholder="System prompt..."
-				rows={3}
-				className="w-full resize-none rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
-			/>
-			<div className="flex justify-end gap-3 pt-2">
-				<button
-					type="button"
-					onClick={onCancel}
-					className="rounded-lg bg-th-bg-tertiary px-4 py-2 text-sm text-th-text-primary transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
-				>
-					Cancel
-				</button>
-				<button
-					type="submit"
-					disabled={!isValid}
-					className="rounded-lg bg-th-accent px-4 py-2 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50"
-				>
-					Save
-				</button>
-			</div>
-		</form>
 	);
 }
