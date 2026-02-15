@@ -23,7 +23,7 @@ func TestNewStore_LoadsExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 
-	if err := os.WriteFile(path, []byte(`{}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"autorun": true}`), 0644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -33,7 +33,7 @@ func TestNewStore_LoadsExistingFile(t *testing.T) {
 	}
 
 	got := store.Get()
-	want := Settings{}
+	want := Settings{Autorun: true}
 	if got != want {
 		t.Errorf("expected settings %+v, got %+v", want, got)
 	}
@@ -65,7 +65,7 @@ func TestStore_Update(t *testing.T) {
 		t.Fatalf("NewStore failed: %v", err)
 	}
 
-	newSettings := Settings{}
+	newSettings := Settings{Autorun: true}
 	if err := store.Update(newSettings); err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
@@ -80,12 +80,12 @@ func TestStore_Update_PersistsToDisk(t *testing.T) {
 	dir := t.TempDir()
 
 	store1, _ := NewStore(dir)
-	store1.Update(Settings{})
+	store1.Update(Settings{Autorun: true})
 
 	// Create new store from same directory
 	store2, _ := NewStore(dir)
 	got := store2.Get()
-	want := Settings{}
+	want := Settings{Autorun: true}
 	if got != want {
 		t.Errorf("expected persisted settings %+v, got %+v", want, got)
 	}
