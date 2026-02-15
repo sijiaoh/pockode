@@ -1,6 +1,7 @@
 import { ChevronDown, GitBranch, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useWorktree } from "../../hooks/useWorktree";
+import { toast } from "../../lib/toastStore";
 import type { WorktreeInfo } from "../../types/message";
 import WorktreeCreateSheet from "./WorktreeCreateSheet";
 import WorktreeDropdown from "./WorktreeDropdown";
@@ -40,20 +41,29 @@ function WorktreeSwitcher({ onClose, isDesktop = true }: Props) {
 		[select],
 	);
 
-	// TODO: Add error handling with toast notification when available
 	const handleDelete = useCallback(
 		async (worktree: WorktreeInfo) => {
 			if (isDeleting) return;
-			await deleteWorktree(worktree.name);
+			try {
+				await deleteWorktree(worktree.name);
+			} catch (err) {
+				toast.error("Failed to delete worktree");
+				console.error("Failed to delete worktree:", err);
+			}
 		},
 		[deleteWorktree, isDeleting],
 	);
 
 	const handleCreate = useCallback(
 		async (name: string, branch: string, baseBranch?: string) => {
-			await create(name, branch, baseBranch);
-			select(name);
-			setIsCreateOpen(false);
+			try {
+				await create(name, branch, baseBranch);
+				select(name);
+				setIsCreateOpen(false);
+			} catch (err) {
+				toast.error("Failed to create worktree");
+				console.error("Failed to create worktree:", err);
+			}
 		},
 		[create, select],
 	);

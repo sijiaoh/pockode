@@ -15,6 +15,7 @@ import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
 import TokenInput from "./Auth/TokenInput";
 import { ChatPanel } from "./Chat";
+import ToastContainer from "./common/ToastContainer";
 import { SessionSidebar } from "./Session";
 
 function AppShell() {
@@ -325,6 +326,7 @@ function AppShell() {
 				onCloseOverlay={handleCloseOverlay}
 				onSelectSession={handleSelectSession}
 			/>
+			<ToastContainer />
 		</div>
 	);
 }

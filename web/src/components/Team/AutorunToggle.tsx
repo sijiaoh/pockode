@@ -1,5 +1,6 @@
 import { Bot, BotOff } from "lucide-react";
 import { useSettingsStore } from "../../lib/settingsStore";
+import { toast } from "../../lib/toastStore";
 import { useWSStore } from "../../lib/wsStore";
 
 export default function AutorunToggle() {
@@ -10,6 +11,7 @@ export default function AutorunToggle() {
 		try {
 			await updateSettings({ autorun: !enabled });
 		} catch (err) {
+			toast.error("Failed to update autorun setting");
 			console.error("Failed to update autorun setting:", err);
 		}
 	};

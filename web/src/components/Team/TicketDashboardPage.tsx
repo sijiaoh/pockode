@@ -2,6 +2,7 @@ import { Plus } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useRoles } from "../../hooks/useRoles";
 import { useTickets } from "../../hooks/useTickets";
+import { toast } from "../../lib/toastStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { Ticket, TicketStatus } from "../../types/message";
 import BackToChatButton from "../ui/BackToChatButton";
@@ -33,20 +34,30 @@ export default function TicketDashboardPage({
 
 	const handleCreate = useCallback(
 		async (data: { title: string; description: string; roleId: string }) => {
-			await createTicket({
-				title: data.title,
-				description: data.description,
-				role_id: data.roleId,
-			});
-			setShowCreateDialog(false);
+			try {
+				await createTicket({
+					title: data.title,
+					description: data.description,
+					role_id: data.roleId,
+				});
+				setShowCreateDialog(false);
+			} catch (err) {
+				toast.error("Failed to create ticket");
+				console.error("Failed to create ticket:", err);
+			}
 		},
 		[createTicket],
 	);
 
 	const handleStart = useCallback(
 		async (ticketId: string) => {
-			const result = await startTicket(ticketId);
-			onSelectSession?.(result.session_id);
+			try {
+				const result = await startTicket(ticketId);
+				onSelectSession?.(result.session_id);
+			} catch (err) {
+				toast.error("Failed to start ticket");
+				console.error("Failed to start ticket:", err);
+			}
 		},
 		[startTicket, onSelectSession],
 	);
@@ -60,7 +71,12 @@ export default function TicketDashboardPage({
 
 	const handleDelete = useCallback(
 		async (ticketId: string) => {
-			await deleteTicket(ticketId);
+			try {
+				await deleteTicket(ticketId);
+			} catch (err) {
+				toast.error("Failed to delete ticket");
+				console.error("Failed to delete ticket:", err);
+			}
 		},
 		[deleteTicket],
 	);
@@ -75,8 +91,13 @@ export default function TicketDashboardPage({
 				priority?: number;
 			},
 		) => {
-			await updateTicket(ticketId, updates);
-			setEditingTicket(null);
+			try {
+				await updateTicket(ticketId, updates);
+				setEditingTicket(null);
+			} catch (err) {
+				toast.error("Failed to update ticket");
+				console.error("Failed to update ticket:", err);
+			}
 		},
 		[updateTicket],
 	);
