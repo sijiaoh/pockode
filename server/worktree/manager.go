@@ -73,6 +73,15 @@ func (m *Manager) Start() error {
 	if err := m.WorktreeWatcher.Start(); err != nil {
 		return err
 	}
+	// Set ticket change callback early so it works even before autorunCtrl is created
+	m.TicketWatcher.SetOnChange(func(event ticket.TicketChangeEvent) {
+		m.mu.Lock()
+		ctrl := m.autorunCtrl
+		m.mu.Unlock()
+		if ctrl != nil {
+			ctrl.OnTicketChange(event)
+		}
+	})
 	return m.TicketWatcher.Start()
 }
 
@@ -199,7 +208,8 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	// Create autorun controller only for main worktree
 	if name == "" && m.settingsStore != nil {
 		m.mu.Lock()
-		if m.autorunCtrl == nil {
+		isNew := m.autorunCtrl == nil
+		if isNew {
 			m.autorunCtrl = autorun.New(
 				m.TicketStore,
 				m.RoleStore,
@@ -207,12 +217,14 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 				chatClient,
 				m.settingsStore,
 			)
-			// Set ticket change callback for autorun
-			m.TicketWatcher.SetOnChange(func(event ticket.TicketChangeEvent) {
-				m.autorunCtrl.OnTicketChange(event)
-			})
 		}
+		ctrl := m.autorunCtrl
 		m.mu.Unlock()
+
+		// On first creation, check if autorun is enabled and start next ticket
+		if isNew && ctrl.IsEnabled() {
+			go ctrl.StartNextOpenTicket()
+		}
 	}
 
 	processManager.SetOnStateChange(func(e process.StateChangeEvent) {

@@ -148,7 +148,7 @@ func TestController_OnTicketChange_AutorunDisabled(t *testing.T) {
 	}
 }
 
-func TestController_startNextOpenTicket_SkipsWhenInProgressExists(t *testing.T) {
+func TestController_StartNextOpenTicket_SkipsWhenInProgressExists(t *testing.T) {
 	ticketStore := newMockTicketStore()
 	ticketStore.addTicket(ticket.Ticket{
 		ID:     "tk-1",
@@ -165,7 +165,7 @@ func TestController_startNextOpenTicket_SkipsWhenInProgressExists(t *testing.T) 
 	}
 
 	// Simulate starting next ticket
-	ctrl.startNextOpenTicket()
+	ctrl.StartNextOpenTicket()
 
 	// tk-2 should still be open because tk-1 is in_progress
 	tickets, _ := ticketStore.List()
@@ -176,12 +176,12 @@ func TestController_startNextOpenTicket_SkipsWhenInProgressExists(t *testing.T) 
 	}
 }
 
-func TestController_isEnabled_NilSettingsStore(t *testing.T) {
+func TestController_IsEnabled_NilSettingsStore(t *testing.T) {
 	ctrl := &Controller{
 		settingsStore: nil,
 	}
 
-	if ctrl.isEnabled() {
+	if ctrl.IsEnabled() {
 		t.Error("expected isEnabled to return false when settingsStore is nil")
 	}
 }

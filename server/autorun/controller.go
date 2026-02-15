@@ -47,7 +47,8 @@ func New(
 	}
 }
 
-func (c *Controller) isEnabled() bool {
+// IsEnabled returns whether autorun is currently enabled.
+func (c *Controller) IsEnabled() bool {
 	if c.settingsStore == nil {
 		return false
 	}
@@ -58,7 +59,7 @@ func (c *Controller) isEnabled() bool {
 // When a session becomes idle, prompts the agent to continue or close the ticket
 // if autorun is enabled and the session is associated with an in_progress ticket.
 func (c *Controller) OnProcessStateChange(event process.StateChangeEvent) {
-	if !c.isEnabled() {
+	if !c.IsEnabled() {
 		return
 	}
 
@@ -91,13 +92,13 @@ func (c *Controller) handleIdleState(sessionID string) {
 // OnTicketChange handles ticket state changes.
 // Starts the next open ticket when a ticket becomes done or a new ticket is created.
 func (c *Controller) OnTicketChange(event ticket.TicketChangeEvent) {
-	if !c.isEnabled() {
+	if !c.IsEnabled() {
 		return
 	}
 
 	if (event.Op == ticket.OperationUpdate && event.Ticket.Status == ticket.TicketStatusDone) ||
 		event.Op == ticket.OperationCreate {
-		go c.startNextOpenTicket()
+		go c.StartNextOpenTicket()
 	}
 }
 
@@ -107,10 +108,11 @@ func (c *Controller) OnSettingsChange(s settings.Settings) {
 	if !s.Autorun {
 		return
 	}
-	go c.startNextOpenTicket()
+	go c.StartNextOpenTicket()
 }
 
-func (c *Controller) startNextOpenTicket() {
+// StartNextOpenTicket starts the next open ticket if none is in progress.
+func (c *Controller) StartNextOpenTicket() {
 	c.processingMu.Lock()
 	if c.processing {
 		c.processingMu.Unlock()
