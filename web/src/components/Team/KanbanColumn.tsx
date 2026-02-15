@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { Ticket, TicketStatus } from "../../types/message";
 import TicketCard from "./TicketCard";
 
@@ -16,7 +17,7 @@ interface Props {
 	onDeleteTicket?: (ticketId: string) => void;
 }
 
-function KanbanColumn({
+const KanbanColumn = memo(function KanbanColumn({
 	status,
 	tickets,
 	onStartTicket,
@@ -53,6 +54,6 @@ function KanbanColumn({
 			</div>
 		</div>
 	);
-}
+});
 
 export default KanbanColumn;
