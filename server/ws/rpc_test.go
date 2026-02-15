@@ -1293,3 +1293,68 @@ func TestHandler_MissingParams(t *testing.T) {
 		t.Errorf("expected 'invalid params' error, got %q", resp.Error.Message)
 	}
 }
+
+// Ticket RPC tests
+
+func TestHandler_TicketGet(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	// Create a role first (required for ticket creation)
+	role, err := env.worktreeManager.RoleStore.Create(bgCtx, "test-role", "Test system prompt")
+	if err != nil {
+		t.Fatalf("failed to create role: %v", err)
+	}
+
+	// Create a ticket
+	created, err := env.worktreeManager.TicketStore.Create(bgCtx, "", "Test Ticket", "Test Description", role.ID, nil)
+	if err != nil {
+		t.Fatalf("failed to create ticket: %v", err)
+	}
+
+	resp := env.call("ticket.get", rpc.TicketGetParams{TicketID: created.ID})
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result ticket.Ticket
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	if result.ID != created.ID {
+		t.Errorf("expected ID %q, got %q", created.ID, result.ID)
+	}
+	if result.Title != "Test Ticket" {
+		t.Errorf("expected title 'Test Ticket', got %q", result.Title)
+	}
+	if result.Description != "Test Description" {
+		t.Errorf("expected description 'Test Description', got %q", result.Description)
+	}
+}
+
+func TestHandler_TicketGet_NotFound(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("ticket.get", rpc.TicketGetParams{TicketID: "non-existent-id"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "ticket not found") {
+		t.Errorf("expected 'ticket not found' error, got %q", resp.Error.Message)
+	}
+}
+
+func TestHandler_TicketGet_EmptyID(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("ticket.get", rpc.TicketGetParams{TicketID: ""})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "ticket_id is required") {
+		t.Errorf("expected 'ticket_id is required' error, got %q", resp.Error.Message)
+	}
+}

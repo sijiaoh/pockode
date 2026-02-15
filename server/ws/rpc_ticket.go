@@ -10,6 +10,33 @@ import (
 	"github.com/sourcegraph/jsonrpc2"
 )
 
+func (h *rpcMethodHandler) handleTicketGet(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.TicketGetParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.TicketID == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "ticket_id is required")
+		return
+	}
+
+	tk, found, err := h.worktreeManager.TicketStore.Get(params.TicketID)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to get ticket")
+		return
+	}
+	if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "ticket not found")
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, tk); err != nil {
+		h.log.Error("failed to send ticket get response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleTicketCreate(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	var params rpc.TicketCreateParams
 	if err := unmarshalParams(req, &params); err != nil {

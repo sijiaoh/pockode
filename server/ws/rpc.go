@@ -256,6 +256,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSettingsUpdate(ctx, conn, req)
 		return
 	// ticket namespace (manager-level, worktree-independent)
+	case "ticket.get":
+		h.handleTicketGet(ctx, conn, req)
+		return
 	case "ticket.create":
 		h.handleTicketCreate(ctx, conn, req)
 		return

@@ -307,6 +307,10 @@ type TicketDeleteParams struct {
 	TicketID string `json:"ticket_id"`
 }
 
+type TicketGetParams struct {
+	TicketID string `json:"ticket_id"`
+}
+
 type TicketStartParams struct {
 	TicketID string `json:"ticket_id"`
 }
