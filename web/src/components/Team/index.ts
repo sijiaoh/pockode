@@ -5,3 +5,4 @@ export { default as TeamTab } from "./TeamTab";
 export { default as TicketCard } from "./TicketCard";
 export { default as TicketCreateDialog } from "./TicketCreateDialog";
 export { default as TicketDashboardPage } from "./TicketDashboardPage";
+export { default as TicketDetailPage } from "./TicketDetailPage";

@@ -14,6 +14,7 @@ const BASE = {
 	commitDiff: "/commit/$hash/diff/$",
 	settings: "/settings",
 	tickets: "/tickets",
+	ticketDetail: "/tickets/$ticketId",
 	agentRoles: "/agent-roles",
 } as const;
 
@@ -37,5 +38,6 @@ export const WT_ROUTES = {
 	commitDiff: `${WT_PREFIX}${BASE.commitDiff}`,
 	settings: `${WT_PREFIX}${BASE.settings}`,
 	tickets: `${WT_PREFIX}${BASE.tickets}`,
+	ticketDetail: `${WT_PREFIX}${BASE.ticketDetail}`,
 	agentRoles: `${WT_PREFIX}${BASE.agentRoles}`,
 } as const;

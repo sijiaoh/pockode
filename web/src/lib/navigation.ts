@@ -58,10 +58,19 @@ interface NavToAgentRolesOverlay {
 	sessionId: string | null;
 }
 
+interface NavToTicketDetailOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "ticket-detail";
+	ticketId: string;
+	sessionId: string | null;
+}
+
 type NavToOverlay =
 	| NavToFileOverlay
 	| NavToSettingsOverlay
 	| NavToTicketsOverlay
+	| NavToTicketDetailOverlay
 	| NavToAgentRolesOverlay;
 
 interface NavToHome {
@@ -138,6 +147,14 @@ export function overlayToNavigation(
 					overlayType: "tickets" as const,
 					sessionId,
 				};
+			case "ticket-detail":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "ticket-detail" as const,
+					ticketId: overlay.ticketId,
+					sessionId,
+				};
 			case "agent-roles":
 				return {
 					type: "overlay" as const,
@@ -192,6 +209,15 @@ export function buildNavigation(
 				result.to = isMain ? ROUTES.tickets : WT_ROUTES.tickets;
 				if (!isMain) {
 					result.params = { worktree: target.worktree };
+				}
+				if (target.sessionId) {
+					result.search = { session: target.sessionId };
+				}
+			} else if (target.overlayType === "ticket-detail") {
+				result.to = isMain ? ROUTES.ticketDetail : WT_ROUTES.ticketDetail;
+				result.params = { ticketId: target.ticketId };
+				if (!isMain) {
+					result.params.worktree = target.worktree;
 				}
 				if (target.sessionId) {
 					result.search = { session: target.sessionId };

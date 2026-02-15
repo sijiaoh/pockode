@@ -5,5 +5,6 @@ export type OverlayState =
 	| { type: "commit-diff"; hash: string; path: string }
 	| { type: "settings" }
 	| { type: "tickets" }
+	| { type: "ticket-detail"; ticketId: string }
 	| { type: "agent-roles" }
 	| null;

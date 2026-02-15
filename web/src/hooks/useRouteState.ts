@@ -76,6 +76,14 @@ export function useRouteState(): RouteInfo {
 		from: WT_ROUTES.tickets,
 		shouldThrow: false,
 	});
+	const ticketDetailMatch = useMatch({
+		from: ROUTES.ticketDetail,
+		shouldThrow: false,
+	});
+	const wtTicketDetailMatch = useMatch({
+		from: WT_ROUTES.ticketDetail,
+		shouldThrow: false,
+	});
 	const agentRolesMatch = useMatch({
 		from: ROUTES.agentRoles,
 		shouldThrow: false,
@@ -154,6 +162,18 @@ export function useRouteState(): RouteInfo {
 			wtSettingsMatch?.search) as OverlaySearchParams;
 		return {
 			overlay: { type: "settings" },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	const ticketDetailId =
+		ticketDetailMatch?.params.ticketId ?? wtTicketDetailMatch?.params.ticketId;
+	if (ticketDetailId) {
+		const search = (ticketDetailMatch?.search ??
+			wtTicketDetailMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "ticket-detail", ticketId: ticketDetailId },
 			sessionId: search.session ?? null,
 			worktree,
 		};

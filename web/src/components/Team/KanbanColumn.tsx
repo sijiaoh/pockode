@@ -13,6 +13,7 @@ interface Props {
 	tickets: Ticket[];
 	onStartTicket?: (ticketId: string) => void;
 	onViewSession?: (sessionId: string) => void;
+	onViewTicketDetail?: (ticketId: string) => void;
 	onEditTicket?: (ticket: Ticket) => void;
 	onDeleteTicket?: (ticketId: string) => void;
 }
@@ -22,6 +23,7 @@ const KanbanColumn = memo(function KanbanColumn({
 	tickets,
 	onStartTicket,
 	onViewSession,
+	onViewTicketDetail,
 	onEditTicket,
 	onDeleteTicket,
 }: Props) {
@@ -42,6 +44,7 @@ const KanbanColumn = memo(function KanbanColumn({
 						ticket={ticket}
 						onStart={onStartTicket}
 						onView={onViewSession}
+						onViewDetail={onViewTicketDetail}
 						onEdit={onEditTicket}
 						onDelete={onDeleteTicket}
 					/>

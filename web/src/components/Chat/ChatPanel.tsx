@@ -13,7 +13,7 @@ import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
 import { SettingsPage } from "../Settings";
-import { AgentRolesPage, TicketDashboardPage } from "../Team";
+import { AgentRolesPage, TicketDashboardPage, TicketDetailPage } from "../Team";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
@@ -195,6 +195,14 @@ function ChatPanel({
 			case "tickets":
 				return (
 					<TicketDashboardPage
+						onBack={onCloseOverlay ?? (() => {})}
+						onSelectSession={onSelectSession}
+					/>
+				);
+			case "ticket-detail":
+				return (
+					<TicketDetailPage
+						ticketId={overlay.ticketId}
 						onBack={onCloseOverlay ?? (() => {})}
 						onSelectSession={onSelectSession}
 					/>

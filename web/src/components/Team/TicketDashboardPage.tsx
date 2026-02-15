@@ -1,7 +1,10 @@
+import { useNavigate } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useRoles } from "../../hooks/useRoles";
+import { useCurrentWorktree, useRouteState } from "../../hooks/useRouteState";
 import { useTickets } from "../../hooks/useTickets";
+import { overlayToNavigation } from "../../lib/navigation";
 import { toast } from "../../lib/toastStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { Ticket, TicketStatus } from "../../types/message";
@@ -20,6 +23,10 @@ export default function TicketDashboardPage({
 	onBack,
 	onSelectSession,
 }: Props) {
+	const navigate = useNavigate();
+	const worktree = useCurrentWorktree();
+	const { sessionId } = useRouteState();
+
 	const status = useWSStore((s) => s.status);
 	const createTicket = useWSStore((s) => s.actions.createTicket);
 	const updateTicket = useWSStore((s) => s.actions.updateTicket);
@@ -63,10 +70,23 @@ export default function TicketDashboardPage({
 	);
 
 	const handleViewSession = useCallback(
-		(sessionId: string) => {
-			onSelectSession?.(sessionId);
+		(sid: string) => {
+			onSelectSession?.(sid);
 		},
 		[onSelectSession],
+	);
+
+	const handleViewTicketDetail = useCallback(
+		(ticketId: string) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "ticket-detail", ticketId },
+					worktree,
+					sessionId,
+				),
+			);
+		},
+		[navigate, worktree, sessionId],
 	);
 
 	const handleDelete = useCallback(
@@ -138,6 +158,7 @@ export default function TicketDashboardPage({
 						grouped={grouped}
 						onStartTicket={handleStart}
 						onViewSession={handleViewSession}
+						onViewTicketDetail={handleViewTicketDetail}
 						onEditTicket={setEditingTicket}
 						onDeleteTicket={handleDelete}
 					/>

@@ -71,6 +71,12 @@ const ticketsRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const ticketDetailRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: ROUTES.ticketDetail,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 const agentRolesRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.agentRoles,
@@ -135,6 +141,12 @@ const wtTicketsRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const wtTicketDetailRoute = createRoute({
+	getParentRoute: () => worktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.ticketDetail,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 const wtAgentRolesRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.agentRoles,
@@ -150,6 +162,7 @@ const routeTree = rootRoute.addChildren([
 	commitDiffRoute, // Must be before commitRoute (more specific path)
 	commitRoute,
 	settingsRoute,
+	ticketDetailRoute, // Must be before ticketsRoute (more specific path)
 	ticketsRoute,
 	agentRolesRoute,
 	worktreeLayoutRoute.addChildren([
@@ -161,6 +174,7 @@ const routeTree = rootRoute.addChildren([
 		wtCommitDiffRoute, // Must be before wtCommitRoute (more specific path)
 		wtCommitRoute,
 		wtSettingsRoute,
+		wtTicketDetailRoute, // Must be before wtTicketsRoute (more specific path)
 		wtTicketsRoute,
 		wtAgentRolesRoute,
 	]),

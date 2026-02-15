@@ -8,6 +8,7 @@ interface Props {
 	ticket: Ticket;
 	onStart?: (ticketId: string) => void;
 	onView?: (sessionId: string) => void;
+	onViewDetail?: (ticketId: string) => void;
 	onEdit?: (ticket: Ticket) => void;
 	onDelete?: (ticketId: string) => void;
 }
@@ -16,6 +17,7 @@ const TicketCard = memo(function TicketCard({
 	ticket,
 	onStart,
 	onView,
+	onViewDetail,
 	onEdit,
 	onDelete,
 }: Props) {
@@ -30,25 +32,41 @@ const TicketCard = memo(function TicketCard({
 
 	const showPriorityBadge = ticket.status === "open";
 
+	const contentSection = (
+		<>
+			<div className="flex items-center gap-2">
+				{showPriorityBadge && (
+					<span className="shrink-0 rounded bg-th-bg-tertiary px-1.5 py-0.5 text-xs text-th-text-muted">
+						#{ticket.priority}
+					</span>
+				)}
+				<h3
+					className={`text-sm font-medium text-th-text-primary truncate${onViewDetail ? " hover:text-th-accent transition-colors" : ""}`}
+				>
+					{ticket.title}
+				</h3>
+			</div>
+			{ticket.description && (
+				<p className="mt-1 text-xs text-th-text-muted line-clamp-2">
+					{ticket.description}
+				</p>
+			)}
+		</>
+	);
+
 	return (
 		<div className="rounded-lg border border-th-border bg-th-bg-secondary p-3">
-			<div className="mb-2">
-				<div className="flex items-center gap-2">
-					{showPriorityBadge && (
-						<span className="shrink-0 rounded bg-th-bg-tertiary px-1.5 py-0.5 text-xs text-th-text-muted">
-							#{ticket.priority}
-						</span>
-					)}
-					<h3 className="text-sm font-medium text-th-text-primary truncate">
-						{ticket.title}
-					</h3>
-				</div>
-				{ticket.description && (
-					<p className="mt-1 text-xs text-th-text-muted line-clamp-2">
-						{ticket.description}
-					</p>
-				)}
-			</div>
+			{onViewDetail ? (
+				<button
+					type="button"
+					className="mb-2 w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent rounded"
+					onClick={() => onViewDetail(ticket.id)}
+				>
+					{contentSection}
+				</button>
+			) : (
+				<div className="mb-2">{contentSection}</div>
+			)}
 
 			<div className="flex items-center justify-between">
 				<span className="text-xs text-th-text-muted">
