@@ -291,7 +291,9 @@ func (e ProcessEndedEvent) ToRecord() EventRecord {
 	return EventRecord{Type: e.EventType()}
 }
 
-// MessageEvent is for history replay only, not sent as RPC notification.
+// MessageEvent represents a user message. Used for:
+// - History replay: reconstructing past messages
+// - Broadcast: notifying other clients when a user sends a message
 type MessageEvent struct {
 	Content string
 }
