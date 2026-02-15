@@ -34,11 +34,13 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 		titleInputRef.current?.focus();
 	}, []);
 
+	const isPriorityEditable = status === "open";
+	const hasPriorityChanged = isPriorityEditable && priority !== ticket.priority;
 	const hasChanges =
 		title.trim() !== ticket.title ||
 		description.trim() !== ticket.description ||
 		status !== ticket.status ||
-		priority !== ticket.priority;
+		hasPriorityChanged;
 
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
@@ -60,7 +62,7 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 		if (status !== ticket.status) {
 			updates.status = status;
 		}
-		if (priority !== ticket.priority) {
+		if (hasPriorityChanged) {
 			updates.priority = priority;
 		}
 
@@ -142,7 +144,15 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 							min={1}
 							value={priority}
 							onChange={(e) => setPriority(Number(e.target.value))}
-							className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
+							disabled={!isPriorityEditable}
+							title={
+								!isPriorityEditable
+									? "Priority only applies to open tickets"
+									: undefined
+							}
+							className={`w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none ${
+								!isPriorityEditable ? "opacity-50 cursor-not-allowed" : ""
+							}`}
 						/>
 					</div>
 				</div>
