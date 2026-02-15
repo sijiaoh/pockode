@@ -24,7 +24,7 @@ var (
 type Store interface {
 	List() ([]Ticket, error)
 	Get(ticketID string) (Ticket, bool, error)
-	Create(ctx context.Context, parentID, title, description, roleID string) (Ticket, error)
+	Create(ctx context.Context, parentID, title, description, roleID string, priority *int) (Ticket, error)
 	Update(ctx context.Context, ticketID string, updates TicketUpdate) (Ticket, error)
 	Delete(ctx context.Context, ticketID string) error
 	SetOnChangeListener(listener OnChangeListener)
@@ -35,6 +35,7 @@ type TicketUpdate struct {
 	Title       *string       `json:"title,omitempty"`
 	Description *string       `json:"description,omitempty"`
 	Status      *TicketStatus `json:"status,omitempty"`
+	Priority    *int          `json:"priority,omitempty"`
 	SessionID   *string       `json:"session_id,omitempty"`
 }
 
@@ -263,6 +264,20 @@ func (s *FileStore) List() ([]Ticket, error) {
 	copy(result, s.tickets)
 
 	sort.Slice(result, func(i, j int) bool {
+		iOpen := result[i].Status == TicketStatusOpen
+		jOpen := result[j].Status == TicketStatusOpen
+
+		// Open tickets come first
+		if iOpen != jOpen {
+			return iOpen
+		}
+
+		// Within open tickets: sort by priority ascending (lower = higher priority)
+		if iOpen {
+			return result[i].Priority < result[j].Priority
+		}
+
+		// Within non-open tickets: sort by updated_at descending
 		return result[i].UpdatedAt.After(result[j].UpdatedAt)
 	})
 
@@ -281,13 +296,21 @@ func (s *FileStore) Get(ticketID string) (Ticket, bool, error) {
 	return Ticket{}, false, nil
 }
 
-func (s *FileStore) Create(ctx context.Context, parentID, title, description, roleID string) (Ticket, error) {
+func (s *FileStore) Create(ctx context.Context, parentID, title, description, roleID string, priority *int) (Ticket, error) {
 	if err := ctx.Err(); err != nil {
 		return Ticket{}, err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Determine priority: use provided value or auto-increment from max open ticket priority
+	var ticketPriority int
+	if priority != nil {
+		ticketPriority = *priority
+	} else {
+		ticketPriority = s.nextPriority()
+	}
 
 	now := time.Now()
 	ticket := Ticket{
@@ -297,6 +320,7 @@ func (s *FileStore) Create(ctx context.Context, parentID, title, description, ro
 		Description: description,
 		RoleID:      roleID,
 		Status:      TicketStatusOpen,
+		Priority:    ticketPriority,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -310,6 +334,18 @@ func (s *FileStore) Create(ctx context.Context, parentID, title, description, ro
 
 	s.notifyChange(TicketChangeEvent{Op: OperationCreate, Ticket: ticket})
 	return ticket, nil
+}
+
+// nextPriority returns max priority among open tickets + 1.
+// Must be called with s.mu held.
+func (s *FileStore) nextPriority() int {
+	maxPriority := -1
+	for _, t := range s.tickets {
+		if t.Status == TicketStatusOpen && t.Priority > maxPriority {
+			maxPriority = t.Priority
+		}
+	}
+	return maxPriority + 1
 }
 
 func (s *FileStore) Update(ctx context.Context, ticketID string, updates TicketUpdate) (Ticket, error) {
@@ -332,6 +368,9 @@ func (s *FileStore) Update(ctx context.Context, ticketID string, updates TicketU
 			}
 			if updates.Status != nil {
 				s.tickets[i].Status = *updates.Status
+			}
+			if updates.Priority != nil {
+				s.tickets[i].Priority = *updates.Priority
 			}
 			if updates.SessionID != nil {
 				s.tickets[i].SessionID = *updates.SessionID

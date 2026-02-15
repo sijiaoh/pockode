@@ -19,6 +19,7 @@ type Ticket struct {
 	Description string       `json:"description"`
 	RoleID      string       `json:"role_id"`
 	Status      TicketStatus `json:"status"`
+	Priority    int          `json:"priority"`
 	SessionID   string       `json:"session_id,omitempty"`
 	CreatedAt   time.Time    `json:"created_at"`
 	UpdatedAt   time.Time    `json:"updated_at"`

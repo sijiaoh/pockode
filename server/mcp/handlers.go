@@ -51,7 +51,18 @@ func (s *Server) handleTicketCreate(ctx context.Context, req mcp.CallToolRequest
 	desc := req.GetString("description", "")
 	parentID := req.GetString("parent_id", "")
 
-	t, err := s.ticketStore.Create(ctx, parentID, title, desc, roleID)
+	// Parse optional priority
+	var priority *int
+	if args, ok := req.Params.Arguments.(map[string]any); ok {
+		if v, ok := args["priority"]; ok {
+			if num, ok := v.(float64); ok {
+				p := int(num)
+				priority = &p
+			}
+		}
+	}
+
+	t, err := s.ticketStore.Create(ctx, parentID, title, desc, roleID, priority)
 	if err != nil {
 		return InternalError(err), nil
 	}
@@ -74,6 +85,14 @@ func (s *Server) handleTicketUpdate(ctx context.Context, req mcp.CallToolRequest
 	if v := req.GetString("status", ""); v != "" {
 		status := ticket.TicketStatus(v)
 		updates.Status = &status
+	}
+	if args, ok := req.Params.Arguments.(map[string]any); ok {
+		if v, ok := args["priority"]; ok {
+			if num, ok := v.(float64); ok {
+				p := int(num)
+				updates.Priority = &p
+			}
+		}
 	}
 
 	t, err := s.ticketStore.Update(ctx, id, updates)

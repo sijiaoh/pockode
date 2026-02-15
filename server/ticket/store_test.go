@@ -14,7 +14,7 @@ func TestFileStore_CRUD(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Create", func(t *testing.T) {
-		ticket, err := store.Create(ctx, "", "Test Title", "Test Description", "role-1")
+		ticket, err := store.Create(ctx, "", "Test Title", "Test Description", "role-1", nil)
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
@@ -26,6 +26,9 @@ func TestFileStore_CRUD(t *testing.T) {
 		}
 		if ticket.Status != TicketStatusOpen {
 			t.Errorf("got status %q, want %q", ticket.Status, TicketStatusOpen)
+		}
+		if ticket.Priority != 0 {
+			t.Errorf("got priority %d, want 0 for first ticket", ticket.Priority)
 		}
 	})
 
@@ -120,7 +123,7 @@ func TestFileStore_Persistence(t *testing.T) {
 		t.Fatalf("NewFileStore: %v", err)
 	}
 
-	_, err = store1.Create(ctx, "", "Persistent Ticket", "Description", "role-1")
+	_, err = store1.Create(ctx, "", "Persistent Ticket", "Description", "role-1", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -154,7 +157,7 @@ func TestFileStore_ChangeListener(t *testing.T) {
 		events = append(events, e)
 	}))
 
-	ticket, _ := store.Create(ctx, "", "Test", "Desc", "role-1")
+	ticket, _ := store.Create(ctx, "", "Test", "Desc", "role-1", nil)
 	newTitle := "Updated"
 	store.Update(ctx, ticket.ID, TicketUpdate{Title: &newTitle})
 	store.Delete(ctx, ticket.ID)
@@ -176,3 +179,122 @@ func TestFileStore_ChangeListener(t *testing.T) {
 type listenerFunc func(TicketChangeEvent)
 
 func (f listenerFunc) OnTicketChange(e TicketChangeEvent) { f(e) }
+
+func TestFileStore_Priority(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	ctx := context.Background()
+
+	t.Run("Auto-increment priority", func(t *testing.T) {
+		t1, _ := store.Create(ctx, "", "First", "", "role-1", nil)
+		t2, _ := store.Create(ctx, "", "Second", "", "role-1", nil)
+		t3, _ := store.Create(ctx, "", "Third", "", "role-1", nil)
+
+		if t1.Priority != 0 {
+			t.Errorf("first ticket priority = %d, want 0", t1.Priority)
+		}
+		if t2.Priority != 1 {
+			t.Errorf("second ticket priority = %d, want 1", t2.Priority)
+		}
+		if t3.Priority != 2 {
+			t.Errorf("third ticket priority = %d, want 2", t3.Priority)
+		}
+	})
+
+	t.Run("Explicit priority", func(t *testing.T) {
+		priority := 10
+		ticket, _ := store.Create(ctx, "", "Explicit Priority", "", "role-1", &priority)
+
+		if ticket.Priority != 10 {
+			t.Errorf("ticket priority = %d, want 10", ticket.Priority)
+		}
+	})
+
+	t.Run("Update priority", func(t *testing.T) {
+		ticket, _ := store.Create(ctx, "", "Update Priority Test", "", "role-1", nil)
+
+		newPriority := 5
+		updated, err := store.Update(ctx, ticket.ID, TicketUpdate{Priority: &newPriority})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if updated.Priority != 5 {
+			t.Errorf("updated priority = %d, want 5", updated.Priority)
+		}
+	})
+
+	t.Run("Priority sorting for open tickets", func(t *testing.T) {
+		store2, _ := NewFileStore(t.TempDir())
+
+		p2 := 2
+		p0 := 0
+		p1 := 1
+		store2.Create(ctx, "", "Priority 2", "", "role-1", &p2)
+		store2.Create(ctx, "", "Priority 0", "", "role-1", &p0)
+		store2.Create(ctx, "", "Priority 1", "", "role-1", &p1)
+
+		tickets, _ := store2.List()
+		if len(tickets) != 3 {
+			t.Fatalf("got %d tickets, want 3", len(tickets))
+		}
+
+		// Should be sorted by priority ascending
+		if tickets[0].Priority != 0 {
+			t.Errorf("tickets[0].Priority = %d, want 0", tickets[0].Priority)
+		}
+		if tickets[1].Priority != 1 {
+			t.Errorf("tickets[1].Priority = %d, want 1", tickets[1].Priority)
+		}
+		if tickets[2].Priority != 2 {
+			t.Errorf("tickets[2].Priority = %d, want 2", tickets[2].Priority)
+		}
+	})
+
+	t.Run("Non-open tickets sorted by updated_at", func(t *testing.T) {
+		store3, _ := NewFileStore(t.TempDir())
+
+		t1, _ := store3.Create(ctx, "", "Done 1", "", "role-1", nil)
+		t2, _ := store3.Create(ctx, "", "Done 2", "", "role-1", nil)
+
+		// Mark both as done
+		done := TicketStatusDone
+		store3.Update(ctx, t1.ID, TicketUpdate{Status: &done})
+		store3.Update(ctx, t2.ID, TicketUpdate{Status: &done})
+
+		tickets, _ := store3.List()
+
+		// t2 was updated last, so should come first
+		if tickets[0].Title != "Done 2" {
+			t.Errorf("expected most recently updated ticket first, got %q", tickets[0].Title)
+		}
+	})
+
+	t.Run("Open tickets come before non-open tickets", func(t *testing.T) {
+		store4, _ := NewFileStore(t.TempDir())
+
+		// Create done ticket first
+		done, _ := store4.Create(ctx, "", "Done", "", "role-1", nil)
+		doneStatus := TicketStatusDone
+		store4.Update(ctx, done.ID, TicketUpdate{Status: &doneStatus})
+
+		// Then create open ticket
+		p1 := 1
+		store4.Create(ctx, "", "Open", "", "role-1", &p1)
+
+		tickets, _ := store4.List()
+		if len(tickets) != 2 {
+			t.Fatalf("got %d tickets, want 2", len(tickets))
+		}
+
+		// Open ticket should come first regardless of creation/update order
+		if tickets[0].Title != "Open" {
+			t.Errorf("expected open ticket first, got %q", tickets[0].Title)
+		}
+		if tickets[1].Title != "Done" {
+			t.Errorf("expected done ticket second, got %q", tickets[1].Title)
+		}
+	})
+}

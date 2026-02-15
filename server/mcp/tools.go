@@ -16,7 +16,7 @@ func (s *Server) registerTools() {
 
 func ticketListTool() mcp.Tool {
 	return mcp.NewTool("ticket_list",
-		mcp.WithDescription("List all tickets sorted by updated_at descending. Returns array of tickets with id, title, status, role_id, created_at, updated_at."),
+		mcp.WithDescription("List all tickets. Open tickets are sorted by priority ascending (lower = higher priority), others by updated_at descending."),
 	)
 }
 
@@ -39,6 +39,8 @@ func ticketCreateTool() mcp.Tool {
 			mcp.Description("Agent role ID from role_list")),
 		mcp.WithString("parent_id",
 			mcp.Description("Parent ticket ID for sub-tasks")),
+		mcp.WithNumber("priority",
+			mcp.Description("Priority order (lower = higher priority). Auto-assigned if omitted.")),
 	)
 }
 
@@ -54,6 +56,8 @@ func ticketUpdateTool() mcp.Tool {
 		mcp.WithString("status",
 			mcp.Enum("open", "in_progress", "done"),
 			mcp.Description("New status")),
+		mcp.WithNumber("priority",
+			mcp.Description("Priority order (lower = higher priority)")),
 	)
 }
 

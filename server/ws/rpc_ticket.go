@@ -41,7 +41,7 @@ func (h *rpcMethodHandler) handleTicketCreate(ctx context.Context, conn *jsonrpc
 		return
 	}
 
-	created, err := h.worktreeManager.TicketStore.Create(ctx, params.ParentID, params.Title, params.Description, params.RoleID)
+	created, err := h.worktreeManager.TicketStore.Create(ctx, params.ParentID, params.Title, params.Description, params.RoleID, nil)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to create ticket")
 		return
