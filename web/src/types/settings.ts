@@ -1,4 +1,6 @@
-export type Settings = Record<string, never>;
+export interface Settings {
+	autorun: boolean;
+}
 
 export interface SettingsSubscribeResult {
 	id: string;

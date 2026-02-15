@@ -5,6 +5,7 @@ import { useTickets } from "../../hooks/useTickets";
 import { useWSStore } from "../../lib/wsStore";
 import type { Ticket, TicketStatus } from "../../types/message";
 import BackToChatButton from "../ui/BackToChatButton";
+import AutorunToggle from "./AutorunToggle";
 import KanbanBoard from "./KanbanBoard";
 import TicketCreateDialog from "./TicketCreateDialog";
 import TicketEditDialog from "./TicketEditDialog";
@@ -87,6 +88,7 @@ export default function TicketDashboardPage({
 				<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
 					Ticket Dashboard
 				</h1>
+				<AutorunToggle />
 				<button
 					type="button"
 					onClick={() => setShowCreateDialog(true)}
