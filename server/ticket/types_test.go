@@ -22,6 +22,9 @@ func TestBuildAgentSystemPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "ticket_update") {
 		t.Error("prompt should contain ticket_update instruction")
 	}
+	if !strings.Contains(prompt, "Scope Constraints") {
+		t.Error("prompt should contain scope constraints")
+	}
 	if !strings.Contains(prompt, "You are a test agent.") {
 		t.Error("prompt should contain role system prompt")
 	}
@@ -42,6 +45,9 @@ func TestBuildAgentSystemPrompt_EmptyRole(t *testing.T) {
 	if !strings.Contains(prompt, "test-ticket-id") {
 		t.Error("prompt should contain ticket ID")
 	}
+	if !strings.Contains(prompt, "Scope Constraints") {
+		t.Error("prompt should contain scope constraints")
+	}
 	if !strings.Contains(prompt, "Test description") {
 		t.Error("prompt should contain ticket description")
 	}
@@ -59,6 +65,9 @@ func TestBuildAgentSystemPrompt_EmptyDescription(t *testing.T) {
 
 	if !strings.Contains(prompt, "test-ticket-id") {
 		t.Error("prompt should contain ticket ID")
+	}
+	if !strings.Contains(prompt, "Scope Constraints") {
+		t.Error("prompt should contain scope constraints")
 	}
 	if !strings.Contains(prompt, "You are a test agent.") {
 		t.Error("prompt should contain role system prompt")

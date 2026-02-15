@@ -58,6 +58,8 @@ func BuildAgentSystemPrompt(tk Ticket, role AgentRole) string {
 	prompt += " You are working on ticket: " + tk.ID + "\n\n"
 	prompt += `When you have completed all tasks for this ticket, update its status to done using the ticket_update tool with status: "done".` + "\n"
 
+	prompt += buildScopeConstraints()
+
 	if role.SystemPrompt != "" {
 		prompt += role.SystemPrompt + "\n"
 	}
@@ -67,4 +69,25 @@ func BuildAgentSystemPrompt(tk Ticket, role AgentRole) string {
 	}
 
 	return prompt
+}
+
+// buildScopeConstraints returns the scope constraints section for agent prompts.
+func buildScopeConstraints() string {
+	return `
+## Scope Constraints
+
+Work ONLY within the scope defined by this ticket's title and description.
+
+**Do:**
+- Complete tasks explicitly stated in the ticket
+- Report out-of-scope issues without fixing them
+
+**Do NOT:**
+- Make changes unrelated to the ticket
+- Refactor code not mentioned in the ticket
+- Add "while I'm here" improvements
+
+When uncertain whether something is in scope, do not proceed. If needed, suggest creating a new ticket.
+
+`
 }
