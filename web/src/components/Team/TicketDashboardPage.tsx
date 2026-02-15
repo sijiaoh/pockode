@@ -81,6 +81,14 @@ export default function TicketDashboardPage({
 		[updateTicket],
 	);
 
+	const handleCancelCreate = useCallback(() => {
+		setShowCreateDialog(false);
+	}, []);
+
+	const handleCloseEdit = useCallback(() => {
+		setEditingTicket(null);
+	}, []);
+
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
@@ -118,14 +126,14 @@ export default function TicketDashboardPage({
 			{showCreateDialog && (
 				<TicketCreateDialog
 					onSubmit={handleCreate}
-					onCancel={() => setShowCreateDialog(false)}
+					onCancel={handleCancelCreate}
 				/>
 			)}
 
 			{editingTicket && (
 				<TicketEditDialog
 					ticket={editingTicket}
-					onClose={() => setEditingTicket(null)}
+					onClose={handleCloseEdit}
 					onSave={handleEdit}
 				/>
 			)}
