@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestTicketStatus_IsValid(t *testing.T) {
+	tests := []struct {
+		status TicketStatus
+		want   bool
+	}{
+		{TicketStatusOpen, true},
+		{TicketStatusInProgress, true},
+		{TicketStatusDone, true},
+		{"invalid", false},
+		{"", false},
+		{"OPEN", false},
+		{"pending", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.status), func(t *testing.T) {
+			if got := tt.status.IsValid(); got != tt.want {
+				t.Errorf("TicketStatus(%q).IsValid() = %v, want %v", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildAgentSystemPrompt(t *testing.T) {
 	tk := Ticket{
 		ID:          "test-ticket-id",

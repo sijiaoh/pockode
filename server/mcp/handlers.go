@@ -84,6 +84,9 @@ func (s *Server) handleTicketUpdate(ctx context.Context, req mcp.CallToolRequest
 	}
 	if v := req.GetString("status", ""); v != "" {
 		status := ticket.TicketStatus(v)
+		if !status.IsValid() {
+			return ValidationError("invalid status: " + v), nil
+		}
 		updates.Status = &status
 	}
 	if args, ok := req.Params.Arguments.(map[string]any); ok {

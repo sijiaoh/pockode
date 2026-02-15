@@ -65,6 +65,11 @@ func (h *rpcMethodHandler) handleTicketUpdate(ctx context.Context, conn *jsonrpc
 		return
 	}
 
+	if params.Status != nil && !params.Status.IsValid() {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid status: "+string(*params.Status))
+		return
+	}
+
 	updates := ticket.TicketUpdate{
 		Title:       params.Title,
 		Description: params.Description,

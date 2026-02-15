@@ -11,6 +11,16 @@ const (
 	TicketStatusDone       TicketStatus = "done"
 )
 
+// IsValid returns true if the status is one of the valid values.
+func (s TicketStatus) IsValid() bool {
+	switch s {
+	case TicketStatusOpen, TicketStatusInProgress, TicketStatusDone:
+		return true
+	default:
+		return false
+	}
+}
+
 // Ticket represents a task for an agent to work on.
 type Ticket struct {
 	ID          string       `json:"id"`
