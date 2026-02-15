@@ -166,30 +166,29 @@ func (s *FileStore) reloadFromDisk() {
 }
 
 func (s *FileStore) notifyExternalChanges(oldTickets, newTickets []Ticket) {
-	oldMap := make(map[string]Ticket)
+	oldMap := make(map[string]Ticket, len(oldTickets))
 	for _, t := range oldTickets {
 		oldMap[t.ID] = t
 	}
 
-	newMap := make(map[string]Ticket)
-	for _, t := range newTickets {
-		newMap[t.ID] = t
-	}
+	seen := make(map[string]struct{}, len(newTickets))
 
 	// Find created and updated
-	for _, t := range newTickets {
-		old, exists := oldMap[t.ID]
-		if !exists {
-			s.notifyChange(TicketChangeEvent{Op: OperationCreate, Ticket: t})
-		} else if t.UpdatedAt != old.UpdatedAt {
-			s.notifyChange(TicketChangeEvent{Op: OperationUpdate, Ticket: t})
+	for _, newT := range newTickets {
+		seen[newT.ID] = struct{}{}
+		if oldT, exists := oldMap[newT.ID]; exists {
+			if newT.UpdatedAt != oldT.UpdatedAt {
+				s.notifyChange(TicketChangeEvent{Op: OperationUpdate, Ticket: newT})
+			}
+		} else {
+			s.notifyChange(TicketChangeEvent{Op: OperationCreate, Ticket: newT})
 		}
 	}
 
 	// Find deleted
-	for _, t := range oldTickets {
-		if _, exists := newMap[t.ID]; !exists {
-			s.notifyChange(TicketChangeEvent{Op: OperationDelete, Ticket: t})
+	for _, oldT := range oldTickets {
+		if _, exists := seen[oldT.ID]; !exists {
+			s.notifyChange(TicketChangeEvent{Op: OperationDelete, Ticket: oldT})
 		}
 	}
 }

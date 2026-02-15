@@ -3,6 +3,7 @@ package ticket
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestFileStore_CRUD(t *testing.T) {
@@ -179,6 +180,120 @@ func TestFileStore_ChangeListener(t *testing.T) {
 type listenerFunc func(TicketChangeEvent)
 
 func (f listenerFunc) OnTicketChange(e TicketChangeEvent) { f(e) }
+
+func TestFileStore_notifyExternalChanges(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	var events []TicketChangeEvent
+	store.SetOnChangeListener(listenerFunc(func(e TicketChangeEvent) {
+		events = append(events, e)
+	}))
+
+	t.Run("Detect created tickets", func(t *testing.T) {
+		events = nil
+		oldTickets := []Ticket{}
+		newTickets := []Ticket{{ID: "t1", Title: "New"}}
+
+		store.notifyExternalChanges(oldTickets, newTickets)
+
+		if len(events) != 1 {
+			t.Fatalf("got %d events, want 1", len(events))
+		}
+		if events[0].Op != OperationCreate {
+			t.Errorf("Op = %v, want %v", events[0].Op, OperationCreate)
+		}
+		if events[0].Ticket.ID != "t1" {
+			t.Errorf("Ticket.ID = %q, want %q", events[0].Ticket.ID, "t1")
+		}
+	})
+
+	t.Run("Detect deleted tickets", func(t *testing.T) {
+		events = nil
+		oldTickets := []Ticket{{ID: "t1", Title: "Old"}}
+		newTickets := []Ticket{}
+
+		store.notifyExternalChanges(oldTickets, newTickets)
+
+		if len(events) != 1 {
+			t.Fatalf("got %d events, want 1", len(events))
+		}
+		if events[0].Op != OperationDelete {
+			t.Errorf("Op = %v, want %v", events[0].Op, OperationDelete)
+		}
+		if events[0].Ticket.ID != "t1" {
+			t.Errorf("Ticket.ID = %q, want %q", events[0].Ticket.ID, "t1")
+		}
+	})
+
+	t.Run("Detect updated tickets", func(t *testing.T) {
+		events = nil
+		now := time.Now()
+		oldTickets := []Ticket{{ID: "t1", Title: "Old", UpdatedAt: now}}
+		newTickets := []Ticket{{ID: "t1", Title: "Updated", UpdatedAt: now.Add(time.Second)}}
+
+		store.notifyExternalChanges(oldTickets, newTickets)
+
+		if len(events) != 1 {
+			t.Fatalf("got %d events, want 1", len(events))
+		}
+		if events[0].Op != OperationUpdate {
+			t.Errorf("Op = %v, want %v", events[0].Op, OperationUpdate)
+		}
+		if events[0].Ticket.Title != "Updated" {
+			t.Errorf("Ticket.Title = %q, want %q", events[0].Ticket.Title, "Updated")
+		}
+	})
+
+	t.Run("No event when unchanged", func(t *testing.T) {
+		events = nil
+		now := time.Now()
+		tickets := []Ticket{{ID: "t1", Title: "Same", UpdatedAt: now}}
+
+		store.notifyExternalChanges(tickets, tickets)
+
+		if len(events) != 0 {
+			t.Errorf("got %d events, want 0", len(events))
+		}
+	})
+
+	t.Run("Mixed create, update, delete", func(t *testing.T) {
+		events = nil
+		now := time.Now()
+		oldTickets := []Ticket{
+			{ID: "stay", Title: "Unchanged", UpdatedAt: now},
+			{ID: "update", Title: "Before", UpdatedAt: now},
+			{ID: "delete", Title: "ToDelete", UpdatedAt: now},
+		}
+		newTickets := []Ticket{
+			{ID: "stay", Title: "Unchanged", UpdatedAt: now},
+			{ID: "update", Title: "After", UpdatedAt: now.Add(time.Second)},
+			{ID: "create", Title: "Created", UpdatedAt: now},
+		}
+
+		store.notifyExternalChanges(oldTickets, newTickets)
+
+		if len(events) != 3 {
+			t.Fatalf("got %d events, want 3", len(events))
+		}
+
+		opCount := map[Operation]int{}
+		for _, e := range events {
+			opCount[e.Op]++
+		}
+		if opCount[OperationCreate] != 1 {
+			t.Errorf("create count = %d, want 1", opCount[OperationCreate])
+		}
+		if opCount[OperationUpdate] != 1 {
+			t.Errorf("update count = %d, want 1", opCount[OperationUpdate])
+		}
+		if opCount[OperationDelete] != 1 {
+			t.Errorf("delete count = %d, want 1", opCount[OperationDelete])
+		}
+	})
+}
 
 func TestFileStore_Priority(t *testing.T) {
 	store, err := NewFileStore(t.TempDir())
