@@ -131,6 +131,9 @@ func (s *Server) handleRoleList(ctx context.Context, req mcp.CallToolRequest) (*
 }
 
 func jsonResult(v any) (*mcp.CallToolResult, error) {
-	data, _ := json.MarshalIndent(v, "", "  ")
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return InternalError(err), nil
+	}
 	return mcp.NewToolResultText(string(data)), nil
 }
