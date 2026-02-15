@@ -180,15 +180,12 @@ func (h *rpcMethodHandler) handleTicketStart(ctx context.Context, conn *jsonrpc2
 	}
 
 	// Send the initial message with custom system prompt
-	initialMessage := tk.Description
-	if initialMessage == "" {
-		initialMessage = tk.Title
-	}
+	// Ticket details are in the system prompt; initial message triggers the agent to start work
 	procOpts := process.ProcessOptions{
 		Mode:         session.ModeYolo,
-		SystemPrompt: buildTicketSystemPrompt(tk.ID, role.SystemPrompt),
+		SystemPrompt: buildTicketSystemPrompt(tk, role),
 	}
-	if err := wt.ChatClient.SendMessageWithOptions(ctx, sessionID, initialMessage, procOpts); err != nil {
+	if err := wt.ChatClient.SendMessageWithOptions(ctx, sessionID, tk.Title, procOpts); err != nil {
 		h.log.Error("failed to send initial message", "error", err)
 		// Don't fail the request - session is created, user can send message manually
 	}
@@ -221,16 +218,17 @@ func (h *rpcMethodHandler) handleTicketListSubscribe(ctx context.Context, conn *
 	}
 }
 
-// buildTicketSystemPrompt combines Pockode's fixed prompt with the role's custom prompt.
-// The fixed prompt instructs the agent to update ticket status when work is complete.
-func buildTicketSystemPrompt(ticketID string, rolePrompt string) string {
-	const template = `You are working on ticket: %s
+// buildTicketSystemPrompt creates a complete system prompt with all ticket and role information.
+func buildTicketSystemPrompt(tk ticket.Ticket, role ticket.AgentRole) string {
+	prompt := fmt.Sprintf(`You are a Claude agent, built on Anthropic's Claude Agent SDK. You are working on ticket: %s
 
 When you have completed all tasks for this ticket, update its status to done using the ticket_update tool with status: "done".
-`
-	pockodePrompt := fmt.Sprintf(template, ticketID)
-	if rolePrompt == "" {
-		return pockodePrompt
+%s
+`, tk.ID, role.SystemPrompt)
+
+	if tk.Description != "" {
+		prompt += tk.Description
 	}
-	return pockodePrompt + rolePrompt
+
+	return prompt
 }
