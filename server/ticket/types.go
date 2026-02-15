@@ -51,3 +51,20 @@ type TicketChangeEvent struct {
 type OnChangeListener interface {
 	OnTicketChange(event TicketChangeEvent)
 }
+
+// BuildAgentSystemPrompt creates a system prompt for an agent working on a ticket.
+func BuildAgentSystemPrompt(tk Ticket, role AgentRole) string {
+	prompt := "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+	prompt += " You are working on ticket: " + tk.ID + "\n\n"
+	prompt += `When you have completed all tasks for this ticket, update its status to done using the ticket_update tool with status: "done".` + "\n"
+
+	if role.SystemPrompt != "" {
+		prompt += role.SystemPrompt + "\n"
+	}
+
+	if tk.Description != "" {
+		prompt += tk.Description
+	}
+
+	return prompt
+}

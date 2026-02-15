@@ -295,7 +295,7 @@ func main() {
 	// Initialize worktree registry and manager
 	claudeAgent := claude.New()
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout, ticketStore, roleStore)
+	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout, ticketStore, roleStore, settingsStore)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}

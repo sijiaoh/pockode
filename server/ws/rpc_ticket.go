@@ -3,7 +3,6 @@ package ws
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/process"
@@ -184,7 +183,7 @@ func (h *rpcMethodHandler) handleTicketStart(ctx context.Context, conn *jsonrpc2
 	// Ticket details are in the system prompt; initial message triggers the agent to start work
 	procOpts := process.ProcessOptions{
 		Mode:         session.ModeYolo,
-		SystemPrompt: buildTicketSystemPrompt(tk, role),
+		SystemPrompt: ticket.BuildAgentSystemPrompt(tk, role),
 	}
 	if err := wt.ChatClient.SendMessageWithOptions(ctx, sessionID, tk.Title, procOpts); err != nil {
 		h.log.Error("failed to send initial message", "error", err)
@@ -217,19 +216,4 @@ func (h *rpcMethodHandler) handleTicketListSubscribe(ctx context.Context, conn *
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send ticket list subscribe response", "error", err)
 	}
-}
-
-// buildTicketSystemPrompt creates a complete system prompt with all ticket and role information.
-func buildTicketSystemPrompt(tk ticket.Ticket, role ticket.AgentRole) string {
-	prompt := fmt.Sprintf(`You are a Claude agent, built on Anthropic's Claude Agent SDK. You are working on ticket: %s
-
-When you have completed all tasks for this ticket, update its status to done using the ticket_update tool with status: "done".
-%s
-`, tk.ID, role.SystemPrompt)
-
-	if tk.Description != "" {
-		prompt += tk.Description
-	}
-
-	return prompt
 }

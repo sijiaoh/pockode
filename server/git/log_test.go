@@ -188,18 +188,18 @@ func TestValidateCommitHash(t *testing.T) {
 		hash    string
 		wantErr bool
 	}{
-		{"", true},                                          // empty
-		{"abc", true},                                       // too short
-		{"abcdef", true},                                    // still too short (6)
-		{"abcdefg", true},                                   // 7 chars but contains 'g'
-		{"abcdef1", false},                                  // 7 hex chars - valid
-		{"1234567", false},                                  // 7 digits - valid
+		{"", true},         // empty
+		{"abc", true},      // too short
+		{"abcdef", true},   // still too short (6)
+		{"abcdefg", true},  // 7 chars but contains 'g'
+		{"abcdef1", false}, // 7 hex chars - valid
+		{"1234567", false}, // 7 digits - valid
 		{"d6f9947789f16ed6736042f10d58271c23b36ad0", false}, // full 40 hex - valid
 		{"D6F9947789F16ED6736042F10D58271C23B36AD0", false}, // uppercase - valid
-		{"d6f9947", false},                                  // short hash - valid
-		{"HEAD", true},                                      // special ref - invalid (contains non-hex)
-		{"main", true},                                      // branch name - invalid
-		{"abc123!", true},                                   // contains special char
+		{"d6f9947", false}, // short hash - valid
+		{"HEAD", true},     // special ref - invalid (contains non-hex)
+		{"main", true},     // branch name - invalid
+		{"abc123!", true},  // contains special char
 	}
 
 	for _, tt := range tests {

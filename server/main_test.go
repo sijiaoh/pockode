@@ -45,7 +45,7 @@ func TestHealthEndpoint(t *testing.T) {
 	ticketStore, _ := ticket.NewFileStore(dataDir)
 	roleStore, _ := ticket.NewFileRoleStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute, ticketStore, roleStore)
+	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute, ticketStore, roleStore, settingsStore)
 	defer scopeManager.Shutdown()
 
 	wsHandler := ws.NewRPCHandler("test-token", "test", true, cmdStore, scopeManager, settingsStore)
@@ -72,7 +72,7 @@ func TestPingEndpoint(t *testing.T) {
 	ticketStore, _ := ticket.NewFileStore(dataDir)
 	roleStore, _ := ticket.NewFileRoleStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute, ticketStore, roleStore)
+	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute, ticketStore, roleStore, settingsStore)
 	defer scopeManager.Shutdown()
 
 	wsHandler := ws.NewRPCHandler(token, "test", true, cmdStore, scopeManager, settingsStore)

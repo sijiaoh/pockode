@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/autorun"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/settings"
 	"github.com/pockode/server/ticket"
 	"github.com/pockode/server/watch"
 )
@@ -30,12 +32,13 @@ type Manager struct {
 	TicketStore     ticket.Store
 	RoleStore       ticket.RoleStore
 	TicketWatcher   *watch.TicketWatcher
+	settingsStore   *settings.Store
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
 }
 
-func NewManager(registry *Registry, ag agent.Agent, dataDir string, idleTimeout time.Duration, ticketStore ticket.Store, roleStore ticket.RoleStore) *Manager {
+func NewManager(registry *Registry, ag agent.Agent, dataDir string, idleTimeout time.Duration, ticketStore ticket.Store, roleStore ticket.RoleStore, settingsStore *settings.Store) *Manager {
 	ticketWatcher := watch.NewTicketWatcher(ticketStore)
 	return &Manager{
 		registry:        registry,
@@ -46,6 +49,7 @@ func NewManager(registry *Registry, ag agent.Agent, dataDir string, idleTimeout 
 		TicketStore:     ticketStore,
 		RoleStore:       roleStore,
 		TicketWatcher:   ticketWatcher,
+		settingsStore:   settingsStore,
 		worktrees:       make(map[string]*Worktree),
 	}
 }
@@ -179,11 +183,30 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	processManager := process.NewManager(m.agent, workDir, sessionStore, m.idleTimeout, m.dataDir)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetProcessStateGetter(processManager)
+	chatClient := chat.NewClient(sessionStore, processManager)
+
+	// Create autorun controller only for main worktree
+	var autorunCtrl *autorun.Controller
+	if name == "" && m.settingsStore != nil {
+		autorunCtrl = autorun.New(
+			m.TicketStore,
+			m.RoleStore,
+			sessionStore,
+			chatClient,
+			m.settingsStore,
+		)
+		// Set ticket change callback for autorun
+		m.TicketWatcher.SetOnChange(func(event ticket.TicketChangeEvent) {
+			autorunCtrl.OnTicketChange(event)
+		})
+	}
+
 	processManager.SetOnStateChange(func(e process.StateChangeEvent) {
 		sessionListWatcher.NotifyProcessStateChange(e.SessionID, string(e.State))
+		if autorunCtrl != nil {
+			autorunCtrl.OnProcessStateChange(e)
+		}
 	})
-
-	chatClient := chat.NewClient(sessionStore, processManager)
 
 	wt := &Worktree{
 		Name:                name,

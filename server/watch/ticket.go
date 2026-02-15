@@ -2,6 +2,7 @@ package watch
 
 import (
 	"log/slog"
+	"sync"
 
 	"github.com/pockode/server/ticket"
 )
@@ -9,8 +10,10 @@ import (
 // TicketWatcher notifies subscribers when the ticket list changes.
 type TicketWatcher struct {
 	*BaseWatcher
-	store   ticket.Store
-	eventCh chan ticket.TicketChangeEvent
+	store      ticket.Store
+	eventCh    chan ticket.TicketChangeEvent
+	onChangeMu sync.RWMutex
+	onChange   func(ticket.TicketChangeEvent)
 }
 
 func NewTicketWatcher(store ticket.Store) *TicketWatcher {
@@ -45,7 +48,22 @@ func (w *TicketWatcher) eventLoop() {
 	}
 }
 
+// SetOnChange sets a callback that is invoked when any ticket changes.
+func (w *TicketWatcher) SetOnChange(fn func(ticket.TicketChangeEvent)) {
+	w.onChangeMu.Lock()
+	defer w.onChangeMu.Unlock()
+	w.onChange = fn
+}
+
 func (w *TicketWatcher) notifyChange(event ticket.TicketChangeEvent) {
+	// Invoke onChange callback (for autorun controller)
+	w.onChangeMu.RLock()
+	onChange := w.onChange
+	w.onChangeMu.RUnlock()
+	if onChange != nil {
+		onChange(event)
+	}
+
 	if !w.HasSubscriptions() {
 		return
 	}
