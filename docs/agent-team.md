@@ -37,6 +37,7 @@ tickets/index.json
 | description | string | Detailed instructions for agent |
 | role_id | string | Reference to AgentRole |
 | status | "open" \| "in_progress" \| "done" | Kanban column |
+| priority | int | Sort order for open tickets (lower = higher priority) |
 | session_id | string? | Linked session (set when started) |
 | created_at | time | |
 | updated_at | time | |
@@ -59,8 +60,8 @@ agent_roles.json
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `ticket.create` | `{title, description, role_id, parent_id?}` | Ticket |
-| `ticket.update` | `{ticket_id, title?, description?, status?}` | Ticket |
+| `ticket.create` | `{title, description, role_id, parent_id?, priority?}` | Ticket |
+| `ticket.update` | `{ticket_id, title?, description?, status?, priority?}` | Ticket |
 | `ticket.delete` | `{ticket_id}` | `{}` |
 | `ticket.start` | `{ticket_id}` | `{session_id}` |
 | `ticket.list.subscribe` | `{}` | `{id, tickets}` |
@@ -143,7 +144,7 @@ Agents access tickets via MCP tools. The `pockode mcp` subcommand runs an MCP se
 | `ticket_list` | List all tickets |
 | `ticket_get` | Get single ticket by ID |
 | `ticket_create` | Create new ticket |
-| `ticket_update` | Update ticket (title, description, status) |
+| `ticket_update` | Update ticket (title, description, status, priority) |
 | `ticket_delete` | Delete ticket |
 | `role_list` | List available agent roles |
 
@@ -166,6 +167,30 @@ Claude receives MCP config via `--mcp-config`:
 ### Sync
 
 FileStore uses fsnotify to detect external changes (from MCP). When MCP modifies tickets, the WebSocket server reloads and notifies connected clients.
+
+## Priority System
+
+### Overview
+
+- Lower value = higher priority (0 is highest)
+- Only `open` tickets are sorted by priority
+- `in_progress` and `done` tickets are sorted by `updated_at` descending
+
+### Auto-assignment
+
+When creating a ticket without specifying priority:
+- New priority = max(priority of all open tickets) + 1
+- If no open tickets exist, priority = 0
+
+### MCP Usage
+
+```json
+// Create with explicit priority
+{"title": "...", "role_id": "...", "priority": 0}  // Highest priority
+
+// Create with auto-assignment
+{"title": "...", "role_id": "..."}  // Priority auto-assigned
+```
 
 ## Design Decisions
 
