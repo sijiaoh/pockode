@@ -1,4 +1,4 @@
-import { Eye, Play } from "lucide-react";
+import { Eye, Pencil, Play } from "lucide-react";
 import { memo } from "react";
 import { useRoleStore } from "../../lib/roleStore";
 import type { Ticket } from "../../types/message";
@@ -8,6 +8,7 @@ interface Props {
 	ticket: Ticket;
 	onStart?: (ticketId: string) => void;
 	onView?: (sessionId: string) => void;
+	onEdit?: (ticket: Ticket) => void;
 	onDelete?: (ticketId: string) => void;
 }
 
@@ -15,6 +16,7 @@ const TicketCard = memo(function TicketCard({
 	ticket,
 	onStart,
 	onView,
+	onEdit,
 	onDelete,
 }: Props) {
 	const role = useRoleStore((s) =>
@@ -61,6 +63,16 @@ const TicketCard = memo(function TicketCard({
 							title="View session"
 						>
 							<Eye className="h-4 w-4" />
+						</button>
+					)}
+					{onEdit && (
+						<button
+							type="button"
+							onClick={() => onEdit(ticket)}
+							className="p-1.5 rounded hover:bg-th-bg-tertiary text-th-text-muted"
+							title="Edit ticket"
+						>
+							<Pencil className="h-4 w-4" />
 						</button>
 					)}
 					{onDelete && (
