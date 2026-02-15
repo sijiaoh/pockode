@@ -15,6 +15,8 @@ function TicketCreateDialog({ onSubmit, onCancel }: Props) {
 	const roles = useRoleStore((s) => s.roles);
 	const titleId = useId();
 	const titleInputRef = useRef<HTMLInputElement>(null);
+	const onCancelRef = useRef(onCancel);
+	onCancelRef.current = onCancel;
 
 	const [title, setTitle] = useState("");
 	const [description, setDescription] = useState("");
@@ -26,7 +28,7 @@ function TicketCreateDialog({ onSubmit, onCancel }: Props) {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
 				e.stopPropagation();
-				onCancel();
+				onCancelRef.current();
 			}
 		};
 
@@ -38,7 +40,7 @@ function TicketCreateDialog({ onSubmit, onCancel }: Props) {
 			document.removeEventListener("keydown", handleKeyDown);
 			document.body.style.overflow = originalOverflow;
 		};
-	}, [onCancel]);
+	}, []);
 
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();

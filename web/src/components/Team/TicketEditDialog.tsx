@@ -25,6 +25,8 @@ const STATUS_OPTIONS: { value: TicketStatus; label: string }[] = [
 function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 	const titleId = useId();
 	const titleInputRef = useRef<HTMLInputElement>(null);
+	const onCloseRef = useRef(onClose);
+	onCloseRef.current = onClose;
 
 	const [title, setTitle] = useState(ticket.title);
 	const [description, setDescription] = useState(ticket.description);
@@ -37,7 +39,7 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
 				e.stopPropagation();
-				onClose();
+				onCloseRef.current();
 			}
 		};
 
@@ -49,7 +51,7 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 			document.removeEventListener("keydown", handleKeyDown);
 			document.body.style.overflow = originalOverflow;
 		};
-	}, [onClose]);
+	}, []);
 
 	const hasChanges =
 		title.trim() !== ticket.title ||
