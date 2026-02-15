@@ -156,16 +156,10 @@ func (h *rpcMethodHandler) handleTicketStart(ctx context.Context, conn *jsonrpc2
 		return
 	}
 
-	// Create a new session with yolo mode
+	// Create a new session
 	sessionID := uuid.Must(uuid.NewV7()).String()
 	if _, err := wt.SessionStore.Create(ctx, sessionID); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to create session")
-		return
-	}
-
-	// Set yolo mode
-	if err := wt.SessionStore.SetMode(ctx, sessionID, session.ModeYolo); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to set session mode")
 		return
 	}
 
