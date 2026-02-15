@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import TextareaAutosize from "react-textarea-autosize";
 import { useIsDesktop } from "../../hooks/useIsDesktop";
 import type { AgentRole } from "../../types/message";
 import ConfirmDialog from "../common/ConfirmDialog";
@@ -149,21 +150,21 @@ function RoleEditorOverlay({ role, onSave, onCancel }: Props) {
 						</div>
 
 						{/* System prompt textarea */}
-						<div className="flex min-h-0 flex-1 flex-col space-y-1.5">
+						<div className="space-y-1.5">
 							<label
 								htmlFor="role-system-prompt"
 								className="text-sm font-medium text-th-text-primary"
 							>
 								System Prompt
 							</label>
-							<textarea
+							<TextareaAutosize
 								id="role-system-prompt"
 								value={systemPrompt}
 								onChange={(e) => setSystemPrompt(e.target.value)}
 								placeholder="Enter system prompt..."
-								className={`w-full flex-1 resize-none rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none focus:ring-2 focus:ring-th-accent/20 ${
-									mobile ? "min-h-[200px]" : "min-h-[300px]"
-								}`}
+								minRows={mobile ? 5 : 8}
+								maxRows={mobile ? 12 : 20}
+								className="w-full resize-none rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none focus:ring-2 focus:ring-th-accent/20"
 							/>
 						</div>
 					</div>
