@@ -235,7 +235,7 @@ export function applyServerEvent(
 	messages: Message[],
 	event: NormalizedEvent,
 ): Message[] {
-	// User message from another client (broadcast)
+	// User message (history replay or broadcast from another client)
 	if (event.type === "message") {
 		return applyUserMessage(messages, event.content);
 	}
