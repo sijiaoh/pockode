@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/settings"
 	"github.com/pockode/server/ticket"
 )
 
@@ -182,5 +183,30 @@ func TestController_isEnabled_NilSettingsStore(t *testing.T) {
 
 	if ctrl.isEnabled() {
 		t.Error("expected isEnabled to return false when settingsStore is nil")
+	}
+}
+
+func TestController_OnSettingsChange_AutorunDisabled(t *testing.T) {
+	ticketStore := newMockTicketStore()
+	ticketStore.addTicket(ticket.Ticket{
+		ID:     "tk-1",
+		Status: ticket.TicketStatusOpen,
+	})
+
+	ctrl := &Controller{
+		ticketStore:   ticketStore,
+		settingsStore: nil,
+	}
+
+	// Should not start ticket when autorun is disabled in settings
+	ctrl.OnSettingsChange(settings.Settings{Autorun: false})
+
+	time.Sleep(10 * time.Millisecond)
+
+	tickets, _ := ticketStore.List()
+	for _, tk := range tickets {
+		if tk.Status == ticket.TicketStatusInProgress {
+			t.Errorf("expected no in_progress tickets when autorun disabled, but found %s", tk.ID)
+		}
 	}
 }

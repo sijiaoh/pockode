@@ -2,6 +2,7 @@ package watch
 
 import (
 	"log/slog"
+	"sync"
 
 	"github.com/pockode/server/settings"
 )
@@ -11,8 +12,10 @@ import (
 // store's mutex during network I/O.
 type SettingsWatcher struct {
 	*BaseWatcher
-	store   *settings.Store
-	eventCh chan settings.Settings
+	store      *settings.Store
+	eventCh    chan settings.Settings
+	onChangeMu sync.RWMutex
+	onChange   func(settings.Settings)
 }
 
 func NewSettingsWatcher(store *settings.Store) *SettingsWatcher {
@@ -47,7 +50,22 @@ func (w *SettingsWatcher) eventLoop() {
 	}
 }
 
+// SetOnChange sets a callback that is invoked when settings change.
+func (w *SettingsWatcher) SetOnChange(fn func(settings.Settings)) {
+	w.onChangeMu.Lock()
+	defer w.onChangeMu.Unlock()
+	w.onChange = fn
+}
+
 func (w *SettingsWatcher) notifyChange(s settings.Settings) {
+	// Invoke onChange callback (for autorun controller)
+	w.onChangeMu.RLock()
+	onChange := w.onChange
+	w.onChangeMu.RUnlock()
+	if onChange != nil {
+		onChange(s)
+	}
+
 	if !w.HasSubscriptions() {
 		return
 	}

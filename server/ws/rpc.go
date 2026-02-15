@@ -35,6 +35,7 @@ type RPCHandler struct {
 
 func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
+	settingsWatcher.SetOnChange(worktreeManager.OnSettingsChange)
 	settingsWatcher.Start()
 
 	return &RPCHandler{

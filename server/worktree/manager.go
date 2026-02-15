@@ -33,6 +33,7 @@ type Manager struct {
 	RoleStore       ticket.RoleStore
 	TicketWatcher   *watch.TicketWatcher
 	settingsStore   *settings.Store
+	autorunCtrl     *autorun.Controller
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
@@ -56,6 +57,16 @@ func NewManager(registry *Registry, ag agent.Agent, dataDir string, idleTimeout 
 
 func (m *Manager) Registry() *Registry {
 	return m.registry
+}
+
+// OnSettingsChange handles settings changes for autorun.
+func (m *Manager) OnSettingsChange(s settings.Settings) {
+	m.mu.Lock()
+	ctrl := m.autorunCtrl
+	m.mu.Unlock()
+	if ctrl != nil {
+		ctrl.OnSettingsChange(s)
+	}
 }
 
 func (m *Manager) Start() error {
@@ -186,25 +197,31 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	chatClient := chat.NewClient(sessionStore, processManager)
 
 	// Create autorun controller only for main worktree
-	var autorunCtrl *autorun.Controller
 	if name == "" && m.settingsStore != nil {
-		autorunCtrl = autorun.New(
-			m.TicketStore,
-			m.RoleStore,
-			sessionStore,
-			chatClient,
-			m.settingsStore,
-		)
-		// Set ticket change callback for autorun
-		m.TicketWatcher.SetOnChange(func(event ticket.TicketChangeEvent) {
-			autorunCtrl.OnTicketChange(event)
-		})
+		m.mu.Lock()
+		if m.autorunCtrl == nil {
+			m.autorunCtrl = autorun.New(
+				m.TicketStore,
+				m.RoleStore,
+				sessionStore,
+				chatClient,
+				m.settingsStore,
+			)
+			// Set ticket change callback for autorun
+			m.TicketWatcher.SetOnChange(func(event ticket.TicketChangeEvent) {
+				m.autorunCtrl.OnTicketChange(event)
+			})
+		}
+		m.mu.Unlock()
 	}
 
 	processManager.SetOnStateChange(func(e process.StateChangeEvent) {
 		sessionListWatcher.NotifyProcessStateChange(e.SessionID, string(e.State))
-		if autorunCtrl != nil {
-			autorunCtrl.OnProcessStateChange(e)
+		m.mu.Lock()
+		ctrl := m.autorunCtrl
+		m.mu.Unlock()
+		if ctrl != nil {
+			ctrl.OnProcessStateChange(e)
 		}
 	})
 

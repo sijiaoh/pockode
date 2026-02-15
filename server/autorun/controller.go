@@ -18,6 +18,7 @@ import (
 // When autorun is enabled:
 // - Sends "continue" when a session becomes idle (for in_progress tickets)
 // - Starts the next open ticket when current ticket is done
+// - Starts the next open ticket when autorun is enabled (if no ticket is in progress)
 type Controller struct {
 	ticketStore   ticket.Store
 	roleStore     ticket.RoleStore
@@ -95,6 +96,15 @@ func (c *Controller) OnTicketChange(event ticket.TicketChangeEvent) {
 	if event.Op == ticket.OperationUpdate && event.Ticket.Status == ticket.TicketStatusDone {
 		go c.startNextOpenTicket()
 	}
+}
+
+// OnSettingsChange handles settings changes.
+// When autorun is enabled and there's no in_progress ticket, starts the next open ticket.
+func (c *Controller) OnSettingsChange(s settings.Settings) {
+	if !s.Autorun {
+		return
+	}
+	go c.startNextOpenTicket()
 }
 
 func (c *Controller) startNextOpenTicket() {
