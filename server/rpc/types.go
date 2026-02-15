@@ -292,13 +292,15 @@ type TicketCreateParams struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	RoleID      string `json:"role_id"`
+	Priority    *int   `json:"priority,omitempty"`
 }
 
 type TicketUpdateParams struct {
-	TicketID    string              `json:"ticket_id"`
-	Title       *string             `json:"title,omitempty"`
-	Description *string             `json:"description,omitempty"`
+	TicketID    string               `json:"ticket_id"`
+	Title       *string              `json:"title,omitempty"`
+	Description *string              `json:"description,omitempty"`
 	Status      *ticket.TicketStatus `json:"status,omitempty"`
+	Priority    *int                 `json:"priority,omitempty"`
 }
 
 type TicketDeleteParams struct {

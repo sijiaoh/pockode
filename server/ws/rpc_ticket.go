@@ -41,7 +41,7 @@ func (h *rpcMethodHandler) handleTicketCreate(ctx context.Context, conn *jsonrpc
 		return
 	}
 
-	created, err := h.worktreeManager.TicketStore.Create(ctx, params.ParentID, params.Title, params.Description, params.RoleID, nil)
+	created, err := h.worktreeManager.TicketStore.Create(ctx, params.ParentID, params.Title, params.Description, params.RoleID, params.Priority)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to create ticket")
 		return
@@ -70,6 +70,7 @@ func (h *rpcMethodHandler) handleTicketUpdate(ctx context.Context, conn *jsonrpc
 		Title:       params.Title,
 		Description: params.Description,
 		Status:      params.Status,
+		Priority:    params.Priority,
 	}
 
 	updated, err := h.worktreeManager.TicketStore.Update(ctx, params.TicketID, updates)
