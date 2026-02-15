@@ -1,10 +1,11 @@
-import { ArrowLeft, MessageSquare, Play } from "lucide-react";
+import { MessageSquare, Play } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { useRoles } from "../../hooks/useRoles";
 import { useTickets } from "../../hooks/useTickets";
 import { selectRoleById, useRoleStore } from "../../lib/roleStore";
 import { toast } from "../../lib/toastStore";
 import { useWSStore } from "../../lib/wsStore";
+import BackToChatButton from "../ui/BackToChatButton";
 
 interface Props {
 	ticketId: string;
@@ -81,14 +82,7 @@ export default function TicketDetailPage({
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
 				<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-					<button
-						type="button"
-						onClick={onBack}
-						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-th-border bg-th-bg-tertiary text-th-text-secondary transition-all hover:border-th-border-focus hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95"
-						aria-label="Back"
-					>
-						<ArrowLeft className="h-5 w-5" />
-					</button>
+					<BackToChatButton onClick={onBack} />
 				</header>
 				<main className="flex min-h-0 flex-1 items-center justify-center p-4">
 					<div className="h-5 w-5 animate-spin rounded-full border-2 border-th-text-muted border-t-transparent" />
@@ -101,14 +95,7 @@ export default function TicketDetailPage({
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
 				<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-					<button
-						type="button"
-						onClick={onBack}
-						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-th-border bg-th-bg-tertiary text-th-text-secondary transition-all hover:border-th-border-focus hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95"
-						aria-label="Back"
-					>
-						<ArrowLeft className="h-5 w-5" />
-					</button>
+					<BackToChatButton onClick={onBack} />
 					<h1 className="px-2 text-sm font-bold text-th-text-primary">
 						Ticket Not Found
 					</h1>
@@ -129,14 +116,7 @@ export default function TicketDetailPage({
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-				<button
-					type="button"
-					onClick={onBack}
-					className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-th-border bg-th-bg-tertiary text-th-text-secondary transition-all hover:border-th-border-focus hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95"
-					aria-label="Back"
-				>
-					<ArrowLeft className="h-5 w-5" />
-				</button>
+				<BackToChatButton onClick={onBack} />
 				<h1 className="flex-1 truncate px-2 text-sm font-bold text-th-text-primary">
 					{ticket.title}
 				</h1>
