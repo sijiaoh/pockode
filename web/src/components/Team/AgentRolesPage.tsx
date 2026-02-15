@@ -1,6 +1,7 @@
 import { Pencil, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRoles } from "../../hooks/useRoles";
+import { useTicketStore } from "../../lib/ticketStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/message";
 import ConfirmDialog from "../common/ConfirmDialog";
@@ -12,6 +13,7 @@ interface Props {
 
 export default function AgentRolesPage({ onBack }: Props) {
 	const { roles, addRole, updateRole, removeRole } = useRoles();
+	const tickets = useTicketStore((s) => s.tickets);
 	const createRoleAction = useWSStore((s) => s.actions.createRole);
 	const updateRoleAction = useWSStore((s) => s.actions.updateRole);
 	const deleteRoleAction = useWSStore((s) => s.actions.deleteRole);
@@ -19,6 +21,15 @@ export default function AgentRolesPage({ onBack }: Props) {
 	const [editingRole, setEditingRole] = useState<AgentRole | null>(null);
 	const [isCreating, setIsCreating] = useState(false);
 	const [deletingRole, setDeletingRole] = useState<AgentRole | null>(null);
+
+	const affectedTicketCount = useMemo(() => {
+		if (!deletingRole) return 0;
+		return tickets.filter(
+			(t) =>
+				t.role_id === deletingRole.id &&
+				(t.status === "open" || t.status === "in_progress"),
+		).length;
+	}, [deletingRole, tickets]);
 
 	const handleCreate = async (name: string, systemPrompt: string) => {
 		const role = await createRoleAction(name, systemPrompt);
@@ -93,7 +104,11 @@ export default function AgentRolesPage({ onBack }: Props) {
 			{deletingRole && (
 				<ConfirmDialog
 					title="Delete Role"
-					message={`Are you sure you want to delete "${deletingRole.name}"? This action cannot be undone.`}
+					message={
+						affectedTicketCount > 0
+							? `This role is used by ${affectedTicketCount} active ticket${affectedTicketCount > 1 ? "s" : ""}. Deleting it may cause issues with those tickets.\n\nAre you sure you want to delete "${deletingRole.name}"?`
+							: `Are you sure you want to delete "${deletingRole.name}"? This action cannot be undone.`
+					}
 					confirmLabel="Delete"
 					variant="danger"
 					onConfirm={handleDelete}

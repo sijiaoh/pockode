@@ -33,7 +33,9 @@ function ConfirmDialog({
 
 	return (
 		<Dialog title={title} onClose={onCancel} maxWidth="max-w-sm">
-			<p className="mt-2 text-sm text-th-text-muted">{message}</p>
+			<p className="mt-2 whitespace-pre-line text-sm text-th-text-muted">
+				{message}
+			</p>
 
 			<div className="mt-4 flex justify-end gap-3">
 				<button
