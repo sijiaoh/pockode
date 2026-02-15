@@ -44,18 +44,10 @@ func (w *Worktree) Unsubscribe(notifier watch.Notifier) {
 }
 
 func (w *Worktree) NotifyAll(ctx context.Context, method string, params any) {
-	w.NotifyAllExcept(ctx, method, params, nil)
-}
-
-// NotifyAllExcept sends a notification to all subscribers except the specified one.
-// If exclude is nil, it behaves identically to NotifyAll.
-func (w *Worktree) NotifyAllExcept(ctx context.Context, method string, params any, exclude watch.Notifier) {
 	w.mu.Lock()
 	notifiers := make([]watch.Notifier, 0, len(w.subscribers))
 	for notifier := range w.subscribers {
-		if notifier != exclude {
-			notifiers = append(notifiers, notifier)
-		}
+		notifiers = append(notifiers, notifier)
 	}
 	w.mu.Unlock()
 
