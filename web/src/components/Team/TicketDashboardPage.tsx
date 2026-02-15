@@ -3,9 +3,11 @@ import { useCallback, useState } from "react";
 import { useRoles } from "../../hooks/useRoles";
 import { useTickets } from "../../hooks/useTickets";
 import { useWSStore } from "../../lib/wsStore";
+import type { Ticket, TicketStatus } from "../../types/message";
 import BackToChatButton from "../ui/BackToChatButton";
 import KanbanBoard from "./KanbanBoard";
 import TicketCreateDialog from "./TicketCreateDialog";
+import TicketEditDialog from "./TicketEditDialog";
 
 interface Props {
 	onBack: () => void;
@@ -18,6 +20,7 @@ export default function TicketDashboardPage({
 }: Props) {
 	const status = useWSStore((s) => s.status);
 	const createTicket = useWSStore((s) => s.actions.createTicket);
+	const updateTicket = useWSStore((s) => s.actions.updateTicket);
 	const deleteTicket = useWSStore((s) => s.actions.deleteTicket);
 	const startTicket = useWSStore((s) => s.actions.startTicket);
 
@@ -25,6 +28,7 @@ export default function TicketDashboardPage({
 	useRoles();
 
 	const [showCreateDialog, setShowCreateDialog] = useState(false);
+	const [editingTicket, setEditingTicket] = useState<Ticket | null>(null);
 
 	const handleCreate = useCallback(
 		async (data: { title: string; description: string; roleId: string }) => {
@@ -60,6 +64,17 @@ export default function TicketDashboardPage({
 		[deleteTicket],
 	);
 
+	const handleEdit = useCallback(
+		async (
+			ticketId: string,
+			updates: { title?: string; description?: string; status?: TicketStatus },
+		) => {
+			await updateTicket(ticketId, updates);
+			setEditingTicket(null);
+		},
+		[updateTicket],
+	);
+
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
@@ -87,6 +102,7 @@ export default function TicketDashboardPage({
 						grouped={grouped}
 						onStartTicket={handleStart}
 						onViewSession={handleViewSession}
+						onEditTicket={setEditingTicket}
 						onDeleteTicket={handleDelete}
 					/>
 				)}
@@ -96,6 +112,14 @@ export default function TicketDashboardPage({
 				<TicketCreateDialog
 					onSubmit={handleCreate}
 					onCancel={() => setShowCreateDialog(false)}
+				/>
+			)}
+
+			{editingTicket && (
+				<TicketEditDialog
+					ticket={editingTicket}
+					onClose={() => setEditingTicket(null)}
+					onSave={handleEdit}
 				/>
 			)}
 		</div>

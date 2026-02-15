@@ -12,6 +12,7 @@ interface Props {
 	tickets: Ticket[];
 	onStartTicket?: (ticketId: string) => void;
 	onViewSession?: (sessionId: string) => void;
+	onEditTicket?: (ticket: Ticket) => void;
 	onDeleteTicket?: (ticketId: string) => void;
 }
 
@@ -20,6 +21,7 @@ function KanbanColumn({
 	tickets,
 	onStartTicket,
 	onViewSession,
+	onEditTicket,
 	onDeleteTicket,
 }: Props) {
 	return (
@@ -39,6 +41,7 @@ function KanbanColumn({
 						ticket={ticket}
 						onStart={onStartTicket}
 						onView={onViewSession}
+						onEdit={onEditTicket}
 						onDelete={onDeleteTicket}
 					/>
 				))}

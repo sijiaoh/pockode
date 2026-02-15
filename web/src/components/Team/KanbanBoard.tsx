@@ -7,6 +7,7 @@ interface Props {
 	grouped: Record<TicketStatus, Ticket[]>;
 	onStartTicket?: (ticketId: string) => void;
 	onViewSession?: (sessionId: string) => void;
+	onEditTicket?: (ticket: Ticket) => void;
 	onDeleteTicket?: (ticketId: string) => void;
 }
 
@@ -14,6 +15,7 @@ function KanbanBoard({
 	grouped,
 	onStartTicket,
 	onViewSession,
+	onEditTicket,
 	onDeleteTicket,
 }: Props) {
 	return (
@@ -25,6 +27,7 @@ function KanbanBoard({
 					tickets={grouped[status]}
 					onStartTicket={onStartTicket}
 					onViewSession={onViewSession}
+					onEditTicket={onEditTicket}
 					onDeleteTicket={onDeleteTicket}
 				/>
 			))}
