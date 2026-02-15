@@ -16,7 +16,7 @@ import (
 
 // Controller handles automatic ticket processing.
 // When autorun is enabled:
-// - Sends "continue" when a session becomes idle (for in_progress tickets)
+// - Prompts agent to continue or close ticket when session becomes idle (for in_progress tickets)
 // - Starts the next open ticket when current ticket is done
 // - Starts the next open ticket when autorun is enabled (if no ticket is in progress)
 type Controller struct {
@@ -55,8 +55,8 @@ func (c *Controller) isEnabled() bool {
 }
 
 // OnProcessStateChange handles process state changes.
-// When a session becomes idle, sends "continue" if autorun is enabled
-// and the session is associated with an in_progress ticket.
+// When a session becomes idle, prompts the agent to continue or close the ticket
+// if autorun is enabled and the session is associated with an in_progress ticket.
 func (c *Controller) OnProcessStateChange(event process.StateChangeEvent) {
 	if !c.isEnabled() {
 		return
@@ -76,7 +76,9 @@ func (c *Controller) handleIdleState(sessionID string) {
 
 	for _, tk := range tickets {
 		if tk.Status == ticket.TicketStatusInProgress && tk.SessionID == sessionID {
-			if err := c.chatClient.SendMessage(context.Background(), sessionID, "continue"); err != nil {
+			// Ask agent to continue or close ticket to prevent infinite loops
+			msg := "Continue working on the ticket. If you have completed all tasks, update the ticket status to done."
+			if err := c.chatClient.SendMessage(context.Background(), sessionID, msg); err != nil {
 				slog.Error("autorun: failed to send continue", "sessionId", sessionID, "error", err)
 			} else {
 				slog.Info("autorun: sent continue", "sessionId", sessionID, "ticketId", tk.ID)
@@ -153,28 +155,25 @@ func (c *Controller) startNextOpenTicket() {
 func (c *Controller) startTicket(tk ticket.Ticket) error {
 	ctx := context.Background()
 
-	// Get the role for system prompt
 	role, found, err := c.roleStore.Get(tk.RoleID)
 	if err != nil {
 		return err
 	}
 	if !found {
 		slog.Warn("autorun: role not found", "roleId", tk.RoleID)
-		role = ticket.AgentRole{} // Use empty role
+		role = ticket.AgentRole{}
 	}
 
-	// Create a new session
+	// Create session first - if this fails, no state to rollback
 	sessionID := uuid.Must(uuid.NewV7()).String()
 	if _, err := c.sessionStore.Create(ctx, sessionID); err != nil {
 		return err
 	}
-
-	// Update session title to match ticket
 	if err := c.sessionStore.Update(ctx, sessionID, tk.Title); err != nil {
 		slog.Warn("autorun: failed to set session title", "error", err)
 	}
 
-	// Update ticket with session ID and status
+	// Update ticket status - if this fails, orphan session is acceptable
 	inProgress := ticket.TicketStatusInProgress
 	if _, err := c.ticketStore.Update(ctx, tk.ID, ticket.TicketUpdate{
 		Status:    &inProgress,
@@ -183,15 +182,29 @@ func (c *Controller) startTicket(tk ticket.Ticket) error {
 		return err
 	}
 
-	// Send the initial message with custom system prompt
+	// Send message - rollback ticket status on failure to prevent zombie ticket
 	procOpts := process.ProcessOptions{
 		Mode:         session.ModeYolo,
 		SystemPrompt: ticket.BuildAgentSystemPrompt(tk, role),
 	}
 	if err := c.chatClient.SendMessageWithOptions(ctx, sessionID, tk.Title, procOpts); err != nil {
+		c.rollbackTicketStatus(ctx, tk.ID)
 		return err
 	}
 
 	slog.Info("autorun: ticket started", "ticketId", tk.ID, "sessionId", sessionID)
 	return nil
+}
+
+func (c *Controller) rollbackTicketStatus(ctx context.Context, ticketID string) {
+	openStatus := ticket.TicketStatusOpen
+	emptySession := ""
+	if _, err := c.ticketStore.Update(ctx, ticketID, ticket.TicketUpdate{
+		Status:    &openStatus,
+		SessionID: &emptySession,
+	}); err != nil {
+		slog.Error("autorun: failed to rollback ticket status", "ticketId", ticketID, "error", err)
+	} else {
+		slog.Warn("autorun: rolled back ticket to open", "ticketId", ticketID)
+	}
 }
