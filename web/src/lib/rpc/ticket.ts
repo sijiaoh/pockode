@@ -15,7 +15,12 @@ export interface TicketActions {
 	createTicket: (params: TicketCreateParams) => Promise<Ticket>;
 	updateTicket: (
 		ticketId: string,
-		updates: { title?: string; description?: string; status?: TicketStatus },
+		updates: {
+			title?: string;
+			description?: string;
+			status?: TicketStatus;
+			priority?: number;
+		},
 	) => Promise<Ticket>;
 	deleteTicket: (ticketId: string) => Promise<void>;
 	startTicket: (ticketId: string) => Promise<TicketStartResult>;
@@ -48,7 +53,12 @@ export function createTicketActions(
 
 		updateTicket: async (
 			ticketId: string,
-			updates: { title?: string; description?: string; status?: TicketStatus },
+			updates: {
+				title?: string;
+				description?: string;
+				status?: TicketStatus;
+				priority?: number;
+			},
 		): Promise<Ticket> => {
 			return requireClient().request("ticket.update", {
 				ticket_id: ticketId,

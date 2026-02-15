@@ -7,7 +7,12 @@ interface Props {
 	onClose: () => void;
 	onSave: (
 		ticketId: string,
-		updates: { title?: string; description?: string; status?: TicketStatus },
+		updates: {
+			title?: string;
+			description?: string;
+			status?: TicketStatus;
+			priority?: number;
+		},
 	) => void;
 }
 
@@ -24,6 +29,7 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 	const [title, setTitle] = useState(ticket.title);
 	const [description, setDescription] = useState(ticket.description);
 	const [status, setStatus] = useState<TicketStatus>(ticket.status);
+	const [priority, setPriority] = useState(ticket.priority);
 
 	useEffect(() => {
 		titleInputRef.current?.focus();
@@ -48,7 +54,8 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 	const hasChanges =
 		title.trim() !== ticket.title ||
 		description.trim() !== ticket.description ||
-		status !== ticket.status;
+		status !== ticket.status ||
+		priority !== ticket.priority;
 
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
@@ -58,6 +65,7 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 			title?: string;
 			description?: string;
 			status?: TicketStatus;
+			priority?: number;
 		} = {};
 
 		if (title.trim() !== ticket.title) {
@@ -68,6 +76,9 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 		}
 		if (status !== ticket.status) {
 			updates.status = status;
+		}
+		if (priority !== ticket.priority) {
+			updates.priority = priority;
 		}
 
 		onSave(ticket.id, updates);
@@ -129,25 +140,44 @@ function TicketEditDialog({ ticket, onClose, onSave }: Props) {
 						/>
 					</div>
 
-					<div>
-						<label
-							htmlFor="ticket-status"
-							className="block text-sm font-medium text-th-text-primary mb-1"
-						>
-							Status
-						</label>
-						<select
-							id="ticket-status"
-							value={status}
-							onChange={(e) => setStatus(e.target.value as TicketStatus)}
-							className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
-						>
-							{STATUS_OPTIONS.map((option) => (
-								<option key={option.value} value={option.value}>
-									{option.label}
-								</option>
-							))}
-						</select>
+					<div className="flex gap-4">
+						<div className="flex-1">
+							<label
+								htmlFor="ticket-status"
+								className="block text-sm font-medium text-th-text-primary mb-1"
+							>
+								Status
+							</label>
+							<select
+								id="ticket-status"
+								value={status}
+								onChange={(e) => setStatus(e.target.value as TicketStatus)}
+								className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
+							>
+								{STATUS_OPTIONS.map((option) => (
+									<option key={option.value} value={option.value}>
+										{option.label}
+									</option>
+								))}
+							</select>
+						</div>
+
+						<div className="w-24">
+							<label
+								htmlFor="ticket-priority"
+								className="block text-sm font-medium text-th-text-primary mb-1"
+							>
+								Priority
+							</label>
+							<input
+								id="ticket-priority"
+								type="number"
+								min={1}
+								value={priority}
+								onChange={(e) => setPriority(Number(e.target.value))}
+								className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
+							/>
+						</div>
 					</div>
 
 					<div className="flex justify-end gap-3 pt-2">

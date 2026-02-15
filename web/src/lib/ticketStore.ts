@@ -27,13 +27,29 @@ export const useTicketStore = create<TicketStore>((set) => ({
 
 /**
  * Get tickets grouped by status for kanban display.
+ * - open: sorted by priority (lower = higher priority)
+ * - in_progress/done: sorted by updated_at descending
  */
 export function groupTicketsByStatus(
 	tickets: Ticket[],
 ): Record<Ticket["status"], Ticket[]> {
-	return {
-		open: tickets.filter((t) => t.status === "open"),
-		in_progress: tickets.filter((t) => t.status === "in_progress"),
-		done: tickets.filter((t) => t.status === "done"),
-	};
+	const open = tickets
+		.filter((t) => t.status === "open")
+		.sort((a, b) => a.priority - b.priority);
+
+	const in_progress = tickets
+		.filter((t) => t.status === "in_progress")
+		.sort(
+			(a, b) =>
+				new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+		);
+
+	const done = tickets
+		.filter((t) => t.status === "done")
+		.sort(
+			(a, b) =>
+				new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+		);
+
+	return { open, in_progress, done };
 }

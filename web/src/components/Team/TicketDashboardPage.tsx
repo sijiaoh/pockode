@@ -67,7 +67,12 @@ export default function TicketDashboardPage({
 	const handleEdit = useCallback(
 		async (
 			ticketId: string,
-			updates: { title?: string; description?: string; status?: TicketStatus },
+			updates: {
+				title?: string;
+				description?: string;
+				status?: TicketStatus;
+				priority?: number;
+			},
 		) => {
 			await updateTicket(ticketId, updates);
 			setEditingTicket(null);

@@ -17,6 +17,7 @@ export interface Ticket {
 	description: string;
 	role_id: string;
 	status: TicketStatus;
+	priority: number;
 	session_id?: string;
 	created_at: string;
 	updated_at: string;
@@ -41,6 +42,7 @@ export interface TicketUpdateParams {
 	title?: string;
 	description?: string;
 	status?: TicketStatus;
+	priority?: number;
 }
 
 export interface TicketDeleteParams {

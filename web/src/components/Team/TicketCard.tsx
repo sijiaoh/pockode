@@ -26,12 +26,21 @@ const TicketCard = memo(function TicketCard({
 	const canStart = ticket.status === "open";
 	const hasSession = ticket.status === "in_progress" && ticket.session_id;
 
+	const showPriorityBadge = ticket.status === "open";
+
 	return (
 		<div className="rounded-lg border border-th-border bg-th-bg-secondary p-3">
 			<div className="mb-2">
-				<h3 className="text-sm font-medium text-th-text-primary truncate">
-					{ticket.title}
-				</h3>
+				<div className="flex items-center gap-2">
+					{showPriorityBadge && (
+						<span className="shrink-0 rounded bg-th-bg-tertiary px-1.5 py-0.5 text-xs text-th-text-muted">
+							#{ticket.priority}
+						</span>
+					)}
+					<h3 className="text-sm font-medium text-th-text-primary truncate">
+						{ticket.title}
+					</h3>
+				</div>
 				{ticket.description && (
 					<p className="mt-1 text-xs text-th-text-muted line-clamp-2">
 						{ticket.description}
