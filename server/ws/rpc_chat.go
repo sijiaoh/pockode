@@ -72,6 +72,10 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 		return
 	}
 
+	// Notify other clients watching this session (e.g., other tabs)
+	event := agent.MessageEvent{Content: params.Content}
+	wt.ChatMessagesWatcher.NotifyMessage(params.SessionID, event, h.state.getNotifier())
+
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		log.Error("failed to send response", "error", err)
 	}
