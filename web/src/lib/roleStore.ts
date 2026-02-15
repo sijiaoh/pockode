@@ -17,6 +17,9 @@ interface RoleActions {
 
 export type RoleStore = RoleState & RoleActions;
 
+export const selectRoleById = (roleId: string) => (state: RoleState) =>
+	state.roles.find((r) => r.id === roleId);
+
 export const useRoleStore = create<RoleStore>((set) => ({
 	roles: [],
 	isLoading: true,

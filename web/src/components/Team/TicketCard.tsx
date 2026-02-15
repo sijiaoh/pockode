@@ -1,6 +1,6 @@
 import { Eye, Pencil, Play } from "lucide-react";
-import { memo } from "react";
-import { useRoleStore } from "../../lib/roleStore";
+import { memo, useMemo } from "react";
+import { selectRoleById, useRoleStore } from "../../lib/roleStore";
 import type { Ticket } from "../../types/message";
 import DeleteButton from "../common/DeleteButton";
 
@@ -19,9 +19,11 @@ const TicketCard = memo(function TicketCard({
 	onEdit,
 	onDelete,
 }: Props) {
-	const role = useRoleStore((s) =>
-		s.roles.find((r) => r.id === ticket.role_id),
+	const selector = useMemo(
+		() => selectRoleById(ticket.role_id),
+		[ticket.role_id],
 	);
+	const role = useRoleStore(selector);
 
 	const canStart = ticket.status === "open";
 	const hasSession = ticket.status === "in_progress" && ticket.session_id;
