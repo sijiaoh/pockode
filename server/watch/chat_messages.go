@@ -75,11 +75,11 @@ func (w *ChatMessagesWatcher) messageLoop() {
 }
 
 func (w *ChatMessagesWatcher) notifyMessage(msg process.ChatMessage) {
-	sessionID := msg.SessionID
-	eventType := msg.Event.EventType()
-	method := "chat." + string(eventType)
+	w.notifyEvent(msg.SessionID, msg.Event.ToRecord(), nil)
+}
 
-	// Get subscription IDs for this session
+// notifyEvent broadcasts an event to session subscribers, optionally excluding one notifier.
+func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRecord, exclude Notifier) {
 	w.sessionMu.RLock()
 	ids := make([]string, len(w.sessionToIDs[sessionID]))
 	copy(ids, w.sessionToIDs[sessionID])
@@ -89,16 +89,14 @@ func (w *ChatMessagesWatcher) notifyMessage(msg process.ChatMessage) {
 		return
 	}
 
-	// Use EventRecord as the notification payload (single source of truth)
-	record := msg.Event.ToRecord()
+	method := "chat." + string(record.Type)
 
 	for _, id := range ids {
 		sub := w.GetSubscription(id)
-		if sub == nil {
+		if sub == nil || sub.Notifier == exclude {
 			continue
 		}
 
-		// Add subscription ID to params for client-side routing
 		params := notifyParams{
 			ID:          sub.ID,
 			EventRecord: record,
@@ -177,4 +175,11 @@ func (w *ChatMessagesWatcher) removeSessionMapping(id string) {
 	if len(w.sessionToIDs[sessionID]) == 0 {
 		delete(w.sessionToIDs, sessionID)
 	}
+}
+
+// NotifyMessage broadcasts a user message to all session subscribers except the sender.
+// This is used when a client sends a message to notify other clients (e.g., other tabs)
+// watching the same session.
+func (w *ChatMessagesWatcher) NotifyMessage(sessionID string, event agent.MessageEvent, exclude Notifier) {
+	w.notifyEvent(sessionID, event.ToRecord(), exclude)
 }

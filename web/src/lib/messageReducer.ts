@@ -26,7 +26,7 @@ export type NormalizedEvent =
 	| { type: "interrupted" }
 	| { type: "process_ended" }
 	| { type: "system"; content: string }
-	| { type: "message"; content: string } // For history replay (user message)
+	| { type: "message"; content: string } // User message (history replay or broadcast)
 	| {
 			type: "permission_request";
 			requestId: string;
@@ -235,6 +235,11 @@ export function applyServerEvent(
 	messages: Message[],
 	event: NormalizedEvent,
 ): Message[] {
+	// User message (history replay or broadcast from another client)
+	if (event.type === "message") {
+		return applyUserMessage(messages, event.content);
+	}
+
 	// Permission response updates existing permission_request across all messages
 	if (event.type === "permission_response") {
 		const newStatus = event.choice === "deny" ? "denied" : "allowed";
@@ -476,12 +481,7 @@ export function replayHistory(records: unknown[]): Message[] {
 
 	for (const record of records) {
 		const event = normalizeEvent(record as Record<string, unknown>);
-
-		if (event.type === "message" && event.content) {
-			messages = applyUserMessage(messages, event.content);
-		} else {
-			messages = applyServerEvent(messages, event);
-		}
+		messages = applyServerEvent(messages, event);
 	}
 
 	return messages;
