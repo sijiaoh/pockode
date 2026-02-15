@@ -2,7 +2,10 @@ package ticket
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
+	"time"
 )
 
 func TestFileRoleStore_DefaultRole(t *testing.T) {
@@ -165,5 +168,93 @@ func TestFileRoleStore_Persistence(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected persistent role to be found after reload")
+	}
+}
+
+func TestFileRoleStore_ChangeListener(t *testing.T) {
+	store, err := NewFileRoleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileRoleStore: %v", err)
+	}
+	defer store.Stop()
+
+	ctx := context.Background()
+	var events []RoleChangeEvent
+	store.SetOnChangeListener(roleListenerFunc(func(e RoleChangeEvent) {
+		events = append(events, e)
+	}))
+
+	role, _ := store.Create(ctx, "Test Role", "Prompt")
+	store.Update(ctx, role.ID, "Updated", "New Prompt")
+	store.Delete(ctx, role.ID)
+
+	if len(events) != 3 {
+		t.Fatalf("got %d events, want 3", len(events))
+	}
+	if events[0].Op != OperationCreate {
+		t.Errorf("event[0].Op = %v, want %v", events[0].Op, OperationCreate)
+	}
+	if events[1].Op != OperationUpdate {
+		t.Errorf("event[1].Op = %v, want %v", events[1].Op, OperationUpdate)
+	}
+	if events[2].Op != OperationDelete {
+		t.Errorf("event[2].Op = %v, want %v", events[2].Op, OperationDelete)
+	}
+}
+
+type roleListenerFunc func(RoleChangeEvent)
+
+func (f roleListenerFunc) OnRoleChange(e RoleChangeEvent) { f(e) }
+
+func TestFileRoleStore_FileWatcher(t *testing.T) {
+	dataDir := t.TempDir()
+
+	store, err := NewFileRoleStore(dataDir)
+	if err != nil {
+		t.Fatalf("NewFileRoleStore: %v", err)
+	}
+	defer store.Stop()
+
+	eventCh := make(chan RoleChangeEvent, 10)
+	store.SetOnChangeListener(roleListenerFunc(func(e RoleChangeEvent) {
+		eventCh <- e
+	}))
+
+	// Wait for self-write detection window to pass
+	time.Sleep(250 * time.Millisecond)
+
+	// Externally modify the file
+	newRoles := []AgentRole{
+		DefaultRole,
+		{ID: "external-role", Name: "External", SystemPrompt: "Added externally"},
+	}
+	data, err := json.MarshalIndent(newRoles, "", "  ")
+	if err != nil {
+		t.Fatalf("json.MarshalIndent: %v", err)
+	}
+	if err := os.WriteFile(store.filePath(), data, 0644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	// Wait for debounce + processing (debounce is 100ms)
+	select {
+	case event := <-eventCh:
+		if event.Op != OperationCreate {
+			t.Errorf("expected create operation, got %v", event.Op)
+		}
+		if event.Role.ID != "external-role" {
+			t.Errorf("expected role ID 'external-role', got %q", event.Role.ID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("timed out waiting for file change event")
+	}
+
+	// Verify the store reflects the change
+	roles, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(roles) != 2 {
+		t.Errorf("got %d roles, want 2", len(roles))
 	}
 }

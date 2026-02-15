@@ -52,6 +52,17 @@ type OnChangeListener interface {
 	OnTicketChange(event TicketChangeEvent)
 }
 
+// RoleChangeEvent is emitted when a role changes.
+type RoleChangeEvent struct {
+	Op   Operation `json:"op"`
+	Role AgentRole `json:"role"`
+}
+
+// OnRoleChangeListener receives role change notifications.
+type OnRoleChangeListener interface {
+	OnRoleChange(event RoleChangeEvent)
+}
+
 // BuildAgentSystemPrompt creates a system prompt for an agent working on a ticket.
 func BuildAgentSystemPrompt(tk Ticket, role AgentRole) string {
 	prompt := "You are a Claude agent, built on Anthropic's Claude Agent SDK."
