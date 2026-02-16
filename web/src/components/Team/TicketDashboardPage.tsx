@@ -30,6 +30,9 @@ export default function TicketDashboardPage({
 	const createTicket = useWSStore((s) => s.actions.createTicket);
 	const updateTicket = useWSStore((s) => s.actions.updateTicket);
 	const deleteTicket = useWSStore((s) => s.actions.deleteTicket);
+	const deleteTicketsByStatus = useWSStore(
+		(s) => s.actions.deleteTicketsByStatus,
+	);
 	const startTicket = useWSStore((s) => s.actions.startTicket);
 
 	const { grouped, isLoading } = useTickets(status === "connected");
@@ -100,6 +103,18 @@ export default function TicketDashboardPage({
 		[deleteTicket],
 	);
 
+	const handleDeleteAllByStatus = useCallback(
+		async (ticketStatus: TicketStatus) => {
+			try {
+				await deleteTicketsByStatus(ticketStatus);
+			} catch (err) {
+				toast.error("Failed to delete tickets");
+				console.error("Failed to delete tickets by status:", err);
+			}
+		},
+		[deleteTicketsByStatus],
+	);
+
 	const handleEdit = useCallback(
 		async (
 			ticketId: string,
@@ -160,6 +175,7 @@ export default function TicketDashboardPage({
 						onViewTicketDetail={handleViewTicketDetail}
 						onEditTicket={setEditingTicket}
 						onDeleteTicket={handleDelete}
+						onDeleteAllByStatus={handleDeleteAllByStatus}
 					/>
 				)}
 			</main>

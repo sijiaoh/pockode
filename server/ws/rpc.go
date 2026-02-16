@@ -268,6 +268,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "ticket.delete":
 		h.handleTicketDelete(ctx, conn, req)
 		return
+	case "ticket.deleteByStatus":
+		h.handleTicketDeleteByStatus(ctx, conn, req)
+		return
 	case "ticket.list.subscribe":
 		h.handleTicketListSubscribe(ctx, conn, req)
 		return

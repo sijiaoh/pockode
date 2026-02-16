@@ -2,6 +2,8 @@ import type { JSONRPCRequester } from "json-rpc-2.0";
 import type {
 	Ticket,
 	TicketCreateParams,
+	TicketDeleteByStatusParams,
+	TicketDeleteByStatusResult,
 	TicketDeleteParams,
 	TicketListChangedNotification,
 	TicketStartParams,
@@ -23,6 +25,7 @@ export interface TicketActions {
 		},
 	) => Promise<Ticket>;
 	deleteTicket: (ticketId: string) => Promise<void>;
+	deleteTicketsByStatus: (status: TicketStatus) => Promise<number>;
 	startTicket: (ticketId: string) => Promise<TicketStartResult>;
 	ticketListSubscribe: (
 		onNotification: (params: TicketListChangedNotification) => void,
@@ -70,6 +73,13 @@ export function createTicketActions(
 			await requireClient().request("ticket.delete", {
 				ticket_id: ticketId,
 			} as TicketDeleteParams);
+		},
+
+		deleteTicketsByStatus: async (status: TicketStatus): Promise<number> => {
+			const result = await requireClient().request("ticket.deleteByStatus", {
+				status,
+			} as TicketDeleteByStatusParams);
+			return (result as TicketDeleteByStatusResult).count;
 		},
 
 		startTicket: async (ticketId: string): Promise<TicketStartResult> => {

@@ -10,6 +10,7 @@ interface Props {
 	onViewTicketDetail?: (ticketId: string) => void;
 	onEditTicket?: (ticket: Ticket) => void;
 	onDeleteTicket?: (ticketId: string) => void;
+	onDeleteAllByStatus?: (status: TicketStatus) => void;
 }
 
 function KanbanBoard({
@@ -19,6 +20,7 @@ function KanbanBoard({
 	onViewTicketDetail,
 	onEditTicket,
 	onDeleteTicket,
+	onDeleteAllByStatus,
 }: Props) {
 	return (
 		<div className="flex h-full gap-4 overflow-x-auto">
@@ -32,6 +34,7 @@ function KanbanBoard({
 					onViewTicketDetail={onViewTicketDetail}
 					onEditTicket={onEditTicket}
 					onDeleteTicket={onDeleteTicket}
+					onDeleteAllByStatus={onDeleteAllByStatus}
 				/>
 			))}
 		</div>

@@ -185,6 +185,32 @@ func (h *rpcMethodHandler) handleTicketStart(ctx context.Context, conn *jsonrpc2
 	}
 }
 
+func (h *rpcMethodHandler) handleTicketDeleteByStatus(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.TicketDeleteByStatusParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if !params.Status.IsValid() {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid status: "+string(params.Status))
+		return
+	}
+
+	count, err := h.worktreeManager.TicketStore.DeleteByStatus(ctx, params.Status)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to delete tickets")
+		return
+	}
+
+	h.log.Info("tickets deleted by status", "status", params.Status, "count", count)
+
+	result := rpc.TicketDeleteByStatusResult{Count: count}
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send ticket delete by status response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleTicketListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	notifier := h.state.getNotifier()
 	id, tickets, err := h.worktreeManager.TicketWatcher.Subscribe(notifier)

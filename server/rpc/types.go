@@ -307,6 +307,14 @@ type TicketDeleteParams struct {
 	TicketID string `json:"ticket_id"`
 }
 
+type TicketDeleteByStatusParams struct {
+	Status ticket.TicketStatus `json:"status"`
+}
+
+type TicketDeleteByStatusResult struct {
+	Count int `json:"count"`
+}
+
 type TicketGetParams struct {
 	TicketID string `json:"ticket_id"`
 }

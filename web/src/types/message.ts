@@ -49,6 +49,14 @@ export interface TicketDeleteParams {
 	ticket_id: string;
 }
 
+export interface TicketDeleteByStatusParams {
+	status: TicketStatus;
+}
+
+export interface TicketDeleteByStatusResult {
+	count: number;
+}
+
 export interface TicketStartParams {
 	ticket_id: string;
 }
