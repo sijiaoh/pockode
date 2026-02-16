@@ -1,6 +1,6 @@
-# Agent Team
+# Autopilot
 
-Ticket-driven multi-agent collaboration.
+Ticket-driven autonomous development.
 
 ## Concept
 
