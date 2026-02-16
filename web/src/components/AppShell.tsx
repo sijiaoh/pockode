@@ -98,6 +98,7 @@ function AppShell() {
 			: null;
 
 	const activeFilePath = overlay?.type === "file" ? overlay.path : null;
+	const activeCommitHash = overlay?.type === "commit" ? overlay.hash : null;
 
 	const {
 		sessions,
@@ -229,6 +230,19 @@ function AppShell() {
 		[navigate, urlWorktree, currentSessionId],
 	);
 
+	const handleSelectCommit = useCallback(
+		(hash: string) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "commit", hash },
+					urlWorktree,
+					currentSessionId,
+				),
+			);
+		},
+		[navigate, urlWorktree, currentSessionId],
+	);
+
 	const handleCloseOverlay = useCallback(() => {
 		if (currentSessionId) {
 			navigate(
@@ -295,6 +309,8 @@ function AppShell() {
 				onDeleteSession={handleDeleteSession}
 				onSelectDiffFile={handleSelectDiffFile}
 				activeDiffFile={activeDiffFile}
+				onSelectCommit={handleSelectCommit}
+				activeCommitHash={activeCommitHash}
 				onSelectFile={handleSelectFile}
 				activeFilePath={activeFilePath}
 				isDesktop={isDesktop}

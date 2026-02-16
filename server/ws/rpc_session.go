@@ -112,12 +112,13 @@ func (h *rpcMethodHandler) handleSessionSetMode(ctx context.Context, conn *jsonr
 }
 
 func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
-	connID := h.state.getConnID()
-	id, sessions, err := wt.SessionListWatcher.Subscribe(conn, connID)
+	notifier := h.state.getNotifier()
+	id, sessions, err := wt.SessionListWatcher.Subscribe(notifier)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to subscribe")
 		return
 	}
+	h.state.trackSubscription(id, wt.SessionListWatcher)
 	h.log.Debug("subscribed", "watcher", "session list", "watchId", id)
 
 	result := rpc.SessionListSubscribeResult{

@@ -15,20 +15,19 @@ This directory contains UI extensions that customize Pockode's interface.
 2. Implement `id` and `activate` in `index.ts`:
    ```ts
    // extensions/YourExtension/index.ts
-   import type { ExtensionContext } from "../../lib/extensions";
-   import { DEFAULT_PRIORITY } from "../../lib/registries/settingsRegistry";
+   import { DEFAULT_PRIORITY, type Extension } from "../../lib/extensions";
    import YourSection from "./YourSection";
 
-   export const id = "your-extension";  // Unique extension ID
+   export const id = "your-extension";
 
-   export function activate(ctx: ExtensionContext) {
+   export const activate: Extension["activate"] = (ctx) => {
      ctx.settings.register({
-       id: "your-section",        // Unique section identifier
-       label: "Your Section",     // Navigation label
-       priority: DEFAULT_PRIORITY, // Sort order (lower = higher)
+       id: "your-section",
+       label: "Your Section",
+       priority: DEFAULT_PRIORITY,
        component: YourSection,
      });
-   }
+   };
    ```
 
 3. Done! Extensions in this directory are automatically loaded at startup.
@@ -37,7 +36,7 @@ This directory contains UI extensions that customize Pockode's interface.
 
 ### ctx.settings.register()
 
-Add custom sections to the Settings page. Components receive no props - the section wrapper (heading, id, styles) is provided automatically by SettingsPage.
+Add custom sections to the Settings page. The `id` will be prefixed with the extension id (e.g., `your-extension.your-section`). Components receive no props - the section wrapper is provided by SettingsPage.
 
 ```tsx
 // extensions/YourExtension/YourSection.tsx

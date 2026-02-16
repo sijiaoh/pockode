@@ -11,7 +11,7 @@ import type {
 import type { OverlayState } from "../../types/overlay";
 import { hasCoarsePointer } from "../../utils/breakpoints";
 import { FileEditor, FileView } from "../Files";
-import { DiffView } from "../Git";
+import { CommitDiffView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
 import { SettingsPage } from "../Settings";
 import DefaultInputBar from "./InputBar";
@@ -187,6 +187,15 @@ function ChatPanel({
 				return (
 					<FileView path={overlay.path} onBack={onCloseOverlay ?? (() => {})} />
 				);
+			case "commit":
+				return (
+					<CommitView
+						hash={overlay.hash}
+						onBack={onCloseOverlay ?? (() => {})}
+					/>
+				);
+			case "commit-diff":
+				return <CommitDiffView hash={overlay.hash} path={overlay.path} />;
 			case "settings":
 				return <SettingsPage onBack={onCloseOverlay ?? (() => {})} />;
 		}

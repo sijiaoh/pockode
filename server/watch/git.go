@@ -8,13 +8,12 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 const gitPollInterval = 3 * time.Second
 
-// GitWatcher polls git status and notifies subscribers when file list changes are detected.
+// GitWatcher polls git state (HEAD + status) and notifies subscribers on changes.
+// Detects working tree changes and HEAD changes (commit, checkout, etc).
 // For file-specific diff content changes, use GitDiffWatcher instead.
 type GitWatcher struct {
 	*BaseWatcher
@@ -22,7 +21,7 @@ type GitWatcher struct {
 	workDir string
 
 	stateMu   sync.Mutex
-	lastState string // git status output
+	lastState string // HEAD hash + git status output
 }
 
 func NewGitWatcher(workDir string) *GitWatcher {
@@ -48,16 +47,15 @@ func (w *GitWatcher) Stop() {
 	slog.Info("GitWatcher stopped")
 }
 
-func (w *GitWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (string, error) {
+func (w *GitWatcher) Subscribe(notifier Notifier) string {
 	id := w.GenerateID()
 
 	sub := &Subscription{
-		ID:     id,
-		ConnID: connID,
-		Conn:   conn,
+		ID:       id,
+		Notifier: notifier,
 	}
 	w.AddSubscription(sub)
-	return id, nil
+	return id
 }
 
 func (w *GitWatcher) pollLoop() {
@@ -93,16 +91,30 @@ func (w *GitWatcher) checkAndNotify() {
 	}
 }
 
-// pollGitState returns the git status output for detecting file list changes.
+// pollGitState returns git status + HEAD hash for detecting changes.
+// This detects both working tree changes and HEAD changes (commit, checkout, etc).
 func (w *GitWatcher) pollGitState() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	out := w.runGitCmd(ctx, "status", "--porcelain=v1", "-uall", "--ignore-submodules=none")
-	if out == "" {
-		return ""
-	}
-	return sortLines(out)
+	// Run both commands in parallel to reduce latency
+	var head, status string
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		head = w.runGitCmd(ctx, "rev-parse", "HEAD")
+	}()
+
+	go func() {
+		defer wg.Done()
+		status = w.runGitCmd(ctx, "status", "--porcelain=v1", "-uall", "--ignore-submodules=none")
+	}()
+
+	wg.Wait()
+
+	return head + "\n" + sortLines(status)
 }
 
 func (w *GitWatcher) runGitCmd(ctx context.Context, args ...string) string {

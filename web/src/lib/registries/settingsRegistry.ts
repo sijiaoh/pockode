@@ -19,6 +19,9 @@ function notifyListeners() {
 	}
 }
 
+/**
+ * @internal Use `ctx.settings.register()` from extension context instead.
+ */
 export function registerSettingsSection(
 	config: SettingsSectionConfig,
 ): () => void {
@@ -40,10 +43,16 @@ export function useSettingsSections(): SettingsSectionConfig[] {
 	);
 }
 
+/**
+ * @internal For testing only.
+ */
 export function getSettingsSections(): SettingsSectionConfig[] {
 	return sections;
 }
 
+/**
+ * @internal For testing only.
+ */
 export function resetSettingsSections() {
 	sections = [];
 	notifyListeners();

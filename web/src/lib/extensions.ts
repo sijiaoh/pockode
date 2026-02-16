@@ -1,16 +1,17 @@
+import { resetChatUIConfig, setChatUIConfig, type ChatUIConfig } from "./registries/chatUIRegistry";
 import {
-	type ChatUIConfig,
-	resetChatUIConfig,
-	setChatUIConfig,
-} from "./registries/chatUIRegistry";
-import {
+	DEFAULT_PRIORITY,
 	registerSettingsSection,
 	type SettingsSectionConfig,
 } from "./registries/settingsRegistry";
 
+export { DEFAULT_PRIORITY };
+export type { SettingsSectionConfig };
+
 export interface ExtensionContext {
 	readonly id: string;
 	readonly settings: {
+		/** config.id will be prefixed with extension id */
 		register(config: SettingsSectionConfig): void;
 	};
 	readonly chatUI: {
@@ -18,18 +19,27 @@ export interface ExtensionContext {
 	};
 }
 
-interface InternalExtensionContext extends ExtensionContext {
+export interface Extension {
+	readonly id: string;
+	activate(ctx: ExtensionContext): void;
+}
+
+interface InternalContext extends ExtensionContext {
 	dispose(): void;
 }
 
-function createExtensionContext(extensionId: string): InternalExtensionContext {
+function createContext(extensionId: string): InternalContext {
 	const disposables: Array<() => void> = [];
 
 	return {
 		id: extensionId,
 		settings: {
 			register(config) {
-				const unregister = registerSettingsSection(config);
+				const namespaced: SettingsSectionConfig = {
+					...config,
+					id: `${extensionId}.${config.id}`,
+				};
+				const unregister = registerSettingsSection(namespaced);
 				disposables.push(unregister);
 			},
 		},
@@ -43,35 +53,51 @@ function createExtensionContext(extensionId: string): InternalExtensionContext {
 			for (const fn of disposables) {
 				fn();
 			}
-			disposables.length = 0;
 		},
 	};
 }
 
-export interface ExtensionModule {
-	id: string;
-	activate(ctx: ExtensionContext): void;
-}
+const loaded = new Map<string, InternalContext>();
 
-const loadedExtensions = new Map<string, InternalExtensionContext>();
-
-export function loadExtension(extension: ExtensionModule): void {
+export function loadExtension(extension: Extension): boolean {
 	const { id } = extension;
-	if (loadedExtensions.has(id)) {
-		console.warn(`Extension "${id}" already loaded`);
-		return;
+
+	if (loaded.has(id)) {
+		console.warn(`Extension "${id}" is already loaded`);
+		return false;
 	}
-	const ctx = createExtensionContext(id);
-	extension.activate(ctx);
-	loadedExtensions.set(id, ctx);
+
+	const context = createContext(id);
+	extension.activate(context);
+	loaded.set(id, context);
+	return true;
 }
 
 export function unloadExtension(id: string): boolean {
-	const ctx = loadedExtensions.get(id);
-	if (!ctx) return false;
-	ctx.dispose();
-	loadedExtensions.delete(id);
+	const context = loaded.get(id);
+	if (!context) return false;
+
+	context.dispose();
+	loaded.delete(id);
 	return true;
+}
+
+export function isExtensionLoaded(id: string): boolean {
+	return loaded.has(id);
+}
+
+export function getLoadedExtensions(): string[] {
+	return Array.from(loaded.keys());
+}
+
+type ExtensionModule = {
+	id?: string;
+	activate?: (ctx: ExtensionContext) => void;
+	default?: Extension;
+};
+
+function isValidExtension(mod: ExtensionModule): mod is Extension {
+	return typeof mod.id === "string" && typeof mod.activate === "function";
 }
 
 export function loadAllExtensions(): void {
@@ -80,7 +106,15 @@ export function loadAllExtensions(): void {
 		{ eager: true },
 	);
 
-	for (const module of Object.values(modules)) {
-		loadExtension(module);
+	for (const [path, mod] of Object.entries(modules)) {
+		const extension = mod.default ?? mod;
+
+		if (isValidExtension(extension)) {
+			loadExtension(extension);
+		} else {
+			console.error(
+				`Invalid extension at ${path}: must export 'id' and 'activate'`,
+			);
+		}
 	}
 }

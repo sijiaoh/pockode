@@ -9,7 +9,6 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 // ChatMessagesWatcher manages subscriptions for chat messages.
@@ -76,11 +75,11 @@ func (w *ChatMessagesWatcher) messageLoop() {
 }
 
 func (w *ChatMessagesWatcher) notifyMessage(msg process.ChatMessage) {
-	sessionID := msg.SessionID
-	eventType := msg.Event.EventType()
-	method := "chat." + string(eventType)
+	w.notifyEvent(msg.SessionID, msg.Event.ToRecord(), nil)
+}
 
-	// Get subscription IDs for this session
+// notifyEvent broadcasts an event to session subscribers, optionally excluding one notifier.
+func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRecord, exclude Notifier) {
 	w.sessionMu.RLock()
 	ids := make([]string, len(w.sessionToIDs[sessionID]))
 	copy(ids, w.sessionToIDs[sessionID])
@@ -90,22 +89,21 @@ func (w *ChatMessagesWatcher) notifyMessage(msg process.ChatMessage) {
 		return
 	}
 
-	// Use EventRecord as the notification payload (single source of truth)
-	record := msg.Event.ToRecord()
+	method := "chat." + string(record.Type)
 
 	for _, id := range ids {
 		sub := w.GetSubscription(id)
-		if sub == nil {
+		if sub == nil || sub.Notifier == exclude {
 			continue
 		}
 
-		// Add subscription ID to params for client-side routing
 		params := notifyParams{
 			ID:          sub.ID,
 			EventRecord: record,
 		}
 
-		if err := sub.Conn.Notify(context.Background(), method, params); err != nil {
+		n := Notification{Method: method, Params: params}
+		if err := sub.Notifier.Notify(context.Background(), n); err != nil {
 			slog.Debug("failed to notify subscriber",
 				"id", sub.ID,
 				"sessionId", sessionID,
@@ -123,18 +121,15 @@ type notifyParams struct {
 // Subscribe registers a subscriber for a specific session.
 // Returns subscription ID and history.
 func (w *ChatMessagesWatcher) Subscribe(
-	conn *jsonrpc2.Conn,
-	connID string,
+	notifier Notifier,
 	sessionID string,
 ) (string, []json.RawMessage, error) {
 	id := w.GenerateID()
 	sub := &Subscription{
-		ID:     id,
-		ConnID: connID,
-		Conn:   conn,
+		ID:       id,
+		Notifier: notifier,
 	}
 
-	// Lock order: sessionMu → subMu (consistent with Unsubscribe/CleanupConnection)
 	w.sessionMu.Lock()
 	w.sessionToIDs[sessionID] = append(w.sessionToIDs[sessionID], id)
 	w.idToSession[id] = sessionID
@@ -162,30 +157,6 @@ func (w *ChatMessagesWatcher) Unsubscribe(id string) {
 	w.RemoveSubscription(id)
 }
 
-// CleanupConnection removes all subscriptions for a connection.
-func (w *ChatMessagesWatcher) CleanupConnection(connID string) {
-	// Get subscription IDs first (releases subMu before acquiring sessionMu)
-	subs := w.GetSubscriptionsByConnID(connID)
-	if len(subs) == 0 {
-		return
-	}
-
-	// Collect IDs to avoid holding lock during iteration
-	ids := make([]string, len(subs))
-	for i, sub := range subs {
-		ids[i] = sub.ID
-	}
-
-	// Lock order: sessionMu → subMu (consistent with Subscribe/Unsubscribe)
-	w.sessionMu.Lock()
-	for _, id := range ids {
-		w.removeSessionMapping(id)
-	}
-	w.sessionMu.Unlock()
-
-	w.BaseWatcher.CleanupConnection(connID)
-}
-
 // removeSessionMapping removes session mapping for a subscription. Caller must hold sessionMu.
 func (w *ChatMessagesWatcher) removeSessionMapping(id string) {
 	sessionID, ok := w.idToSession[id]
@@ -204,4 +175,11 @@ func (w *ChatMessagesWatcher) removeSessionMapping(id string) {
 	if len(w.sessionToIDs[sessionID]) == 0 {
 		delete(w.sessionToIDs, sessionID)
 	}
+}
+
+// NotifyMessage broadcasts a user message to all session subscribers except the sender.
+// This is used when a client sends a message to notify other clients (e.g., other tabs)
+// watching the same session.
+func (w *ChatMessagesWatcher) NotifyMessage(sessionID string, event agent.MessageEvent, exclude Notifier) {
+	w.notifyEvent(sessionID, event.ToRecord(), exclude)
 }

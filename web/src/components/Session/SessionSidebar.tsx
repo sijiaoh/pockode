@@ -16,6 +16,8 @@ interface Props {
 	onDeleteSession: (id: string) => void;
 	onSelectDiffFile: (path: string, staged: boolean) => void;
 	activeDiffFile: { path: string; staged: boolean } | null;
+	onSelectCommit: (hash: string) => void;
+	activeCommitHash: string | null;
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
 	isDesktop: boolean;
@@ -30,6 +32,8 @@ function SessionSidebar({
 	onDeleteSession,
 	onSelectDiffFile,
 	activeDiffFile,
+	onSelectCommit,
+	activeCommitHash,
 	onSelectFile,
 	activeFilePath,
 	isDesktop,
@@ -45,7 +49,7 @@ function SessionSidebar({
 				showBadge: hasAnyUnread,
 			},
 			{ id: "files", label: "Files", icon: FolderOpen },
-			{ id: "diff", label: "Diff", icon: GitCompare },
+			{ id: "git", label: "Git", icon: GitCompare },
 		],
 		[hasAnyUnread],
 	);
@@ -65,6 +69,14 @@ function SessionSidebar({
 			if (!isDesktop) onClose();
 		},
 		[onSelectDiffFile, isDesktop, onClose],
+	);
+
+	const handleSelectCommit = useCallback(
+		(hash: string) => {
+			onSelectCommit(hash);
+			if (!isDesktop) onClose();
+		},
+		[onSelectCommit, isDesktop, onClose],
 	);
 
 	const handleSelectFile = useCallback(
@@ -98,7 +110,9 @@ function SessionSidebar({
 			/>
 			<DiffTab
 				onSelectFile={handleSelectDiffFile}
+				onSelectCommit={handleSelectCommit}
 				activeFile={activeDiffFile}
+				activeCommitHash={activeCommitHash}
 			/>
 		</TabbedSidebar>
 	);

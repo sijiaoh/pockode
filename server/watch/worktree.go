@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 const worktreePollInterval = 3 * time.Second
@@ -46,16 +44,15 @@ func (w *WorktreeWatcher) Stop() {
 	slog.Info("WorktreeWatcher stopped")
 }
 
-func (w *WorktreeWatcher) Subscribe(conn *jsonrpc2.Conn, connID string) (string, error) {
+func (w *WorktreeWatcher) Subscribe(notifier Notifier) string {
 	id := w.GenerateID()
 
 	sub := &Subscription{
-		ID:     id,
-		ConnID: connID,
-		Conn:   conn,
+		ID:       id,
+		Notifier: notifier,
 	}
 	w.AddSubscription(sub)
-	return id, nil
+	return id
 }
 
 func (w *WorktreeWatcher) pollLoop() {

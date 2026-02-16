@@ -124,9 +124,10 @@ func (h *rpcMethodHandler) handleWorktreeSwitch(ctx context.Context, conn *jsonr
 		return
 	}
 
-	// Atomically check and switch worktree
+	// Atomically check, switch worktree, and get values for cleanup
 	h.state.mu.Lock()
 	currentWorktree := h.state.worktree
+	notifier := h.state.notifier
 
 	// No-op if switching to same worktree
 	if currentWorktree != nil && currentWorktree.Name == params.Name {
@@ -143,16 +144,17 @@ func (h *rpcMethodHandler) handleWorktreeSwitch(ctx context.Context, conn *jsonr
 		return
 	}
 
-	// Cleanup old worktree (inline to avoid double-lock)
+	// Update state atomically first, then cleanup old worktree outside lock
+	h.state.worktree = newWorktree
+	newWorktree.Subscribe(notifier)
+	h.state.mu.Unlock()
+
+	// Cleanup old worktree (outside lock to avoid deadlock)
 	if currentWorktree != nil {
-		currentWorktree.UnsubscribeConnection(conn, h.state.connID)
+		h.state.unsubscribeWorktreeWatchers(currentWorktree)
+		currentWorktree.Unsubscribe(notifier)
 		h.worktreeManager.Release(currentWorktree)
 	}
-
-	// Bind to new worktree and subscribe atomically
-	h.state.worktree = newWorktree
-	newWorktree.Subscribe(conn)
-	h.state.mu.Unlock()
 
 	h.log.Info("worktree switched", "to", newWorktree.Name)
 
@@ -166,12 +168,9 @@ func (h *rpcMethodHandler) handleWorktreeSwitch(ctx context.Context, conn *jsonr
 }
 
 func (h *rpcMethodHandler) handleWorktreeSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	connID := h.state.getConnID()
-	id, err := h.worktreeManager.WorktreeWatcher.Subscribe(conn, connID)
-	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		return
-	}
+	notifier := h.state.getNotifier()
+	id := h.worktreeManager.WorktreeWatcher.Subscribe(notifier)
+	h.state.trackSubscription(id, h.worktreeManager.WorktreeWatcher)
 	h.log.Debug("subscribed", "watcher", "worktree", "watchId", id)
 
 	if err := conn.Reply(ctx, req.ID, rpc.WorktreeSubscribeResult{ID: id}); err != nil {

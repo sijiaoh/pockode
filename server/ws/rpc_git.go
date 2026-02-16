@@ -45,8 +45,8 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 		return
 	}
 
-	connID := h.state.getConnID()
-	id, result, err := wt.GitDiffWatcher.Subscribe(params.Path, params.Staged, conn, connID)
+	notifier := h.state.getNotifier()
+	id, result, err := wt.GitDiffWatcher.Subscribe(params.Path, params.Staged, notifier)
 	if err != nil {
 		if strings.Contains(err.Error(), "file not found") {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
@@ -55,6 +55,7 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
+	h.state.trackSubscription(id, wt.GitDiffWatcher)
 
 	h.log.Debug("subscribed", "watcher", "git-diff", "watchId", id, "path", params.Path, "staged", params.Staged)
 
@@ -70,12 +71,9 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 }
 
 func (h *rpcMethodHandler) handleGitSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
-	connID := h.state.getConnID()
-	id, err := wt.GitWatcher.Subscribe(conn, connID)
-	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		return
-	}
+	notifier := h.state.getNotifier()
+	id := wt.GitWatcher.Subscribe(notifier)
+	h.state.trackSubscription(id, wt.GitWatcher)
 	h.log.Debug("subscribed", "watcher", "git", "watchId", id)
 
 	if err := conn.Reply(ctx, req.ID, rpc.GitSubscribeResult{ID: id}); err != nil {
@@ -148,5 +146,71 @@ func (h *rpcMethodHandler) handleGitReset(ctx context.Context, conn *jsonrpc2.Co
 
 	if err := conn.Reply(ctx, req.ID, nil); err != nil {
 		h.log.Error("failed to send git reset response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleGitLog(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.GitLogParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	commits, err := git.Log(wt.WorkDir, params.Limit)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return
+	}
+
+	result := rpc.GitLogResult{Commits: commits}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send git log response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleGitShow(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.GitShowParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.Hash == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "hash required")
+		return
+	}
+
+	result, err := git.Show(wt.WorkDir, params.Hash)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send git show response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleGitShowDiff(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.GitShowDiffParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.Hash == "" || params.Path == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "hash and path required")
+		return
+	}
+
+	result, err := git.ShowFileDiff(wt.WorkDir, params.Hash, params.Path)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send git show diff response", "error", err)
 	}
 }

@@ -112,6 +112,33 @@ type GitPathsParams struct {
 	Paths []string `json:"paths"`
 }
 
+// GitLogParams is the params for git.log request.
+type GitLogParams struct {
+	Limit int `json:"limit,omitempty"` // default 50
+}
+
+// GitLogResult is the result of git.log request.
+type GitLogResult struct {
+	Commits []git.Commit `json:"commits"`
+}
+
+// GitShowParams is the params for git.show request.
+type GitShowParams struct {
+	Hash string `json:"hash"`
+}
+
+// GitShowResult is the result of git.show request.
+type GitShowResult = git.ShowResult
+
+// GitShowDiffParams is the params for git.show.diff request.
+type GitShowDiffParams struct {
+	Hash string `json:"hash"`
+	Path string `json:"path"`
+}
+
+// GitShowDiffResult is the result of git.show.diff request.
+type GitShowDiffResult = git.DiffResult
+
 // Command namespace
 
 type CommandListResult struct {

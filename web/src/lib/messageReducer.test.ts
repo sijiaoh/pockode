@@ -770,6 +770,44 @@ describe("messageReducer", () => {
 				]);
 			});
 		});
+
+		describe("user message broadcast", () => {
+			it("adds user message from broadcast to empty state", () => {
+				const messages = applyServerEvent([], {
+					type: "message",
+					content: "Hello from another tab",
+				});
+				expect(messages).toHaveLength(2);
+				expect(messages[0].role).toBe("user");
+				const user = messages[0] as UserMessage;
+				expect(user.content).toBe("Hello from another tab");
+				expect(messages[1].role).toBe("assistant");
+				// createAssistantMessage defaults to "streaming" status
+				expect((messages[1] as AssistantMessage).status).toBe("streaming");
+			});
+
+			it("finalizes streaming assistant before adding broadcast message", () => {
+				const streaming: AssistantMessage = {
+					id: "msg-1",
+					role: "assistant",
+					parts: [{ type: "text", content: "Previous response" }],
+					status: "streaming",
+					createdAt: new Date(),
+				};
+				const messages = applyServerEvent([streaming], {
+					type: "message",
+					content: "New message from another tab",
+				});
+				expect(messages).toHaveLength(3);
+				expect(messages[0].role).toBe("assistant");
+				expect(messages[0].status).toBe("complete"); // finalized
+				expect(messages[1].role).toBe("user");
+				expect((messages[1] as UserMessage).content).toBe(
+					"New message from another tab",
+				);
+				expect(messages[2].role).toBe("assistant");
+			});
+		});
 	});
 
 	describe("applyUserMessage", () => {

@@ -1,70 +1,138 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Extension } from "./extensions";
 import { resetSettingsSections } from "./registries/settingsRegistry";
 
+function createExtension(overrides: Partial<Extension> = {}): Extension {
+	return { id: "test", activate: vi.fn(), ...overrides };
+}
+
+async function importExtensions() {
+	return import("./extensions");
+}
+
 describe("extensions", () => {
-	afterEach(async () => {
+	afterEach(() => {
 		vi.resetModules();
 		resetSettingsSections();
 	});
 
-	it("loads an extension", async () => {
-		const { loadExtension, unloadExtension } = await import("./extensions");
+	describe("loadExtension", () => {
+		it("activates extension with context containing extension id", async () => {
+			const { loadExtension, unloadExtension, isExtensionLoaded } =
+				await importExtensions();
 
-		const activate = vi.fn();
-		loadExtension({ id: "test", activate });
+			const activate = vi.fn();
+			const result = loadExtension(createExtension({ activate }));
 
-		expect(activate).toHaveBeenCalledTimes(1);
-		expect(activate).toHaveBeenCalledWith(
-			expect.objectContaining({ id: "test" }),
-		);
+			expect(result).toBe(true);
+			expect(activate).toHaveBeenCalledOnce();
+			expect(activate).toHaveBeenCalledWith(
+				expect.objectContaining({ id: "test" }),
+			);
+			expect(isExtensionLoaded("test")).toBe(true);
 
-		unloadExtension("test");
-	});
-
-	it("prevents duplicate loading", async () => {
-		const { loadExtension, unloadExtension } = await import("./extensions");
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-		const activate = vi.fn();
-		loadExtension({ id: "test", activate });
-		loadExtension({ id: "test", activate });
-
-		expect(activate).toHaveBeenCalledTimes(1);
-		expect(warnSpy).toHaveBeenCalledWith('Extension "test" already loaded');
-
-		warnSpy.mockRestore();
-		unloadExtension("test");
-	});
-
-	it("unloads an extension and calls dispose", async () => {
-		const { loadExtension, unloadExtension } = await import("./extensions");
-		const { getSettingsSections } = await import(
-			"./registries/settingsRegistry"
-		);
-
-		loadExtension({
-			id: "test",
-			activate: (ctx) => {
-				ctx.settings.register({
-					id: "test-section",
-					label: "Test",
-					priority: 10,
-					component: () => null,
-				});
-			},
+			unloadExtension("test");
 		});
 
-		expect(getSettingsSections()).toHaveLength(1);
+		it("rejects duplicate extension id", async () => {
+			const { loadExtension, unloadExtension } = await importExtensions();
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-		const result = unloadExtension("test");
-		expect(result).toBe(true);
-		expect(getSettingsSections()).toHaveLength(0);
+			const activate = vi.fn();
+			const first = loadExtension(createExtension({ activate }));
+			const second = loadExtension(createExtension({ activate }));
+
+			expect(first).toBe(true);
+			expect(second).toBe(false);
+			expect(activate).toHaveBeenCalledOnce();
+			expect(warnSpy).toHaveBeenCalledWith(
+				'Extension "test" is already loaded',
+			);
+
+			warnSpy.mockRestore();
+			unloadExtension("test");
+		});
 	});
 
-	it("returns false when unloading non-existent extension", async () => {
-		const { unloadExtension } = await import("./extensions");
+	describe("unloadExtension", () => {
+		it("cleans up registrations", async () => {
+			const { loadExtension, unloadExtension, isExtensionLoaded } =
+				await importExtensions();
+			const { getSettingsSections } = await import(
+				"./registries/settingsRegistry"
+			);
 
-		const result = unloadExtension("non-existent");
-		expect(result).toBe(false);
+			loadExtension(
+				createExtension({
+					activate: (ctx) => {
+						ctx.settings.register({
+							id: "section",
+							label: "Test",
+							priority: 10,
+							component: () => null,
+						});
+					},
+				}),
+			);
+
+			expect(getSettingsSections()).toHaveLength(1);
+			expect(isExtensionLoaded("test")).toBe(true);
+
+			const result = unloadExtension("test");
+
+			expect(result).toBe(true);
+			expect(getSettingsSections()).toHaveLength(0);
+			expect(isExtensionLoaded("test")).toBe(false);
+		});
+
+		it("returns false for non-existent extension", async () => {
+			const { unloadExtension } = await importExtensions();
+
+			expect(unloadExtension("non-existent")).toBe(false);
+		});
+	});
+
+	describe("settings.register", () => {
+		it("namespaces section id with extension id", async () => {
+			const { loadExtension, unloadExtension } = await importExtensions();
+			const { getSettingsSections } = await import(
+				"./registries/settingsRegistry"
+			);
+
+			loadExtension(
+				createExtension({
+					id: "my-ext",
+					activate: (ctx) => {
+						ctx.settings.register({
+							id: "section",
+							label: "Test",
+							priority: 10,
+							component: () => null,
+						});
+					},
+				}),
+			);
+
+			expect(getSettingsSections()).toEqual([
+				expect.objectContaining({ id: "my-ext.section" }),
+			]);
+
+			unloadExtension("my-ext");
+		});
+	});
+
+	describe("getLoadedExtensions", () => {
+		it("returns all loaded extension ids", async () => {
+			const { loadExtension, unloadExtension, getLoadedExtensions } =
+				await importExtensions();
+
+			loadExtension(createExtension({ id: "ext-a" }));
+			loadExtension(createExtension({ id: "ext-b" }));
+
+			expect(getLoadedExtensions()).toEqual(["ext-a", "ext-b"]);
+
+			unloadExtension("ext-a");
+			unloadExtension("ext-b");
+		});
 	});
 });

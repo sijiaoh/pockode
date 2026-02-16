@@ -4,7 +4,7 @@ import {
 	ThemeSection,
 	WorktreeSection,
 } from "../../components/Settings/sections";
-import type { ExtensionContext } from "../../lib/extensions";
+import type { Extension } from "../../lib/extensions";
 
 // Builtin sections use 0-99
 const PRIORITY = {
@@ -16,7 +16,7 @@ const PRIORITY = {
 
 export const id = "builtin";
 
-export function activate(ctx: ExtensionContext) {
+export const activate: Extension["activate"] = (ctx) => {
 	ctx.settings.register({
 		id: "appearance",
 		label: "Appearance",
@@ -44,4 +44,4 @@ export function activate(ctx: ExtensionContext) {
 		priority: PRIORITY.ACCOUNT,
 		component: AccountSection,
 	});
-}
+};

@@ -516,7 +516,7 @@ func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent
 		return nil
 	default:
 		log.Debug("unhandled event type from CLI", "type", event.Type)
-		return []agent.AgentEvent{agent.RawEvent{Content: string(line)}}
+		return nil
 	}
 }
 

@@ -53,7 +53,7 @@ function DiffFileList({
 					{toggleAllLabel}
 				</button>
 			</div>
-			<div className="flex flex-col gap-1 px-2">
+			<div className="flex flex-col gap-1 px-2 pb-1">
 				{files.map((file) => (
 					<DiffFileItem
 						key={`${staged}-${file.path}`}

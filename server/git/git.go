@@ -585,3 +585,268 @@ func validatePath(path string) error {
 
 	return nil
 }
+
+// Commit represents a single git commit.
+type Commit struct {
+	Hash    string `json:"hash"`
+	Subject string `json:"subject"`
+	Body    string `json:"body,omitempty"`
+	Author  string `json:"author"`
+	Date    string `json:"date"`
+}
+
+// Delimiters for parsing git log/show output.
+// Using unique strings to reliably parse multi-line body and empty body.
+const (
+	commitStartDelim = "---COMMIT_START---"
+	bodyStartDelim   = "---BODY_START---"
+	bodyEndDelim     = "---BODY_END---"
+	commitEndDelim   = "---COMMIT_END---"
+)
+
+// commitFormat is the git log/show format string.
+// Format: COMMIT_START, hash, subject, BODY_START, body, BODY_END, author, date, COMMIT_END
+var commitFormat = fmt.Sprintf("%s%%n%%H%%n%%s%%n%s%%n%%b%s%%n%%an%%n%%aI%%n%s",
+	commitStartDelim, bodyStartDelim, bodyEndDelim, commitEndDelim)
+
+// FileChange represents a file changed in a commit.
+type FileChange struct {
+	Path   string `json:"path"`
+	Status string `json:"status"` // M, A, D, R
+}
+
+// ShowResult is the result of git show.
+type ShowResult struct {
+	Commit
+	Files []FileChange `json:"files"`
+}
+
+// Log returns the commit history for the repository.
+func Log(dir string, limit int) ([]Commit, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	args := []string{
+		"log",
+		fmt.Sprintf("-n%d", limit),
+		fmt.Sprintf("--format=%s", commitFormat),
+	}
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git log failed: %w", err)
+	}
+
+	return parseLogOutput(string(output)), nil
+}
+
+// parseLogOutput parses the output of git log with our custom format.
+func parseLogOutput(output string) []Commit {
+	if output == "" {
+		return []Commit{}
+	}
+
+	var commits []Commit
+
+	// Split by commit delimiter
+	commitBlocks := strings.Split(output, commitStartDelim)
+
+	for _, block := range commitBlocks {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+
+		// Remove trailing COMMIT_END
+		block = strings.TrimSuffix(block, commitEndDelim)
+		block = strings.TrimSpace(block)
+
+		// Extract body section
+		bodyStartIdx := strings.Index(block, bodyStartDelim)
+		bodyEndIdx := strings.Index(block, bodyEndDelim)
+
+		if bodyStartIdx == -1 || bodyEndIdx == -1 {
+			continue
+		}
+
+		// Header: hash and subject
+		header := strings.TrimSpace(block[:bodyStartIdx])
+		headerLines := strings.SplitN(header, "\n", 2)
+		if len(headerLines) < 2 {
+			continue
+		}
+		hash := headerLines[0]
+		subject := headerLines[1]
+
+		// Body (may be empty or multi-line)
+		body := strings.TrimSpace(block[bodyStartIdx+len(bodyStartDelim) : bodyEndIdx])
+
+		// Footer: author and date
+		footer := strings.TrimSpace(block[bodyEndIdx+len(bodyEndDelim):])
+		footerLines := strings.SplitN(footer, "\n", 2)
+		if len(footerLines) < 2 {
+			continue
+		}
+		author := footerLines[0]
+		date := strings.TrimSpace(footerLines[1])
+
+		commits = append(commits, Commit{
+			Hash:    hash,
+			Subject: subject,
+			Body:    body,
+			Author:  author,
+			Date:    date,
+		})
+	}
+
+	return commits
+}
+
+// Show returns detailed commit information including changed files.
+func Show(dir, hash string) (*ShowResult, error) {
+	if err := validateCommitHash(hash); err != nil {
+		return nil, err
+	}
+
+	// Get commit metadata
+	args := []string{
+		"show",
+		"--no-patch",
+		fmt.Sprintf("--format=%s", commitFormat),
+		hash,
+	}
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show failed: %w", err)
+	}
+
+	commits := parseLogOutput(string(output))
+	if len(commits) == 0 {
+		return nil, fmt.Errorf("commit not found: %s", hash)
+	}
+
+	commit := commits[0]
+
+	// Get changed files with status
+	// -m: for merge commits, show diff against each parent (we take first)
+	// --first-parent: follow only the first parent
+	filesArgs := []string{
+		"show",
+		"-m",
+		"--first-parent",
+		"--name-status",
+		"--format=",
+		hash,
+	}
+
+	filesCmd := exec.Command("git", filesArgs...)
+	filesCmd.Dir = dir
+	filesOutput, err := filesCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show --name-status failed: %w", err)
+	}
+
+	files := parseNameStatus(string(filesOutput))
+
+	return &ShowResult{
+		Commit: commit,
+		Files:  files,
+	}, nil
+}
+
+// parseNameStatus parses git's --name-status output.
+func parseNameStatus(output string) []FileChange {
+	var files []FileChange
+
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Format: "M\tfilename" or "R100\told\tnew"
+		parts := strings.Split(line, "\t")
+		if len(parts) < 2 {
+			continue
+		}
+
+		status := parts[0]
+		path := parts[1]
+
+		// For renames/copies, use the new filename and normalize to "R"
+		if len(parts) > 2 && (status[0] == 'R' || status[0] == 'C') {
+			path = parts[2]
+			status = "R"
+		}
+
+		// Normalize status to single character
+		if len(status) > 1 {
+			status = string(status[0])
+		}
+
+		files = append(files, FileChange{
+			Path:   path,
+			Status: status,
+		})
+	}
+
+	return files
+}
+
+// ShowFileDiff returns the diff of a specific file in a commit.
+func ShowFileDiff(dir, hash, path string) (*DiffResult, error) {
+	if err := validateCommitHash(hash); err != nil {
+		return nil, err
+	}
+	if err := validatePath(path); err != nil {
+		return nil, err
+	}
+
+	// Get the diff using git show
+	cmd := exec.Command("git", "show", "--format=", hash, "--", path)
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show failed: %w", err)
+	}
+
+	diff := string(output)
+
+	// Get old content (parent commit)
+	oldContent, _ := getFileFromRef(dir, hash+"^", path)
+	// Get new content (the commit itself)
+	newContent, _ := getFileFromRef(dir, hash, path)
+
+	return &DiffResult{
+		Diff:       diff,
+		OldContent: oldContent,
+		NewContent: newContent,
+	}, nil
+}
+
+// validateCommitHash validates a git commit hash to prevent injection.
+func validateCommitHash(hash string) error {
+	if hash == "" {
+		return fmt.Errorf("commit hash is empty")
+	}
+
+	// Require at least 7 hex characters (short hash minimum)
+	if len(hash) < 7 {
+		return fmt.Errorf("commit hash too short")
+	}
+
+	// Only allow hex characters for security
+	for _, c := range hash {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return fmt.Errorf("invalid commit hash character: %c", c)
+		}
+	}
+
+	return nil
+}

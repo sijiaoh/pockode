@@ -111,6 +111,58 @@ describe("buildNavigation", () => {
 			});
 		});
 
+		it("builds main worktree commit route", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "",
+				overlayType: "commit",
+				hash: "abc1234",
+				sessionId: null,
+			});
+
+			expect(result).toEqual({
+				to: "/commit/$",
+				params: { _splat: "abc1234" },
+			});
+		});
+
+		it("builds main worktree commit-diff route", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "",
+				overlayType: "commit-diff",
+				path: "src/index.ts",
+				hash: "abc1234",
+				sessionId: null,
+			});
+
+			expect(result).toEqual({
+				to: "/commit/$hash/diff/$",
+				params: { hash: "abc1234", _splat: "src/index.ts" },
+			});
+		});
+
+		it("builds named worktree commit-diff route with session", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "feature-x",
+				overlayType: "commit-diff",
+				path: "src/app.ts",
+				hash: "def5678",
+				sessionId: "sess123",
+			});
+
+			expect(result).toEqual({
+				to: "/w/$worktree/commit/$hash/diff/$",
+				params: {
+					worktree: "feature-x",
+					hash: "def5678",
+					_splat: "src/app.ts",
+				},
+				search: { session: "sess123" },
+			});
+		});
+
 		it("builds main worktree settings route", () => {
 			const result = buildNavigation({
 				type: "overlay",

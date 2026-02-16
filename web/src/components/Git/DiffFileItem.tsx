@@ -1,5 +1,5 @@
 import { Loader2, Minus, Plus } from "lucide-react";
-import type { FileStatus } from "../../types/git";
+import { type FileStatus, GIT_STATUS_INFO } from "../../types/git";
 import { splitPath } from "../../utils/path";
 import SidebarListItem from "../common/SidebarListItem";
 
@@ -12,14 +12,6 @@ interface Props {
 	isToggling?: boolean;
 }
 
-const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-	M: { label: "Modified", color: "text-th-warning" },
-	A: { label: "Added", color: "text-th-success" },
-	D: { label: "Deleted", color: "text-th-error" },
-	R: { label: "Renamed", color: "text-th-accent" },
-	"?": { label: "Untracked", color: "text-th-text-muted" },
-};
-
 function DiffFileItem({
 	file,
 	staged,
@@ -28,7 +20,7 @@ function DiffFileItem({
 	isActive,
 	isToggling,
 }: Props) {
-	const statusInfo = STATUS_LABELS[file.status] || STATUS_LABELS["?"];
+	const statusInfo = GIT_STATUS_INFO[file.status] ?? GIT_STATUS_INFO["?"];
 	const { fileName, directory } = splitPath(file.path);
 
 	const Icon = staged ? Minus : Plus;

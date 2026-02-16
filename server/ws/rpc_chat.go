@@ -2,12 +2,11 @@ package ws
 
 import (
 	"context"
-	"fmt"
-	"log/slog"
+	"errors"
 	"unicode"
 
 	"github.com/pockode/server/agent"
-	"github.com/pockode/server/process"
+	"github.com/pockode/server/chat"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
@@ -33,11 +32,13 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		return
 	}
 
-	id, history, err := wt.ChatMessagesWatcher.Subscribe(conn, h.state.connID, params.SessionID)
+	notifier := h.state.getNotifier()
+	id, history, err := wt.ChatMessagesWatcher.Subscribe(notifier, params.SessionID)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
+	h.state.trackSubscription(id, wt.ChatMessagesWatcher)
 
 	result := rpc.ChatMessagesSubscribeResult{
 		ID:      id,
@@ -62,29 +63,21 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	proc, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
-	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		return
-	}
-
 	h.recordCommandIfSlash(params.Content)
 
 	log.Info("received prompt", "length", len(params.Content))
 
-	// Persist user message to history
-	event := agent.MessageEvent{Content: params.Content}
-	if err := wt.SessionStore.AppendToHistory(ctx, params.SessionID, agent.NewEventRecord(event)); err != nil {
-		log.Error("failed to append to history", "error", err)
-	}
-
-	if err := proc.SendMessage(params.Content); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+	if err := wt.ChatClient.SendMessage(ctx, params.SessionID, params.Content); err != nil {
+		h.replyErrorForChat(ctx, conn, req.ID, err)
 		return
 	}
 
+	// Notify other clients watching this session (e.g., other tabs)
+	event := agent.MessageEvent{Content: params.Content}
+	wt.ChatMessagesWatcher.NotifyMessage(params.SessionID, event, h.state.getNotifier())
+
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
-		log.Error("failed to send message response", "error", err)
+		log.Error("failed to send response", "error", err)
 	}
 }
 
@@ -97,21 +90,15 @@ func (h *rpcMethodHandler) handleInterrupt(ctx context.Context, conn *jsonrpc2.C
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	proc, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
-	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		return
-	}
-
-	if err := proc.SendInterrupt(); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+	if err := wt.ChatClient.Interrupt(ctx, params.SessionID); err != nil {
+		h.replyErrorForChat(ctx, conn, req.ID, err)
 		return
 	}
 
 	log.Info("sent interrupt")
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
-		log.Error("failed to send interrupt response", "error", err)
+		log.Error("failed to send response", "error", err)
 	}
 }
 
@@ -124,12 +111,6 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	proc, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
-	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		return
-	}
-
 	data := agent.PermissionRequestData{
 		RequestID:             params.RequestID,
 		ToolInput:             params.ToolInput,
@@ -137,21 +118,16 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 		PermissionSuggestions: params.PermissionSuggestions,
 	}
 	choice := parsePermissionChoice(params.Choice)
-	if err := proc.SendPermissionResponse(data, choice); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		return
-	}
 
-	// Persist permission response to history
-	permEvent := agent.PermissionResponseEvent{RequestID: params.RequestID, Choice: params.Choice}
-	if err := wt.SessionStore.AppendToHistory(ctx, params.SessionID, agent.NewEventRecord(permEvent)); err != nil {
-		log.Error("failed to append to history", "error", err)
+	if err := wt.ChatClient.SendPermissionResponse(ctx, params.SessionID, data, choice); err != nil {
+		h.replyErrorForChat(ctx, conn, req.ID, err)
+		return
 	}
 
 	log.Info("sent permission response", "choice", params.Choice)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
-		log.Error("failed to send permission response", "error", err)
+		log.Error("failed to send response", "error", err)
 	}
 }
 
@@ -164,31 +140,29 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	proc, err := h.getOrCreateProcess(ctx, log, wt, params.SessionID)
-	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		return
-	}
-
 	data := agent.QuestionRequestData{
 		RequestID: params.RequestID,
 		ToolUseID: params.ToolUseID,
 	}
-	if err := proc.SendQuestionResponse(data, params.Answers); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		return
-	}
 
-	// Persist question response to history
-	qEvent := agent.QuestionResponseEvent{RequestID: params.RequestID, Answers: params.Answers}
-	if err := wt.SessionStore.AppendToHistory(ctx, params.SessionID, agent.NewEventRecord(qEvent)); err != nil {
-		log.Error("failed to append to history", "error", err)
+	if err := wt.ChatClient.SendQuestionResponse(ctx, params.SessionID, data, params.Answers); err != nil {
+		h.replyErrorForChat(ctx, conn, req.ID, err)
+		return
 	}
 
 	log.Info("sent question response", "cancelled", params.Answers == nil)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
-		log.Error("failed to send question response", "error", err)
+		log.Error("failed to send response", "error", err)
+	}
+}
+
+// replyErrorForChat handles chat-specific errors with appropriate RPC codes.
+func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error) {
+	if errors.Is(err, chat.ErrSessionNotFound) {
+		h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, "session not found")
+	} else {
+		h.replyError(ctx, conn, id, jsonrpc2.CodeInternalError, err.Error())
 	}
 }
 
@@ -224,33 +198,4 @@ func (h *rpcMethodHandler) recordCommandIfSlash(content string) {
 
 func isWhitespace(r rune) bool {
 	return unicode.IsSpace(r)
-}
-
-func (h *rpcMethodHandler) getOrCreateProcess(ctx context.Context, log *slog.Logger, wt *worktree.Worktree, sessionID string) (*process.Process, error) {
-	meta, found, err := wt.SessionStore.Get(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get session: %w", err)
-	}
-	if !found {
-		return nil, fmt.Errorf("session not found: %s", sessionID)
-	}
-
-	resume := meta.Activated
-	proc, created, err := wt.ProcessManager.GetOrCreateProcess(ctx, sessionID, resume, meta.Mode)
-	if err != nil {
-		return nil, err
-	}
-
-	// Mark as activated on first process creation
-	if created && !resume {
-		if err := wt.SessionStore.Activate(ctx, sessionID); err != nil {
-			log.Error("failed to activate session", "error", err)
-		}
-	}
-
-	if created {
-		log.Info("process created", "resume", resume, "mode", meta.Mode)
-	}
-
-	return proc, nil
 }
