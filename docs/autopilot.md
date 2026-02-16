@@ -1,20 +1,20 @@
 # Autopilot
 
-Ticket-driven autonomous development.
+Task-driven autonomous development.
 
 ## Concept
 
-Agents coordinate through tickets. Each agent works autonomously; users observe via Chat UI.
+Agents coordinate through tasks. Each agent works autonomously; users observe via Chat UI.
 
 ```
 User: "Build auth feature"
               │
               ▼
         ┌───────────┐
-        │ PM Ticket │ open → in_progress → done → closed
+        │  PM Task  │ open → in_progress → done → closed
         │ (parent)  │
         └─────┬─────┘
-              │ creates sub-tickets
+              │ creates subtasks
     ┌─────────┼─────────┐
     ▼         ▼         ▼
 ┌────────┐ ┌────────┐ ┌────────┐
@@ -28,27 +28,27 @@ User: "Build auth feature"
 ### Key Principles
 
 - **No special agent types** — PM behavior comes from role prompts, not system logic
-- **Any ticket can have sub-tickets** — Nesting depth unlimited
+- **Any task can have subtasks** — Nesting depth unlimited
 - **Roles are user-defined** — System provides presets, users customize freely
-- **Comments as shared context** — Agents communicate via parent ticket's comments
+- **Comments as shared context** — Agents communicate via parent task's comments
 
 ## Data Model
 
-### Ticket
+### Task
 
 ```
-tickets/index.json
+tasks/index.json
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | id | string | UUID |
-| parent_id | string? | Parent ticket ID (for sub-tickets) |
-| title | string | Task title |
+| parent_id | string? | Parent task ID (for subtasks) |
+| title | string | Short title |
 | description | string | Detailed instructions for agent |
 | role_id | string | Reference to AgentRole |
 | status | enum | See status lifecycle below |
-| priority | int | Sort order for open tickets (lower = higher priority) |
+| priority | int | Sort order for open tasks (lower = higher priority) |
 | session_id | string? | Linked session (set when started) |
 | created_at | time | |
 | updated_at | time | |
@@ -74,28 +74,28 @@ open → in_progress → done → closed
 
 **Transition rules** (system-controlled):
 - `done` → `in_progress`: When child completes, parent is reactivated for review
-- `done` → `closed`: When all sub-tickets are `closed` (or no sub-tickets)
+- `done` → `closed`: When all subtasks are `closed` (or no subtasks)
 - `failed` / `needs_review` → any: Manual user action only
 - Parent cycles between `done` (waiting) and `in_progress` (reviewing) until all children complete
 
 ### Comment
 
 ```
-tickets/{ticket_id}/comments.json
+tasks/{task_id}/comments.json
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | id | string | UUID |
-| ticket_id | string | The ticket this comment belongs to |
-| author_ticket_id | string? | Which ticket's agent posted this |
+| task_id | string | The task this comment belongs to |
+| author_task_id | string? | Which task's agent posted this |
 | author_role | string | Display name (e.g., "Designer") |
 | content | string | Message content |
 | created_at | time | |
 
 **Comment placement**:
-- Sub-tickets post to **parent ticket** for sibling communication
-- Comments are for passing information to other agents (siblings or future sub-tickets)
+- Subtasks post to **parent task** for sibling communication
+- Comments are for passing information to other agents (siblings or future subtasks)
 
 Example flow:
 1. Designer posts to parent: "UI specs at /designs/auth.fig"
@@ -117,34 +117,34 @@ agent_roles.json
 
 | Role | Purpose |
 |------|---------|
-| Project Manager | Breaks down tasks, creates sub-tickets, monitors progress |
+| Project Manager | Breaks down tasks, creates subtasks, monitors progress |
 | Engineer | Implements features, fixes bugs |
 | Designer | Creates UI/UX designs |
 | Reviewer | Reviews code, provides feedback |
 
 ## RPC Methods
 
-### Ticket
+### Task
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `ticket.create` | `{title, description, role_id, parent_id?, priority?}` | Ticket |
-| `ticket.update` | `{ticket_id, title?, description?, priority?}` | Ticket |
-| `ticket.delete` | `{ticket_id}` | `{}` |
-| `ticket.start` | `{ticket_id}` | `{session_id}` |
-| `ticket.list.subscribe` | `{}` | `{id, tickets}` |
-| `ticket.list.unsubscribe` | `{id}` | `{}` |
+| `task.create` | `{title, description, role_id, parent_id?, priority?}` | Task |
+| `task.update` | `{task_id, title?, description?, priority?}` | Task |
+| `task.delete` | `{task_id}` | `{}` |
+| `task.start` | `{task_id}` | `{session_id}` |
+| `task.list.subscribe` | `{}` | `{id, tasks}` |
+| `task.list.unsubscribe` | `{id}` | `{}` |
 
-Note: Status transitions are system-controlled. Use `ticket.start` to begin (open → in_progress). Other transitions happen automatically when agents mark done.
+Note: Status transitions are system-controlled. Use `task.start` to begin (open → in_progress). Other transitions happen automatically when agents mark done.
 
 ### Comment
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `ticket.comment.list` | `{ticket_id}` | `{comments}` |
-| `ticket.comment.create` | `{ticket_id, content}` | Comment |
+| `task.comment.list` | `{task_id}` | `{comments}` |
+| `task.comment.create` | `{task_id, content}` | Comment |
 
-Note: `author_ticket_id` and `author_role` are auto-populated from agent context (TICKET_ID).
+Note: `author_task_id` and `author_role` are auto-populated from agent context (TASK_ID).
 
 ### Agent Role
 
@@ -159,33 +159,33 @@ Note: `author_ticket_id` and `author_role` are auto-populated from agent context
 
 | Method | Params |
 |--------|--------|
-| `ticket.list.changed` | `{id, operation, ticket?}` or `{id, operation, ticketId}` |
+| `task.list.changed` | `{id, operation, task?}` or `{id, operation, taskId}` |
 
 ## Code Structure
 
 Structure details are implementation concerns. See actual files:
 
-**Backend**: `server/ticket/`, `server/mcp/`, `server/watch/`, `server/ws/`
+**Backend**: `server/task/`, `server/mcp/`, `server/watch/`, `server/ws/`
 
-**Frontend**: `web/src/lib/ticketStore.ts`, `web/src/components/Team/`
+**Frontend**: `web/src/lib/taskStore.ts`, `web/src/components/Autopilot/`
 
 ## Execution Flow
 
 ### Manual Start (User-initiated)
 
-1. User clicks "Start" on an open ticket
+1. User clicks "Start" on an open task
 2. Backend creates new Session
-3. Backend updates ticket: status → in_progress, session_id set
+3. Backend updates task: status → in_progress, session_id set
 4. Backend sends initial message (description or title) with system prompt + role_prompt
 
-### Sub-ticket Lifecycle
+### Subtask Lifecycle
 
 ```
-Parent (PM role)                    Sub-tickets
-─────────────────                   ────────────
+Parent (PM role)                    Subtasks
+─────────────────                   ────────
 1. Started by user (in_progress)
 2. Analyzes task
-3. Creates sub-tickets ──────────→  [Designer: open, prio:0]
+3. Creates subtasks ─────────────→  [Designer: open, prio:0]
    (via MCP tool)                   [Engineer: open, prio:1]
 4. Marks self done                  [Reviewer: open, prio:2]
          │
@@ -193,26 +193,26 @@ Parent (PM role)                    Sub-tickets
    (Parent: done)
          │
 5. System auto-starts ─────────────→  Designer starts (in_progress)
-   first open sub-ticket                  │
+   first open subtask                     │
                                     Designer works...
                                     Designer marks done
                                           │
-                                    Designer marks done (no sub-tickets)
+                                    Designer marks done (no subtasks)
                                           │
 6. System sets Designer: closed ←─────  Designer: closed
    System sets Parent: in_progress
    System sends chat to Parent session:
-   "Designer completed. Check comments and adjust sub-tickets if needed.
+   "Designer completed. Check comments and adjust subtasks if needed.
     If no issues, simply finish. Lifecycle is managed automatically."
          │
 7. Parent reviews (in_progress)
    - Reads comments
-   - If adjustment needed: creates/modifies tickets
+   - If adjustment needed: creates/modifies tasks
    - Marks self done
          │
          ▼
 8. System auto-starts ─────────────→  Engineer starts
-   next open sub-ticket                   │
+   next open subtask                      │
    ...repeat...                           │
                                           │
 9. Last child closed, Parent reviews     Reviewer: closed
@@ -224,49 +224,49 @@ Parent (PM role)                    Sub-tickets
 
 ### System-controlled Transitions
 
-The system (not agents) controls ticket lifecycle:
+The system (not agents) controls task lifecycle:
 
 | Event | System Action |
 |-------|---------------|
-| Ticket marks `done` with no sub-tickets | Set ticket to `closed` |
-| Ticket marks `done` with open sub-tickets | Start first open sub-ticket |
+| Task marks `done` with no subtasks | Set task to `closed` |
+| Task marks `done` with open subtasks | Start first open subtask |
 | Child becomes `closed` | Set parent to `in_progress`, send review chat |
-| Parent marks `done` with open children | Start next open sub-ticket |
+| Parent marks `done` with open children | Start next open subtask |
 | Parent marks `done` with all children `closed` | Set parent to `closed` |
 
-**Key insight**: Agents only call `ticket_mark_done`. All other transitions (`closed`, `in_progress` during review) are system-controlled.
+**Key insight**: Agents only call `task_mark_done`. All other transitions (`closed`, `in_progress` during review) are system-controlled.
 
 ### Session Lifecycle
 
 | Condition at `done` | Session behavior |
 |---------------------|------------------|
-| Has open/in_progress sub-tickets | Session stays alive, awaits child completion notifications |
-| No sub-tickets (or all closed) | Session terminated |
+| Has open/in_progress subtasks | Session stays alive, awaits child completion notifications |
+| No subtasks (or all closed) | Session terminated |
 
 **Key distinction**:
-- **Has sub-tickets**: `done` → system starts first child → child closes → system sets `in_progress` → agent reviews and marks `done` → system starts next child → repeat until all children closed → system sets `closed` → session terminated
-- **No sub-tickets**: `done` → system sets `closed` → session terminated
+- **Has subtasks**: `done` → system starts first child → child closes → system sets `in_progress` → agent reviews and marks `done` → system starts next child → repeat until all children closed → system sets `closed` → session terminated
+- **No subtasks**: `done` → system sets `closed` → session terminated
 
-Note: The system checks for sub-tickets at the moment of `done` transition. If an agent creates sub-tickets, it should do so before marking itself done.
+Note: The system checks for subtasks at the moment of `done` transition. If an agent creates subtasks, it should do so before marking itself done.
 
 ### Parent Notification
 
-When a sub-ticket becomes `closed` (done with no sub-tickets → auto-closed):
+When a subtask becomes `closed` (done with no subtasks → auto-closed):
 1. System sets parent to `in_progress` and sends message to parent's session
 2. Parent agent reviews output (via comments)
-3. If adjustment needed: parent creates/modifies tickets
+3. If adjustment needed: parent creates/modifies tasks
 4. Parent marks self as `done`
 5. System starts next open child (or closes parent if all children closed)
 
 **If parent session is terminated** (edge case):
-- Sub-ticket remains in `done` status
+- Subtask remains in `done` status
 - No automatic progression occurs
-- User can manually start the parent session, or manually manage tickets via UI
+- User can manually start the parent session, or manually manage tasks via UI
 - This prevents unsupervised progression and maintains human oversight
 
 ## MCP Integration
 
-Agents access tickets via MCP tools. The `pockode mcp` subcommand runs an MCP server (stdio transport).
+Agents access tasks via MCP tools. The `pockode mcp` subcommand runs an MCP server (stdio transport).
 
 ### Tools
 
@@ -274,39 +274,39 @@ Agents access tickets via MCP tools. The `pockode mcp` subcommand runs an MCP se
 
 | Tool | Description |
 |------|-------------|
-| `ticket_list` | List all tickets |
-| `ticket_get` | Get single ticket by ID |
-| `ticket_comment_list` | List comments on a ticket |
+| `task_list` | List all tasks |
+| `task_get` | Get single task by ID |
+| `task_comment_list` | List comments on a task |
 | `role_list` | List available agent roles |
 
 **Write operations** (constrained actions):
 
 | Tool | Description |
 |------|-------------|
-| `ticket_create` | Create sub-ticket under current ticket |
-| `ticket_mark_done` | Mark own ticket as done |
-| `ticket_mark_failed` | Mark own ticket as failed (with error message) |
-| `ticket_request_review` | Mark own ticket as needs_review (with reason) |
-| `ticket_comment_create` | Post comment to parent ticket |
+| `task_create` | Create subtask under current task |
+| `task_mark_done` | Mark own task as done |
+| `task_mark_failed` | Mark own task as failed (with error message) |
+| `task_request_review` | Mark own task as needs_review (with reason) |
+| `task_comment_create` | Post comment to parent task |
 
 **Status transitions** (all system-controlled except agent-initiated):
-- `done`: Agent calls `ticket_mark_done`
-- `failed`: Agent calls `ticket_mark_failed`
-- `needs_review`: Agent calls `ticket_request_review`
+- `done`: Agent calls `task_mark_done`
+- `failed`: Agent calls `task_mark_failed`
+- `needs_review`: Agent calls `task_request_review`
 - `in_progress`: System sets when child closes (for parent review)
-- `closed`: System sets when ticket marks done with no sub-tickets, or all children closed
+- `closed`: System sets when task marks done with no subtasks, or all children closed
 
-**Design rationale**: Agents only mark themselves `done`. System controls all other transitions based on session state and ticket relationships.
+**Design rationale**: Agents only mark themselves `done`. System controls all other transitions based on session state and task relationships.
 
 ### Agent Context
 
 When an agent session starts, it receives context via system prompt:
-- `TICKET_ID`: The agent's own ticket ID
-- `PARENT_TICKET_ID`: Parent ticket ID (if sub-ticket)
+- `TASK_ID`: The agent's own task ID
+- `PARENT_TASK_ID`: Parent task ID (if subtask)
 
 This allows agents to:
-- Update their own ticket status
-- Post comments to parent ticket (for sibling communication)
+- Update their own task status
+- Post comments to parent task (for sibling communication)
 
 ### Configuration
 
@@ -315,24 +315,24 @@ Claude receives MCP config via `--mcp-config`:
 ```json
 {
   "mcpServers": {
-    "pockode-ticket": {
+    "pockode-task": {
       "command": "/path/to/pockode",
       "args": ["mcp"],
       "env": {
         "POCKODE_DATA_DIR": "/path/to/data",
-        "POCKODE_TICKET_ID": "<ticket-id>",
-        "POCKODE_PARENT_TICKET_ID": "<parent-ticket-id>"
+        "POCKODE_TASK_ID": "<task-id>",
+        "POCKODE_PARENT_TASK_ID": "<parent-task-id>"
       }
     }
   }
 }
 ```
 
-The `POCKODE_TICKET_ID` and `POCKODE_PARENT_TICKET_ID` environment variables are set dynamically when starting an agent session. MCP handlers use these to auto-populate comment author info.
+The `POCKODE_TASK_ID` and `POCKODE_PARENT_TASK_ID` environment variables are set dynamically when starting an agent session. MCP handlers use these to auto-populate comment author info.
 
 ### Sync
 
-FileStore uses fsnotify to detect external changes (from MCP). When MCP modifies tickets, the WebSocket server reloads and notifies connected clients.
+FileStore uses fsnotify to detect external changes (from MCP). When MCP modifies tasks, the WebSocket server reloads and notifies connected clients.
 
 ## Priority System
 
@@ -340,14 +340,14 @@ FileStore uses fsnotify to detect external changes (from MCP). When MCP modifies
 
 - Lower value = higher priority (0 is highest)
 - Priority is **scoped to parent** — siblings compete within the same parent
-- Root tickets (no parent) share a global priority space
-- Only `open` tickets are sorted by priority
-- `in_progress` and `done` tickets are sorted by `updated_at` descending
+- Root tasks (no parent) share a global priority space
+- Only `open` tasks are sorted by priority
+- `in_progress` and `done` tasks are sorted by `updated_at` descending
 
 ### Auto-assignment
 
-When creating a ticket without specifying priority:
-- New priority = max(priority of sibling open tickets) + 1
+When creating a task without specifying priority:
+- New priority = max(priority of sibling open tasks) + 1
 - If no open siblings exist, priority = 0
 
 ### MCP Usage
@@ -366,26 +366,26 @@ To prevent runaway execution:
 
 | Limit | Default | Description |
 |-------|---------|-------------|
-| `MAX_SUBTICKET_DEPTH` | 5 | Maximum nesting depth |
-| `MAX_SUBTICKETS_PER_PARENT` | 20 | Maximum children per ticket |
-| `TICKET_TIMEOUT_MINUTES` | 30 | Auto-fail if in_progress exceeds this |
-| `MAX_REVIEW_CYCLES` | 10 | Max done→in_progress cycles per ticket |
+| `MAX_SUBTASK_DEPTH` | 5 | Maximum nesting depth |
+| `MAX_SUBTASKS_PER_PARENT` | 20 | Maximum children per task |
+| `TASK_TIMEOUT_MINUTES` | 30 | Auto-fail if in_progress exceeds this |
+| `MAX_REVIEW_CYCLES` | 10 | Max done→in_progress cycles per task |
 
 When limits are exceeded:
-- Depth/count limits: `ticket_create` returns error
-- Timeout: System sets ticket to `failed` with timeout message
-- Review cycles: System sets ticket to `needs_review`
+- Depth/count limits: `task_create` returns error
+- Timeout: System sets task to `failed` with timeout message
+- Review cycles: System sets task to `needs_review`
 
 ## Design Decisions
 
 - **Store interface decoupled from transport** — Same Store used by WebSocket RPC and MCP
-- **Tickets are global** (not per-worktree) — Single ticket store at Manager level
+- **Tasks are global** (not per-worktree) — Single task store at Manager level
 - **Roles are also global** — Shared across worktrees
 - **Prompt composition** — System prompt (Pockode) + Role prompt (user-defined)
 - **No special agent types** — PM vs Worker distinction is purely in role prompts
-- **Comments on parent ticket** — Siblings communicate via shared board, not direct messaging
-- **Sequential sub-ticket execution** — One sub-ticket at a time; parallel execution not supported in v1
-- **Parent supervision required** — Sub-tickets don't auto-progress; parent reviews each before system closes
+- **Comments on parent task** — Siblings communicate via shared board, not direct messaging
+- **Sequential subtask execution** — One subtask at a time; parallel execution not supported in v1
+- **Parent supervision required** — Subtasks don't auto-progress; parent reviews each before system closes
 - **Constrained interfaces** — Both RPC and MCP restrict status changes; system controls transitions
 - **Fail-safe defaults** — Timeouts and limits prevent infinite loops and resource exhaustion
 
@@ -393,9 +393,9 @@ When limits are exceeded:
 
 ### System Prompt (provided by Pockode)
 
-Pockode injects a base system prompt that teaches agents how to use the ticket system:
-- Available MCP tools (ticket_create, ticket_mark_done, ticket_comment_create, etc.)
-- TICKET_ID and PARENT_TICKET_ID context
+Pockode injects a base system prompt that teaches agents how to use the task system:
+- Available MCP tools (task_create, task_mark_done, task_comment_create, etc.)
+- TASK_ID and PARENT_TASK_ID context
 - Basic workflow conventions
 
 ### Role Prompt (user-defined)
@@ -405,19 +405,19 @@ Each AgentRole has a `role_prompt` that defines role-specific behavior. Examples
 ### For PM-like roles
 
 ```
-You coordinate work by creating and managing sub-tickets.
+You coordinate work by creating and managing subtasks.
 
 Workflow:
-1. Analyze the task and break it into sub-tickets
-2. Create sub-tickets with appropriate roles and priorities
-3. Mark yourself as done (system will auto-start first sub-ticket)
-4. When notified of sub-ticket completion:
+1. Analyze the task and break it into subtasks
+2. Create subtasks with appropriate roles and priorities
+3. Mark yourself as done (system will auto-start first subtask)
+4. When notified of subtask completion:
    - Review the work (check comments for outputs)
-   - If adjustment needed: create new tickets or modify priorities
+   - If adjustment needed: create new tasks or modify priorities
    - Mark yourself as done (system closes child and proceeds)
-5. System closes you automatically when all sub-tickets complete
+5. System closes you automatically when all subtasks complete
 
-Use comments to provide guidance to sub-ticket agents.
+Use comments to provide guidance to subtask agents.
 ```
 
 ### For Worker roles
@@ -426,7 +426,7 @@ Use comments to provide guidance to sub-ticket agents.
 You work on assigned tasks and report via comments.
 
 Workflow:
-1. Check parent ticket's comments for context from other agents
+1. Check parent task's comments for context from other agents
 2. Do your work
 3. Post results to comments (file paths, PR numbers, etc.)
 4. Mark yourself as done (this ends your session)
@@ -449,8 +449,8 @@ Example comment: "UI design complete. See /designs/auth-flow.fig"
 
 ### What This Does NOT Do (v1)
 
-- **Parallel execution**: Sub-tickets run sequentially, not concurrently
-- **Cross-project coordination**: Tickets are per-project, no global orchestration
+- **Parallel execution**: Subtasks run sequentially, not concurrently
+- **Cross-project coordination**: Tasks are per-project, no global orchestration
 - **Automatic quality gates**: No built-in testing/validation between steps
 
 ### Complexity Trade-off
@@ -459,11 +459,11 @@ This feature adds complexity. Consider whether simpler alternatives suffice:
 
 | Need | Simpler Alternative |
 |------|---------------------|
-| Run multiple tasks | Manual ticket creation, no PM |
+| Run multiple tasks | Manual task creation, no PM |
 | Handoff context | Single long-running session with checkpoints |
-| Task breakdown | User creates sub-tickets manually |
+| Task breakdown | User creates subtasks manually |
 
-The PM/sub-ticket model is valuable when:
+The PM/subtask model is valuable when:
 - Tasks are large enough to benefit from decomposition
 - Different roles genuinely need different prompts
 - User wants to observe without constant intervention

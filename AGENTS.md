@@ -17,7 +17,7 @@ Pockode 是一个移动端编程平台，核心理念是「AI 编辑为主，手
 
 ## 機能ドキュメント
 
-- [Autopilot](docs/autopilot.md) — Ticket 駆動の自動開発機能
+- [Autopilot](docs/autopilot.md) — Task 駆動の自動開発機能
 
 ## 项目结构
 
