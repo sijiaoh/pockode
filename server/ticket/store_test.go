@@ -113,6 +113,44 @@ func TestFileStore_CRUD(t *testing.T) {
 			t.Errorf("got error %v, want %v", err, ErrTicketNotFound)
 		}
 	})
+
+	t.Run("DeleteByStatus", func(t *testing.T) {
+		store2, _ := NewFileStore(t.TempDir())
+		store2.Create(ctx, "", "Open 1", "", "role-1", nil)
+		store2.Create(ctx, "", "Open 2", "", "role-1", nil)
+		t3, _ := store2.Create(ctx, "", "Done", "", "role-1", nil)
+		done := TicketStatusDone
+		store2.Update(ctx, t3.ID, TicketUpdate{Status: &done})
+
+		count, err := store2.DeleteByStatus(ctx, TicketStatusOpen)
+		if err != nil {
+			t.Fatalf("DeleteByStatus: %v", err)
+		}
+		if count != 2 {
+			t.Errorf("deleted count = %d, want 2", count)
+		}
+
+		tickets, _ := store2.List()
+		if len(tickets) != 1 {
+			t.Errorf("remaining tickets = %d, want 1", len(tickets))
+		}
+		if tickets[0].Status != TicketStatusDone {
+			t.Errorf("remaining ticket status = %v, want %v", tickets[0].Status, TicketStatusDone)
+		}
+	})
+
+	t.Run("DeleteByStatus no match", func(t *testing.T) {
+		store3, _ := NewFileStore(t.TempDir())
+		store3.Create(ctx, "", "Open", "", "role-1", nil)
+
+		count, err := store3.DeleteByStatus(ctx, TicketStatusDone)
+		if err != nil {
+			t.Fatalf("DeleteByStatus: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("deleted count = %d, want 0", count)
+		}
+	})
 }
 
 func TestFileStore_Persistence(t *testing.T) {

@@ -27,6 +27,7 @@ type Store interface {
 	Create(ctx context.Context, parentID, title, description, roleID string, priority *int) (Ticket, error)
 	Update(ctx context.Context, ticketID string, updates TicketUpdate) (Ticket, error)
 	Delete(ctx context.Context, ticketID string) error
+	DeleteByStatus(ctx context.Context, status TicketStatus) (int, error)
 	SetOnChangeListener(listener OnChangeListener)
 }
 
@@ -419,4 +420,38 @@ func (s *FileStore) Delete(ctx context.Context, ticketID string) error {
 
 	s.notifyChange(TicketChangeEvent{Op: OperationDelete, Ticket: deleted})
 	return nil
+}
+
+func (s *FileStore) DeleteByStatus(ctx context.Context, status TicketStatus) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var deleted []Ticket
+	newTickets := make([]Ticket, 0, len(s.tickets))
+	for _, t := range s.tickets {
+		if t.Status != status {
+			newTickets = append(newTickets, t)
+		} else {
+			deleted = append(deleted, t)
+		}
+	}
+
+	if len(deleted) == 0 {
+		return 0, nil
+	}
+
+	s.tickets = newTickets
+
+	if err := s.persistIndex(); err != nil {
+		return 0, err
+	}
+
+	for _, t := range deleted {
+		s.notifyChange(TicketChangeEvent{Op: OperationDelete, Ticket: t})
+	}
+	return len(deleted), nil
 }

@@ -122,6 +122,24 @@ func (s *Server) handleTicketDelete(ctx context.Context, req mcp.CallToolRequest
 	return mcp.NewToolResultText(`{"success":true}`), nil
 }
 
+func (s *Server) handleTicketDeleteByStatus(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	statusStr, err := req.RequireString("status")
+	if err != nil {
+		return ValidationError("status is required"), nil
+	}
+
+	status := ticket.TicketStatus(statusStr)
+	if !status.IsValid() {
+		return ValidationError("invalid status: " + statusStr), nil
+	}
+
+	count, err := s.ticketStore.DeleteByStatus(ctx, status)
+	if err != nil {
+		return InternalError(err), nil
+	}
+	return jsonResult(map[string]int{"deleted_count": count})
+}
+
 func (s *Server) handleRoleList(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	roles, err := s.roleStore.List()
 	if err != nil {

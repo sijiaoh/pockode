@@ -12,6 +12,7 @@ func (s *Server) registerTools() {
 	s.mcpServer.AddTool(ticketCreateTool(), s.handleTicketCreate)
 	s.mcpServer.AddTool(ticketUpdateTool(), s.handleTicketUpdate)
 	s.mcpServer.AddTool(ticketDeleteTool(), s.handleTicketDelete)
+	s.mcpServer.AddTool(ticketDeleteByStatusTool(), s.handleTicketDeleteByStatus)
 }
 
 func ticketListTool() mcp.Tool {
@@ -66,6 +67,15 @@ func ticketDeleteTool() mcp.Tool {
 		mcp.WithDescription("Delete a ticket permanently."),
 		mcp.WithString("ticket_id", mcp.Required(),
 			mcp.Description("Ticket ID to delete")),
+	)
+}
+
+func ticketDeleteByStatusTool() mcp.Tool {
+	return mcp.NewTool("ticket_delete_by_status",
+		mcp.WithDescription("Delete all tickets with the specified status."),
+		mcp.WithString("status", mcp.Required(),
+			mcp.Enum("open", "in_progress", "done"),
+			mcp.Description("Status of tickets to delete")),
 	)
 }
 
