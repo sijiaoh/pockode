@@ -1,6 +1,7 @@
 import { ArrowDown } from "lucide-react";
 import { forwardRef, useCallback, useRef, useState } from "react";
 import { type Components, Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import type {
 	AskUserQuestionRequest,
 	Message,
@@ -19,6 +20,7 @@ interface Props {
 		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
+	onHintClick?: (hint: string) => void;
 }
 
 // Custom scroller: prevent horizontal overflow
@@ -50,7 +52,9 @@ function MessageList({
 	isProcessRunning,
 	onPermissionRespond,
 	onQuestionRespond,
+	onHintClick,
 }: Props) {
+	const { EmptyState: CustomEmptyState } = useChatUIConfig();
 	const virtuosoRef = useRef<VirtuosoHandle>(null);
 	const [showScrollButton, setShowScrollButton] = useState(false);
 	const isAtBottomRef = useRef(true);
@@ -100,6 +104,9 @@ function MessageList({
 	);
 
 	if (messages.length === 0) {
+		if (CustomEmptyState) {
+			return <CustomEmptyState onHintClick={onHintClick} />;
+		}
 		return (
 			<div className="flex min-h-0 flex-1 items-center justify-center text-th-text-muted">
 				<p>Start a conversation...</p>
