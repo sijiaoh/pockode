@@ -28,7 +28,7 @@ User: "Build auth feature"
 ### Key Principles
 
 - **No special agent types** — PM behavior comes from role prompts, not system logic
-- **Any task can have subtasks** — Nesting depth unlimited
+- **Any task can have subtasks** — Nested hierarchy supported
 - **Roles are user-defined** — System provides presets, users customize freely
 - **Comments as shared context** — Agents communicate via parent task's comments
 
@@ -65,8 +65,8 @@ open → in_progress → done → closed
 |--------|-------------|
 | `open` | Not started |
 | `in_progress` | Agent working |
-| `done` | Agent's own work complete (may still have open sub-tickets) |
-| `closed` | Fully complete (self + all sub-tickets) |
+| `done` | Agent's own work complete (may still have open subtasks) |
+| `closed` | Fully complete (self + all subtasks) |
 | `failed` | Agent encountered unrecoverable error |
 | `needs_review` | Agent requests human review before proceeding |
 
@@ -195,8 +195,6 @@ Parent (PM role)                    Subtasks
 5. System auto-starts ─────────────→  Designer starts (in_progress)
    first open subtask                     │
                                     Designer works...
-                                    Designer marks done
-                                          │
                                     Designer marks done (no subtasks)
                                           │
 6. System sets Designer: closed ←─────  Designer: closed
@@ -259,9 +257,10 @@ When a subtask becomes `closed` (done with no subtasks → auto-closed):
 5. System starts next open child (or closes parent if all children closed)
 
 **If parent session is terminated** (edge case):
-- Subtask remains in `done` status
-- No automatic progression occurs
-- User can manually start the parent session, or manually manage tasks via UI
+- Subtask becomes `closed` as normal
+- Parent cannot be notified (session gone)
+- No automatic progression to next subtask
+- User must manually restart parent session or manage tasks via UI
 - This prevents unsupervised progression and maintains human oversight
 
 ## MCP Integration
@@ -283,7 +282,7 @@ Agents access tasks via MCP tools. The `pockode mcp` subcommand runs an MCP serv
 
 | Tool | Description |
 |------|-------------|
-| `task_create` | Create subtask under current task |
+| `task_create` | Create subtask under current task (root tasks are created via UI/RPC only) |
 | `task_mark_done` | Mark own task as done |
 | `task_mark_failed` | Mark own task as failed (with error message) |
 | `task_request_review` | Mark own task as needs_review (with reason) |
@@ -414,7 +413,7 @@ Workflow:
 4. When notified of subtask completion:
    - Review the work (check comments for outputs)
    - If adjustment needed: create new tasks or modify priorities
-   - Mark yourself as done (system closes child and proceeds)
+   - Mark yourself as done (system starts next subtask)
 5. System closes you automatically when all subtasks complete
 
 Use comments to provide guidance to subtask agents.
