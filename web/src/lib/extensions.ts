@@ -1,4 +1,8 @@
-import { resetChatUIConfig, setChatUIConfig, type ChatUIConfig } from "./registries/chatUIRegistry";
+import {
+	type ChatUIConfig,
+	resetChatUIConfig,
+	setChatUIConfig,
+} from "./registries/chatUIRegistry";
 import {
 	DEFAULT_PRIORITY,
 	registerSettingsSection,
