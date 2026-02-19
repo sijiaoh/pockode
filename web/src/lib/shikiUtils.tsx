@@ -79,13 +79,19 @@ export function CodeHighlighter({
 	const isDesktop = useIsDesktop();
 	const fontSize = isDesktop ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
 	const [copied, setCopied] = React.useState(false);
+	const timerRef = React.useRef<number>();
 
 	const highlighted = useShikiHighlighter(children, language, cssVarTheme);
+
+	React.useEffect(() => {
+		return () => clearTimeout(timerRef.current);
+	}, []);
 
 	const handleCopy = async () => {
 		await navigator.clipboard.writeText(children);
 		setCopied(true);
-		setTimeout(() => setCopied(false), 2000);
+		clearTimeout(timerRef.current);
+		timerRef.current = window.setTimeout(() => setCopied(false), 2000);
 	};
 
 	const style = { "--code-font-size": `${fontSize}px` } as React.CSSProperties;
