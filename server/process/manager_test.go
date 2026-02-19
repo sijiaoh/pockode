@@ -301,13 +301,13 @@ func TestProcess_SetIdle_EmitsStateChange(t *testing.T) {
 	proc.SetRunning()
 
 	// SetIdle should emit idle
-	proc.SetIdle()
+	proc.SetIdle(false)
 	if len(events) != 3 || events[2].State != ProcessStateIdle {
 		t.Errorf("expected idle event, got %v", events)
 	}
 
 	// Duplicate SetIdle should not emit
-	proc.SetIdle()
+	proc.SetIdle(false)
 	if len(events) != 3 {
 		t.Errorf("expected no duplicate event, got %d events", len(events))
 	}

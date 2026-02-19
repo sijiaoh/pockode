@@ -1,6 +1,6 @@
 import { FolderOpen, GitCompare, MessageSquare } from "lucide-react";
 import { useCallback, useMemo } from "react";
-import { unreadActions, useHasAnyUnread } from "../../lib/unreadStore";
+import { useSessionStore } from "../../lib/sessionStore";
 import { FilesTab } from "../Files";
 import { DiffTab } from "../Git";
 import { TabbedSidebar, type TabConfig } from "../Layout";
@@ -38,7 +38,9 @@ function SessionSidebar({
 	activeFilePath,
 	isDesktop,
 }: Props) {
-	const hasAnyUnread = useHasAnyUnread();
+	const hasAnyUnread = useSessionStore((s) =>
+		s.sessions.some((sess) => sess.unread),
+	);
 
 	const tabs: TabConfig[] = useMemo(
 		() => [
@@ -56,7 +58,6 @@ function SessionSidebar({
 
 	const handleSelectSession = useCallback(
 		(id: string) => {
-			unreadActions.markRead(id);
 			onSelectSession(id);
 			if (!isDesktop) onClose();
 		},

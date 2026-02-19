@@ -20,8 +20,9 @@ const (
 )
 
 type StateChangeEvent struct {
-	SessionID string
-	State     ProcessState
+	SessionID  string
+	State      ProcessState
+	NeedsInput bool
 }
 
 // Manager manages agent processes.
@@ -84,9 +85,9 @@ func (m *Manager) SetOnStateChange(fn func(StateChangeEvent)) {
 	m.onStateChange = fn
 }
 
-func (m *Manager) emitStateChange(sessionID string, state ProcessState) {
+func (m *Manager) emitStateChange(sessionID string, state ProcessState, needsInput bool) {
 	if m.onStateChange != nil {
-		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: state})
+		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: state, NeedsInput: needsInput})
 	}
 }
 
@@ -103,10 +104,10 @@ func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent) {
 // GetOrCreateProcess returns an existing process or creates a new one.
 func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resume bool, mode session.Mode) (*Process, bool, error) {
 	m.processesMu.Lock()
-	defer m.processesMu.Unlock()
 
 	if proc, exists := m.processes[sessionID]; exists {
 		proc.touch()
+		m.processesMu.Unlock()
 		return proc, false, nil
 	}
 
@@ -119,6 +120,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 	}
 	sess, err := m.agent.Start(m.ctx, opts)
 	if err != nil {
+		m.processesMu.Unlock()
 		return nil, false, err
 	}
 
@@ -138,13 +140,16 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 				logger.LogPanic(r, "session crashed", "sessionId", sessionID)
 			}
 			m.remove(sessionID)
-			m.emitStateChange(sessionID, ProcessStateEnded)
+			m.emitStateChange(sessionID, ProcessStateEnded, false)
 			slog.Info("process ended", "sessionId", sessionID)
 		}()
 		proc.streamEvents(m.ctx)
 	}()
 
-	m.emitStateChange(sessionID, ProcessStateIdle)
+	m.processesMu.Unlock()
+
+	// Emit after releasing processesMu — callbacks may acquire it.
+	m.emitStateChange(sessionID, ProcessStateIdle, false)
 	slog.Info("process created", "sessionId", sessionID, "resume", resume, "mode", mode)
 	return proc, true, nil
 }
@@ -327,16 +332,17 @@ func (p *Process) SetRunning() {
 		return
 	}
 	p.setState(ProcessStateRunning)
-	p.manager.emitStateChange(p.sessionID, ProcessStateRunning)
+	p.manager.emitStateChange(p.sessionID, ProcessStateRunning, false)
 }
 
 // SetIdle transitions the process to idle state and notifies subscribers.
-func (p *Process) SetIdle() {
+// needsInput indicates whether the AI is waiting for user input (permission/question).
+func (p *Process) SetIdle(needsInput bool) {
 	if p.State() == ProcessStateIdle {
 		return
 	}
 	p.setState(ProcessStateIdle)
-	p.manager.emitStateChange(p.sessionID, ProcessStateIdle)
+	p.manager.emitStateChange(p.sessionID, ProcessStateIdle, needsInput)
 }
 
 // streamEvents routes events to history and emits to the event listener.
@@ -358,7 +364,9 @@ func (p *Process) streamEvents(ctx context.Context) {
 		}
 
 		if eventType.AwaitsUserInput() {
-			p.SetIdle()
+			needsInput := eventType == agent.EventTypePermissionRequest ||
+				eventType == agent.EventTypeAskUserQuestion
+			p.SetIdle(needsInput)
 			if err := p.sessionStore.Touch(ctx, p.sessionID); err != nil {
 				log.Error("failed to touch session", "error", err)
 			}

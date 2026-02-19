@@ -27,13 +27,18 @@ func (m Mode) IsValid() bool {
 }
 
 // SessionMeta holds metadata for a chat session.
+// These fields represent the conversation's state, not the process's state.
+// A process may be created, reaped, and recreated many times within a single
+// session, but NeedsInput and Unread persist across those process lifecycles.
 type SessionMeta struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Activated bool      `json:"activated"` // true after first message sent
-	Mode      Mode      `json:"mode"`      // agent mode (default, yolo, plan)
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	Activated  bool      `json:"activated"`   // true after first message sent
+	Mode       Mode      `json:"mode"`        // agent mode (default, yolo, plan)
+	NeedsInput bool      `json:"needs_input"` // true when waiting for user input (permission/question)
+	Unread     bool      `json:"unread"`      // true when session has unread changes
 }
 
 // Operation represents the type of change to the session list.

@@ -23,6 +23,8 @@ type Store interface {
 	Update(ctx context.Context, sessionID string, title string) error
 	Activate(ctx context.Context, sessionID string) error
 	SetMode(ctx context.Context, sessionID string, mode Mode) error
+	SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error
+	SetUnread(ctx context.Context, sessionID string, unread bool) error
 
 	// History persistence
 	GetHistory(ctx context.Context, sessionID string) ([]json.RawMessage, error)
@@ -256,6 +258,56 @@ func (s *FileStore) SetMode(ctx context.Context, sessionID string, mode Mode) er
 		if s.sessions[i].ID == sessionID {
 			s.sessions[i].Mode = mode
 			s.sessions[i].UpdatedAt = time.Now()
+			if err := s.persistIndex(); err != nil {
+				return err
+			}
+			s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
+			return nil
+		}
+	}
+
+	return ErrSessionNotFound
+}
+
+func (s *FileStore) SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.sessions {
+		if s.sessions[i].ID == sessionID {
+			if s.sessions[i].NeedsInput == needsInput {
+				return nil
+			}
+			s.sessions[i].NeedsInput = needsInput
+			if err := s.persistIndex(); err != nil {
+				return err
+			}
+			s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
+			return nil
+		}
+	}
+
+	return ErrSessionNotFound
+}
+
+func (s *FileStore) SetUnread(ctx context.Context, sessionID string, unread bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.sessions {
+		if s.sessions[i].ID == sessionID {
+			if s.sessions[i].Unread == unread {
+				return nil
+			}
+			s.sessions[i].Unread = unread
 			if err := s.persistIndex(); err != nil {
 				return err
 			}

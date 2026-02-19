@@ -167,8 +167,9 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	processManager := process.NewManager(m.agent, workDir, sessionStore, m.idleTimeout)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetProcessStateGetter(processManager)
+	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
 	processManager.SetOnStateChange(func(e process.StateChangeEvent) {
-		sessionListWatcher.NotifyProcessStateChange(e.SessionID, string(e.State))
+		sessionListWatcher.HandleProcessStateChange(e)
 	})
 
 	chatClient := chat.NewClient(sessionStore, processManager)

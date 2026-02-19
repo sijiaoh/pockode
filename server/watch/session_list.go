@@ -1,14 +1,21 @@
 package watch
 
 import (
+	"context"
 	"log/slog"
 
+	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 )
 
 type ProcessStateGetter interface {
 	GetProcessState(sessionID string) string
+}
+
+// ViewingChecker checks whether any client has an active subscription to a session.
+type ViewingChecker interface {
+	IsViewing(sessionID string) bool
 }
 
 // SessionListWatcher notifies subscribers when the session list changes.
@@ -18,6 +25,7 @@ type SessionListWatcher struct {
 	*BaseWatcher
 	store              session.Store
 	processStateGetter ProcessStateGetter
+	viewingChecker     ViewingChecker
 	eventCh            chan session.SessionChangeEvent
 }
 
@@ -33,6 +41,10 @@ func NewSessionListWatcher(store session.Store) *SessionListWatcher {
 
 func (w *SessionListWatcher) SetProcessStateGetter(psg ProcessStateGetter) {
 	w.processStateGetter = psg
+}
+
+func (w *SessionListWatcher) SetViewingChecker(vc ViewingChecker) {
+	w.viewingChecker = vc
 }
 
 func (w *SessionListWatcher) Start() error {
@@ -58,6 +70,13 @@ func (w *SessionListWatcher) eventLoop() {
 	}
 }
 
+func (w *SessionListWatcher) buildItem(meta session.SessionMeta) rpc.SessionListItem {
+	return rpc.SessionListItem{
+		SessionMeta: meta,
+		State:       w.processStateGetter.GetProcessState(meta.ID),
+	}
+}
+
 // notifyChange sends notifications to all subscribers.
 func (w *SessionListWatcher) notifyChange(event session.SessionChangeEvent) {
 	if !w.HasSubscriptions() {
@@ -72,10 +91,8 @@ func (w *SessionListWatcher) notifyChange(event session.SessionChangeEvent) {
 		if event.Op == session.OperationDelete {
 			params.SessionID = event.Session.ID
 		} else {
-			params.Session = &rpc.SessionListItem{
-				SessionMeta: event.Session,
-				State:       w.processStateGetter.GetProcessState(event.Session.ID),
-			}
+			item := w.buildItem(event.Session)
+			params.Session = &item
 		}
 		return params
 	})
@@ -103,10 +120,7 @@ func (w *SessionListWatcher) Subscribe(notifier Notifier) (string, []rpc.Session
 
 	items := make([]rpc.SessionListItem, len(sessions))
 	for i, sess := range sessions {
-		items[i] = rpc.SessionListItem{
-			SessionMeta: sess,
-			State:       w.processStateGetter.GetProcessState(sess.ID),
-		}
+		items[i] = w.buildItem(sess)
 	}
 
 	return id, items, nil
@@ -119,29 +133,61 @@ type sessionListChangedParams struct {
 	SessionID string               `json:"sessionId,omitempty"`
 }
 
-func (w *SessionListWatcher) NotifyProcessStateChange(sessionID string, state string) {
+// HandleProcessStateChange updates NeedsInput/Unread in the store and notifies subscribers.
+// Store updates trigger OnSessionChange → notifyChange automatically.
+// The manual notification at the end covers the volatile ProcessState change.
+func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent) {
+	ctx := context.Background()
+
+	switch e.State {
+	case process.ProcessStateIdle:
+		if err := w.store.SetNeedsInput(ctx, e.SessionID, e.NeedsInput); err != nil {
+			slog.Warn("failed to set needs input", "sessionId", e.SessionID, "error", err)
+		}
+		if w.viewingChecker == nil || !w.viewingChecker.IsViewing(e.SessionID) {
+			if err := w.store.SetUnread(ctx, e.SessionID, true); err != nil {
+				slog.Warn("failed to set unread", "sessionId", e.SessionID, "error", err)
+			}
+		}
+	case process.ProcessStateRunning:
+		if err := w.store.SetNeedsInput(ctx, e.SessionID, false); err != nil {
+			slog.Warn("failed to clear needs input", "sessionId", e.SessionID, "error", err)
+		}
+	}
+
+	// Notify ProcessState change (volatile, not covered by Store's OnSessionChange)
 	if !w.HasSubscriptions() {
 		return
 	}
 
-	meta, found, err := w.store.Get(sessionID)
+	meta, found, err := w.store.Get(e.SessionID)
 	if err != nil || !found {
-		slog.Warn("failed to get session for state change", "sessionId", sessionID, "error", err)
 		return
 	}
 
+	// Use e.State directly — the event already carries the authoritative state,
+	// so re-querying via GetProcessState would be redundant.
+	item := rpc.SessionListItem{
+		SessionMeta: meta,
+		State:       string(e.State),
+	}
 	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
 		return sessionListChangedParams{
 			ID:        sub.ID,
 			Operation: "update",
-			Session: &rpc.SessionListItem{
-				SessionMeta: meta,
-				State:       state,
-			},
+			Session:   &item,
 		}
 	})
+}
 
-	slog.Debug("notified process state change", "sessionId", sessionID, "state", state)
+func (w *SessionListWatcher) MarkRead(sessionID string) {
+	meta, found, err := w.store.Get(sessionID)
+	if err != nil || !found || !meta.Unread {
+		return
+	}
+	if err := w.store.SetUnread(context.Background(), sessionID, false); err != nil {
+		slog.Warn("failed to mark read", "sessionId", sessionID, "error", err)
+	}
 }
 
 // OnSessionChange implements session.OnChangeListener.

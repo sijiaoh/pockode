@@ -68,6 +68,10 @@ type SessionSetModeParams struct {
 	Mode      session.Mode `json:"mode"`
 }
 
+type SessionMarkReadParams struct {
+	SessionID string `json:"session_id"`
+}
+
 // File namespace
 
 type FileGetParams struct {

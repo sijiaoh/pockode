@@ -8,6 +8,8 @@ export interface SessionListItem {
 	updated_at: string;
 	mode: SessionMode;
 	state: ProcessState;
+	needs_input: boolean;
+	unread: boolean;
 }
 
 export type MessageStatus =

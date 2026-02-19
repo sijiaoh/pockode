@@ -105,9 +105,7 @@ beforeEach(() => {
 
 afterEach(async () => {
 	const { resetWSStore } = await import("./wsStore");
-	const { resetUnreadStore } = await import("./unreadStore");
 	resetWSStore();
-	resetUnreadStore();
 
 	vi.useRealTimers();
 	globalThis.WebSocket = OriginalWebSocket;

@@ -130,3 +130,17 @@ func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn 
 		h.log.Error("failed to send session list subscribe response", "error", err)
 	}
 }
+
+func (h *rpcMethodHandler) handleSessionMarkRead(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.SessionMarkReadParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	wt.SessionListWatcher.MarkRead(params.SessionID)
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send session mark read response", "error", err)
+	}
+}

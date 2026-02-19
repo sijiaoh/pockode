@@ -1,6 +1,6 @@
 import { MessageSquare } from "lucide-react";
 import { useRouteState } from "../../hooks/useRouteState";
-import { useHasUnread } from "../../lib/unreadStore";
+import { useSessionStore } from "../../lib/sessionStore";
 import BadgeDot from "./BadgeDot";
 
 interface Props {
@@ -12,7 +12,9 @@ const buttonClass =
 
 export default function BackToChatButton({ onClick }: Props) {
 	const { sessionId } = useRouteState();
-	const hasUnread = useHasUnread(sessionId ?? "");
+	const hasUnread = useSessionStore(
+		(s) => s.sessions.find((sess) => sess.id === sessionId)?.unread ?? false,
+	);
 
 	return (
 		<button

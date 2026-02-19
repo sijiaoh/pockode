@@ -1,7 +1,6 @@
 import { Square } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
-import { unreadActions } from "../../lib/unreadStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
 	AskUserQuestionRequest,
@@ -56,16 +55,15 @@ function ChatPanel({
 		sessionId,
 	});
 
-	// Mark session as viewing when chat is visible (not showing overlay)
+	const markSessionRead = useWSStore((s) => s.actions.markSessionRead);
+
+	// Subscribe already marks read server-side, but we also need to mark read
+	// when returning from an overlay (where new messages may have arrived).
 	useEffect(() => {
 		if (!overlay) {
-			unreadActions.setViewingSession(sessionId);
-			unreadActions.markRead(sessionId);
-		} else {
-			unreadActions.setViewingSession(null);
+			markSessionRead(sessionId).catch(() => {});
 		}
-		return () => unreadActions.setViewingSession(null);
-	}, [sessionId, overlay]);
+	}, [sessionId, overlay, markSessionRead]);
 
 	const handleSend = useCallback(
 		(content: string) => {

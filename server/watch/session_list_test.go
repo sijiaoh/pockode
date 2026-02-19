@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 )
 
@@ -51,6 +52,14 @@ func (m *mockSessionStore) Touch(ctx context.Context, sessionID string) error {
 }
 
 func (m *mockSessionStore) SetMode(ctx context.Context, sessionID string, mode session.Mode) error {
+	return nil
+}
+
+func (m *mockSessionStore) SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error {
+	return nil
+}
+
+func (m *mockSessionStore) SetUnread(ctx context.Context, sessionID string, unread bool) error {
 	return nil
 }
 
@@ -174,10 +183,13 @@ func TestSessionListWatcher_Subscribe_ListError(t *testing.T) {
 	}
 }
 
-func TestSessionListWatcher_NotifyProcessStateChange_NoSubscribers(t *testing.T) {
+func TestSessionListWatcher_HandleProcessStateChange_NoSubscribers(t *testing.T) {
 	store := &mockSessionStore{}
 	w := NewSessionListWatcher(store)
 
 	// Should not panic when no subscribers
-	w.NotifyProcessStateChange("sess-1", "running")
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID: "sess-1",
+		State:     process.ProcessStateRunning,
+	})
 }

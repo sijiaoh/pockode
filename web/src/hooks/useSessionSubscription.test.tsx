@@ -1,7 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionStore } from "../lib/sessionStore";
-import { useUnreadStore } from "../lib/unreadStore";
 import type {
 	SessionListChangedNotification,
 	SessionListItem,
@@ -15,6 +14,8 @@ const mockSessionItem = (id: string, title = "Test"): SessionListItem => ({
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default",
 	state: "ended",
+	needs_input: false,
+	unread: false,
 });
 
 let notificationCallback: ((p: SessionListChangedNotification) => void) | null =
@@ -53,10 +54,6 @@ describe("useSessionSubscription", () => {
 			sessions: [],
 			isLoading: true,
 			isSuccess: false,
-		});
-		useUnreadStore.setState({
-			unreadSessionIds: new Set(),
-			viewingSessionId: null,
 		});
 	});
 
@@ -147,7 +144,7 @@ describe("useSessionSubscription", () => {
 			expect(useSessionStore.getState().sessions[0].title).toBe("New");
 		});
 
-		it("marks session as unread on content update when not viewing", async () => {
+		it("reflects server-side unread flag from update notification", async () => {
 			mockSessions = [mockSessionItem("1")];
 
 			renderHook(() => useSessionSubscription(true));
@@ -160,78 +157,11 @@ describe("useSessionSubscription", () => {
 				notificationCallback?.({
 					id: "watch-1",
 					operation: "update",
-					session: {
-						...mockSessionItem("1", "Updated"),
-						updated_at: "2024-01-01T01:00:00Z", // Changed timestamp
-					},
+					session: { ...mockSessionItem("1"), unread: true },
 				});
 			});
 
-			expect(useUnreadStore.getState().unreadSessionIds.has("1")).toBe(true);
-		});
-
-		it("does not mark session as unread on state-only update", async () => {
-			mockSessions = [mockSessionItem("1")];
-
-			renderHook(() => useSessionSubscription(true));
-
-			await waitFor(() => {
-				expect(useSessionStore.getState().sessions.length).toBe(1);
-			});
-
-			act(() => {
-				notificationCallback?.({
-					id: "watch-1",
-					operation: "update",
-					session: { ...mockSessionItem("1"), state: "running" }, // Same updated_at
-				});
-			});
-
-			expect(useUnreadStore.getState().unreadSessionIds.has("1")).toBe(false);
-		});
-
-		it("does not mark session as unread on content update when viewing", async () => {
-			mockSessions = [mockSessionItem("1")];
-			useUnreadStore.setState({ viewingSessionId: "1" });
-
-			renderHook(() => useSessionSubscription(true));
-
-			await waitFor(() => {
-				expect(useSessionStore.getState().sessions.length).toBe(1);
-			});
-
-			act(() => {
-				notificationCallback?.({
-					id: "watch-1",
-					operation: "update",
-					session: {
-						...mockSessionItem("1", "Updated"),
-						updated_at: "2024-01-01T01:00:00Z",
-					},
-				});
-			});
-
-			expect(useUnreadStore.getState().unreadSessionIds.has("1")).toBe(false);
-		});
-
-		it("does not mark session as unread on create", async () => {
-			mockSessions = [];
-
-			renderHook(() => useSessionSubscription(true));
-
-			await waitFor(() => {
-				expect(mockSubscribe).toHaveBeenCalled();
-			});
-
-			act(() => {
-				notificationCallback?.({
-					id: "watch-1",
-					operation: "create",
-					session: mockSessionItem("1"),
-				});
-			});
-
-			expect(useUnreadStore.getState().unreadSessionIds.has("1")).toBe(false);
+			expect(useSessionStore.getState().sessions[0].unread).toBe(true);
 		});
 
 		it("handles delete notification", async () => {

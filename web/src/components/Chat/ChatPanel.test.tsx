@@ -54,6 +54,7 @@ vi.mock("../../lib/wsStore", () => {
 			return mockState.chatMessagesSubscribe(_sessionId, listener);
 		},
 		chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
+		markSessionRead: vi.fn(() => Promise.resolve()),
 	});
 
 	const mockStore = ((selector: (state: unknown) => unknown) => {

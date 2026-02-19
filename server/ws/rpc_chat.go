@@ -40,6 +40,8 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	}
 	h.state.trackSubscription(id, wt.ChatMessagesWatcher)
 
+	wt.SessionListWatcher.MarkRead(params.SessionID)
+
 	result := rpc.ChatMessagesSubscribeResult{
 		ID:      id,
 		History: history,
