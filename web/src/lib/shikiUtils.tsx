@@ -79,7 +79,7 @@ export function CodeHighlighter({
 	const isDesktop = useIsDesktop();
 	const fontSize = isDesktop ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
 	const [copied, setCopied] = React.useState(false);
-	const timerRef = React.useRef<number>();
+	const timerRef = React.useRef<number | undefined>(undefined);
 
 	const highlighted = useShikiHighlighter(children, language, cssVarTheme);
 
