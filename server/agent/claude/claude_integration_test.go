@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/session"
 )
 
 // requireFields validates that expected fields are non-empty for each event type.
@@ -76,6 +77,7 @@ type chatCase struct {
 	name       string
 	prompt     string
 	expectType agent.EventType
+	mode       session.Mode // empty = default
 }
 
 func TestIntegration_Chat(t *testing.T) {
@@ -105,6 +107,25 @@ func TestIntegration_Chat(t *testing.T) {
 			prompt:     "Use AskUserQuestion to ask if I like bread. Two options: Yes and No.",
 			expectType: agent.EventTypeAskUserQuestion,
 		},
+		// Yolo mode: tool permissions (Bash, Edit, etc.) are auto-approved
+		{
+			name:       "ToolCallEvent/yolo",
+			prompt:     "Run this exact bash command: echo hi",
+			expectType: agent.EventTypeToolCall,
+			mode:       session.ModeYolo,
+		},
+		{
+			name:       "ToolResultEvent/yolo",
+			prompt:     "Run this exact bash command: echo hi",
+			expectType: agent.EventTypeToolResult,
+			mode:       session.ModeYolo,
+		},
+		{
+			name:       "AskUserQuestionEvent/yolo",
+			prompt:     "Use AskUserQuestion to ask if I like bread. Two options: Yes and No.",
+			expectType: agent.EventTypeAskUserQuestion,
+			mode:       session.ModeYolo,
+		},
 	}
 
 	for _, tc := range cases {
@@ -121,7 +142,7 @@ func runChatScenario(t *testing.T, tc chatCase) {
 	ctx, cancel := context.WithTimeout(context.Background(), chatTimeout)
 	defer cancel()
 
-	session, err := a.Start(ctx, agent.StartOptions{WorkDir: t.TempDir()})
+	session, err := a.Start(ctx, agent.StartOptions{WorkDir: t.TempDir(), Mode: tc.mode})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -146,7 +167,6 @@ func runChatScenario(t *testing.T, tc chatCase) {
 			requireFields(t, event)
 			t.Logf("event: %s", event.EventType())
 
-			// Check for expected event type
 			if event.EventType() == tc.expectType {
 				found = true
 			}
@@ -187,6 +207,47 @@ func runChatScenario(t *testing.T, tc chatCase) {
 
 		case <-ctx.Done():
 			t.Fatalf("timeout waiting for %s event", tc.expectType)
+		}
+	}
+}
+
+// TestIntegration_YoloNoPermission verifies that yolo mode skips permission prompts.
+// Uses the same command that triggers PermissionRequestEvent in default mode.
+func TestIntegration_YoloNoPermission(t *testing.T) {
+	a := New()
+
+	ctx, cancel := context.WithTimeout(context.Background(), chatTimeout)
+	defer cancel()
+
+	session, err := a.Start(ctx, agent.StartOptions{WorkDir: t.TempDir(), Mode: session.ModeYolo})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer session.Close()
+
+	if err := session.SendMessage("Run this exact bash command: ruby --version"); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	for {
+		select {
+		case event, ok := <-session.Events():
+			if !ok {
+				return
+			}
+			requireFields(t, event)
+			t.Logf("event: %s", event.EventType())
+
+			switch e := event.(type) {
+			case agent.PermissionRequestEvent:
+				t.Fatalf("unexpected permission_request in yolo mode: tool=%s", e.ToolName)
+			case agent.ErrorEvent:
+				t.Fatalf("error event: %s", e.Error)
+			case agent.DoneEvent:
+				return
+			}
+		case <-ctx.Done():
+			t.Fatal("timeout")
 		}
 	}
 }

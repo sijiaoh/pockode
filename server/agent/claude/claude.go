@@ -45,13 +45,11 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		"--verbose",
 	}
 
-	// Add mode-specific options
-	switch opts.Mode {
-	case session.ModeYolo:
-		claudeArgs = append(claudeArgs, "--dangerously-skip-permissions")
-	default:
-		// Default mode: use permission prompt tool
-		claudeArgs = append(claudeArgs, "--permission-prompt-tool", "stdio")
+	// Always use permission-prompt-tool so we receive control_request events
+	// (including AskUserQuestion) regardless of mode.
+	claudeArgs = append(claudeArgs, "--permission-prompt-tool", "stdio")
+	if opts.Mode == session.ModeYolo {
+		claudeArgs = append(claudeArgs, "--permission-mode", "bypassPermissions")
 	}
 
 	if opts.SessionID != "" {
