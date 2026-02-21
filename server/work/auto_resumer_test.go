@@ -185,6 +185,25 @@ func TestAutoResumer_RetryResetOnCompletion(t *testing.T) {
 	}
 }
 
+func TestAutoResumer_NoMessageWhenWorkNeedsInput(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// Transition to needs_input
+	niStatus := StatusNeedsInput
+	store.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+
+	// Process stops — but work is needs_input, not in_progress
+	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	time.Sleep(50 * time.Millisecond) // negative assertion: verify nothing fires
+	if len(sender.getMessages()) != 0 {
+		t.Error("should not send continuation message when work is needs_input")
+	}
+}
+
 func TestAutoResumer_NoMessageWhenWorkDone(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 

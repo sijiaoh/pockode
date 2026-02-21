@@ -1,6 +1,11 @@
 export type WorkType = "story" | "task";
 
-export type WorkStatus = "open" | "in_progress" | "done" | "closed";
+export type WorkStatus =
+	| "open"
+	| "in_progress"
+	| "needs_input"
+	| "done"
+	| "closed";
 
 export interface Work {
 	id: string;

@@ -122,6 +122,7 @@ const emptyTasks: Work[] = [];
 
 const statusGroupOrder: WorkStatus[] = [
 	"in_progress",
+	"needs_input",
 	"open",
 	"done",
 	"closed",
@@ -129,6 +130,7 @@ const statusGroupOrder: WorkStatus[] = [
 
 const statusLabels: Record<WorkStatus, string> = {
 	in_progress: "In Progress",
+	needs_input: "Needs Input",
 	open: "Open",
 	done: "Done",
 	closed: "Closed",

@@ -51,7 +51,8 @@ func TestValidNextStatuses(t *testing.T) {
 		expected []WorkStatus
 	}{
 		{StatusOpen, []WorkStatus{StatusInProgress}},
-		{StatusInProgress, []WorkStatus{StatusOpen, StatusDone}},
+		{StatusInProgress, []WorkStatus{StatusOpen, StatusNeedsInput, StatusDone}},
+		{StatusNeedsInput, []WorkStatus{StatusInProgress}},
 		{StatusDone, []WorkStatus{StatusInProgress}},
 		{StatusClosed, []WorkStatus{StatusInProgress}},
 	}

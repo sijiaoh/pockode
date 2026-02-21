@@ -1,4 +1,4 @@
-import { Circle, CircleCheck, CircleDot } from "lucide-react";
+import { Circle, CircleCheck, CircleDot, CirclePause } from "lucide-react";
 import type { WorkStatus } from "../../types/work";
 
 interface StatusIconProps {
@@ -18,6 +18,8 @@ export default function StatusIcon({
 			return <Circle className={`${base} text-th-text-muted`} />;
 		case "in_progress":
 			return <CircleDot className={`${base} text-th-accent`} />;
+		case "needs_input":
+			return <CirclePause className={`${base} text-th-warning`} />;
 		case "done":
 			return <CircleCheck className={`${base} text-th-warning`} />;
 		case "closed":

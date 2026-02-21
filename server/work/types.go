@@ -22,8 +22,9 @@ type WorkStatus string
 const (
 	StatusOpen       WorkStatus = "open"
 	StatusInProgress WorkStatus = "in_progress"
-	StatusDone       WorkStatus = "done"   // direct work complete, children may be pending
-	StatusClosed     WorkStatus = "closed" // fully complete (auto-derived, never set directly)
+	StatusNeedsInput WorkStatus = "needs_input" // agent waiting for user confirmation
+	StatusDone       WorkStatus = "done"        // direct work complete, children may be pending
+	StatusClosed     WorkStatus = "closed"      // fully complete (auto-derived, never set directly)
 )
 
 type Work struct {

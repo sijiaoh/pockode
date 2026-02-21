@@ -102,6 +102,18 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
+		Name:        "work_needs_input",
+		Description: "Pause a work item to wait for user input. Transitions from in_progress to needs_input. Use when the agent needs user confirmation or clarification before continuing.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id":     {Type: "string", Description: "Work item ID"},
+				"reason": {Type: "string", Description: "Why user input is needed (shown to the user)"},
+			},
+			Required: []string{"id", "reason"},
+		},
+	},
+	{
 		Name:        "agent_role_list",
 		Description: "List all available agent roles. Use this to find which roles can be assigned to work items. Use agent_role_get for full details including role_prompt.",
 		InputSchema: inputSchema{
@@ -138,6 +150,8 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkDone, true
 	case "work_start":
 		return s.handleWorkStart, true
+	case "work_needs_input":
+		return s.handleWorkNeedsInput, true
 	case "agent_role_list":
 		return s.handleAgentRoleList, true
 	case "agent_role_get":
@@ -373,6 +387,23 @@ func (s *Server) handleWorkStart(ctx context.Context, args json.RawMessage) (str
 	}
 
 	return fmt.Sprintf("Started work %s (session: %s)", params.ID, sessionID), nil
+}
+
+func (s *Server) handleWorkNeedsInput(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ID     string `json:"id"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	status := work.StatusNeedsInput
+	if err := s.store.Update(ctx, params.ID, work.UpdateFields{Status: &status}); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Work %s is now waiting for user input: %s", params.ID, params.Reason), nil
 }
 
 func (s *Server) handleAgentRoleList(_ context.Context, _ json.RawMessage) (string, error) {

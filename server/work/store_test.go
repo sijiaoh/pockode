@@ -380,6 +380,84 @@ func TestTransition_DoneToInProgress(t *testing.T) {
 	}
 }
 
+// --- needs_input transitions ---
+
+func TestTransition_InProgressToNeedsInput(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	status := StatusNeedsInput
+	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status}); err != nil {
+		t.Fatalf("in_progress → needs_input: %v", err)
+	}
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusNeedsInput {
+		t.Errorf("status = %q, want %q", got.Status, StatusNeedsInput)
+	}
+}
+
+func TestTransition_NeedsInputToInProgress(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	niStatus := StatusNeedsInput
+	s.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+
+	ipStatus := StatusInProgress
+	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &ipStatus}); err != nil {
+		t.Fatalf("needs_input → in_progress: %v", err)
+	}
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
+	}
+}
+
+func TestTransition_Invalid_NeedsInputToDone(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	niStatus := StatusNeedsInput
+	s.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+
+	doneStatus := StatusDone
+	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &doneStatus}); err == nil {
+		t.Fatal("expected error for needs_input → done")
+	}
+}
+
+func TestTransition_Invalid_OpenToNeedsInput(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+
+	status := StatusNeedsInput
+	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status}); err == nil {
+		t.Fatal("expected error for open → needs_input")
+	}
+}
+
+func TestAutoClose_BlockedByNeedsInputChild(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWork(t, s, story.ID)
+	startWork(t, s, task.ID)
+
+	// Put task in needs_input
+	niStatus := StatusNeedsInput
+	s.Update(context.Background(), task.ID, UpdateFields{Status: &niStatus})
+
+	// Parent done — but task is needs_input, so parent stays done (not closed)
+	doneWork(t, s, story.ID)
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusDone {
+		t.Errorf("story status = %q, want %q (child needs_input blocks auto-close)", got.Status, StatusDone)
+	}
+}
+
 // --- MarkDone (atomic open/in_progress → done) ---
 
 func TestMarkDone_FromOpen(t *testing.T) {
