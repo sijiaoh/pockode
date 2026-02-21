@@ -7,6 +7,13 @@ import (
 
 const testAgentRoleID = "role-abc-123"
 
+func assertContains(t *testing.T, msg, substr, label string) {
+	t.Helper()
+	if !strings.Contains(msg, substr) {
+		t.Errorf("expected %s in message, got %q", label, msg)
+	}
+}
+
 func TestBuildKickoffMessage_Task(t *testing.T) {
 	w := Work{
 		ID:          "task-1",
@@ -132,24 +139,106 @@ func TestBuildKickoffMessage_RoleRefComesFirst(t *testing.T) {
 	}
 }
 
-func TestBuildAutoContinuationMessage(t *testing.T) {
-	storyMsg := BuildAutoContinuationMessage(WorkTypeStory)
-	if !strings.Contains(storyMsg, "story") {
-		t.Errorf("expected 'story' in message, got %q", storyMsg)
+func TestBuildAutoContinuationMessage_Story(t *testing.T) {
+	w := Work{
+		ID:          "story-1",
+		Type:        WorkTypeStory,
+		AgentRoleID: testAgentRoleID,
+		Title:       "Big feature",
 	}
 
-	taskMsg := BuildAutoContinuationMessage(WorkTypeTask)
-	if !strings.Contains(taskMsg, "task") {
-		t.Errorf("expected 'task' in message, got %q", taskMsg)
+	msg := BuildAutoContinuationMessage(w, "")
+
+	assertContains(t, msg, testAgentRoleID, "agent role ID")
+	assertContains(t, msg, "agent_role_get", "agent_role_get instruction")
+	assertContains(t, msg, "Big feature", "story title")
+	assertContains(t, msg, "story-1", "work ID")
+	assertContains(t, msg, "story", "'story'")
+	assertContains(t, msg, storyBehaviorRules, "storyBehaviorRules")
+}
+
+func TestBuildAutoContinuationMessage_Task(t *testing.T) {
+	w := Work{
+		ID:          "task-1",
+		Type:        WorkTypeTask,
+		ParentID:    "story-1",
+		AgentRoleID: testAgentRoleID,
+		Title:       "Fix the bug",
+		Body:        "Check null pointers",
 	}
+
+	msg := BuildAutoContinuationMessage(w, "Epic story")
+
+	assertContains(t, msg, testAgentRoleID, "agent role ID")
+	assertContains(t, msg, "agent_role_get", "agent_role_get instruction")
+	assertContains(t, msg, "Fix the bug", "task title")
+	assertContains(t, msg, "task-1", "work ID")
+	assertContains(t, msg, "Epic story", "parent title")
+	assertContains(t, msg, "Check null pointers", "body")
+	assertContains(t, msg, "work_done", "work_done instruction")
 }
 
 func TestBuildParentReactivationMessage(t *testing.T) {
-	msg := BuildParentReactivationMessage("Implement login")
-	if !strings.Contains(msg, "Implement login") {
-		t.Errorf("expected child title in message, got %q", msg)
+	parent := Work{
+		ID:          "story-1",
+		Type:        WorkTypeStory,
+		AgentRoleID: testAgentRoleID,
+		Title:       "Big feature",
 	}
-	if !strings.Contains(msg, "work_done") {
-		t.Errorf("expected work_done instruction in message, got %q", msg)
+
+	msg := BuildParentReactivationMessage(parent, "Implement login")
+
+	assertContains(t, msg, testAgentRoleID, "agent role ID")
+	assertContains(t, msg, "agent_role_get", "agent_role_get instruction")
+	assertContains(t, msg, "Big feature", "parent title")
+	assertContains(t, msg, "story-1", "work ID")
+	assertContains(t, msg, "Implement login", "child title")
+	assertContains(t, msg, "work_done", "work_done instruction")
+	assertContains(t, msg, storyBehaviorRules, "storyBehaviorRules")
+}
+
+func TestStoryBehaviorRulesConsistency(t *testing.T) {
+	storyWork := Work{
+		ID: "s1", Type: WorkTypeStory, AgentRoleID: "role-1", Title: "S",
+	}
+	kickoff := BuildKickoffMessage(storyWork, "")
+	continuation := BuildAutoContinuationMessage(storyWork, "")
+	reactivation := BuildParentReactivationMessage(storyWork, "child task")
+
+	for _, tc := range []struct {
+		name string
+		msg  string
+	}{
+		{"kickoff", kickoff},
+		{"continuation", continuation},
+		{"reactivation", reactivation},
+	} {
+		if !strings.Contains(tc.msg, storyBehaviorRules) {
+			t.Errorf("%s: expected storyBehaviorRules in message", tc.name)
+		}
+	}
+}
+
+func TestAllPromptsContainRoleReference(t *testing.T) {
+	story := Work{
+		ID: "s1", Type: WorkTypeStory, AgentRoleID: "role-1", Title: "S",
+	}
+	task := Work{
+		ID: "t1", Type: WorkTypeTask, ParentID: "s1", AgentRoleID: "role-2", Title: "T",
+	}
+
+	for _, tc := range []struct {
+		name   string
+		msg    string
+		roleID string
+	}{
+		{"kickoff-story", BuildKickoffMessage(story, ""), "role-1"},
+		{"kickoff-task", BuildKickoffMessage(task, "S"), "role-2"},
+		{"continuation-story", BuildAutoContinuationMessage(story, ""), "role-1"},
+		{"continuation-task", BuildAutoContinuationMessage(task, "S"), "role-2"},
+		{"reactivation", BuildParentReactivationMessage(story, "child"), "role-1"},
+	} {
+		assertContains(t, tc.msg, tc.roleID, tc.name+": agent role ID")
+		assertContains(t, tc.msg, "agent_role_get", tc.name+": agent_role_get")
 	}
 }
