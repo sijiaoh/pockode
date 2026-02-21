@@ -275,21 +275,21 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 
 	return (
 		<div>
-			<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
-				Role Prompt
-			</h3>
-			<div className="group relative">
-				<div className="rounded-lg bg-th-bg-secondary px-3 py-2">
-					<MarkdownContent content={role.role_prompt} />
-				</div>
+			<div className="group flex items-center justify-between mb-1">
+				<h3 className="text-xs font-medium text-th-text-muted uppercase">
+					Role Prompt
+				</h3>
 				<button
 					type="button"
 					onClick={() => setEditing(true)}
-					className="absolute top-2 right-2 flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
+					className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
 					aria-label="Edit role prompt"
 				>
-					<Pencil className="size-4" />
+					<Pencil className="size-3.5" />
 				</button>
+			</div>
+			<div className="rounded-lg bg-th-bg-secondary px-3 py-2">
+				<MarkdownContent content={role.role_prompt} />
 			</div>
 		</div>
 	);
