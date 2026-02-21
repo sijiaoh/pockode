@@ -9,30 +9,30 @@ func roleReference(agentRoleID string) string {
 	)
 }
 
-const storyBehaviorRules = "Your ONLY job is to coordinate tasks (create, update, or delete) — do NOT implement anything yourself. Each task will be executed by a separate agent. Do NOT call work_done on tasks — each task agent will mark itself done when finished."
+const storyBehaviorRules = "You are a coordinator. Break down the work into tasks using work_create, then call work_done on YOUR story immediately — do NOT wait for tasks to finish. You will be automatically reactivated when a task completes. Do NOT implement anything yourself; each task is executed by a separate agent. Do NOT call work_done on child tasks; task agents handle that themselves."
 
 // buildBase builds the common message shared by all prompt types.
 func buildBase(w Work) string {
 	role := roleReference(w.AgentRoleID)
 
-	workCtx := fmt.Sprintf("You are working on: %q (Work ID: %s)", w.Title, w.ID)
+	workCtx := fmt.Sprintf("You are working on: %q (Work ID: %s). Use work_get with this ID to read the full details before starting.", w.Title, w.ID)
 
 	var rules string
 	if w.Type == WorkTypeStory {
-		rules = storyBehaviorRules + " " + fmt.Sprintf(
-			"When you're done coordinating, call work_done with ID %s immediately.",
-			w.ID,
+		rules = fmt.Sprintf(
+			"%s Call work_done with ID %s as soon as you've created the tasks. If you need user input to proceed, call work_needs_input with ID %s.",
+			storyBehaviorRules, w.ID, w.ID,
 		)
 	} else {
 		if w.ParentID != "" {
 			rules = fmt.Sprintf(
-				"IMPORTANT: When you finish, you MUST first report your results by calling work_comment_add on the parent work (ID: %s), then call work_done with ID %s. Do not end your turn without doing this.",
-				w.ParentID, w.ID,
+				"IMPORTANT: When you finish, you MUST first report your results by calling work_comment_add on the parent work (ID: %s), then call work_done with ID %s. If you need user input to proceed, call work_needs_input with ID %s. Do not end your turn without calling one of these.",
+				w.ParentID, w.ID, w.ID,
 			)
 		} else {
 			rules = fmt.Sprintf(
-				"IMPORTANT: When you finish, you MUST call the work_done tool with ID %s. Do not end your turn without doing this.",
-				w.ID,
+				"IMPORTANT: When you finish, you MUST call work_done with ID %s. If you need user input to proceed, call work_needs_input with ID %s. Do not end your turn without calling one of these.",
+				w.ID, w.ID,
 			)
 		}
 	}
@@ -52,12 +52,12 @@ func BuildAutoContinuationMessage(w Work) string {
 	var nudge string
 	if w.Type == WorkTypeStory {
 		nudge = fmt.Sprintf(
-			"Your story is still in_progress. If you're done coordinating tasks, call work_done with ID %s now.",
+			"Your story is still in_progress but your session was interrupted. Review your tasks, then call work_done with ID %s. You will be reactivated when a task completes.",
 			w.ID,
 		)
 	} else {
 		nudge = fmt.Sprintf(
-			"Your task is still in_progress. If you've finished, call work_done with ID %s. If not, continue working.",
+			"Your task is still in_progress but your session was interrupted. Review what you've done so far, then either complete the remaining work or call work_done with ID %s if everything is finished.",
 			w.ID,
 		)
 	}
@@ -71,8 +71,8 @@ func BuildParentReactivationMessage(parent Work, childTitle, childID string) str
 	base := buildBase(parent)
 
 	nudge := fmt.Sprintf(
-		"Task %q (ID: %s) has been completed. Use work_comment_list on your own work (ID: %s) to read the task's report, review the remaining tasks, adjust the plan if needed, then mark yourself done.",
-		childTitle, childID, parent.ID,
+		"Task %q (ID: %s) has been completed. Use work_comment_list on your own work (ID: %s) to read the task's report. Then use work_list to check remaining tasks. If all tasks are done, call work_done with ID %s. If tasks remain, review progress and adjust the plan as needed, then call work_done with ID %s to wait for the next completion.",
+		childTitle, childID, parent.ID, parent.ID, parent.ID,
 	)
 
 	return base + "\n\n" + nudge
