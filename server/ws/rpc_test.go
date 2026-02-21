@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
@@ -30,6 +31,7 @@ type testEnv struct {
 	mock            *mockAgent
 	worktreeManager *worktree.Manager
 	workStore       work.Store
+	testRoleID      string // pre-created agent role ID for tests
 	server          *httptest.Server
 	conn            *websocket.Conn
 	ctx             context.Context
@@ -57,10 +59,24 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 		t.Fatalf("failed to create work store: %v", err)
 	}
 
+	agentRoleStore, err := agentrole.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("failed to create agent role store: %v", err)
+	}
+
+	// Create a default role for tests
+	testRole, err := agentRoleStore.Create(context.Background(), agentrole.AgentRole{
+		Name:       "Test Engineer",
+		RolePrompt: "You are a test engineer.",
+	})
+	if err != nil {
+		t.Fatalf("failed to create test agent role: %v", err)
+	}
+
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, mock, dataDir, 10*time.Minute)
 
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, agentRoleStore)
 	server := httptest.NewServer(h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -78,6 +94,7 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 		mock:            mock,
 		worktreeManager: worktreeManager,
 		workStore:       workStore,
+		testRoleID:      testRole.ID,
 		server:          server,
 		conn:            conn,
 		ctx:             ctx,
@@ -218,7 +235,8 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
 	defer worktreeManager.Shutdown()
 
-	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore)
+	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
+	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, agentRoleStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -265,8 +283,9 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
 	defer worktreeManager.Shutdown()
+	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, agentRoleStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 

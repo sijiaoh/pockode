@@ -39,10 +39,11 @@ type Store interface {
 
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
 type UpdateFields struct {
-	Title     *string     `json:"title,omitempty"`
-	Body      *string     `json:"body,omitempty"`
-	Status    *WorkStatus `json:"status,omitempty"`
-	SessionID *string     `json:"session_id,omitempty"`
+	Title       *string     `json:"title,omitempty"`
+	Body        *string     `json:"body,omitempty"`
+	AgentRoleID *string     `json:"agent_role_id,omitempty"`
+	Status      *WorkStatus `json:"status,omitempty"`
+	SessionID   *string     `json:"session_id,omitempty"`
 }
 
 type indexData struct {
@@ -51,9 +52,9 @@ type indexData struct {
 
 // FileStore persists Work items to a JSON file with flock-based inter-process safety.
 type FileStore struct {
-	dataDir  string
-	worksMu  sync.RWMutex
-	works    []Work
+	dataDir   string
+	worksMu   sync.RWMutex
+	works     []Work
 	listeners []OnChangeListener
 
 	// writeGen is incremented on every in-process write (Create/Update/Delete/MarkDone).
@@ -144,16 +145,27 @@ func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
 		return Work{}, fmt.Errorf("%w: cannot add child to closed parent %s", ErrInvalidWork, parent.ID)
 	}
 
+	// Inherit agent_role_id from parent if not specified (task under story)
+	agentRoleID := w.AgentRoleID
+	if agentRoleID == "" && parent != nil {
+		agentRoleID = parent.AgentRoleID
+	}
+	if agentRoleID == "" {
+		s.worksMu.Unlock()
+		return Work{}, fmt.Errorf("%w: agent_role_id is required", ErrInvalidWork)
+	}
+
 	now := time.Now()
 	work := Work{
-		ID:        uuid.Must(uuid.NewV7()).String(),
-		Type:      w.Type,
-		ParentID:  w.ParentID,
-		Title:     w.Title,
-		Body:      w.Body,
-		Status:    StatusOpen,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          uuid.Must(uuid.NewV7()).String(),
+		Type:        w.Type,
+		ParentID:    w.ParentID,
+		AgentRoleID: agentRoleID,
+		Title:       w.Title,
+		Body:        w.Body,
+		Status:      StatusOpen,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	s.works = append(s.works, work)
@@ -208,6 +220,9 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) er
 	}
 	if fields.Body != nil {
 		w.Body = *fields.Body
+	}
+	if fields.AgentRoleID != nil {
+		w.AgentRoleID = *fields.AgentRoleID
 	}
 	if fields.SessionID != nil {
 		w.SessionID = *fields.SessionID
@@ -639,6 +654,7 @@ func diffWorks(old, updated []Work) []ChangeEvent {
 func workChanged(a, b Work) bool {
 	return a.Title != b.Title ||
 		a.Body != b.Body ||
+		a.AgentRoleID != b.AgentRoleID ||
 		a.Status != b.Status ||
 		a.SessionID != b.SessionID ||
 		a.ParentID != b.ParentID ||

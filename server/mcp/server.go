@@ -11,15 +11,17 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/work"
 )
 
 type Server struct {
-	store work.Store
+	store          work.Store
+	agentRoleStore agentrole.Store
 }
 
-func NewServer(store work.Store) *Server {
-	return &Server{store: store}
+func NewServer(store work.Store, agentRoleStore agentrole.Store) *Server {
+	return &Server{store: store, agentRoleStore: agentRoleStore}
 }
 
 // Run starts the stdio JSON-RPC 2.0 loop.
@@ -159,7 +161,7 @@ func writeJSONRPCError(w io.Writer, id json.RawMessage, code int, message string
 // --- MCP protocol types ---
 
 type initializeResult struct {
-	ProtocolVersion string     `json:"protocolVersion"`
+	ProtocolVersion string       `json:"protocolVersion"`
 	Capabilities    capabilities `json:"capabilities"`
 	ServerInfo      serverInfo   `json:"serverInfo"`
 }

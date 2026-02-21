@@ -44,23 +44,25 @@ var toolDefinitions = []toolDefinition{
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
-				"type":      {Type: "string", Description: "Work type", Enum: []string{"story", "task"}},
-				"parent_id": {Type: "string", Description: "Parent work ID (required for tasks)"},
-				"title":     {Type: "string", Description: "Title of the work item"},
-				"body":      {Type: "string", Description: "Detailed description or instructions for the work item"},
+				"type":          {Type: "string", Description: "Work type", Enum: []string{"story", "task"}},
+				"parent_id":     {Type: "string", Description: "Parent work ID (required for tasks)"},
+				"title":         {Type: "string", Description: "Title of the work item"},
+				"body":          {Type: "string", Description: "Detailed description or instructions for the work item"},
+				"agent_role_id": {Type: "string", Description: "Agent role ID. Required for stories. Tasks inherit from parent story if not specified."},
 			},
 			Required: []string{"type", "title"},
 		},
 	},
 	{
 		Name:        "work_update",
-		Description: "Update a work item's title or body.",
+		Description: "Update a work item's title, body, or agent role.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
-				"id":    {Type: "string", Description: "Work item ID"},
-				"title": {Type: "string", Description: "New title"},
-				"body":  {Type: "string", Description: "New body content"},
+				"id":            {Type: "string", Description: "Work item ID"},
+				"title":         {Type: "string", Description: "New title"},
+				"body":          {Type: "string", Description: "New body content"},
+				"agent_role_id": {Type: "string", Description: "New agent role ID"},
 			},
 			Required: []string{"id"},
 		},
@@ -87,6 +89,14 @@ var toolDefinitions = []toolDefinition{
 			Required: []string{"id"},
 		},
 	},
+	{
+		Name:        "agent_role_list",
+		Description: "List all available agent roles. Use this to find which roles can be assigned to work items.",
+		InputSchema: inputSchema{
+			Type:       "object",
+			Properties: map[string]propertySchema{},
+		},
+	},
 }
 
 type toolHandler func(ctx context.Context, args json.RawMessage) (string, error)
@@ -103,6 +113,8 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkGet, true
 	case "work_done":
 		return s.handleWorkDone, true
+	case "agent_role_list":
+		return s.handleAgentRoleList, true
 	default:
 		return nil, false
 	}
@@ -136,20 +148,22 @@ func (s *Server) handleWorkList(ctx context.Context, args json.RawMessage) (stri
 	// Always return JSON array for consistent parsing by the AI agent.
 	// Formatted text would risk prompt injection via user-supplied titles.
 	type workItem struct {
-		ID       string `json:"id"`
-		Type     string `json:"type"`
-		ParentID string `json:"parent_id,omitempty"`
-		Status   string `json:"status"`
-		Title    string `json:"title"`
+		ID          string `json:"id"`
+		Type        string `json:"type"`
+		ParentID    string `json:"parent_id,omitempty"`
+		AgentRoleID string `json:"agent_role_id,omitempty"`
+		Status      string `json:"status"`
+		Title       string `json:"title"`
 	}
 	items := make([]workItem, len(works))
 	for i, w := range works {
 		items[i] = workItem{
-			ID:       w.ID,
-			Type:     string(w.Type),
-			ParentID: w.ParentID,
-			Status:   string(w.Status),
-			Title:    w.Title,
+			ID:          w.ID,
+			Type:        string(w.Type),
+			ParentID:    w.ParentID,
+			AgentRoleID: w.AgentRoleID,
+			Status:      string(w.Status),
+			Title:       w.Title,
 		}
 	}
 	b, err := json.Marshal(items)
@@ -161,20 +175,31 @@ func (s *Server) handleWorkList(ctx context.Context, args json.RawMessage) (stri
 
 func (s *Server) handleWorkCreate(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
-		Type     work.WorkType `json:"type"`
-		ParentID string        `json:"parent_id"`
-		Title    string        `json:"title"`
-		Body     string        `json:"body"`
+		Type        work.WorkType `json:"type"`
+		ParentID    string        `json:"parent_id"`
+		Title       string        `json:"title"`
+		Body        string        `json:"body"`
+		AgentRoleID string        `json:"agent_role_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
+	// Validate agent_role_id exists if specified
+	if params.AgentRoleID != "" {
+		if _, found, err := s.agentRoleStore.Get(params.AgentRoleID); err != nil {
+			return "", fmt.Errorf("failed to validate agent role: %w", err)
+		} else if !found {
+			return "", fmt.Errorf("agent role %q not found", params.AgentRoleID)
+		}
+	}
+
 	created, err := s.store.Create(ctx, work.Work{
-		Type:     params.Type,
-		ParentID: params.ParentID,
-		Title:    params.Title,
-		Body:     params.Body,
+		Type:        params.Type,
+		ParentID:    params.ParentID,
+		Title:       params.Title,
+		Body:        params.Body,
+		AgentRoleID: params.AgentRoleID,
 	})
 	if err != nil {
 		return "", err
@@ -185,17 +210,28 @@ func (s *Server) handleWorkCreate(ctx context.Context, args json.RawMessage) (st
 
 func (s *Server) handleWorkUpdate(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
-		ID    string  `json:"id"`
-		Title *string `json:"title"`
-		Body  *string `json:"body"`
+		ID          string  `json:"id"`
+		Title       *string `json:"title"`
+		Body        *string `json:"body"`
+		AgentRoleID *string `json:"agent_role_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
+	// Validate agent_role_id exists if specified
+	if params.AgentRoleID != nil && *params.AgentRoleID != "" {
+		if _, found, err := s.agentRoleStore.Get(*params.AgentRoleID); err != nil {
+			return "", fmt.Errorf("failed to validate agent role: %w", err)
+		} else if !found {
+			return "", fmt.Errorf("agent role %q not found", *params.AgentRoleID)
+		}
+	}
+
 	fields := work.UpdateFields{
-		Title: params.Title,
-		Body:  params.Body,
+		Title:       params.Title,
+		Body:        params.Body,
+		AgentRoleID: params.AgentRoleID,
 	}
 	if err := s.store.Update(ctx, params.ID, fields); err != nil {
 		return "", err
@@ -207,6 +243,9 @@ func (s *Server) handleWorkUpdate(ctx context.Context, args json.RawMessage) (st
 	}
 	if params.Body != nil {
 		parts = append(parts, "body")
+	}
+	if params.AgentRoleID != nil {
+		parts = append(parts, "agent_role_id")
 	}
 	if len(parts) == 0 {
 		return fmt.Sprintf("Updated work %s (no fields changed)", params.ID), nil
@@ -231,20 +270,22 @@ func (s *Server) handleWorkGet(_ context.Context, args json.RawMessage) (string,
 	}
 
 	type workDetail struct {
-		ID       string `json:"id"`
-		Type     string `json:"type"`
-		ParentID string `json:"parent_id,omitempty"`
-		Status   string `json:"status"`
-		Title    string `json:"title"`
-		Body     string `json:"body,omitempty"`
+		ID          string `json:"id"`
+		Type        string `json:"type"`
+		ParentID    string `json:"parent_id,omitempty"`
+		AgentRoleID string `json:"agent_role_id,omitempty"`
+		Status      string `json:"status"`
+		Title       string `json:"title"`
+		Body        string `json:"body,omitempty"`
 	}
 	b, err := json.Marshal(workDetail{
-		ID:       w.ID,
-		Type:     string(w.Type),
-		ParentID: w.ParentID,
-		Status:   string(w.Status),
-		Title:    w.Title,
-		Body:     w.Body,
+		ID:          w.ID,
+		Type:        string(w.Type),
+		ParentID:    w.ParentID,
+		AgentRoleID: w.AgentRoleID,
+		Status:      string(w.Status),
+		Title:       w.Title,
+		Body:        w.Body,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal work item: %w", err)
@@ -265,4 +306,30 @@ func (s *Server) handleWorkDone(ctx context.Context, args json.RawMessage) (stri
 	}
 
 	return fmt.Sprintf("Marked work %s as done", params.ID), nil
+}
+
+func (s *Server) handleAgentRoleList(_ context.Context, _ json.RawMessage) (string, error) {
+	roles, err := s.agentRoleStore.List()
+	if err != nil {
+		return "", err
+	}
+
+	type roleItem struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		RolePrompt string `json:"role_prompt"`
+	}
+	items := make([]roleItem, len(roles))
+	for i, r := range roles {
+		items[i] = roleItem{
+			ID:         r.ID,
+			Name:       r.Name,
+			RolePrompt: r.RolePrompt,
+		}
+	}
+	b, err := json.Marshal(items)
+	if err != nil {
+		return "", fmt.Errorf("marshal agent role list: %w", err)
+	}
+	return string(b), nil
 }

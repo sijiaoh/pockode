@@ -7,16 +7,39 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/work"
 )
 
-func newTestServer(t *testing.T) *Server {
+type testServer struct {
+	*Server
+	roleID string
+}
+
+func newTestServer(t *testing.T) testServer {
 	t.Helper()
-	store, err := work.NewFileStore(t.TempDir())
+	dataDir := t.TempDir()
+	store, err := work.NewFileStore(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewServer(store)
+	arStore, err := agentrole.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	role, err := arStore.Create(context.Background(), agentrole.AgentRole{
+		Name:       "Test Engineer",
+		RolePrompt: "You are a test engineer.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return testServer{
+		Server: NewServer(store, arStore),
+		roleID: role.ID,
+	}
 }
 
 // callMethod sends a JSON-RPC request and returns the parsed response.
@@ -77,8 +100,8 @@ func toolText(r toolCallResult) string {
 // --- Protocol tests ---
 
 func TestInitialize(t *testing.T) {
-	s := newTestServer(t)
-	resp := callMethod(t, s, "initialize", nil)
+	ts := newTestServer(t)
+	resp := callMethod(t, ts.Server, "initialize", nil)
 
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
@@ -97,8 +120,8 @@ func TestInitialize(t *testing.T) {
 }
 
 func TestToolsList(t *testing.T) {
-	s := newTestServer(t)
-	resp := callMethod(t, s, "tools/list", nil)
+	ts := newTestServer(t)
+	resp := callMethod(t, ts.Server, "tools/list", nil)
 
 	b, _ := json.Marshal(resp.Result)
 	var result toolsListResult
@@ -109,7 +132,7 @@ func TestToolsList(t *testing.T) {
 		names[td.Name] = true
 	}
 
-	for _, want := range []string{"work_list", "work_create", "work_update", "work_done"} {
+	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_done", "agent_role_list"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}
@@ -117,8 +140,8 @@ func TestToolsList(t *testing.T) {
 }
 
 func TestUnknownMethod(t *testing.T) {
-	s := newTestServer(t)
-	resp := callMethod(t, s, "nonexistent", nil)
+	ts := newTestServer(t)
+	resp := callMethod(t, ts.Server, "nonexistent", nil)
 
 	if resp.Error == nil {
 		t.Fatal("expected error for unknown method")
@@ -129,9 +152,9 @@ func TestUnknownMethod(t *testing.T) {
 }
 
 func TestUnknownTool(t *testing.T) {
-	s := newTestServer(t)
+	ts := newTestServer(t)
 	rawArgs, _ := json.Marshal(map[string]string{})
-	resp := callMethod(t, s, "tools/call", toolCallParams{
+	resp := callMethod(t, ts.Server, "tools/call", toolCallParams{
 		Name:      "nonexistent_tool",
 		Arguments: rawArgs,
 	})
@@ -147,10 +170,11 @@ func TestUnknownTool(t *testing.T) {
 // --- Tool: work_create ---
 
 func TestWorkCreate(t *testing.T) {
-	s := newTestServer(t)
-	result := callTool(t, s, "work_create", map[string]string{
-		"type":  "story",
-		"title": "Login feature",
+	ts := newTestServer(t)
+	result := callTool(t, ts.Server, "work_create", map[string]string{
+		"type":          "story",
+		"title":         "Login feature",
+		"agent_role_id": ts.roleID,
 	})
 
 	if result.IsError {
@@ -167,10 +191,11 @@ func TestWorkCreate(t *testing.T) {
 }
 
 func TestWorkCreate_InvalidType(t *testing.T) {
-	s := newTestServer(t)
-	result := callTool(t, s, "work_create", map[string]string{
-		"type":  "epic",
-		"title": "X",
+	ts := newTestServer(t)
+	result := callTool(t, ts.Server, "work_create", map[string]string{
+		"type":          "epic",
+		"title":         "X",
+		"agent_role_id": ts.roleID,
 	})
 
 	if !result.IsError {
@@ -181,8 +206,8 @@ func TestWorkCreate_InvalidType(t *testing.T) {
 // --- Tool: work_list ---
 
 func TestWorkList_Empty(t *testing.T) {
-	s := newTestServer(t)
-	result := callTool(t, s, "work_list", map[string]string{})
+	ts := newTestServer(t)
+	result := callTool(t, ts.Server, "work_list", map[string]string{})
 
 	text := toolText(result)
 	if text != "[]" {
@@ -191,16 +216,16 @@ func TestWorkList_Empty(t *testing.T) {
 }
 
 func TestWorkList_WithItems(t *testing.T) {
-	s := newTestServer(t)
+	ts := newTestServer(t)
 
-	callTool(t, s, "work_create", map[string]string{
-		"type": "story", "title": "Story A",
+	callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story A", "agent_role_id": ts.roleID,
 	})
-	callTool(t, s, "work_create", map[string]string{
-		"type": "story", "title": "Story B",
+	callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story B", "agent_role_id": ts.roleID,
 	})
 
-	result := callTool(t, s, "work_list", map[string]string{})
+	result := callTool(t, ts.Server, "work_list", map[string]string{})
 	text := toolText(result)
 
 	if !strings.Contains(text, "Story A") || !strings.Contains(text, "Story B") {
@@ -209,26 +234,26 @@ func TestWorkList_WithItems(t *testing.T) {
 }
 
 func TestWorkList_FilterByParentID(t *testing.T) {
-	s := newTestServer(t)
+	ts := newTestServer(t)
 
 	// Create story, extract ID
-	storyResult := callTool(t, s, "work_create", map[string]string{
-		"type": "story", "title": "Parent Story",
+	storyResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Parent Story", "agent_role_id": ts.roleID,
 	})
 	storyID := extractID(t, toolText(storyResult))
 
-	// Create task under story
-	callTool(t, s, "work_create", map[string]interface{}{
+	// Create task under story (inherits agent_role_id from parent)
+	callTool(t, ts.Server, "work_create", map[string]interface{}{
 		"type": "task", "parent_id": storyID, "title": "Child Task",
 	})
 
 	// Create another top-level story
-	callTool(t, s, "work_create", map[string]string{
-		"type": "story", "title": "Other Story",
+	callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Other Story", "agent_role_id": ts.roleID,
 	})
 
 	// Filter by parent
-	result := callTool(t, s, "work_list", map[string]string{"parent_id": storyID})
+	result := callTool(t, ts.Server, "work_list", map[string]string{"parent_id": storyID})
 	text := toolText(result)
 
 	if !strings.Contains(text, "Child Task") {
@@ -242,14 +267,14 @@ func TestWorkList_FilterByParentID(t *testing.T) {
 // --- Tool: work_update ---
 
 func TestWorkUpdate(t *testing.T) {
-	s := newTestServer(t)
+	ts := newTestServer(t)
 
-	createResult := callTool(t, s, "work_create", map[string]string{
-		"type": "story", "title": "Old Title",
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Old Title", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
-	result := callTool(t, s, "work_update", map[string]string{
+	result := callTool(t, ts.Server, "work_update", map[string]string{
 		"id": id, "title": "New Title",
 	})
 
@@ -262,10 +287,43 @@ func TestWorkUpdate(t *testing.T) {
 }
 
 func TestWorkUpdate_NotFound(t *testing.T) {
-	s := newTestServer(t)
-	result := callTool(t, s, "work_update", map[string]string{
+	ts := newTestServer(t)
+	result := callTool(t, ts.Server, "work_update", map[string]string{
 		"id": "nonexistent", "title": "X",
 	})
+
+	if !result.IsError {
+		t.Error("expected error for nonexistent ID")
+	}
+}
+
+// --- Tool: work_get ---
+
+func TestWorkGet(t *testing.T) {
+	ts := newTestServer(t)
+
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "My Story", "body": "Details here", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(createResult))
+
+	result := callTool(t, ts.Server, "work_get", map[string]string{"id": id})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	text := toolText(result)
+	if !strings.Contains(text, "My Story") {
+		t.Errorf("result = %q, want to contain title", text)
+	}
+	if !strings.Contains(text, "Details here") {
+		t.Errorf("result = %q, want to contain body", text)
+	}
+}
+
+func TestWorkGet_NotFound(t *testing.T) {
+	ts := newTestServer(t)
+	result := callTool(t, ts.Server, "work_get", map[string]string{"id": "nonexistent"})
 
 	if !result.IsError {
 		t.Error("expected error for nonexistent ID")
@@ -275,19 +333,19 @@ func TestWorkUpdate_NotFound(t *testing.T) {
 // --- Tool: work_done ---
 
 func TestWorkDone(t *testing.T) {
-	s := newTestServer(t)
+	ts := newTestServer(t)
 
-	createResult := callTool(t, s, "work_create", map[string]string{
-		"type": "story", "title": "My Story",
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "My Story", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
 	// Pre-transition to in_progress to test the in_progress → done path specifically
 	// (the auto open → done path is tested in TestWorkDone_FromOpen_AutoTransitions)
 	status := work.StatusInProgress
-	s.store.Update(context.Background(), id, work.UpdateFields{Status: &status})
+	ts.store.Update(context.Background(), id, work.UpdateFields{Status: &status})
 
-	result := callTool(t, s, "work_done", map[string]string{"id": id})
+	result := callTool(t, ts.Server, "work_done", map[string]string{"id": id})
 
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", toolText(result))
@@ -298,38 +356,57 @@ func TestWorkDone(t *testing.T) {
 }
 
 func TestWorkDone_FromOpen_AutoTransitions(t *testing.T) {
-	s := newTestServer(t)
+	ts := newTestServer(t)
 
 	// Create story (status=open) → work_done auto-transitions open → in_progress → done
-	createResult := callTool(t, s, "work_create", map[string]string{
-		"type": "story", "title": "Story",
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
-	result := callTool(t, s, "work_done", map[string]string{"id": id})
+	result := callTool(t, ts.Server, "work_done", map[string]string{"id": id})
 	if result.IsError {
 		t.Errorf("expected success for open → done (auto-transition), got error: %s", toolText(result))
 	}
 }
 
 func TestWorkDone_AlreadyClosed(t *testing.T) {
-	s := newTestServer(t)
+	ts := newTestServer(t)
 
 	// Create and complete a story (will auto-close since no children)
-	createResult := callTool(t, s, "work_create", map[string]string{
-		"type": "story", "title": "Story",
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
 	status := work.StatusInProgress
-	s.store.Update(context.Background(), id, work.UpdateFields{Status: &status})
+	ts.store.Update(context.Background(), id, work.UpdateFields{Status: &status})
 
-	callTool(t, s, "work_done", map[string]string{"id": id})
+	callTool(t, ts.Server, "work_done", map[string]string{"id": id})
 
 	// Try to done again — already closed, should fail
-	result := callTool(t, s, "work_done", map[string]string{"id": id})
+	result := callTool(t, ts.Server, "work_done", map[string]string{"id": id})
 	if !result.IsError {
 		t.Error("expected error for closed → done (invalid transition)")
+	}
+}
+
+// --- Tool: agent_role_list ---
+
+func TestAgentRoleList(t *testing.T) {
+	ts := newTestServer(t)
+	result := callTool(t, ts.Server, "agent_role_list", map[string]string{})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+
+	text := toolText(result)
+	if !strings.Contains(text, "Test Engineer") {
+		t.Errorf("expected role list to contain 'Test Engineer', got %q", text)
+	}
+	if !strings.Contains(text, "You are a test engineer.") {
+		t.Errorf("expected role list to contain role_prompt, got %q", text)
 	}
 }
 

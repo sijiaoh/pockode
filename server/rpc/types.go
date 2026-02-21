@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
@@ -292,17 +293,19 @@ type SettingsUpdateParams struct {
 // Work namespace
 
 type WorkCreateParams struct {
-	Type     work.WorkType `json:"type"`
-	ParentID string        `json:"parent_id,omitempty"`
-	Title    string        `json:"title"`
-	Body     string        `json:"body,omitempty"`
+	Type        work.WorkType `json:"type"`
+	ParentID    string        `json:"parent_id,omitempty"`
+	AgentRoleID string        `json:"agent_role_id,omitempty"`
+	Title       string        `json:"title"`
+	Body        string        `json:"body,omitempty"`
 }
 
 type WorkUpdateParams struct {
-	ID     string           `json:"id"`
-	Title  *string          `json:"title,omitempty"`
-	Body   *string          `json:"body,omitempty"`
-	Status *work.WorkStatus `json:"status,omitempty"`
+	ID          string           `json:"id"`
+	Title       *string          `json:"title,omitempty"`
+	Body        *string          `json:"body,omitempty"`
+	AgentRoleID *string          `json:"agent_role_id,omitempty"`
+	Status      *work.WorkStatus `json:"status,omitempty"`
 }
 
 type WorkDeleteParams struct {
@@ -316,4 +319,26 @@ type WorkStartParams struct {
 type WorkListSubscribeResult struct {
 	ID    string      `json:"id"`
 	Items []work.Work `json:"items"`
+}
+
+// AgentRole namespace
+
+type AgentRoleCreateParams struct {
+	Name       string `json:"name"`
+	RolePrompt string `json:"role_prompt"`
+}
+
+type AgentRoleUpdateParams struct {
+	ID         string  `json:"id"`
+	Name       *string `json:"name,omitempty"`
+	RolePrompt *string `json:"role_prompt,omitempty"`
+}
+
+type AgentRoleDeleteParams struct {
+	ID string `json:"id"`
+}
+
+type AgentRoleListSubscribeResult struct {
+	ID    string                `json:"id"`
+	Items []agentrole.AgentRole `json:"items"`
 }

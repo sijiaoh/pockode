@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
+	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/rpc"
@@ -25,34 +26,41 @@ import (
 
 // RPCHandler handles JSON-RPC 2.0 over WebSocket.
 type RPCHandler struct {
-	token           string
-	version         string
-	devMode         bool
-	commandStore    *command.Store
-	worktreeManager *worktree.Manager
-	settingsStore   *settings.Store
-	settingsWatcher *watch.SettingsWatcher
-	workStore       work.Store
-	workListWatcher *watch.WorkListWatcher
+	token                string
+	version              string
+	devMode              bool
+	commandStore         *command.Store
+	worktreeManager      *worktree.Manager
+	settingsStore        *settings.Store
+	settingsWatcher      *watch.SettingsWatcher
+	workStore            work.Store
+	workListWatcher      *watch.WorkListWatcher
+	agentRoleStore       agentrole.Store
+	agentRoleListWatcher *watch.AgentRoleListWatcher
 }
 
-func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store) *RPCHandler {
+func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, agentRoleStore agentrole.Store) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
 	workListWatcher := watch.NewWorkListWatcher(workStore)
 	workListWatcher.Start()
 
+	agentRoleListWatcher := watch.NewAgentRoleListWatcher(agentRoleStore)
+	agentRoleListWatcher.Start()
+
 	return &RPCHandler{
-		token:           token,
-		version:         version,
-		devMode:         devMode,
-		commandStore:    commandStore,
-		worktreeManager: worktreeManager,
-		settingsStore:   settingsStore,
-		settingsWatcher: settingsWatcher,
-		workStore:       workStore,
-		workListWatcher: workListWatcher,
+		token:                token,
+		version:              version,
+		devMode:              devMode,
+		commandStore:         commandStore,
+		worktreeManager:      worktreeManager,
+		settingsStore:        settingsStore,
+		settingsWatcher:      settingsWatcher,
+		workStore:            workStore,
+		workListWatcher:      workListWatcher,
+		agentRoleStore:       agentRoleStore,
+		agentRoleListWatcher: agentRoleListWatcher,
 	}
 }
 
@@ -60,6 +68,7 @@ func NewRPCHandler(token, version string, devMode bool, commandStore *command.St
 func (h *RPCHandler) Stop() {
 	h.settingsWatcher.Stop()
 	h.workListWatcher.Stop()
+	h.agentRoleListWatcher.Stop()
 }
 
 func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -281,6 +290,22 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "work.list.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, h.workListWatcher, "work list")
+		return
+	// agent_role namespace (app-level)
+	case "agent_role.create":
+		h.handleAgentRoleCreate(ctx, conn, req)
+		return
+	case "agent_role.update":
+		h.handleAgentRoleUpdate(ctx, conn, req)
+		return
+	case "agent_role.delete":
+		h.handleAgentRoleDelete(ctx, conn, req)
+		return
+	case "agent_role.list.subscribe":
+		h.handleAgentRoleListSubscribe(ctx, conn, req)
+		return
+	case "agent_role.list.unsubscribe":
+		h.handleWatcherUnsubscribe(ctx, conn, req, h.agentRoleListWatcher, "agent role list")
 		return
 	}
 

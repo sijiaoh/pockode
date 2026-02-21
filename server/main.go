@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent/claude"
+	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/logger"
@@ -287,6 +288,16 @@ func main() {
 		slog.Warn("failed to start work store file watcher", "error", err)
 	}
 
+	// Initialize agent role store
+	agentRoleStore, err := agentrole.NewFileStore(dataDir)
+	if err != nil {
+		slog.Error("failed to initialize agent role store", "error", err)
+		os.Exit(1)
+	}
+	if err := agentRoleStore.StartWatching(); err != nil {
+		slog.Warn("failed to start agent role store file watcher", "error", err)
+	}
+
 	// Initialize worktree registry and manager
 	claudeAgent := claude.New()
 	registry := worktree.NewRegistry(workDir, dataDir)
@@ -296,7 +307,7 @@ func main() {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
 
-	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore)
+	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, agentRoleStore)
 	handler := newHandler(token, devMode, wsHandler)
 
 	portStr := strconv.Itoa(port)
@@ -368,6 +379,7 @@ func main() {
 		workAutoResumer.Stop()
 		worktreeManager.Shutdown()
 		workStore.StopWatching()
+		agentRoleStore.StopWatching()
 		close(shutdownDone)
 	}()
 
@@ -423,7 +435,13 @@ func runMCP() {
 	}
 	defer store.StopWatching()
 
-	server := mcp.NewServer(store)
+	agentRoleStore, err := agentrole.NewFileStore(dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to initialize agent role store: %v\n", err)
+		os.Exit(1)
+	}
+
+	server := mcp.NewServer(store, agentRoleStore)
 	if err := server.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
 		os.Exit(1)

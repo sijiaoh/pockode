@@ -59,11 +59,28 @@ interface NavToWorkDetailOverlay {
 	sessionId: string | null;
 }
 
+interface NavToAgentRolesOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "agent-roles";
+	sessionId: string | null;
+}
+
+interface NavToAgentRoleDetailOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "agent-role-detail";
+	roleId: string;
+	sessionId: string | null;
+}
+
 type NavToOverlay =
 	| NavToFileOverlay
 	| NavToSettingsOverlay
 	| NavToWorksOverlay
-	| NavToWorkDetailOverlay;
+	| NavToWorkDetailOverlay
+	| NavToAgentRolesOverlay
+	| NavToAgentRoleDetailOverlay;
 
 interface NavToHome {
 	type: "home";
@@ -147,6 +164,21 @@ export function overlayToNavigation(
 					workId: overlay.workId,
 					sessionId,
 				};
+			case "agent-role-list":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "agent-roles" as const,
+					sessionId,
+				};
+			case "agent-role-detail":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "agent-role-detail" as const,
+					roleId: overlay.roleId,
+					sessionId,
+				};
 		}
 	})();
 	return buildNavigation(target);
@@ -182,7 +214,16 @@ export function buildNavigation(
 		}
 
 		case "overlay": {
-			if (target.overlayType === "work-detail") {
+			if (target.overlayType === "agent-role-detail") {
+				result.to = isMain ? ROUTES.agentRoleDetail : WT_ROUTES.agentRoleDetail;
+				result.params = { roleId: target.roleId };
+				if (!isMain) {
+					result.params.worktree = target.worktree;
+				}
+				if (target.sessionId) {
+					result.search = { session: target.sessionId };
+				}
+			} else if (target.overlayType === "work-detail") {
 				result.to = isMain ? ROUTES.workDetail : WT_ROUTES.workDetail;
 				result.params = { workId: target.workId };
 				if (!isMain) {
@@ -193,9 +234,15 @@ export function buildNavigation(
 				}
 			} else if (
 				target.overlayType === "settings" ||
-				target.overlayType === "works"
+				target.overlayType === "works" ||
+				target.overlayType === "agent-roles"
 			) {
-				const routeKey = target.overlayType === "works" ? "works" : "settings";
+				const routeKeyMap = {
+					settings: "settings",
+					works: "works",
+					"agent-roles": "agentRoles",
+				} as const;
+				const routeKey = routeKeyMap[target.overlayType];
 				result.to = isMain ? ROUTES[routeKey] : WT_ROUTES[routeKey];
 				if (!isMain) {
 					result.params = { worktree: target.worktree };

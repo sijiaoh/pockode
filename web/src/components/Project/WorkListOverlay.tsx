@@ -7,8 +7,10 @@ import {
 	Plus,
 	Trash2,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useWorkSubscription } from "../../hooks/useWorkSubscription";
+import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { Work, WorkType } from "../../types/work";
@@ -28,6 +30,7 @@ export default function WorkListOverlay({
 	onOpenWorkDetail,
 }: Props) {
 	useWorkSubscription(true);
+	useAgentRoleSubscription(true);
 
 	const works = useWorkStore((s) => s.works);
 	const isLoading = useWorkStore((s) => s.isLoading);
@@ -289,15 +292,24 @@ interface CreateWorkButtonProps {
 function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
 	const [isCreating, setIsCreating] = useState(false);
 	const [title, setTitle] = useState("");
+	const [agentRoleId, setAgentRoleId] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const createWork = useWSStore((s) => s.actions.createWork);
+	const roles = useAgentRoleStore((s) => s.roles);
+
+	// Auto-select when there's only one role
+	useEffect(() => {
+		if (roles.length === 1 && !agentRoleId) {
+			setAgentRoleId(roles[0].id);
+		}
+	}, [roles, agentRoleId]);
 
 	const handleSubmit = useCallback(
 		async (e: React.FormEvent) => {
 			e.preventDefault();
 			const trimmed = title.trim();
-			if (!trimmed || isSubmitting) return;
+			if (!trimmed || !agentRoleId || isSubmitting) return;
 
 			setError(null);
 			setIsSubmitting(true);
@@ -305,9 +317,11 @@ function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
 				await createWork({
 					type,
 					parent_id: parentId,
+					agent_role_id: agentRoleId,
 					title: trimmed,
 				});
 				setTitle("");
+				setAgentRoleId(roles.length === 1 ? roles[0].id : "");
 				setIsCreating(false);
 			} catch (err) {
 				setError(err instanceof Error ? err.message : "Failed to create work");
@@ -315,7 +329,7 @@ function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
 				setIsSubmitting(false);
 			}
 		},
-		[title, type, parentId, createWork, isSubmitting],
+		[title, type, parentId, agentRoleId, createWork, isSubmitting, roles],
 	);
 
 	if (!isCreating) {
@@ -331,32 +345,82 @@ function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
 		);
 	}
 
+	if (roles.length === 0) {
+		return (
+			<div className="px-1 text-xs text-th-text-muted">
+				<p>No agent roles registered.</p>
+				<p className="mt-1">
+					Create a role in{" "}
+					<span className="text-th-text-secondary">Settings</span> first.
+				</p>
+				<button
+					type="button"
+					onClick={() => {
+						setIsCreating(false);
+					}}
+					className="mt-1.5 text-th-text-muted hover:text-th-text-primary"
+				>
+					Cancel
+				</button>
+			</div>
+		);
+	}
+
 	return (
 		<div>
-			<form onSubmit={handleSubmit} className="flex gap-1.5 px-1">
+			<form onSubmit={handleSubmit} className="space-y-1.5 px-1">
 				<input
 					type="text"
 					value={title}
 					onChange={(e) => setTitle(e.target.value)}
 					placeholder={type === "story" ? "Story title" : "Task title"}
-					className="min-w-0 flex-1 rounded border border-th-border bg-th-bg-primary px-2 py-1.5 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+					className="w-full rounded border border-th-border bg-th-bg-primary px-2 py-1.5 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
 					// biome-ignore lint/a11y/noAutofocus: inline creation form
 					autoFocus
 					onKeyDown={(e) => {
 						if (e.key === "Escape") {
 							setIsCreating(false);
 							setTitle("");
+							setAgentRoleId(roles.length === 1 ? roles[0].id : "");
 							setError(null);
 						}
 					}}
 				/>
-				<button
-					type="submit"
-					disabled={!title.trim() || isSubmitting}
-					className="rounded bg-th-accent px-3 py-1.5 text-xs text-th-accent-text disabled:opacity-50"
-				>
-					{isSubmitting ? "Adding..." : "Add"}
-				</button>
+				{roles.length > 1 && (
+					<select
+						value={agentRoleId}
+						onChange={(e) => setAgentRoleId(e.target.value)}
+						className="w-full rounded border border-th-border bg-th-bg-primary px-2 py-1.5 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
+					>
+						<option value="">Select role...</option>
+						{roles.map((role) => (
+							<option key={role.id} value={role.id}>
+								{role.name}
+							</option>
+						))}
+					</select>
+				)}
+				<div className="flex gap-1.5">
+					<button
+						type="submit"
+						disabled={!title.trim() || !agentRoleId || isSubmitting}
+						className="rounded bg-th-accent px-3 py-1.5 text-xs text-th-accent-text disabled:opacity-50"
+					>
+						{isSubmitting ? "Adding..." : "Add"}
+					</button>
+					<button
+						type="button"
+						onClick={() => {
+							setIsCreating(false);
+							setTitle("");
+							setAgentRoleId(roles.length === 1 ? roles[0].id : "");
+							setError(null);
+						}}
+						className="rounded px-3 py-1.5 text-xs text-th-text-muted hover:bg-th-bg-tertiary"
+					>
+						Cancel
+					</button>
+				</div>
 			</form>
 			{error && (
 				<p className="px-1 pt-1 text-xs text-th-error" role="alert">

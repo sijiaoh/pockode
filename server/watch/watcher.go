@@ -18,4 +18,5 @@ var (
 	_ Watcher = (*SettingsWatcher)(nil)
 	_ Watcher = (*ChatMessagesWatcher)(nil)
 	_ Watcher = (*WorkListWatcher)(nil)
+	_ Watcher = (*AgentRoleListWatcher)(nil)
 )

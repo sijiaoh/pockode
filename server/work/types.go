@@ -27,15 +27,16 @@ const (
 )
 
 type Work struct {
-	ID        string     `json:"id"`
-	Type      WorkType   `json:"type"`
-	ParentID  string     `json:"parent_id,omitempty"`
-	Title     string     `json:"title"`
-	Body      string     `json:"body,omitempty"`
-	Status    WorkStatus `json:"status"`
-	SessionID string     `json:"session_id,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID          string     `json:"id"`
+	Type        WorkType   `json:"type"`
+	ParentID    string     `json:"parent_id,omitempty"`
+	AgentRoleID string     `json:"agent_role_id,omitempty"`
+	Title       string     `json:"title"`
+	Body        string     `json:"body,omitempty"`
+	Status      WorkStatus `json:"status"`
+	SessionID   string     `json:"session_id,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 type Operation string

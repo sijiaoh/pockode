@@ -1,6 +1,11 @@
 import { JSONRPCClient, type JSONRPCRequester } from "json-rpc-2.0";
 import { create } from "zustand";
 import type {
+	AgentRole,
+	AgentRoleListChangedNotification,
+	AgentRoleListSubscribeResult,
+} from "../types/agentRole";
+import type {
 	GitDiffChangedNotification,
 	GitDiffSubscribeResult,
 } from "../types/git";
@@ -25,8 +30,10 @@ import type {
 } from "../types/work";
 import { getWebSocketUrl } from "../utils/config";
 import {
+	type AgentRoleActions,
 	type ChatActions,
 	type CommandActions,
+	createAgentRoleActions,
 	createChatActions,
 	createCommandActions,
 	createFileActions,
@@ -99,9 +106,14 @@ export interface WatchActions {
 		callback: (params: WorkListChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<Work[]>>;
 	workListUnsubscribe: (id: string) => Promise<void>;
+	agentRoleListSubscribe: (
+		callback: (params: AgentRoleListChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<AgentRole[]>>;
+	agentRoleListUnsubscribe: (id: string) => Promise<void>;
 }
 
 type RPCActions = ConnectionActions &
+	AgentRoleActions &
 	ChatActions &
 	CommandActions &
 	SessionActions &
@@ -150,6 +162,10 @@ const workListWatchCallbacks = new Map<
 	string,
 	(params: WorkListChangedNotification) => void
 >();
+const agentRoleListWatchCallbacks = new Map<
+	string,
+	(params: AgentRoleListChangedNotification) => void
+>();
 
 /**
  * Clear all local watch subscriptions.
@@ -165,6 +181,7 @@ function clearWatchSubscriptions(): void {
 	sessionListWatchCallbacks.clear();
 	chatMessagesCallbacks.clear();
 	workListWatchCallbacks.clear();
+	agentRoleListWatchCallbacks.clear();
 	// Note: worktreeWatchCallbacks and settingsWatchCallbacks are NOT cleared here
 	// because they are Manager-level, not worktree-specific.
 }
@@ -250,6 +267,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 		workListWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
+	"agent_role.list.changed": (params) => {
+		const changedParams = params as AgentRoleListChangedNotification;
+		agentRoleListWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
 };
 
 function handleNotification(method: string, params: unknown): void {
@@ -274,6 +296,7 @@ function handleNotification(method: string, params: unknown): void {
 }
 
 // Create namespace-specific actions
+const agentRoleActions = createAgentRoleActions(getClient);
 const chatActions = createChatActions(getClient);
 const commandActions = createCommandActions(getClient);
 const sessionActions = createSessionActions(getClient);
@@ -664,7 +687,35 @@ export const useWSStore = create<WSState>((set, get) => ({
 			}
 		},
 
+		agentRoleListSubscribe: async (
+			callback: (params: AgentRoleListChangedNotification) => void,
+		) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			const result = (await client.request(
+				"agent_role.list.subscribe",
+				{},
+			)) as AgentRoleListSubscribeResult;
+			agentRoleListWatchCallbacks.set(result.id, callback);
+			return { id: result.id, initial: result.items };
+		},
+
+		agentRoleListUnsubscribe: async (id: string) => {
+			agentRoleListWatchCallbacks.delete(id);
+			const client = getClient();
+			if (client) {
+				try {
+					await client.request("agent_role.list.unsubscribe", { id });
+				} catch {
+					// Ignore errors (connection might be closed)
+				}
+			}
+		},
+
 		// Spread namespace-specific actions
+		...agentRoleActions,
 		...chatActions,
 		...commandActions,
 		...sessionActions,
@@ -751,6 +802,7 @@ export function resetWSStore() {
 	chatMessagesCallbacks.clear();
 	settingsWatchCallbacks.clear();
 	workListWatchCallbacks.clear();
+	agentRoleListWatchCallbacks.clear();
 	worktreeDeletedListener = null;
 	onWorktreeSwitched = null;
 	useWSStore.setState({

@@ -11,7 +11,12 @@ import { hasCoarsePointer } from "../../utils/breakpoints";
 import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
-import { WorkDetailOverlay, WorkListOverlay } from "../Project";
+import {
+	AgentRoleDetailOverlay,
+	AgentRoleListOverlay,
+	WorkDetailOverlay,
+	WorkListOverlay,
+} from "../Project";
 import { SettingsPage } from "../Settings";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
@@ -28,6 +33,8 @@ interface Props {
 	onNavigateToSession?: (sessionId: string) => void;
 	onOpenWorkDetail?: (workId: string) => void;
 	onOpenWorkList?: () => void;
+	onOpenAgentRoleList?: () => void;
+	onOpenAgentRoleDetail?: (roleId: string) => void;
 }
 
 function ChatPanel({
@@ -41,6 +48,8 @@ function ChatPanel({
 	onNavigateToSession,
 	onOpenWorkDetail,
 	onOpenWorkList,
+	onOpenAgentRoleList,
+	onOpenAgentRoleDetail,
 }: Props) {
 	const projectTitle = useWSStore((state) => state.projectTitle);
 
@@ -201,6 +210,20 @@ function ChatPanel({
 						onBack={onOpenWorkList ?? onCloseOverlay ?? noop}
 						onNavigateToSession={onNavigateToSession ?? noop}
 						onOpenWorkDetail={onOpenWorkDetail ?? noop}
+					/>
+				);
+			case "agent-role-list":
+				return (
+					<AgentRoleListOverlay
+						onBack={onCloseOverlay ?? noop}
+						onOpenAgentRoleDetail={onOpenAgentRoleDetail ?? noop}
+					/>
+				);
+			case "agent-role-detail":
+				return (
+					<AgentRoleDetailOverlay
+						roleId={overlay.roleId}
+						onBack={onOpenAgentRoleList ?? onCloseOverlay ?? noop}
 					/>
 				);
 		}

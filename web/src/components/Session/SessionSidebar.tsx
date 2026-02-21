@@ -27,6 +27,7 @@ interface Props {
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
 	onOpenWorkList: () => void;
+	onOpenAgentRoleList: () => void;
 	isDesktop: boolean;
 }
 
@@ -44,6 +45,7 @@ function SessionSidebar({
 	onSelectFile,
 	activeFilePath,
 	onOpenWorkList,
+	onOpenAgentRoleList,
 	isDesktop,
 }: Props) {
 	const hasAnyUnread = useSessionStore((s) =>
@@ -124,7 +126,10 @@ function SessionSidebar({
 				activeFile={activeDiffFile}
 				activeCommitHash={activeCommitHash}
 			/>
-			<ProjectTab onOpenWorkList={onOpenWorkList} />
+			<ProjectTab
+				onOpenWorkList={onOpenWorkList}
+				onOpenAgentRoleList={onOpenAgentRoleList}
+			/>
 		</TabbedSidebar>
 	);
 }

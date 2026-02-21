@@ -8,7 +8,9 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useWorkSubscription } from "../../hooks/useWorkSubscription";
+import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { Work, WorkStatus } from "../../types/work";
@@ -28,6 +30,7 @@ export default function WorkDetailOverlay({
 	onOpenWorkDetail,
 }: Props) {
 	useWorkSubscription(true);
+	useAgentRoleSubscription(true);
 
 	const works = useWorkStore((s) => s.works);
 	const work = useMemo(
@@ -344,8 +347,17 @@ function MetadataSection({
 	onNavigateToSession: (sessionId: string) => void;
 }) {
 	const startWork = useWSStore((s) => s.actions.startWork);
+	const updateWork = useWSStore((s) => s.actions.updateWork);
+	const roles = useAgentRoleStore((s) => s.roles);
 	const [isStarting, setIsStarting] = useState(false);
+	const [editingRole, setEditingRole] = useState(false);
+	const [savingRole, setSavingRole] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+
+	const roleName = useMemo(() => {
+		if (!work.agent_role_id) return null;
+		return roles.find((r) => r.id === work.agent_role_id)?.name ?? null;
+	}, [work.agent_role_id, roles]);
 
 	const handleStart = useCallback(async () => {
 		setError(null);
@@ -361,6 +373,26 @@ function MetadataSection({
 		}
 	}, [startWork, work.id]);
 
+	const handleRoleChange = useCallback(
+		async (newRoleId: string) => {
+			if (!newRoleId || newRoleId === work.agent_role_id) {
+				setEditingRole(false);
+				return;
+			}
+			setError(null);
+			setSavingRole(true);
+			try {
+				await updateWork({ id: work.id, agent_role_id: newRoleId });
+				setEditingRole(false);
+			} catch (err) {
+				setError(err instanceof Error ? err.message : "Failed to update role");
+			} finally {
+				setSavingRole(false);
+			}
+		},
+		[work.id, work.agent_role_id, updateWork],
+	);
+
 	return (
 		<div className="space-y-2">
 			<div className="flex items-center gap-2 text-xs text-th-text-muted">
@@ -370,6 +402,43 @@ function MetadataSection({
 			<div className="flex items-center gap-2 text-xs text-th-text-muted">
 				<span className="w-14">Type</span>
 				<span className="text-th-text-secondary">{work.type}</span>
+			</div>
+			<div className="flex items-center gap-2 text-xs text-th-text-muted">
+				<span className="w-14">Role</span>
+				{editingRole ? (
+					<div className="flex items-center gap-1">
+						<select
+							value={work.agent_role_id ?? ""}
+							onChange={(e) => handleRoleChange(e.target.value)}
+							onBlur={() => {
+								if (!savingRole) setEditingRole(false);
+							}}
+							disabled={savingRole}
+							className="rounded border border-th-border bg-th-bg-primary px-1.5 py-0.5 text-xs text-th-text-primary focus:border-th-accent focus:outline-none"
+							// biome-ignore lint/a11y/noAutofocus: inline edit
+							autoFocus
+						>
+							{!work.agent_role_id && <option value="">Select role...</option>}
+							{roles.map((role) => (
+								<option key={role.id} value={role.id}>
+									{role.name}
+								</option>
+							))}
+						</select>
+						{savingRole && (
+							<Loader2 className="size-3 animate-spin text-th-text-muted" />
+						)}
+					</div>
+				) : (
+					<button
+						type="button"
+						onClick={() => setEditingRole(true)}
+						className="group flex items-center gap-1 text-th-text-secondary hover:text-th-accent"
+					>
+						<span>{roleName ?? "—"}</span>
+						<Pencil className="size-3 text-th-text-muted opacity-0 group-hover:opacity-100" />
+					</button>
+				)}
 			</div>
 			<div className="flex items-center gap-2">
 				{work.status === "open" && (

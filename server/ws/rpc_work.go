@@ -28,11 +28,23 @@ func (h *rpcMethodHandler) handleWorkCreate(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
+	// Validate agent_role_id exists if specified
+	if params.AgentRoleID != "" {
+		if _, found, err := h.agentRoleStore.Get(params.AgentRoleID); err != nil {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to validate agent role")
+			return
+		} else if !found {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "agent role not found: "+params.AgentRoleID)
+			return
+		}
+	}
+
 	w, err := h.workStore.Create(ctx, work.Work{
-		Type:     params.Type,
-		ParentID: params.ParentID,
-		Title:    params.Title,
-		Body:     params.Body,
+		Type:        params.Type,
+		ParentID:    params.ParentID,
+		AgentRoleID: params.AgentRoleID,
+		Title:       params.Title,
+		Body:        params.Body,
 	})
 	if err != nil {
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to create work")
@@ -53,10 +65,22 @@ func (h *rpcMethodHandler) handleWorkUpdate(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
+	// Validate agent_role_id exists if specified
+	if params.AgentRoleID != nil && *params.AgentRoleID != "" {
+		if _, found, err := h.agentRoleStore.Get(*params.AgentRoleID); err != nil {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to validate agent role")
+			return
+		} else if !found {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "agent role not found: "+*params.AgentRoleID)
+			return
+		}
+	}
+
 	fields := work.UpdateFields{
-		Title:  params.Title,
-		Body:   params.Body,
-		Status: params.Status,
+		Title:       params.Title,
+		Body:        params.Body,
+		AgentRoleID: params.AgentRoleID,
+		Status:      params.Status,
 	}
 	if err := h.workStore.Update(ctx, params.ID, fields); err != nil {
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to update work")
@@ -127,7 +151,22 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 		return
 	}
 
-	// 2. Get main worktree
+	// 2. Resolve agent role — every work item must have one.
+	if w.AgentRoleID == "" {
+		rollbackAndReply("work has no agent_role_id")
+		return
+	}
+	role, roleFound, err := h.agentRoleStore.Get(w.AgentRoleID)
+	if err != nil {
+		rollbackAndReply("failed to get agent role")
+		return
+	}
+	if !roleFound {
+		rollbackAndReply("agent role not found: " + w.AgentRoleID)
+		return
+	}
+
+	// 3. Get main worktree
 	mainWt, err := h.worktreeManager.Get("")
 	if err != nil {
 		rollbackAndReply("failed to get main worktree")
@@ -135,18 +174,18 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 	}
 	defer h.worktreeManager.Release(mainWt)
 
-	// 3. Create session
+	// 4. Create session
 	if _, err := mainWt.SessionStore.Create(ctx, sessionID); err != nil {
 		rollbackAndReply("failed to create session")
 		return
 	}
 
-	// 4. Set session title to work title
+	// 5. Set session title to work title
 	if err := mainWt.SessionStore.Update(ctx, sessionID, w.Title); err != nil {
 		h.log.Warn("failed to set session title", "error", err)
 	}
 
-	// 5. Send kickoff message (starts the agent process).
+	// 6. Send kickoff message (starts the agent process).
 	//    This is the step that actually launches the agent — if it fails,
 	//    the work would be stuck in_progress with no running process.
 	var parentTitle string
@@ -157,7 +196,7 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 			h.log.Warn("failed to get parent for kickoff message", "parentId", w.ParentID, "error", err)
 		}
 	}
-	kickoffMsg := work.BuildKickoffMessage(w, parentTitle)
+	kickoffMsg := work.BuildKickoffMessage(w, parentTitle, role.RolePrompt)
 	if err := mainWt.ChatClient.SendMessage(ctx, sessionID, kickoffMsg); err != nil {
 		if delErr := mainWt.SessionStore.Delete(ctx, sessionID); delErr != nil {
 			h.log.Error("failed to clean up session after kickoff failure", "sessionId", sessionID, "error", delErr)

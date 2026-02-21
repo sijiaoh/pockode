@@ -6,6 +6,7 @@ export interface Work {
 	id: string;
 	type: WorkType;
 	parent_id?: string;
+	agent_role_id?: string;
 	title: string;
 	body?: string;
 	status: WorkStatus;
@@ -17,6 +18,7 @@ export interface Work {
 export interface WorkCreateParams {
 	type: WorkType;
 	parent_id?: string;
+	agent_role_id?: string;
 	title: string;
 	body?: string;
 }
@@ -25,6 +27,7 @@ export interface WorkUpdateParams {
 	id: string;
 	title?: string;
 	body?: string;
+	agent_role_id?: string;
 	status?: Exclude<WorkStatus, "closed">;
 }
 

@@ -16,9 +16,12 @@ func newTestStore(t *testing.T) *FileStore {
 	return store
 }
 
+// testRoleID is a dummy agent_role_id used in tests.
+const testRoleID = "test-role-id"
+
 func createStory(t *testing.T, s *FileStore, title string) Work {
 	t.Helper()
-	w, err := s.Create(context.Background(), Work{Type: WorkTypeStory, Title: title})
+	w, err := s.Create(context.Background(), Work{Type: WorkTypeStory, Title: title, AgentRoleID: testRoleID})
 	if err != nil {
 		t.Fatalf("Create story %q: %v", title, err)
 	}
@@ -109,7 +112,7 @@ func TestCreate_Task(t *testing.T) {
 
 func TestCreate_TaskRequiresParent(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeTask, Title: "Orphan"})
+	_, err := s.Create(context.Background(), Work{Type: WorkTypeTask, Title: "Orphan", AgentRoleID: testRoleID})
 	if err == nil {
 		t.Fatal("expected error for task without parent")
 	}
@@ -120,7 +123,7 @@ func TestCreate_TaskCannotBeUnderTask(t *testing.T) {
 	story := createStory(t, s, "Story")
 	task := createTask(t, s, story.ID, "Task")
 
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: task.ID, Title: "Sub-task"})
+	_, err := s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: task.ID, Title: "Sub-task", AgentRoleID: testRoleID})
 	if err == nil {
 		t.Fatal("expected error for task under task")
 	}
@@ -130,7 +133,7 @@ func TestCreate_StoryMustBeTopLevel(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "Parent")
 
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeStory, ParentID: story.ID, Title: "Nested story"})
+	_, err := s.Create(context.Background(), Work{Type: WorkTypeStory, ParentID: story.ID, Title: "Nested story", AgentRoleID: testRoleID})
 	if err == nil {
 		t.Fatal("expected error for nested story")
 	}
@@ -154,7 +157,7 @@ func TestCreate_TaskUnderClosedParent(t *testing.T) {
 
 func TestCreate_InvalidType(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.Create(context.Background(), Work{Type: "epic", Title: "X"})
+	_, err := s.Create(context.Background(), Work{Type: "epic", Title: "X", AgentRoleID: testRoleID})
 	if err == nil {
 		t.Fatal("expected error for invalid type")
 	}
@@ -162,7 +165,7 @@ func TestCreate_InvalidType(t *testing.T) {
 
 func TestCreate_EmptyTitle(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeStory, Title: ""})
+	_, err := s.Create(context.Background(), Work{Type: WorkTypeStory, Title: "", AgentRoleID: testRoleID})
 	if err == nil {
 		t.Fatal("expected error for empty title")
 	}
@@ -599,8 +602,9 @@ func TestConcurrent_CreateStories(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func(i int) {
 			_, err := s.Create(context.Background(), Work{
-				Type:  WorkTypeStory,
-				Title: fmt.Sprintf("Story %d", i),
+				Type:        WorkTypeStory,
+				Title:       fmt.Sprintf("Story %d", i),
+				AgentRoleID: testRoleID,
 			})
 			errs <- err
 		}(i)
@@ -640,7 +644,7 @@ func TestConcurrent_CreateTasksUnderStory(t *testing.T) {
 				ParentID: story.ID,
 				Title:    fmt.Sprintf("Task %d", i),
 			})
-			errs <- err
+			errs <- err // inherits agent_role_id from parent
 		}(i)
 	}
 
@@ -718,7 +722,7 @@ func TestConcurrent_MixedOperations(t *testing.T) {
 
 	done := make(chan struct{}, n*3)
 
-	// Concurrent creates
+	// Concurrent creates (tasks inherit agent_role_id from parent)
 	for i := 0; i < n; i++ {
 		go func(i int) {
 			defer func() { done <- struct{}{} }()

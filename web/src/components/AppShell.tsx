@@ -283,6 +283,30 @@ function AppShell() {
 		[navigate, urlWorktree, currentSessionId],
 	);
 
+	const handleOpenAgentRoleList = useCallback(() => {
+		setSidebarOpen(false);
+		navigate(
+			overlayToNavigation(
+				{ type: "agent-role-list" },
+				urlWorktree,
+				currentSessionId,
+			),
+		);
+	}, [navigate, urlWorktree, currentSessionId]);
+
+	const handleOpenAgentRoleDetail = useCallback(
+		(roleId: string) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "agent-role-detail", roleId },
+					urlWorktree,
+					currentSessionId,
+				),
+			);
+		},
+		[navigate, urlWorktree, currentSessionId],
+	);
+
 	const handleNavigateToSession = useCallback(
 		(sessionId: string) => {
 			navigate(
@@ -347,6 +371,7 @@ function AppShell() {
 				onSelectFile={handleSelectFile}
 				activeFilePath={activeFilePath}
 				onOpenWorkList={handleOpenWorkList}
+				onOpenAgentRoleList={handleOpenAgentRoleList}
 				isDesktop={isDesktop}
 			/>
 			<ChatPanel
@@ -360,6 +385,8 @@ function AppShell() {
 				onNavigateToSession={handleNavigateToSession}
 				onOpenWorkDetail={handleOpenWorkDetail}
 				onOpenWorkList={handleOpenWorkList}
+				onOpenAgentRoleList={handleOpenAgentRoleList}
+				onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
 			/>
 		</div>
 	);

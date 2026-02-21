@@ -6,4 +6,6 @@ export type OverlayState =
 	| { type: "settings" }
 	| { type: "work-list" }
 	| { type: "work-detail"; workId: string }
+	| { type: "agent-role-list" }
+	| { type: "agent-role-detail"; roleId: string }
 	| null;

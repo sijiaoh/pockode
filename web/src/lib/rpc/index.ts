@@ -1,3 +1,7 @@
+export {
+	type AgentRoleActions,
+	createAgentRoleActions,
+} from "./agentRole";
 export { type ChatActions, createChatActions } from "./chat";
 export {
 	type Command,

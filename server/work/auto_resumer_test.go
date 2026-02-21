@@ -11,7 +11,7 @@ import (
 // mockSender records SendMessage calls.
 type mockSender struct {
 	messagesMu sync.Mutex
-	messages []sentMessage
+	messages   []sentMessage
 }
 
 type sentMessage struct {
