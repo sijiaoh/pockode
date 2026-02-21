@@ -3,9 +3,7 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Loader2,
-	Play,
 	Plus,
-	Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
@@ -14,22 +12,17 @@ import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { Work, WorkStatus, WorkType } from "../../types/work";
-import ConfirmDialog from "../common/ConfirmDialog";
+import SidebarListItem from "../common/SidebarListItem";
 import BackToChatButton from "../ui/BackToChatButton";
 import { statusLabels } from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
 
 interface Props {
 	onBack: () => void;
-	onNavigateToSession: (sessionId: string) => void;
 	onOpenWorkDetail: (workId: string) => void;
 }
 
-export default function WorkListOverlay({
-	onBack,
-	onNavigateToSession,
-	onOpenWorkDetail,
-}: Props) {
+export default function WorkListOverlay({ onBack, onOpenWorkDetail }: Props) {
 	useWorkSubscription(true);
 	useAgentRoleSubscription(true);
 
@@ -82,7 +75,11 @@ export default function WorkListOverlay({
 				</h1>
 			</header>
 
-			<div className="min-h-0 flex-1 overflow-auto p-3">
+			<div className="min-h-0 flex-1 overflow-auto p-2">
+				<div className="mb-2">
+					<CreateWorkButton type="story" />
+				</div>
+
 				{isLoading ? (
 					<div className="flex items-center justify-center py-8">
 						<Loader2 className="size-5 animate-spin text-th-text-muted" />
@@ -97,29 +94,22 @@ export default function WorkListOverlay({
 						No work items yet
 					</div>
 				) : (
-					<div className="space-y-3">
+					<div className="space-y-2">
 						{storyGroups.map(({ status, stories }) => (
 							<StatusGroup
 								key={status}
 								status={status}
 								stories={stories}
 								tasksByParentId={tasksByParentId}
-								onNavigateToSession={onNavigateToSession}
 								onOpenWorkDetail={onOpenWorkDetail}
 							/>
 						))}
 					</div>
 				)}
 			</div>
-
-			<div className="border-t border-th-border p-3">
-				<CreateWorkButton type="story" />
-			</div>
 		</div>
 	);
 }
-
-const emptyTasks: Work[] = [];
 
 const statusGroupOrder: WorkStatus[] = [
 	"in_progress",
@@ -133,7 +123,6 @@ interface StatusGroupProps {
 	status: WorkStatus;
 	stories: Work[];
 	tasksByParentId: Map<string, Work[]>;
-	onNavigateToSession: (sessionId: string) => void;
 	onOpenWorkDetail: (workId: string) => void;
 }
 
@@ -141,7 +130,6 @@ function StatusGroup({
 	status,
 	stories,
 	tasksByParentId,
-	onNavigateToSession,
 	onOpenWorkDetail,
 }: StatusGroupProps) {
 	const [collapsed, setCollapsed] = useState(status === "closed");
@@ -151,221 +139,54 @@ function StatusGroup({
 			<button
 				type="button"
 				onClick={() => setCollapsed(!collapsed)}
-				className="flex w-full items-center gap-1.5 px-1 py-1 text-xs font-medium text-th-text-muted"
+				className="flex min-h-[44px] w-full items-center gap-2 px-3 text-xs font-medium text-th-text-muted"
 			>
 				{collapsed ? (
-					<ChevronRight className="size-3" />
+					<ChevronRight className="size-3.5 shrink-0" />
 				) : (
-					<ChevronDown className="size-3" />
+					<ChevronDown className="size-3.5 shrink-0" />
 				)}
-				<StatusIcon status={status} className="!size-3" />
-				<span>{statusLabels[status]}</span>
-				<span className="text-th-text-muted/60">{stories.length}</span>
+				<StatusIcon status={status} />
+				<span className="flex-1 text-left">{statusLabels[status]}</span>
+				<span className="rounded-full bg-th-bg-tertiary px-1.5 py-0.5 text-xs tabular-nums text-th-text-muted">
+					{stories.length}
+				</span>
 			</button>
 			{!collapsed && (
-				<div className="space-y-1">
-					{stories.map((story) => (
-						<StoryItem
-							key={story.id}
-							story={story}
-							tasks={tasksByParentId.get(story.id) ?? emptyTasks}
-							onNavigateToSession={onNavigateToSession}
-							onOpenWorkDetail={onOpenWorkDetail}
-						/>
-					))}
+				<div className="space-y-0.5">
+					{stories.map((story) => {
+						const tasks = tasksByParentId.get(story.id);
+						const totalTasks = tasks?.length ?? 0;
+						const doneTasks =
+							tasks?.filter((t) => t.status === "done" || t.status === "closed")
+								.length ?? 0;
+
+						const subtitle =
+							totalTasks > 0
+								? `${doneTasks}/${totalTasks} tasks done`
+								: undefined;
+
+						return (
+							<SidebarListItem
+								key={story.id}
+								title={story.title}
+								subtitle={subtitle}
+								isActive={false}
+								isRunning={story.status === "in_progress"}
+								needsInput={story.status === "needs_input"}
+								leftSlot={<StatusIcon status={story.status} />}
+								onSelect={() => onOpenWorkDetail(story.id)}
+								ariaLabel={`${story.title} — ${statusLabels[story.status]}`}
+							/>
+						);
+					})}
 				</div>
 			)}
 		</div>
 	);
 }
 
-interface StoryItemProps {
-	story: Work;
-	tasks: Work[];
-	onNavigateToSession: (sessionId: string) => void;
-	onOpenWorkDetail: (workId: string) => void;
-}
-
-function StoryItem({
-	story,
-	tasks,
-	onNavigateToSession,
-	onOpenWorkDetail,
-}: StoryItemProps) {
-	const [expanded, setExpanded] = useState(story.status !== "closed");
-
-	return (
-		<div>
-			<WorkRow
-				work={story}
-				onToggle={() => setExpanded(!expanded)}
-				expanded={expanded}
-				hasChildren={tasks.length > 0}
-				onNavigateToSession={onNavigateToSession}
-				onOpenWorkDetail={onOpenWorkDetail}
-			/>
-			{expanded && (
-				<div className="ml-5 space-y-0.5 border-l border-th-border pl-2">
-					{tasks.map((task) => (
-						<WorkRow
-							key={task.id}
-							work={task}
-							onNavigateToSession={onNavigateToSession}
-							onOpenWorkDetail={onOpenWorkDetail}
-						/>
-					))}
-					<div className="pt-1">
-						<CreateWorkButton type="task" parentId={story.id} />
-					</div>
-				</div>
-			)}
-		</div>
-	);
-}
-
-interface WorkRowProps {
-	work: Work;
-	onToggle?: () => void;
-	expanded?: boolean;
-	hasChildren?: boolean;
-	onNavigateToSession: (sessionId: string) => void;
-	onOpenWorkDetail: (workId: string) => void;
-}
-
-function WorkRow({
-	work,
-	onToggle,
-	expanded,
-	hasChildren,
-	onNavigateToSession,
-	onOpenWorkDetail,
-}: WorkRowProps) {
-	const startWork = useWSStore((s) => s.actions.startWork);
-	const deleteWork = useWSStore((s) => s.actions.deleteWork);
-	const [showDelete, setShowDelete] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const [isStarting, setIsStarting] = useState(false);
-
-	const handleStart = useCallback(async () => {
-		setError(null);
-		setIsStarting(true);
-		try {
-			await startWork(work.id);
-		} catch (err) {
-			setError(
-				`Failed to start: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		} finally {
-			setIsStarting(false);
-		}
-	}, [startWork, work.id]);
-
-	const handleDelete = useCallback(async () => {
-		try {
-			await deleteWork(work.id);
-			setShowDelete(false);
-		} catch (err) {
-			setError(
-				`Failed to delete: ${err instanceof Error ? err.message : String(err)}`,
-			);
-			setShowDelete(false);
-		}
-	}, [deleteWork, work.id]);
-
-	const canDelete =
-		work.status === "open" || (work.status !== "closed" && !hasChildren);
-
-	return (
-		<>
-			<div className="group flex min-h-[36px] items-center gap-1.5 rounded px-1.5 hover:bg-th-bg-tertiary">
-				{work.type === "story" && (
-					<button
-						type="button"
-						onClick={onToggle}
-						className="flex size-5 items-center justify-center text-th-text-muted"
-					>
-						{expanded ? (
-							<ChevronDown className="size-3.5" />
-						) : (
-							<ChevronRight className="size-3.5" />
-						)}
-					</button>
-				)}
-
-				<StatusIcon status={work.status} />
-
-				<button
-					type="button"
-					onClick={() => onOpenWorkDetail(work.id)}
-					className="min-w-0 flex-1 truncate text-left text-sm text-th-text-primary hover:text-th-accent"
-				>
-					{work.title}
-				</button>
-
-				{work.session_id && (
-					<button
-						type="button"
-						onClick={() => onNavigateToSession(work.session_id ?? "")}
-						className="shrink-0 rounded px-1.5 py-0.5 text-xs text-th-accent hover:bg-th-bg-tertiary"
-					>
-						Chat
-					</button>
-				)}
-
-				{work.status === "open" && (
-					<button
-						type="button"
-						onClick={handleStart}
-						disabled={isStarting}
-						className="shrink-0 rounded p-1 text-th-text-muted transition-opacity hover:text-th-accent md:opacity-0 md:group-hover:opacity-100"
-						aria-label="Start"
-					>
-						{isStarting ? (
-							<Loader2 className="size-3.5 animate-spin" />
-						) : (
-							<Play className="size-3.5" />
-						)}
-					</button>
-				)}
-
-				{canDelete && (
-					<button
-						type="button"
-						onClick={() => setShowDelete(true)}
-						className="shrink-0 rounded p-1 text-th-text-muted transition-opacity hover:text-th-error md:opacity-0 md:group-hover:opacity-100"
-						aria-label="Delete"
-					>
-						<Trash2 className="size-3.5" />
-					</button>
-				)}
-			</div>
-
-			{error && (
-				<p className="px-1.5 py-1 text-xs text-th-error" role="alert">
-					{error}
-				</p>
-			)}
-
-			{showDelete && (
-				<ConfirmDialog
-					title="Delete work"
-					message={`Delete "${work.title}"?`}
-					confirmLabel="Delete"
-					variant="danger"
-					onConfirm={handleDelete}
-					onCancel={() => setShowDelete(false)}
-				/>
-			)}
-		</>
-	);
-}
-
-interface CreateWorkButtonProps {
-	type: WorkType;
-	parentId?: string;
-}
-
-function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
+function CreateWorkButton({ type }: { type: WorkType }) {
 	const [isCreating, setIsCreating] = useState(false);
 	const [title, setTitle] = useState("");
 	const [agentRoleId, setAgentRoleId] = useState("");
@@ -392,7 +213,6 @@ function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
 			try {
 				await createWork({
 					type,
-					parent_id: parentId,
 					agent_role_id: agentRoleId,
 					title: trimmed,
 				});
@@ -405,7 +225,7 @@ function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
 				setIsSubmitting(false);
 			}
 		},
-		[title, type, parentId, agentRoleId, createWork, isSubmitting, roles],
+		[title, type, agentRoleId, createWork, isSubmitting, roles],
 	);
 
 	if (!isCreating) {
@@ -413,28 +233,29 @@ function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
 			<button
 				type="button"
 				onClick={() => setIsCreating(true)}
-				className="flex items-center gap-1.5 rounded px-2 py-1.5 text-xs text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
+				className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
 			>
-				<Plus className="size-3" />
-				{type === "story" ? "Add Story" : "Add Task"}
+				<Plus className="size-4" />
+				{type === "story" ? "New Story" : "Add Task"}
 			</button>
 		);
 	}
 
 	if (roles.length === 0) {
 		return (
-			<div className="px-1 text-xs text-th-text-muted">
+			<div className="rounded-lg bg-th-bg-secondary p-3 text-xs text-th-text-muted">
 				<p>No agent roles registered.</p>
 				<p className="mt-1">
 					Create a role in{" "}
-					<span className="text-th-text-secondary">Settings</span> first.
+					<span className="font-medium text-th-text-secondary">
+						Agent Roles
+					</span>{" "}
+					first.
 				</p>
 				<button
 					type="button"
-					onClick={() => {
-						setIsCreating(false);
-					}}
-					className="mt-1.5 text-th-text-muted hover:text-th-text-primary"
+					onClick={() => setIsCreating(false)}
+					className="mt-2 min-h-[44px] text-sm text-th-text-muted hover:text-th-text-primary"
 				>
 					Cancel
 				</button>
@@ -443,14 +264,14 @@ function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
 	}
 
 	return (
-		<div>
-			<form onSubmit={handleSubmit} className="space-y-1.5 px-1">
+		<div className="rounded-lg bg-th-bg-secondary p-3">
+			<form onSubmit={handleSubmit} className="space-y-2">
 				<input
 					type="text"
 					value={title}
 					onChange={(e) => setTitle(e.target.value)}
 					placeholder={type === "story" ? "Story title" : "Task title"}
-					className="w-full rounded border border-th-border bg-th-bg-primary px-2 py-1.5 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+					className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
 					// biome-ignore lint/a11y/noAutofocus: inline creation form
 					autoFocus
 					onKeyDown={(e) => {
@@ -466,7 +287,7 @@ function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
 					<select
 						value={agentRoleId}
 						onChange={(e) => setAgentRoleId(e.target.value)}
-						className="w-full rounded border border-th-border bg-th-bg-primary px-2 py-1.5 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
+						className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
 					>
 						<option value="">Select role...</option>
 						{roles.map((role) => (
@@ -476,11 +297,11 @@ function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
 						))}
 					</select>
 				)}
-				<div className="flex gap-1.5">
+				<div className="flex gap-2">
 					<button
 						type="submit"
 						disabled={!title.trim() || !agentRoleId || isSubmitting}
-						className="rounded bg-th-accent px-3 py-1.5 text-xs text-th-accent-text disabled:opacity-50"
+						className="min-h-[44px] flex-1 rounded-lg bg-th-accent px-3 text-sm font-medium text-th-accent-text disabled:opacity-50"
 					>
 						{isSubmitting ? "Adding..." : "Add"}
 					</button>
@@ -492,14 +313,14 @@ function CreateWorkButton({ type, parentId }: CreateWorkButtonProps) {
 							setAgentRoleId(roles.length === 1 ? roles[0].id : "");
 							setError(null);
 						}}
-						className="rounded px-3 py-1.5 text-xs text-th-text-muted hover:bg-th-bg-tertiary"
+						className="min-h-[44px] rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary"
 					>
 						Cancel
 					</button>
 				</div>
 			</form>
 			{error && (
-				<p className="px-1 pt-1 text-xs text-th-error" role="alert">
+				<p className="mt-2 text-xs text-th-error" role="alert">
 					{error}
 				</p>
 			)}

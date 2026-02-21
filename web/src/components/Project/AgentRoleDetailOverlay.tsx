@@ -1,9 +1,10 @@
-import { AlertCircle, Check, Loader2, Pencil, X } from "lucide-react";
+import { AlertCircle, Check, Loader2, Pencil, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
+import { autoResizeTextarea } from "../../utils/dom";
 import { MarkdownContent } from "../Chat/MarkdownContent";
 import ConfirmDialog from "../common/ConfirmDialog";
 import BackButton from "../ui/BackButton";
@@ -113,13 +114,13 @@ function InlineEditableName({ role }: { role: AgentRole }) {
 							if (e.key === "Escape") cancel();
 						}}
 						disabled={saving}
-						className="min-w-0 flex-1 rounded border border-th-border bg-th-bg-primary px-2 py-1 text-base font-semibold text-th-text-primary focus:border-th-accent focus:outline-none"
+						className="min-w-0 flex-1 rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-lg font-bold text-th-text-primary focus:border-th-accent focus:outline-none"
 					/>
 					<button
 						type="button"
 						onClick={save}
 						disabled={saving || !value.trim()}
-						className="rounded p-1 text-th-success hover:bg-th-bg-tertiary disabled:opacity-50"
+						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-success hover:bg-th-bg-tertiary disabled:opacity-50"
 						aria-label="Save"
 					>
 						{saving ? (
@@ -132,7 +133,7 @@ function InlineEditableName({ role }: { role: AgentRole }) {
 						type="button"
 						onClick={cancel}
 						disabled={saving}
-						className="rounded p-1 text-th-text-muted hover:bg-th-bg-tertiary"
+						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary"
 						aria-label="Cancel"
 					>
 						<X className="size-4" />
@@ -149,16 +150,16 @@ function InlineEditableName({ role }: { role: AgentRole }) {
 
 	return (
 		<div className="group flex items-start gap-1">
-			<h2 className="min-w-0 flex-1 text-base font-semibold text-th-text-primary">
+			<h2 className="min-w-0 flex-1 text-lg font-bold text-th-text-primary">
 				{role.name}
 			</h2>
 			<button
 				type="button"
 				onClick={() => setEditing(true)}
-				className="shrink-0 rounded p-1 text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
+				className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
 				aria-label="Edit name"
 			>
-				<Pencil className="size-3.5" />
+				<Pencil className="size-4" />
 			</button>
 		</div>
 	);
@@ -179,7 +180,7 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 	useEffect(() => {
 		if (editing && textareaRef.current) {
 			textareaRef.current.focus();
-			autoResize(textareaRef.current);
+			autoResizeTextarea(textareaRef.current);
 		}
 	}, [editing]);
 
@@ -210,7 +211,7 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 	if (editing) {
 		return (
 			<div>
-				<h3 className="mb-1.5 text-xs font-medium text-th-text-muted uppercase">
+				<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
 					Role Prompt
 				</h3>
 				<textarea
@@ -218,7 +219,7 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 					value={value}
 					onChange={(e) => {
 						setValue(e.target.value);
-						autoResize(e.target);
+						autoResizeTextarea(e.target);
 					}}
 					onKeyDown={(e) => {
 						if (e.key === "Escape") cancel();
@@ -226,14 +227,14 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 					disabled={saving}
 					placeholder="Enter role prompt..."
 					rows={6}
-					className="w-full resize-none rounded border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+					className="w-full resize-none rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
 				/>
-				<div className="mt-1.5 flex items-center gap-1.5">
+				<div className="mt-2 flex items-center gap-2">
 					<button
 						type="button"
 						onClick={save}
 						disabled={saving}
-						className="rounded bg-th-accent px-3 py-1 text-xs text-th-accent-text disabled:opacity-50"
+						className="min-h-[44px] rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text disabled:opacity-50"
 					>
 						{saving ? "Saving..." : "Save"}
 					</button>
@@ -241,7 +242,7 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 						type="button"
 						onClick={cancel}
 						disabled={saving}
-						className="rounded px-3 py-1 text-xs text-th-text-muted hover:bg-th-bg-tertiary"
+						className="min-h-[44px] rounded-lg px-4 text-sm text-th-text-muted hover:bg-th-bg-tertiary"
 					>
 						Cancel
 					</button>
@@ -258,13 +259,13 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 	if (!role.role_prompt) {
 		return (
 			<div>
-				<h3 className="mb-1.5 text-xs font-medium text-th-text-muted uppercase">
+				<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
 					Role Prompt
 				</h3>
 				<button
 					type="button"
 					onClick={() => setEditing(true)}
-					className="w-full rounded border border-dashed border-th-border px-3 py-3 text-left text-sm text-th-text-muted hover:border-th-text-muted hover:text-th-text-secondary"
+					className="min-h-[44px] w-full rounded-lg border border-dashed border-th-border px-3 text-left text-sm text-th-text-muted hover:border-th-text-muted hover:text-th-text-secondary"
 				>
 					Add role prompt...
 				</button>
@@ -274,20 +275,20 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 
 	return (
 		<div>
-			<h3 className="mb-1.5 text-xs font-medium text-th-text-muted uppercase">
+			<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
 				Role Prompt
 			</h3>
 			<div className="group relative">
-				<div className="rounded bg-th-bg-secondary px-3 py-2">
+				<div className="rounded-lg bg-th-bg-secondary px-3 py-2">
 					<MarkdownContent content={role.role_prompt} />
 				</div>
 				<button
 					type="button"
 					onClick={() => setEditing(true)}
-					className="absolute top-2 right-2 rounded p-1 text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
+					className="absolute top-2 right-2 flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
 					aria-label="Edit role prompt"
 				>
-					<Pencil className="size-3.5" />
+					<Pencil className="size-4" />
 				</button>
 			</div>
 		</div>
@@ -318,12 +319,13 @@ function DeleteSection({
 	}, [deleteAgentRole, role.id, onDeleted]);
 
 	return (
-		<div className="border-t border-th-border pt-4">
+		<div className="border-t border-th-border pt-5">
 			<button
 				type="button"
 				onClick={() => setShowConfirm(true)}
-				className="rounded px-3 py-1.5 text-xs text-th-error hover:bg-th-error/10"
+				className="flex min-h-[44px] items-center gap-2 rounded-lg px-3 text-sm text-th-error hover:bg-th-error/10"
 			>
+				<Trash2 className="size-4" />
 				Delete Role
 			</button>
 			{error && (
@@ -343,9 +345,4 @@ function DeleteSection({
 			)}
 		</div>
 	);
-}
-
-function autoResize(el: HTMLTextAreaElement) {
-	el.style.height = "auto";
-	el.style.height = `${el.scrollHeight}px`;
 }

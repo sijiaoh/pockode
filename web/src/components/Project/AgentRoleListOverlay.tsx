@@ -30,7 +30,7 @@ export default function AgentRoleListOverlay({
 				</h1>
 			</header>
 
-			<div className="min-h-0 flex-1 overflow-auto p-3">
+			<div className="min-h-0 flex-1 overflow-auto p-2">
 				{isLoading ? (
 					<div className="flex items-center justify-center py-8">
 						<Loader2 className="size-5 animate-spin text-th-text-muted" />
@@ -58,7 +58,7 @@ export default function AgentRoleListOverlay({
 				)}
 			</div>
 
-			<div className="border-t border-th-border p-3">
+			<div className="border-t border-th-border p-2">
 				<CreateRoleButton />
 			</div>
 		</div>
@@ -92,7 +92,7 @@ function RoleRow({
 
 	return (
 		<>
-			<div className="group flex min-h-[36px] items-center gap-1.5 rounded px-1.5 hover:bg-th-bg-tertiary">
+			<div className="group flex min-h-[44px] items-center gap-1.5 rounded-lg px-2 hover:bg-th-bg-tertiary">
 				<button
 					type="button"
 					onClick={() => onOpenDetail(roleId)}
@@ -104,10 +104,10 @@ function RoleRow({
 				<button
 					type="button"
 					onClick={() => setShowDelete(true)}
-					className="shrink-0 rounded p-1 text-th-text-muted transition-opacity hover:text-th-error md:opacity-0 md:group-hover:opacity-100"
+					className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted transition-opacity hover:text-th-error md:opacity-0 md:group-hover:opacity-100"
 					aria-label="Delete"
 				>
-					<Trash2 className="size-3.5" />
+					<Trash2 className="size-4" />
 				</button>
 			</div>
 
@@ -164,23 +164,23 @@ function CreateRoleButton() {
 			<button
 				type="button"
 				onClick={() => setIsCreating(true)}
-				className="flex items-center gap-1.5 rounded px-2 py-1.5 text-xs text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
+				className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
 			>
-				<Plus className="size-3" />
+				<Plus className="size-4" />
 				Add Role
 			</button>
 		);
 	}
 
 	return (
-		<div>
-			<form onSubmit={handleSubmit} className="flex gap-1.5 px-1">
+		<div className="rounded-lg bg-th-bg-secondary p-3">
+			<form onSubmit={handleSubmit} className="space-y-2">
 				<input
 					type="text"
 					value={name}
 					onChange={(e) => setName(e.target.value)}
 					placeholder="Role name"
-					className="min-w-0 flex-1 rounded border border-th-border bg-th-bg-primary px-2 py-1.5 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+					className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
 					// biome-ignore lint/a11y/noAutofocus: inline creation form
 					autoFocus
 					onKeyDown={(e) => {
@@ -191,16 +191,29 @@ function CreateRoleButton() {
 						}
 					}}
 				/>
-				<button
-					type="submit"
-					disabled={!name.trim() || isSubmitting}
-					className="rounded bg-th-accent px-3 py-1.5 text-xs text-th-accent-text disabled:opacity-50"
-				>
-					{isSubmitting ? "Adding..." : "Add"}
-				</button>
+				<div className="flex gap-2">
+					<button
+						type="submit"
+						disabled={!name.trim() || isSubmitting}
+						className="min-h-[44px] flex-1 rounded-lg bg-th-accent px-3 text-sm font-medium text-th-accent-text disabled:opacity-50"
+					>
+						{isSubmitting ? "Adding..." : "Add"}
+					</button>
+					<button
+						type="button"
+						onClick={() => {
+							setIsCreating(false);
+							setName("");
+							setError(null);
+						}}
+						className="min-h-[44px] rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary"
+					>
+						Cancel
+					</button>
+				</div>
 			</form>
 			{error && (
-				<p className="px-1 pt-1 text-xs text-th-error" role="alert">
+				<p className="mt-2 text-xs text-th-error" role="alert">
 					{error}
 				</p>
 			)}

@@ -1,4 +1,14 @@
-import { AlertCircle, Check, Loader2, Pencil, Play, X } from "lucide-react";
+import {
+	AlertCircle,
+	Check,
+	Loader2,
+	MessageSquare,
+	Pencil,
+	Play,
+	Plus,
+	Trash2,
+	X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useWorkSubscription } from "../../hooks/useWorkSubscription";
@@ -6,8 +16,11 @@ import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { Comment, Work, WorkType } from "../../types/work";
+import { autoResizeTextarea } from "../../utils/dom";
 import { MarkdownContent } from "../Chat/MarkdownContent";
+import ConfirmDialog from "../common/ConfirmDialog";
 import BackButton from "../ui/BackButton";
+import BottomActionBar from "../ui/BottomActionBar";
 import StatusBadge from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
 
@@ -58,31 +71,29 @@ export default function WorkDetailOverlay({
 			<DetailHeader onBack={onBack} type={work.type} />
 			<div className="min-h-0 flex-1 overflow-auto">
 				<div className="space-y-5 p-4">
-					<div className="flex items-start gap-2">
-						<StatusIcon status={work.status} className="mt-1 shrink-0" />
-						<div className="min-w-0 flex-1">
-							<InlineEditableTitle work={work} />
-							{parent && (
-								<button
-									type="button"
-									onClick={() => onOpenWorkDetail(parent.id)}
-									className="mt-1 text-xs text-th-text-muted hover:text-th-accent"
-								>
-									{parent.title}
-								</button>
-							)}
+					<div>
+						{parent && (
+							<button
+								type="button"
+								onClick={() => onOpenWorkDetail(parent.id)}
+								className="mb-1 flex min-h-[44px] items-center text-xs text-th-text-muted hover:text-th-accent"
+							>
+								{parent.title}
+							</button>
+						)}
+						<InlineEditableTitle work={work} />
+						<div className="mt-2">
+							<StatusBadge status={work.status} />
 						</div>
 					</div>
 
-					<InlineEditableBody work={work} />
+					<RoleSection work={work} />
 
-					<MetadataSection
-						work={work}
-						onNavigateToSession={onNavigateToSession}
-					/>
+					<InlineEditableBody work={work} />
 
 					{work.type === "story" && (
 						<ChildrenSection
+							storyId={work.id}
 							tasks={children}
 							onOpenWorkDetail={onOpenWorkDetail}
 							onNavigateToSession={onNavigateToSession}
@@ -90,8 +101,12 @@ export default function WorkDetailOverlay({
 					)}
 
 					<CommentsSection workId={workId} />
+
+					<DeleteSection work={work} onBack={onBack} />
 				</div>
 			</div>
+
+			<ActionBar work={work} onNavigateToSession={onNavigateToSession} />
 		</div>
 	);
 }
@@ -115,6 +130,74 @@ function DetailHeader({
 				{type ? typeLabels[type] : "Detail"}
 			</h1>
 		</header>
+	);
+}
+
+function ActionBar({
+	work,
+	onNavigateToSession,
+}: {
+	work: Work;
+	onNavigateToSession: (sessionId: string) => void;
+}) {
+	const startWork = useWSStore((s) => s.actions.startWork);
+	const [isStarting, setIsStarting] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const handleStart = useCallback(async () => {
+		setError(null);
+		setIsStarting(true);
+		try {
+			await startWork(work.id);
+		} catch (err) {
+			setError(
+				`Failed to start: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		} finally {
+			setIsStarting(false);
+		}
+	}, [startWork, work.id]);
+
+	const showStart = work.status === "open";
+	const showChat = !!work.session_id;
+
+	if (!showStart && !showChat) return null;
+
+	return (
+		<BottomActionBar>
+			{error && (
+				<p className="mb-1.5 text-xs text-th-error" role="alert">
+					{error}
+				</p>
+			)}
+			<div className="flex gap-2">
+				{showStart && (
+					<button
+						type="button"
+						onClick={handleStart}
+						disabled={isStarting}
+						className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent text-sm font-medium text-th-accent-text disabled:opacity-50"
+					>
+						{isStarting ? (
+							<Loader2 className="size-4 animate-spin" />
+						) : (
+							<Play className="size-4" />
+						)}
+						Start
+					</button>
+				)}
+				{showChat && (
+					<button
+						type="button"
+						onClick={() => onNavigateToSession(work.session_id ?? "")}
+						className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg border border-th-border text-sm font-medium text-th-text-primary hover:bg-th-bg-tertiary"
+					>
+						<MessageSquare className="size-4" />
+						Open Chat
+					</button>
+				)}
+			</div>
+		</BottomActionBar>
 	);
 }
 
@@ -172,13 +255,13 @@ function InlineEditableTitle({ work }: { work: Work }) {
 							if (e.key === "Escape") cancel();
 						}}
 						disabled={saving}
-						className="min-w-0 flex-1 rounded border border-th-border bg-th-bg-primary px-2 py-1 text-base font-semibold text-th-text-primary focus:border-th-accent focus:outline-none"
+						className="min-w-0 flex-1 rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-lg font-bold text-th-text-primary focus:border-th-accent focus:outline-none"
 					/>
 					<button
 						type="button"
 						onClick={save}
 						disabled={saving || !value.trim()}
-						className="rounded p-1 text-th-success hover:bg-th-bg-tertiary disabled:opacity-50"
+						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-success hover:bg-th-bg-tertiary disabled:opacity-50"
 						aria-label="Save"
 					>
 						{saving ? (
@@ -191,7 +274,7 @@ function InlineEditableTitle({ work }: { work: Work }) {
 						type="button"
 						onClick={cancel}
 						disabled={saving}
-						className="rounded p-1 text-th-text-muted hover:bg-th-bg-tertiary"
+						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary"
 						aria-label="Cancel"
 					>
 						<X className="size-4" />
@@ -208,17 +291,97 @@ function InlineEditableTitle({ work }: { work: Work }) {
 
 	return (
 		<div className="group flex items-start gap-1">
-			<h2 className="min-w-0 flex-1 text-base font-semibold text-th-text-primary">
+			<h2 className="min-w-0 flex-1 text-lg font-bold text-th-text-primary">
 				{work.title}
 			</h2>
 			<button
 				type="button"
 				onClick={() => setEditing(true)}
-				className="shrink-0 rounded p-1 text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
+				className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
 				aria-label="Edit title"
 			>
-				<Pencil className="size-3.5" />
+				<Pencil className="size-4" />
 			</button>
+		</div>
+	);
+}
+
+function RoleSection({ work }: { work: Work }) {
+	const updateWork = useWSStore((s) => s.actions.updateWork);
+	const roles = useAgentRoleStore((s) => s.roles);
+	const [editingRole, setEditingRole] = useState(false);
+	const [savingRole, setSavingRole] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const roleName = useMemo(() => {
+		if (!work.agent_role_id) return null;
+		return roles.find((r) => r.id === work.agent_role_id)?.name ?? null;
+	}, [work.agent_role_id, roles]);
+
+	const handleRoleChange = useCallback(
+		async (newRoleId: string) => {
+			if (!newRoleId || newRoleId === work.agent_role_id) {
+				setEditingRole(false);
+				return;
+			}
+			setError(null);
+			setSavingRole(true);
+			try {
+				await updateWork({ id: work.id, agent_role_id: newRoleId });
+				setEditingRole(false);
+			} catch (err) {
+				setError(err instanceof Error ? err.message : "Failed to update role");
+			} finally {
+				setSavingRole(false);
+			}
+		},
+		[work.id, work.agent_role_id, updateWork],
+	);
+
+	return (
+		<div>
+			<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
+				Role
+			</h3>
+			{editingRole ? (
+				<div className="flex items-center gap-2">
+					<select
+						value={work.agent_role_id ?? ""}
+						onChange={(e) => handleRoleChange(e.target.value)}
+						onBlur={() => {
+							if (!savingRole) setEditingRole(false);
+						}}
+						disabled={savingRole}
+						className="min-h-[44px] flex-1 rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
+						// biome-ignore lint/a11y/noAutofocus: inline edit
+						autoFocus
+					>
+						{!work.agent_role_id && <option value="">Select role...</option>}
+						{roles.map((role) => (
+							<option key={role.id} value={role.id}>
+								{role.name}
+							</option>
+						))}
+					</select>
+					{savingRole && (
+						<Loader2 className="size-4 animate-spin text-th-text-muted" />
+					)}
+				</div>
+			) : (
+				<button
+					type="button"
+					onClick={() => setEditingRole(true)}
+					className="group flex min-h-[44px] items-center gap-1.5 text-sm text-th-text-secondary hover:text-th-accent"
+				>
+					<span>{roleName ?? "—"}</span>
+					<Pencil className="size-3.5 text-th-text-muted opacity-60 md:opacity-0 md:group-hover:opacity-100" />
+				</button>
+			)}
+			{error && (
+				<p className="mt-1 text-xs text-th-error" role="alert">
+					{error}
+				</p>
+			)}
 		</div>
 	);
 }
@@ -238,7 +401,7 @@ function InlineEditableBody({ work }: { work: Work }) {
 	useEffect(() => {
 		if (editing && textareaRef.current) {
 			textareaRef.current.focus();
-			autoResize(textareaRef.current);
+			autoResizeTextarea(textareaRef.current);
 		}
 	}, [editing]);
 
@@ -269,12 +432,15 @@ function InlineEditableBody({ work }: { work: Work }) {
 	if (editing) {
 		return (
 			<div>
+				<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
+					Description
+				</h3>
 				<textarea
 					ref={textareaRef}
 					value={value}
 					onChange={(e) => {
 						setValue(e.target.value);
-						autoResize(e.target);
+						autoResizeTextarea(e.target);
 					}}
 					onKeyDown={(e) => {
 						if (e.key === "Escape") cancel();
@@ -282,14 +448,14 @@ function InlineEditableBody({ work }: { work: Work }) {
 					disabled={saving}
 					placeholder="Add description..."
 					rows={3}
-					className="w-full resize-none rounded border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+					className="w-full resize-none rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
 				/>
-				<div className="mt-1.5 flex items-center gap-1.5">
+				<div className="mt-2 flex items-center gap-2">
 					<button
 						type="button"
 						onClick={save}
 						disabled={saving}
-						className="rounded bg-th-accent px-3 py-1 text-xs text-th-accent-text disabled:opacity-50"
+						className="min-h-[44px] rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text disabled:opacity-50"
 					>
 						{saving ? "Saving..." : "Save"}
 					</button>
@@ -297,7 +463,7 @@ function InlineEditableBody({ work }: { work: Work }) {
 						type="button"
 						onClick={cancel}
 						disabled={saving}
-						className="rounded px-3 py-1 text-xs text-th-text-muted hover:bg-th-bg-tertiary"
+						className="min-h-[44px] rounded-lg px-4 text-sm text-th-text-muted hover:bg-th-bg-tertiary"
 					>
 						Cancel
 					</button>
@@ -313,203 +479,84 @@ function InlineEditableBody({ work }: { work: Work }) {
 
 	if (!work.body) {
 		return (
-			<button
-				type="button"
-				onClick={() => setEditing(true)}
-				className="w-full rounded border border-dashed border-th-border px-3 py-3 text-left text-sm text-th-text-muted hover:border-th-text-muted hover:text-th-text-secondary"
-			>
-				Add description...
-			</button>
-		);
-	}
-
-	return (
-		<div className="group relative">
-			<div className="rounded bg-th-bg-secondary px-3 py-2">
-				<MarkdownContent content={work.body} />
-			</div>
-			<button
-				type="button"
-				onClick={() => setEditing(true)}
-				className="absolute top-2 right-2 rounded p-1 text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
-				aria-label="Edit description"
-			>
-				<Pencil className="size-3.5" />
-			</button>
-		</div>
-	);
-}
-
-function MetadataSection({
-	work,
-	onNavigateToSession,
-}: {
-	work: Work;
-	onNavigateToSession: (sessionId: string) => void;
-}) {
-	const startWork = useWSStore((s) => s.actions.startWork);
-	const updateWork = useWSStore((s) => s.actions.updateWork);
-	const roles = useAgentRoleStore((s) => s.roles);
-	const [isStarting, setIsStarting] = useState(false);
-	const [editingRole, setEditingRole] = useState(false);
-	const [savingRole, setSavingRole] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-
-	const roleName = useMemo(() => {
-		if (!work.agent_role_id) return null;
-		return roles.find((r) => r.id === work.agent_role_id)?.name ?? null;
-	}, [work.agent_role_id, roles]);
-
-	const handleStart = useCallback(async () => {
-		setError(null);
-		setIsStarting(true);
-		try {
-			await startWork(work.id);
-		} catch (err) {
-			setError(
-				`Failed to start: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		} finally {
-			setIsStarting(false);
-		}
-	}, [startWork, work.id]);
-
-	const handleRoleChange = useCallback(
-		async (newRoleId: string) => {
-			if (!newRoleId || newRoleId === work.agent_role_id) {
-				setEditingRole(false);
-				return;
-			}
-			setError(null);
-			setSavingRole(true);
-			try {
-				await updateWork({ id: work.id, agent_role_id: newRoleId });
-				setEditingRole(false);
-			} catch (err) {
-				setError(err instanceof Error ? err.message : "Failed to update role");
-			} finally {
-				setSavingRole(false);
-			}
-		},
-		[work.id, work.agent_role_id, updateWork],
-	);
-
-	return (
-		<div className="space-y-2">
-			<div className="flex items-center gap-2 text-xs text-th-text-muted">
-				<span className="w-14">Status</span>
-				<StatusBadge status={work.status} />
-			</div>
-			<div className="flex items-center gap-2 text-xs text-th-text-muted">
-				<span className="w-14">Type</span>
-				<span className="text-th-text-secondary">{work.type}</span>
-			</div>
-			<div className="flex items-center gap-2 text-xs text-th-text-muted">
-				<span className="w-14">Role</span>
-				{editingRole ? (
-					<div className="flex items-center gap-1">
-						<select
-							value={work.agent_role_id ?? ""}
-							onChange={(e) => handleRoleChange(e.target.value)}
-							onBlur={() => {
-								if (!savingRole) setEditingRole(false);
-							}}
-							disabled={savingRole}
-							className="rounded border border-th-border bg-th-bg-primary px-1.5 py-0.5 text-xs text-th-text-primary focus:border-th-accent focus:outline-none"
-							// biome-ignore lint/a11y/noAutofocus: inline edit
-							autoFocus
-						>
-							{!work.agent_role_id && <option value="">Select role...</option>}
-							{roles.map((role) => (
-								<option key={role.id} value={role.id}>
-									{role.name}
-								</option>
-							))}
-						</select>
-						{savingRole && (
-							<Loader2 className="size-3 animate-spin text-th-text-muted" />
-						)}
-					</div>
-				) : (
-					<button
-						type="button"
-						onClick={() => setEditingRole(true)}
-						className="group flex items-center gap-1 text-th-text-secondary hover:text-th-accent"
-					>
-						<span>{roleName ?? "—"}</span>
-						<Pencil className="size-3 text-th-text-muted opacity-60 md:opacity-0 md:group-hover:opacity-100" />
-					</button>
-				)}
-			</div>
-			<div className="flex items-center gap-2">
-				{work.status === "open" && (
-					<button
-						type="button"
-						onClick={handleStart}
-						disabled={isStarting}
-						className="flex items-center gap-1 rounded bg-th-accent px-2.5 py-1 text-xs text-th-accent-text disabled:opacity-50"
-					>
-						{isStarting ? (
-							<Loader2 className="size-3 animate-spin" />
-						) : (
-							<Play className="size-3" />
-						)}
-						Start
-					</button>
-				)}
-				{work.session_id && (
-					<button
-						type="button"
-						onClick={() => onNavigateToSession(work.session_id ?? "")}
-						className="rounded px-2.5 py-1 text-xs text-th-accent hover:bg-th-bg-tertiary"
-					>
-						Open Chat
-					</button>
-				)}
-			</div>
-			{error && (
-				<p className="text-xs text-th-error" role="alert">
-					{error}
-				</p>
-			)}
-		</div>
-	);
-}
-
-function ChildrenSection({
-	tasks,
-	onOpenWorkDetail,
-	onNavigateToSession,
-}: {
-	tasks: Work[];
-	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string) => void;
-}) {
-	if (tasks.length === 0) {
-		return (
 			<div>
-				<h3 className="mb-2 text-xs font-medium text-th-text-muted uppercase">
-					Tasks
+				<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
+					Description
 				</h3>
-				<p className="text-sm text-th-text-muted">No tasks yet</p>
+				<button
+					type="button"
+					onClick={() => setEditing(true)}
+					className="min-h-[44px] w-full rounded-lg border border-dashed border-th-border px-3 text-left text-sm text-th-text-muted hover:border-th-text-muted hover:text-th-text-secondary"
+				>
+					Add description...
+				</button>
 			</div>
 		);
 	}
 
 	return (
 		<div>
-			<h3 className="mb-2 text-xs font-medium text-th-text-muted uppercase">
-				Tasks ({tasks.length})
+			<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
+				Description
 			</h3>
-			<div className="space-y-0.5">
-				{tasks.map((child) => (
-					<ChildRow
-						key={child.id}
-						work={child}
-						onOpenWorkDetail={onOpenWorkDetail}
-						onNavigateToSession={onNavigateToSession}
-					/>
-				))}
+			<div className="group relative">
+				<div className="rounded-lg bg-th-bg-secondary px-3 py-2">
+					<MarkdownContent content={work.body} />
+				</div>
+				<button
+					type="button"
+					onClick={() => setEditing(true)}
+					className="absolute top-2 right-2 flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
+					aria-label="Edit description"
+				>
+					<Pencil className="size-4" />
+				</button>
+			</div>
+		</div>
+	);
+}
+
+function ChildrenSection({
+	storyId,
+	tasks,
+	onOpenWorkDetail,
+	onNavigateToSession,
+}: {
+	storyId: string;
+	tasks: Work[];
+	onOpenWorkDetail: (workId: string) => void;
+	onNavigateToSession: (sessionId: string) => void;
+}) {
+	const doneTasks = tasks.filter(
+		(t) => t.status === "done" || t.status === "closed",
+	).length;
+
+	return (
+		<div>
+			<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
+				Tasks{" "}
+				{tasks.length > 0 && (
+					<span>
+						({doneTasks}/{tasks.length})
+					</span>
+				)}
+			</h3>
+			{tasks.length === 0 ? (
+				<p className="py-2 text-sm text-th-text-muted">No tasks yet</p>
+			) : (
+				<div className="space-y-0.5">
+					{tasks.map((child) => (
+						<ChildRow
+							key={child.id}
+							work={child}
+							onOpenWorkDetail={onOpenWorkDetail}
+							onNavigateToSession={onNavigateToSession}
+						/>
+					))}
+				</div>
+			)}
+			<div className="mt-1">
+				<CreateTaskInline parentId={storyId} />
 			</div>
 		</div>
 	);
@@ -525,7 +572,7 @@ function ChildRow({
 	onNavigateToSession: (sessionId: string) => void;
 }) {
 	return (
-		<div className="group flex min-h-[36px] items-center gap-1.5 rounded px-1.5 hover:bg-th-bg-tertiary">
+		<div className="group flex min-h-[44px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary">
 			<StatusIcon status={work.status} />
 			<button
 				type="button"
@@ -538,10 +585,145 @@ function ChildRow({
 				<button
 					type="button"
 					onClick={() => onNavigateToSession(work.session_id ?? "")}
-					className="shrink-0 rounded px-1.5 py-0.5 text-xs text-th-accent hover:bg-th-bg-tertiary"
+					className="flex min-h-[44px] shrink-0 items-center rounded-lg px-2 text-xs text-th-accent hover:bg-th-bg-tertiary"
 				>
 					Chat
 				</button>
+			)}
+		</div>
+	);
+}
+
+function CreateTaskInline({ parentId }: { parentId: string }) {
+	const [isCreating, setIsCreating] = useState(false);
+	const [title, setTitle] = useState("");
+	const [agentRoleId, setAgentRoleId] = useState("");
+	const [error, setError] = useState<string | null>(null);
+	const [isSubmitting, setIsSubmitting] = useState(false);
+	const createWork = useWSStore((s) => s.actions.createWork);
+	const roles = useAgentRoleStore((s) => s.roles);
+
+	useEffect(() => {
+		if (roles.length === 1 && !agentRoleId) {
+			setAgentRoleId(roles[0].id);
+		}
+	}, [roles, agentRoleId]);
+
+	const handleSubmit = useCallback(
+		async (e: React.FormEvent) => {
+			e.preventDefault();
+			const trimmed = title.trim();
+			if (!trimmed || !agentRoleId || isSubmitting) return;
+
+			setError(null);
+			setIsSubmitting(true);
+			try {
+				await createWork({
+					type: "task",
+					parent_id: parentId,
+					agent_role_id: agentRoleId,
+					title: trimmed,
+				});
+				setTitle("");
+				setAgentRoleId(roles.length === 1 ? roles[0].id : "");
+				setIsCreating(false);
+			} catch (err) {
+				setError(err instanceof Error ? err.message : "Failed to create task");
+			} finally {
+				setIsSubmitting(false);
+			}
+		},
+		[title, parentId, agentRoleId, createWork, isSubmitting, roles],
+	);
+
+	if (!isCreating) {
+		return (
+			<button
+				type="button"
+				onClick={() => setIsCreating(true)}
+				className="flex min-h-[44px] items-center gap-2 rounded-lg px-2 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
+			>
+				<Plus className="size-4" />
+				Add Task
+			</button>
+		);
+	}
+
+	if (roles.length === 0) {
+		return (
+			<div className="rounded-lg bg-th-bg-secondary p-3 text-xs text-th-text-muted">
+				<p>No agent roles registered.</p>
+				<button
+					type="button"
+					onClick={() => setIsCreating(false)}
+					className="mt-2 min-h-[44px] text-sm text-th-text-muted hover:text-th-text-primary"
+				>
+					Cancel
+				</button>
+			</div>
+		);
+	}
+
+	return (
+		<div className="rounded-lg bg-th-bg-secondary p-3">
+			<form onSubmit={handleSubmit} className="space-y-2">
+				<input
+					type="text"
+					value={title}
+					onChange={(e) => setTitle(e.target.value)}
+					placeholder="Task title"
+					className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+					// biome-ignore lint/a11y/noAutofocus: inline creation form
+					autoFocus
+					onKeyDown={(e) => {
+						if (e.key === "Escape") {
+							setIsCreating(false);
+							setTitle("");
+							setAgentRoleId(roles.length === 1 ? roles[0].id : "");
+							setError(null);
+						}
+					}}
+				/>
+				{roles.length > 1 && (
+					<select
+						value={agentRoleId}
+						onChange={(e) => setAgentRoleId(e.target.value)}
+						className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
+					>
+						<option value="">Select role...</option>
+						{roles.map((role) => (
+							<option key={role.id} value={role.id}>
+								{role.name}
+							</option>
+						))}
+					</select>
+				)}
+				<div className="flex gap-2">
+					<button
+						type="submit"
+						disabled={!title.trim() || !agentRoleId || isSubmitting}
+						className="min-h-[44px] flex-1 rounded-lg bg-th-accent px-3 text-sm font-medium text-th-accent-text disabled:opacity-50"
+					>
+						{isSubmitting ? "Adding..." : "Add"}
+					</button>
+					<button
+						type="button"
+						onClick={() => {
+							setIsCreating(false);
+							setTitle("");
+							setAgentRoleId(roles.length === 1 ? roles[0].id : "");
+							setError(null);
+						}}
+						className="min-h-[44px] rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary"
+					>
+						Cancel
+					</button>
+				</div>
+			</form>
+			{error && (
+				<p className="mt-2 text-xs text-th-error" role="alert">
+					{error}
+				</p>
 			)}
 		</div>
 	);
@@ -581,10 +763,10 @@ function CommentsSection({ workId }: { workId: string }) {
 	if (loading) {
 		return (
 			<div>
-				<h3 className="mb-2 text-xs font-medium text-th-text-muted uppercase">
+				<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
 					Comments
 				</h3>
-				<div className="flex items-center gap-1.5 text-sm text-th-text-muted">
+				<div className="flex items-center gap-1.5 py-2 text-sm text-th-text-muted">
 					<Loader2 className="size-3.5 animate-spin" />
 					<span>Loading...</span>
 				</div>
@@ -595,7 +777,7 @@ function CommentsSection({ workId }: { workId: string }) {
 	if (error) {
 		return (
 			<div>
-				<h3 className="mb-2 text-xs font-medium text-th-text-muted uppercase">
+				<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
 					Comments
 				</h3>
 				<p className="text-xs text-th-error" role="alert">
@@ -608,24 +790,24 @@ function CommentsSection({ workId }: { workId: string }) {
 	if (comments.length === 0) {
 		return (
 			<div>
-				<h3 className="mb-2 text-xs font-medium text-th-text-muted uppercase">
+				<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
 					Comments
 				</h3>
-				<p className="text-sm text-th-text-muted">No comments yet</p>
+				<p className="py-2 text-sm text-th-text-muted">No comments yet</p>
 			</div>
 		);
 	}
 
 	return (
 		<div>
-			<h3 className="mb-2 text-xs font-medium text-th-text-muted uppercase">
+			<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
 				Comments ({comments.length})
 			</h3>
 			<div className="space-y-3">
 				{comments.map((comment) => (
 					<div
 						key={comment.id}
-						className="rounded bg-th-bg-secondary px-3 py-2"
+						className="rounded-lg bg-th-bg-secondary px-3 py-2"
 					>
 						<MarkdownContent content={comment.body} />
 						<p className="mt-1.5 text-xs text-th-text-muted">
@@ -634,6 +816,55 @@ function CommentsSection({ workId }: { workId: string }) {
 					</div>
 				))}
 			</div>
+		</div>
+	);
+}
+
+function DeleteSection({ work, onBack }: { work: Work; onBack: () => void }) {
+	const deleteWork = useWSStore((s) => s.actions.deleteWork);
+	const [showConfirm, setShowConfirm] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const handleDelete = useCallback(async () => {
+		try {
+			await deleteWork(work.id);
+			setShowConfirm(false);
+			onBack();
+		} catch (err) {
+			setError(
+				`Failed to delete: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			setShowConfirm(false);
+		}
+	}, [deleteWork, work.id, onBack]);
+
+	if (work.status === "closed") return null;
+
+	return (
+		<div className="border-t border-th-border pt-5">
+			<button
+				type="button"
+				onClick={() => setShowConfirm(true)}
+				className="flex min-h-[44px] items-center gap-2 rounded-lg px-3 text-sm text-th-error hover:bg-th-error/10"
+			>
+				<Trash2 className="size-4" />
+				Delete {work.type === "story" ? "Story" : "Task"}
+			</button>
+			{error && (
+				<p className="mt-1 px-3 text-xs text-th-error" role="alert">
+					{error}
+				</p>
+			)}
+			{showConfirm && (
+				<ConfirmDialog
+					title="Delete work"
+					message={`Delete "${work.title}"? This cannot be undone.`}
+					confirmLabel="Delete"
+					variant="danger"
+					onConfirm={handleDelete}
+					onCancel={() => setShowConfirm(false)}
+				/>
+			)}
 		</div>
 	);
 }
@@ -653,9 +884,4 @@ function formatCommentDate(dateString: string): string {
 		hour: "2-digit",
 		minute: "2-digit",
 	});
-}
-
-function autoResize(el: HTMLTextAreaElement) {
-	el.style.height = "auto";
-	el.style.height = `${el.scrollHeight}px`;
 }
