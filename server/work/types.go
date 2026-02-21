@@ -48,8 +48,9 @@ const (
 )
 
 type ChangeEvent struct {
-	Op   Operation
-	Work Work
+	Op       Operation
+	Work     Work
+	External bool // true when the change originated from another process (fsnotify)
 }
 
 // OnChangeListener receives notifications when Work items change.

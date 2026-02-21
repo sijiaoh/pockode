@@ -303,11 +303,13 @@ func main() {
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout)
 	worktreeManager.SetWorkAutoResumer(workAutoResumer)
+	workStarter := worktree.NewWorkStarter(worktreeManager, workStore, agentRoleStore)
+	workAutoResumer.SetStartHandler(workStarter)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
 
-	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, agentRoleStore)
+	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workStarter, agentRoleStore)
 	handler := newHandler(token, devMode, wsHandler)
 
 	portStr := strconv.Itoa(port)

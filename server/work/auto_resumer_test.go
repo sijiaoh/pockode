@@ -291,6 +291,107 @@ func TestAutoResumer_IgnoresTopLevelClosed(t *testing.T) {
 	}
 }
 
+// --- Trigger C: external work start ---
+
+// mockStartHandler records HandleWorkStart calls.
+type mockStartHandler struct {
+	mu    sync.Mutex
+	calls []Work
+	err   error // if non-nil, HandleWorkStart returns this error
+}
+
+func (m *mockStartHandler) HandleWorkStart(_ context.Context, w Work) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, w)
+	return m.err
+}
+
+func (m *mockStartHandler) getCalls() []Work {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Work, len(m.calls))
+	copy(out, m.calls)
+	return out
+}
+
+func TestAutoResumer_ExternalWorkStart(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+	handler := &mockStartHandler{}
+	resumer.SetStartHandler(handler)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// External event: work started via MCP
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: true,
+		Work:     Work{ID: story.ID, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
+	})
+
+	waitFor(t, func() bool { return len(handler.getCalls()) >= 1 })
+
+	calls := handler.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 start call, got %d", len(calls))
+	}
+	if calls[0].ID != story.ID {
+		t.Errorf("work ID = %q, want %q", calls[0].ID, story.ID)
+	}
+}
+
+func TestAutoResumer_InternalInProgressDoesNotTriggerC(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+	handler := &mockStartHandler{}
+	resumer.SetStartHandler(handler)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// Internal event (External=false): e.g. parent reactivation
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: story.ID, Status: StatusInProgress, SessionID: sid},
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	if len(handler.getCalls()) != 0 {
+		t.Error("should not trigger work start for internal events")
+	}
+}
+
+func TestAutoResumer_ExternalWorkStartRollbackOnFailure(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+	handler := &mockStartHandler{err: fmt.Errorf("session create failed")}
+	resumer.SetStartHandler(handler)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: true,
+		Work:     Work{ID: story.ID, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
+	})
+
+	waitFor(t, func() bool { return len(handler.getCalls()) >= 1 })
+	// Give rollback time to execute
+	time.Sleep(50 * time.Millisecond)
+
+	// Work should be rolled back to open
+	w := getWork(t, store, story.ID)
+	if w.Status != StatusOpen {
+		t.Errorf("status = %q, want %q (rollback)", w.Status, StatusOpen)
+	}
+	if w.SessionID != "" {
+		t.Errorf("sessionID = %q, want empty (rollback)", w.SessionID)
+	}
+}
+
 // --- Shutdown edge cases ---
 
 func TestAutoResumer_StopCancelsPendingContinuation(t *testing.T) {

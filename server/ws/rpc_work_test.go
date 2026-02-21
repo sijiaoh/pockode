@@ -379,7 +379,7 @@ func TestHandler_WorkStart_RollbackOnKickoffFailure(t *testing.T) {
 	if resp.Error == nil {
 		t.Fatal("expected error when agent start fails")
 	}
-	if !strings.Contains(resp.Error.Message, "failed to send kickoff message") {
+	if !strings.Contains(resp.Error.Message, "send kickoff message") {
 		t.Errorf("expected kickoff failure message, got %q", resp.Error.Message)
 	}
 

@@ -14,22 +14,33 @@ type MessageSender interface {
 	SendMessage(ctx context.Context, sessionID, content string) error
 }
 
-// AutoResumer handles two automatic triggers for Work sessions:
+// WorkStartHandler handles the full lifecycle of starting a work session
+// (create session, set title, send kickoff message).
+// Satisfied by worktree integration code in the main server.
+type WorkStartHandler interface {
+	HandleWorkStart(ctx context.Context, w Work) error
+}
+
+// AutoResumer handles three automatic triggers for Work sessions:
 //
 // Trigger A: When an agent process stops while Work is in_progress,
 // send a continuation message to resume work.
 //
 // Trigger B: When a child Work closes, reactivate the parent Work's
 // agent to review and continue.
+//
+// Trigger C: When a work item is started externally (e.g. via MCP),
+// create the session and send the kickoff message.
 type AutoResumer struct {
-	workStore   Store
-	sender      atomic.Pointer[MessageSender]
-	ctx         context.Context
-	cancel      context.CancelFunc
-	retryMu     sync.Mutex
-	retries     map[string]int // sessionID → retry count
-	maxRetries  int
-	settleDelay time.Duration // delay before checking work status after process stop
+	workStore    Store
+	sender       atomic.Pointer[MessageSender]
+	startHandler atomic.Pointer[WorkStartHandler]
+	ctx          context.Context
+	cancel       context.CancelFunc
+	retryMu      sync.Mutex
+	retries      map[string]int // sessionID → retry count
+	maxRetries   int
+	settleDelay  time.Duration // delay before checking work status after process stop
 }
 
 // defaultSettleDelay is the time to wait after a process stops before checking
@@ -65,6 +76,18 @@ func (r *AutoResumer) SetSender(sender MessageSender) {
 
 func (r *AutoResumer) getSender() MessageSender {
 	if p := r.sender.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// SetStartHandler sets the handler for external work starts (Trigger C).
+func (r *AutoResumer) SetStartHandler(h WorkStartHandler) {
+	r.startHandler.Store(&h)
+}
+
+func (r *AutoResumer) getStartHandler() WorkStartHandler {
+	if p := r.startHandler.Load(); p != nil {
 		return *p
 	}
 	return nil
@@ -147,6 +170,16 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 		}
 	}
 
+	// Trigger C: external work start (e.g. MCP work_start).
+	// Only fires for External events (fsnotify) to avoid conflicting with
+	// in-process transitions like Trigger B's parent reactivation.
+	if event.External && event.Work.Status == StatusInProgress && event.Work.SessionID != "" {
+		if h := r.getStartHandler(); h != nil {
+			go r.handleExternalWorkStart(event.Work, h)
+		}
+		return
+	}
+
 	// Trigger B: child closed → parent reactivation
 	sender := r.getSender()
 	if sender == nil {
@@ -157,6 +190,25 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 	}
 
 	go r.handleParentReactivation(event.Work, sender)
+}
+
+func (r *AutoResumer) handleExternalWorkStart(w Work, h WorkStartHandler) {
+	if err := h.HandleWorkStart(r.ctx, w); err != nil {
+		if r.ctx.Err() != nil {
+			return
+		}
+		slog.Error("external work start failed, rolling back", "workId", w.ID, "error", err)
+		openStatus := StatusOpen
+		emptySession := ""
+		if rbErr := r.workStore.Update(r.ctx, w.ID, UpdateFields{
+			Status:    &openStatus,
+			SessionID: &emptySession,
+		}); rbErr != nil {
+			slog.Error("failed to rollback external work start", "workId", w.ID, "error", rbErr)
+		}
+		return
+	}
+	slog.Info("external work start completed", "workId", w.ID, "sessionId", w.SessionID)
 }
 
 func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/pockode/server/work"
 )
 
@@ -90,6 +91,17 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
+		Name:        "work_start",
+		Description: "Start a work item. Transitions it from open to in_progress and launches an agent session.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id": {Type: "string", Description: "Work item ID to start"},
+			},
+			Required: []string{"id"},
+		},
+	},
+	{
 		Name:        "agent_role_list",
 		Description: "List all available agent roles. Use this to find which roles can be assigned to work items.",
 		InputSchema: inputSchema{
@@ -113,6 +125,8 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkGet, true
 	case "work_done":
 		return s.handleWorkDone, true
+	case "work_start":
+		return s.handleWorkStart, true
 	case "agent_role_list":
 		return s.handleAgentRoleList, true
 	default:
@@ -306,6 +320,46 @@ func (s *Server) handleWorkDone(ctx context.Context, args json.RawMessage) (stri
 	}
 
 	return fmt.Sprintf("Marked work %s as done", params.ID), nil
+}
+
+func (s *Server) handleWorkStart(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	// Validate work exists and has an agent role before claiming
+	w, found, err := s.store.Get(params.ID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("work %s not found", params.ID)
+	}
+	if w.AgentRoleID == "" {
+		return "", fmt.Errorf("work %s has no agent_role_id", params.ID)
+	}
+	if _, roleFound, err := s.agentRoleStore.Get(w.AgentRoleID); err != nil {
+		return "", fmt.Errorf("failed to validate agent role: %w", err)
+	} else if !roleFound {
+		return "", fmt.Errorf("agent role %q not found", w.AgentRoleID)
+	}
+
+	// Claim: open → in_progress + attach sessionID.
+	// The main server detects this state change via fsnotify and handles
+	// session creation + kickoff message (AutoResumer Trigger C).
+	sessionID := uuid.Must(uuid.NewV7()).String()
+	status := work.StatusInProgress
+	if err := s.store.Update(ctx, params.ID, work.UpdateFields{
+		SessionID: &sessionID,
+		Status:    &status,
+	}); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Started work %s (session: %s)", params.ID, sessionID), nil
 }
 
 func (s *Server) handleAgentRoleList(_ context.Context, _ json.RawMessage) (string, error) {

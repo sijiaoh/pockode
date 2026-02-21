@@ -120,15 +120,6 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 		return
 	}
 
-	// rollbackAndReply rolls back the work claim and replies with an internal error.
-	// If the rollback itself fails, the message is annotated.
-	rollbackAndReply := func(msg string) {
-		if rbErr := h.rollbackWorkStart(ctx, params.ID); rbErr != nil {
-			msg += " (rollback also failed — work may be stuck in_progress)"
-		}
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, msg)
-	}
-
 	// 1. Claim the work atomically: open → in_progress + link session.
 	//    This must happen before creating the session to prevent orphan
 	//    sessions when concurrent requests race on the same work item.
@@ -147,61 +138,13 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 	w, found, err := h.workStore.Get(params.ID)
 	if err != nil || !found {
 		h.log.Error("failed to read work after claim", "error", err, "found", found)
-		rollbackAndReply("work claimed but failed to read back")
+		h.rollbackAndReply(ctx, conn, req.ID, params.ID, "work claimed but failed to read back")
 		return
 	}
 
-	// 2. Resolve agent role — every work item must have one.
-	if w.AgentRoleID == "" {
-		rollbackAndReply("work has no agent_role_id")
-		return
-	}
-	role, roleFound, err := h.agentRoleStore.Get(w.AgentRoleID)
-	if err != nil {
-		rollbackAndReply("failed to get agent role")
-		return
-	}
-	if !roleFound {
-		rollbackAndReply("agent role not found: " + w.AgentRoleID)
-		return
-	}
-
-	// 3. Get main worktree
-	mainWt, err := h.worktreeManager.Get("")
-	if err != nil {
-		rollbackAndReply("failed to get main worktree")
-		return
-	}
-	defer h.worktreeManager.Release(mainWt)
-
-	// 4. Create session
-	if _, err := mainWt.SessionStore.Create(ctx, sessionID); err != nil {
-		rollbackAndReply("failed to create session")
-		return
-	}
-
-	// 5. Set session title to work title
-	if err := mainWt.SessionStore.Update(ctx, sessionID, w.Title); err != nil {
-		h.log.Warn("failed to set session title", "error", err)
-	}
-
-	// 6. Send kickoff message (starts the agent process).
-	//    This is the step that actually launches the agent — if it fails,
-	//    the work would be stuck in_progress with no running process.
-	var parentTitle string
-	if w.ParentID != "" {
-		if parent, found, err := h.workStore.Get(w.ParentID); err == nil && found {
-			parentTitle = parent.Title
-		} else {
-			h.log.Warn("failed to get parent for kickoff message", "parentId", w.ParentID, "error", err)
-		}
-	}
-	kickoffMsg := work.BuildKickoffMessage(w, parentTitle, role.RolePrompt)
-	if err := mainWt.ChatClient.SendMessage(ctx, sessionID, kickoffMsg); err != nil {
-		if delErr := mainWt.SessionStore.Delete(ctx, sessionID); delErr != nil {
-			h.log.Error("failed to clean up session after kickoff failure", "sessionId", sessionID, "error", delErr)
-		}
-		rollbackAndReply("failed to send kickoff message")
+	// 2. Create session and send kickoff message via WorkStarter.
+	if err := h.workStarter.HandleWorkStart(ctx, w); err != nil {
+		h.rollbackAndReply(ctx, conn, req.ID, params.ID, err.Error())
 		return
 	}
 
@@ -212,12 +155,10 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 	}
 }
 
-// rollbackWorkStart reverts a claimed work item back to open status.
-// Called when session creation or kickoff fails after the work was
-// already transitioned to in_progress.
-// Returns an error if the rollback itself fails, so callers can
-// include that context in the user-facing error message.
-func (h *rpcMethodHandler) rollbackWorkStart(ctx context.Context, workID string) error {
+// rollbackAndReply reverts a claimed work item back to open status and
+// replies with an internal error. If the rollback itself fails, the
+// message is annotated.
+func (h *rpcMethodHandler) rollbackAndReply(ctx context.Context, conn *jsonrpc2.Conn, reqID jsonrpc2.ID, workID, msg string) {
 	openStatus := work.StatusOpen
 	emptySession := ""
 	if err := h.workStore.Update(ctx, workID, work.UpdateFields{
@@ -225,10 +166,11 @@ func (h *rpcMethodHandler) rollbackWorkStart(ctx context.Context, workID string)
 		SessionID: &emptySession,
 	}); err != nil {
 		h.log.Error("failed to rollback work start", "workId", workID, "error", err)
-		return err
+		msg += " (rollback also failed — work may be stuck in_progress)"
+	} else {
+		h.log.Info("rolled back work start", "workId", workID)
 	}
-	h.log.Info("rolled back work start", "workId", workID)
-	return nil
+	h.replyError(ctx, conn, reqID, jsonrpc2.CodeInternalError, msg)
 }
 
 func (h *rpcMethodHandler) handleWorkListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {

@@ -613,6 +613,9 @@ func (s *FileStore) reloadFromDisk() {
 	// the data matches and no events are fired. External writes (MCP)
 	// produce a diff and trigger notifications.
 	events := diffWorks(old, idx.Works)
+	for i := range events {
+		events[i].External = true
+	}
 	for _, e := range events {
 		notify(listeners, e)
 	}

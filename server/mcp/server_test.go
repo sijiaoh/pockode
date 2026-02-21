@@ -132,7 +132,7 @@ func TestToolsList(t *testing.T) {
 		names[td.Name] = true
 	}
 
-	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_done", "agent_role_list"} {
+	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_done", "work_start", "agent_role_list"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}
@@ -388,6 +388,86 @@ func TestWorkDone_AlreadyClosed(t *testing.T) {
 	result := callTool(t, ts.Server, "work_done", map[string]string{"id": id})
 	if !result.IsError {
 		t.Error("expected error for closed → done (invalid transition)")
+	}
+}
+
+// --- Tool: work_start ---
+
+func TestWorkStart(t *testing.T) {
+	ts := newTestServer(t)
+
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Start Me", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(createResult))
+
+	result := callTool(t, ts.Server, "work_start", map[string]string{"id": id})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	text := toolText(result)
+	if !strings.Contains(text, "Started") {
+		t.Errorf("result = %q, want to contain 'Started'", text)
+	}
+	if !strings.Contains(text, "session:") {
+		t.Errorf("result = %q, want to contain 'session:'", text)
+	}
+
+	// Verify work is now in_progress
+	w, found, err := ts.store.Get(id)
+	if err != nil || !found {
+		t.Fatal("work not found after start")
+	}
+	if w.Status != work.StatusInProgress {
+		t.Errorf("status = %q, want in_progress", w.Status)
+	}
+	if w.SessionID == "" {
+		t.Error("session_id should be set after start")
+	}
+}
+
+func TestWorkStart_NotFound(t *testing.T) {
+	ts := newTestServer(t)
+	result := callTool(t, ts.Server, "work_start", map[string]string{"id": "nonexistent"})
+
+	if !result.IsError {
+		t.Error("expected error for nonexistent ID")
+	}
+}
+
+func TestWorkStart_AlreadyInProgress(t *testing.T) {
+	ts := newTestServer(t)
+
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(createResult))
+
+	// Start once
+	callTool(t, ts.Server, "work_start", map[string]string{"id": id})
+
+	// Start again — should fail (already in_progress)
+	result := callTool(t, ts.Server, "work_start", map[string]string{"id": id})
+	if !result.IsError {
+		t.Error("expected error for already in_progress work")
+	}
+}
+
+func TestWorkStart_NoAgentRole(t *testing.T) {
+	ts := newTestServer(t)
+
+	// Create story, then clear its agent_role_id
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(createResult))
+	empty := ""
+	ts.store.Update(context.Background(), id, work.UpdateFields{AgentRoleID: &empty})
+
+	result := callTool(t, ts.Server, "work_start", map[string]string{"id": id})
+	if !result.IsError {
+		t.Error("expected error for work without agent_role_id")
 	}
 }
 
