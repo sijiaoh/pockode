@@ -30,6 +30,9 @@ type Store interface {
 	// separate Get → Update sequence.
 	MarkDone(ctx context.Context, id string) error
 
+	AddComment(ctx context.Context, workID, body string) (Comment, error)
+	ListComments(workID string) ([]Comment, error)
+
 	AddOnChangeListener(listener OnChangeListener)
 
 	// StartWatching begins monitoring the index file for external changes (e.g. from MCP).
@@ -47,7 +50,8 @@ type UpdateFields struct {
 }
 
 type indexData struct {
-	Works []Work `json:"works"`
+	Works    []Work    `json:"works"`
+	Comments []Comment `json:"comments,omitempty"`
 }
 
 // FileStore persists Work items to a JSON file with flock-based inter-process safety.
@@ -55,6 +59,7 @@ type FileStore struct {
 	dataDir   string
 	worksMu   sync.RWMutex
 	works     []Work
+	comments  []Comment
 	listeners []OnChangeListener
 
 	// writeGen is incremented on every in-process write (Create/Update/Delete/MarkDone).
@@ -80,6 +85,7 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 		return nil, err
 	}
 	store.works = idx.Works
+	store.comments = idx.Comments
 
 	return store, nil
 }
@@ -390,6 +396,51 @@ func (s *FileStore) autoCloseRecursiveN(w *Work, now time.Time, modified map[str
 	}
 }
 
+// --- Comments ---
+
+func (s *FileStore) AddComment(_ context.Context, workID, body string) (Comment, error) {
+	s.worksMu.Lock()
+
+	if s.findIndex(workID) < 0 {
+		s.worksMu.Unlock()
+		return Comment{}, ErrWorkNotFound
+	}
+
+	comment := Comment{
+		ID:        uuid.Must(uuid.NewV7()).String(),
+		WorkID:    workID,
+		Body:      body,
+		CreatedAt: time.Now(),
+	}
+
+	s.comments = append(s.comments, comment)
+
+	if err := s.persistIndex(); err != nil {
+		s.comments = s.comments[:len(s.comments)-1]
+		s.worksMu.Unlock()
+		return Comment{}, err
+	}
+
+	s.worksMu.Unlock()
+	return comment, nil
+}
+
+func (s *FileStore) ListComments(workID string) ([]Comment, error) {
+	s.worksMu.RLock()
+	defer s.worksMu.RUnlock()
+
+	var result []Comment
+	for _, c := range s.comments {
+		if c.WorkID == workID {
+			result = append(result, c)
+		}
+	}
+	if result == nil {
+		result = []Comment{}
+	}
+	return result, nil
+}
+
 // --- Listener management ---
 
 func (s *FileStore) AddOnChangeListener(listener OnChangeListener) {
@@ -452,6 +503,9 @@ func (s *FileStore) readIndexFromDisk() (indexData, error) {
 	if idx.Works == nil {
 		idx.Works = []Work{}
 	}
+	if idx.Comments == nil {
+		idx.Comments = []Comment{}
+	}
 	return idx, nil
 }
 
@@ -459,7 +513,7 @@ func (s *FileStore) readIndexFromDisk() (indexData, error) {
 // A crash at any point leaves either the old file intact or the new file
 // fully written — never a partial/empty file.
 func (s *FileStore) persistIndex() error {
-	data, err := json.MarshalIndent(indexData{Works: s.works}, "", "  ")
+	data, err := json.MarshalIndent(indexData{Works: s.works, Comments: s.comments}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -606,6 +660,7 @@ func (s *FileStore) reloadFromDisk() {
 
 	old := s.works
 	s.works = idx.Works
+	s.comments = idx.Comments
 	listeners := s.copyListeners()
 	s.worksMu.Unlock()
 

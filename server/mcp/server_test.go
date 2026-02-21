@@ -132,7 +132,7 @@ func TestToolsList(t *testing.T) {
 		names[td.Name] = true
 	}
 
-	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_done", "work_start", "agent_role_list", "agent_role_get"} {
+	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_done", "work_start", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}
@@ -515,6 +515,83 @@ func TestAgentRoleGet_NotFound(t *testing.T) {
 
 	if !result.IsError {
 		t.Error("expected error for nonexistent ID")
+	}
+}
+
+// --- Tool: work_comment_add ---
+
+func TestWorkCommentAdd(t *testing.T) {
+	ts := newTestServer(t)
+
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(createResult))
+
+	result := callTool(t, ts.Server, "work_comment_add", map[string]string{
+		"work_id": id, "body": "my comment",
+	})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	if !strings.Contains(toolText(result), "Comment added") {
+		t.Errorf("result = %q, want to contain 'Comment added'", toolText(result))
+	}
+}
+
+func TestWorkCommentAdd_WorkNotFound(t *testing.T) {
+	ts := newTestServer(t)
+
+	result := callTool(t, ts.Server, "work_comment_add", map[string]string{
+		"work_id": "nonexistent", "body": "hello",
+	})
+
+	if !result.IsError {
+		t.Error("expected error for nonexistent work ID")
+	}
+}
+
+// --- Tool: work_comment_list ---
+
+func TestWorkCommentList_Empty(t *testing.T) {
+	ts := newTestServer(t)
+
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(createResult))
+
+	result := callTool(t, ts.Server, "work_comment_list", map[string]string{"work_id": id})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	if toolText(result) != "[]" {
+		t.Errorf("expected empty JSON array, got %q", toolText(result))
+	}
+}
+
+func TestWorkCommentList_WithComments(t *testing.T) {
+	ts := newTestServer(t)
+
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(createResult))
+
+	callTool(t, ts.Server, "work_comment_add", map[string]string{
+		"work_id": id, "body": "first comment",
+	})
+	callTool(t, ts.Server, "work_comment_add", map[string]string{
+		"work_id": id, "body": "second comment",
+	})
+
+	result := callTool(t, ts.Server, "work_comment_list", map[string]string{"work_id": id})
+
+	text := toolText(result)
+	if !strings.Contains(text, "first comment") || !strings.Contains(text, "second comment") {
+		t.Errorf("expected both comments in list, got %q", text)
 	}
 }
 

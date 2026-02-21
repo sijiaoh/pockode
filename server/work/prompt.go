@@ -11,15 +11,11 @@ func roleReference(agentRoleID string) string {
 
 const storyBehaviorRules = "Your ONLY job is to coordinate tasks (create, update, or delete) — do NOT implement anything yourself. Each task will be executed by a separate agent. Do NOT call work_done on tasks — each task agent will mark itself done when finished."
 
-// buildBase builds the common message shared by all prompt types:
-// role reference, work context, behavior rules (story only), and done instruction.
+// buildBase builds the common message shared by all prompt types.
 func buildBase(w Work) string {
 	role := roleReference(w.AgentRoleID)
 
 	workCtx := fmt.Sprintf("You are working on: %q (Work ID: %s)", w.Title, w.ID)
-	if w.Body != "" {
-		workCtx += "\n\n" + w.Body
-	}
 
 	var rules string
 	if w.Type == WorkTypeStory {
@@ -28,10 +24,17 @@ func buildBase(w Work) string {
 			w.ID,
 		)
 	} else {
-		rules = fmt.Sprintf(
-			"IMPORTANT: When you finish, you MUST call the work_done tool with ID %s. Do not end your turn without doing this.",
-			w.ID,
-		)
+		if w.ParentID != "" {
+			rules = fmt.Sprintf(
+				"IMPORTANT: When you finish, you MUST first report your results by calling work_comment_add on the parent work (ID: %s), then call work_done with ID %s. Do not end your turn without doing this.",
+				w.ParentID, w.ID,
+			)
+		} else {
+			rules = fmt.Sprintf(
+				"IMPORTANT: When you finish, you MUST call the work_done tool with ID %s. Do not end your turn without doing this.",
+				w.ID,
+			)
+		}
 	}
 
 	return role + "\n\n" + workCtx + "\n\n" + rules
@@ -68,8 +71,8 @@ func BuildParentReactivationMessage(parent Work, childTitle, childID string) str
 	base := buildBase(parent)
 
 	nudge := fmt.Sprintf(
-		"Task %q (ID: %s) has been completed. Review the remaining tasks, adjust the plan if needed, then mark yourself done.",
-		childTitle, childID,
+		"Task %q (ID: %s) has been completed. Use work_comment_list on your own work (ID: %s) to read the task's report, review the remaining tasks, adjust the plan if needed, then mark yourself done.",
+		childTitle, childID, parent.ID,
 	)
 
 	return base + "\n\n" + nudge

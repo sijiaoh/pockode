@@ -13,7 +13,7 @@ import { useWorkSubscription } from "../../hooks/useWorkSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
-import type { Work, WorkStatus } from "../../types/work";
+import type { Comment, Work, WorkStatus } from "../../types/work";
 import { MarkdownContent } from "../Chat/MarkdownContent";
 import StatusIcon from "../ui/StatusIcon";
 
@@ -94,6 +94,8 @@ export default function WorkDetailOverlay({
 							onNavigateToSession={onNavigateToSession}
 						/>
 					)}
+
+					<CommentsSection workId={workId} />
 				</div>
 			</div>
 		</div>
@@ -545,6 +547,114 @@ function ChildRow({
 			)}
 		</div>
 	);
+}
+
+function CommentsSection({ workId }: { workId: string }) {
+	const listWorkComments = useWSStore((s) => s.actions.listWorkComments);
+	const status = useWSStore((s) => s.status);
+	const [comments, setComments] = useState<Comment[]>([]);
+	const [loading, setLoading] = useState(true);
+	const [error, setError] = useState<string | null>(null);
+
+	useEffect(() => {
+		if (status !== "connected") return;
+
+		let cancelled = false;
+		setLoading(true);
+		setError(null);
+
+		listWorkComments(workId)
+			.then((result) => {
+				if (!cancelled) setComments(result);
+			})
+			.catch((err) => {
+				if (!cancelled)
+					setError(err instanceof Error ? err.message : "Failed to load");
+			})
+			.finally(() => {
+				if (!cancelled) setLoading(false);
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [workId, status, listWorkComments]);
+
+	if (loading) {
+		return (
+			<div>
+				<h3 className="mb-2 text-xs font-medium text-th-text-muted uppercase">
+					Comments
+				</h3>
+				<div className="flex items-center gap-1.5 text-sm text-th-text-muted">
+					<Loader2 className="size-3.5 animate-spin" />
+					<span>Loading...</span>
+				</div>
+			</div>
+		);
+	}
+
+	if (error) {
+		return (
+			<div>
+				<h3 className="mb-2 text-xs font-medium text-th-text-muted uppercase">
+					Comments
+				</h3>
+				<p className="text-xs text-th-error" role="alert">
+					{error}
+				</p>
+			</div>
+		);
+	}
+
+	if (comments.length === 0) {
+		return (
+			<div>
+				<h3 className="mb-2 text-xs font-medium text-th-text-muted uppercase">
+					Comments
+				</h3>
+				<p className="text-sm text-th-text-muted">No comments yet</p>
+			</div>
+		);
+	}
+
+	return (
+		<div>
+			<h3 className="mb-2 text-xs font-medium text-th-text-muted uppercase">
+				Comments ({comments.length})
+			</h3>
+			<div className="space-y-3">
+				{comments.map((comment) => (
+					<div
+						key={comment.id}
+						className="rounded bg-th-bg-secondary px-3 py-2"
+					>
+						<MarkdownContent content={comment.body} />
+						<p className="mt-1.5 text-xs text-th-text-muted">
+							{formatCommentDate(comment.created_at)}
+						</p>
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
+function formatCommentDate(dateString: string): string {
+	const date = new Date(dateString);
+	const now = new Date();
+	if (date.toDateString() === now.toDateString()) {
+		return date.toLocaleTimeString(undefined, {
+			hour: "2-digit",
+			minute: "2-digit",
+		});
+	}
+	return date.toLocaleDateString(undefined, {
+		month: "short",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
+	});
 }
 
 function StatusBadge({ status }: { status: WorkStatus }) {

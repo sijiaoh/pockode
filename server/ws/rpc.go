@@ -287,6 +287,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "work.start":
 		h.handleWorkStart(ctx, conn, req)
 		return
+	case "work.comment.list":
+		h.handleWorkCommentList(ctx, conn, req)
+		return
 	case "work.list.subscribe":
 		h.handleWorkListSubscribe(ctx, conn, req)
 		return

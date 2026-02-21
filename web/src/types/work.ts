@@ -36,6 +36,13 @@ export interface WorkUpdateParams {
 	status?: Exclude<WorkStatus, "closed">;
 }
 
+export interface Comment {
+	id: string;
+	work_id: string;
+	body: string;
+	created_at: string;
+}
+
 export interface WorkListSubscribeResult {
 	id: string;
 	items: Work[];

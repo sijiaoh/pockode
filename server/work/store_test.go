@@ -958,6 +958,88 @@ func TestDiffWorks_Mixed(t *testing.T) {
 	}
 }
 
+// --- Comments ---
+
+func TestAddComment(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+
+	c, err := s.AddComment(context.Background(), story.ID, "hello")
+	if err != nil {
+		t.Fatalf("AddComment: %v", err)
+	}
+	if c.ID == "" {
+		t.Error("expected non-empty comment ID")
+	}
+	if c.WorkID != story.ID {
+		t.Errorf("work_id = %q, want %q", c.WorkID, story.ID)
+	}
+	if c.Body != "hello" {
+		t.Errorf("body = %q, want %q", c.Body, "hello")
+	}
+}
+
+func TestAddComment_WorkNotFound(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.AddComment(context.Background(), "nonexistent", "hello")
+	if err == nil {
+		t.Fatal("expected error for nonexistent work")
+	}
+}
+
+func TestListComments(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+
+	comments, _ := s.ListComments(story.ID)
+	if len(comments) != 0 {
+		t.Fatalf("expected empty list, got %d", len(comments))
+	}
+
+	s.AddComment(context.Background(), story.ID, "first")
+	s.AddComment(context.Background(), story.ID, "second")
+
+	comments, _ = s.ListComments(story.ID)
+	if len(comments) != 2 {
+		t.Fatalf("expected 2 comments, got %d", len(comments))
+	}
+	if comments[0].Body != "first" || comments[1].Body != "second" {
+		t.Errorf("unexpected comment bodies: %q, %q", comments[0].Body, comments[1].Body)
+	}
+}
+
+func TestListComments_FilterByWorkID(t *testing.T) {
+	s := newTestStore(t)
+	story1 := createStory(t, s, "S1")
+	story2 := createStory(t, s, "S2")
+
+	s.AddComment(context.Background(), story1.ID, "on s1")
+	s.AddComment(context.Background(), story2.ID, "on s2")
+
+	comments, _ := s.ListComments(story1.ID)
+	if len(comments) != 1 || comments[0].Body != "on s1" {
+		t.Errorf("expected 1 comment for s1, got %d", len(comments))
+	}
+}
+
+func TestComments_Persistence(t *testing.T) {
+	dir := t.TempDir()
+
+	s1, _ := NewFileStore(dir)
+	story := createStory(t, s1, "S")
+	s1.AddComment(context.Background(), story.ID, "persisted")
+
+	s2, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("re-open: %v", err)
+	}
+
+	comments, _ := s2.ListComments(story.ID)
+	if len(comments) != 1 || comments[0].Body != "persisted" {
+		t.Fatalf("expected persisted comment, got %v", comments)
+	}
+}
+
 // --- Test helpers ---
 
 type listenerFunc func(ChangeEvent)

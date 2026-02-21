@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+type Comment struct {
+	ID        string    `json:"id"`
+	WorkID    string    `json:"work_id"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 var (
 	ErrWorkNotFound = errors.New("work not found")
 	ErrInvalidWork  = errors.New("invalid work")

@@ -114,6 +114,29 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
+		Name:        "work_comment_add",
+		Description: "Add a comment to a work item. Use this to report progress, results, or notes.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"work_id": {Type: "string", Description: "Work item ID to comment on"},
+				"body":    {Type: "string", Description: "Comment text"},
+			},
+			Required: []string{"work_id", "body"},
+		},
+	},
+	{
+		Name:        "work_comment_list",
+		Description: "List comments on a work item.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"work_id": {Type: "string", Description: "Work item ID"},
+			},
+			Required: []string{"work_id"},
+		},
+	},
+	{
 		Name:        "agent_role_list",
 		Description: "List all available agent roles. Use this to find which roles can be assigned to work items. Use agent_role_get for full details including role_prompt.",
 		InputSchema: inputSchema{
@@ -152,6 +175,10 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkStart, true
 	case "work_needs_input":
 		return s.handleWorkNeedsInput, true
+	case "work_comment_add":
+		return s.handleWorkCommentAdd, true
+	case "work_comment_list":
+		return s.handleWorkCommentList, true
 	case "agent_role_list":
 		return s.handleAgentRoleList, true
 	case "agent_role_get":
@@ -404,6 +431,58 @@ func (s *Server) handleWorkNeedsInput(ctx context.Context, args json.RawMessage)
 	}
 
 	return fmt.Sprintf("Work %s is now waiting for user input: %s", params.ID, params.Reason), nil
+}
+
+func (s *Server) handleWorkCommentAdd(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		WorkID string `json:"work_id"`
+		Body   string `json:"body"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	comment, err := s.store.AddComment(ctx, params.WorkID, params.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Comment added (ID: %s)", comment.ID), nil
+}
+
+func (s *Server) handleWorkCommentList(_ context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		WorkID string `json:"work_id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	comments, err := s.store.ListComments(params.WorkID)
+	if err != nil {
+		return "", err
+	}
+
+	type commentItem struct {
+		ID        string `json:"id"`
+		WorkID    string `json:"work_id"`
+		Body      string `json:"body"`
+		CreatedAt string `json:"created_at"`
+	}
+	items := make([]commentItem, len(comments))
+	for i, c := range comments {
+		items[i] = commentItem{
+			ID:        c.ID,
+			WorkID:    c.WorkID,
+			Body:      c.Body,
+			CreatedAt: c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		}
+	}
+	b, err := json.Marshal(items)
+	if err != nil {
+		return "", fmt.Errorf("marshal comment list: %w", err)
+	}
+	return string(b), nil
 }
 
 func (s *Server) handleAgentRoleList(_ context.Context, _ json.RawMessage) (string, error) {

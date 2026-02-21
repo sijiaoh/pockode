@@ -20,7 +20,6 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 		Type:        WorkTypeTask,
 		AgentRoleID: testAgentRoleID,
 		Title:       "Fix the bug",
-		Body:        "Check the auth module for null pointer errors",
 	}
 
 	msg := BuildKickoffMessage(w)
@@ -29,7 +28,6 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 	assertContains(t, msg, "agent_role_get", "agent_role_get instruction")
 	assertContains(t, msg, "Fix the bug", "task title")
 	assertContains(t, msg, "task-1", "work ID")
-	assertContains(t, msg, "Check the auth module", "body")
 	assertContains(t, msg, "work_done", "work_done instruction")
 
 	if strings.Contains(msg, "coordinate") {
@@ -43,24 +41,12 @@ func TestBuildKickoffMessage_Story(t *testing.T) {
 		Type:        WorkTypeStory,
 		AgentRoleID: testAgentRoleID,
 		Title:       "Big feature",
-		Body:        "Implement OAuth2 login with Google and GitHub providers",
 	}
 
 	msg := BuildKickoffMessage(w)
 
 	assertContains(t, msg, "Big feature", "story title")
-	assertContains(t, msg, "Implement OAuth2", "body")
 	assertContains(t, msg, storyBehaviorRules, "story behavior rules")
-}
-
-func TestBuildKickoffMessage_EmptyBodyOmitted(t *testing.T) {
-	msg := BuildKickoffMessage(Work{
-		ID: "t1", Type: WorkTypeTask, AgentRoleID: testAgentRoleID, Title: "T",
-	})
-
-	if strings.Contains(msg, "\n\n\n\n") {
-		t.Error("empty body should not produce extra blank lines")
-	}
 }
 
 func TestBuildKickoffMessage_RoleRefComesFirst(t *testing.T) {
@@ -102,6 +88,50 @@ func TestBuildAutoContinuationMessage_ContainsBaseAndNudge(t *testing.T) {
 			assertContains(t, cont, tc.nudge, "nudge")
 		})
 	}
+}
+
+func TestBuildKickoffMessage_TaskWithParent_ReportViaComment(t *testing.T) {
+	w := Work{
+		ID:          "task-1",
+		Type:        WorkTypeTask,
+		ParentID:    "story-1",
+		AgentRoleID: testAgentRoleID,
+		Title:       "Fix bug",
+	}
+
+	msg := BuildKickoffMessage(w)
+
+	assertContains(t, msg, "work_comment_add", "work_comment_add instruction")
+	assertContains(t, msg, "story-1", "parent work ID")
+	assertContains(t, msg, "work_done", "work_done instruction")
+}
+
+func TestBuildKickoffMessage_TaskWithoutParent_NoCommentInstruction(t *testing.T) {
+	w := Work{
+		ID:          "task-1",
+		Type:        WorkTypeTask,
+		AgentRoleID: testAgentRoleID,
+		Title:       "Fix bug",
+	}
+
+	msg := BuildKickoffMessage(w)
+
+	if strings.Contains(msg, "work_comment_add") {
+		t.Error("task without parent should not mention work_comment_add")
+	}
+}
+
+func TestBuildParentReactivationMessage_ContainsCommentListNudge(t *testing.T) {
+	parent := Work{
+		ID:          "story-1",
+		Type:        WorkTypeStory,
+		AgentRoleID: testAgentRoleID,
+		Title:       "Big feature",
+	}
+
+	msg := BuildParentReactivationMessage(parent, "Implement login", "task-42")
+	assertContains(t, msg, "work_comment_list", "work_comment_list instruction")
+	assertContains(t, msg, "your own work (ID: story-1)", "parent work ID for comment list")
 }
 
 func TestBuildParentReactivationMessage_ContainsBaseAndNudge(t *testing.T) {
