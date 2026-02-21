@@ -242,6 +242,43 @@ func TestAutoResumer_ReactivatesParent(t *testing.T) {
 	}
 }
 
+func TestAutoResumer_ReactivatesParentAfterAutoClose(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+	store.AddOnChangeListener(resumer)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	parentSid := "parent-session"
+	startWorkWithSession(t, store, story.ID, parentSid)
+	startWork(t, store, task.ID)
+
+	// Parent done, waiting for children
+	doneWork(t, store, story.ID)
+
+	// MarkDone on the last task: autoCloseRecursive closes both task and
+	// parent in one batch. handleParentReactivation must still send the
+	// reactivation message even though the parent is already closed.
+	if err := store.MarkDone(context.Background(), task.ID); err != nil {
+		t.Fatalf("MarkDone task: %v", err)
+	}
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	// Parent should be reactivated to in_progress
+	parent := getWork(t, store, story.ID)
+	if parent.Status != StatusInProgress {
+		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
+	}
+
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 reactivation message, got %d", len(msgs))
+	}
+	if msgs[0].SessionID != parentSid {
+		t.Errorf("sessionID = %q, want %q", msgs[0].SessionID, parentSid)
+	}
+}
+
 func TestAutoResumer_NoReactivateWhenParentInProgress(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 

@@ -15,6 +15,7 @@ var validTransitions = map[WorkStatus][]WorkStatus{
 	StatusOpen:       {StatusInProgress},
 	StatusInProgress: {StatusOpen, StatusDone}, // open: rollback on failed start
 	StatusDone:       {StatusInProgress},       // parent re-activation
+	StatusClosed:     {StatusInProgress},       // parent re-activation after auto-close
 }
 
 func ValidateType(t WorkType) bool {

@@ -53,7 +53,7 @@ func TestValidNextStatuses(t *testing.T) {
 		{StatusOpen, []WorkStatus{StatusInProgress}},
 		{StatusInProgress, []WorkStatus{StatusOpen, StatusDone}},
 		{StatusDone, []WorkStatus{StatusInProgress}},
-		{StatusClosed, nil},
+		{StatusClosed, []WorkStatus{StatusInProgress}},
 	}
 
 	for _, tt := range tests {

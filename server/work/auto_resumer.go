@@ -221,12 +221,13 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 		return
 	}
 
-	// Only reactivate if parent is done (waiting for children) and has a session
-	if parent.Status != StatusDone || parent.SessionID == "" {
+	// Reactivate if parent is done (waiting for children) or closed (auto-closed
+	// because the last child completed in the same MarkDone batch).
+	if (parent.Status != StatusDone && parent.Status != StatusClosed) || parent.SessionID == "" {
 		return
 	}
 
-	// Reactivate: done → in_progress
+	// Reactivate: done/closed → in_progress
 	status := StatusInProgress
 	if err := r.workStore.Update(r.ctx, parent.ID, UpdateFields{Status: &status}); err != nil {
 		if r.ctx.Err() != nil {
