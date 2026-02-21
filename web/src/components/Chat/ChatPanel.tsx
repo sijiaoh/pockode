@@ -1,4 +1,4 @@
-import { ChevronRight, ClipboardList, Square } from "lucide-react";
+import { ClipboardList, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { useWorkStore } from "../../lib/workStore";
@@ -8,7 +8,6 @@ import type {
 	PermissionRequest,
 } from "../../types/message";
 import type { OverlayState } from "../../types/overlay";
-import { hasCoarsePointer } from "../../utils/breakpoints";
 import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
@@ -19,7 +18,6 @@ import {
 	WorkListOverlay,
 } from "../Project";
 import { SettingsPage } from "../Settings";
-import StatusBadge from "../ui/StatusBadge";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
@@ -250,35 +248,32 @@ function ChatPanel({
 						onModeChange={setMode}
 						disabled={isStreaming}
 					/>
+					{linkedWork && (
+						<button
+							type="button"
+							onClick={() => onOpenWorkDetail?.(linkedWork.id)}
+							className="flex min-w-0 items-center gap-1 rounded px-2 py-1 text-xs text-th-text-secondary transition-all hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
+						>
+							<span className="relative shrink-0">
+								<ClipboardList className="size-3.5" />
+								{linkedWork.status === "needs_input" && (
+									<span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-th-warning" />
+								)}
+							</span>
+							<span className="max-w-[120px] truncate">{linkedWork.title}</span>
+						</button>
+					)}
 					{isStreaming ? (
 						<button
 							type="button"
 							onClick={handleInterrupt}
 							aria-label="Stop"
-							className="flex h-8 items-center gap-1.5 rounded bg-th-error px-2.5 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
+							className="flex size-8 shrink-0 items-center justify-center rounded bg-th-error text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
 						>
 							<Square className="size-3.5 fill-current" />
-							{!hasCoarsePointer() && (
-								<span className="text-xs opacity-80">Esc</span>
-							)}
 						</button>
 					) : (
-						linkedWork && (
-							<button
-								type="button"
-								onClick={() => onOpenWorkDetail?.(linkedWork.id)}
-								className="flex items-center gap-1 rounded px-2 py-1 text-xs text-th-text-secondary transition-all hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
-							>
-								<ClipboardList className="size-3.5 shrink-0" />
-								<span className="max-w-[200px] truncate">
-									{linkedWork.title}
-								</span>
-								{linkedWork.status === "needs_input" && (
-									<StatusBadge status="needs_input" />
-								)}
-								<ChevronRight className="size-3.5 shrink-0" />
-							</button>
-						)
+						<div className="size-8 shrink-0" />
 					)}
 				</div>
 			)}
