@@ -11,6 +11,7 @@ import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
+import { MarkdownContent } from "../Chat/MarkdownContent";
 import ConfirmDialog from "../common/ConfirmDialog";
 
 interface Props {
@@ -290,8 +291,8 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 				Role Prompt
 			</h3>
 			<div className="group relative">
-				<div className="whitespace-pre-wrap rounded bg-th-bg-secondary px-3 py-2 text-sm text-th-text-secondary">
-					{role.role_prompt}
+				<div className="rounded bg-th-bg-secondary px-3 py-2">
+					<MarkdownContent content={role.role_prompt} />
 				</div>
 				<button
 					type="button"

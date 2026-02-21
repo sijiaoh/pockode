@@ -14,6 +14,7 @@ import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { Work, WorkStatus } from "../../types/work";
+import { MarkdownContent } from "../Chat/MarkdownContent";
 import StatusIcon from "../ui/StatusIcon";
 
 interface Props {
@@ -324,8 +325,8 @@ function InlineEditableBody({ work }: { work: Work }) {
 
 	return (
 		<div className="group relative">
-			<div className="whitespace-pre-wrap rounded bg-th-bg-secondary px-3 py-2 text-sm text-th-text-secondary">
-				{work.body}
+			<div className="rounded bg-th-bg-secondary px-3 py-2">
+				<MarkdownContent content={work.body} />
 			</div>
 			<button
 				type="button"
