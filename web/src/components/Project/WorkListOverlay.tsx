@@ -16,6 +16,7 @@ import { useWSStore } from "../../lib/wsStore";
 import type { Work, WorkStatus, WorkType } from "../../types/work";
 import ConfirmDialog from "../common/ConfirmDialog";
 import BackToChatButton from "../ui/BackToChatButton";
+import { statusLabels } from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
 
 interface Props {
@@ -127,14 +128,6 @@ const statusGroupOrder: WorkStatus[] = [
 	"done",
 	"closed",
 ];
-
-const statusLabels: Record<WorkStatus, string> = {
-	in_progress: "In Progress",
-	needs_input: "Needs Input",
-	open: "Open",
-	done: "Done",
-	closed: "Closed",
-};
 
 interface StatusGroupProps {
 	status: WorkStatus;

@@ -1,20 +1,14 @@
-import {
-	AlertCircle,
-	ArrowLeft,
-	Check,
-	Loader2,
-	Pencil,
-	Play,
-	X,
-} from "lucide-react";
+import { AlertCircle, Check, Loader2, Pencil, Play, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useWorkSubscription } from "../../hooks/useWorkSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
-import type { Comment, Work, WorkStatus } from "../../types/work";
+import type { Comment, Work, WorkType } from "../../types/work";
 import { MarkdownContent } from "../Chat/MarkdownContent";
+import BackButton from "../ui/BackButton";
+import StatusBadge from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
 
 interface Props {
@@ -61,7 +55,7 @@ export default function WorkDetailOverlay({
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<DetailHeader onBack={onBack} />
+			<DetailHeader onBack={onBack} type={work.type} />
 			<div className="min-h-0 flex-1 overflow-auto">
 				<div className="space-y-5 p-4">
 					<div className="flex items-start gap-2">
@@ -102,19 +96,23 @@ export default function WorkDetailOverlay({
 	);
 }
 
-function DetailHeader({ onBack }: { onBack: () => void }) {
+const typeLabels: Record<WorkType, string> = {
+	story: "Story",
+	task: "Task",
+};
+
+function DetailHeader({
+	onBack,
+	type,
+}: {
+	onBack: () => void;
+	type?: WorkType;
+}) {
 	return (
 		<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-			<button
-				type="button"
-				onClick={onBack}
-				className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-th-border bg-th-bg-tertiary p-2 text-th-text-secondary transition-all hover:border-th-border-focus hover:text-th-text-primary active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
-				aria-label="Back to work list"
-			>
-				<ArrowLeft className="h-5 w-5" aria-hidden="true" />
-			</button>
+			<BackButton onClick={onBack} aria-label="Back to work list" />
 			<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
-				Detail
+				{type ? typeLabels[type] : "Detail"}
 			</h1>
 		</header>
 	);
@@ -216,7 +214,7 @@ function InlineEditableTitle({ work }: { work: Work }) {
 			<button
 				type="button"
 				onClick={() => setEditing(true)}
-				className="shrink-0 rounded p-1 text-th-text-muted opacity-0 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary group-hover:opacity-100"
+				className="shrink-0 rounded p-1 text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
 				aria-label="Edit title"
 			>
 				<Pencil className="size-3.5" />
@@ -333,7 +331,7 @@ function InlineEditableBody({ work }: { work: Work }) {
 			<button
 				type="button"
 				onClick={() => setEditing(true)}
-				className="absolute top-2 right-2 rounded p-1 text-th-text-muted opacity-0 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary group-hover:opacity-100"
+				className="absolute top-2 right-2 rounded p-1 text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
 				aria-label="Edit description"
 			>
 				<Pencil className="size-3.5" />
@@ -439,7 +437,7 @@ function MetadataSection({
 						className="group flex items-center gap-1 text-th-text-secondary hover:text-th-accent"
 					>
 						<span>{roleName ?? "—"}</span>
-						<Pencil className="size-3 text-th-text-muted opacity-0 group-hover:opacity-100" />
+						<Pencil className="size-3 text-th-text-muted opacity-60 md:opacity-0 md:group-hover:opacity-100" />
 					</button>
 				)}
 			</div>
@@ -655,28 +653,6 @@ function formatCommentDate(dateString: string): string {
 		hour: "2-digit",
 		minute: "2-digit",
 	});
-}
-
-function StatusBadge({ status }: { status: WorkStatus }) {
-	const styles: Record<WorkStatus, string> = {
-		open: "bg-th-bg-tertiary text-th-text-muted",
-		in_progress: "bg-th-accent/10 text-th-accent",
-		needs_input: "bg-th-warning/10 text-th-warning",
-		done: "bg-th-warning/10 text-th-warning",
-		closed: "bg-th-success/10 text-th-success",
-	};
-	const labels: Record<WorkStatus, string> = {
-		open: "Open",
-		in_progress: "In Progress",
-		needs_input: "Needs Input",
-		done: "Done",
-		closed: "Closed",
-	};
-	return (
-		<span className={`rounded-full px-2 py-0.5 text-xs ${styles[status]}`}>
-			{labels[status]}
-		</span>
-	);
 }
 
 function autoResize(el: HTMLTextAreaElement) {

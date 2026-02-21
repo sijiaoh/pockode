@@ -1,11 +1,4 @@
-import {
-	AlertCircle,
-	ArrowLeft,
-	Check,
-	Loader2,
-	Pencil,
-	X,
-} from "lucide-react";
+import { AlertCircle, Check, Loader2, Pencil, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
@@ -13,6 +6,7 @@ import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import { MarkdownContent } from "../Chat/MarkdownContent";
 import ConfirmDialog from "../common/ConfirmDialog";
+import BackButton from "../ui/BackButton";
 
 interface Props {
 	roleId: string;
@@ -57,14 +51,7 @@ export default function AgentRoleDetailOverlay({ roleId, onBack }: Props) {
 function DetailHeader({ onBack }: { onBack: () => void }) {
 	return (
 		<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-			<button
-				type="button"
-				onClick={onBack}
-				className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-th-border bg-th-bg-tertiary p-2 text-th-text-secondary transition-all hover:border-th-border-focus hover:text-th-text-primary active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
-				aria-label="Back to agent roles"
-			>
-				<ArrowLeft className="h-5 w-5" aria-hidden="true" />
-			</button>
+			<BackButton onClick={onBack} aria-label="Back to agent roles" />
 			<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
 				Agent Role
 			</h1>
@@ -168,7 +155,7 @@ function InlineEditableName({ role }: { role: AgentRole }) {
 			<button
 				type="button"
 				onClick={() => setEditing(true)}
-				className="shrink-0 rounded p-1 text-th-text-muted opacity-0 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary group-hover:opacity-100"
+				className="shrink-0 rounded p-1 text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
 				aria-label="Edit name"
 			>
 				<Pencil className="size-3.5" />
@@ -297,7 +284,7 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 				<button
 					type="button"
 					onClick={() => setEditing(true)}
-					className="absolute top-2 right-2 rounded p-1 text-th-text-muted opacity-0 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary group-hover:opacity-100"
+					className="absolute top-2 right-2 rounded p-1 text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
 					aria-label="Edit role prompt"
 				>
 					<Pencil className="size-3.5" />
