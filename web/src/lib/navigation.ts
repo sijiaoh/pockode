@@ -51,7 +51,19 @@ interface NavToWorksOverlay {
 	sessionId: string | null;
 }
 
-type NavToOverlay = NavToFileOverlay | NavToSettingsOverlay | NavToWorksOverlay;
+interface NavToWorkDetailOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "work-detail";
+	workId: string;
+	sessionId: string | null;
+}
+
+type NavToOverlay =
+	| NavToFileOverlay
+	| NavToSettingsOverlay
+	| NavToWorksOverlay
+	| NavToWorkDetailOverlay;
 
 interface NavToHome {
 	type: "home";
@@ -127,6 +139,14 @@ export function overlayToNavigation(
 					overlayType: "works" as const,
 					sessionId,
 				};
+			case "work-detail":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "work-detail" as const,
+					workId: overlay.workId,
+					sessionId,
+				};
 		}
 	})();
 	return buildNavigation(target);
@@ -162,7 +182,19 @@ export function buildNavigation(
 		}
 
 		case "overlay": {
-			if (target.overlayType === "settings" || target.overlayType === "works") {
+			if (target.overlayType === "work-detail") {
+				result.to = isMain ? ROUTES.workDetail : WT_ROUTES.workDetail;
+				result.params = { workId: target.workId };
+				if (!isMain) {
+					result.params.worktree = target.worktree;
+				}
+				if (target.sessionId) {
+					result.search = { session: target.sessionId };
+				}
+			} else if (
+				target.overlayType === "settings" ||
+				target.overlayType === "works"
+			) {
 				const routeKey = target.overlayType === "works" ? "works" : "settings";
 				result.to = isMain ? ROUTES[routeKey] : WT_ROUTES[routeKey];
 				if (!isMain) {

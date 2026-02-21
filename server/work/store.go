@@ -40,6 +40,7 @@ type Store interface {
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
 type UpdateFields struct {
 	Title     *string     `json:"title,omitempty"`
+	Body      *string     `json:"body,omitempty"`
 	Status    *WorkStatus `json:"status,omitempty"`
 	SessionID *string     `json:"session_id,omitempty"`
 }
@@ -149,6 +150,7 @@ func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
 		Type:      w.Type,
 		ParentID:  w.ParentID,
 		Title:     w.Title,
+		Body:      w.Body,
 		Status:    StatusOpen,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -203,6 +205,9 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) er
 	now := time.Now()
 	if fields.Title != nil {
 		w.Title = *fields.Title
+	}
+	if fields.Body != nil {
+		w.Body = *fields.Body
 	}
 	if fields.SessionID != nil {
 		w.SessionID = *fields.SessionID
@@ -633,6 +638,7 @@ func diffWorks(old, updated []Work) []ChangeEvent {
 
 func workChanged(a, b Work) bool {
 	return a.Title != b.Title ||
+		a.Body != b.Body ||
 		a.Status != b.Status ||
 		a.SessionID != b.SessionID ||
 		a.ParentID != b.ParentID ||

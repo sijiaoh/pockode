@@ -31,6 +31,7 @@ type Work struct {
 	Type      WorkType   `json:"type"`
 	ParentID  string     `json:"parent_id,omitempty"`
 	Title     string     `json:"title"`
+	Body      string     `json:"body,omitempty"`
 	Status    WorkStatus `json:"status"`
 	SessionID string     `json:"session_id,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`

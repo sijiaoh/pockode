@@ -2,9 +2,6 @@ import {
 	AlertCircle,
 	ChevronDown,
 	ChevronRight,
-	Circle,
-	CircleCheck,
-	CircleDot,
 	Loader2,
 	Play,
 	Plus,
@@ -14,18 +11,21 @@ import { useCallback, useMemo, useState } from "react";
 import { useWorkSubscription } from "../../hooks/useWorkSubscription";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
-import type { Work, WorkStatus, WorkType } from "../../types/work";
+import type { Work, WorkType } from "../../types/work";
 import ConfirmDialog from "../common/ConfirmDialog";
 import BackToChatButton from "../ui/BackToChatButton";
+import StatusIcon from "../ui/StatusIcon";
 
 interface Props {
 	onBack: () => void;
 	onNavigateToSession: (sessionId: string) => void;
+	onOpenWorkDetail: (workId: string) => void;
 }
 
 export default function WorkListOverlay({
 	onBack,
 	onNavigateToSession,
+	onOpenWorkDetail,
 }: Props) {
 	useWorkSubscription(true);
 
@@ -84,6 +84,7 @@ export default function WorkListOverlay({
 								story={story}
 								tasks={tasksByParentId.get(story.id) ?? emptyTasks}
 								onNavigateToSession={onNavigateToSession}
+								onOpenWorkDetail={onOpenWorkDetail}
 							/>
 						))}
 					</div>
@@ -103,9 +104,15 @@ interface StoryItemProps {
 	story: Work;
 	tasks: Work[];
 	onNavigateToSession: (sessionId: string) => void;
+	onOpenWorkDetail: (workId: string) => void;
 }
 
-function StoryItem({ story, tasks, onNavigateToSession }: StoryItemProps) {
+function StoryItem({
+	story,
+	tasks,
+	onNavigateToSession,
+	onOpenWorkDetail,
+}: StoryItemProps) {
 	const [expanded, setExpanded] = useState(story.status !== "closed");
 
 	return (
@@ -116,6 +123,7 @@ function StoryItem({ story, tasks, onNavigateToSession }: StoryItemProps) {
 				expanded={expanded}
 				hasChildren={tasks.length > 0}
 				onNavigateToSession={onNavigateToSession}
+				onOpenWorkDetail={onOpenWorkDetail}
 			/>
 			{expanded && (
 				<div className="ml-5 space-y-0.5 border-l border-th-border pl-2">
@@ -124,6 +132,7 @@ function StoryItem({ story, tasks, onNavigateToSession }: StoryItemProps) {
 							key={task.id}
 							work={task}
 							onNavigateToSession={onNavigateToSession}
+							onOpenWorkDetail={onOpenWorkDetail}
 						/>
 					))}
 					<div className="pt-1">
@@ -141,6 +150,7 @@ interface WorkRowProps {
 	expanded?: boolean;
 	hasChildren?: boolean;
 	onNavigateToSession: (sessionId: string) => void;
+	onOpenWorkDetail: (workId: string) => void;
 }
 
 function WorkRow({
@@ -149,6 +159,7 @@ function WorkRow({
 	expanded,
 	hasChildren,
 	onNavigateToSession,
+	onOpenWorkDetail,
 }: WorkRowProps) {
 	const startWork = useWSStore((s) => s.actions.startWork);
 	const deleteWork = useWSStore((s) => s.actions.deleteWork);
@@ -204,9 +215,13 @@ function WorkRow({
 
 				<StatusIcon status={work.status} />
 
-				<span className="min-w-0 flex-1 truncate text-sm text-th-text-primary">
+				<button
+					type="button"
+					onClick={() => onOpenWorkDetail(work.id)}
+					className="min-w-0 flex-1 truncate text-left text-sm text-th-text-primary hover:text-th-accent"
+				>
 					{work.title}
-				</span>
+				</button>
 
 				{work.session_id && (
 					<button
@@ -264,23 +279,6 @@ function WorkRow({
 			)}
 		</>
 	);
-}
-
-interface StatusIconProps {
-	status: WorkStatus;
-}
-
-function StatusIcon({ status }: StatusIconProps) {
-	switch (status) {
-		case "open":
-			return <Circle className="size-3.5 shrink-0 text-th-text-muted" />;
-		case "in_progress":
-			return <CircleDot className="size-3.5 shrink-0 text-th-accent" />;
-		case "done":
-			return <CircleCheck className="size-3.5 shrink-0 text-th-warning" />;
-		case "closed":
-			return <CircleCheck className="size-3.5 shrink-0 text-th-success" />;
-	}
 }
 
 interface CreateWorkButtonProps {

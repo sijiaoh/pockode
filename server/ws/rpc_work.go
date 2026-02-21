@@ -32,6 +32,7 @@ func (h *rpcMethodHandler) handleWorkCreate(ctx context.Context, conn *jsonrpc2.
 		Type:     params.Type,
 		ParentID: params.ParentID,
 		Title:    params.Title,
+		Body:     params.Body,
 	})
 	if err != nil {
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to create work")
@@ -54,6 +55,7 @@ func (h *rpcMethodHandler) handleWorkUpdate(ctx context.Context, conn *jsonrpc2.
 
 	fields := work.UpdateFields{
 		Title:  params.Title,
+		Body:   params.Body,
 		Status: params.Status,
 	}
 	if err := h.workStore.Update(ctx, params.ID, fields); err != nil {

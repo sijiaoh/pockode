@@ -295,11 +295,13 @@ type WorkCreateParams struct {
 	Type     work.WorkType `json:"type"`
 	ParentID string        `json:"parent_id,omitempty"`
 	Title    string        `json:"title"`
+	Body     string        `json:"body,omitempty"`
 }
 
 type WorkUpdateParams struct {
 	ID     string           `json:"id"`
 	Title  *string          `json:"title,omitempty"`
+	Body   *string          `json:"body,omitempty"`
 	Status *work.WorkStatus `json:"status,omitempty"`
 }
 

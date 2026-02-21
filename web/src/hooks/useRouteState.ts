@@ -68,6 +68,14 @@ export function useRouteState(): RouteInfo {
 		from: WT_ROUTES.settings,
 		shouldThrow: false,
 	});
+	const workDetailMatch = useMatch({
+		from: ROUTES.workDetail,
+		shouldThrow: false,
+	});
+	const wtWorkDetailMatch = useMatch({
+		from: WT_ROUTES.workDetail,
+		shouldThrow: false,
+	});
 	const worksMatch = useMatch({
 		from: ROUTES.works,
 		shouldThrow: false,
@@ -146,6 +154,18 @@ export function useRouteState(): RouteInfo {
 			wtSettingsMatch?.search) as OverlaySearchParams;
 		return {
 			overlay: { type: "settings" },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	const workDetailParams = workDetailMatch?.params ?? wtWorkDetailMatch?.params;
+	if (workDetailParams) {
+		const workId = (workDetailParams as { workId: string }).workId;
+		const search = (workDetailMatch?.search ??
+			wtWorkDetailMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "work-detail", workId },
 			sessionId: search.session ?? null,
 			worktree,
 		};

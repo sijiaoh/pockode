@@ -270,6 +270,19 @@ function AppShell() {
 		);
 	}, [navigate, urlWorktree, currentSessionId]);
 
+	const handleOpenWorkDetail = useCallback(
+		(workId: string) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "work-detail", workId },
+					urlWorktree,
+					currentSessionId,
+				),
+			);
+		},
+		[navigate, urlWorktree, currentSessionId],
+	);
+
 	const handleNavigateToSession = useCallback(
 		(sessionId: string) => {
 			navigate(
@@ -345,6 +358,8 @@ function AppShell() {
 				overlay={overlay}
 				onCloseOverlay={handleCloseOverlay}
 				onNavigateToSession={handleNavigateToSession}
+				onOpenWorkDetail={handleOpenWorkDetail}
+				onOpenWorkList={handleOpenWorkList}
 			/>
 		</div>
 	);

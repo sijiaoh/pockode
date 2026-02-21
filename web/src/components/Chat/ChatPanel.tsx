@@ -11,7 +11,7 @@ import { hasCoarsePointer } from "../../utils/breakpoints";
 import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
-import { WorkListOverlay } from "../Project";
+import { WorkDetailOverlay, WorkListOverlay } from "../Project";
 import { SettingsPage } from "../Settings";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
@@ -26,6 +26,8 @@ interface Props {
 	overlay?: OverlayState;
 	onCloseOverlay?: () => void;
 	onNavigateToSession?: (sessionId: string) => void;
+	onOpenWorkDetail?: (workId: string) => void;
+	onOpenWorkList?: () => void;
 }
 
 function ChatPanel({
@@ -37,6 +39,8 @@ function ChatPanel({
 	overlay,
 	onCloseOverlay,
 	onNavigateToSession,
+	onOpenWorkDetail,
+	onOpenWorkList,
 }: Props) {
 	const projectTitle = useWSStore((state) => state.projectTitle);
 
@@ -187,6 +191,16 @@ function ChatPanel({
 					<WorkListOverlay
 						onBack={onCloseOverlay ?? noop}
 						onNavigateToSession={onNavigateToSession ?? noop}
+						onOpenWorkDetail={onOpenWorkDetail ?? noop}
+					/>
+				);
+			case "work-detail":
+				return (
+					<WorkDetailOverlay
+						workId={overlay.workId}
+						onBack={onOpenWorkList ?? onCloseOverlay ?? noop}
+						onNavigateToSession={onNavigateToSession ?? noop}
+						onOpenWorkDetail={onOpenWorkDetail ?? noop}
 					/>
 				);
 		}

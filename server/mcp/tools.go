@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/pockode/server/work"
 )
@@ -46,20 +47,33 @@ var toolDefinitions = []toolDefinition{
 				"type":      {Type: "string", Description: "Work type", Enum: []string{"story", "task"}},
 				"parent_id": {Type: "string", Description: "Parent work ID (required for tasks)"},
 				"title":     {Type: "string", Description: "Title of the work item"},
+				"body":      {Type: "string", Description: "Detailed description or instructions for the work item"},
 			},
 			Required: []string{"type", "title"},
 		},
 	},
 	{
 		Name:        "work_update",
-		Description: "Update a work item's title.",
+		Description: "Update a work item's title or body.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
 				"id":    {Type: "string", Description: "Work item ID"},
 				"title": {Type: "string", Description: "New title"},
+				"body":  {Type: "string", Description: "New body content"},
 			},
-			Required: []string{"id", "title"},
+			Required: []string{"id"},
+		},
+	},
+	{
+		Name:        "work_get",
+		Description: "Get a single work item by ID with full details including body.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id": {Type: "string", Description: "Work item ID"},
+			},
+			Required: []string{"id"},
 		},
 	},
 	{
@@ -85,6 +99,8 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkCreate, true
 	case "work_update":
 		return s.handleWorkUpdate, true
+	case "work_get":
+		return s.handleWorkGet, true
 	case "work_done":
 		return s.handleWorkDone, true
 	default:
@@ -148,6 +164,7 @@ func (s *Server) handleWorkCreate(ctx context.Context, args json.RawMessage) (st
 		Type     work.WorkType `json:"type"`
 		ParentID string        `json:"parent_id"`
 		Title    string        `json:"title"`
+		Body     string        `json:"body"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
@@ -157,6 +174,7 @@ func (s *Server) handleWorkCreate(ctx context.Context, args json.RawMessage) (st
 		Type:     params.Type,
 		ParentID: params.ParentID,
 		Title:    params.Title,
+		Body:     params.Body,
 	})
 	if err != nil {
 		return "", err
@@ -167,18 +185,71 @@ func (s *Server) handleWorkCreate(ctx context.Context, args json.RawMessage) (st
 
 func (s *Server) handleWorkUpdate(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
-		ID    string `json:"id"`
-		Title string `json:"title"`
+		ID    string  `json:"id"`
+		Title *string `json:"title"`
+		Body  *string `json:"body"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if err := s.store.Update(ctx, params.ID, work.UpdateFields{Title: &params.Title}); err != nil {
+	fields := work.UpdateFields{
+		Title: params.Title,
+		Body:  params.Body,
+	}
+	if err := s.store.Update(ctx, params.ID, fields); err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("Updated work %s title to %q", params.ID, params.Title), nil
+	var parts []string
+	if params.Title != nil {
+		parts = append(parts, fmt.Sprintf("title to %q", *params.Title))
+	}
+	if params.Body != nil {
+		parts = append(parts, "body")
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("Updated work %s (no fields changed)", params.ID), nil
+	}
+	return fmt.Sprintf("Updated work %s %s", params.ID, strings.Join(parts, " and ")), nil
+}
+
+func (s *Server) handleWorkGet(_ context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	w, found, err := s.store.Get(params.ID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("work %s not found", params.ID)
+	}
+
+	type workDetail struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		ParentID string `json:"parent_id,omitempty"`
+		Status   string `json:"status"`
+		Title    string `json:"title"`
+		Body     string `json:"body,omitempty"`
+	}
+	b, err := json.Marshal(workDetail{
+		ID:       w.ID,
+		Type:     string(w.Type),
+		ParentID: w.ParentID,
+		Status:   string(w.Status),
+		Title:    w.Title,
+		Body:     w.Body,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal work item: %w", err)
+	}
+	return string(b), nil
 }
 
 func (s *Server) handleWorkDone(ctx context.Context, args json.RawMessage) (string, error) {

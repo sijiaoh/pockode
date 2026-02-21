@@ -7,6 +7,7 @@ export interface Work {
 	type: WorkType;
 	parent_id?: string;
 	title: string;
+	body?: string;
 	status: WorkStatus;
 	session_id?: string;
 	created_at: string;
@@ -17,11 +18,13 @@ export interface WorkCreateParams {
 	type: WorkType;
 	parent_id?: string;
 	title: string;
+	body?: string;
 }
 
 export interface WorkUpdateParams {
 	id: string;
 	title?: string;
+	body?: string;
 	status?: Exclude<WorkStatus, "closed">;
 }
 
