@@ -26,7 +26,7 @@ func buildBase(w Work) string {
 	} else {
 		if w.ParentID != "" {
 			rules = fmt.Sprintf(
-				"IMPORTANT: When you finish, you MUST first report your results by calling work_comment_add on the parent work (ID: %s), then call work_done with ID %s. If you need user input to proceed, call work_needs_input with ID %s. Do not end your turn without calling one of these.",
+				"IMPORTANT: When you finish, you MUST first report your results by calling work_comment_add with work_id %s (the parent), then call work_done with ID %s. If you need user input to proceed, call work_needs_input with ID %s. Do not end your turn without calling one of these.",
 				w.ParentID, w.ID, w.ID,
 			)
 		} else {
@@ -71,8 +71,8 @@ func BuildParentReactivationMessage(parent Work, childTitle, childID string) str
 	base := buildBase(parent)
 
 	nudge := fmt.Sprintf(
-		"Task %q (ID: %s) has been completed. Use work_comment_list on your own work (ID: %s) to read the task's report. Then use work_list to check remaining tasks. If all tasks are done, call work_done with ID %s. If tasks remain, review progress and adjust the plan as needed, then call work_done with ID %s to wait for the next completion.",
-		childTitle, childID, parent.ID, parent.ID, parent.ID,
+		"Task %q (ID: %s) has been completed. Use work_comment_list with work_id %s to read the task's report. Then use work_list with parent_id %s to check remaining tasks. If all tasks are done, call work_done with ID %s. If tasks remain, review progress and adjust the plan as needed, then call work_done with ID %s to wait for the next completion.",
+		childTitle, childID, parent.ID, parent.ID, parent.ID, parent.ID,
 	)
 
 	return base + "\n\n" + nudge

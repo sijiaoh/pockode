@@ -131,7 +131,7 @@ func TestBuildParentReactivationMessage_ContainsCommentListNudge(t *testing.T) {
 
 	msg := BuildParentReactivationMessage(parent, "Implement login", "task-42")
 	assertContains(t, msg, "work_comment_list", "work_comment_list instruction")
-	assertContains(t, msg, "your own work (ID: story-1)", "parent work ID for comment list")
+	assertContains(t, msg, "work_id story-1", "parent work ID for comment list")
 }
 
 func TestBuildParentReactivationMessage_ContainsBaseAndNudge(t *testing.T) {
