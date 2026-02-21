@@ -13,7 +13,7 @@ import { useWorkSubscription } from "../../hooks/useWorkSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
-import type { Work, WorkType } from "../../types/work";
+import type { Work, WorkStatus, WorkType } from "../../types/work";
 import ConfirmDialog from "../common/ConfirmDialog";
 import BackToChatButton from "../ui/BackToChatButton";
 import StatusIcon from "../ui/StatusIcon";
@@ -36,11 +36,6 @@ export default function WorkListOverlay({
 	const isLoading = useWorkStore((s) => s.isLoading);
 	const error = useWorkStore((s) => s.error);
 
-	const stories = useMemo(
-		() => works.filter((w) => w.type === "story"),
-		[works],
-	);
-
 	const tasksByParentId = useMemo(() => {
 		const map = new Map<string, Work[]>();
 		for (const w of works) {
@@ -55,6 +50,27 @@ export default function WorkListOverlay({
 		}
 		return map;
 	}, [works]);
+
+	const storyGroups = useMemo(() => {
+		const byStatus = new Map<WorkStatus, Work[]>();
+		for (const w of works) {
+			if (w.type !== "story") continue;
+			const list = byStatus.get(w.status);
+			if (list) {
+				list.push(w);
+			} else {
+				byStatus.set(w.status, [w]);
+			}
+		}
+		return statusGroupOrder
+			.filter((s) => byStatus.has(s))
+			.map((status) => ({
+				status,
+				stories: byStatus.get(status) as Work[],
+			}));
+	}, [works]);
+
+	const hasStories = storyGroups.length > 0;
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
@@ -75,17 +91,18 @@ export default function WorkListOverlay({
 						<AlertCircle className="size-5" />
 						<p>{error}</p>
 					</div>
-				) : stories.length === 0 ? (
+				) : !hasStories ? (
 					<div className="py-8 text-center text-sm text-th-text-muted">
 						No work items yet
 					</div>
 				) : (
-					<div className="space-y-1">
-						{stories.map((story) => (
-							<StoryItem
-								key={story.id}
-								story={story}
-								tasks={tasksByParentId.get(story.id) ?? emptyTasks}
+					<div className="space-y-3">
+						{storyGroups.map(({ status, stories }) => (
+							<StatusGroup
+								key={status}
+								status={status}
+								stories={stories}
+								tasksByParentId={tasksByParentId}
 								onNavigateToSession={onNavigateToSession}
 								onOpenWorkDetail={onOpenWorkDetail}
 							/>
@@ -102,6 +119,70 @@ export default function WorkListOverlay({
 }
 
 const emptyTasks: Work[] = [];
+
+const statusGroupOrder: WorkStatus[] = [
+	"in_progress",
+	"open",
+	"done",
+	"closed",
+];
+
+const statusLabels: Record<WorkStatus, string> = {
+	in_progress: "In Progress",
+	open: "Open",
+	done: "Done",
+	closed: "Closed",
+};
+
+interface StatusGroupProps {
+	status: WorkStatus;
+	stories: Work[];
+	tasksByParentId: Map<string, Work[]>;
+	onNavigateToSession: (sessionId: string) => void;
+	onOpenWorkDetail: (workId: string) => void;
+}
+
+function StatusGroup({
+	status,
+	stories,
+	tasksByParentId,
+	onNavigateToSession,
+	onOpenWorkDetail,
+}: StatusGroupProps) {
+	const [collapsed, setCollapsed] = useState(status === "closed");
+
+	return (
+		<div>
+			<button
+				type="button"
+				onClick={() => setCollapsed(!collapsed)}
+				className="flex w-full items-center gap-1.5 px-1 py-1 text-xs font-medium text-th-text-muted"
+			>
+				{collapsed ? (
+					<ChevronRight className="size-3" />
+				) : (
+					<ChevronDown className="size-3" />
+				)}
+				<StatusIcon status={status} className="!size-3" />
+				<span>{statusLabels[status]}</span>
+				<span className="text-th-text-muted/60">{stories.length}</span>
+			</button>
+			{!collapsed && (
+				<div className="space-y-1">
+					{stories.map((story) => (
+						<StoryItem
+							key={story.id}
+							story={story}
+							tasks={tasksByParentId.get(story.id) ?? emptyTasks}
+							onNavigateToSession={onNavigateToSession}
+							onOpenWorkDetail={onOpenWorkDetail}
+						/>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
 
 interface StoryItemProps {
 	story: Work;
