@@ -134,14 +134,7 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSen
 	r.retries[sessionID] = count + 1
 	r.retryMu.Unlock()
 
-	var parentTitle string
-	if w.ParentID != "" {
-		if p, found, err := r.workStore.Get(w.ParentID); err == nil && found {
-			parentTitle = p.Title
-		}
-	}
-
-	msg := BuildAutoContinuationMessage(*w, parentTitle)
+	msg := BuildAutoContinuationMessage(*w)
 	if err := sender.SendMessage(r.ctx, sessionID, msg); err != nil {
 		if r.ctx.Err() != nil {
 			return // shutting down, don't log
@@ -249,7 +242,7 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 	delete(r.retries, parent.SessionID)
 	r.retryMu.Unlock()
 
-	msg := BuildParentReactivationMessage(parent, child.Title)
+	msg := BuildParentReactivationMessage(parent, child.Title, child.ID)
 	if err := sender.SendMessage(r.ctx, parent.SessionID, msg); err != nil {
 		if r.ctx.Err() != nil {
 			return

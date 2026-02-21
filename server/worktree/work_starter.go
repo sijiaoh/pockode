@@ -13,14 +13,12 @@ import (
 // and sending a kickoff message via the main worktree.
 type WorkStarter struct {
 	worktreeManager *Manager
-	workStore       work.Store
 	agentRoleStore  agentrole.Store
 }
 
-func NewWorkStarter(wm *Manager, ws work.Store, ars agentrole.Store) *WorkStarter {
+func NewWorkStarter(wm *Manager, ars agentrole.Store) *WorkStarter {
 	return &WorkStarter{
 		worktreeManager: wm,
-		workStore:       ws,
 		agentRoleStore:  ars,
 	}
 }
@@ -54,16 +52,7 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 		slog.Warn("failed to set session title", "sessionId", w.SessionID, "error", err)
 	}
 
-	var parentTitle string
-	if w.ParentID != "" {
-		if parent, found, err := s.workStore.Get(w.ParentID); err == nil && found {
-			parentTitle = parent.Title
-		} else {
-			slog.Warn("failed to get parent for kickoff message", "parentId", w.ParentID, "error", err)
-		}
-	}
-
-	kickoffMsg := work.BuildKickoffMessage(w, parentTitle)
+	kickoffMsg := work.BuildKickoffMessage(w)
 	if err := mainWt.ChatClient.SendMessage(ctx, w.SessionID, kickoffMsg); err != nil {
 		if delErr := mainWt.SessionStore.Delete(ctx, w.SessionID); delErr != nil {
 			slog.Error("failed to clean up session after kickoff failure", "sessionId", w.SessionID, "error", delErr)

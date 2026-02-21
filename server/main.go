@@ -303,7 +303,7 @@ func main() {
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout)
 	worktreeManager.SetWorkAutoResumer(workAutoResumer)
-	workStarter := worktree.NewWorkStarter(worktreeManager, workStore, agentRoleStore)
+	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore)
 	workAutoResumer.SetStartHandler(workStarter)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)

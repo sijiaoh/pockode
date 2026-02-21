@@ -75,7 +75,7 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, mock, dataDir, 10*time.Minute)
-	workStarter := worktree.NewWorkStarter(worktreeManager, workStore, agentRoleStore)
+	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore)
 
 	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, agentRoleStore)
 	server := httptest.NewServer(h)
@@ -237,7 +237,7 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	defer worktreeManager.Shutdown()
 
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
-	workStarter := worktree.NewWorkStarter(worktreeManager, workStore, agentRoleStore)
+	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore)
 	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, agentRoleStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
@@ -287,7 +287,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	defer worktreeManager.Shutdown()
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 
-	workStarter := worktree.NewWorkStarter(worktreeManager, workStore, agentRoleStore)
+	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore)
 	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, agentRoleStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
