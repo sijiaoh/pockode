@@ -5,17 +5,18 @@ import (
 	"testing"
 )
 
-const testRolePrompt = "You are a senior Go engineer."
+const testAgentRoleID = "role-abc-123"
 
 func TestBuildKickoffMessage_Task(t *testing.T) {
 	w := Work{
-		ID:       "task-1",
-		Type:     WorkTypeTask,
-		ParentID: "story-1",
-		Title:    "Fix the bug",
+		ID:          "task-1",
+		Type:        WorkTypeTask,
+		ParentID:    "story-1",
+		AgentRoleID: testAgentRoleID,
+		Title:       "Fix the bug",
 	}
 
-	msg := BuildKickoffMessage(w, "Epic story", testRolePrompt)
+	msg := BuildKickoffMessage(w, "Epic story")
 
 	if !strings.Contains(msg, "Fix the bug") {
 		t.Errorf("expected task title in message, got %q", msg)
@@ -29,21 +30,25 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 	if !strings.Contains(msg, "work_done") {
 		t.Errorf("expected work_done instruction in message, got %q", msg)
 	}
-	if !strings.Contains(msg, testRolePrompt) {
-		t.Errorf("expected role prompt in message, got %q", msg)
+	if !strings.Contains(msg, testAgentRoleID) {
+		t.Errorf("expected agent role ID in message, got %q", msg)
+	}
+	if !strings.Contains(msg, "agent_role_get") {
+		t.Errorf("expected agent_role_get instruction in message, got %q", msg)
 	}
 }
 
 func TestBuildKickoffMessage_TaskWithBody(t *testing.T) {
 	w := Work{
-		ID:       "task-1",
-		Type:     WorkTypeTask,
-		ParentID: "story-1",
-		Title:    "Fix the bug",
-		Body:     "Check the auth module for null pointer errors",
+		ID:          "task-1",
+		Type:        WorkTypeTask,
+		ParentID:    "story-1",
+		AgentRoleID: testAgentRoleID,
+		Title:       "Fix the bug",
+		Body:        "Check the auth module for null pointer errors",
 	}
 
-	msg := BuildKickoffMessage(w, "Epic story", testRolePrompt)
+	msg := BuildKickoffMessage(w, "Epic story")
 
 	if !strings.Contains(msg, "Check the auth module") {
 		t.Errorf("expected body in message, got %q", msg)
@@ -52,12 +57,13 @@ func TestBuildKickoffMessage_TaskWithBody(t *testing.T) {
 
 func TestBuildKickoffMessage_Story(t *testing.T) {
 	w := Work{
-		ID:    "story-1",
-		Type:  WorkTypeStory,
-		Title: "Big feature",
+		ID:          "story-1",
+		Type:        WorkTypeStory,
+		AgentRoleID: testAgentRoleID,
+		Title:       "Big feature",
 	}
 
-	msg := BuildKickoffMessage(w, "", testRolePrompt)
+	msg := BuildKickoffMessage(w, "")
 
 	if !strings.Contains(msg, "Big feature") {
 		t.Errorf("expected story title in message, got %q", msg)
@@ -68,20 +74,24 @@ func TestBuildKickoffMessage_Story(t *testing.T) {
 	if !strings.Contains(msg, "story-1") {
 		t.Errorf("expected work ID in message, got %q", msg)
 	}
-	if !strings.Contains(msg, testRolePrompt) {
-		t.Errorf("expected role prompt in message, got %q", msg)
+	if !strings.Contains(msg, testAgentRoleID) {
+		t.Errorf("expected agent role ID in message, got %q", msg)
+	}
+	if !strings.Contains(msg, "agent_role_get") {
+		t.Errorf("expected agent_role_get instruction in message, got %q", msg)
 	}
 }
 
 func TestBuildKickoffMessage_StoryWithBody(t *testing.T) {
 	w := Work{
-		ID:    "story-1",
-		Type:  WorkTypeStory,
-		Title: "Big feature",
-		Body:  "Implement OAuth2 login with Google and GitHub providers",
+		ID:          "story-1",
+		Type:        WorkTypeStory,
+		AgentRoleID: testAgentRoleID,
+		Title:       "Big feature",
+		Body:        "Implement OAuth2 login with Google and GitHub providers",
 	}
 
-	msg := BuildKickoffMessage(w, "", testRolePrompt)
+	msg := BuildKickoffMessage(w, "")
 
 	if !strings.Contains(msg, "Implement OAuth2") {
 		t.Errorf("expected body in message, got %q", msg)
@@ -90,11 +100,11 @@ func TestBuildKickoffMessage_StoryWithBody(t *testing.T) {
 
 func TestBuildKickoffMessage_EmptyBodyOmitted(t *testing.T) {
 	withBody := BuildKickoffMessage(Work{
-		ID: "t1", Type: WorkTypeTask, ParentID: "s1", Title: "T", Body: "details",
-	}, "S", testRolePrompt)
+		ID: "t1", Type: WorkTypeTask, ParentID: "s1", AgentRoleID: testAgentRoleID, Title: "T", Body: "details",
+	}, "S")
 	without := BuildKickoffMessage(Work{
-		ID: "t1", Type: WorkTypeTask, ParentID: "s1", Title: "T",
-	}, "S", testRolePrompt)
+		ID: "t1", Type: WorkTypeTask, ParentID: "s1", AgentRoleID: testAgentRoleID, Title: "T",
+	}, "S")
 
 	if !strings.Contains(withBody, "details") {
 		t.Fatal("body should appear when set")
@@ -104,20 +114,21 @@ func TestBuildKickoffMessage_EmptyBodyOmitted(t *testing.T) {
 	}
 }
 
-func TestBuildKickoffMessage_RolePromptComesFirst(t *testing.T) {
+func TestBuildKickoffMessage_RoleRefComesFirst(t *testing.T) {
 	w := Work{
-		ID:       "task-1",
-		Type:     WorkTypeTask,
-		ParentID: "story-1",
-		Title:    "Fix the bug",
+		ID:          "task-1",
+		Type:        WorkTypeTask,
+		ParentID:    "story-1",
+		AgentRoleID: testAgentRoleID,
+		Title:       "Fix the bug",
 	}
 
-	msg := BuildKickoffMessage(w, "Epic story", testRolePrompt)
+	msg := BuildKickoffMessage(w, "Epic story")
 
-	roleIdx := strings.Index(msg, testRolePrompt)
+	roleIdx := strings.Index(msg, testAgentRoleID)
 	workIdx := strings.Index(msg, "You are working on task")
 	if roleIdx < 0 || workIdx < 0 || roleIdx >= workIdx {
-		t.Error("role prompt should appear before work instruction")
+		t.Error("role reference should appear before work instruction")
 	}
 }
 

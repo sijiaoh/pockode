@@ -4,12 +4,17 @@ import "fmt"
 
 // BuildKickoffMessage builds the prompt sent to an agent when work starts.
 // Tasks include parent context; stories instruct the agent to only coordinate.
-// rolePrompt is prepended as the agent's persona.
-func BuildKickoffMessage(w Work, parentTitle, rolePrompt string) string {
+// The agent role is referenced by ID so the agent can fetch it via agent_role_get.
+func BuildKickoffMessage(w Work, parentTitle string) string {
 	var body string
 	if w.Body != "" {
 		body = "\n\n" + w.Body
 	}
+
+	roleRef := fmt.Sprintf(
+		"Your agent role ID is %s. Use the agent_role_get tool to retrieve your role instructions.",
+		w.AgentRoleID,
+	)
 
 	var workInstruction string
 	if w.Type == WorkTypeTask && parentTitle != "" {
@@ -24,7 +29,7 @@ func BuildKickoffMessage(w Work, parentTitle, rolePrompt string) string {
 		)
 	}
 
-	return rolePrompt + "\n\n" + workInstruction
+	return roleRef + "\n\n" + workInstruction
 }
 
 // BuildAutoContinuationMessage creates the nudge sent when an agent process

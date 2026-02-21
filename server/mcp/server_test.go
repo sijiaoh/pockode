@@ -132,7 +132,7 @@ func TestToolsList(t *testing.T) {
 		names[td.Name] = true
 	}
 
-	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_done", "work_start", "agent_role_list"} {
+	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_done", "work_start", "agent_role_list", "agent_role_get"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}
@@ -485,8 +485,36 @@ func TestAgentRoleList(t *testing.T) {
 	if !strings.Contains(text, "Test Engineer") {
 		t.Errorf("expected role list to contain 'Test Engineer', got %q", text)
 	}
+	if strings.Contains(text, "role_prompt") {
+		t.Error("agent_role_list should not include role_prompt; use agent_role_get for details")
+	}
+}
+
+// --- Tool: agent_role_get ---
+
+func TestAgentRoleGet(t *testing.T) {
+	ts := newTestServer(t)
+	result := callTool(t, ts.Server, "agent_role_get", map[string]string{"id": ts.roleID})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+
+	text := toolText(result)
+	if !strings.Contains(text, "Test Engineer") {
+		t.Errorf("result = %q, want to contain name", text)
+	}
 	if !strings.Contains(text, "You are a test engineer.") {
-		t.Errorf("expected role list to contain role_prompt, got %q", text)
+		t.Errorf("result = %q, want to contain role_prompt", text)
+	}
+}
+
+func TestAgentRoleGet_NotFound(t *testing.T) {
+	ts := newTestServer(t)
+	result := callTool(t, ts.Server, "agent_role_get", map[string]string{"id": "nonexistent"})
+
+	if !result.IsError {
+		t.Error("expected error for nonexistent ID")
 	}
 }
 

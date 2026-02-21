@@ -32,7 +32,7 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 		return fmt.Errorf("work %s has no agent_role_id", w.ID)
 	}
 
-	role, found, err := s.agentRoleStore.Get(w.AgentRoleID)
+	_, found, err := s.agentRoleStore.Get(w.AgentRoleID)
 	if err != nil {
 		return fmt.Errorf("get agent role: %w", err)
 	}
@@ -63,7 +63,7 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 		}
 	}
 
-	kickoffMsg := work.BuildKickoffMessage(w, parentTitle, role.RolePrompt)
+	kickoffMsg := work.BuildKickoffMessage(w, parentTitle)
 	if err := mainWt.ChatClient.SendMessage(ctx, w.SessionID, kickoffMsg); err != nil {
 		if delErr := mainWt.SessionStore.Delete(ctx, w.SessionID); delErr != nil {
 			slog.Error("failed to clean up session after kickoff failure", "sessionId", w.SessionID, "error", delErr)

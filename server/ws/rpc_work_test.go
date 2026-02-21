@@ -305,7 +305,7 @@ func TestHandler_WorkStart(t *testing.T) {
 		t.Error("expected non-empty session_id after start")
 	}
 
-	// Verify kickoff message includes role prompt
+	// Verify kickoff message references agent role ID (not inline prompt)
 	mock.mu.Lock()
 	msgs := mock.messages
 	mock.mu.Unlock()
@@ -313,8 +313,8 @@ func TestHandler_WorkStart(t *testing.T) {
 		t.Fatal("expected at least one message sent to agent")
 	}
 	kickoff := msgs[0]
-	if !strings.Contains(kickoff, "You are a test engineer.") {
-		t.Errorf("expected role prompt in kickoff message, got %q", kickoff)
+	if !strings.Contains(kickoff, "agent_role_get") {
+		t.Errorf("expected agent_role_get reference in kickoff message, got %q", kickoff)
 	}
 }
 

@@ -103,10 +103,21 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "agent_role_list",
-		Description: "List all available agent roles. Use this to find which roles can be assigned to work items.",
+		Description: "List all available agent roles. Use this to find which roles can be assigned to work items. Use agent_role_get for full details including role_prompt.",
 		InputSchema: inputSchema{
 			Type:       "object",
 			Properties: map[string]propertySchema{},
+		},
+	},
+	{
+		Name:        "agent_role_get",
+		Description: "Get a single agent role by ID with full details including role_prompt.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id": {Type: "string", Description: "Agent role ID"},
+			},
+			Required: []string{"id"},
 		},
 	},
 }
@@ -129,6 +140,8 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkStart, true
 	case "agent_role_list":
 		return s.handleAgentRoleList, true
+	case "agent_role_get":
+		return s.handleAgentRoleGet, true
 	default:
 		return nil, false
 	}
@@ -369,21 +382,51 @@ func (s *Server) handleAgentRoleList(_ context.Context, _ json.RawMessage) (stri
 	}
 
 	type roleItem struct {
-		ID         string `json:"id"`
-		Name       string `json:"name"`
-		RolePrompt string `json:"role_prompt"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
 	}
 	items := make([]roleItem, len(roles))
 	for i, r := range roles {
 		items[i] = roleItem{
-			ID:         r.ID,
-			Name:       r.Name,
-			RolePrompt: r.RolePrompt,
+			ID:   r.ID,
+			Name: r.Name,
 		}
 	}
 	b, err := json.Marshal(items)
 	if err != nil {
 		return "", fmt.Errorf("marshal agent role list: %w", err)
+	}
+	return string(b), nil
+}
+
+func (s *Server) handleAgentRoleGet(_ context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	role, found, err := s.agentRoleStore.Get(params.ID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("agent role %q not found", params.ID)
+	}
+
+	type roleDetail struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		RolePrompt string `json:"role_prompt"`
+	}
+	b, err := json.Marshal(roleDetail{
+		ID:         role.ID,
+		Name:       role.Name,
+		RolePrompt: role.RolePrompt,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal agent role: %w", err)
 	}
 	return string(b), nil
 }
