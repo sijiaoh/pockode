@@ -23,12 +23,14 @@ type StateChangeEvent struct {
 	SessionID  string
 	State      ProcessState
 	NeedsInput bool
+	IsInitial  bool // true only for the initial idle emitted on process creation
 }
 
 // Manager manages agent processes.
 type Manager struct {
 	agent        agent.Agent
 	workDir      string
+	dataDir      string
 	sessionStore session.Store
 	idleTimeout  time.Duration
 
@@ -61,11 +63,12 @@ type Process struct {
 }
 
 // NewManager creates a new manager with the given idle timeout.
-func NewManager(ag agent.Agent, workDir string, store session.Store, idleTimeout time.Duration) *Manager {
+func NewManager(ag agent.Agent, workDir, dataDir string, store session.Store, idleTimeout time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		agent:        ag,
 		workDir:      workDir,
+		dataDir:      dataDir,
 		sessionStore: store,
 		idleTimeout:  idleTimeout,
 		processes:    make(map[string]*Process),
@@ -114,6 +117,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 	// Use manager's context for process lifecycle, not request context
 	opts := agent.StartOptions{
 		WorkDir:   m.workDir,
+		DataDir:   m.dataDir,
 		SessionID: sessionID,
 		Resume:    resume,
 		Mode:      mode,
@@ -149,7 +153,9 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 	m.processesMu.Unlock()
 
 	// Emit after releasing processesMu — callbacks may acquire it.
-	m.emitStateChange(sessionID, ProcessStateIdle, false)
+	if m.onStateChange != nil {
+		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: ProcessStateIdle, IsInitial: true})
+	}
 	slog.Info("process created", "sessionId", sessionID, "resume", resume, "mode", mode)
 	return proc, true, nil
 }

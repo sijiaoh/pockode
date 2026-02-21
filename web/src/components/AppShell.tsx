@@ -263,6 +263,26 @@ function AppShell() {
 		);
 	}, [navigate, urlWorktree, currentSessionId]);
 
+	const handleOpenWorkList = useCallback(() => {
+		setSidebarOpen(false);
+		navigate(
+			overlayToNavigation({ type: "work-list" }, urlWorktree, currentSessionId),
+		);
+	}, [navigate, urlWorktree, currentSessionId]);
+
+	const handleNavigateToSession = useCallback(
+		(sessionId: string) => {
+			navigate(
+				buildNavigation({
+					type: "session",
+					worktree: urlWorktree,
+					sessionId,
+				}),
+			);
+		},
+		[navigate, urlWorktree],
+	);
+
 	if (!hasAuthToken) {
 		return <TokenInput onSubmit={handleTokenSubmit} />;
 	}
@@ -313,6 +333,7 @@ function AppShell() {
 				activeCommitHash={activeCommitHash}
 				onSelectFile={handleSelectFile}
 				activeFilePath={activeFilePath}
+				onOpenWorkList={handleOpenWorkList}
 				isDesktop={isDesktop}
 			/>
 			<ChatPanel
@@ -323,6 +344,7 @@ function AppShell() {
 				onOpenSettings={handleOpenSettings}
 				overlay={overlay}
 				onCloseOverlay={handleCloseOverlay}
+				onNavigateToSession={handleNavigateToSession}
 			/>
 		</div>
 	);

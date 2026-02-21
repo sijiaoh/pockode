@@ -44,7 +44,14 @@ interface NavToSettingsOverlay {
 	sessionId: string | null;
 }
 
-type NavToOverlay = NavToFileOverlay | NavToSettingsOverlay;
+interface NavToWorksOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "works";
+	sessionId: string | null;
+}
+
+type NavToOverlay = NavToFileOverlay | NavToSettingsOverlay | NavToWorksOverlay;
 
 interface NavToHome {
 	type: "home";
@@ -113,6 +120,13 @@ export function overlayToNavigation(
 					overlayType: "settings" as const,
 					sessionId,
 				};
+			case "work-list":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "works" as const,
+					sessionId,
+				};
 		}
 	})();
 	return buildNavigation(target);
@@ -148,8 +162,9 @@ export function buildNavigation(
 		}
 
 		case "overlay": {
-			if (target.overlayType === "settings") {
-				result.to = isMain ? ROUTES.settings : WT_ROUTES.settings;
+			if (target.overlayType === "settings" || target.overlayType === "works") {
+				const routeKey = target.overlayType === "works" ? "works" : "settings";
+				result.to = isMain ? ROUTES[routeKey] : WT_ROUTES[routeKey];
 				if (!isMain) {
 					result.params = { worktree: target.worktree };
 				}

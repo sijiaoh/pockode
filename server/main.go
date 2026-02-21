@@ -23,10 +23,12 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/startup"
+	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
 	"github.com/pockode/server/ws"
 )
@@ -156,6 +158,15 @@ func findAvailablePort(startPort int) int {
 }
 
 func main() {
+	// Handle subcommands before flag.Parse()
+	if len(os.Args) > 1 && os.Args[0] != "-" {
+		switch os.Args[1] {
+		case "mcp":
+			runMCP()
+			return
+		}
+	}
+
 	portFlag := flag.Int("port", 0, fmt.Sprintf("server port (default %d)", defaultPort))
 	tokenFlag := flag.String("auth-token", "", "authentication token (required)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
@@ -264,15 +275,28 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize work store and auto-resumer
+	workStore, err := work.NewFileStore(dataDir)
+	if err != nil {
+		slog.Error("failed to initialize work store", "error", err)
+		os.Exit(1)
+	}
+	workAutoResumer := work.NewAutoResumer(workStore, 3)
+	workStore.AddOnChangeListener(workAutoResumer)
+	if err := workStore.StartWatching(); err != nil {
+		slog.Warn("failed to start work store file watcher", "error", err)
+	}
+
 	// Initialize worktree registry and manager
 	claudeAgent := claude.New()
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout)
+	worktreeManager.SetWorkAutoResumer(workAutoResumer)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
 
-	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore)
+	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore)
 	handler := newHandler(token, devMode, wsHandler)
 
 	portStr := strconv.Itoa(port)
@@ -341,7 +365,9 @@ func main() {
 			relayManager.Stop()
 		}
 		wsHandler.Stop()
+		workAutoResumer.Stop()
 		worktreeManager.Shutdown()
+		workStore.StopWatching()
 		close(shutdownDone)
 	}()
 
@@ -371,4 +397,35 @@ func main() {
 	}
 	<-shutdownDone
 	slog.Info("server stopped")
+}
+
+func runMCP() {
+	mcpFlags := flag.NewFlagSet("mcp", flag.ExitOnError)
+	dataDirFlag := mcpFlags.String("data-dir", "", "data directory (required)")
+	mcpFlags.Parse(os.Args[2:])
+
+	dataDir := *dataDirFlag
+	if dataDir == "" {
+		fmt.Fprintln(os.Stderr, "Error: --data-dir is required")
+		os.Exit(1)
+	}
+
+	store, err := work.NewFileStore(dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to initialize work store: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Watch for external changes so the in-memory cache stays in sync
+	// when the main server modifies the work index file.
+	if err := store.StartWatching(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to start file watcher: %v\n", err)
+	}
+	defer store.StopWatching()
+
+	server := mcp.NewServer(store)
+	if err := server.Run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
+		os.Exit(1)
+	}
 }

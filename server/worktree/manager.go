@@ -15,6 +15,7 @@ import (
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/watch"
+	"github.com/pockode/server/work"
 )
 
 const idleReleaseDelay = 30 * time.Second
@@ -26,6 +27,8 @@ type Manager struct {
 	dataDir         string
 	idleTimeout     time.Duration
 	WorktreeWatcher *watch.WorktreeWatcher
+
+	workAutoResumer *work.AutoResumer
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
@@ -44,6 +47,10 @@ func NewManager(registry *Registry, ag agent.Agent, dataDir string, idleTimeout 
 
 func (m *Manager) Registry() *Registry {
 	return m.registry
+}
+
+func (m *Manager) SetWorkAutoResumer(ar *work.AutoResumer) {
+	m.workAutoResumer = ar
 }
 
 func (m *Manager) Start() error {
@@ -164,15 +171,23 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	gitDiffWatcher := watch.NewGitDiffWatcher(workDir)
 	sessionListWatcher := watch.NewSessionListWatcher(sessionStore)
 	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore)
-	processManager := process.NewManager(m.agent, workDir, sessionStore, m.idleTimeout)
+	processManager := process.NewManager(m.agent, workDir, m.dataDir, sessionStore, m.idleTimeout)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetProcessStateGetter(processManager)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
 	processManager.SetOnStateChange(func(e process.StateChangeEvent) {
 		sessionListWatcher.HandleProcessStateChange(e)
+		if m.workAutoResumer != nil {
+			m.workAutoResumer.HandleProcessStateChange(e.SessionID, string(e.State), e.NeedsInput, e.IsInitial)
+		}
 	})
 
 	chatClient := chat.NewClient(sessionStore, processManager)
+
+	// Set sender for auto-resumer when creating the main worktree
+	if name == "" && m.workAutoResumer != nil {
+		m.workAutoResumer.SetSender(chatClient)
+	}
 
 	wt := &Worktree{
 		Name:                name,

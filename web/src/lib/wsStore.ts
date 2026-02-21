@@ -18,6 +18,11 @@ import type {
 	SettingsChangedNotification,
 	SettingsSubscribeResult,
 } from "../types/settings";
+import type {
+	Work,
+	WorkListChangedNotification,
+	WorkListSubscribeResult,
+} from "../types/work";
 import { getWebSocketUrl } from "../utils/config";
 import {
 	type ChatActions,
@@ -28,11 +33,13 @@ import {
 	createGitActions,
 	createSessionActions,
 	createSettingsActions,
+	createWorkActions,
 	createWorktreeActions,
 	type FileActions,
 	type GitActions,
 	type SessionActions,
 	type SettingsActions,
+	type WorkActions,
 	type WorktreeActions,
 } from "./rpc";
 import { APP_VERSION } from "./version";
@@ -88,6 +95,10 @@ export interface WatchActions {
 		callback: (params: SettingsChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<Settings>>;
 	settingsUnsubscribe: (id: string) => Promise<void>;
+	workListSubscribe: (
+		callback: (params: WorkListChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<Work[]>>;
+	workListUnsubscribe: (id: string) => Promise<void>;
 }
 
 type RPCActions = ConnectionActions &
@@ -98,6 +109,7 @@ type RPCActions = ConnectionActions &
 	FileActions &
 	GitActions &
 	WatchActions &
+	WorkActions &
 	WorktreeActions;
 
 interface WSState {
@@ -134,6 +146,10 @@ const settingsWatchCallbacks = new Map<
 	string,
 	(params: SettingsChangedNotification) => void
 >();
+const workListWatchCallbacks = new Map<
+	string,
+	(params: WorkListChangedNotification) => void
+>();
 
 /**
  * Clear all local watch subscriptions.
@@ -148,6 +164,7 @@ function clearWatchSubscriptions(): void {
 	gitDiffWatchCallbacks.clear();
 	sessionListWatchCallbacks.clear();
 	chatMessagesCallbacks.clear();
+	workListWatchCallbacks.clear();
 	// Note: worktreeWatchCallbacks and settingsWatchCallbacks are NOT cleared here
 	// because they are Manager-level, not worktree-specific.
 }
@@ -228,6 +245,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 		settingsWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
+	"work.list.changed": (params) => {
+		const changedParams = params as WorkListChangedNotification;
+		workListWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
 };
 
 function handleNotification(method: string, params: unknown): void {
@@ -258,6 +280,7 @@ const sessionActions = createSessionActions(getClient);
 const settingsActions = createSettingsActions(getClient);
 const fileActions = createFileActions(getClient);
 const gitActions = createGitActions(getClient);
+const workActions = createWorkActions(getClient);
 const worktreeRpcActions = createWorktreeActions(getClient);
 
 // Listener for worktree deleted notification
@@ -614,6 +637,33 @@ export const useWSStore = create<WSState>((set, get) => ({
 			}
 		},
 
+		workListSubscribe: async (
+			callback: (params: WorkListChangedNotification) => void,
+		) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			const result = (await client.request(
+				"work.list.subscribe",
+				{},
+			)) as WorkListSubscribeResult;
+			workListWatchCallbacks.set(result.id, callback);
+			return { id: result.id, initial: result.items };
+		},
+
+		workListUnsubscribe: async (id: string) => {
+			workListWatchCallbacks.delete(id);
+			const client = getClient();
+			if (client) {
+				try {
+					await client.request("work.list.unsubscribe", { id });
+				} catch {
+					// Ignore errors (connection might be closed)
+				}
+			}
+		},
+
 		// Spread namespace-specific actions
 		...chatActions,
 		...commandActions,
@@ -621,6 +671,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		...settingsActions,
 		...fileActions,
 		...gitActions,
+		...workActions,
 		...worktreeRpcActions,
 	},
 }));
@@ -699,6 +750,7 @@ export function resetWSStore() {
 	sessionListWatchCallbacks.clear();
 	chatMessagesCallbacks.clear();
 	settingsWatchCallbacks.clear();
+	workListWatchCallbacks.clear();
 	worktreeDeletedListener = null;
 	onWorktreeSwitched = null;
 	useWSStore.setState({

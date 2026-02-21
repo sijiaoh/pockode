@@ -18,6 +18,7 @@ import (
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/watch"
+	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -31,11 +32,16 @@ type RPCHandler struct {
 	worktreeManager *worktree.Manager
 	settingsStore   *settings.Store
 	settingsWatcher *watch.SettingsWatcher
+	workStore       work.Store
+	workListWatcher *watch.WorkListWatcher
 }
 
-func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store) *RPCHandler {
+func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
+
+	workListWatcher := watch.NewWorkListWatcher(workStore)
+	workListWatcher.Start()
 
 	return &RPCHandler{
 		token:           token,
@@ -45,12 +51,15 @@ func NewRPCHandler(token, version string, devMode bool, commandStore *command.St
 		worktreeManager: worktreeManager,
 		settingsStore:   settingsStore,
 		settingsWatcher: settingsWatcher,
+		workStore:       workStore,
+		workListWatcher: workListWatcher,
 	}
 }
 
 // Stop stops the RPC handler and releases resources.
 func (h *RPCHandler) Stop() {
 	h.settingsWatcher.Stop()
+	h.workListWatcher.Stop()
 }
 
 func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -253,6 +262,25 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "settings.update":
 		h.handleSettingsUpdate(ctx, conn, req)
+		return
+	// work namespace (app-level)
+	case "work.create":
+		h.handleWorkCreate(ctx, conn, req)
+		return
+	case "work.update":
+		h.handleWorkUpdate(ctx, conn, req)
+		return
+	case "work.delete":
+		h.handleWorkDelete(ctx, conn, req)
+		return
+	case "work.start":
+		h.handleWorkStart(ctx, conn, req)
+		return
+	case "work.list.subscribe":
+		h.handleWorkListSubscribe(ctx, conn, req)
+		return
+	case "work.list.unsubscribe":
+		h.handleWatcherUnsubscribe(ctx, conn, req, h.workListWatcher, "work list")
 		return
 	}
 

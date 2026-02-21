@@ -1,0 +1,352 @@
+package mcp
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/pockode/server/work"
+)
+
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	store, err := work.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewServer(store)
+}
+
+// callMethod sends a JSON-RPC request and returns the parsed response.
+func callMethod(t *testing.T, s *Server, method string, params interface{}) jsonRPCResponse {
+	t.Helper()
+	var rawParams json.RawMessage
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rawParams = b
+	}
+
+	req := &jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`1`),
+		Method:  method,
+		Params:  rawParams,
+	}
+
+	var buf bytes.Buffer
+	s.handleRequest(context.Background(), &buf, req)
+
+	var resp jsonRPCResponse
+	if err := json.Unmarshal(buf.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v\nraw: %s", err, buf.String())
+	}
+	return resp
+}
+
+// callTool sends a tools/call request and returns the parsed tool result.
+func callTool(t *testing.T, s *Server, name string, args interface{}) toolCallResult {
+	t.Helper()
+	rawArgs, _ := json.Marshal(args)
+	resp := callMethod(t, s, "tools/call", toolCallParams{
+		Name:      name,
+		Arguments: rawArgs,
+	})
+	if resp.Error != nil {
+		t.Fatalf("unexpected RPC error: %+v", resp.Error)
+	}
+	b, _ := json.Marshal(resp.Result)
+	var result toolCallResult
+	if err := json.Unmarshal(b, &result); err != nil {
+		t.Fatalf("unmarshal tool result: %v", err)
+	}
+	return result
+}
+
+func toolText(r toolCallResult) string {
+	if len(r.Content) == 0 {
+		return ""
+	}
+	return r.Content[0].Text
+}
+
+// --- Protocol tests ---
+
+func TestInitialize(t *testing.T) {
+	s := newTestServer(t)
+	resp := callMethod(t, s, "initialize", nil)
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	b, _ := json.Marshal(resp.Result)
+	var result initializeResult
+	json.Unmarshal(b, &result)
+
+	if result.ProtocolVersion != "2024-11-05" {
+		t.Errorf("protocol = %q, want 2024-11-05", result.ProtocolVersion)
+	}
+	if result.ServerInfo.Name != "pockode" {
+		t.Errorf("name = %q, want pockode", result.ServerInfo.Name)
+	}
+}
+
+func TestToolsList(t *testing.T) {
+	s := newTestServer(t)
+	resp := callMethod(t, s, "tools/list", nil)
+
+	b, _ := json.Marshal(resp.Result)
+	var result toolsListResult
+	json.Unmarshal(b, &result)
+
+	names := make(map[string]bool)
+	for _, td := range result.Tools {
+		names[td.Name] = true
+	}
+
+	for _, want := range []string{"work_list", "work_create", "work_update", "work_done"} {
+		if !names[want] {
+			t.Errorf("missing tool %q", want)
+		}
+	}
+}
+
+func TestUnknownMethod(t *testing.T) {
+	s := newTestServer(t)
+	resp := callMethod(t, s, "nonexistent", nil)
+
+	if resp.Error == nil {
+		t.Fatal("expected error for unknown method")
+	}
+	if resp.Error.Code != -32601 {
+		t.Errorf("code = %d, want -32601", resp.Error.Code)
+	}
+}
+
+func TestUnknownTool(t *testing.T) {
+	s := newTestServer(t)
+	rawArgs, _ := json.Marshal(map[string]string{})
+	resp := callMethod(t, s, "tools/call", toolCallParams{
+		Name:      "nonexistent_tool",
+		Arguments: rawArgs,
+	})
+
+	if resp.Error == nil {
+		t.Fatal("expected RPC error for unknown tool")
+	}
+	if resp.Error.Code != -32602 {
+		t.Errorf("code = %d, want -32602", resp.Error.Code)
+	}
+}
+
+// --- Tool: work_create ---
+
+func TestWorkCreate(t *testing.T) {
+	s := newTestServer(t)
+	result := callTool(t, s, "work_create", map[string]string{
+		"type":  "story",
+		"title": "Login feature",
+	})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+
+	text := toolText(result)
+	if !strings.Contains(text, "Login feature") {
+		t.Errorf("result = %q, want to contain title", text)
+	}
+	if !strings.Contains(text, "story") {
+		t.Errorf("result = %q, want to contain type", text)
+	}
+}
+
+func TestWorkCreate_InvalidType(t *testing.T) {
+	s := newTestServer(t)
+	result := callTool(t, s, "work_create", map[string]string{
+		"type":  "epic",
+		"title": "X",
+	})
+
+	if !result.IsError {
+		t.Error("expected error for invalid type")
+	}
+}
+
+// --- Tool: work_list ---
+
+func TestWorkList_Empty(t *testing.T) {
+	s := newTestServer(t)
+	result := callTool(t, s, "work_list", map[string]string{})
+
+	text := toolText(result)
+	if text != "[]" {
+		t.Errorf("expected empty JSON array, got %q", text)
+	}
+}
+
+func TestWorkList_WithItems(t *testing.T) {
+	s := newTestServer(t)
+
+	callTool(t, s, "work_create", map[string]string{
+		"type": "story", "title": "Story A",
+	})
+	callTool(t, s, "work_create", map[string]string{
+		"type": "story", "title": "Story B",
+	})
+
+	result := callTool(t, s, "work_list", map[string]string{})
+	text := toolText(result)
+
+	if !strings.Contains(text, "Story A") || !strings.Contains(text, "Story B") {
+		t.Errorf("expected both stories in list, got %q", text)
+	}
+}
+
+func TestWorkList_FilterByParentID(t *testing.T) {
+	s := newTestServer(t)
+
+	// Create story, extract ID
+	storyResult := callTool(t, s, "work_create", map[string]string{
+		"type": "story", "title": "Parent Story",
+	})
+	storyID := extractID(t, toolText(storyResult))
+
+	// Create task under story
+	callTool(t, s, "work_create", map[string]interface{}{
+		"type": "task", "parent_id": storyID, "title": "Child Task",
+	})
+
+	// Create another top-level story
+	callTool(t, s, "work_create", map[string]string{
+		"type": "story", "title": "Other Story",
+	})
+
+	// Filter by parent
+	result := callTool(t, s, "work_list", map[string]string{"parent_id": storyID})
+	text := toolText(result)
+
+	if !strings.Contains(text, "Child Task") {
+		t.Errorf("expected child task, got %q", text)
+	}
+	if strings.Contains(text, "Parent Story") || strings.Contains(text, "Other Story") {
+		t.Errorf("should not contain non-child items, got %q", text)
+	}
+}
+
+// --- Tool: work_update ---
+
+func TestWorkUpdate(t *testing.T) {
+	s := newTestServer(t)
+
+	createResult := callTool(t, s, "work_create", map[string]string{
+		"type": "story", "title": "Old Title",
+	})
+	id := extractID(t, toolText(createResult))
+
+	result := callTool(t, s, "work_update", map[string]string{
+		"id": id, "title": "New Title",
+	})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	if !strings.Contains(toolText(result), "New Title") {
+		t.Errorf("result = %q, want to contain new title", toolText(result))
+	}
+}
+
+func TestWorkUpdate_NotFound(t *testing.T) {
+	s := newTestServer(t)
+	result := callTool(t, s, "work_update", map[string]string{
+		"id": "nonexistent", "title": "X",
+	})
+
+	if !result.IsError {
+		t.Error("expected error for nonexistent ID")
+	}
+}
+
+// --- Tool: work_done ---
+
+func TestWorkDone(t *testing.T) {
+	s := newTestServer(t)
+
+	createResult := callTool(t, s, "work_create", map[string]string{
+		"type": "story", "title": "My Story",
+	})
+	id := extractID(t, toolText(createResult))
+
+	// Pre-transition to in_progress to test the in_progress → done path specifically
+	// (the auto open → done path is tested in TestWorkDone_FromOpen_AutoTransitions)
+	status := work.StatusInProgress
+	s.store.Update(context.Background(), id, work.UpdateFields{Status: &status})
+
+	result := callTool(t, s, "work_done", map[string]string{"id": id})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	if !strings.Contains(toolText(result), "done") {
+		t.Errorf("result = %q, want to contain 'done'", toolText(result))
+	}
+}
+
+func TestWorkDone_FromOpen_AutoTransitions(t *testing.T) {
+	s := newTestServer(t)
+
+	// Create story (status=open) → work_done auto-transitions open → in_progress → done
+	createResult := callTool(t, s, "work_create", map[string]string{
+		"type": "story", "title": "Story",
+	})
+	id := extractID(t, toolText(createResult))
+
+	result := callTool(t, s, "work_done", map[string]string{"id": id})
+	if result.IsError {
+		t.Errorf("expected success for open → done (auto-transition), got error: %s", toolText(result))
+	}
+}
+
+func TestWorkDone_AlreadyClosed(t *testing.T) {
+	s := newTestServer(t)
+
+	// Create and complete a story (will auto-close since no children)
+	createResult := callTool(t, s, "work_create", map[string]string{
+		"type": "story", "title": "Story",
+	})
+	id := extractID(t, toolText(createResult))
+
+	status := work.StatusInProgress
+	s.store.Update(context.Background(), id, work.UpdateFields{Status: &status})
+
+	callTool(t, s, "work_done", map[string]string{"id": id})
+
+	// Try to done again — already closed, should fail
+	result := callTool(t, s, "work_done", map[string]string{"id": id})
+	if !result.IsError {
+		t.Error("expected error for closed → done (invalid transition)")
+	}
+}
+
+// --- Helpers ---
+
+// extractID parses "Created story "title" (ID: xxx)" to extract the ID.
+func extractID(t *testing.T, text string) string {
+	t.Helper()
+	const prefix = "(ID: "
+	idx := strings.Index(text, prefix)
+	if idx < 0 {
+		t.Fatalf("cannot find ID in %q", text)
+	}
+	rest := text[idx+len(prefix):]
+	end := strings.Index(rest, ")")
+	if end < 0 {
+		t.Fatalf("cannot find closing paren in %q", text)
+	}
+	return rest[:end]
+}

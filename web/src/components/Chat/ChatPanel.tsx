@@ -11,6 +11,7 @@ import { hasCoarsePointer } from "../../utils/breakpoints";
 import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
+import { WorkListOverlay } from "../Project";
 import { SettingsPage } from "../Settings";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
@@ -24,6 +25,7 @@ interface Props {
 	onOpenSettings?: () => void;
 	overlay?: OverlayState;
 	onCloseOverlay?: () => void;
+	onNavigateToSession?: (sessionId: string) => void;
 }
 
 function ChatPanel({
@@ -34,6 +36,7 @@ function ChatPanel({
 	onOpenSettings,
 	overlay,
 	onCloseOverlay,
+	onNavigateToSession,
 }: Props) {
 	const projectTitle = useWSStore((state) => state.projectTitle);
 
@@ -161,32 +164,31 @@ function ChatPanel({
 					<DiffView
 						path={overlay.path}
 						staged={overlay.staged}
-						onBack={onCloseOverlay ?? (() => {})}
+						onBack={onCloseOverlay ?? noop}
 					/>
 				);
 			case "file":
 				if (overlay.edit) {
 					return (
-						<FileEditor
-							path={overlay.path}
-							onBack={onCloseOverlay ?? (() => {})}
-						/>
+						<FileEditor path={overlay.path} onBack={onCloseOverlay ?? noop} />
 					);
 				}
-				return (
-					<FileView path={overlay.path} onBack={onCloseOverlay ?? (() => {})} />
-				);
+				return <FileView path={overlay.path} onBack={onCloseOverlay ?? noop} />;
 			case "commit":
 				return (
-					<CommitView
-						hash={overlay.hash}
-						onBack={onCloseOverlay ?? (() => {})}
-					/>
+					<CommitView hash={overlay.hash} onBack={onCloseOverlay ?? noop} />
 				);
 			case "commit-diff":
 				return <CommitDiffView hash={overlay.hash} path={overlay.path} />;
 			case "settings":
-				return <SettingsPage onBack={onCloseOverlay ?? (() => {})} />;
+				return <SettingsPage onBack={onCloseOverlay ?? noop} />;
+			case "work-list":
+				return (
+					<WorkListOverlay
+						onBack={onCloseOverlay ?? noop}
+						onNavigateToSession={onNavigateToSession ?? noop}
+					/>
+				);
 		}
 	};
 
@@ -230,3 +232,5 @@ function ChatPanel({
 }
 
 export default ChatPanel;
+
+const noop = () => {};

@@ -13,6 +13,7 @@ const BASE = {
 	commit: "/commit/$",
 	commitDiff: "/commit/$hash/diff/$",
 	settings: "/settings",
+	works: "/works",
 } as const;
 
 const WT_PREFIX = "/w/$worktree";
@@ -34,4 +35,5 @@ export const WT_ROUTES = {
 	commit: `${WT_PREFIX}${BASE.commit}`,
 	commitDiff: `${WT_PREFIX}${BASE.commitDiff}`,
 	settings: `${WT_PREFIX}${BASE.settings}`,
+	works: `${WT_PREFIX}${BASE.works}`,
 } as const;

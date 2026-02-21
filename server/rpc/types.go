@@ -11,6 +11,7 @@ import (
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/work"
 )
 
 // Client → Server
@@ -286,4 +287,31 @@ type SettingsSubscribeResult struct {
 
 type SettingsUpdateParams struct {
 	Settings settings.Settings `json:"settings"`
+}
+
+// Work namespace
+
+type WorkCreateParams struct {
+	Type     work.WorkType `json:"type"`
+	ParentID string        `json:"parent_id,omitempty"`
+	Title    string        `json:"title"`
+}
+
+type WorkUpdateParams struct {
+	ID     string           `json:"id"`
+	Title  *string          `json:"title,omitempty"`
+	Status *work.WorkStatus `json:"status,omitempty"`
+}
+
+type WorkDeleteParams struct {
+	ID string `json:"id"`
+}
+
+type WorkStartParams struct {
+	ID string `json:"id"`
+}
+
+type WorkListSubscribeResult struct {
+	ID    string      `json:"id"`
+	Items []work.Work `json:"items"`
 }

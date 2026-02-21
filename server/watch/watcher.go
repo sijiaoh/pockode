@@ -17,4 +17,5 @@ var (
 	_ Watcher = (*SessionListWatcher)(nil)
 	_ Watcher = (*SettingsWatcher)(nil)
 	_ Watcher = (*ChatMessagesWatcher)(nil)
+	_ Watcher = (*WorkListWatcher)(nil)
 )

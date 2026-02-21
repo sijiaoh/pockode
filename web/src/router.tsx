@@ -65,6 +65,12 @@ const settingsRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const worksRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: ROUTES.works,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 // Worktree-prefixed routes
 const worktreeLayoutRoute = createRoute({
 	getParentRoute: () => rootRoute,
@@ -117,6 +123,12 @@ const wtSettingsRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const wtWorksRoute = createRoute({
+	getParentRoute: () => worktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.works,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 const routeTree = rootRoute.addChildren([
 	indexRoute,
 	sessionRoute,
@@ -126,6 +138,7 @@ const routeTree = rootRoute.addChildren([
 	commitDiffRoute, // Must be before commitRoute (more specific path)
 	commitRoute,
 	settingsRoute,
+	worksRoute,
 	worktreeLayoutRoute.addChildren([
 		wtIndexRoute,
 		wtSessionRoute,
@@ -135,6 +148,7 @@ const routeTree = rootRoute.addChildren([
 		wtCommitDiffRoute, // Must be before wtCommitRoute (more specific path)
 		wtCommitRoute,
 		wtSettingsRoute,
+		wtWorksRoute,
 	]),
 ]);
 

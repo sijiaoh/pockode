@@ -1,9 +1,15 @@
-import { FolderOpen, GitCompare, MessageSquare } from "lucide-react";
+import {
+	FolderOpen,
+	GitCompare,
+	ListChecks,
+	MessageSquare,
+} from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { useSessionStore } from "../../lib/sessionStore";
 import { FilesTab } from "../Files";
 import { DiffTab } from "../Git";
 import { TabbedSidebar, type TabConfig } from "../Layout";
+import { ProjectTab } from "../Project";
 import { WorktreeSwitcher } from "../Worktree";
 import SessionsTab from "./SessionsTab";
 
@@ -20,6 +26,7 @@ interface Props {
 	activeCommitHash: string | null;
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
+	onOpenWorkList: () => void;
 	isDesktop: boolean;
 }
 
@@ -36,6 +43,7 @@ function SessionSidebar({
 	activeCommitHash,
 	onSelectFile,
 	activeFilePath,
+	onOpenWorkList,
 	isDesktop,
 }: Props) {
 	const hasAnyUnread = useSessionStore((s) =>
@@ -52,6 +60,7 @@ function SessionSidebar({
 			},
 			{ id: "files", label: "Files", icon: FolderOpen },
 			{ id: "git", label: "Git", icon: GitCompare },
+			{ id: "project", label: "Project", icon: ListChecks },
 		],
 		[hasAnyUnread],
 	);
@@ -115,6 +124,7 @@ function SessionSidebar({
 				activeFile={activeDiffFile}
 				activeCommitHash={activeCommitHash}
 			/>
+			<ProjectTab onOpenWorkList={onOpenWorkList} />
 		</TabbedSidebar>
 	);
 }

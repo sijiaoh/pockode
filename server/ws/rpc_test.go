@@ -18,6 +18,7 @@ import (
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -28,6 +29,7 @@ type testEnv struct {
 	t               *testing.T
 	mock            *mockAgent
 	worktreeManager *worktree.Manager
+	workStore       work.Store
 	server          *httptest.Server
 	conn            *websocket.Conn
 	ctx             context.Context
@@ -50,10 +52,15 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 		t.Fatalf("failed to create settings store: %v", err)
 	}
 
+	workStore, err := work.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("failed to create work store: %v", err)
+	}
+
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, mock, dataDir, 10*time.Minute)
 
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore)
 	server := httptest.NewServer(h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -70,6 +77,7 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 		t:               t,
 		mock:            mock,
 		worktreeManager: worktreeManager,
+		workStore:       workStore,
 		server:          server,
 		conn:            conn,
 		ctx:             ctx,
@@ -205,11 +213,12 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
+	workStore, _ := work.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
 	defer worktreeManager.Shutdown()
 
-	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore)
+	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -252,11 +261,12 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
+	workStore, _ := work.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
 	defer worktreeManager.Shutdown()
 
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
