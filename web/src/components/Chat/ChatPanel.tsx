@@ -1,6 +1,7 @@
-import { Square } from "lucide-react";
-import { useCallback, useEffect } from "react";
+import { ChevronRight, ClipboardList, Square } from "lucide-react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
+import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
 	AskUserQuestionRequest,
@@ -18,6 +19,7 @@ import {
 	WorkListOverlay,
 } from "../Project";
 import { SettingsPage } from "../Settings";
+import StatusBadge from "../ui/StatusBadge";
 import InputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
@@ -52,6 +54,11 @@ function ChatPanel({
 	onOpenAgentRoleDetail,
 }: Props) {
 	const projectTitle = useWSStore((state) => state.projectTitle);
+	const works = useWorkStore((s) => s.works);
+	const linkedWork = useMemo(
+		() => works.find((w) => w.session_id === sessionId),
+		[works, sessionId],
+	);
 
 	const {
 		messages,
@@ -243,7 +250,7 @@ function ChatPanel({
 						onModeChange={setMode}
 						disabled={isStreaming}
 					/>
-					{isStreaming && (
+					{isStreaming ? (
 						<button
 							type="button"
 							onClick={handleInterrupt}
@@ -255,6 +262,23 @@ function ChatPanel({
 								<span className="text-xs opacity-80">Esc</span>
 							)}
 						</button>
+					) : (
+						linkedWork && (
+							<button
+								type="button"
+								onClick={() => onOpenWorkDetail?.(linkedWork.id)}
+								className="flex items-center gap-1 rounded px-2 py-1 text-xs text-th-text-secondary transition-all hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
+							>
+								<ClipboardList className="size-3.5 shrink-0" />
+								<span className="max-w-[200px] truncate">
+									{linkedWork.title}
+								</span>
+								{linkedWork.status === "needs_input" && (
+									<StatusBadge status="needs_input" />
+								)}
+								<ChevronRight className="size-3.5 shrink-0" />
+							</button>
+						)
 					)}
 				</div>
 			)}
