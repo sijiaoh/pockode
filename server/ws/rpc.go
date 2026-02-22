@@ -35,7 +35,7 @@ type RPCHandler struct {
 	settingsWatcher      *watch.SettingsWatcher
 	workStore            work.Store
 	workListWatcher      *watch.WorkListWatcher
-	workCommentWatcher   *watch.WorkCommentWatcher
+	workDetailWatcher    *watch.WorkDetailWatcher
 	workStarter          *worktree.WorkStarter
 	agentRoleStore       agentrole.Store
 	agentRoleListWatcher *watch.AgentRoleListWatcher
@@ -48,8 +48,8 @@ func NewRPCHandler(token, version string, devMode bool, commandStore *command.St
 	workListWatcher := watch.NewWorkListWatcher(workStore)
 	workListWatcher.Start()
 
-	workCommentWatcher := watch.NewWorkCommentWatcher(workStore)
-	workCommentWatcher.Start()
+	workDetailWatcher := watch.NewWorkDetailWatcher(workStore)
+	workDetailWatcher.Start()
 
 	agentRoleListWatcher := watch.NewAgentRoleListWatcher(agentRoleStore)
 	agentRoleListWatcher.Start()
@@ -64,7 +64,7 @@ func NewRPCHandler(token, version string, devMode bool, commandStore *command.St
 		settingsWatcher:      settingsWatcher,
 		workStore:            workStore,
 		workListWatcher:      workListWatcher,
-		workCommentWatcher:   workCommentWatcher,
+		workDetailWatcher:    workDetailWatcher,
 		workStarter:          workStarter,
 		agentRoleStore:       agentRoleStore,
 		agentRoleListWatcher: agentRoleListWatcher,
@@ -75,7 +75,7 @@ func NewRPCHandler(token, version string, devMode bool, commandStore *command.St
 func (h *RPCHandler) Stop() {
 	h.settingsWatcher.Stop()
 	h.workListWatcher.Stop()
-	h.workCommentWatcher.Stop()
+	h.workDetailWatcher.Stop()
 	h.agentRoleListWatcher.Stop()
 }
 
@@ -296,11 +296,11 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "work.comment.list":
 		h.handleWorkCommentList(ctx, conn, req)
 		return
-	case "work.comment.subscribe":
-		h.handleWorkCommentSubscribe(ctx, conn, req)
+	case "work.detail.subscribe":
+		h.handleWorkDetailSubscribe(ctx, conn, req)
 		return
-	case "work.comment.unsubscribe":
-		h.handleWatcherUnsubscribe(ctx, conn, req, h.workCommentWatcher, "work comment")
+	case "work.detail.unsubscribe":
+		h.handleWatcherUnsubscribe(ctx, conn, req, h.workDetailWatcher, "work detail")
 		return
 	case "work.list.subscribe":
 		h.handleWorkListSubscribe(ctx, conn, req)

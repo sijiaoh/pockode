@@ -329,12 +329,13 @@ type WorkCommentListResult struct {
 	Comments []work.Comment `json:"comments"`
 }
 
-type WorkCommentSubscribeParams struct {
+type WorkDetailSubscribeParams struct {
 	WorkID string `json:"work_id"`
 }
 
-type WorkCommentSubscribeResult struct {
+type WorkDetailSubscribeResult struct {
 	ID       string         `json:"id"`
+	Work     work.Work      `json:"work"`
 	Comments []work.Comment `json:"comments"`
 }
 

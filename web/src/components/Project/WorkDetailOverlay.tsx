@@ -10,12 +10,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
-import { useWorkCommentSubscription } from "../../hooks/useWorkCommentSubscription";
+import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription";
 import { useWorkSubscription } from "../../hooks/useWorkSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
-import type { Work, WorkType } from "../../types/work";
+import type { Comment, Work, WorkType } from "../../types/work";
 import { autoResizeTextarea } from "../../utils/dom";
 import { MarkdownContent } from "../Chat/MarkdownContent";
 import ConfirmDialog from "../common/ConfirmDialog";
@@ -41,11 +41,9 @@ export default function WorkDetailOverlay({
 	useWorkSubscription(true);
 	useAgentRoleSubscription(true);
 
+	const { work, comments, loading, error } = useWorkDetailSubscription(workId);
+
 	const works = useWorkStore((s) => s.works);
-	const work = useMemo(
-		() => works.find((w) => w.id === workId),
-		[works, workId],
-	);
 	const children = useMemo(
 		() => works.filter((w) => w.parent_id === workId),
 		[works, workId],
@@ -55,13 +53,25 @@ export default function WorkDetailOverlay({
 		[works, work],
 	);
 
-	if (!work) {
+	if (loading) {
+		return (
+			<div className="flex min-h-0 flex-1 flex-col">
+				<DetailHeader onBack={onBack} />
+				<div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-th-text-muted">
+					<Loader2 className="size-5 animate-spin" />
+					<p>Loading...</p>
+				</div>
+			</div>
+		);
+	}
+
+	if (error || !work) {
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
 				<DetailHeader onBack={onBack} />
 				<div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-th-text-muted">
 					<AlertCircle className="size-5" />
-					<p>Work item not found</p>
+					<p>{error ?? "Work item not found"}</p>
 				</div>
 			</div>
 		);
@@ -101,7 +111,7 @@ export default function WorkDetailOverlay({
 						/>
 					)}
 
-					<CommentsSection workId={workId} />
+					<CommentsSection comments={comments} />
 
 					<DeleteSection work={work} onBack={onBack} />
 				</div>
@@ -599,36 +609,7 @@ function ChildRow({
 	);
 }
 
-function CommentsSection({ workId }: { workId: string }) {
-	const { comments, loading, error } = useWorkCommentSubscription(workId);
-
-	if (loading) {
-		return (
-			<div>
-				<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
-					Comments
-				</h3>
-				<div className="flex items-center gap-1.5 py-2 text-sm text-th-text-muted">
-					<Loader2 className="size-3.5 animate-spin" />
-					<span>Loading...</span>
-				</div>
-			</div>
-		);
-	}
-
-	if (error) {
-		return (
-			<div>
-				<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
-					Comments
-				</h3>
-				<p className="text-xs text-th-error" role="alert">
-					{error}
-				</p>
-			</div>
-		);
-	}
-
+function CommentsSection({ comments }: { comments: Comment[] }) {
 	if (comments.length === 0) {
 		return (
 			<div>

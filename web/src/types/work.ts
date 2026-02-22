@@ -53,11 +53,14 @@ export type WorkListChangedNotification =
 	| { id: string; operation: "delete"; workId: string }
 	| { id: string; operation: "sync"; works: Work[] };
 
-export interface WorkCommentSubscribeResult {
+export interface WorkDetailSubscribeResult {
 	id: string;
+	work: Work;
 	comments: Comment[];
 }
 
-export type WorkCommentChangedNotification =
-	| { id: string; operation: "create"; comment: Comment }
-	| { id: string; operation: "sync"; work_id: string; comments: Comment[] };
+export interface WorkDetailChangedNotification {
+	id: string;
+	work: Work;
+	comments: Comment[];
+}
