@@ -155,6 +155,14 @@ var toolDefinitions = []toolDefinition{
 			Required: []string{"id"},
 		},
 	},
+	{
+		Name:        "agent_role_reset_defaults",
+		Description: "Reset all agent roles to their default values. This deletes all existing roles and recreates the defaults.",
+		InputSchema: inputSchema{
+			Type:       "object",
+			Properties: map[string]propertySchema{},
+		},
+	},
 }
 
 type toolHandler func(ctx context.Context, args json.RawMessage) (string, error)
@@ -183,6 +191,8 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleAgentRoleList, true
 	case "agent_role_get":
 		return s.handleAgentRoleGet, true
+	case "agent_role_reset_defaults":
+		return s.handleAgentRoleResetDefaults, true
 	default:
 		return nil, false
 	}
@@ -540,4 +550,11 @@ func (s *Server) handleAgentRoleGet(_ context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("marshal agent role: %w", err)
 	}
 	return string(b), nil
+}
+
+func (s *Server) handleAgentRoleResetDefaults(ctx context.Context, _ json.RawMessage) (string, error) {
+	if err := s.agentRoleStore.ResetDefaults(ctx); err != nil {
+		return "", err
+	}
+	return "Agent roles reset to defaults", nil
 }

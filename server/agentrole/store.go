@@ -24,6 +24,7 @@ type Store interface {
 	Create(ctx context.Context, r AgentRole) (AgentRole, error)
 	Update(ctx context.Context, id string, fields UpdateFields) error
 	Delete(ctx context.Context, id string) error
+	ResetDefaults(ctx context.Context) error
 
 	AddOnChangeListener(listener OnChangeListener)
 
@@ -105,9 +106,20 @@ var defaultRoles = []struct {
 }
 
 func (s *FileStore) seedDefaults() error {
+	s.roles = buildDefaultRoles()
+	if err := s.persistIndex(); err != nil {
+		s.roles = nil
+		return err
+	}
+	slog.Info("seeded default agent roles", "count", len(defaultRoles))
+	return nil
+}
+
+func buildDefaultRoles() []AgentRole {
 	now := time.Now()
+	roles := make([]AgentRole, 0, len(defaultRoles))
 	for _, d := range defaultRoles {
-		s.roles = append(s.roles, AgentRole{
+		roles = append(roles, AgentRole{
 			ID:         uuid.Must(uuid.NewV7()).String(),
 			Name:       d.Name,
 			RolePrompt: d.RolePrompt,
@@ -115,12 +127,7 @@ func (s *FileStore) seedDefaults() error {
 			UpdatedAt:  now,
 		})
 	}
-	if err := s.persistIndex(); err != nil {
-		s.roles = nil
-		return err
-	}
-	slog.Info("seeded default agent roles", "count", len(defaultRoles))
-	return nil
+	return roles
 }
 
 func (s *FileStore) indexPath() string {
@@ -249,6 +256,31 @@ func (s *FileStore) Delete(_ context.Context, id string) error {
 	s.rolesMu.Unlock()
 
 	notify(listeners, ChangeEvent{Op: OperationDelete, Role: deleted})
+	return nil
+}
+
+func (s *FileStore) ResetDefaults(_ context.Context) error {
+	s.rolesMu.Lock()
+
+	prev := s.roles
+	newRoles := buildDefaultRoles()
+	s.roles = newRoles
+
+	if err := s.persistIndex(); err != nil {
+		s.roles = prev
+		s.rolesMu.Unlock()
+		return err
+	}
+
+	listeners := s.copyListeners()
+	s.rolesMu.Unlock()
+
+	events := diffRoles(prev, newRoles)
+	for _, e := range events {
+		notify(listeners, e)
+	}
+
+	slog.Info("agent roles reset to defaults", "count", len(defaultRoles))
 	return nil
 }
 

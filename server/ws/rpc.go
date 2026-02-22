@@ -306,6 +306,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "agent_role.delete":
 		h.handleAgentRoleDelete(ctx, conn, req)
 		return
+	case "agent_role.reset_defaults":
+		h.handleAgentRoleResetDefaults(ctx, conn, req)
+		return
 	case "agent_role.list.subscribe":
 		h.handleAgentRoleListSubscribe(ctx, conn, req)
 		return

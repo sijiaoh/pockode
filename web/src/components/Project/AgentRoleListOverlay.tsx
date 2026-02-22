@@ -1,4 +1,4 @@
-import { AlertCircle, Loader2, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
@@ -21,6 +21,25 @@ export default function AgentRoleListOverlay({
 	const isLoading = useAgentRoleStore((s) => s.isLoading);
 	const error = useAgentRoleStore((s) => s.error);
 
+	const resetAgentRoleDefaults = useWSStore(
+		(s) => s.actions.resetAgentRoleDefaults,
+	);
+	const [showReset, setShowReset] = useState(false);
+	const [resetError, setResetError] = useState<string | null>(null);
+
+	const handleReset = useCallback(async () => {
+		setResetError(null);
+		try {
+			await resetAgentRoleDefaults();
+			setShowReset(false);
+		} catch (err) {
+			setResetError(
+				`Failed to reset: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			setShowReset(false);
+		}
+	}, [resetAgentRoleDefaults]);
+
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
@@ -28,7 +47,21 @@ export default function AgentRoleListOverlay({
 				<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
 					Agent Roles
 				</h1>
+				<button
+					type="button"
+					onClick={() => setShowReset(true)}
+					className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted hover:text-th-text-primary"
+					aria-label="Reset to defaults"
+				>
+					<RotateCcw className="size-4" />
+				</button>
 			</header>
+
+			{resetError && (
+				<p className="px-3 py-1.5 text-xs text-th-error" role="alert">
+					{resetError}
+				</p>
+			)}
 
 			<div className="min-h-0 flex-1 overflow-auto p-2">
 				{isLoading ? (
@@ -61,6 +94,17 @@ export default function AgentRoleListOverlay({
 			<div className="border-t border-th-border p-2">
 				<CreateRoleButton />
 			</div>
+
+			{showReset && (
+				<ConfirmDialog
+					title="Reset agent roles"
+					message="Reset all roles to defaults? Your customizations will be lost."
+					confirmLabel="Reset"
+					variant="danger"
+					onConfirm={handleReset}
+					onCancel={() => setShowReset(false)}
+				/>
+			)}
 		</div>
 	);
 }

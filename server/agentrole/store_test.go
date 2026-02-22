@@ -428,6 +428,110 @@ func TestSeed_SkippedWhenRolesExist(t *testing.T) {
 	}
 }
 
+// --- ResetDefaults ---
+
+func TestResetDefaults(t *testing.T) {
+	s := newTestStore(t)
+
+	// Add custom roles
+	createRole(t, s, "Custom1", "prompt1")
+	createRole(t, s, "Custom2", "prompt2")
+
+	rolesBefore, _ := s.List()
+	if len(rolesBefore) != len(defaultRoles)+2 {
+		t.Fatalf("expected %d roles before reset, got %d", len(defaultRoles)+2, len(rolesBefore))
+	}
+
+	if err := s.ResetDefaults(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	rolesAfter, _ := s.List()
+	if len(rolesAfter) != len(defaultRoles) {
+		t.Fatalf("expected %d roles after reset, got %d", len(defaultRoles), len(rolesAfter))
+	}
+
+	// Verify all default role names and prompts are present
+	for _, d := range defaultRoles {
+		found := false
+		for _, r := range rolesAfter {
+			if r.Name == d.Name && r.RolePrompt == d.RolePrompt {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("default role %q not found after reset", d.Name)
+		}
+	}
+
+	// Verify IDs changed (new UUIDs)
+	oldIDs := make(map[string]bool)
+	for _, r := range rolesBefore {
+		oldIDs[r.ID] = true
+	}
+	for _, r := range rolesAfter {
+		if oldIDs[r.ID] {
+			t.Errorf("role %q kept old ID %s after reset", r.Name, r.ID)
+		}
+	}
+}
+
+func TestResetDefaults_Listener(t *testing.T) {
+	s := newTestStore(t)
+	createRole(t, s, "Custom", "prompt")
+
+	var events []ChangeEvent
+	s.AddOnChangeListener(listenerFunc(func(e ChangeEvent) {
+		events = append(events, e)
+	}))
+
+	if err := s.ResetDefaults(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have delete events for old roles + create events for new defaults
+	var deletes, creates int
+	for _, e := range events {
+		switch e.Op {
+		case OperationDelete:
+			deletes++
+		case OperationCreate:
+			creates++
+		}
+	}
+	if deletes != len(defaultRoles)+1 {
+		t.Errorf("expected %d delete events, got %d", len(defaultRoles)+1, deletes)
+	}
+	if creates != len(defaultRoles) {
+		t.Errorf("expected %d create events, got %d", len(defaultRoles), creates)
+	}
+}
+
+func TestResetDefaults_Persisted(t *testing.T) {
+	dir := t.TempDir()
+
+	s1, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRole(t, s1, "Custom", "prompt")
+
+	if err := s1.ResetDefaults(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopen and verify
+	s2, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles, _ := s2.List()
+	if len(roles) != len(defaultRoles) {
+		t.Fatalf("expected %d roles after reopen, got %d", len(defaultRoles), len(roles))
+	}
+}
+
 // --- diffRoles ---
 
 func TestDiffRoles_NoChanges(t *testing.T) {

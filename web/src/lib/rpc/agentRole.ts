@@ -9,6 +9,7 @@ export interface AgentRoleActions {
 	createAgentRole: (params: AgentRoleCreateParams) => Promise<AgentRole>;
 	updateAgentRole: (params: AgentRoleUpdateParams) => Promise<void>;
 	deleteAgentRole: (id: string) => Promise<void>;
+	resetAgentRoleDefaults: () => Promise<void>;
 }
 
 export function createAgentRoleActions(
@@ -33,6 +34,9 @@ export function createAgentRoleActions(
 		},
 		deleteAgentRole: async (id: string): Promise<void> => {
 			await requireClient().request("agent_role.delete", { id });
+		},
+		resetAgentRoleDefaults: async (): Promise<void> => {
+			await requireClient().request("agent_role.reset_defaults", {});
 		},
 	};
 }

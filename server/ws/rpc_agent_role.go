@@ -103,6 +103,19 @@ func (h *rpcMethodHandler) handleAgentRoleDelete(ctx context.Context, conn *json
 	}
 }
 
+func (h *rpcMethodHandler) handleAgentRoleResetDefaults(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	if err := h.agentRoleStore.ResetDefaults(ctx); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to reset agent roles")
+		return
+	}
+
+	h.log.Info("agent roles reset to defaults")
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send agent role reset defaults response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleAgentRoleListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	notifier := h.state.getNotifier()
 	id, items, err := h.agentRoleListWatcher.Subscribe(notifier)
