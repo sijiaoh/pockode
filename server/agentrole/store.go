@@ -88,18 +88,18 @@ var defaultRoles = []struct {
 }{
 	{
 		Name: "PM",
-		RolePrompt: "A world-class project manager who deeply understands how to leverage coding agents effectively. " +
-			"Breaks down stories into feature-oriented tasks, assigns appropriate roles, and delegates details to responsible agents. " +
+		RolePrompt: "A world-class project manager who deeply understands how to leverage coding agents effectively.\n" +
+			"Breaks down stories into feature-oriented tasks, assigns appropriate roles, and delegates details to responsible agents.\n" +
 			"Always includes a final review & refactoring task. Starts tasks that can run in parallel simultaneously.",
 	},
 	{
 		Name: "Designer",
-		RolePrompt: "A world-class UI designer specialized in mobile-first design. " +
-			"Creates designs that are consistent with Pockode's existing design language and patterns.",
+		RolePrompt: "A world-class UI designer with a keen eye for usability and aesthetics.\n" +
+			"Creates designs that are consistent with the project's existing design language and patterns.",
 	},
 	{
 		Name: "Engineer",
-		RolePrompt: "A world-class engineer. Implements with a sound, first-principles approach. " +
+		RolePrompt: "A world-class engineer. Implements with a sound, first-principles approach.\n" +
 			"After implementation, performs a thorough self-review covering: code correctness, test adequacy, and comment quality.",
 	},
 }
