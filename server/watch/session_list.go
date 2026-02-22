@@ -163,15 +163,13 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 			w.workNeedsInputSyncer.SyncNeedsInput(e.SessionID, true)
 		}
 	case process.ProcessStateRunning:
-		// Only sync work needs_input when the session itself was in needs_input.
-		// MCP work_needs_input sets work status directly without changing the session,
-		// so syncing unconditionally would overwrite that intentional transition.
-		meta, found, _ := w.store.Get(e.SessionID)
-		wasNeedsInput := found && meta.NeedsInput
 		if err := w.store.SetNeedsInput(ctx, e.SessionID, false); err != nil {
 			slog.Warn("failed to clear needs input", "sessionId", e.SessionID, "error", err)
 		}
-		if wasNeedsInput && w.workNeedsInputSyncer != nil {
+		// Always sync: MCP work_needs_input sets work status without the session flag,
+		// so we can't rely on session NeedsInput alone. The syncer's own guard
+		// (work.Status != needs_input → skip) prevents spurious transitions.
+		if w.workNeedsInputSyncer != nil {
 			w.workNeedsInputSyncer.SyncNeedsInput(e.SessionID, false)
 		}
 	}

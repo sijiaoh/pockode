@@ -272,7 +272,7 @@ func TestHandleProcessStateChange_Running_SyncsWorkWhenSessionWasNeedsInput(t *t
 	}
 }
 
-func TestHandleProcessStateChange_Running_SkipsSyncWhenSessionNotNeedsInput(t *testing.T) {
+func TestHandleProcessStateChange_Running_SyncsWorkEvenWhenSessionNotNeedsInput(t *testing.T) {
 	store := &mockSessionStore{
 		sessions: []session.SessionMeta{
 			{ID: "sess-1", NeedsInput: false},
@@ -287,8 +287,13 @@ func TestHandleProcessStateChange_Running_SkipsSyncWhenSessionNotNeedsInput(t *t
 		State:     process.ProcessStateRunning,
 	})
 
-	if len(syncer.calls) != 0 {
-		t.Errorf("expected no sync calls when session was not needs_input, got %d", len(syncer.calls))
+	// MCP work_needs_input sets work status without the session flag,
+	// so we must always sync to handle that path.
+	if len(syncer.calls) != 1 {
+		t.Fatalf("expected 1 sync call (MCP path), got %d", len(syncer.calls))
+	}
+	if syncer.calls[0].SessionID != "sess-1" || syncer.calls[0].NeedsInput {
+		t.Errorf("unexpected call: %+v", syncer.calls[0])
 	}
 }
 
