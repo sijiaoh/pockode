@@ -255,12 +255,7 @@ function ChatPanel({
 							onClick={() => onOpenWorkDetail?.(linkedWork.id)}
 							className="flex min-w-0 items-center gap-1 rounded px-2 py-1 text-xs text-th-text-secondary transition-all hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
 						>
-							<span className="relative shrink-0">
-								<ClipboardList className="size-3.5" />
-								{linkedWork.status === "needs_input" && (
-									<span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-th-warning" />
-								)}
-							</span>
+							<ClipboardList className="size-3.5 shrink-0" />
 							<span className="max-w-[120px] truncate">{linkedWork.title}</span>
 						</button>
 					)}

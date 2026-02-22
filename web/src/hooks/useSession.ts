@@ -18,7 +18,7 @@ export function useSession({
 	const sessions = useSessionStore((s) => s.sessions);
 	const isLoading = useSessionStore((s) => s.isLoading);
 	const isSuccess = useSessionStore((s) => s.isSuccess);
-	const hideTaskSessions = useSessionStore((s) => s.hideTaskSessions);
+	const showTaskSessions = useSessionStore((s) => s.showTaskSessions);
 	const updateSessions = useSessionStore((s) => s.updateSessions);
 	const works = useWorkStore((s) => s.works);
 	const { refresh } = useSessionSubscription(enabled);
@@ -27,10 +27,10 @@ export function useSession({
 
 	const filteredSessions = useMemo(
 		() =>
-			hideTaskSessions
-				? sessions.filter((s) => !taskSessionIds.has(s.id))
-				: sessions,
-		[sessions, hideTaskSessions, taskSessionIds],
+			showTaskSessions
+				? sessions
+				: sessions.filter((s) => !taskSessionIds.has(s.id)),
+		[sessions, showTaskSessions, taskSessionIds],
 	);
 
 	const hasAnyUnread = useMemo(

@@ -2,7 +2,6 @@ import { ListFilter } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useIsDesktop } from "../../hooks/useIsDesktop";
 import { useSessionStore } from "../../lib/sessionStore";
-import { BadgeDot } from "../ui";
 import ResponsivePanel from "../ui/ResponsivePanel";
 import FilterOption from "./FilterOption";
 
@@ -11,17 +10,11 @@ export default function SessionFilterButton() {
 	const triggerRef = useRef<HTMLButtonElement>(null);
 	const isDesktop = useIsDesktop();
 
-	const hideTaskSessions = useSessionStore((s) => s.hideTaskSessions);
-	const toggleHide = useSessionStore((s) => s.toggleHideTaskSessions);
-
-	const hasActiveFilter = hideTaskSessions;
+	const showTaskSessions = useSessionStore((s) => s.showTaskSessions);
+	const toggleShow = useSessionStore((s) => s.toggleShowTaskSessions);
 
 	const handleClose = useCallback(() => setIsOpen(false), []);
 	const handleToggle = useCallback(() => setIsOpen((v) => !v), []);
-
-	const ariaLabel = hasActiveFilter
-		? "Filter sessions (1 active)"
-		: "Filter sessions";
 
 	return (
 		<div className="relative">
@@ -29,16 +22,11 @@ export default function SessionFilterButton() {
 				ref={triggerRef}
 				type="button"
 				onClick={handleToggle}
-				className={`relative flex items-center justify-center rounded-md border min-h-[44px] min-w-[44px] p-2 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
-					hasActiveFilter
-						? "border-th-accent/40 bg-th-bg-tertiary text-th-accent hover:border-th-accent hover:text-th-accent"
-						: "border-th-border bg-th-bg-tertiary text-th-text-secondary hover:border-th-border-focus hover:text-th-text-primary"
-				}`}
-				aria-label={ariaLabel}
+				className="relative flex items-center justify-center rounded-md border min-h-[44px] min-w-[44px] p-2 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 border-th-border bg-th-bg-tertiary text-th-text-secondary hover:border-th-border-focus hover:text-th-text-primary"
+				aria-label="Filter sessions"
 				aria-expanded={isOpen}
 			>
 				<ListFilter className="h-5 w-5" aria-hidden="true" />
-				<BadgeDot show={hasActiveFilter} className="top-1 right-1" />
 			</button>
 
 			<ResponsivePanel
@@ -52,10 +40,10 @@ export default function SessionFilterButton() {
 			>
 				<div className="py-2">
 					<FilterOption
-						label="Hide task sessions"
-						description="Sessions linked to tasks will be hidden from the list"
-						checked={hideTaskSessions}
-						onChange={toggleHide}
+						label="Show task sessions"
+						description="Include sessions linked to tasks in the list"
+						checked={showTaskSessions}
+						onChange={toggleShow}
 					/>
 				</div>
 			</ResponsivePanel>
