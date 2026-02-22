@@ -28,7 +28,8 @@ type Manager struct {
 	idleTimeout     time.Duration
 	WorktreeWatcher *watch.WorktreeWatcher
 
-	workAutoResumer *work.AutoResumer
+	workAutoResumer      *work.AutoResumer
+	workNeedsInputSyncer *work.NeedsInputSyncer
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
@@ -51,6 +52,10 @@ func (m *Manager) Registry() *Registry {
 
 func (m *Manager) SetWorkAutoResumer(ar *work.AutoResumer) {
 	m.workAutoResumer = ar
+}
+
+func (m *Manager) SetWorkNeedsInputSyncer(s *work.NeedsInputSyncer) {
+	m.workNeedsInputSyncer = s
 }
 
 func (m *Manager) Start() error {
@@ -175,6 +180,9 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetProcessStateGetter(processManager)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
+	if m.workNeedsInputSyncer != nil {
+		sessionListWatcher.SetWorkNeedsInputSyncer(m.workNeedsInputSyncer)
+	}
 	processManager.SetOnStateChange(func(e process.StateChangeEvent) {
 		sessionListWatcher.HandleProcessStateChange(e)
 		if m.workAutoResumer != nil {

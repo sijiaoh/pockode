@@ -1059,6 +1059,39 @@ func TestComments_Persistence(t *testing.T) {
 	}
 }
 
+// --- FindBySessionID ---
+
+func TestFindBySessionID_Found(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWorkWithSession(t, s, task.ID, "sess-1")
+
+	w, found, err := s.FindBySessionID("sess-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected to find work by session ID")
+	}
+	if w.ID != task.ID {
+		t.Errorf("expected work ID %s, got %s", task.ID, w.ID)
+	}
+}
+
+func TestFindBySessionID_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	createStory(t, s, "S")
+
+	_, found, err := s.FindBySessionID("nonexistent")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Error("expected not found")
+	}
+}
+
 // --- Test helpers ---
 
 type listenerFunc func(ChangeEvent)

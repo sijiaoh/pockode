@@ -193,3 +193,84 @@ func TestSessionListWatcher_HandleProcessStateChange_NoSubscribers(t *testing.T)
 		State:     process.ProcessStateRunning,
 	})
 }
+
+type recordingSyncer struct {
+	calls []syncCall
+}
+
+type syncCall struct {
+	SessionID  string
+	NeedsInput bool
+}
+
+func (r *recordingSyncer) SyncNeedsInput(sessionID string, needsInput bool) {
+	r.calls = append(r.calls, syncCall{SessionID: sessionID, NeedsInput: needsInput})
+}
+
+func TestHandleProcessStateChange_IdleNeedsInput_SyncsWork(t *testing.T) {
+	store := &mockSessionStore{}
+	w := NewSessionListWatcher(store)
+	syncer := &recordingSyncer{}
+	w.SetWorkNeedsInputSyncer(syncer)
+
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID:  "sess-1",
+		State:      process.ProcessStateIdle,
+		NeedsInput: true,
+	})
+
+	if len(syncer.calls) != 1 {
+		t.Fatalf("expected 1 sync call, got %d", len(syncer.calls))
+	}
+	if syncer.calls[0].SessionID != "sess-1" || !syncer.calls[0].NeedsInput {
+		t.Errorf("unexpected call: %+v", syncer.calls[0])
+	}
+}
+
+func TestHandleProcessStateChange_IdleNoNeedsInput_NoSync(t *testing.T) {
+	store := &mockSessionStore{}
+	w := NewSessionListWatcher(store)
+	syncer := &recordingSyncer{}
+	w.SetWorkNeedsInputSyncer(syncer)
+
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID:  "sess-1",
+		State:      process.ProcessStateIdle,
+		NeedsInput: false,
+	})
+
+	if len(syncer.calls) != 0 {
+		t.Errorf("expected no sync calls for idle without needsInput, got %d", len(syncer.calls))
+	}
+}
+
+func TestHandleProcessStateChange_Running_SyncsWorkFalse(t *testing.T) {
+	store := &mockSessionStore{}
+	w := NewSessionListWatcher(store)
+	syncer := &recordingSyncer{}
+	w.SetWorkNeedsInputSyncer(syncer)
+
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID: "sess-1",
+		State:     process.ProcessStateRunning,
+	})
+
+	if len(syncer.calls) != 1 {
+		t.Fatalf("expected 1 sync call, got %d", len(syncer.calls))
+	}
+	if syncer.calls[0].SessionID != "sess-1" || syncer.calls[0].NeedsInput {
+		t.Errorf("unexpected call: %+v", syncer.calls[0])
+	}
+}
+
+func TestHandleProcessStateChange_NoSyncer_NoPanic(t *testing.T) {
+	store := &mockSessionStore{}
+	w := NewSessionListWatcher(store)
+
+	// No syncer set — should not panic
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID:  "sess-1",
+		State:      process.ProcessStateIdle,
+		NeedsInput: true,
+	})
+}

@@ -20,6 +20,7 @@ import (
 type Store interface {
 	List() ([]Work, error)
 	Get(id string) (Work, bool, error)
+	FindBySessionID(sessionID string) (Work, bool, error)
 
 	Create(ctx context.Context, w Work) (Work, error)
 	Update(ctx context.Context, id string, fields UpdateFields) error
@@ -111,6 +112,18 @@ func (s *FileStore) Get(id string) (Work, bool, error) {
 
 	for _, w := range s.works {
 		if w.ID == id {
+			return w, true, nil
+		}
+	}
+	return Work{}, false, nil
+}
+
+func (s *FileStore) FindBySessionID(sessionID string) (Work, bool, error) {
+	s.worksMu.RLock()
+	defer s.worksMu.RUnlock()
+
+	for _, w := range s.works {
+		if w.SessionID == sessionID {
 			return w, true, nil
 		}
 	}

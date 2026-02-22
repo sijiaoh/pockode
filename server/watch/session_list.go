@@ -18,15 +18,21 @@ type ViewingChecker interface {
 	IsViewing(sessionID string) bool
 }
 
+// WorkNeedsInputSyncer syncs work item status when a session's needs_input state changes.
+type WorkNeedsInputSyncer interface {
+	SyncNeedsInput(sessionID string, needsInput bool)
+}
+
 // SessionListWatcher notifies subscribers when the session list changes.
 // Uses a channel-based async notification pattern to avoid blocking the session
 // store's mutex during network I/O.
 type SessionListWatcher struct {
 	*BaseWatcher
-	store              session.Store
-	processStateGetter ProcessStateGetter
-	viewingChecker     ViewingChecker
-	eventCh            chan session.SessionChangeEvent
+	store                session.Store
+	processStateGetter   ProcessStateGetter
+	viewingChecker       ViewingChecker
+	workNeedsInputSyncer WorkNeedsInputSyncer
+	eventCh              chan session.SessionChangeEvent
 }
 
 func NewSessionListWatcher(store session.Store) *SessionListWatcher {
@@ -45,6 +51,10 @@ func (w *SessionListWatcher) SetProcessStateGetter(psg ProcessStateGetter) {
 
 func (w *SessionListWatcher) SetViewingChecker(vc ViewingChecker) {
 	w.viewingChecker = vc
+}
+
+func (w *SessionListWatcher) SetWorkNeedsInputSyncer(s WorkNeedsInputSyncer) {
+	w.workNeedsInputSyncer = s
 }
 
 func (w *SessionListWatcher) Start() error {
@@ -149,9 +159,15 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 				slog.Warn("failed to set unread", "sessionId", e.SessionID, "error", err)
 			}
 		}
+		if e.NeedsInput && w.workNeedsInputSyncer != nil {
+			w.workNeedsInputSyncer.SyncNeedsInput(e.SessionID, true)
+		}
 	case process.ProcessStateRunning:
 		if err := w.store.SetNeedsInput(ctx, e.SessionID, false); err != nil {
 			slog.Warn("failed to clear needs input", "sessionId", e.SessionID, "error", err)
+		}
+		if w.workNeedsInputSyncer != nil {
+			w.workNeedsInputSyncer.SyncNeedsInput(e.SessionID, false)
 		}
 	}
 
