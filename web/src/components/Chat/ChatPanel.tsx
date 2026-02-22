@@ -22,6 +22,19 @@ import InputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
 
+const noop = () => {};
+
+const inputBarHiddenOverlays: OverlayState["type"][] = [
+	"work-list",
+	"work-detail",
+	"agent-role-list",
+	"agent-role-detail",
+];
+
+function isInputBarHidden(overlay: OverlayState | undefined): boolean {
+	return !!overlay && inputBarHiddenOverlays.includes(overlay.type);
+}
+
 interface Props {
 	sessionId: string;
 	sessionTitle: string;
@@ -146,6 +159,7 @@ function ChatPanel({
 		const handleKeyDown = (e: KeyboardEvent) => {
 			// Skip if already handled (e.g., by CommandPalette)
 			if (e.defaultPrevented) return;
+			if (isInputBarHidden(overlay)) return;
 			if (e.key === "Escape" && isStreaming) {
 				handleInterrupt();
 			}
@@ -153,7 +167,7 @@ function ChatPanel({
 
 		document.addEventListener("keydown", handleKeyDown);
 		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, [isStreaming, handleInterrupt]);
+	}, [isStreaming, handleInterrupt, overlay]);
 
 	const renderContent = () => {
 		if (!overlay) {
@@ -273,13 +287,7 @@ function ChatPanel({
 					)}
 				</div>
 			)}
-			{(!overlay ||
-				![
-					"work-list",
-					"work-detail",
-					"agent-role-list",
-					"agent-role-detail",
-				].includes(overlay.type)) && (
+			{!isInputBarHidden(overlay) && (
 				<InputBar
 					sessionId={sessionId}
 					onSend={handleSend}
@@ -291,5 +299,3 @@ function ChatPanel({
 }
 
 export default ChatPanel;
-
-const noop = () => {};
