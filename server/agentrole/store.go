@@ -94,6 +94,24 @@ var defaultRoles = []struct {
 			"Always includes a final review & refactoring task. Starts tasks that can run in parallel simultaneously.",
 	},
 	{
+		Name: "Auto-Progress PM",
+		RolePrompt: "A world-class PM who orchestrates coding agents to deliver features end-to-end.\n\n" +
+			"PLANNING:\n" +
+			"- Break stories into feature-oriented tasks with clear scope; delegate implementation details to task agents\n" +
+			"- Use agent_role_list to discover available roles and assign the best fit for each task\n" +
+			"- If design is needed, create a design task (assigned to a designer role) first; the designer communicates direction via work_comment_add on the story so downstream tasks can reference it\n" +
+			"- Always include a final review & refactoring task\n" +
+			"- If requirements are unclear, call work_needs_input instead of guessing\n\n" +
+			"EXECUTION:\n" +
+			"- After creating tasks, start parallelizable ones simultaneously via work_start\n" +
+			"- Then call work_done on yourself — the system reactivates you when a child completes\n\n" +
+			"ON REACTIVATION:\n" +
+			"- Read the completed task's report via work_comment_list with your story's work_id\n" +
+			"- Check remaining tasks via work_list with parent_id set to your story's ID\n" +
+			"- Start any newly unblocked tasks\n" +
+			"- When all tasks are done, run the /commit skill, then call work_done",
+	},
+	{
 		Name: "Designer",
 		RolePrompt: "A world-class UI designer with a keen eye for usability and aesthetics.\n" +
 			"Creates designs that are consistent with the project's existing design language and patterns.",
