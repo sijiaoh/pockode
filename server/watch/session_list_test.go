@@ -20,6 +20,11 @@ func (m *mockSessionStore) List() ([]session.SessionMeta, error) {
 }
 
 func (m *mockSessionStore) Get(sessionID string) (session.SessionMeta, bool, error) {
+	for _, s := range m.sessions {
+		if s.ID == sessionID {
+			return s, true, nil
+		}
+	}
 	return session.SessionMeta{}, false, nil
 }
 
@@ -244,8 +249,12 @@ func TestHandleProcessStateChange_IdleNoNeedsInput_NoSync(t *testing.T) {
 	}
 }
 
-func TestHandleProcessStateChange_Running_SyncsWorkFalse(t *testing.T) {
-	store := &mockSessionStore{}
+func TestHandleProcessStateChange_Running_SyncsWorkWhenSessionWasNeedsInput(t *testing.T) {
+	store := &mockSessionStore{
+		sessions: []session.SessionMeta{
+			{ID: "sess-1", NeedsInput: true},
+		},
+	}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
 	w.SetWorkNeedsInputSyncer(syncer)
@@ -260,6 +269,26 @@ func TestHandleProcessStateChange_Running_SyncsWorkFalse(t *testing.T) {
 	}
 	if syncer.calls[0].SessionID != "sess-1" || syncer.calls[0].NeedsInput {
 		t.Errorf("unexpected call: %+v", syncer.calls[0])
+	}
+}
+
+func TestHandleProcessStateChange_Running_SkipsSyncWhenSessionNotNeedsInput(t *testing.T) {
+	store := &mockSessionStore{
+		sessions: []session.SessionMeta{
+			{ID: "sess-1", NeedsInput: false},
+		},
+	}
+	w := NewSessionListWatcher(store)
+	syncer := &recordingSyncer{}
+	w.SetWorkNeedsInputSyncer(syncer)
+
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID: "sess-1",
+		State:     process.ProcessStateRunning,
+	})
+
+	if len(syncer.calls) != 0 {
+		t.Errorf("expected no sync calls when session was not needs_input, got %d", len(syncer.calls))
 	}
 }
 
