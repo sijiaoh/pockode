@@ -267,7 +267,7 @@ func TestAutoResumer_ReactivatesParent(t *testing.T) {
 	}
 }
 
-func TestAutoResumer_ReactivatesParentAfterAutoClose(t *testing.T) {
+func TestAutoResumer_NoReactivateWhenAllChildrenComplete(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 	store.AddOnChangeListener(resumer)
 
@@ -281,15 +281,49 @@ func TestAutoResumer_ReactivatesParentAfterAutoClose(t *testing.T) {
 	doneWork(t, store, story.ID)
 
 	// MarkDone on the last task: autoCloseRecursive closes both task and
-	// parent in one batch. handleParentReactivation must still send the
-	// reactivation message even though the parent is already closed.
+	// parent in one batch. No reactivation should occur because all
+	// children are complete — the parent is fully done.
 	if err := store.MarkDone(context.Background(), task.ID); err != nil {
 		t.Fatalf("MarkDone task: %v", err)
 	}
 
+	time.Sleep(50 * time.Millisecond)
+
+	// Parent should remain closed (not reactivated)
+	parent := getWork(t, store, story.ID)
+	if parent.Status != StatusClosed {
+		t.Errorf("parent status = %q, want %q", parent.Status, StatusClosed)
+	}
+
+	msgs := sender.getMessages()
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 reactivation messages, got %d", len(msgs))
+	}
+}
+
+func TestAutoResumer_ReactivatesParentWhenSiblingsStillRunning(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	task1 := createTask(t, store, story.ID, "Task 1")
+	task2 := createTask(t, store, story.ID, "Task 2")
+	parentSid := "parent-session"
+	startWorkWithSession(t, store, story.ID, parentSid)
+	startWork(t, store, task1.ID)
+	startWork(t, store, task2.ID)
+
+	// Parent done, waiting for children
+	doneWork(t, store, story.ID)
+
+	// Simulate child 1 closed event while child 2 is still running
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task1.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task 1"},
+	})
+
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
-	// Parent should be reactivated to in_progress
+	// Parent should be reactivated because task2 is still in_progress
 	parent := getWork(t, store, story.ID)
 	if parent.Status != StatusInProgress {
 		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
