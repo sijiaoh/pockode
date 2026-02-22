@@ -1,8 +1,8 @@
-import { Eye, EyeOff, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useSession } from "../../hooks/useSession";
-import { useSessionStore } from "../../lib/sessionStore";
 import { useSidebarRefresh } from "../Layout";
 import { PullToRefresh } from "../ui";
+import SessionFilterButton from "./SessionFilterButton";
 import SessionList from "./SessionList";
 
 interface Props {
@@ -19,11 +19,7 @@ function SessionsTab({
 	onDeleteSession,
 }: Props) {
 	const { filteredSessions, isLoading, refresh } = useSession();
-	const hideTaskSessions = useSessionStore((s) => s.hideTaskSessions);
-	const toggleHide = useSessionStore((s) => s.toggleHideTaskSessions);
 	const { isActive } = useSidebarRefresh("sessions", refresh);
-
-	const ToggleIcon = hideTaskSessions ? EyeOff : Eye;
 
 	return (
 		<div
@@ -38,17 +34,7 @@ function SessionsTab({
 					<Plus className="h-5 w-5" aria-hidden="true" />
 					New Chat
 				</button>
-				<button
-					type="button"
-					onClick={toggleHide}
-					className="flex items-center justify-center rounded-lg border border-th-border p-3 text-th-text-secondary hover:border-th-border-focus hover:text-th-text-primary"
-					aria-label={
-						hideTaskSessions ? "Show task sessions" : "Hide task sessions"
-					}
-					title={hideTaskSessions ? "Show task sessions" : "Hide task sessions"}
-				>
-					<ToggleIcon className="h-5 w-5" aria-hidden="true" />
-				</button>
+				<SessionFilterButton />
 			</div>
 			<PullToRefresh onRefresh={refresh}>
 				{isLoading ? (
