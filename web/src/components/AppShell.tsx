@@ -4,6 +4,7 @@ import { useIsDesktop } from "../hooks/useIsDesktop";
 import { useRouteState } from "../hooks/useRouteState";
 import { useSession } from "../hooks/useSession";
 import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
+import { useWorkSubscription } from "../hooks/useWorkSubscription";
 import { useWorktree } from "../hooks/useWorktree";
 import {
 	authActions,
@@ -75,6 +76,7 @@ function AppShell() {
 	} = useWorktree({ enabled: hasAuthToken });
 
 	useSettingsSubscription(hasAuthToken);
+	useWorkSubscription(hasAuthToken);
 
 	// Redirect to main when URL worktree doesn't exist in worktree list
 	useEffect(() => {

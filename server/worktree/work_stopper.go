@@ -3,6 +3,7 @@ package worktree
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/pockode/server/work"
 )
@@ -40,10 +41,14 @@ func (s *WorkStopper) HandleWorkStop(ctx context.Context, id string) error {
 		return fmt.Errorf("transition to stopped: %w", err)
 	}
 
-	// Terminate the agent process if running
+	// Terminate the agent process if running.
+	// Best-effort: the work is already stopped, so we log but don't fail
+	// if the process can't be reached (e.g. worktree already closed).
 	if w.SessionID != "" {
 		mainWt, err := s.worktreeManager.Get("")
-		if err == nil {
+		if err != nil {
+			slog.Warn("could not get worktree to terminate process", "workId", id, "sessionId", w.SessionID, "error", err)
+		} else {
 			mainWt.ProcessManager.Close(w.SessionID)
 			s.worktreeManager.Release(mainWt)
 		}

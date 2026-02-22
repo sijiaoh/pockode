@@ -12,7 +12,6 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription";
-import { useWorkSubscription } from "../../hooks/useWorkSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -39,7 +38,6 @@ export default function WorkDetailOverlay({
 	onNavigateToSession,
 	onOpenWorkDetail,
 }: Props) {
-	useWorkSubscription(true);
 	useAgentRoleSubscription(true);
 
 	const { work, comments, loading, error } = useWorkDetailSubscription(workId);
