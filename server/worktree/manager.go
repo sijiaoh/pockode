@@ -191,6 +191,13 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	})
 
 	chatClient := chat.NewClient(sessionStore, processManager)
+	chatClient.SetBroadcaster(func(sessionID string, event agent.MessageEvent, exclude any) {
+		var n watch.Notifier
+		if exclude != nil {
+			n = exclude.(watch.Notifier)
+		}
+		chatMessagesWatcher.NotifyMessage(sessionID, event, n)
+	})
 
 	// Set sender for auto-resumer when creating the main worktree
 	if name == "" && m.workAutoResumer != nil {
