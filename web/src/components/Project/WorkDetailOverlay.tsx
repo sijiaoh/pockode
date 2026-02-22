@@ -684,20 +684,18 @@ function CreateTaskInline({ parentId }: { parentId: string }) {
 						}
 					}}
 				/>
-				{roles.length > 1 && (
-					<select
-						value={agentRoleId}
-						onChange={(e) => setAgentRoleId(e.target.value)}
-						className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
-					>
-						<option value="">Select role...</option>
-						{roles.map((role) => (
-							<option key={role.id} value={role.id}>
-								{role.name}
-							</option>
-						))}
-					</select>
-				)}
+				<select
+					value={agentRoleId}
+					onChange={(e) => setAgentRoleId(e.target.value)}
+					className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
+				>
+					<option value="">Select role...</option>
+					{roles.map((role) => (
+						<option key={role.id} value={role.id}>
+							{role.name}
+						</option>
+					))}
+				</select>
 				<div className="flex gap-2">
 					<button
 						type="submit"

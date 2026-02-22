@@ -151,12 +151,7 @@ func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
 		return Work{}, fmt.Errorf("%w: cannot add child to closed parent %s", ErrInvalidWork, parent.ID)
 	}
 
-	// Inherit agent_role_id from parent if not specified (task under story)
-	agentRoleID := w.AgentRoleID
-	if agentRoleID == "" && parent != nil {
-		agentRoleID = parent.AgentRoleID
-	}
-	if agentRoleID == "" {
+	if w.AgentRoleID == "" {
 		s.worksMu.Unlock()
 		return Work{}, fmt.Errorf("%w: agent_role_id is required", ErrInvalidWork)
 	}
@@ -166,7 +161,7 @@ func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
 		ID:          uuid.Must(uuid.NewV7()).String(),
 		Type:        w.Type,
 		ParentID:    w.ParentID,
-		AgentRoleID: agentRoleID,
+		AgentRoleID: w.AgentRoleID,
 		Title:       w.Title,
 		Body:        w.Body,
 		Status:      StatusOpen,

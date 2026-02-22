@@ -17,7 +17,7 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 |------|----------------|-----------------|---------|
 | `work_list` | — | `parent_id` | JSON array of `{id, type, parent_id?, agent_role_id?, status, title}` |
 | `work_get` | `id` | — | `{id, type, parent_id?, agent_role_id?, status, title, body?}` |
-| `work_create` | `type`, `title` | `parent_id`, `body`, `agent_role_id` | Confirmation string with ID |
+| `work_create` | `type`, `title`, `agent_role_id` | `parent_id`, `body` | Confirmation string with ID |
 | `work_update` | `id` | `title`, `body`, `agent_role_id` | Confirmation string |
 | `work_done` | `id` | — | Confirmation string |
 | `work_start` | `id` | — | Confirmation string with session ID |
@@ -35,7 +35,7 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 
 ### Behavior Notes
 
-- **`work_create`**: Validates `agent_role_id` exists if provided. Stories are top-level; tasks require `parent_id`.
+- **`work_create`**: Requires `agent_role_id` (validated to exist). Stories are top-level; tasks require `parent_id`.
 - **`work_start`**: Requires the work item to have an `agent_role_id`. Generates a UUIDv7 session ID, transitions `open → in_progress` and attaches the session ID via `Store.Update`. The main server detects this state change via fsnotify (`AutoResumer` Trigger C) and handles session creation.
 - **`work_done`**: Calls `Store.MarkDone()`. If the item is still `open`, it auto-advances to `in_progress` first, then transitions to `done`. After that, `autoCloseRecursive` promotes `done → closed` if all children are complete, cascading upward to ancestors.
 - **`work_needs_input`**: Transitions `in_progress → needs_input`. Used when the agent needs user confirmation before continuing.
@@ -72,7 +72,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 ### Wire Types
 
 ```
-WorkCreateParams     { type, title, parent_id?, body?, agent_role_id? }
+WorkCreateParams     { type, title, agent_role_id, parent_id?, body? }
 WorkUpdateParams     { id, title?, body?, agent_role_id?, status? }
 WorkDeleteParams     { id }
 WorkStartParams      { id }

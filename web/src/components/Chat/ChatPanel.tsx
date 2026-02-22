@@ -277,11 +277,19 @@ function ChatPanel({
 					)}
 				</div>
 			)}
-			<InputBar
-				sessionId={sessionId}
-				onSend={handleSend}
-				canSend={status === "connected" && !isLoadingHistory}
-			/>
+			{(!overlay ||
+				![
+					"work-list",
+					"work-detail",
+					"agent-role-list",
+					"agent-role-detail",
+				].includes(overlay.type)) && (
+				<InputBar
+					sessionId={sessionId}
+					onSend={handleSend}
+					canSend={status === "connected" && !isLoadingHistory}
+				/>
+			)}
 		</MainContainer>
 	);
 }

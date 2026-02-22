@@ -48,7 +48,7 @@ Two-level only: **Story → Task**.
 
 - Stories are always top-level (no parent).
 - Tasks must have exactly one story parent.
-- `agent_role_id` is inherited: if a task omits it on creation, the parent story's value is used. At least one must be set.
+- `agent_role_id` is required on all work items (both stories and tasks).
 - A story cannot be deleted while it has children.
 - Children cannot be added to a closed story.
 

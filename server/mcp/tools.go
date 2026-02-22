@@ -49,9 +49,9 @@ var toolDefinitions = []toolDefinition{
 				"parent_id":     {Type: "string", Description: "Parent work ID (required for tasks)"},
 				"title":         {Type: "string", Description: "Title of the work item"},
 				"body":          {Type: "string", Description: "Detailed description or instructions for the work item"},
-				"agent_role_id": {Type: "string", Description: "Agent role ID. Required for stories. Tasks inherit from parent story if not specified."},
+				"agent_role_id": {Type: "string", Description: "Agent role ID (required)"},
 			},
-			Required: []string{"type", "title"},
+			Required: []string{"type", "title", "agent_role_id"},
 		},
 	},
 	{
@@ -253,13 +253,14 @@ func (s *Server) handleWorkCreate(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	// Validate agent_role_id exists if specified
-	if params.AgentRoleID != "" {
-		if _, found, err := s.agentRoleStore.Get(params.AgentRoleID); err != nil {
-			return "", fmt.Errorf("failed to validate agent role: %w", err)
-		} else if !found {
-			return "", fmt.Errorf("agent role %q not found", params.AgentRoleID)
-		}
+	// Validate agent_role_id is provided and exists
+	if params.AgentRoleID == "" {
+		return "", fmt.Errorf("agent_role_id is required")
+	}
+	if _, found, err := s.agentRoleStore.Get(params.AgentRoleID); err != nil {
+		return "", fmt.Errorf("failed to validate agent role: %w", err)
+	} else if !found {
+		return "", fmt.Errorf("agent role %q not found", params.AgentRoleID)
 	}
 
 	created, err := s.store.Create(ctx, work.Work{

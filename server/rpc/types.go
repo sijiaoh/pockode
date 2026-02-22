@@ -295,7 +295,7 @@ type SettingsUpdateParams struct {
 type WorkCreateParams struct {
 	Type        work.WorkType `json:"type"`
 	ParentID    string        `json:"parent_id,omitempty"`
-	AgentRoleID string        `json:"agent_role_id,omitempty"`
+	AgentRoleID string        `json:"agent_role_id"`
 	Title       string        `json:"title"`
 	Body        string        `json:"body,omitempty"`
 }

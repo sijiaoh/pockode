@@ -242,9 +242,9 @@ func TestWorkList_FilterByParentID(t *testing.T) {
 	})
 	storyID := extractID(t, toolText(storyResult))
 
-	// Create task under story (inherits agent_role_id from parent)
-	callTool(t, ts.Server, "work_create", map[string]interface{}{
-		"type": "task", "parent_id": storyID, "title": "Child Task",
+	// Create task under story with explicit agent_role_id
+	callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "task", "parent_id": storyID, "title": "Child Task", "agent_role_id": ts.roleID,
 	})
 
 	// Create another top-level story

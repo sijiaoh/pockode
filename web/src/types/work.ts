@@ -23,7 +23,7 @@ export interface Work {
 export interface WorkCreateParams {
 	type: WorkType;
 	parent_id?: string;
-	agent_role_id?: string;
+	agent_role_id: string;
 	title: string;
 	body?: string;
 }

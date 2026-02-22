@@ -30,7 +30,7 @@ func createStory(t *testing.T, s *FileStore, title string) Work {
 
 func createTask(t *testing.T, s *FileStore, parentID, title string) Work {
 	t.Helper()
-	w, err := s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: parentID, Title: title})
+	w, err := s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: parentID, Title: title, AgentRoleID: testRoleID})
 	if err != nil {
 		t.Fatalf("Create task %q: %v", title, err)
 	}
@@ -149,9 +149,26 @@ func TestCreate_TaskUnderClosedParent(t *testing.T) {
 		t.Fatal("precondition: story should be closed")
 	}
 
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: story.ID, Title: "Late task"})
+	_, err := s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: story.ID, Title: "Late task", AgentRoleID: testRoleID})
 	if err == nil {
 		t.Fatal("expected error for task under closed parent")
+	}
+}
+
+func TestCreate_AgentRoleIDRequired(t *testing.T) {
+	s := newTestStore(t)
+
+	// Story without agent_role_id
+	_, err := s.Create(context.Background(), Work{Type: WorkTypeStory, Title: "No role"})
+	if err == nil {
+		t.Fatal("expected error for story without agent_role_id")
+	}
+
+	// Task without agent_role_id
+	story := createStory(t, s, "Parent")
+	_, err = s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: story.ID, Title: "No role task"})
+	if err == nil {
+		t.Fatal("expected error for task without agent_role_id")
 	}
 }
 
@@ -718,11 +735,12 @@ func TestConcurrent_CreateTasksUnderStory(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func(i int) {
 			_, err := s.Create(context.Background(), Work{
-				Type:     WorkTypeTask,
-				ParentID: story.ID,
-				Title:    fmt.Sprintf("Task %d", i),
+				Type:        WorkTypeTask,
+				ParentID:    story.ID,
+				Title:       fmt.Sprintf("Task %d", i),
+				AgentRoleID: testRoleID,
 			})
-			errs <- err // inherits agent_role_id from parent
+			errs <- err
 		}(i)
 	}
 
@@ -800,14 +818,15 @@ func TestConcurrent_MixedOperations(t *testing.T) {
 
 	done := make(chan struct{}, n*3)
 
-	// Concurrent creates (tasks inherit agent_role_id from parent)
+	// Concurrent creates
 	for i := 0; i < n; i++ {
 		go func(i int) {
 			defer func() { done <- struct{}{} }()
 			s.Create(context.Background(), Work{
-				Type:     WorkTypeTask,
-				ParentID: story.ID,
-				Title:    fmt.Sprintf("Task %d", i),
+				Type:        WorkTypeTask,
+				ParentID:    story.ID,
+				Title:       fmt.Sprintf("Task %d", i),
+				AgentRoleID: testRoleID,
 			})
 		}(i)
 	}

@@ -59,11 +59,12 @@ func TestHandler_WorkCreate_TaskWithParent(t *testing.T) {
 	var story work.Work
 	json.Unmarshal(storyResp.Result, &story)
 
-	// Create task under story (inherits agent_role_id)
+	// Create task under story with explicit agent_role_id
 	resp := env.call("work.create", rpc.WorkCreateParams{
-		Type:     work.WorkTypeTask,
-		ParentID: story.ID,
-		Title:    "Implement auth",
+		Type:        work.WorkTypeTask,
+		ParentID:    story.ID,
+		AgentRoleID: env.testRoleID,
+		Title:       "Implement auth",
 	})
 
 	if resp.Error != nil {
@@ -80,7 +81,7 @@ func TestHandler_WorkCreate_TaskWithParent(t *testing.T) {
 		t.Errorf("expected type task, got %s", result.Type)
 	}
 	if result.AgentRoleID != env.testRoleID {
-		t.Errorf("expected inherited agent_role_id %q, got %q", env.testRoleID, result.AgentRoleID)
+		t.Errorf("expected agent_role_id %q, got %q", env.testRoleID, result.AgentRoleID)
 	}
 }
 
@@ -123,6 +124,22 @@ func TestHandler_WorkCreate_TaskWithoutParent(t *testing.T) {
 
 	if resp.Error == nil {
 		t.Fatal("expected error for task without parent")
+	}
+}
+
+func TestHandler_WorkCreate_MissingAgentRoleID(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("work.create", rpc.WorkCreateParams{
+		Type:  work.WorkTypeStory,
+		Title: "Story without role",
+	})
+
+	if resp.Error == nil {
+		t.Fatal("expected error for missing agent_role_id")
+	}
+	if !strings.Contains(resp.Error.Message, "agent_role_id is required") {
+		t.Errorf("expected 'agent_role_id is required' error, got %q", resp.Error.Message)
 	}
 }
 
@@ -252,9 +269,10 @@ func TestHandler_WorkDelete_WithChildren(t *testing.T) {
 	json.Unmarshal(storyResp.Result, &story)
 
 	env.call("work.create", rpc.WorkCreateParams{
-		Type:     work.WorkTypeTask,
-		ParentID: story.ID,
-		Title:    "Child task",
+		Type:        work.WorkTypeTask,
+		ParentID:    story.ID,
+		AgentRoleID: env.testRoleID,
+		Title:       "Child task",
 	})
 
 	// Try to delete parent — should fail
@@ -281,9 +299,10 @@ func TestHandler_WorkStart(t *testing.T) {
 	json.Unmarshal(storyResp.Result, &story)
 
 	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:     work.WorkTypeTask,
-		ParentID: story.ID,
-		Title:    "Implement backend",
+		Type:        work.WorkTypeTask,
+		ParentID:    story.ID,
+		AgentRoleID: env.testRoleID,
+		Title:       "Implement backend",
 	})
 	var task work.Work
 	json.Unmarshal(taskResp.Result, &task)
@@ -367,9 +386,10 @@ func TestHandler_WorkStart_RollbackOnKickoffFailure(t *testing.T) {
 	json.Unmarshal(storyResp.Result, &story)
 
 	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:     work.WorkTypeTask,
-		ParentID: story.ID,
-		Title:    "Implement backend",
+		Type:        work.WorkTypeTask,
+		ParentID:    story.ID,
+		AgentRoleID: env.testRoleID,
+		Title:       "Implement backend",
 	})
 	var task work.Work
 	json.Unmarshal(taskResp.Result, &task)

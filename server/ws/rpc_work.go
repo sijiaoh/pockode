@@ -28,15 +28,17 @@ func (h *rpcMethodHandler) handleWorkCreate(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
-	// Validate agent_role_id exists if specified
-	if params.AgentRoleID != "" {
-		if _, found, err := h.agentRoleStore.Get(params.AgentRoleID); err != nil {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to validate agent role")
-			return
-		} else if !found {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "agent role not found: "+params.AgentRoleID)
-			return
-		}
+	// Validate agent_role_id is provided and exists
+	if params.AgentRoleID == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "agent_role_id is required")
+		return
+	}
+	if _, found, err := h.agentRoleStore.Get(params.AgentRoleID); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to validate agent role")
+		return
+	} else if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "agent role not found: "+params.AgentRoleID)
+		return
 	}
 
 	w, err := h.workStore.Create(ctx, work.Work{
