@@ -9,10 +9,10 @@ import (
 
 type mockDetailStore struct {
 	work.Store
-	works            []work.Work
-	comments         []work.Comment
-	changeListener   work.OnChangeListener
-	commentListener  work.OnCommentChangeListener
+	works           []work.Work
+	comments        []work.Comment
+	changeListener  work.OnChangeListener
+	commentListener work.OnCommentChangeListener
 }
 
 func (m *mockDetailStore) Get(id string) (work.Work, bool, error) {

@@ -38,7 +38,8 @@ type AutoResumer struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	retryMu      sync.Mutex
-	retries      map[string]int // sessionID → retry count
+	retries      map[string]int  // sessionID → retry count
+	continuing   map[string]bool // sessionID → auto-continuation pending
 	maxRetries   int
 	settleDelay  time.Duration // delay before checking work status after process stop
 }
@@ -59,6 +60,7 @@ func NewAutoResumer(workStore Store, maxRetries int) *AutoResumer {
 		ctx:         ctx,
 		cancel:      cancel,
 		retries:     make(map[string]int),
+		continuing:  make(map[string]bool),
 		maxRetries:  maxRetries,
 		settleDelay: defaultSettleDelay,
 	}
@@ -67,6 +69,29 @@ func NewAutoResumer(workStore Store, maxRetries int) *AutoResumer {
 // Stop cancels all pending goroutines (settle delays and in-flight sends).
 func (r *AutoResumer) Stop() {
 	r.cancel()
+}
+
+// StopOrphanedWork transitions all in_progress and needs_input work items to stopped.
+// Call this at server startup before any sessions are created, so that work
+// items left running from a previous server run are properly marked.
+func (r *AutoResumer) StopOrphanedWork() {
+	works, err := r.workStore.List()
+	if err != nil {
+		slog.Warn("failed to list works for orphan detection", "error", err)
+		return
+	}
+
+	stoppedStatus := StatusStopped
+	for _, w := range works {
+		if w.Status != StatusInProgress && w.Status != StatusNeedsInput {
+			continue
+		}
+		if err := r.workStore.Update(r.ctx, w.ID, UpdateFields{Status: &stoppedStatus}); err != nil {
+			slog.Warn("failed to stop orphaned work", "workId", w.ID, "error", err)
+		} else {
+			slog.Info("stopped orphaned work on startup", "workId", w.ID, "sessionId", w.SessionID)
+		}
+	}
 }
 
 // SetSender sets the message sender. Called when the main worktree is initialized.
@@ -94,8 +119,21 @@ func (r *AutoResumer) getStartHandler() WorkStartHandler {
 }
 
 // HandleProcessStateChange implements trigger A: auto-continuation when agent stops.
+// Also handles process termination by transitioning work to stopped.
 // Parameters are extracted from process.StateChangeEvent to avoid importing the process package.
 func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInput, isInitial bool) {
+	// Process ended: transition in_progress work to stopped,
+	// but only if auto-continuation isn't already handling this session.
+	if state == "ended" {
+		r.retryMu.Lock()
+		pending := r.continuing[sessionID]
+		r.retryMu.Unlock()
+		if !pending {
+			go r.handleProcessEnded(sessionID)
+		}
+		return
+	}
+
 	sender := r.getSender()
 	if sender == nil {
 		return
@@ -107,10 +145,50 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 		return
 	}
 
+	r.retryMu.Lock()
+	r.continuing[sessionID] = true
+	r.retryMu.Unlock()
+
 	go r.handleAutoContinuation(sessionID, sender)
 }
 
+// handleProcessEnded transitions in_progress work to stopped when its process terminates.
+// This catches cases like user interrupt or unexpected process exit.
+func (r *AutoResumer) handleProcessEnded(sessionID string) {
+	// Use the same settle delay as auto-continuation to allow work_done to propagate.
+	select {
+	case <-time.After(r.settleDelay):
+	case <-r.ctx.Done():
+		return
+	}
+
+	w := r.findInProgressWorkBySessionID(sessionID)
+	if w == nil {
+		return
+	}
+
+	stoppedStatus := StatusStopped
+	if err := r.workStore.Update(r.ctx, w.ID, UpdateFields{Status: &stoppedStatus}); err != nil {
+		if r.ctx.Err() == nil {
+			slog.Warn("failed to stop work after process ended", "workId", w.ID, "error", err)
+		}
+	} else {
+		slog.Info("work stopped after process ended", "workId", w.ID, "sessionId", sessionID)
+	}
+
+	// Clean up retry tracking
+	r.retryMu.Lock()
+	delete(r.retries, sessionID)
+	r.retryMu.Unlock()
+}
+
 func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSender) {
+	defer func() {
+		r.retryMu.Lock()
+		delete(r.continuing, sessionID)
+		r.retryMu.Unlock()
+	}()
+
 	// Wait for MCP work_done writes to propagate via fsnotify.
 	// Use select so we abort immediately on shutdown.
 	select {
@@ -128,7 +206,13 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSen
 	count := r.retries[sessionID]
 	if count >= r.maxRetries {
 		r.retryMu.Unlock()
-		slog.Info("auto-resume retry limit reached", "sessionId", sessionID, "workId", w.ID)
+		slog.Info("auto-resume retry limit reached, stopping work", "sessionId", sessionID, "workId", w.ID)
+		stoppedStatus := StatusStopped
+		if err := r.workStore.Update(r.ctx, w.ID, UpdateFields{Status: &stoppedStatus}); err != nil {
+			if r.ctx.Err() == nil {
+				slog.Warn("failed to stop work after retry limit", "workId", w.ID, "error", err)
+			}
+		}
 		return
 	}
 	r.retries[sessionID] = count + 1
@@ -161,8 +245,8 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 		return
 	}
 
-	// Reset retries when work completes
-	if event.Work.Status == StatusDone || event.Work.Status == StatusClosed {
+	// Reset retries when work completes or stops
+	if event.Work.Status == StatusDone || event.Work.Status == StatusClosed || event.Work.Status == StatusStopped {
 		if event.Work.SessionID != "" {
 			r.retryMu.Lock()
 			delete(r.retries, event.Work.SessionID)

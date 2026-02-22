@@ -4,6 +4,7 @@ export type WorkStatus =
 	| "open"
 	| "in_progress"
 	| "needs_input"
+	| "stopped"
 	| "done"
 	| "closed";
 
@@ -33,7 +34,7 @@ export interface WorkUpdateParams {
 	title?: string;
 	body?: string;
 	agent_role_id?: string;
-	status?: Exclude<WorkStatus, "closed">;
+	status?: Exclude<WorkStatus, "stopped" | "closed">;
 }
 
 export interface Comment {

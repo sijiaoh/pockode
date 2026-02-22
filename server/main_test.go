@@ -50,7 +50,8 @@ func TestHealthEndpoint(t *testing.T) {
 	defer scopeManager.Shutdown()
 
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore)
-	wsHandler := ws.NewRPCHandler("test-token", "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, agentRoleStore)
+	workStopper := worktree.NewWorkStopper(scopeManager, workStore)
+	wsHandler := ws.NewRPCHandler("test-token", "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	handler := newHandler("test-token", true, wsHandler)
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -78,7 +79,8 @@ func TestPingEndpoint(t *testing.T) {
 	defer scopeManager.Shutdown()
 
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore)
-	wsHandler := ws.NewRPCHandler(token, "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, agentRoleStore)
+	workStopper := worktree.NewWorkStopper(scopeManager, workStore)
+	wsHandler := ws.NewRPCHandler(token, "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	handler := newHandler(token, true, wsHandler)
 
 	t.Run("returns pong with valid token", func(t *testing.T) {

@@ -13,10 +13,11 @@ var validParents = map[WorkType][]WorkType{
 // done → closed is handled internally by auto-close, not as an external transition.
 var validTransitions = map[WorkStatus][]WorkStatus{
 	StatusOpen:       {StatusInProgress},
-	StatusInProgress: {StatusOpen, StatusNeedsInput, StatusDone}, // open: rollback on failed start
-	StatusNeedsInput: {StatusInProgress},                         // user confirms → resume
-	StatusDone:       {StatusInProgress},                         // parent re-activation
-	StatusClosed:     {StatusInProgress},                         // parent re-activation after auto-close
+	StatusInProgress: {StatusOpen, StatusNeedsInput, StatusStopped, StatusDone}, // open: rollback on failed start
+	StatusNeedsInput: {StatusInProgress, StatusStopped},                         // user confirms → resume; stop button
+	StatusStopped:    {StatusInProgress},                                        // restart from stopped
+	StatusDone:       {StatusInProgress},                                        // parent re-activation
+	StatusClosed:     {StatusInProgress},                                        // parent re-activation after auto-close
 }
 
 func ValidateType(t WorkType) bool {
@@ -26,7 +27,7 @@ func ValidateType(t WorkType) bool {
 
 func ValidateStatus(s WorkStatus) bool {
 	switch s {
-	case StatusOpen, StatusInProgress, StatusNeedsInput, StatusDone, StatusClosed:
+	case StatusOpen, StatusInProgress, StatusNeedsInput, StatusStopped, StatusDone, StatusClosed:
 		return true
 	default:
 		return false

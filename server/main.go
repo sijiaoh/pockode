@@ -283,6 +283,7 @@ func main() {
 		os.Exit(1)
 	}
 	workAutoResumer := work.NewAutoResumer(workStore, 3)
+	workAutoResumer.StopOrphanedWork()
 	workStore.AddOnChangeListener(workAutoResumer)
 	if err := workStore.StartWatching(); err != nil {
 		slog.Warn("failed to start work store file watcher", "error", err)
@@ -305,12 +306,13 @@ func main() {
 	worktreeManager.SetWorkAutoResumer(workAutoResumer)
 	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore)
+	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
 	workAutoResumer.SetStartHandler(workStarter)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
 
-	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workStarter, agentRoleStore)
+	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	handler := newHandler(token, devMode, wsHandler)
 
 	portStr := strconv.Itoa(port)

@@ -92,7 +92,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "work_start",
-		Description: "Start a work item. Transitions it from open to in_progress and launches an agent session.",
+		Description: "Start a work item. Transitions it from open (or stopped) to in_progress and launches an agent session.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{

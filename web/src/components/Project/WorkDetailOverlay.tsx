@@ -5,6 +5,7 @@ import {
 	MessageSquare,
 	Pencil,
 	Play,
+	Square,
 	Trash2,
 	X,
 } from "lucide-react";
@@ -152,7 +153,9 @@ function ActionBar({
 	onNavigateToSession: (sessionId: string) => void;
 }) {
 	const startWork = useWSStore((s) => s.actions.startWork);
+	const stopWork = useWSStore((s) => s.actions.stopWork);
 	const [isStarting, setIsStarting] = useState(false);
+	const [isStopping, setIsStopping] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	const handleStart = useCallback(async () => {
@@ -169,10 +172,26 @@ function ActionBar({
 		}
 	}, [startWork, work.id]);
 
-	const showStart = work.status === "open";
+	const handleStop = useCallback(async () => {
+		setError(null);
+		setIsStopping(true);
+		try {
+			await stopWork(work.id);
+		} catch (err) {
+			setError(
+				`Failed to stop: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		} finally {
+			setIsStopping(false);
+		}
+	}, [stopWork, work.id]);
+
+	const showStart = work.status === "open" || work.status === "stopped";
+	const showStop =
+		work.status === "in_progress" || work.status === "needs_input";
 	const showChat = !!work.session_id;
 
-	if (!showStart && !showChat) return null;
+	if (!showStart && !showStop && !showChat) return null;
 
 	return (
 		<BottomActionBar>
@@ -194,7 +213,22 @@ function ActionBar({
 						) : (
 							<Play className="size-4" />
 						)}
-						Start
+						{work.status === "stopped" ? "Restart" : "Start"}
+					</button>
+				)}
+				{showStop && (
+					<button
+						type="button"
+						onClick={handleStop}
+						disabled={isStopping}
+						className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-error/10 text-sm font-medium text-th-error disabled:opacity-50"
+					>
+						{isStopping ? (
+							<Loader2 className="size-4 animate-spin" />
+						) : (
+							<Square className="size-4" />
+						)}
+						Stop
 					</button>
 				)}
 				{showChat && (
@@ -583,10 +617,11 @@ function ChildRow({
 	onNavigateToSession: (sessionId: string) => void;
 }) {
 	const isNeedsInput = work.status === "needs_input";
+	const isStopped = work.status === "stopped";
 
 	return (
 		<div
-			className={`group flex min-h-[44px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsInput ? "border-l-2 border-th-warning bg-th-warning/5" : ""}`}
+			className={`group flex min-h-[44px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsInput ? "border-l-2 border-th-warning bg-th-warning/5" : isStopped ? "border-l-2 border-th-error bg-th-error/5" : ""}`}
 		>
 			<StatusIcon status={work.status} />
 			<button

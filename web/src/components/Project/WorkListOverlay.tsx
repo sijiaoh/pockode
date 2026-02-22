@@ -130,6 +130,7 @@ export default function WorkListOverlay({
 const statusGroupOrder: WorkStatus[] = [
 	"in_progress",
 	"needs_input",
+	"stopped",
 	"open",
 	"done",
 	"closed",
@@ -256,7 +257,9 @@ function StoryRow({
 						</button>
 					</>
 				)}
-				{story.status === "open" && <StartButton workId={story.id} />}
+				{(story.status === "open" || story.status === "stopped") && (
+					<StartButton workId={story.id} />
+				)}
 			</div>
 
 			{/* Task list */}
@@ -293,10 +296,11 @@ function TaskRow({
 		: null;
 
 	const isNeedsInput = task.status === "needs_input";
+	const isStopped = task.status === "stopped";
 
 	return (
 		<div
-			className={`flex min-h-[36px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsInput ? "border-l-2 border-th-warning bg-th-warning/5" : ""}`}
+			className={`flex min-h-[36px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsInput ? "border-l-2 border-th-warning bg-th-warning/5" : isStopped ? "border-l-2 border-th-error bg-th-error/5" : ""}`}
 		>
 			<StatusIcon status={task.status} size="sm" />
 			<button
@@ -318,9 +322,8 @@ function TaskRow({
 					Chat
 				</button>
 			)}
-			{task.status === "open" && !task.session_id && (
-				<StartButton workId={task.id} iconOnly />
-			)}
+			{((task.status === "open" && !task.session_id) ||
+				task.status === "stopped") && <StartButton workId={task.id} iconOnly />}
 		</div>
 	);
 }

@@ -26,6 +26,16 @@ func NewWorkStarter(wm *Manager, ars agentrole.Store) *WorkStarter {
 // HandleWorkStart creates a session and sends the kickoff message for a
 // work item that has already been claimed (status=in_progress, sessionID set).
 func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
+	return s.handleWorkStartWithMessage(ctx, w, work.BuildKickoffMessage(w))
+}
+
+// HandleWorkRestart creates a session and sends a restart message for a
+// work item that was previously stopped and is now being restarted.
+func (s *WorkStarter) HandleWorkRestart(ctx context.Context, w work.Work) error {
+	return s.handleWorkStartWithMessage(ctx, w, work.BuildRestartMessage(w))
+}
+
+func (s *WorkStarter) handleWorkStartWithMessage(ctx context.Context, w work.Work, msg string) error {
 	if w.AgentRoleID == "" {
 		return fmt.Errorf("work %s has no agent_role_id", w.ID)
 	}
@@ -52,8 +62,7 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 		slog.Warn("failed to set session title", "sessionId", w.SessionID, "error", err)
 	}
 
-	kickoffMsg := work.BuildKickoffMessage(w)
-	if err := mainWt.ChatClient.SendMessage(ctx, w.SessionID, kickoffMsg); err != nil {
+	if err := mainWt.ChatClient.SendMessage(ctx, w.SessionID, msg); err != nil {
 		if delErr := mainWt.SessionStore.Delete(ctx, w.SessionID); delErr != nil {
 			slog.Error("failed to clean up session after kickoff failure", "sessionId", w.SessionID, "error", delErr)
 		}

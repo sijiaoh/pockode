@@ -37,11 +37,12 @@ type RPCHandler struct {
 	workListWatcher      *watch.WorkListWatcher
 	workDetailWatcher    *watch.WorkDetailWatcher
 	workStarter          *worktree.WorkStarter
+	workStopper          *worktree.WorkStopper
 	agentRoleStore       agentrole.Store
 	agentRoleListWatcher *watch.AgentRoleListWatcher
 }
 
-func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workStarter *worktree.WorkStarter, agentRoleStore agentrole.Store) *RPCHandler {
+func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workStarter *worktree.WorkStarter, workStopper *worktree.WorkStopper, agentRoleStore agentrole.Store) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -66,6 +67,7 @@ func NewRPCHandler(token, version string, devMode bool, commandStore *command.St
 		workListWatcher:      workListWatcher,
 		workDetailWatcher:    workDetailWatcher,
 		workStarter:          workStarter,
+		workStopper:          workStopper,
 		agentRoleStore:       agentRoleStore,
 		agentRoleListWatcher: agentRoleListWatcher,
 	}
@@ -292,6 +294,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "work.start":
 		h.handleWorkStart(ctx, conn, req)
+		return
+	case "work.stop":
+		h.handleWorkStop(ctx, conn, req)
 		return
 	case "work.comment.list":
 		h.handleWorkCommentList(ctx, conn, req)

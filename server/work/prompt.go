@@ -44,6 +44,27 @@ func BuildKickoffMessage(w Work) string {
 	return buildBase(w)
 }
 
+// BuildRestartMessage appends a restart nudge to the base message
+// when a stopped work item is restarted by the user.
+func BuildRestartMessage(w Work) string {
+	base := buildBase(w)
+
+	var nudge string
+	if w.Type == WorkTypeStory {
+		nudge = fmt.Sprintf(
+			"Your story was stopped and is now being restarted. Review your tasks, then call work_done with ID %s. You will be reactivated when a task completes.",
+			w.ID,
+		)
+	} else {
+		nudge = fmt.Sprintf(
+			"Your task was stopped and is now being restarted. Review what you've done so far, then either complete the remaining work or call work_done with ID %s if everything is finished.",
+			w.ID,
+		)
+	}
+
+	return base + "\n\n" + nudge
+}
+
 // BuildAutoContinuationMessage appends a nudge to the base message
 // when an agent process stops but its work item is still in_progress.
 func BuildAutoContinuationMessage(w Work) string {

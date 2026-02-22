@@ -316,6 +316,10 @@ type WorkStartParams struct {
 	ID string `json:"id"`
 }
 
+type WorkStopParams struct {
+	ID string `json:"id"`
+}
+
 type WorkListSubscribeResult struct {
 	ID    string      `json:"id"`
 	Items []work.Work `json:"items"`

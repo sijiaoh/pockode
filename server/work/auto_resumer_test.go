@@ -126,7 +126,7 @@ func TestAutoResumer_SkipsWhenNoSender(t *testing.T) {
 	time.Sleep(50 * time.Millisecond) // negative assertion: verify no panic
 }
 
-func TestAutoResumer_RetryLimit(t *testing.T) {
+func TestAutoResumer_RetryLimit_TransitionsToStopped(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
 	story := createStory(t, store, "Story")
@@ -146,6 +146,12 @@ func TestAutoResumer_RetryLimit(t *testing.T) {
 	msgs := sender.getMessages()
 	if len(msgs) != 3 {
 		t.Errorf("expected 3 messages (retry limit), got %d", len(msgs))
+	}
+
+	// Work should be transitioned to stopped
+	w := getWork(t, store, story.ID)
+	if w.Status != StatusStopped {
+		t.Errorf("status = %q, want %q after retry limit", w.Status, StatusStopped)
 	}
 }
 
@@ -445,6 +451,134 @@ func TestAutoResumer_ExternalWorkStartRollbackOnFailure(t *testing.T) {
 	}
 	if w.SessionID != "" {
 		t.Errorf("sessionID = %q, want empty (rollback)", w.SessionID)
+	}
+}
+
+// --- Process ended → stopped ---
+
+func TestAutoResumer_ProcessEndedStopsWork(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	resumer.HandleProcessStateChange(sid, "ended", false, false)
+
+	waitFor(t, func() bool {
+		w := getWork(t, store, story.ID)
+		return w.Status == StatusStopped
+	})
+
+	w := getWork(t, store, story.ID)
+	if w.Status != StatusStopped {
+		t.Errorf("status = %q, want %q after process ended", w.Status, StatusStopped)
+	}
+}
+
+func TestAutoResumer_ProcessEndedSkippedWhenContinuationPending(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// idle fires first → auto-continuation pending
+	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	// ended fires shortly after → should be suppressed
+	resumer.HandleProcessStateChange(sid, "ended", false, false)
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	// Work should still be in_progress (continuation sent, not stopped)
+	w := getWork(t, store, story.ID)
+	if w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q (ended suppressed by continuation)", w.Status, StatusInProgress)
+	}
+}
+
+func TestAutoResumer_ProcessEndedNoopWhenWorkDone(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	sid := "session-1"
+	startWorkWithSession(t, store, task.ID, sid)
+
+	// Work completes before process ends
+	doneWork(t, store, task.ID)
+
+	resumer.HandleProcessStateChange(sid, "ended", false, false)
+
+	time.Sleep(50 * time.Millisecond)
+
+	w := getWork(t, store, task.ID)
+	if w.Status != StatusClosed {
+		t.Errorf("status = %q, want %q (should remain closed)", w.Status, StatusClosed)
+	}
+}
+
+// --- StopOrphanedWork ---
+
+func TestAutoResumer_StopOrphanedWork(t *testing.T) {
+	store := newTestStore(t)
+	resumer := NewAutoResumer(store, 3)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	startWorkWithSession(t, store, story.ID, "s1")
+	startWorkWithSession(t, store, task.ID, "s2")
+
+	// Simulate server restart: both are in_progress with no live sessions
+	resumer.StopOrphanedWork()
+
+	s := getWork(t, store, story.ID)
+	if s.Status != StatusStopped {
+		t.Errorf("story status = %q, want %q", s.Status, StatusStopped)
+	}
+	tk := getWork(t, store, task.ID)
+	if tk.Status != StatusStopped {
+		t.Errorf("task status = %q, want %q", tk.Status, StatusStopped)
+	}
+}
+
+func TestAutoResumer_StopOrphanedWork_NeedsInput(t *testing.T) {
+	store := newTestStore(t)
+	resumer := NewAutoResumer(store, 3)
+
+	story := createStory(t, store, "Story")
+	startWorkWithSession(t, store, story.ID, "s1")
+
+	// Transition to needs_input (simulates agent waiting for user)
+	niStatus := StatusNeedsInput
+	store.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+
+	resumer.StopOrphanedWork()
+
+	s := getWork(t, store, story.ID)
+	if s.Status != StatusStopped {
+		t.Errorf("story status = %q, want %q (needs_input should be stopped on startup)", s.Status, StatusStopped)
+	}
+}
+
+func TestAutoResumer_StopOrphanedWork_SkipsNonInProgress(t *testing.T) {
+	store := newTestStore(t)
+	resumer := NewAutoResumer(store, 3)
+
+	story := createStory(t, store, "Story") // open
+	task := createTask(t, store, story.ID, "Task")
+	startWork(t, store, task.ID)
+	doneWork(t, store, task.ID) // closed
+
+	resumer.StopOrphanedWork()
+
+	s := getWork(t, store, story.ID)
+	if s.Status != StatusOpen {
+		t.Errorf("story status = %q, want %q (should remain open)", s.Status, StatusOpen)
+	}
+	tk := getWork(t, store, task.ID)
+	if tk.Status != StatusClosed {
+		t.Errorf("task status = %q, want %q (should remain closed)", tk.Status, StatusClosed)
 	}
 }
 

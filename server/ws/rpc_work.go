@@ -122,7 +122,19 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 		return
 	}
 
-	// 1. Claim the work atomically: open → in_progress + link session.
+	// Read current status before transition (to detect restart from stopped)
+	current, found, err := h.workStore.Get(params.ID)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to start work")
+		return
+	}
+	if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "work not found")
+		return
+	}
+	restart := current.Status == work.StatusStopped
+
+	// 1. Claim the work atomically: open/stopped → in_progress + link session.
 	//    This must happen before creating the session to prevent orphan
 	//    sessions when concurrent requests race on the same work item.
 	//    The Store's mutex ensures only one request wins the transition.
@@ -140,39 +152,71 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 	w, found, err := h.workStore.Get(params.ID)
 	if err != nil || !found {
 		h.log.Error("failed to read work after claim", "error", err, "found", found)
-		h.rollbackAndReply(ctx, conn, req.ID, params.ID, "work claimed but failed to read back")
+		h.rollbackWorkStart(ctx, params.ID, restart)
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "work claimed but failed to read back")
 		return
 	}
 
-	// 2. Create session and send kickoff message via WorkStarter.
-	if err := h.workStarter.HandleWorkStart(ctx, w); err != nil {
-		h.rollbackAndReply(ctx, conn, req.ID, params.ID, err.Error())
+	// 2. Create session and send kickoff/restart message via WorkStarter.
+	if restart {
+		err = h.workStarter.HandleWorkRestart(ctx, w)
+	} else {
+		err = h.workStarter.HandleWorkStart(ctx, w)
+	}
+	if err != nil {
+		h.rollbackWorkStart(ctx, params.ID, restart)
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
 
-	h.log.Info("work started", "workId", params.ID, "sessionId", sessionID)
+	h.log.Info("work started", "workId", params.ID, "sessionId", sessionID, "restart", restart)
 
 	if err := conn.Reply(ctx, req.ID, w); err != nil {
 		h.log.Error("failed to send work start response", "error", err)
 	}
 }
 
-// rollbackAndReply reverts a claimed work item back to open status and
-// replies with an internal error. If the rollback itself fails, the
-// message is annotated.
-func (h *rpcMethodHandler) rollbackAndReply(ctx context.Context, conn *jsonrpc2.Conn, reqID jsonrpc2.ID, workID, msg string) {
-	openStatus := work.StatusOpen
-	emptySession := ""
-	if err := h.workStore.Update(ctx, workID, work.UpdateFields{
-		Status:    &openStatus,
-		SessionID: &emptySession,
-	}); err != nil {
-		h.log.Error("failed to rollback work start", "workId", workID, "error", err)
-		msg += " (rollback also failed — work may be stuck in_progress)"
+// rollbackWorkStart reverts a claimed work item to its previous status.
+// Fresh starts roll back to open (clearing sessionID); restarts roll back to stopped.
+func (h *rpcMethodHandler) rollbackWorkStart(ctx context.Context, workID string, restart bool) {
+	if restart {
+		stoppedStatus := work.StatusStopped
+		if err := h.workStore.Update(ctx, workID, work.UpdateFields{Status: &stoppedStatus}); err != nil {
+			h.log.Error("failed to rollback work restart", "workId", workID, "error", err)
+		} else {
+			h.log.Info("rolled back work restart", "workId", workID)
+		}
 	} else {
-		h.log.Info("rolled back work start", "workId", workID)
+		openStatus := work.StatusOpen
+		emptySession := ""
+		if err := h.workStore.Update(ctx, workID, work.UpdateFields{
+			Status:    &openStatus,
+			SessionID: &emptySession,
+		}); err != nil {
+			h.log.Error("failed to rollback work start", "workId", workID, "error", err)
+		} else {
+			h.log.Info("rolled back work start", "workId", workID)
+		}
 	}
-	h.replyError(ctx, conn, reqID, jsonrpc2.CodeInternalError, msg)
+}
+
+func (h *rpcMethodHandler) handleWorkStop(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.WorkStopParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if err := h.workStopper.HandleWorkStop(ctx, params.ID); err != nil {
+		h.replyWorkError(ctx, conn, req.ID, err, "failed to stop work")
+		return
+	}
+
+	h.log.Info("work stopped", "workId", params.ID)
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send work stop response", "error", err)
+	}
 }
 
 func (h *rpcMethodHandler) handleWorkCommentList(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
