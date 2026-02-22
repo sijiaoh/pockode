@@ -25,3 +25,11 @@ export const useWorkStore = create<WorkStore>((set) => ({
 	setError: (error) => set({ isLoading: false, error }),
 	reset: () => set({ works: [], isLoading: true, error: null }),
 }));
+
+export function collectTaskSessionIds(works: Work[]): Set<string> {
+	const ids = new Set<string>();
+	for (const w of works) {
+		if (w.session_id) ids.add(w.session_id);
+	}
+	return ids;
+}

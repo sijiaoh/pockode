@@ -1,5 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { prependSession, useSessionStore } from "../lib/sessionStore";
+import { collectTaskSessionIds, useWorkStore } from "../lib/workStore";
 import { wsActions } from "../lib/wsStore";
 import { useSessionSubscription } from "./useSessionSubscription";
 
@@ -16,8 +18,25 @@ export function useSession({
 	const sessions = useSessionStore((s) => s.sessions);
 	const isLoading = useSessionStore((s) => s.isLoading);
 	const isSuccess = useSessionStore((s) => s.isSuccess);
+	const hideTaskSessions = useSessionStore((s) => s.hideTaskSessions);
 	const updateSessions = useSessionStore((s) => s.updateSessions);
+	const works = useWorkStore((s) => s.works);
 	const { refresh } = useSessionSubscription(enabled);
+
+	const taskSessionIds = useMemo(() => collectTaskSessionIds(works), [works]);
+
+	const filteredSessions = useMemo(
+		() =>
+			hideTaskSessions
+				? sessions.filter((s) => !taskSessionIds.has(s.id))
+				: sessions,
+		[sessions, hideTaskSessions, taskSessionIds],
+	);
+
+	const hasAnyUnread = useMemo(
+		() => filteredSessions.some((s) => s.unread),
+		[filteredSessions],
+	);
 
 	const createMutation = useMutation({
 		mutationFn: wsActions.createSession,
@@ -43,7 +62,7 @@ export function useSession({
 	const redirectSessionId = (() => {
 		if (!isSuccess) return null;
 		if (currentSessionId && currentSession) return null;
-		if (sessions.length > 0) return sessions[0].id;
+		if (filteredSessions.length > 0) return filteredSessions[0].id;
 		return null;
 	})();
 
@@ -51,6 +70,8 @@ export function useSession({
 
 	return {
 		sessions,
+		filteredSessions,
+		hasAnyUnread,
 		currentSessionId,
 		currentSession,
 		isLoading,

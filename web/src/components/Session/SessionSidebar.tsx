@@ -5,7 +5,7 @@ import {
 	MessageSquare,
 } from "lucide-react";
 import { useCallback, useMemo } from "react";
-import { useSessionStore } from "../../lib/sessionStore";
+import { useSession } from "../../hooks/useSession";
 import { FilesTab } from "../Files";
 import { DiffTab } from "../Git";
 import { TabbedSidebar, type TabConfig } from "../Layout";
@@ -48,9 +48,7 @@ function SessionSidebar({
 	onOpenAgentRoleList,
 	isDesktop,
 }: Props) {
-	const hasAnyUnread = useSessionStore((s) =>
-		s.sessions.some((sess) => sess.unread),
-	);
+	const { hasAnyUnread } = useSession();
 
 	const tabs: TabConfig[] = useMemo(
 		() => [

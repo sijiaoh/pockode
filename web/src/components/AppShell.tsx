@@ -101,7 +101,7 @@ function AppShell() {
 	const activeCommitHash = overlay?.type === "commit" ? overlay.hash : null;
 
 	const {
-		sessions,
+		filteredSessions,
 		currentSessionId,
 		currentSession,
 		redirectSessionId,
@@ -184,7 +184,7 @@ function AppShell() {
 	const handleDeleteSession = useCallback(
 		async (id: string) => {
 			const isCurrentSession = id === currentSessionId;
-			const remaining = sessions.filter((s) => s.id !== id);
+			const remaining = filteredSessions.filter((s) => s.id !== id);
 
 			await deleteSession(id);
 
@@ -201,7 +201,7 @@ function AppShell() {
 				);
 			}
 		},
-		[currentSessionId, sessions, deleteSession, navigate, urlWorktree],
+		[currentSessionId, filteredSessions, deleteSession, navigate, urlWorktree],
 	);
 
 	const handleSelectDiffFile = useCallback(
