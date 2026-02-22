@@ -197,6 +197,36 @@ func (h *rpcMethodHandler) handleWorkCommentList(ctx context.Context, conn *json
 	}
 }
 
+func (h *rpcMethodHandler) handleWorkCommentSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.WorkCommentSubscribeParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+	if params.WorkID == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "work_id is required")
+		return
+	}
+
+	notifier := h.state.getNotifier()
+	id, comments, err := h.workCommentWatcher.Subscribe(params.WorkID, notifier)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to subscribe")
+		return
+	}
+	h.state.trackSubscription(id, h.workCommentWatcher)
+	h.log.Debug("subscribed", "watcher", "work comment", "watchId", id, "workId", params.WorkID)
+
+	result := rpc.WorkCommentSubscribeResult{
+		ID:       id,
+		Comments: comments,
+	}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send work comment subscribe response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleWorkListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	notifier := h.state.getNotifier()
 	id, items, err := h.workListWatcher.Subscribe(notifier)

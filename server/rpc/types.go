@@ -329,6 +329,15 @@ type WorkCommentListResult struct {
 	Comments []work.Comment `json:"comments"`
 }
 
+type WorkCommentSubscribeParams struct {
+	WorkID string `json:"work_id"`
+}
+
+type WorkCommentSubscribeResult struct {
+	ID       string         `json:"id"`
+	Comments []work.Comment `json:"comments"`
+}
+
 // AgentRole namespace
 
 type AgentRoleCreateParams struct {

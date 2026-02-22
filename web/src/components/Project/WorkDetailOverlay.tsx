@@ -10,11 +10,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
+import { useWorkCommentSubscription } from "../../hooks/useWorkCommentSubscription";
 import { useWorkSubscription } from "../../hooks/useWorkSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
-import type { Comment, Work, WorkType } from "../../types/work";
+import type { Work, WorkType } from "../../types/work";
 import { autoResizeTextarea } from "../../utils/dom";
 import { MarkdownContent } from "../Chat/MarkdownContent";
 import ConfirmDialog from "../common/ConfirmDialog";
@@ -599,35 +600,7 @@ function ChildRow({
 }
 
 function CommentsSection({ workId }: { workId: string }) {
-	const listWorkComments = useWSStore((s) => s.actions.listWorkComments);
-	const status = useWSStore((s) => s.status);
-	const [comments, setComments] = useState<Comment[]>([]);
-	const [loading, setLoading] = useState(true);
-	const [error, setError] = useState<string | null>(null);
-
-	useEffect(() => {
-		if (status !== "connected") return;
-
-		let cancelled = false;
-		setLoading(true);
-		setError(null);
-
-		listWorkComments(workId)
-			.then((result) => {
-				if (!cancelled) setComments(result);
-			})
-			.catch((err) => {
-				if (!cancelled)
-					setError(err instanceof Error ? err.message : "Failed to load");
-			})
-			.finally(() => {
-				if (!cancelled) setLoading(false);
-			});
-
-		return () => {
-			cancelled = true;
-		};
-	}, [workId, status, listWorkComments]);
+	const { comments, loading, error } = useWorkCommentSubscription(workId);
 
 	if (loading) {
 		return (

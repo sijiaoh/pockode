@@ -35,6 +35,7 @@ type Store interface {
 	ListComments(workID string) ([]Comment, error)
 
 	AddOnChangeListener(listener OnChangeListener)
+	AddOnCommentChangeListener(listener OnCommentChangeListener)
 
 	// StartWatching begins monitoring the index file for external changes (e.g. from MCP).
 	StartWatching() error
@@ -57,11 +58,12 @@ type indexData struct {
 
 // FileStore persists Work items to a JSON file with flock-based inter-process safety.
 type FileStore struct {
-	dataDir   string
-	worksMu   sync.RWMutex
-	works     []Work
-	comments  []Comment
-	listeners []OnChangeListener
+	dataDir          string
+	worksMu          sync.RWMutex
+	works            []Work
+	comments         []Comment
+	listeners        []OnChangeListener
+	commentListeners []OnCommentChangeListener
 
 	// writeGen is incremented on every in-process write (Create/Update/Delete/MarkDone).
 	// reloadFromDisk uses it to skip stale fsnotify-triggered reloads.
@@ -429,7 +431,10 @@ func (s *FileStore) AddComment(_ context.Context, workID, body string) (Comment,
 		return Comment{}, err
 	}
 
+	commentListeners := s.copyCommentListeners()
 	s.worksMu.Unlock()
+
+	notifyComment(commentListeners, CommentEvent{Comment: comment})
 	return comment, nil
 }
 
@@ -457,6 +462,12 @@ func (s *FileStore) AddOnChangeListener(listener OnChangeListener) {
 	s.listeners = append(s.listeners, listener)
 }
 
+func (s *FileStore) AddOnCommentChangeListener(listener OnCommentChangeListener) {
+	s.worksMu.Lock()
+	defer s.worksMu.Unlock()
+	s.commentListeners = append(s.commentListeners, listener)
+}
+
 // Caller must hold s.worksMu (read or write).
 func (s *FileStore) copyListeners() []OnChangeListener {
 	out := make([]OnChangeListener, len(s.listeners))
@@ -468,6 +479,20 @@ func (s *FileStore) copyListeners() []OnChangeListener {
 func notify(listeners []OnChangeListener, event ChangeEvent) {
 	for _, l := range listeners {
 		l.OnWorkChange(event)
+	}
+}
+
+// Caller must hold s.worksMu (read or write).
+func (s *FileStore) copyCommentListeners() []OnCommentChangeListener {
+	out := make([]OnCommentChangeListener, len(s.commentListeners))
+	copy(out, s.commentListeners)
+	return out
+}
+
+// Must be called WITHOUT s.worksMu held.
+func notifyComment(listeners []OnCommentChangeListener, event CommentEvent) {
+	for _, l := range listeners {
+		l.OnCommentChange(event)
 	}
 }
 

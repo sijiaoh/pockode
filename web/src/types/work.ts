@@ -52,3 +52,12 @@ export type WorkListChangedNotification =
 	| { id: string; operation: "create" | "update"; work: Work }
 	| { id: string; operation: "delete"; workId: string }
 	| { id: string; operation: "sync"; works: Work[] };
+
+export interface WorkCommentSubscribeResult {
+	id: string;
+	comments: Comment[];
+}
+
+export type WorkCommentChangedNotification =
+	| { id: string; operation: "create"; comment: Comment }
+	| { id: string; operation: "sync"; work_id: string; comments: Comment[] };

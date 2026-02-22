@@ -70,3 +70,13 @@ type ChangeEvent struct {
 type OnChangeListener interface {
 	OnWorkChange(event ChangeEvent)
 }
+
+type CommentEvent struct {
+	Comment Comment
+}
+
+// OnCommentChangeListener receives notifications when comments are added.
+// Same mutex contract as OnChangeListener applies.
+type OnCommentChangeListener interface {
+	OnCommentChange(event CommentEvent)
+}

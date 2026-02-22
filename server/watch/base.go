@@ -8,6 +8,7 @@ import (
 
 type Subscription struct {
 	ID       string
+	WorkID   string // used by WorkCommentWatcher to filter by work item
 	Notifier Notifier
 }
 

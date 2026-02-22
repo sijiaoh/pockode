@@ -24,7 +24,10 @@ import type {
 	SettingsSubscribeResult,
 } from "../types/settings";
 import type {
+	Comment,
 	Work,
+	WorkCommentChangedNotification,
+	WorkCommentSubscribeResult,
 	WorkListChangedNotification,
 	WorkListSubscribeResult,
 } from "../types/work";
@@ -106,6 +109,11 @@ export interface WatchActions {
 		callback: (params: WorkListChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<Work[]>>;
 	workListUnsubscribe: (id: string) => Promise<void>;
+	workCommentSubscribe: (
+		workId: string,
+		callback: (params: WorkCommentChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<Comment[]>>;
+	workCommentUnsubscribe: (id: string) => Promise<void>;
 	agentRoleListSubscribe: (
 		callback: (params: AgentRoleListChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<AgentRole[]>>;
@@ -162,6 +170,10 @@ const workListWatchCallbacks = new Map<
 	string,
 	(params: WorkListChangedNotification) => void
 >();
+const workCommentWatchCallbacks = new Map<
+	string,
+	(params: WorkCommentChangedNotification) => void
+>();
 const agentRoleListWatchCallbacks = new Map<
 	string,
 	(params: AgentRoleListChangedNotification) => void
@@ -181,6 +193,7 @@ function clearWatchSubscriptions(): void {
 	sessionListWatchCallbacks.clear();
 	chatMessagesCallbacks.clear();
 	workListWatchCallbacks.clear();
+	workCommentWatchCallbacks.clear();
 	agentRoleListWatchCallbacks.clear();
 	// Note: worktreeWatchCallbacks and settingsWatchCallbacks are NOT cleared here
 	// because they are Manager-level, not worktree-specific.
@@ -265,6 +278,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 	"work.list.changed": (params) => {
 		const changedParams = params as WorkListChangedNotification;
 		workListWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
+	"work.comment.changed": (params) => {
+		const changedParams = params as WorkCommentChangedNotification;
+		workCommentWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
 	"agent_role.list.changed": (params) => {
@@ -687,6 +705,33 @@ export const useWSStore = create<WSState>((set, get) => ({
 			}
 		},
 
+		workCommentSubscribe: async (
+			workId: string,
+			callback: (params: WorkCommentChangedNotification) => void,
+		) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			const result = (await client.request("work.comment.subscribe", {
+				work_id: workId,
+			})) as WorkCommentSubscribeResult;
+			workCommentWatchCallbacks.set(result.id, callback);
+			return { id: result.id, initial: result.comments };
+		},
+
+		workCommentUnsubscribe: async (id: string) => {
+			workCommentWatchCallbacks.delete(id);
+			const client = getClient();
+			if (client) {
+				try {
+					await client.request("work.comment.unsubscribe", { id });
+				} catch {
+					// Ignore errors (connection might be closed)
+				}
+			}
+		},
+
 		agentRoleListSubscribe: async (
 			callback: (params: AgentRoleListChangedNotification) => void,
 		) => {
@@ -802,6 +847,7 @@ export function resetWSStore() {
 	chatMessagesCallbacks.clear();
 	settingsWatchCallbacks.clear();
 	workListWatchCallbacks.clear();
+	workCommentWatchCallbacks.clear();
 	agentRoleListWatchCallbacks.clear();
 	worktreeDeletedListener = null;
 	onWorktreeSwitched = null;
