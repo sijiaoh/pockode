@@ -158,6 +158,7 @@ function StatusGroup({
 			<button
 				type="button"
 				onClick={() => setCollapsed(!collapsed)}
+				aria-expanded={!collapsed}
 				className="flex min-h-[44px] w-full items-center gap-2 px-3 text-xs font-medium text-th-text-muted"
 			>
 				{collapsed ? (
@@ -189,6 +190,8 @@ function StatusGroup({
 	);
 }
 
+const collapsedByDefault: ReadonlySet<WorkStatus> = new Set(["done", "closed"]);
+
 function StoryRow({
 	story,
 	tasks,
@@ -209,16 +212,37 @@ function StoryRow({
 	const roleName = story.agent_role_id
 		? (roleNameMap.get(story.agent_role_id) ?? null)
 		: null;
+	const hasTasks = totalTasks > 0;
+	const [tasksExpanded, setTasksExpanded] = useState(
+		() => !collapsedByDefault.has(story.status),
+	);
 
 	return (
 		<div className="rounded-lg">
 			{/* Title row */}
-			<div className="flex min-h-[44px] items-center gap-2 px-3">
+			<div className="flex min-h-[44px] items-center px-1">
+				{hasTasks ? (
+					<button
+						type="button"
+						onClick={() => setTasksExpanded(!tasksExpanded)}
+						className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-th-text-muted"
+						aria-expanded={tasksExpanded}
+						aria-label={tasksExpanded ? "Collapse tasks" : "Expand tasks"}
+					>
+						{tasksExpanded ? (
+							<ChevronDown className="size-3.5" />
+						) : (
+							<ChevronRight className="size-3.5" />
+						)}
+					</button>
+				) : (
+					<div className="min-h-[44px] min-w-[44px] shrink-0" />
+				)}
 				<StatusIcon status={story.status} />
 				<button
 					type="button"
 					onClick={() => onOpenWorkDetail(story.id)}
-					className="min-w-0 flex-1 truncate text-left text-sm text-th-text-primary hover:text-th-accent"
+					className="ml-2 min-w-0 flex-1 truncate text-left text-sm text-th-text-primary hover:text-th-accent"
 					aria-label={`${story.title} — ${statusLabels[story.status]}`}
 				>
 					{story.title}
@@ -226,14 +250,14 @@ function StoryRow({
 				{(story.status === "needs_input" ||
 					tasks?.some((t) => t.status === "needs_input")) && (
 					<span
-						className="h-2 w-2 shrink-0 rounded-full bg-th-warning"
+						className="mr-2 h-2 w-2 shrink-0 rounded-full bg-th-warning"
 						aria-hidden="true"
 					/>
 				)}
 			</div>
 
-			{/* Meta info row */}
-			<div className="flex items-center gap-2 px-3 pb-1 pl-[2.125rem] text-xs text-th-text-muted">
+			{/* Meta info row — always visible */}
+			<div className="flex items-center gap-2 px-3 pb-1 pl-[4.375rem] text-xs text-th-text-muted">
 				<span>{roleName ?? "—"}</span>
 				{totalTasks > 0 && (
 					<>
@@ -260,10 +284,10 @@ function StoryRow({
 				)}
 			</div>
 
-			{/* Task list */}
-			{tasks && tasks.length > 0 && (
-				<div className="pb-1 pl-6 pr-2">
-					{tasks.map((task) => (
+			{/* Task list — collapsible */}
+			{tasksExpanded && hasTasks && (
+				<div className="pb-1 pl-[3rem] pr-2">
+					{tasks?.map((task) => (
 						<TaskRow
 							key={task.id}
 							task={task}
