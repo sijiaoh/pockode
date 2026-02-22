@@ -224,7 +224,8 @@ function StoryRow({
 				>
 					{story.title}
 				</button>
-				{story.status === "needs_input" && (
+				{(story.status === "needs_input" ||
+					tasks?.some((t) => t.status === "needs_input")) && (
 					<span
 						className="h-2 w-2 shrink-0 rounded-full bg-th-warning"
 						aria-hidden="true"
@@ -291,8 +292,12 @@ function TaskRow({
 		? (roleNameMap.get(task.agent_role_id) ?? null)
 		: null;
 
+	const isNeedsInput = task.status === "needs_input";
+
 	return (
-		<div className="flex min-h-[36px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary">
+		<div
+			className={`flex min-h-[36px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsInput ? "border-l-2 border-th-warning bg-th-warning/5" : ""}`}
+		>
 			<StatusIcon status={task.status} size="sm" />
 			<button
 				type="button"

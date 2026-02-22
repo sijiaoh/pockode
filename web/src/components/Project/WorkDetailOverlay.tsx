@@ -571,8 +571,12 @@ function ChildRow({
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string) => void;
 }) {
+	const isNeedsInput = work.status === "needs_input";
+
 	return (
-		<div className="group flex min-h-[44px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary">
+		<div
+			className={`group flex min-h-[44px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsInput ? "border-l-2 border-th-warning bg-th-warning/5" : ""}`}
+		>
 			<StatusIcon status={work.status} />
 			<button
 				type="button"

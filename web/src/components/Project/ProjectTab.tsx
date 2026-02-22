@@ -1,4 +1,5 @@
 import { ListChecks, UserCog } from "lucide-react";
+import { useWorkStore } from "../../lib/workStore";
 import { useSidebarRefresh } from "../Layout";
 
 interface Props {
@@ -11,6 +12,9 @@ export default function ProjectTab({
 	onOpenAgentRoleList,
 }: Props) {
 	const { isActive } = useSidebarRefresh("project");
+	const hasNeedsInput = useWorkStore((s) =>
+		s.works.some((w) => w.status === "needs_input"),
+	);
 
 	return (
 		<div className={isActive ? "space-y-1 p-2" : "hidden"}>
@@ -21,6 +25,12 @@ export default function ProjectTab({
 			>
 				<ListChecks className="size-4 text-th-text-muted" />
 				Stories
+				{hasNeedsInput && (
+					<span
+						className="ml-auto h-2 w-2 shrink-0 rounded-full bg-th-warning"
+						aria-hidden="true"
+					/>
+				)}
 			</button>
 			<button
 				type="button"
