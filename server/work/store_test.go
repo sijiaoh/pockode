@@ -291,10 +291,17 @@ func TestDelete(t *testing.T) {
 func TestDelete_WithChildren(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "Story")
-	createTask(t, s, story.ID, "Task")
+	task := createTask(t, s, story.ID, "Task")
 
-	if err := s.Delete(context.Background(), story.ID); err == nil {
-		t.Fatal("expected error when deleting work with children")
+	if err := s.Delete(context.Background(), story.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, found, _ := s.Get(story.ID); found {
+		t.Error("expected story to be deleted")
+	}
+	if _, found, _ := s.Get(task.ID); found {
+		t.Error("expected child task to be cascade-deleted")
 	}
 }
 

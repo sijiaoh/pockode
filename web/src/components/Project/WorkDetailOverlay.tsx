@@ -112,7 +112,11 @@ export default function WorkDetailOverlay({
 
 					<CommentsSection comments={comments} />
 
-					<DeleteSection work={work} onBack={onBack} />
+					<DeleteSection
+						work={work}
+						childCount={children.length}
+						onBack={onBack}
+					/>
 				</div>
 			</div>
 
@@ -676,7 +680,15 @@ function CommentsSection({ comments }: { comments: Comment[] }) {
 	);
 }
 
-function DeleteSection({ work, onBack }: { work: Work; onBack: () => void }) {
+function DeleteSection({
+	work,
+	childCount,
+	onBack,
+}: {
+	work: Work;
+	childCount: number;
+	onBack: () => void;
+}) {
 	const deleteWork = useWSStore((s) => s.actions.deleteWork);
 	const [showConfirm, setShowConfirm] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -696,6 +708,12 @@ function DeleteSection({ work, onBack }: { work: Work; onBack: () => void }) {
 
 	if (work.status === "closed") return null;
 
+	const typeLabel = work.type === "story" ? "Story" : "Task";
+	const confirmMessage =
+		childCount > 0
+			? `Delete "${work.title}" and its ${childCount} child task${childCount > 1 ? "s" : ""}? This cannot be undone.`
+			: `Delete "${work.title}"? This cannot be undone.`;
+
 	return (
 		<div className="border-t border-th-border pt-5">
 			<button
@@ -704,7 +722,7 @@ function DeleteSection({ work, onBack }: { work: Work; onBack: () => void }) {
 				className="flex min-h-[44px] items-center gap-2 rounded-lg px-3 text-sm text-th-error hover:bg-th-error/10"
 			>
 				<Trash2 className="size-4" />
-				Delete {work.type === "story" ? "Story" : "Task"}
+				Delete {typeLabel}
 			</button>
 			{error && (
 				<p className="mt-1 px-3 text-xs text-th-error" role="alert">
@@ -713,8 +731,8 @@ function DeleteSection({ work, onBack }: { work: Work; onBack: () => void }) {
 			)}
 			{showConfirm && (
 				<ConfirmDialog
-					title={`Delete ${work.type === "story" ? "Story" : "Task"}`}
-					message={`Delete "${work.title}"? This cannot be undone.`}
+					title={`Delete ${typeLabel}`}
+					message={confirmMessage}
 					confirmLabel="Delete"
 					variant="danger"
 					onConfirm={handleDelete}

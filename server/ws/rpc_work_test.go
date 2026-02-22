@@ -268,18 +268,27 @@ func TestHandler_WorkDelete_WithChildren(t *testing.T) {
 	var story work.Work
 	json.Unmarshal(storyResp.Result, &story)
 
-	env.call("work.create", rpc.WorkCreateParams{
+	taskResp := env.call("work.create", rpc.WorkCreateParams{
 		Type:        work.WorkTypeTask,
 		ParentID:    story.ID,
 		AgentRoleID: env.testRoleID,
 		Title:       "Child task",
 	})
+	var task work.Work
+	json.Unmarshal(taskResp.Result, &task)
 
-	// Try to delete parent — should fail
+	// Cascade delete: parent and children should both be removed
 	resp := env.call("work.delete", rpc.WorkDeleteParams{ID: story.ID})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
 
-	if resp.Error == nil {
-		t.Fatal("expected error when deleting work with children")
+	// Verify both are gone
+	if _, found, _ := env.workStore.Get(story.ID); found {
+		t.Error("expected story to be deleted")
+	}
+	if _, found, _ := env.workStore.Get(task.ID); found {
+		t.Error("expected child task to be cascade-deleted")
 	}
 }
 

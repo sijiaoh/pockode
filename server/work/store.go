@@ -265,18 +265,24 @@ func (s *FileStore) Delete(_ context.Context, id string) error {
 		return ErrWorkNotFound
 	}
 
+	// Collect the target and its children for cascade delete.
+	deleteIDs := map[string]bool{id: true}
 	for _, w := range s.works {
 		if w.ParentID == id {
-			s.worksMu.Unlock()
-			return fmt.Errorf("%w: cannot delete work with children", ErrInvalidWork)
+			deleteIDs[w.ID] = true
 		}
 	}
 
-	deleted := s.works[idx]
+	var deleted []Work
+	newWorks := make([]Work, 0, len(s.works)-len(deleteIDs))
+	for _, w := range s.works {
+		if deleteIDs[w.ID] {
+			deleted = append(deleted, w)
+		} else {
+			newWorks = append(newWorks, w)
+		}
+	}
 
-	newWorks := make([]Work, 0, len(s.works)-1)
-	newWorks = append(newWorks, s.works[:idx]...)
-	newWorks = append(newWorks, s.works[idx+1:]...)
 	prev := s.works
 	s.works = newWorks
 
@@ -289,7 +295,9 @@ func (s *FileStore) Delete(_ context.Context, id string) error {
 	listeners := s.copyListeners()
 	s.worksMu.Unlock()
 
-	notify(listeners, ChangeEvent{Op: OperationDelete, Work: deleted})
+	for _, w := range deleted {
+		notify(listeners, ChangeEvent{Op: OperationDelete, Work: w})
+	}
 	return nil
 }
 
