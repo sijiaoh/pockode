@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-const testAgentRoleID = "role-abc-123"
-
 func assertContains(t *testing.T, msg, substr, label string) {
 	t.Helper()
 	if !strings.Contains(msg, substr) {
@@ -18,13 +16,13 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 	w := Work{
 		ID:          "task-1",
 		Type:        WorkTypeTask,
-		AgentRoleID: testAgentRoleID,
+		AgentRoleID: testRoleID,
 		Title:       "Fix the bug",
 	}
 
 	msg := BuildKickoffMessage(w)
 
-	assertContains(t, msg, testAgentRoleID, "agent role ID")
+	assertContains(t, msg, testRoleID, "agent role ID")
 	assertContains(t, msg, "agent_role_get", "agent_role_get instruction")
 	assertContains(t, msg, "Fix the bug", "task title")
 	assertContains(t, msg, "task-1", "work ID")
@@ -39,7 +37,7 @@ func TestBuildKickoffMessage_Story(t *testing.T) {
 	w := Work{
 		ID:          "story-1",
 		Type:        WorkTypeStory,
-		AgentRoleID: testAgentRoleID,
+		AgentRoleID: testRoleID,
 		Title:       "Big feature",
 	}
 
@@ -51,10 +49,10 @@ func TestBuildKickoffMessage_Story(t *testing.T) {
 
 func TestBuildKickoffMessage_RoleRefComesFirst(t *testing.T) {
 	msg := BuildKickoffMessage(Work{
-		ID: "t1", Type: WorkTypeTask, AgentRoleID: testAgentRoleID, Title: "T",
+		ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T",
 	})
 
-	roleIdx := strings.Index(msg, testAgentRoleID)
+	roleIdx := strings.Index(msg, testRoleID)
 	workIdx := strings.Index(msg, "You are working on")
 	if roleIdx < 0 || workIdx < 0 || roleIdx >= workIdx {
 		t.Error("role reference should appear before work context")
@@ -69,12 +67,12 @@ func TestBuildAutoContinuationMessage_ContainsBaseAndNudge(t *testing.T) {
 	}{
 		{
 			"task",
-			Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testAgentRoleID, Title: "T"},
+			Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"},
 			"Your task is still in_progress",
 		},
 		{
 			"story",
-			Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testAgentRoleID, Title: "S"},
+			Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"},
 			"Your story is still in_progress",
 		},
 	} {
@@ -95,7 +93,7 @@ func TestBuildKickoffMessage_TaskWithParent_ReportViaComment(t *testing.T) {
 		ID:          "task-1",
 		Type:        WorkTypeTask,
 		ParentID:    "story-1",
-		AgentRoleID: testAgentRoleID,
+		AgentRoleID: testRoleID,
 		Title:       "Fix bug",
 	}
 
@@ -110,7 +108,7 @@ func TestBuildKickoffMessage_TaskWithoutParent_NoCommentInstruction(t *testing.T
 	w := Work{
 		ID:          "task-1",
 		Type:        WorkTypeTask,
-		AgentRoleID: testAgentRoleID,
+		AgentRoleID: testRoleID,
 		Title:       "Fix bug",
 	}
 
@@ -125,7 +123,7 @@ func TestBuildParentReactivationMessage_ContainsCommentListNudge(t *testing.T) {
 	parent := Work{
 		ID:          "story-1",
 		Type:        WorkTypeStory,
-		AgentRoleID: testAgentRoleID,
+		AgentRoleID: testRoleID,
 		Title:       "Big feature",
 	}
 
@@ -134,11 +132,40 @@ func TestBuildParentReactivationMessage_ContainsCommentListNudge(t *testing.T) {
 	assertContains(t, msg, "work_id story-1", "parent work ID for comment list")
 }
 
+func TestBuildRestartMessage_ContainsBaseAndNudge(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		w     Work
+		nudge string
+	}{
+		{
+			"task",
+			Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"},
+			"Your task was stopped and is now being restarted",
+		},
+		{
+			"story",
+			Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"},
+			"Your story was stopped and is now being restarted",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := BuildKickoffMessage(tc.w)
+			restart := BuildRestartMessage(tc.w)
+
+			if !strings.Contains(restart, base) {
+				t.Error("restart message should contain the full kickoff base")
+			}
+			assertContains(t, restart, tc.nudge, "nudge")
+		})
+	}
+}
+
 func TestBuildParentReactivationMessage_ContainsBaseAndNudge(t *testing.T) {
 	parent := Work{
 		ID:          "story-1",
 		Type:        WorkTypeStory,
-		AgentRoleID: testAgentRoleID,
+		AgentRoleID: testRoleID,
 		Title:       "Big feature",
 	}
 

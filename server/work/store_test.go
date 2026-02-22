@@ -404,6 +404,67 @@ func TestTransition_DoneToInProgress(t *testing.T) {
 	}
 }
 
+// --- stopped / closed restart transitions ---
+
+func TestTransition_StoppedToInProgress(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	// in_progress → stopped
+	status := StatusStopped
+	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status}); err != nil {
+		t.Fatalf("in_progress → stopped: %v", err)
+	}
+
+	// stopped → in_progress (restart)
+	status = StatusInProgress
+	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status}); err != nil {
+		t.Fatalf("stopped → in_progress: %v", err)
+	}
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
+	}
+}
+
+func TestTransition_ClosedToInProgress(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+	doneWork(t, s, story.ID) // no children → auto-close → closed
+
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusClosed {
+		t.Fatalf("precondition: story should be closed, got %q", got.Status)
+	}
+
+	// closed → in_progress (parent reactivation)
+	status := StatusInProgress
+	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status}); err != nil {
+		t.Fatalf("closed → in_progress: %v", err)
+	}
+	got = getWork(t, s, story.ID)
+	if got.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
+	}
+}
+
+func TestMarkDone_FromStopped(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	// in_progress → stopped
+	status := StatusStopped
+	s.Update(context.Background(), story.ID, UpdateFields{Status: &status})
+
+	// MarkDone from stopped should fail (stopped → done is not valid)
+	if err := s.MarkDone(context.Background(), story.ID); err == nil {
+		t.Fatal("expected error for MarkDone from stopped")
+	}
+}
+
 // --- needs_input transitions ---
 
 func TestTransition_InProgressToNeedsInput(t *testing.T) {
@@ -479,6 +540,25 @@ func TestAutoClose_BlockedByNeedsInputChild(t *testing.T) {
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusDone {
 		t.Errorf("story status = %q, want %q (child needs_input blocks auto-close)", got.Status, StatusDone)
+	}
+}
+
+func TestAutoClose_BlockedByStoppedChild(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWork(t, s, story.ID)
+	startWork(t, s, task.ID)
+
+	// Stop the task (simulates agent crash or retry limit)
+	stoppedStatus := StatusStopped
+	s.Update(context.Background(), task.ID, UpdateFields{Status: &stoppedStatus})
+
+	// Parent done — but task is stopped, so parent stays done (not closed)
+	doneWork(t, s, story.ID)
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusDone {
+		t.Errorf("story status = %q, want %q (stopped child blocks auto-close)", got.Status, StatusDone)
 	}
 }
 

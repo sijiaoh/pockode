@@ -208,7 +208,7 @@ type syncCall struct {
 	NeedsInput bool
 }
 
-func (r *recordingSyncer) SyncNeedsInput(sessionID string, needsInput bool) {
+func (r *recordingSyncer) SyncNeedsInput(_ context.Context, sessionID string, needsInput bool) {
 	r.calls = append(r.calls, syncCall{SessionID: sessionID, NeedsInput: needsInput})
 }
 

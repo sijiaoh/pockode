@@ -25,15 +25,6 @@ func ValidateType(t WorkType) bool {
 	return ok
 }
 
-func ValidateStatus(s WorkStatus) bool {
-	switch s {
-	case StatusOpen, StatusInProgress, StatusNeedsInput, StatusStopped, StatusDone, StatusClosed:
-		return true
-	default:
-		return false
-	}
-}
-
 func ValidateTransition(from, to WorkStatus) bool {
 	for _, allowed := range validTransitions[from] {
 		if allowed == to {

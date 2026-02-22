@@ -17,7 +17,7 @@ func NewNeedsInputSyncer(store Store) *NeedsInputSyncer {
 	return &NeedsInputSyncer{store: store}
 }
 
-func (s *NeedsInputSyncer) SyncNeedsInput(sessionID string, needsInput bool) {
+func (s *NeedsInputSyncer) SyncNeedsInput(ctx context.Context, sessionID string, needsInput bool) {
 	w, found, err := s.store.FindBySessionID(sessionID)
 	if err != nil {
 		slog.Warn("failed to find work by session for needs_input sync", "sessionId", sessionID, "error", err)
@@ -40,7 +40,7 @@ func (s *NeedsInputSyncer) SyncNeedsInput(sessionID string, needsInput bool) {
 		targetStatus = StatusInProgress
 	}
 
-	if err := s.store.Update(context.Background(), w.ID, UpdateFields{Status: &targetStatus}); err != nil {
+	if err := s.store.Update(ctx, w.ID, UpdateFields{Status: &targetStatus}); err != nil {
 		slog.Warn("failed to auto-transition work needs_input",
 			"workId", w.ID, "from", w.Status, "to", targetStatus, "error", err)
 	} else {

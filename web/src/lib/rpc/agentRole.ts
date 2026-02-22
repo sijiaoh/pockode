@@ -4,6 +4,7 @@ import type {
 	AgentRoleCreateParams,
 	AgentRoleUpdateParams,
 } from "../../types/agentRole";
+import { requireClient } from "./client";
 
 export interface AgentRoleActions {
 	createAgentRole: (params: AgentRoleCreateParams) => Promise<AgentRole>;
@@ -15,28 +16,22 @@ export interface AgentRoleActions {
 export function createAgentRoleActions(
 	getClient: () => JSONRPCRequester<void> | null,
 ): AgentRoleActions {
-	const requireClient = (): JSONRPCRequester<void> => {
-		const client = getClient();
-		if (!client) {
-			throw new Error("Not connected");
-		}
-		return client;
-	};
+	const client = () => requireClient(getClient);
 
 	return {
 		createAgentRole: async (
 			params: AgentRoleCreateParams,
 		): Promise<AgentRole> => {
-			return requireClient().request("agent_role.create", params);
+			return client().request("agent_role.create", params);
 		},
 		updateAgentRole: async (params: AgentRoleUpdateParams): Promise<void> => {
-			await requireClient().request("agent_role.update", params);
+			await client().request("agent_role.update", params);
 		},
 		deleteAgentRole: async (id: string): Promise<void> => {
-			await requireClient().request("agent_role.delete", { id });
+			await client().request("agent_role.delete", { id });
 		},
 		resetAgentRoleDefaults: async (): Promise<void> => {
-			await requireClient().request("agent_role.reset_defaults", {});
+			await client().request("agent_role.reset_defaults", {});
 		},
 	};
 }

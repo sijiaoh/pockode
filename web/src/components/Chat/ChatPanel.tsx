@@ -24,7 +24,7 @@ import ModeSelector from "./ModeSelector";
 
 const noop = () => {};
 
-const inputBarHiddenOverlays: OverlayState["type"][] = [
+const inputBarHiddenOverlays: NonNullable<OverlayState>["type"][] = [
 	"work-list",
 	"work-detail",
 	"agent-role-list",

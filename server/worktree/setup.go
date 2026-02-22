@@ -84,7 +84,7 @@ func RunSetupHook(dataDir, mainDir, worktreePath, worktreeName string) error {
 			"output", outputStr,
 		)
 		if outputStr != "" {
-			return fmt.Errorf("%s: %s", err, outputStr)
+			return fmt.Errorf("%w: %s", err, outputStr)
 		}
 		return err
 	}

@@ -83,12 +83,11 @@ func (r *AutoResumer) StopOrphanedWork() {
 		return
 	}
 
-	stoppedStatus := StatusStopped
 	for _, w := range works {
 		if w.Status != StatusInProgress && w.Status != StatusNeedsInput {
 			continue
 		}
-		if err := r.workStore.Update(r.ctx, w.ID, UpdateFields{Status: &stoppedStatus}); err != nil {
+		if err := r.stopWork(w.ID); err != nil {
 			slog.Warn("failed to stop orphaned work", "workId", w.ID, "error", err)
 		} else {
 			slog.Info("stopped orphaned work on startup", "workId", w.ID, "sessionId", w.SessionID)
@@ -169,8 +168,7 @@ func (r *AutoResumer) handleProcessEnded(sessionID string) {
 		return
 	}
 
-	stoppedStatus := StatusStopped
-	if err := r.workStore.Update(r.ctx, w.ID, UpdateFields{Status: &stoppedStatus}); err != nil {
+	if err := r.stopWork(w.ID); err != nil {
 		if r.ctx.Err() == nil {
 			slog.Warn("failed to stop work after process ended", "workId", w.ID, "error", err)
 		}
@@ -209,8 +207,7 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSen
 	if count >= r.maxRetries {
 		r.retryMu.Unlock()
 		slog.Info("auto-resume retry limit reached, stopping work", "sessionId", sessionID, "workId", w.ID)
-		stoppedStatus := StatusStopped
-		if err := r.workStore.Update(r.ctx, w.ID, UpdateFields{Status: &stoppedStatus}); err != nil {
+		if err := r.stopWork(w.ID); err != nil {
 			if r.ctx.Err() == nil {
 				slog.Warn("failed to stop work after retry limit", "workId", w.ID, "error", err)
 			}
@@ -337,6 +334,11 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 	} else {
 		slog.Info("parent reactivation sent", "parentId", parent.ID, "childId", child.ID)
 	}
+}
+
+func (r *AutoResumer) stopWork(workID string) error {
+	status := StatusStopped
+	return r.workStore.Update(r.ctx, workID, UpdateFields{Status: &status})
 }
 
 func (r *AutoResumer) findWorkBySessionID(sessionID string, statuses ...WorkStatus) *Work {

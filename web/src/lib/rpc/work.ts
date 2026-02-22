@@ -4,6 +4,7 @@ import type {
 	WorkCreateParams,
 	WorkUpdateParams,
 } from "../../types/work";
+import { requireClient } from "./client";
 
 export interface WorkActions {
 	createWork: (params: WorkCreateParams) => Promise<Work>;
@@ -16,33 +17,27 @@ export interface WorkActions {
 export function createWorkActions(
 	getClient: () => JSONRPCRequester<void> | null,
 ): WorkActions {
-	const requireClient = (): JSONRPCRequester<void> => {
-		const client = getClient();
-		if (!client) {
-			throw new Error("Not connected");
-		}
-		return client;
-	};
+	const client = () => requireClient(getClient);
 
 	return {
 		createWork: async (params: WorkCreateParams): Promise<Work> => {
-			return requireClient().request("work.create", params);
+			return client().request("work.create", params);
 		},
 
 		updateWork: async (params: WorkUpdateParams): Promise<void> => {
-			await requireClient().request("work.update", params);
+			await client().request("work.update", params);
 		},
 
 		deleteWork: async (id: string): Promise<void> => {
-			await requireClient().request("work.delete", { id });
+			await client().request("work.delete", { id });
 		},
 
 		startWork: async (id: string): Promise<Work> => {
-			return requireClient().request("work.start", { id });
+			return client().request("work.start", { id });
 		},
 
 		stopWork: async (id: string): Promise<void> => {
-			await requireClient().request("work.stop", { id });
+			await client().request("work.stop", { id });
 		},
 	};
 }

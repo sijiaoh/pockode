@@ -20,7 +20,7 @@ type ViewingChecker interface {
 
 // WorkNeedsInputSyncer syncs work item status when a session's needs_input state changes.
 type WorkNeedsInputSyncer interface {
-	SyncNeedsInput(sessionID string, needsInput bool)
+	SyncNeedsInput(ctx context.Context, sessionID string, needsInput bool)
 }
 
 // SessionListWatcher notifies subscribers when the session list changes.
@@ -160,7 +160,7 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 			}
 		}
 		if e.NeedsInput && w.workNeedsInputSyncer != nil {
-			w.workNeedsInputSyncer.SyncNeedsInput(e.SessionID, true)
+			w.workNeedsInputSyncer.SyncNeedsInput(w.Context(), e.SessionID, true)
 		}
 	case process.ProcessStateRunning:
 		if err := w.store.SetNeedsInput(ctx, e.SessionID, false); err != nil {
@@ -170,7 +170,7 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 		// so we can't rely on session NeedsInput alone. The syncer's own guard
 		// (work.Status != needs_input → skip) prevents spurious transitions.
 		if w.workNeedsInputSyncer != nil {
-			w.workNeedsInputSyncer.SyncNeedsInput(e.SessionID, false)
+			w.workNeedsInputSyncer.SyncNeedsInput(w.Context(), e.SessionID, false)
 		}
 	}
 
