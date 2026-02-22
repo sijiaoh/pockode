@@ -65,7 +65,7 @@ React SPA (前端)
 
 ### Git 规范
 
-- **禁止 `git -C <path>`** — 不要用 `-C` 选项
+- **直接执行 git 命令** — 不要用 `-C` 或 `cd` 绕路
 - 分支命名：`feature/xxx`、`fix/xxx`、`refactor/xxx`
 - Commit 信息简洁明了，说明「做了什么」而非「怎么做的」
 - 保持 commit 粒度合理，一个 commit 做一件事
