@@ -1,4 +1,6 @@
-export type Settings = Record<string, never>;
+export interface Settings {
+	default_agent_role_id?: string;
+}
 
 export interface SettingsSubscribeResult {
 	id: string;

@@ -4,7 +4,7 @@ import type { SessionListItem } from "../types/message";
 const HIDE_TASK_SESSIONS_KEY = "hide-task-sessions";
 
 function loadHideTaskSessions(): boolean {
-	return localStorage.getItem(HIDE_TASK_SESSIONS_KEY) !== "false";
+	return localStorage.getItem(HIDE_TASK_SESSIONS_KEY) === "true";
 }
 
 interface SessionState {

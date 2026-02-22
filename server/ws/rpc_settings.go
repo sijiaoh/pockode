@@ -29,6 +29,19 @@ func (h *rpcMethodHandler) handleSettingsUpdate(ctx context.Context, conn *jsonr
 		return
 	}
 
+	// Validate that the referenced agent role exists
+	if params.Settings.DefaultAgentRoleID != "" {
+		_, found, err := h.agentRoleStore.Get(params.Settings.DefaultAgentRoleID)
+		if err != nil {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to validate agent role")
+			return
+		}
+		if !found {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "agent role not found")
+			return
+		}
+	}
+
 	if err := h.settingsStore.Update(params.Settings); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to update settings")
 		return

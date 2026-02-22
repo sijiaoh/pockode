@@ -1,6 +1,7 @@
 import { Loader2, Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { useSettingsStore } from "../../lib/settingsStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { WorkType } from "../../types/work";
 
@@ -17,18 +18,29 @@ export default function CreateWorkForm({ type, parentId }: Props) {
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const createWork = useWSStore((s) => s.actions.createWork);
 	const roles = useAgentRoleStore((s) => s.roles);
+	const defaultRoleId = useSettingsStore(
+		(s) => s.settings?.default_agent_role_id ?? "",
+	);
+
+	const resolveInitialRole = useCallback((): string => {
+		if (roles.length === 1) return roles[0].id;
+		if (defaultRoleId && roles.some((r) => r.id === defaultRoleId))
+			return defaultRoleId;
+		return "";
+	}, [roles, defaultRoleId]);
 
 	useEffect(() => {
-		if (roles.length === 1 && !agentRoleId) {
-			setAgentRoleId(roles[0].id);
+		if (!agentRoleId) {
+			const initial = resolveInitialRole();
+			if (initial) setAgentRoleId(initial);
 		}
-	}, [roles, agentRoleId]);
+	}, [resolveInitialRole, agentRoleId]);
 
 	const resetForm = useCallback(() => {
 		setTitle("");
-		setAgentRoleId(roles.length === 1 ? roles[0].id : "");
+		setAgentRoleId(resolveInitialRole());
 		setError(null);
-	}, [roles]);
+	}, [resolveInitialRole]);
 
 	const handleSubmit = useCallback(
 		async (e: React.FormEvent) => {

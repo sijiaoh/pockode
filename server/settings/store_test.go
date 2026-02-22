@@ -65,7 +65,7 @@ func TestStore_Update(t *testing.T) {
 		t.Fatalf("NewStore failed: %v", err)
 	}
 
-	newSettings := Settings{}
+	newSettings := Settings{DefaultAgentRoleID: "role-123"}
 	if err := store.Update(newSettings); err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
@@ -80,12 +80,12 @@ func TestStore_Update_PersistsToDisk(t *testing.T) {
 	dir := t.TempDir()
 
 	store1, _ := NewStore(dir)
-	store1.Update(Settings{})
+	store1.Update(Settings{DefaultAgentRoleID: "role-456"})
 
 	// Create new store from same directory
 	store2, _ := NewStore(dir)
 	got := store2.Get()
-	want := Settings{}
+	want := Settings{DefaultAgentRoleID: "role-456"}
 	if got != want {
 		t.Errorf("expected persisted settings %+v, got %+v", want, got)
 	}
