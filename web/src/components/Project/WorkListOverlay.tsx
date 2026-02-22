@@ -224,12 +224,6 @@ function StoryRow({
 				>
 					{story.title}
 				</button>
-				{story.status === "in_progress" && (
-					<output
-						className="h-3 w-3 shrink-0 rounded-full border-2 border-th-accent border-t-transparent animate-spin"
-						aria-label="AI responding"
-					/>
-				)}
 				{story.status === "needs_input" && (
 					<span
 						className="h-2 w-2 shrink-0 rounded-full bg-th-warning"
