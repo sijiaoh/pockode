@@ -138,7 +138,11 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 	//    This must happen before creating the session to prevent orphan
 	//    sessions when concurrent requests race on the same work item.
 	//    The Store's mutex ensures only one request wins the transition.
-	sessionID := uuid.Must(uuid.NewV7()).String()
+	//    Reuse existing sessionID on restart to preserve chat history.
+	sessionID := current.SessionID
+	if !restart || sessionID == "" {
+		sessionID = uuid.Must(uuid.NewV7()).String()
+	}
 	status := work.StatusInProgress
 	if err := h.workStore.Update(ctx, params.ID, work.UpdateFields{
 		SessionID: &sessionID,
@@ -158,12 +162,8 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 	}
 
 	// 2. Create session and send kickoff/restart message via WorkStarter.
-	if restart {
-		err = h.workStarter.HandleWorkRestart(ctx, w)
-	} else {
-		err = h.workStarter.HandleWorkStart(ctx, w)
-	}
-	if err != nil {
+	//    HandleWorkStart detects restart by checking if the session already exists.
+	if err := h.workStarter.HandleWorkStart(ctx, w); err != nil {
 		h.rollbackWorkStart(ctx, params.ID, restart)
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return

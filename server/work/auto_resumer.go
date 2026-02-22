@@ -16,6 +16,8 @@ type MessageSender interface {
 
 // WorkStartHandler handles the full lifecycle of starting a work session
 // (create session, set title, send kickoff message).
+// For restarts (reused sessionID), the implementation should detect the
+// existing session and send a restart message instead.
 // Satisfied by worktree integration code in the main server.
 type WorkStartHandler interface {
 	HandleWorkStart(ctx context.Context, w Work) error

@@ -412,10 +412,16 @@ func (s *Server) handleWorkStart(ctx context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("agent role %q not found", w.AgentRoleID)
 	}
 
-	// Claim: open → in_progress + attach sessionID.
+	// Reuse existing sessionID on restart (stopped/needs_input → in_progress)
+	// to preserve chat history. Only generate a new one for fresh starts.
+	sessionID := w.SessionID
+	if w.Status == work.StatusOpen || sessionID == "" {
+		sessionID = uuid.Must(uuid.NewV7()).String()
+	}
+
+	// Claim: open/stopped/needs_input → in_progress + attach sessionID.
 	// The main server detects this state change via fsnotify and handles
 	// session creation + kickoff message (AutoResumer Trigger C).
-	sessionID := uuid.Must(uuid.NewV7()).String()
 	status := work.StatusInProgress
 	if err := s.store.Update(ctx, params.ID, work.UpdateFields{
 		SessionID: &sessionID,
