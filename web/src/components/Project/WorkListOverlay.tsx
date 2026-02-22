@@ -5,7 +5,7 @@ import {
 	Loader2,
 	Play,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useWorkSubscription } from "../../hooks/useWorkSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
@@ -335,12 +335,14 @@ function StartButton({
 }) {
 	const startWork = useWSStore((s) => s.actions.startWork);
 	const [isStarting, setIsStarting] = useState(false);
+	const startingRef = useRef(false);
 	const [error, setError] = useState<string | null>(null);
 
 	const handleStart = useCallback(
 		async (e: React.MouseEvent) => {
 			e.stopPropagation();
-			if (isStarting) return;
+			if (startingRef.current) return;
+			startingRef.current = true;
 			setError(null);
 			setIsStarting(true);
 			try {
@@ -348,10 +350,11 @@ function StartButton({
 			} catch (err) {
 				setError(err instanceof Error ? err.message : "Failed to start");
 			} finally {
+				startingRef.current = false;
 				setIsStarting(false);
 			}
 		},
-		[startWork, workId, isStarting],
+		[startWork, workId],
 	);
 
 	if (iconOnly) {
