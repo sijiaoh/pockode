@@ -249,6 +249,18 @@ function StoryRow({
 						</span>
 					</>
 				)}
+				{story.session_id && (
+					<>
+						<span aria-hidden="true">&middot;</span>
+						<button
+							type="button"
+							onClick={() => onNavigateToSession(story.session_id ?? "")}
+							className="-my-2 py-2 text-th-accent"
+						>
+							Chat
+						</button>
+					</>
+				)}
 				{story.status === "open" && <StartButton workId={story.id} />}
 			</div>
 
