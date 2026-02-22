@@ -476,6 +476,30 @@ func TestAutoResumer_ProcessEndedStopsWork(t *testing.T) {
 	}
 }
 
+func TestAutoResumer_ProcessEndedStopsNeedsInputWork(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// Transition to needs_input (agent waiting for user)
+	niStatus := StatusNeedsInput
+	store.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+
+	resumer.HandleProcessStateChange(sid, "ended", false, false)
+
+	waitFor(t, func() bool {
+		w := getWork(t, store, story.ID)
+		return w.Status == StatusStopped
+	})
+
+	w := getWork(t, store, story.ID)
+	if w.Status != StatusStopped {
+		t.Errorf("status = %q, want %q after process ended while needs_input", w.Status, StatusStopped)
+	}
+}
+
 func TestAutoResumer_ProcessEndedSkippedWhenContinuationPending(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 

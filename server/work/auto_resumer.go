@@ -162,7 +162,7 @@ func (r *AutoResumer) handleProcessEnded(sessionID string) {
 		return
 	}
 
-	w := r.findInProgressWorkBySessionID(sessionID)
+	w := r.findWorkBySessionID(sessionID, StatusInProgress, StatusNeedsInput)
 	if w == nil {
 		return
 	}
@@ -197,7 +197,7 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSen
 		return
 	}
 
-	w := r.findInProgressWorkBySessionID(sessionID)
+	w := r.findWorkBySessionID(sessionID, StatusInProgress)
 	if w == nil {
 		return
 	}
@@ -337,15 +337,21 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 	}
 }
 
-func (r *AutoResumer) findInProgressWorkBySessionID(sessionID string) *Work {
+func (r *AutoResumer) findWorkBySessionID(sessionID string, statuses ...WorkStatus) *Work {
 	works, err := r.workStore.List()
 	if err != nil {
 		slog.Warn("failed to list works for auto-resume check", "sessionId", sessionID, "error", err)
 		return nil
 	}
 	for i := range works {
-		if works[i].SessionID == sessionID && works[i].Status == StatusInProgress {
-			return &works[i]
+		w := &works[i]
+		if w.SessionID != sessionID {
+			continue
+		}
+		for _, s := range statuses {
+			if w.Status == s {
+				return w
+			}
 		}
 	}
 	return nil

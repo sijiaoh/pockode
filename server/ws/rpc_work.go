@@ -132,7 +132,7 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "work not found")
 		return
 	}
-	restart := current.Status == work.StatusStopped
+	restart := current.Status == work.StatusStopped || current.Status == work.StatusNeedsInput
 
 	// 1. Claim the work atomically: open/stopped → in_progress + link session.
 	//    This must happen before creating the session to prevent orphan

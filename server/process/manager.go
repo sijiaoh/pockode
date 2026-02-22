@@ -281,6 +281,7 @@ func (m *Manager) reapIdle() {
 	})
 	for _, proc := range procs {
 		proc.agentSession.Close()
+		m.emitStateChange(proc.sessionID, ProcessStateEnded, false)
 		slog.Info("idle process reaped", "sessionId", proc.sessionID)
 	}
 }

@@ -134,6 +134,40 @@ func TestManager_IdleReaper(t *testing.T) {
 	}
 }
 
+func TestManager_IdleReaper_EmitsProcessStateEnded(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	idleTimeout := 50 * time.Millisecond
+	m := NewManager(mock, "/tmp", "", store, idleTimeout)
+	defer m.Shutdown()
+
+	var mu sync.Mutex
+	var events []StateChangeEvent
+	m.SetOnStateChange(func(e StateChangeEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	})
+
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+
+	time.Sleep(idleTimeout * 2)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var found bool
+	for _, e := range events {
+		if e.SessionID == "sess-1" && e.State == ProcessStateEnded {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected ProcessStateEnded event for sess-1, got events: %v", events)
+	}
+}
+
 func TestManager_Touch_PreventsReaping(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
