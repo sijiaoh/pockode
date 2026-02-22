@@ -205,6 +205,7 @@ function ChatPanel({
 					<WorkListOverlay
 						onBack={onCloseOverlay ?? noop}
 						onOpenWorkDetail={onOpenWorkDetail ?? noop}
+						onNavigateToSession={onNavigateToSession ?? noop}
 					/>
 				);
 			case "work-detail":

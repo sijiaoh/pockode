@@ -5,7 +5,6 @@ import {
 	MessageSquare,
 	Pencil,
 	Play,
-	Plus,
 	Trash2,
 	X,
 } from "lucide-react";
@@ -23,6 +22,7 @@ import BackButton from "../ui/BackButton";
 import BottomActionBar from "../ui/BottomActionBar";
 import StatusBadge from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
+import CreateWorkForm from "./CreateWorkForm";
 
 interface Props {
 	workId: string;
@@ -556,7 +556,7 @@ function ChildrenSection({
 				</div>
 			)}
 			<div className="mt-1">
-				<CreateTaskInline parentId={storyId} />
+				<CreateWorkForm type="task" parentId={storyId} />
 			</div>
 		</div>
 	);
@@ -589,139 +589,6 @@ function ChildRow({
 				>
 					Chat
 				</button>
-			)}
-		</div>
-	);
-}
-
-function CreateTaskInline({ parentId }: { parentId: string }) {
-	const [isCreating, setIsCreating] = useState(false);
-	const [title, setTitle] = useState("");
-	const [agentRoleId, setAgentRoleId] = useState("");
-	const [error, setError] = useState<string | null>(null);
-	const [isSubmitting, setIsSubmitting] = useState(false);
-	const createWork = useWSStore((s) => s.actions.createWork);
-	const roles = useAgentRoleStore((s) => s.roles);
-
-	useEffect(() => {
-		if (roles.length === 1 && !agentRoleId) {
-			setAgentRoleId(roles[0].id);
-		}
-	}, [roles, agentRoleId]);
-
-	const handleSubmit = useCallback(
-		async (e: React.FormEvent) => {
-			e.preventDefault();
-			const trimmed = title.trim();
-			if (!trimmed || !agentRoleId || isSubmitting) return;
-
-			setError(null);
-			setIsSubmitting(true);
-			try {
-				await createWork({
-					type: "task",
-					parent_id: parentId,
-					agent_role_id: agentRoleId,
-					title: trimmed,
-				});
-				setTitle("");
-				setAgentRoleId(roles.length === 1 ? roles[0].id : "");
-				setIsCreating(false);
-			} catch (err) {
-				setError(err instanceof Error ? err.message : "Failed to create task");
-			} finally {
-				setIsSubmitting(false);
-			}
-		},
-		[title, parentId, agentRoleId, createWork, isSubmitting, roles],
-	);
-
-	if (!isCreating) {
-		return (
-			<button
-				type="button"
-				onClick={() => setIsCreating(true)}
-				className="flex min-h-[44px] items-center gap-2 rounded-lg px-2 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
-			>
-				<Plus className="size-4" />
-				Add Task
-			</button>
-		);
-	}
-
-	if (roles.length === 0) {
-		return (
-			<div className="rounded-lg bg-th-bg-secondary p-3 text-xs text-th-text-muted">
-				<p>No agent roles registered.</p>
-				<button
-					type="button"
-					onClick={() => setIsCreating(false)}
-					className="mt-2 min-h-[44px] text-sm text-th-text-muted hover:text-th-text-primary"
-				>
-					Cancel
-				</button>
-			</div>
-		);
-	}
-
-	return (
-		<div className="rounded-lg bg-th-bg-secondary p-3">
-			<form onSubmit={handleSubmit} className="space-y-2">
-				<input
-					type="text"
-					value={title}
-					onChange={(e) => setTitle(e.target.value)}
-					placeholder="Task title"
-					className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
-					// biome-ignore lint/a11y/noAutofocus: inline creation form
-					autoFocus
-					onKeyDown={(e) => {
-						if (e.key === "Escape") {
-							setIsCreating(false);
-							setTitle("");
-							setAgentRoleId(roles.length === 1 ? roles[0].id : "");
-							setError(null);
-						}
-					}}
-				/>
-				<select
-					value={agentRoleId}
-					onChange={(e) => setAgentRoleId(e.target.value)}
-					className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
-				>
-					<option value="">Select role...</option>
-					{roles.map((role) => (
-						<option key={role.id} value={role.id}>
-							{role.name}
-						</option>
-					))}
-				</select>
-				<div className="flex gap-2">
-					<button
-						type="submit"
-						disabled={!title.trim() || !agentRoleId || isSubmitting}
-						className="min-h-[44px] flex-1 rounded-lg bg-th-accent px-3 text-sm font-medium text-th-accent-text disabled:opacity-50"
-					>
-						{isSubmitting ? "Adding..." : "Add"}
-					</button>
-					<button
-						type="button"
-						onClick={() => {
-							setIsCreating(false);
-							setTitle("");
-							setAgentRoleId(roles.length === 1 ? roles[0].id : "");
-							setError(null);
-						}}
-						className="min-h-[44px] rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary"
-					>
-						Cancel
-					</button>
-				</div>
-			</form>
-			{error && (
-				<p className="mt-2 text-xs text-th-error" role="alert">
-					{error}
-				</p>
 			)}
 		</div>
 	);

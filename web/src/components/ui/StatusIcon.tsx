@@ -3,16 +3,14 @@ import type { WorkStatus } from "../../types/work";
 
 interface StatusIconProps {
 	status: WorkStatus;
-	className?: string;
+	size?: "sm" | "default";
 }
 
 export default function StatusIcon({
 	status,
-	className = "",
+	size = "default",
 }: StatusIconProps) {
-	const base = className
-		? `size-3.5 shrink-0 ${className}`
-		: "size-3.5 shrink-0";
+	const base = size === "sm" ? "size-3 shrink-0" : "size-3.5 shrink-0";
 	switch (status) {
 		case "open":
 			return <Circle className={`${base} text-th-text-muted`} />;

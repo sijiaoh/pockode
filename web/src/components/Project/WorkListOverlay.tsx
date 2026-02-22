@@ -3,32 +3,46 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Loader2,
-	Plus,
+	Play,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useWorkSubscription } from "../../hooks/useWorkSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
-import type { Work, WorkStatus, WorkType } from "../../types/work";
-import SidebarListItem from "../common/SidebarListItem";
+import type { Work, WorkStatus } from "../../types/work";
 import BackToChatButton from "../ui/BackToChatButton";
 import { statusLabels } from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
+import CreateWorkForm from "./CreateWorkForm";
 
 interface Props {
 	onBack: () => void;
 	onOpenWorkDetail: (workId: string) => void;
+	onNavigateToSession: (sessionId: string) => void;
 }
 
-export default function WorkListOverlay({ onBack, onOpenWorkDetail }: Props) {
+export default function WorkListOverlay({
+	onBack,
+	onOpenWorkDetail,
+	onNavigateToSession,
+}: Props) {
 	useWorkSubscription(true);
 	useAgentRoleSubscription(true);
 
 	const works = useWorkStore((s) => s.works);
 	const isLoading = useWorkStore((s) => s.isLoading);
 	const error = useWorkStore((s) => s.error);
+	const roles = useAgentRoleStore((s) => s.roles);
+
+	const roleNameMap = useMemo(() => {
+		const map = new Map<string, string>();
+		for (const r of roles) {
+			map.set(r.id, r.name);
+		}
+		return map;
+	}, [roles]);
 
 	const tasksByParentId = useMemo(() => {
 		const map = new Map<string, Work[]>();
@@ -77,7 +91,7 @@ export default function WorkListOverlay({ onBack, onOpenWorkDetail }: Props) {
 
 			<div className="min-h-0 flex-1 overflow-auto p-2">
 				<div className="mb-2">
-					<CreateWorkButton type="story" />
+					<CreateWorkForm type="story" />
 				</div>
 
 				{isLoading ? (
@@ -101,7 +115,9 @@ export default function WorkListOverlay({ onBack, onOpenWorkDetail }: Props) {
 								status={status}
 								stories={stories}
 								tasksByParentId={tasksByParentId}
+								roleNameMap={roleNameMap}
 								onOpenWorkDetail={onOpenWorkDetail}
+								onNavigateToSession={onNavigateToSession}
 							/>
 						))}
 					</div>
@@ -123,14 +139,18 @@ interface StatusGroupProps {
 	status: WorkStatus;
 	stories: Work[];
 	tasksByParentId: Map<string, Work[]>;
+	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
+	onNavigateToSession: (sessionId: string) => void;
 }
 
 function StatusGroup({
 	status,
 	stories,
 	tasksByParentId,
+	roleNameMap,
 	onOpenWorkDetail,
+	onNavigateToSession,
 }: StatusGroupProps) {
 	const [collapsed, setCollapsed] = useState(status === "closed");
 
@@ -154,174 +174,206 @@ function StatusGroup({
 			</button>
 			{!collapsed && (
 				<div className="space-y-0.5">
-					{stories.map((story) => {
-						const tasks = tasksByParentId.get(story.id);
-						const totalTasks = tasks?.length ?? 0;
-						const doneTasks =
-							tasks?.filter((t) => t.status === "done" || t.status === "closed")
-								.length ?? 0;
-
-						const subtitle =
-							totalTasks > 0
-								? `${doneTasks}/${totalTasks} tasks done`
-								: undefined;
-
-						return (
-							<SidebarListItem
-								key={story.id}
-								title={story.title}
-								subtitle={subtitle}
-								isActive={false}
-								isRunning={story.status === "in_progress"}
-								needsInput={story.status === "needs_input"}
-								leftSlot={<StatusIcon status={story.status} />}
-								onSelect={() => onOpenWorkDetail(story.id)}
-								ariaLabel={`${story.title} — ${statusLabels[story.status]}`}
-							/>
-						);
-					})}
+					{stories.map((story) => (
+						<StoryRow
+							key={story.id}
+							story={story}
+							tasks={tasksByParentId.get(story.id)}
+							roleNameMap={roleNameMap}
+							onOpenWorkDetail={onOpenWorkDetail}
+							onNavigateToSession={onNavigateToSession}
+						/>
+					))}
 				</div>
 			)}
 		</div>
 	);
 }
 
-function CreateWorkButton({ type }: { type: WorkType }) {
-	const [isCreating, setIsCreating] = useState(false);
-	const [title, setTitle] = useState("");
-	const [agentRoleId, setAgentRoleId] = useState("");
+function StoryRow({
+	story,
+	tasks,
+	roleNameMap,
+	onOpenWorkDetail,
+	onNavigateToSession,
+}: {
+	story: Work;
+	tasks: Work[] | undefined;
+	roleNameMap: Map<string, string>;
+	onOpenWorkDetail: (workId: string) => void;
+	onNavigateToSession: (sessionId: string) => void;
+}) {
+	const totalTasks = tasks?.length ?? 0;
+	const doneTasks =
+		tasks?.filter((t) => t.status === "done" || t.status === "closed").length ??
+		0;
+	const roleName = story.agent_role_id
+		? (roleNameMap.get(story.agent_role_id) ?? null)
+		: null;
+
+	return (
+		<div className="rounded-lg">
+			{/* Title row */}
+			<div className="flex min-h-[44px] items-center gap-2 px-3">
+				<StatusIcon status={story.status} />
+				<button
+					type="button"
+					onClick={() => onOpenWorkDetail(story.id)}
+					className="min-w-0 flex-1 truncate text-left text-sm text-th-text-primary hover:text-th-accent"
+					aria-label={`${story.title} — ${statusLabels[story.status]}`}
+				>
+					{story.title}
+				</button>
+				{story.status === "in_progress" && (
+					<output
+						className="h-3 w-3 shrink-0 rounded-full border-2 border-th-accent border-t-transparent animate-spin"
+						aria-label="AI responding"
+					/>
+				)}
+				{story.status === "needs_input" && (
+					<span
+						className="h-2 w-2 shrink-0 rounded-full bg-th-warning"
+						aria-hidden="true"
+					/>
+				)}
+			</div>
+
+			{/* Meta info row */}
+			<div className="flex items-center gap-2 px-3 pb-1 pl-[2.125rem] text-xs text-th-text-muted">
+				<span>{roleName ?? "—"}</span>
+				{totalTasks > 0 && (
+					<>
+						<span aria-hidden="true">&middot;</span>
+						<span>
+							{doneTasks}/{totalTasks} tasks
+						</span>
+					</>
+				)}
+				{story.status === "open" && <StartButton workId={story.id} />}
+			</div>
+
+			{/* Task list */}
+			{tasks && tasks.length > 0 && (
+				<div className="pb-1 pl-6 pr-2">
+					{tasks.map((task) => (
+						<TaskRow
+							key={task.id}
+							task={task}
+							roleNameMap={roleNameMap}
+							onOpenWorkDetail={onOpenWorkDetail}
+							onNavigateToSession={onNavigateToSession}
+						/>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function TaskRow({
+	task,
+	roleNameMap,
+	onOpenWorkDetail,
+	onNavigateToSession,
+}: {
+	task: Work;
+	roleNameMap: Map<string, string>;
+	onOpenWorkDetail: (workId: string) => void;
+	onNavigateToSession: (sessionId: string) => void;
+}) {
+	const roleName = task.agent_role_id
+		? (roleNameMap.get(task.agent_role_id) ?? null)
+		: null;
+
+	return (
+		<div className="flex min-h-[36px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary">
+			<StatusIcon status={task.status} size="sm" />
+			<button
+				type="button"
+				onClick={() => onOpenWorkDetail(task.id)}
+				className="min-w-0 flex-1 truncate text-left text-xs text-th-text-primary hover:text-th-accent"
+			>
+				{task.title}
+			</button>
+			<span className="shrink-0 text-xs text-th-text-muted">
+				{roleName ?? "—"}
+			</span>
+			{task.session_id && (
+				<button
+					type="button"
+					onClick={() => onNavigateToSession(task.session_id ?? "")}
+					className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-xs text-th-accent"
+				>
+					Chat
+				</button>
+			)}
+			{task.status === "open" && !task.session_id && (
+				<StartButton workId={task.id} iconOnly />
+			)}
+		</div>
+	);
+}
+
+function StartButton({
+	workId,
+	iconOnly,
+}: {
+	workId: string;
+	iconOnly?: boolean;
+}) {
+	const startWork = useWSStore((s) => s.actions.startWork);
+	const [isStarting, setIsStarting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [isSubmitting, setIsSubmitting] = useState(false);
-	const createWork = useWSStore((s) => s.actions.createWork);
-	const roles = useAgentRoleStore((s) => s.roles);
 
-	// Auto-select when there's only one role
-	useEffect(() => {
-		if (roles.length === 1 && !agentRoleId) {
-			setAgentRoleId(roles[0].id);
-		}
-	}, [roles, agentRoleId]);
-
-	const handleSubmit = useCallback(
-		async (e: React.FormEvent) => {
-			e.preventDefault();
-			const trimmed = title.trim();
-			if (!trimmed || !agentRoleId || isSubmitting) return;
-
+	const handleStart = useCallback(
+		async (e: React.MouseEvent) => {
+			e.stopPropagation();
+			if (isStarting) return;
 			setError(null);
-			setIsSubmitting(true);
+			setIsStarting(true);
 			try {
-				await createWork({
-					type,
-					agent_role_id: agentRoleId,
-					title: trimmed,
-				});
-				setTitle("");
-				setAgentRoleId(roles.length === 1 ? roles[0].id : "");
-				setIsCreating(false);
+				await startWork(workId);
 			} catch (err) {
-				setError(err instanceof Error ? err.message : "Failed to create story");
+				setError(err instanceof Error ? err.message : "Failed to start");
 			} finally {
-				setIsSubmitting(false);
+				setIsStarting(false);
 			}
 		},
-		[title, type, agentRoleId, createWork, isSubmitting, roles],
+		[startWork, workId, isStarting],
 	);
 
-	if (!isCreating) {
+	if (iconOnly) {
 		return (
 			<button
 				type="button"
-				onClick={() => setIsCreating(true)}
-				className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
+				onClick={handleStart}
+				disabled={isStarting}
+				className={`flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center disabled:opacity-50 ${error ? "text-th-error" : "text-th-accent"}`}
+				aria-label={error ?? "Start"}
 			>
-				<Plus className="size-4" />
-				{type === "story" ? "New Story" : "Add Task"}
+				{isStarting ? (
+					<Loader2 className="size-3.5 animate-spin" />
+				) : (
+					<Play className="size-3.5" />
+				)}
 			</button>
 		);
 	}
 
-	if (roles.length === 0) {
-		return (
-			<div className="rounded-lg bg-th-bg-secondary p-3 text-xs text-th-text-muted">
-				<p>No agent roles registered.</p>
-				<p className="mt-1">
-					Create a role in{" "}
-					<span className="font-medium text-th-text-secondary">
-						Agent Roles
-					</span>{" "}
-					first.
-				</p>
-				<button
-					type="button"
-					onClick={() => setIsCreating(false)}
-					className="mt-2 min-h-[44px] text-sm text-th-text-muted hover:text-th-text-primary"
-				>
-					Cancel
-				</button>
-			</div>
-		);
-	}
-
 	return (
-		<div className="rounded-lg bg-th-bg-secondary p-3">
-			<form onSubmit={handleSubmit} className="space-y-2">
-				<input
-					type="text"
-					value={title}
-					onChange={(e) => setTitle(e.target.value)}
-					placeholder={type === "story" ? "Story title" : "Task title"}
-					className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
-					// biome-ignore lint/a11y/noAutofocus: inline creation form
-					autoFocus
-					onKeyDown={(e) => {
-						if (e.key === "Escape") {
-							setIsCreating(false);
-							setTitle("");
-							setAgentRoleId(roles.length === 1 ? roles[0].id : "");
-							setError(null);
-						}
-					}}
-				/>
-				<select
-					value={agentRoleId}
-					onChange={(e) => setAgentRoleId(e.target.value)}
-					className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
-				>
-					<option value="">Select role...</option>
-					{roles.map((role) => (
-						<option key={role.id} value={role.id}>
-							{role.name}
-						</option>
-					))}
-				</select>
-				<div className="flex gap-2">
-					<button
-						type="submit"
-						disabled={!title.trim() || !agentRoleId || isSubmitting}
-						className="min-h-[44px] flex-1 rounded-lg bg-th-accent px-3 text-sm font-medium text-th-accent-text disabled:opacity-50"
-					>
-						{isSubmitting ? "Adding..." : "Add"}
-					</button>
-					<button
-						type="button"
-						onClick={() => {
-							setIsCreating(false);
-							setTitle("");
-							setAgentRoleId(roles.length === 1 ? roles[0].id : "");
-							setError(null);
-						}}
-						className="min-h-[44px] rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary"
-					>
-						Cancel
-					</button>
-				</div>
-			</form>
-			{error && (
-				<p className="mt-2 text-xs text-th-error" role="alert">
-					{error}
-				</p>
+		<button
+			type="button"
+			onClick={handleStart}
+			disabled={isStarting}
+			className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs disabled:opacity-50 ${error ? "bg-th-error/10 text-th-error" : "bg-th-accent/10 text-th-accent"}`}
+			aria-label={error ?? undefined}
+		>
+			{isStarting ? (
+				<Loader2 className="size-3 animate-spin" />
+			) : (
+				<Play className="size-3" />
 			)}
-		</div>
+			{error ? "Error" : "Start"}
+		</button>
 	);
 }
