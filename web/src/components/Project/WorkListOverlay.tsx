@@ -71,7 +71,7 @@ export default function WorkListOverlay({ onBack, onOpenWorkDetail }: Props) {
 			<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
 				<BackToChatButton onClick={onBack} />
 				<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
-					Work
+					Stories
 				</h1>
 			</header>
 
@@ -91,7 +91,7 @@ export default function WorkListOverlay({ onBack, onOpenWorkDetail }: Props) {
 					</div>
 				) : !hasStories ? (
 					<div className="py-8 text-center text-sm text-th-text-muted">
-						No work items yet
+						No stories yet
 					</div>
 				) : (
 					<div className="space-y-2">
@@ -220,7 +220,7 @@ function CreateWorkButton({ type }: { type: WorkType }) {
 				setAgentRoleId(roles.length === 1 ? roles[0].id : "");
 				setIsCreating(false);
 			} catch (err) {
-				setError(err instanceof Error ? err.message : "Failed to create work");
+				setError(err instanceof Error ? err.message : "Failed to create story");
 			} finally {
 				setIsSubmitting(false);
 			}

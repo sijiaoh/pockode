@@ -80,16 +80,17 @@ func TestList(t *testing.T) {
 	s := newTestStore(t)
 
 	roles, _ := s.List()
-	if len(roles) != 0 {
-		t.Fatalf("expected empty list, got %d", len(roles))
+	baseline := len(roles)
+	if baseline != len(defaultRoles) {
+		t.Fatalf("expected %d default roles, got %d", len(defaultRoles), baseline)
 	}
 
 	createRole(t, s, "A", "prompt A")
 	createRole(t, s, "B", "prompt B")
 
 	roles, _ = s.List()
-	if len(roles) != 2 {
-		t.Fatalf("expected 2, got %d", len(roles))
+	if len(roles) != baseline+2 {
+		t.Fatalf("expected %d, got %d", baseline+2, len(roles))
 	}
 }
 
@@ -267,8 +268,9 @@ func TestConcurrent_Creates(t *testing.T) {
 	}
 
 	roles, _ := s.List()
-	if len(roles) != n {
-		t.Errorf("expected %d roles, got %d", n, len(roles))
+	want := n + len(defaultRoles)
+	if len(roles) != want {
+		t.Errorf("expected %d roles, got %d", want, len(roles))
 	}
 
 	ids := make(map[string]bool)
@@ -347,6 +349,82 @@ func TestConcurrent_MixedOperations(t *testing.T) {
 	}
 	if len(roles) < 1 {
 		t.Error("expected at least 1 role")
+	}
+}
+
+// --- Default seeding ---
+
+func TestSeed_NewStoreHasDefaults(t *testing.T) {
+	s := newTestStore(t)
+
+	roles, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roles) != len(defaultRoles) {
+		t.Fatalf("expected %d default roles, got %d", len(defaultRoles), len(roles))
+	}
+
+	names := make(map[string]bool)
+	for _, r := range roles {
+		names[r.Name] = true
+		if r.ID == "" {
+			t.Error("seeded role has empty ID")
+		}
+		if r.RolePrompt == "" {
+			t.Errorf("seeded role %q has empty prompt", r.Name)
+		}
+	}
+	for _, d := range defaultRoles {
+		if !names[d.Name] {
+			t.Errorf("expected default role %q not found", d.Name)
+		}
+	}
+}
+
+func TestSeed_Persisted(t *testing.T) {
+	dir := t.TempDir()
+
+	s1, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles1, _ := s1.List()
+
+	s2, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles2, _ := s2.List()
+
+	if len(roles2) != len(roles1) {
+		t.Fatalf("expected %d roles after reopen, got %d", len(roles1), len(roles2))
+	}
+	for i, r := range roles2 {
+		if r.ID != roles1[i].ID {
+			t.Errorf("role %d: ID mismatch: %s vs %s", i, r.ID, roles1[i].ID)
+		}
+	}
+}
+
+func TestSeed_SkippedWhenRolesExist(t *testing.T) {
+	dir := t.TempDir()
+
+	s1, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRole(t, s1, "Custom", "custom prompt")
+
+	s2, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles, _ := s2.List()
+
+	// Should have defaults + 1 custom, not defaults*2 + 1
+	if len(roles) != len(defaultRoles)+1 {
+		t.Fatalf("expected %d roles, got %d (seeding may have re-run)", len(defaultRoles)+1, len(roles))
 	}
 }
 

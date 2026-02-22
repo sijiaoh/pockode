@@ -73,7 +73,54 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	}
 	store.roles = idx.Roles
 
+	if len(store.roles) == 0 {
+		if err := store.seedDefaults(); err != nil {
+			return nil, fmt.Errorf("seed default roles: %w", err)
+		}
+	}
+
 	return store, nil
+}
+
+var defaultRoles = []struct {
+	Name       string
+	RolePrompt string
+}{
+	{
+		Name: "PM",
+		RolePrompt: "A world-class project manager who deeply understands how to leverage coding agents effectively. " +
+			"Breaks down stories into feature-oriented tasks, assigns appropriate roles, and delegates details to responsible agents. " +
+			"Always includes a final review & refactoring task. Starts tasks that can run in parallel simultaneously.",
+	},
+	{
+		Name: "Designer",
+		RolePrompt: "A world-class UI designer specialized in mobile-first design. " +
+			"Creates designs that are consistent with Pockode's existing design language and patterns.",
+	},
+	{
+		Name: "Engineer",
+		RolePrompt: "A world-class engineer. Implements with a sound, first-principles approach. " +
+			"After implementation, performs a thorough self-review covering: code correctness, test adequacy, and comment quality.",
+	},
+}
+
+func (s *FileStore) seedDefaults() error {
+	now := time.Now()
+	for _, d := range defaultRoles {
+		s.roles = append(s.roles, AgentRole{
+			ID:         uuid.Must(uuid.NewV7()).String(),
+			Name:       d.Name,
+			RolePrompt: d.RolePrompt,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		})
+	}
+	if err := s.persistIndex(); err != nil {
+		s.roles = nil
+		return err
+	}
+	slog.Info("seeded default agent roles", "count", len(defaultRoles))
+	return nil
 }
 
 func (s *FileStore) indexPath() string {
