@@ -40,8 +40,7 @@ func createTask(t *testing.T, s *FileStore, parentID, title string) Work {
 
 func startWork(t *testing.T, s *FileStore, id string) {
 	t.Helper()
-	status := StatusInProgress
-	if err := s.Update(context.Background(), id, UpdateFields{Status: &status}); err != nil {
+	if _, err := s.Start(context.Background(), id, ""); err != nil {
 		t.Fatalf("Start work %s: %v", id, err)
 	}
 }
@@ -50,19 +49,14 @@ func startWork(t *testing.T, s *FileStore, id string) {
 // matching the real handleWorkStart pattern.
 func startWorkWithSession(t *testing.T, s *FileStore, id, sessionID string) {
 	t.Helper()
-	status := StatusInProgress
-	if err := s.Update(context.Background(), id, UpdateFields{
-		Status:    &status,
-		SessionID: &sessionID,
-	}); err != nil {
+	if _, err := s.Start(context.Background(), id, sessionID); err != nil {
 		t.Fatalf("Start work %s with session %s: %v", id, sessionID, err)
 	}
 }
 
 func doneWork(t *testing.T, s *FileStore, id string) {
 	t.Helper()
-	status := StatusDone
-	if err := s.Update(context.Background(), id, UpdateFields{Status: &status}); err != nil {
+	if err := s.MarkDone(context.Background(), id); err != nil {
 		t.Fatalf("Done work %s: %v", id, err)
 	}
 }
@@ -221,57 +215,57 @@ func TestUpdate_Title(t *testing.T) {
 	}
 }
 
-func TestUpdate_SessionID_RequiresStatusTransition(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	startWork(t, s, story.ID)
-
-	// Setting SessionID without status change should fail
-	sid := "session-1"
-	err := s.Update(context.Background(), story.ID, UpdateFields{SessionID: &sid})
-	if err == nil {
-		t.Fatal("expected error when setting session_id without status transition")
-	}
-}
-
-func TestUpdate_SessionID_SetOnStart(t *testing.T) {
+func TestStart_SetsSessionID(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 
-	// Setting SessionID with open → in_progress should succeed
-	sid := "session-1"
-	status := StatusInProgress
-	err := s.Update(context.Background(), story.ID, UpdateFields{
-		SessionID: &sid,
-		Status:    &status,
-	})
+	w, err := s.Start(context.Background(), story.ID, "session-1")
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
-	got := getWork(t, s, story.ID)
-	if got.SessionID != sid {
-		t.Errorf("session_id = %q, want %q", got.SessionID, sid)
+	if w.SessionID != "session-1" {
+		t.Errorf("session_id = %q, want %q", w.SessionID, "session-1")
+	}
+	if w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q", w.Status, StatusInProgress)
 	}
 }
 
-func TestUpdate_SessionID_ClearOnRollback(t *testing.T) {
+func TestRollbackStart_ClearsSessionID(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWorkWithSession(t, s, story.ID, "session-1")
 
-	// Clearing SessionID with in_progress → open should succeed
-	empty := ""
-	status := StatusOpen
-	err := s.Update(context.Background(), story.ID, UpdateFields{
-		SessionID: &empty,
-		Status:    &status,
-	})
+	// Fresh start rollback: in_progress → open, clear sessionID
+	err := s.RollbackStart(context.Background(), story.ID, false)
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
 	got := getWork(t, s, story.ID)
 	if got.SessionID != "" {
 		t.Errorf("session_id = %q, want empty", got.SessionID)
+	}
+	if got.Status != StatusOpen {
+		t.Errorf("status = %q, want %q", got.Status, StatusOpen)
+	}
+}
+
+func TestRollbackStart_RestartPreservesSessionID(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWorkWithSession(t, s, story.ID, "session-1")
+
+	// Restart rollback: in_progress → stopped, preserve sessionID
+	err := s.RollbackStart(context.Background(), story.ID, true)
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	got := getWork(t, s, story.ID)
+	if got.SessionID != "session-1" {
+		t.Errorf("session_id = %q, want %q", got.SessionID, "session-1")
+	}
+	if got.Status != StatusStopped {
+		t.Errorf("status = %q, want %q", got.Status, StatusStopped)
 	}
 }
 
@@ -339,24 +333,60 @@ func TestTransition_InProgressToDone(t *testing.T) {
 	}
 }
 
-func TestTransition_Invalid_OpenToDone(t *testing.T) {
+func TestStart_FromStopped(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
+	startWorkWithSession(t, s, story.ID, "old-session")
+	s.Stop(context.Background(), story.ID)
 
-	status := StatusDone
-	err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status})
-	if err == nil {
-		t.Fatal("expected error for open → done")
+	w, err := s.Start(context.Background(), story.ID, "new-session")
+	if err != nil {
+		t.Fatalf("Start from stopped: %v", err)
+	}
+	if w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q", w.Status, StatusInProgress)
+	}
+	if w.SessionID != "new-session" {
+		t.Errorf("session_id = %q, want %q", w.SessionID, "new-session")
 	}
 }
 
-func TestTransition_InProgressToOpen(t *testing.T) {
+func TestStart_FromNeedsInput(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWorkWithSession(t, s, story.ID, "session-1")
+	s.MarkNeedsInput(context.Background(), story.ID)
+
+	w, err := s.Start(context.Background(), story.ID, "session-1")
+	if err != nil {
+		t.Fatalf("Start from needs_input: %v", err)
+	}
+	if w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q", w.Status, StatusInProgress)
+	}
+	if w.SessionID != "session-1" {
+		t.Errorf("session_id = %q, want %q", w.SessionID, "session-1")
+	}
+}
+
+func TestStart_InvalidFromInProgress(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	status := StatusOpen
-	err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status})
+	// Start from in_progress should fail
+	_, err := s.Start(context.Background(), story.ID, "new-session")
+	if err == nil {
+		t.Fatal("expected error for Start from in_progress")
+	}
+}
+
+func TestRollbackStart_FreshStartRollsBackToOpen(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	err := s.RollbackStart(context.Background(), story.ID, false)
 	if err != nil {
 		t.Fatalf("in_progress → open should be valid (rollback): %v", err)
 	}
@@ -367,19 +397,7 @@ func TestTransition_InProgressToOpen(t *testing.T) {
 	}
 }
 
-func TestTransition_Invalid_SetClosedDirectly(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	startWork(t, s, story.ID)
-
-	status := StatusClosed
-	err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status})
-	if err == nil {
-		t.Fatal("expected error for setting closed directly")
-	}
-}
-
-func TestTransition_DoneToInProgress(t *testing.T) {
+func TestReactivate_DoneToInProgress(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -395,8 +413,7 @@ func TestTransition_DoneToInProgress(t *testing.T) {
 	}
 
 	// Re-activate parent (done → in_progress)
-	status := StatusInProgress
-	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status}); err != nil {
+	if err := s.Reactivate(context.Background(), story.ID); err != nil {
 		t.Fatalf("done → in_progress: %v", err)
 	}
 	got = getWork(t, s, story.ID)
@@ -413,14 +430,12 @@ func TestTransition_StoppedToInProgress(t *testing.T) {
 	startWork(t, s, story.ID)
 
 	// in_progress → stopped
-	status := StatusStopped
-	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status}); err != nil {
+	if err := s.Stop(context.Background(), story.ID); err != nil {
 		t.Fatalf("in_progress → stopped: %v", err)
 	}
 
-	// stopped → in_progress (restart)
-	status = StatusInProgress
-	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status}); err != nil {
+	// stopped → in_progress (restart via Reactivate)
+	if err := s.Reactivate(context.Background(), story.ID); err != nil {
 		t.Fatalf("stopped → in_progress: %v", err)
 	}
 	got := getWork(t, s, story.ID)
@@ -440,9 +455,8 @@ func TestTransition_ClosedToInProgress(t *testing.T) {
 		t.Fatalf("precondition: story should be closed, got %q", got.Status)
 	}
 
-	// closed → in_progress (parent reactivation)
-	status := StatusInProgress
-	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status}); err != nil {
+	// closed → in_progress (parent reactivation via Reactivate)
+	if err := s.Reactivate(context.Background(), story.ID); err != nil {
 		t.Fatalf("closed → in_progress: %v", err)
 	}
 	got = getWork(t, s, story.ID)
@@ -457,8 +471,7 @@ func TestMarkDone_FromStopped(t *testing.T) {
 	startWork(t, s, story.ID)
 
 	// in_progress → stopped
-	status := StatusStopped
-	s.Update(context.Background(), story.ID, UpdateFields{Status: &status})
+	s.Stop(context.Background(), story.ID)
 
 	// MarkDone from stopped should fail (stopped → done is not valid)
 	if err := s.MarkDone(context.Background(), story.ID); err == nil {
@@ -473,8 +486,7 @@ func TestTransition_InProgressToNeedsInput(t *testing.T) {
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	status := StatusNeedsInput
-	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status}); err != nil {
+	if err := s.MarkNeedsInput(context.Background(), story.ID); err != nil {
 		t.Fatalf("in_progress → needs_input: %v", err)
 	}
 	got := getWork(t, s, story.ID)
@@ -488,11 +500,9 @@ func TestTransition_NeedsInputToInProgress(t *testing.T) {
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	niStatus := StatusNeedsInput
-	s.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+	s.MarkNeedsInput(context.Background(), story.ID)
 
-	ipStatus := StatusInProgress
-	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &ipStatus}); err != nil {
+	if err := s.Resume(context.Background(), story.ID); err != nil {
 		t.Fatalf("needs_input → in_progress: %v", err)
 	}
 	got := getWork(t, s, story.ID)
@@ -506,11 +516,9 @@ func TestTransition_NeedsInputToStopped(t *testing.T) {
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	niStatus := StatusNeedsInput
-	s.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+	s.MarkNeedsInput(context.Background(), story.ID)
 
-	stoppedStatus := StatusStopped
-	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &stoppedStatus}); err != nil {
+	if err := s.Stop(context.Background(), story.ID); err != nil {
 		t.Fatalf("needs_input → stopped: %v", err)
 	}
 	got := getWork(t, s, story.ID)
@@ -524,11 +532,10 @@ func TestTransition_Invalid_NeedsInputToDone(t *testing.T) {
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	niStatus := StatusNeedsInput
-	s.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+	s.MarkNeedsInput(context.Background(), story.ID)
 
-	doneStatus := StatusDone
-	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &doneStatus}); err == nil {
+	// MarkDone from needs_input should fail
+	if err := s.MarkDone(context.Background(), story.ID); err == nil {
 		t.Fatal("expected error for needs_input → done")
 	}
 }
@@ -537,8 +544,7 @@ func TestTransition_Invalid_OpenToNeedsInput(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 
-	status := StatusNeedsInput
-	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &status}); err == nil {
+	if err := s.MarkNeedsInput(context.Background(), story.ID); err == nil {
 		t.Fatal("expected error for open → needs_input")
 	}
 }
@@ -551,8 +557,7 @@ func TestAutoClose_BlockedByNeedsInputChild(t *testing.T) {
 	startWork(t, s, task.ID)
 
 	// Put task in needs_input
-	niStatus := StatusNeedsInput
-	s.Update(context.Background(), task.ID, UpdateFields{Status: &niStatus})
+	s.MarkNeedsInput(context.Background(), task.ID)
 
 	// Parent done — but task is needs_input, so parent stays done (not closed)
 	doneWork(t, s, story.ID)
@@ -570,8 +575,7 @@ func TestAutoClose_BlockedByStoppedChild(t *testing.T) {
 	startWork(t, s, task.ID)
 
 	// Stop the task (simulates agent crash or retry limit)
-	stoppedStatus := StatusStopped
-	s.Update(context.Background(), task.ID, UpdateFields{Status: &stoppedStatus})
+	s.Stop(context.Background(), task.ID)
 
 	// Parent done — but task is stopped, so parent stays done (not closed)
 	doneWork(t, s, story.ID)
@@ -994,12 +998,9 @@ func TestConcurrent_StartSameWork(t *testing.T) {
 	results := make(chan error, n)
 	for i := 0; i < n; i++ {
 		go func(i int) {
-			status := StatusInProgress
 			sid := fmt.Sprintf("session-%d", i)
-			results <- s.Update(context.Background(), story.ID, UpdateFields{
-				Status:    &status,
-				SessionID: &sid,
-			})
+			_, err := s.Start(context.Background(), story.ID, sid)
+			results <- err
 		}(i)
 	}
 

@@ -82,7 +82,6 @@ func (h *rpcMethodHandler) handleWorkUpdate(ctx context.Context, conn *jsonrpc2.
 		Title:       params.Title,
 		Body:        params.Body,
 		AgentRoleID: params.AgentRoleID,
-		Status:      params.Status,
 	}
 	if err := h.workStore.Update(ctx, params.ID, fields); err != nil {
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to update work")
@@ -134,7 +133,7 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 	}
 	restart := current.Status == work.StatusStopped || current.Status == work.StatusNeedsInput
 
-	// 1. Claim the work atomically: open/stopped → in_progress + link session.
+	// 1. Claim the work atomically: transition to in_progress + link session.
 	//    This must happen before creating the session to prevent orphan
 	//    sessions when concurrent requests race on the same work item.
 	//    The Store's mutex ensures only one request wins the transition.
@@ -143,21 +142,9 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 	if !restart || sessionID == "" {
 		sessionID = uuid.Must(uuid.NewV7()).String()
 	}
-	status := work.StatusInProgress
-	if err := h.workStore.Update(ctx, params.ID, work.UpdateFields{
-		SessionID: &sessionID,
-		Status:    &status,
-	}); err != nil {
+	w, err := h.workStore.Start(ctx, params.ID, sessionID)
+	if err != nil {
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to start work")
-		return
-	}
-
-	// Re-read to get the full work (including title for session/kickoff)
-	w, found, err := h.workStore.Get(params.ID)
-	if err != nil || !found {
-		h.log.Error("failed to read work after claim", "error", err, "found", found)
-		h.rollbackWorkStart(ctx, params.ID, restart)
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "work claimed but failed to read back")
 		return
 	}
 
@@ -179,24 +166,10 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 // rollbackWorkStart reverts a claimed work item to its previous status.
 // Fresh starts roll back to open (clearing sessionID); restarts roll back to stopped.
 func (h *rpcMethodHandler) rollbackWorkStart(ctx context.Context, workID string, restart bool) {
-	if restart {
-		stoppedStatus := work.StatusStopped
-		if err := h.workStore.Update(ctx, workID, work.UpdateFields{Status: &stoppedStatus}); err != nil {
-			h.log.Error("failed to rollback work restart", "workId", workID, "error", err)
-		} else {
-			h.log.Info("rolled back work restart", "workId", workID)
-		}
+	if err := h.workStore.RollbackStart(ctx, workID, restart); err != nil {
+		h.log.Error("failed to rollback work start", "workId", workID, "restart", restart, "error", err)
 	} else {
-		openStatus := work.StatusOpen
-		emptySession := ""
-		if err := h.workStore.Update(ctx, workID, work.UpdateFields{
-			Status:    &openStatus,
-			SessionID: &emptySession,
-		}); err != nil {
-			h.log.Error("failed to rollback work start", "workId", workID, "error", err)
-		} else {
-			h.log.Info("rolled back work start", "workId", workID)
-		}
+		h.log.Info("rolled back work start", "workId", workID, "restart", restart)
 	}
 }
 

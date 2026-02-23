@@ -27,24 +27,27 @@ func (s *NeedsInputSyncer) SyncNeedsInput(ctx context.Context, sessionID string,
 		return
 	}
 
-	var targetStatus WorkStatus
 	if needsInput {
 		if w.Status != StatusInProgress {
 			return
 		}
-		targetStatus = StatusNeedsInput
+		if err := s.store.MarkNeedsInput(ctx, w.ID); err != nil {
+			slog.Warn("failed to auto-transition work to needs_input",
+				"workId", w.ID, "from", w.Status, "error", err)
+		} else {
+			slog.Info("auto-transitioned work to needs_input",
+				"workId", w.ID, "from", w.Status, "sessionId", sessionID)
+		}
 	} else {
 		if w.Status != StatusNeedsInput {
 			return
 		}
-		targetStatus = StatusInProgress
-	}
-
-	if err := s.store.Update(ctx, w.ID, UpdateFields{Status: &targetStatus}); err != nil {
-		slog.Warn("failed to auto-transition work needs_input",
-			"workId", w.ID, "from", w.Status, "to", targetStatus, "error", err)
-	} else {
-		slog.Info("auto-transitioned work needs_input",
-			"workId", w.ID, "from", w.Status, "to", targetStatus, "sessionId", sessionID)
+		if err := s.store.Resume(ctx, w.ID); err != nil {
+			slog.Warn("failed to auto-transition work from needs_input",
+				"workId", w.ID, "from", w.Status, "error", err)
+		} else {
+			slog.Info("auto-transitioned work from needs_input",
+				"workId", w.ID, "from", w.Status, "sessionId", sessionID)
+		}
 	}
 }

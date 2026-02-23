@@ -301,11 +301,10 @@ type WorkCreateParams struct {
 }
 
 type WorkUpdateParams struct {
-	ID          string           `json:"id"`
-	Title       *string          `json:"title,omitempty"`
-	Body        *string          `json:"body,omitempty"`
-	AgentRoleID *string          `json:"agent_role_id,omitempty"`
-	Status      *work.WorkStatus `json:"status,omitempty"`
+	ID          string  `json:"id"`
+	Title       *string `json:"title,omitempty"`
+	Body        *string `json:"body,omitempty"`
+	AgentRoleID *string `json:"agent_role_id,omitempty"`
 }
 
 type WorkDeleteParams struct {

@@ -211,8 +211,7 @@ func (r *AutoResumer) handleProcessRunning(sessionID string) {
 		return
 	}
 
-	status := StatusInProgress
-	if err := r.workStore.Update(r.ctx, w.ID, UpdateFields{Status: &status}); err != nil {
+	if err := r.workStore.Reactivate(r.ctx, w.ID); err != nil {
 		if r.ctx.Err() == nil {
 			slog.Warn("failed to reactivate stopped work on process running", "workId", w.ID, "error", err)
 		}
@@ -326,12 +325,7 @@ func (r *AutoResumer) handleExternalWorkStart(w Work, h WorkStartHandler) {
 			return
 		}
 		slog.Error("external work start failed, rolling back", "workId", w.ID, "error", err)
-		openStatus := StatusOpen
-		emptySession := ""
-		if rbErr := r.workStore.Update(r.ctx, w.ID, UpdateFields{
-			Status:    &openStatus,
-			SessionID: &emptySession,
-		}); rbErr != nil {
+		if rbErr := r.workStore.RollbackStart(r.ctx, w.ID, false); rbErr != nil {
 			slog.Error("failed to rollback external work start", "workId", w.ID, "error", rbErr)
 		}
 		return
@@ -356,8 +350,7 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 
 	// Transition parent back to in_progress so the agent can work and
 	// call work_done again (done→done would be an invalid transition).
-	status := StatusInProgress
-	if err := r.workStore.Update(r.ctx, parent.ID, UpdateFields{Status: &status}); err != nil {
+	if err := r.workStore.Reactivate(r.ctx, parent.ID); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
@@ -382,8 +375,7 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 }
 
 func (r *AutoResumer) stopWork(workID string) error {
-	status := StatusStopped
-	return r.workStore.Update(r.ctx, workID, UpdateFields{Status: &status})
+	return r.workStore.Stop(r.ctx, workID)
 }
 
 func (r *AutoResumer) findWorkBySessionID(sessionID string, statuses ...WorkStatus) *Work {

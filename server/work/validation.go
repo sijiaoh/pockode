@@ -9,7 +9,7 @@ var validParents = map[WorkType][]WorkType{
 	WorkTypeTask:  {WorkTypeStory},
 }
 
-// validTransitions defines the allowed status transitions for Store.Update.
+// validTransitions defines the allowed status transitions.
 // done → closed is handled internally by auto-close, not as an external transition.
 var validTransitions = map[WorkStatus][]WorkStatus{
 	StatusOpen:       {StatusInProgress},
@@ -35,27 +35,12 @@ func ValidateTransition(from, to WorkStatus) bool {
 }
 
 // ValidNextStatuses returns the statuses that a work item can transition to
-// from the given status via Store.Update.
+// from the given status.
 func ValidNextStatuses(from WorkStatus) []WorkStatus {
 	next := validTransitions[from]
 	out := make([]WorkStatus, len(next))
 	copy(out, next)
 	return out
-}
-
-// validateSessionIDChange ensures SessionID is only modified alongside a
-// matching status transition (set on start, clear on rollback).
-func validateSessionIDChange(sessionID string, status *WorkStatus) error {
-	if status == nil {
-		return fmt.Errorf("%w: session_id can only change with a status transition", ErrInvalidWork)
-	}
-	if sessionID != "" && *status != StatusInProgress {
-		return fmt.Errorf("%w: session_id can only be set when transitioning to in_progress", ErrInvalidWork)
-	}
-	if sessionID == "" && *status != StatusOpen {
-		return fmt.Errorf("%w: session_id can only be cleared when transitioning to open", ErrInvalidWork)
-	}
-	return nil
 }
 
 // ValidateParent checks that the parent is a valid type for the given child type.

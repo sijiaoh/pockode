@@ -89,8 +89,7 @@ func TestAutoResumer_RunningReactivatesStoppedWork(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, sid)
 
 	// Transition to stopped (simulates process exit → work stopped)
-	stoppedStatus := StatusStopped
-	store.Update(context.Background(), story.ID, UpdateFields{Status: &stoppedStatus})
+	store.Stop(context.Background(), story.ID)
 
 	resumer.HandleProcessStateChange(sid, "running", false, false, false)
 
@@ -137,8 +136,7 @@ func TestAutoResumer_RunningResetsRetryCount(t *testing.T) {
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 2 })
 
 	// Stop work, then reactivate via running
-	stoppedStatus := StatusStopped
-	store.Update(context.Background(), story.ID, UpdateFields{Status: &stoppedStatus})
+	store.Stop(context.Background(), story.ID)
 	resumer.HandleProcessStateChange(sid, "running", false, false, false)
 
 	// Should be able to retry 3 more times (counter reset)
@@ -275,8 +273,7 @@ func TestAutoResumer_RetryResetOnCompletion(t *testing.T) {
 	}})
 
 	// Re-open task for more work
-	status := StatusInProgress
-	store.Update(context.Background(), task.ID, UpdateFields{Status: &status})
+	store.Reactivate(context.Background(), task.ID)
 
 	// Should be able to retry again from 0
 	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
@@ -295,8 +292,7 @@ func TestAutoResumer_NoMessageWhenWorkNeedsInput(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, sid)
 
 	// Transition to needs_input
-	niStatus := StatusNeedsInput
-	store.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+	store.MarkNeedsInput(context.Background(), story.ID)
 
 	// Process stops — but work is needs_input, not in_progress
 	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
@@ -617,8 +613,7 @@ func TestAutoResumer_ProcessEndedStopsNeedsInputWork(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, sid)
 
 	// Transition to needs_input (agent waiting for user)
-	niStatus := StatusNeedsInput
-	store.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+	store.MarkNeedsInput(context.Background(), story.ID)
 
 	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
 
@@ -707,8 +702,7 @@ func TestAutoResumer_StopOrphanedWork_NeedsInput(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, "s1")
 
 	// Transition to needs_input (simulates agent waiting for user)
-	niStatus := StatusNeedsInput
-	store.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+	store.MarkNeedsInput(context.Background(), story.ID)
 
 	resumer.StopOrphanedWork()
 

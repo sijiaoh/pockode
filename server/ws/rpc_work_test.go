@@ -200,30 +200,6 @@ func TestHandler_WorkUpdate_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandler_WorkUpdate_InvalidTransition(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{})
-
-	// Create a story (status=open)
-	createResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
-		AgentRoleID: env.testRoleID,
-		Title:       "Story",
-	})
-	var created work.Work
-	json.Unmarshal(createResp.Result, &created)
-
-	// Try to transition open → done (invalid, must go through in_progress)
-	doneStatus := work.StatusDone
-	resp := env.call("work.update", rpc.WorkUpdateParams{
-		ID:     created.ID,
-		Status: &doneStatus,
-	})
-
-	if resp.Error == nil {
-		t.Fatal("expected error for invalid status transition")
-	}
-}
-
 // --- work.delete ---
 
 func TestHandler_WorkDelete(t *testing.T) {

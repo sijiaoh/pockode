@@ -377,8 +377,7 @@ func TestWorkDone(t *testing.T) {
 
 	// Pre-transition to in_progress to test the in_progress → done path specifically
 	// (the auto open → done path is tested in TestWorkDone_FromOpen_AutoTransitions)
-	status := work.StatusInProgress
-	ts.store.Update(context.Background(), id, work.UpdateFields{Status: &status})
+	ts.store.Start(context.Background(), id, "")
 
 	result := callTool(t, ts.Server, "work_done", map[string]string{"id": id})
 
@@ -414,8 +413,7 @@ func TestWorkDone_AlreadyClosed(t *testing.T) {
 	})
 	id := extractID(t, toolText(createResult))
 
-	status := work.StatusInProgress
-	ts.store.Update(context.Background(), id, work.UpdateFields{Status: &status})
+	ts.store.Start(context.Background(), id, "")
 
 	callTool(t, ts.Server, "work_done", map[string]string{"id": id})
 

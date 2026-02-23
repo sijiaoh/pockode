@@ -32,13 +32,8 @@ func (s *WorkStopper) HandleWorkStop(ctx context.Context, id string) error {
 		return work.ErrWorkNotFound
 	}
 
-	if w.Status != work.StatusInProgress && w.Status != work.StatusNeedsInput {
-		return fmt.Errorf("%w: can only stop in_progress or needs_input work, got %s", work.ErrInvalidWork, w.Status)
-	}
-
-	stoppedStatus := work.StatusStopped
-	if err := s.workStore.Update(ctx, id, work.UpdateFields{Status: &stoppedStatus}); err != nil {
-		return fmt.Errorf("transition to stopped: %w", err)
+	if err := s.workStore.Stop(ctx, id); err != nil {
+		return err
 	}
 
 	// Terminate the agent process if running.

@@ -1,47 +1,6 @@
 package work
 
-import (
-	"context"
-	"testing"
-)
-
-func TestValidateSessionIDChange_CannotSetOnDone(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	task := createTask(t, s, story.ID, "T")
-	startWork(t, s, story.ID)
-	startWork(t, s, task.ID)
-
-	// Setting SessionID with in_progress → done should fail
-	sid := "new-session"
-	doneStatus := StatusDone
-	err := s.Update(context.Background(), story.ID, UpdateFields{
-		SessionID: &sid,
-		Status:    &doneStatus,
-	})
-	if err == nil {
-		t.Fatal("expected error when setting session_id on done transition")
-	}
-}
-
-func TestValidateSessionIDChange_CannotClearOnDone(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	task := createTask(t, s, story.ID, "T")
-	startWorkWithSession(t, s, story.ID, "session-1")
-	startWork(t, s, task.ID)
-
-	// Clearing SessionID with in_progress → done should fail
-	emptySid := ""
-	doneStatus := StatusDone
-	err := s.Update(context.Background(), story.ID, UpdateFields{
-		SessionID: &emptySid,
-		Status:    &doneStatus,
-	})
-	if err == nil {
-		t.Fatal("expected error when clearing session_id on done transition")
-	}
-}
+import "testing"
 
 // --- ValidNextStatuses ---
 

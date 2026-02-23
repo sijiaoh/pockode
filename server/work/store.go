@@ -23,10 +23,37 @@ type Store interface {
 	Update(ctx context.Context, id string, fields UpdateFields) error
 	Delete(ctx context.Context, id string) error
 
+	// --- Intent-based transition methods ---
+	// These are the preferred way to change work status. Each method
+	// encapsulates validation, sessionID management, and side effects.
+
+	// Start transitions a work item to in_progress and assigns a sessionID.
+	// Allowed from any state that can reach in_progress (open, stopped,
+	// needs_input, done, closed). Use Reactivate instead when sessionID
+	// should not be changed (e.g. process-running detection, parent reactivation).
+	Start(ctx context.Context, id string, sessionID string) (Work, error)
+
+	// Stop transitions in_progress/needs_input → stopped.
+	Stop(ctx context.Context, id string) error
+
 	// MarkDone atomically transitions a work item to done, auto-advancing
 	// from open → in_progress if needed. This avoids the TOCTOU race of a
 	// separate Get → Update sequence.
 	MarkDone(ctx context.Context, id string) error
+
+	// MarkNeedsInput transitions in_progress → needs_input.
+	MarkNeedsInput(ctx context.Context, id string) error
+
+	// Resume transitions needs_input → in_progress.
+	Resume(ctx context.Context, id string) error
+
+	// Reactivate transitions stopped/done/closed → in_progress without
+	// changing sessionID. Used for process-running detection and parent reactivation.
+	Reactivate(ctx context.Context, id string) error
+
+	// RollbackStart reverts a failed Start. Fresh starts roll back to open
+	// (clearing sessionID); restarts roll back to stopped (preserving sessionID).
+	RollbackStart(ctx context.Context, id string, wasRestart bool) error
 
 	AddComment(ctx context.Context, workID, body string) (Comment, error)
 	ListComments(workID string) ([]Comment, error)
@@ -40,12 +67,12 @@ type Store interface {
 }
 
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
+// Status and SessionID are not included — use the intent-based transition
+// methods (Start, Stop, MarkDone, etc.) for status changes.
 type UpdateFields struct {
-	Title       *string     `json:"title,omitempty"`
-	Body        *string     `json:"body,omitempty"`
-	AgentRoleID *string     `json:"agent_role_id,omitempty"`
-	Status      *WorkStatus `json:"status,omitempty"`
-	SessionID   *string     `json:"session_id,omitempty"`
+	Title       *string `json:"title,omitempty"`
+	Body        *string `json:"body,omitempty"`
+	AgentRoleID *string `json:"agent_role_id,omitempty"`
 }
 
 type indexData struct {
@@ -199,23 +226,6 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) er
 
 	w := &s.works[idx]
 
-	if fields.Status != nil {
-		if !ValidateTransition(w.Status, *fields.Status) {
-			s.worksMu.Unlock()
-			return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, *fields.Status)
-		}
-	}
-
-	// SessionID must only change alongside an appropriate status transition:
-	//   set (non-empty) → must be transitioning to in_progress
-	//   clear (empty)   → must be transitioning to open (rollback)
-	if fields.SessionID != nil {
-		if err := validateSessionIDChange(*fields.SessionID, fields.Status); err != nil {
-			s.worksMu.Unlock()
-			return err
-		}
-	}
-
 	// Snapshot before mutations so we can roll back on persist failure
 	prev := s.snapshotWorks()
 
@@ -229,19 +239,9 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) er
 	if fields.AgentRoleID != nil {
 		w.AgentRoleID = *fields.AgentRoleID
 	}
-	if fields.SessionID != nil {
-		w.SessionID = *fields.SessionID
-	}
-	if fields.Status != nil {
-		w.Status = *fields.Status
-	}
 	w.UpdatedAt = now
 
 	modified := map[string]bool{id: true}
-	if fields.Status != nil && *fields.Status == StatusDone {
-		s.autoClose(w, now, modified)
-	}
-
 	return s.persistAndNotifyUpdates(prev, modified)
 }
 
@@ -321,6 +321,168 @@ func (s *FileStore) MarkDone(_ context.Context, id string) error {
 	modified := map[string]bool{id: true}
 	s.autoClose(w, now, modified)
 
+	return s.persistAndNotifyUpdates(prev, modified)
+}
+
+func (s *FileStore) Start(_ context.Context, id string, sessionID string) (Work, error) {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return Work{}, ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if !ValidateTransition(w.Status, StatusInProgress) {
+		s.worksMu.Unlock()
+		return Work{}, fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusInProgress)
+	}
+
+	prev := s.snapshotWorks()
+
+	now := time.Now()
+	w.Status = StatusInProgress
+	w.SessionID = sessionID
+	w.UpdatedAt = now
+
+	result := *w // copy before persistAndNotifyUpdates releases the lock
+
+	modified := map[string]bool{id: true}
+	if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
+		return Work{}, err
+	}
+
+	return result, nil
+}
+
+func (s *FileStore) Stop(_ context.Context, id string) error {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if !ValidateTransition(w.Status, StatusStopped) {
+		s.worksMu.Unlock()
+		return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusStopped)
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Status = StatusStopped
+	w.UpdatedAt = time.Now()
+
+	modified := map[string]bool{id: true}
+	return s.persistAndNotifyUpdates(prev, modified)
+}
+
+func (s *FileStore) MarkNeedsInput(_ context.Context, id string) error {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if !ValidateTransition(w.Status, StatusNeedsInput) {
+		s.worksMu.Unlock()
+		return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusNeedsInput)
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Status = StatusNeedsInput
+	w.UpdatedAt = time.Now()
+
+	modified := map[string]bool{id: true}
+	return s.persistAndNotifyUpdates(prev, modified)
+}
+
+func (s *FileStore) Resume(_ context.Context, id string) error {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if w.Status != StatusNeedsInput {
+		s.worksMu.Unlock()
+		return fmt.Errorf("%w: invalid transition %s → %s (Resume requires needs_input)", ErrInvalidWork, w.Status, StatusInProgress)
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Status = StatusInProgress
+	w.UpdatedAt = time.Now()
+
+	modified := map[string]bool{id: true}
+	return s.persistAndNotifyUpdates(prev, modified)
+}
+
+func (s *FileStore) Reactivate(_ context.Context, id string) error {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if !ValidateTransition(w.Status, StatusInProgress) {
+		s.worksMu.Unlock()
+		return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusInProgress)
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Status = StatusInProgress
+	w.UpdatedAt = time.Now()
+
+	modified := map[string]bool{id: true}
+	return s.persistAndNotifyUpdates(prev, modified)
+}
+
+func (s *FileStore) RollbackStart(_ context.Context, id string, wasRestart bool) error {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	prev := s.snapshotWorks()
+
+	if wasRestart {
+		// Restart rollback: in_progress → stopped, preserve sessionID
+		if !ValidateTransition(w.Status, StatusStopped) {
+			s.worksMu.Unlock()
+			return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusStopped)
+		}
+		w.Status = StatusStopped
+	} else {
+		// Fresh start rollback: in_progress → open, clear sessionID
+		if !ValidateTransition(w.Status, StatusOpen) {
+			s.worksMu.Unlock()
+			return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusOpen)
+		}
+		w.Status = StatusOpen
+		w.SessionID = ""
+	}
+	w.UpdatedAt = time.Now()
+
+	modified := map[string]bool{id: true}
 	return s.persistAndNotifyUpdates(prev, modified)
 }
 

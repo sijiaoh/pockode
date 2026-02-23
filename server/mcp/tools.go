@@ -450,11 +450,7 @@ func (s *Server) handleWorkStart(ctx context.Context, args json.RawMessage) (str
 	// Claim: open/stopped/needs_input → in_progress + attach sessionID.
 	// The main server detects this state change via fsnotify and handles
 	// session creation + kickoff message (AutoResumer Trigger C).
-	status := work.StatusInProgress
-	if err := s.store.Update(ctx, params.ID, work.UpdateFields{
-		SessionID: &sessionID,
-		Status:    &status,
-	}); err != nil {
+	if _, err := s.store.Start(ctx, params.ID, sessionID); err != nil {
 		return "", err
 	}
 
@@ -470,8 +466,7 @@ func (s *Server) handleWorkNeedsInput(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	status := work.StatusNeedsInput
-	if err := s.store.Update(ctx, params.ID, work.UpdateFields{Status: &status}); err != nil {
+	if err := s.store.MarkNeedsInput(ctx, params.ID); err != nil {
 		return "", err
 	}
 
