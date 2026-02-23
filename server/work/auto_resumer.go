@@ -23,10 +23,12 @@ type WorkStartHandler interface {
 	HandleWorkStart(ctx context.Context, w Work) error
 }
 
-// AutoResumer handles three automatic triggers for Work sessions:
+// AutoResumer handles automatic triggers for Work sessions:
 //
-// Trigger A: When an agent process stops while Work is in_progress,
-// send a continuation message to resume work.
+// Process lifecycle sync:
+//   - idle → send a continuation message to resume in_progress work.
+//   - running → transition stopped work back to in_progress.
+//   - ended → transition in_progress/needs_input work to stopped.
 //
 // Trigger B: When a child Work closes, reactivate the parent Work's
 // agent to review and continue.
@@ -119,8 +121,11 @@ func (r *AutoResumer) getStartHandler() WorkStartHandler {
 	return nil
 }
 
-// HandleProcessStateChange implements trigger A: auto-continuation when agent stops.
-// Also handles process termination by transitioning work to stopped.
+// HandleProcessStateChange syncs work status with process lifecycle:
+//   - running → reactivate stopped work to in_progress.
+//   - idle → send auto-continuation message for in_progress work.
+//   - ended → transition in_progress/needs_input work to stopped.
+//
 // Parameters are extracted from process.StateChangeEvent to avoid importing the process package.
 func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInput, isInitial bool) {
 	// Process ended: transition in_progress work to stopped,
@@ -132,6 +137,14 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 		if !pending {
 			go r.handleProcessEnded(sessionID)
 		}
+		return
+	}
+
+	// Process running: sync stopped work back to in_progress.
+	// This covers the case where a user sends a message to a session
+	// whose work was stopped (e.g. after process exit), bypassing work_start.
+	if state == "running" {
+		r.handleProcessRunning(sessionID)
 		return
 	}
 
@@ -180,6 +193,31 @@ func (r *AutoResumer) handleProcessEnded(sessionID string) {
 	r.retryMu.Lock()
 	delete(r.retries, sessionID)
 	r.retryMu.Unlock()
+}
+
+// handleProcessRunning transitions stopped work back to in_progress when its
+// process starts running. This handles the case where a user sends a message
+// directly to a session (bypassing work_start), reactivating the process.
+func (r *AutoResumer) handleProcessRunning(sessionID string) {
+	w := r.findWorkBySessionID(sessionID, StatusStopped)
+	if w == nil {
+		return
+	}
+
+	status := StatusInProgress
+	if err := r.workStore.Update(r.ctx, w.ID, UpdateFields{Status: &status}); err != nil {
+		if r.ctx.Err() == nil {
+			slog.Warn("failed to reactivate stopped work on process running", "workId", w.ID, "error", err)
+		}
+		return
+	}
+
+	// Reset retry count — fresh activity context
+	r.retryMu.Lock()
+	delete(r.retries, sessionID)
+	r.retryMu.Unlock()
+
+	slog.Info("stopped work reactivated by process running", "workId", w.ID, "sessionId", sessionID)
 }
 
 func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSender) {
@@ -363,20 +401,17 @@ func (r *AutoResumer) stopWork(workID string) error {
 }
 
 func (r *AutoResumer) findWorkBySessionID(sessionID string, statuses ...WorkStatus) *Work {
-	works, err := r.workStore.List()
+	w, found, err := r.workStore.FindBySessionID(sessionID)
 	if err != nil {
-		slog.Warn("failed to list works for auto-resume check", "sessionId", sessionID, "error", err)
+		slog.Warn("failed to find work by session ID", "sessionId", sessionID, "error", err)
 		return nil
 	}
-	for i := range works {
-		w := &works[i]
-		if w.SessionID != sessionID {
-			continue
-		}
-		for _, s := range statuses {
-			if w.Status == s {
-				return w
-			}
+	if !found {
+		return nil
+	}
+	for _, s := range statuses {
+		if w.Status == s {
+			return &w
 		}
 	}
 	return nil

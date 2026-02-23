@@ -66,7 +66,7 @@ func TestAutoResumer_ContinuesInProgressWork(t *testing.T) {
 	}
 }
 
-func TestAutoResumer_IgnoresRunningState(t *testing.T) {
+func TestAutoResumer_RunningDoesNotSendMessage(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
 	story := createStory(t, store, "Story")
@@ -75,9 +75,80 @@ func TestAutoResumer_IgnoresRunningState(t *testing.T) {
 
 	resumer.HandleProcessStateChange(sid, "running", false, false)
 
-	time.Sleep(50 * time.Millisecond) // negative assertion: verify nothing fires
+	time.Sleep(50 * time.Millisecond)
 	if len(sender.getMessages()) != 0 {
 		t.Error("should not send message for running state")
+	}
+}
+
+func TestAutoResumer_RunningReactivatesStoppedWork(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// Transition to stopped (simulates process exit → work stopped)
+	stoppedStatus := StatusStopped
+	store.Update(context.Background(), story.ID, UpdateFields{Status: &stoppedStatus})
+
+	resumer.HandleProcessStateChange(sid, "running", false, false)
+
+	w := getWork(t, store, story.ID)
+	if w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q after process running on stopped work", w.Status, StatusInProgress)
+	}
+}
+
+func TestAutoResumer_RunningNoopWhenWorkInProgress(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// Work is already in_progress — running should be a no-op
+	resumer.HandleProcessStateChange(sid, "running", false, false)
+
+	w := getWork(t, store, story.ID)
+	if w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q (should remain in_progress)", w.Status, StatusInProgress)
+	}
+}
+
+func TestAutoResumer_RunningNoopWhenNoWork(t *testing.T) {
+	_, resumer, _ := setupResumerTest(t)
+
+	// No work linked to this session — should not panic
+	resumer.HandleProcessStateChange("unknown-session", "running", false, false)
+}
+
+func TestAutoResumer_RunningResetsRetryCount(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// Use 2 retries
+	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 2 })
+
+	// Stop work, then reactivate via running
+	stoppedStatus := StatusStopped
+	store.Update(context.Background(), story.ID, UpdateFields{Status: &stoppedStatus})
+	resumer.HandleProcessStateChange(sid, "running", false, false)
+
+	// Should be able to retry 3 more times (counter reset)
+	for i := 0; i < 3; i++ {
+		resumer.HandleProcessStateChange(sid, "idle", false, false)
+		waitFor(t, func() bool { return len(sender.getMessages()) >= 2+i+1 })
+	}
+
+	if len(sender.getMessages()) != 5 {
+		t.Errorf("expected 5 messages (2 before + 3 after reset), got %d", len(sender.getMessages()))
 	}
 }
 
