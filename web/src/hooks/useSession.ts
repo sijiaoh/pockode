@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { prependSession, useSessionStore } from "../lib/sessionStore";
-import { collectTaskSessionIds, useWorkStore } from "../lib/workStore";
+import { collectWorkSessionIds, useWorkStore } from "../lib/workStore";
 import { wsActions } from "../lib/wsStore";
 import { useSessionSubscription } from "./useSessionSubscription";
 
@@ -23,14 +23,14 @@ export function useSession({
 	const works = useWorkStore((s) => s.works);
 	const { refresh } = useSessionSubscription(enabled);
 
-	const taskSessionIds = useMemo(() => collectTaskSessionIds(works), [works]);
+	const workSessionIds = useMemo(() => collectWorkSessionIds(works), [works]);
 
 	const filteredSessions = useMemo(
 		() =>
 			showTaskSessions
 				? sessions
-				: sessions.filter((s) => !taskSessionIds.has(s.id)),
-		[sessions, showTaskSessions, taskSessionIds],
+				: sessions.filter((s) => !workSessionIds.has(s.id)),
+		[sessions, showTaskSessions, workSessionIds],
 	);
 
 	const hasAnyUnread = useMemo(
