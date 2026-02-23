@@ -1,7 +1,15 @@
-import { AlertCircle, Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
+import {
+	AlertCircle,
+	Loader2,
+	Plus,
+	RotateCcw,
+	Star,
+	Trash2,
+} from "lucide-react";
 import { useCallback, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { useSettingsStore } from "../../lib/settingsStore";
 import { useWSStore } from "../../lib/wsStore";
 import ConfirmDialog from "../common/ConfirmDialog";
 import BackToChatButton from "../ui/BackToChatButton";
@@ -20,6 +28,21 @@ export default function AgentRoleListOverlay({
 	const roles = useAgentRoleStore((s) => s.roles);
 	const isLoading = useAgentRoleStore((s) => s.isLoading);
 	const error = useAgentRoleStore((s) => s.error);
+
+	const defaultRoleId = useSettingsStore(
+		(s) => s.settings?.default_agent_role_id ?? "",
+	);
+	const updateSettings = useWSStore((s) => s.actions.updateSettings);
+
+	const handleToggleDefault = useCallback(
+		(roleId: string) => {
+			const newId = defaultRoleId === roleId ? "" : roleId;
+			updateSettings({ default_agent_role_id: newId });
+		},
+		[defaultRoleId, updateSettings],
+	);
+
+	const defaultRoleName = roles.find((r) => r.id === defaultRoleId)?.name;
 
 	const resetAgentRoleDefaults = useWSStore(
 		(s) => s.actions.resetAgentRoleDefaults,
@@ -84,6 +107,8 @@ export default function AgentRoleListOverlay({
 								key={role.id}
 								roleId={role.id}
 								name={role.name}
+								isDefault={role.id === defaultRoleId}
+								onToggleDefault={handleToggleDefault}
 								onOpenDetail={onOpenAgentRoleDetail}
 							/>
 						))}
@@ -92,6 +117,9 @@ export default function AgentRoleListOverlay({
 			</div>
 
 			<div className="border-t border-th-border p-2">
+				<p className="px-3 py-1 text-xs text-th-text-muted">
+					Default: {defaultRoleName ?? "None (always ask)"}
+				</p>
 				<CreateRoleButton />
 			</div>
 
@@ -112,10 +140,14 @@ export default function AgentRoleListOverlay({
 function RoleRow({
 	roleId,
 	name,
+	isDefault,
+	onToggleDefault,
 	onOpenDetail,
 }: {
 	roleId: string;
 	name: string;
+	isDefault: boolean;
+	onToggleDefault: (roleId: string) => void;
 	onOpenDetail: (roleId: string) => void;
 }) {
 	const deleteAgentRole = useWSStore((s) => s.actions.deleteAgentRole);
@@ -137,6 +169,18 @@ function RoleRow({
 	return (
 		<>
 			<div className="group flex min-h-[44px] items-center gap-1.5 rounded-lg px-2 hover:bg-th-bg-tertiary">
+				<button
+					type="button"
+					onClick={() => onToggleDefault(roleId)}
+					className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center"
+					aria-label={isDefault ? "Unset as default" : "Set as default"}
+					aria-pressed={isDefault}
+				>
+					<Star
+						className={`size-4 ${isDefault ? "fill-th-accent text-th-accent" : "text-th-text-muted"}`}
+					/>
+				</button>
+
 				<button
 					type="button"
 					onClick={() => onOpenDetail(roleId)}

@@ -1,7 +1,6 @@
 import {
 	AccountSection,
 	AppearanceSection,
-	DefaultRoleSection,
 	ThemeSection,
 	WorktreeSection,
 } from "../../components/Settings/sections";
@@ -11,7 +10,6 @@ import type { Extension } from "../../lib/extensions";
 const PRIORITY = {
 	APPEARANCE: 10,
 	THEME: 20,
-	DEFAULT_ROLE: 25,
 	WORKTREE: 30,
 	ACCOUNT: 90,
 } as const;
@@ -31,13 +29,6 @@ export const activate: Extension["activate"] = (ctx) => {
 		label: "Theme",
 		priority: PRIORITY.THEME,
 		component: ThemeSection,
-	});
-
-	ctx.settings.register({
-		id: "default-role",
-		label: "Default Role",
-		priority: PRIORITY.DEFAULT_ROLE,
-		component: DefaultRoleSection,
 	});
 
 	ctx.settings.register({
