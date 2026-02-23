@@ -186,7 +186,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	processManager.SetOnStateChange(func(e process.StateChangeEvent) {
 		sessionListWatcher.HandleProcessStateChange(e)
 		if m.workAutoResumer != nil {
-			m.workAutoResumer.HandleProcessStateChange(e.SessionID, string(e.State), e.NeedsInput, e.IsInitial)
+			m.workAutoResumer.HandleProcessStateChange(e.SessionID, string(e.State), e.NeedsInput, e.IsInitial, e.Interrupted)
 		}
 	})
 

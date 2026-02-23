@@ -53,7 +53,7 @@ func TestAutoResumer_ContinuesInProgressWork(t *testing.T) {
 	sid := "session-1"
 	startWorkWithSession(t, store, story.ID, sid)
 
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
@@ -73,7 +73,7 @@ func TestAutoResumer_RunningDoesNotSendMessage(t *testing.T) {
 	sid := "session-1"
 	startWorkWithSession(t, store, story.ID, sid)
 
-	resumer.HandleProcessStateChange(sid, "running", false, false)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
 
 	time.Sleep(50 * time.Millisecond)
 	if len(sender.getMessages()) != 0 {
@@ -92,7 +92,7 @@ func TestAutoResumer_RunningReactivatesStoppedWork(t *testing.T) {
 	stoppedStatus := StatusStopped
 	store.Update(context.Background(), story.ID, UpdateFields{Status: &stoppedStatus})
 
-	resumer.HandleProcessStateChange(sid, "running", false, false)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
 
 	w := getWork(t, store, story.ID)
 	if w.Status != StatusInProgress {
@@ -108,7 +108,7 @@ func TestAutoResumer_RunningNoopWhenWorkInProgress(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, sid)
 
 	// Work is already in_progress — running should be a no-op
-	resumer.HandleProcessStateChange(sid, "running", false, false)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
 
 	w := getWork(t, store, story.ID)
 	if w.Status != StatusInProgress {
@@ -120,7 +120,7 @@ func TestAutoResumer_RunningNoopWhenNoWork(t *testing.T) {
 	_, resumer, _ := setupResumerTest(t)
 
 	// No work linked to this session — should not panic
-	resumer.HandleProcessStateChange("unknown-session", "running", false, false)
+	resumer.HandleProcessStateChange("unknown-session", "running", false, false, false)
 }
 
 func TestAutoResumer_RunningResetsRetryCount(t *testing.T) {
@@ -131,19 +131,19 @@ func TestAutoResumer_RunningResetsRetryCount(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, sid)
 
 	// Use 2 retries
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 2 })
 
 	// Stop work, then reactivate via running
 	stoppedStatus := StatusStopped
 	store.Update(context.Background(), story.ID, UpdateFields{Status: &stoppedStatus})
-	resumer.HandleProcessStateChange(sid, "running", false, false)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
 
 	// Should be able to retry 3 more times (counter reset)
 	for i := 0; i < 3; i++ {
-		resumer.HandleProcessStateChange(sid, "idle", false, false)
+		resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 		waitFor(t, func() bool { return len(sender.getMessages()) >= 2+i+1 })
 	}
 
@@ -159,11 +159,36 @@ func TestAutoResumer_IgnoresInitialIdle(t *testing.T) {
 	sid := "session-1"
 	startWorkWithSession(t, store, story.ID, sid)
 
-	resumer.HandleProcessStateChange(sid, "idle", false, true)
+	resumer.HandleProcessStateChange(sid, "idle", false, true, false)
 
 	time.Sleep(50 * time.Millisecond) // negative assertion: verify nothing fires
 	if len(sender.getMessages()) != 0 {
 		t.Error("should not send message for initial idle on process creation")
+	}
+}
+
+func TestAutoResumer_InterruptStopsWork(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	resumer.HandleProcessStateChange(sid, "idle", false, false, true)
+
+	waitFor(t, func() bool {
+		w := getWork(t, store, story.ID)
+		return w.Status == StatusStopped
+	})
+
+	// No continuation message should be sent
+	if len(sender.getMessages()) != 0 {
+		t.Error("should not send continuation message after interrupt")
+	}
+
+	w := getWork(t, store, story.ID)
+	if w.Status != StatusStopped {
+		t.Errorf("status = %q, want %q after interrupt", w.Status, StatusStopped)
 	}
 }
 
@@ -174,7 +199,7 @@ func TestAutoResumer_IgnoresNeedsInput(t *testing.T) {
 	sid := "session-1"
 	startWorkWithSession(t, store, story.ID, sid)
 
-	resumer.HandleProcessStateChange(sid, "idle", true, false)
+	resumer.HandleProcessStateChange(sid, "idle", true, false, false)
 
 	time.Sleep(50 * time.Millisecond) // negative assertion: verify nothing fires
 	if len(sender.getMessages()) != 0 {
@@ -192,7 +217,7 @@ func TestAutoResumer_SkipsWhenNoSender(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, sid)
 
 	// Should not panic
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 
 	time.Sleep(50 * time.Millisecond) // negative assertion: verify no panic
 }
@@ -206,7 +231,7 @@ func TestAutoResumer_RetryLimit_TransitionsToStopped(t *testing.T) {
 
 	// Exhaust retries (maxRetries=3)
 	for i := 0; i < 4; i++ {
-		resumer.HandleProcessStateChange(sid, "idle", false, false)
+		resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 		if i < 3 {
 			waitFor(t, func() bool { return len(sender.getMessages()) >= i+1 })
 		} else {
@@ -235,9 +260,9 @@ func TestAutoResumer_RetryResetOnCompletion(t *testing.T) {
 	startWorkWithSession(t, store, task.ID, sid)
 
 	// Use 2 retries
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 2 })
 
 	if len(sender.getMessages()) != 2 {
@@ -254,7 +279,7 @@ func TestAutoResumer_RetryResetOnCompletion(t *testing.T) {
 	store.Update(context.Background(), task.ID, UpdateFields{Status: &status})
 
 	// Should be able to retry again from 0
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 3 })
 
 	if len(sender.getMessages()) != 3 {
@@ -274,7 +299,7 @@ func TestAutoResumer_NoMessageWhenWorkNeedsInput(t *testing.T) {
 	store.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
 
 	// Process stops — but work is needs_input, not in_progress
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 	time.Sleep(50 * time.Millisecond) // negative assertion: verify nothing fires
 	if len(sender.getMessages()) != 0 {
 		t.Error("should not send continuation message when work is needs_input")
@@ -293,7 +318,7 @@ func TestAutoResumer_NoMessageWhenWorkDone(t *testing.T) {
 	doneWork(t, store, task.ID)
 
 	// Process stops — but work is already closed
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 	time.Sleep(50 * time.Millisecond) // negative assertion: verify nothing fires
 	if len(sender.getMessages()) != 0 {
 		t.Error("should not send message when work is already done/closed")
@@ -568,7 +593,7 @@ func TestAutoResumer_ProcessEndedStopsWork(t *testing.T) {
 	sid := "session-1"
 	startWorkWithSession(t, store, story.ID, sid)
 
-	resumer.HandleProcessStateChange(sid, "ended", false, false)
+	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
 
 	waitFor(t, func() bool {
 		w := getWork(t, store, story.ID)
@@ -592,7 +617,7 @@ func TestAutoResumer_ProcessEndedStopsNeedsInputWork(t *testing.T) {
 	niStatus := StatusNeedsInput
 	store.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
 
-	resumer.HandleProcessStateChange(sid, "ended", false, false)
+	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
 
 	waitFor(t, func() bool {
 		w := getWork(t, store, story.ID)
@@ -613,9 +638,9 @@ func TestAutoResumer_ProcessEndedSkippedWhenContinuationPending(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, sid)
 
 	// idle fires first → auto-continuation pending
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 	// ended fires shortly after → should be suppressed
-	resumer.HandleProcessStateChange(sid, "ended", false, false)
+	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
@@ -637,7 +662,7 @@ func TestAutoResumer_ProcessEndedNoopWhenWorkDone(t *testing.T) {
 	// Work completes before process ends
 	doneWork(t, store, task.ID)
 
-	resumer.HandleProcessStateChange(sid, "ended", false, false)
+	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -722,7 +747,7 @@ func TestAutoResumer_StopCancelsPendingContinuation(t *testing.T) {
 	sid := "session-1"
 	startWorkWithSession(t, store, story.ID, sid)
 
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 
 	// Stop before settle delay completes
 	time.Sleep(50 * time.Millisecond)
@@ -754,7 +779,7 @@ func TestAutoResumer_SendErrorAfterShutdownSuppressesLog(t *testing.T) {
 	sid := "session-1"
 	startWorkWithSession(t, store, story.ID, sid)
 
-	resumer.HandleProcessStateChange(sid, "idle", false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 
 	// Stop while the goroutine is in settle delay
 	time.Sleep(5 * time.Millisecond)
@@ -777,7 +802,7 @@ func TestAutoResumer_ConcurrentProcessStateChanges(t *testing.T) {
 
 	// Fire all process state changes concurrently
 	for i := 0; i < n; i++ {
-		go resumer.HandleProcessStateChange(fmt.Sprintf("session-%d", i), "idle", false, false)
+		go resumer.HandleProcessStateChange(fmt.Sprintf("session-%d", i), "idle", false, false, false)
 	}
 
 	// All should eventually send messages

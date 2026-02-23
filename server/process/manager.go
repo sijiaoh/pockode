@@ -20,10 +20,11 @@ const (
 )
 
 type StateChangeEvent struct {
-	SessionID  string
-	State      ProcessState
-	NeedsInput bool
-	IsInitial  bool // true only for the initial idle emitted on process creation
+	SessionID   string
+	State       ProcessState
+	NeedsInput  bool
+	IsInitial   bool // true only for the initial idle emitted on process creation
+	Interrupted bool // true when idle is caused by user interrupt
 }
 
 // Manager manages agent processes.
@@ -91,6 +92,12 @@ func (m *Manager) SetOnStateChange(fn func(StateChangeEvent)) {
 func (m *Manager) emitStateChange(sessionID string, state ProcessState, needsInput bool) {
 	if m.onStateChange != nil {
 		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: state, NeedsInput: needsInput})
+	}
+}
+
+func (m *Manager) emitStateChangeEvent(e StateChangeEvent) {
+	if m.onStateChange != nil {
+		m.onStateChange(e)
 	}
 }
 
@@ -345,11 +352,25 @@ func (p *Process) SetRunning() {
 // SetIdle transitions the process to idle state and notifies subscribers.
 // needsInput indicates whether the AI is waiting for user input (permission/question).
 func (p *Process) SetIdle(needsInput bool) {
+	p.setIdle(needsInput, false)
+}
+
+// SetIdleInterrupted transitions to idle due to a user interrupt.
+func (p *Process) SetIdleInterrupted() {
+	p.setIdle(false, true)
+}
+
+func (p *Process) setIdle(needsInput, interrupted bool) {
 	if p.State() == ProcessStateIdle {
 		return
 	}
 	p.setState(ProcessStateIdle)
-	p.manager.emitStateChange(p.sessionID, ProcessStateIdle, needsInput)
+	p.manager.emitStateChangeEvent(StateChangeEvent{
+		SessionID:   p.sessionID,
+		State:       ProcessStateIdle,
+		NeedsInput:  needsInput,
+		Interrupted: interrupted,
+	})
 }
 
 // streamEvents routes events to history and emits to the event listener.
@@ -371,9 +392,13 @@ func (p *Process) streamEvents(ctx context.Context) {
 		}
 
 		if eventType.AwaitsUserInput() {
-			needsInput := eventType == agent.EventTypePermissionRequest ||
-				eventType == agent.EventTypeAskUserQuestion
-			p.SetIdle(needsInput)
+			if eventType == agent.EventTypeInterrupted {
+				p.SetIdleInterrupted()
+			} else {
+				needsInput := eventType == agent.EventTypePermissionRequest ||
+					eventType == agent.EventTypeAskUserQuestion
+				p.SetIdle(needsInput)
+			}
 			if err := p.sessionStore.Touch(ctx, p.sessionID); err != nil {
 				log.Error("failed to touch session", "error", err)
 			}

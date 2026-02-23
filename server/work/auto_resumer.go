@@ -124,10 +124,11 @@ func (r *AutoResumer) getStartHandler() WorkStartHandler {
 // HandleProcessStateChange syncs work status with process lifecycle:
 //   - running → reactivate stopped work to in_progress.
 //   - idle → send auto-continuation message for in_progress work.
+//   - idle (interrupted) → stop work without auto-continuation.
 //   - ended → transition in_progress/needs_input work to stopped.
 //
 // Parameters are extracted from process.StateChangeEvent to avoid importing the process package.
-func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInput, isInitial bool) {
+func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInput, isInitial, interrupted bool) {
 	// Process ended: transition in_progress work to stopped,
 	// but only if auto-continuation isn't already handling this session.
 	if state == "ended" {
@@ -145,6 +146,12 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 	// whose work was stopped (e.g. after process exit), bypassing work_start.
 	if state == "running" {
 		r.handleProcessRunning(sessionID)
+		return
+	}
+
+	// User-initiated interrupt: stop work without auto-continuation.
+	if interrupted {
+		go r.handleProcessEnded(sessionID)
 		return
 	}
 
