@@ -3,6 +3,7 @@ package work
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -1181,6 +1182,74 @@ func TestComments_Persistence(t *testing.T) {
 	}
 }
 
+// --- diffComments ---
+
+func TestDiffComments_NoChanges(t *testing.T) {
+	comments := []Comment{
+		{ID: "c1", WorkID: "w1", Body: "hello"},
+	}
+	events := diffComments(comments, comments)
+	if len(events) != 0 {
+		t.Errorf("expected 0 events, got %d", len(events))
+	}
+}
+
+func TestDiffComments_NewComment(t *testing.T) {
+	old := []Comment{{ID: "c1", WorkID: "w1", Body: "first"}}
+	updated := []Comment{
+		{ID: "c1", WorkID: "w1", Body: "first"},
+		{ID: "c2", WorkID: "w1", Body: "second"},
+	}
+	events := diffComments(old, updated)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Comment.ID != "c2" {
+		t.Errorf("expected comment c2, got %s", events[0].Comment.ID)
+	}
+}
+
+func TestDiffComments_Empty(t *testing.T) {
+	events := diffComments(nil, nil)
+	if len(events) != 0 {
+		t.Errorf("expected 0 events, got %d", len(events))
+	}
+}
+
+// --- Reload notifies comment listeners ---
+
+func TestReload_NotifiesCommentListeners(t *testing.T) {
+	dir := t.TempDir()
+
+	// s1: main server store with listeners
+	s1, _ := NewFileStore(dir)
+	story := createStory(t, s1, "S")
+
+	var mu sync.Mutex
+	var received []CommentEvent
+	s1.AddOnCommentChangeListener(commentListenerFunc(func(e CommentEvent) {
+		mu.Lock()
+		received = append(received, e)
+		mu.Unlock()
+	}))
+
+	// s2: simulates MCP process writing a comment
+	s2, _ := NewFileStore(dir)
+	s2.AddComment(context.Background(), story.ID, "from MCP")
+
+	// Trigger reload on s1 (simulates fsnotify)
+	s1.reloadFromDisk()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 1 {
+		t.Fatalf("expected 1 comment event, got %d", len(received))
+	}
+	if received[0].Comment.Body != "from MCP" {
+		t.Errorf("expected body 'from MCP', got %q", received[0].Comment.Body)
+	}
+}
+
 // --- FindBySessionID ---
 
 func TestFindBySessionID_Found(t *testing.T) {
@@ -1219,6 +1288,10 @@ func TestFindBySessionID_NotFound(t *testing.T) {
 type listenerFunc func(ChangeEvent)
 
 func (f listenerFunc) OnWorkChange(e ChangeEvent) { f(e) }
+
+type commentListenerFunc func(CommentEvent)
+
+func (f commentListenerFunc) OnCommentChange(e CommentEvent) { f(e) }
 
 func findEvent(events []ChangeEvent, workID string) *ChangeEvent {
 	for i := range events {

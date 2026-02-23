@@ -521,9 +521,11 @@ func (s *FileStore) reloadFromDisk() {
 	}
 
 	old := s.works
+	oldComments := s.comments
 	s.works = idx.Works
 	s.comments = idx.Comments
 	listeners := s.copyListeners()
+	commentListeners := s.copyCommentListeners()
 	s.worksMu.Unlock()
 
 	events := diffWorks(old, idx.Works)
@@ -532,6 +534,11 @@ func (s *FileStore) reloadFromDisk() {
 	}
 	for _, e := range events {
 		notify(listeners, e)
+	}
+
+	commentEvents := diffComments(oldComments, idx.Comments)
+	for _, e := range commentEvents {
+		notifyComment(commentListeners, e)
 	}
 }
 
@@ -543,6 +550,23 @@ func diffWorks(old, updated []Work) []ChangeEvent {
 			return ChangeEvent{Op: Operation(op), Work: w}
 		},
 	)
+}
+
+// diffComments detects newly added comments.
+// Comments are append-only, so only creates need to be detected.
+func diffComments(old, updated []Comment) []CommentEvent {
+	oldIDs := make(map[string]struct{}, len(old))
+	for _, c := range old {
+		oldIDs[c.ID] = struct{}{}
+	}
+
+	var events []CommentEvent
+	for _, c := range updated {
+		if _, exists := oldIDs[c.ID]; !exists {
+			events = append(events, CommentEvent{Comment: c})
+		}
+	}
+	return events
 }
 
 func workChanged(a, b Work) bool {
