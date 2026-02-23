@@ -30,9 +30,8 @@ type WorkStartHandler interface {
 //   - running → transition stopped work back to in_progress.
 //   - ended → transition in_progress/needs_input work to stopped.
 //
-// Trigger B: When a child Work closes, send a message to the parent Work's
-// session so the agent can review and continue. The agent decides its own
-// status transitions.
+// Trigger B: When a child Work closes, transition the parent from done to
+// in_progress and send a message so the agent can review and call work_done.
 //
 // Trigger C: When a work item is started externally (e.g. via MCP),
 // create the session and send the kickoff message.
@@ -351,8 +350,18 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 	}
 
 	// Only trigger when the parent is done (waiting for children).
-	// The restarted agent decides whether to transition its own status.
 	if parent.Status != StatusDone || parent.SessionID == "" {
+		return
+	}
+
+	// Transition parent back to in_progress so the agent can work and
+	// call work_done again (done→done would be an invalid transition).
+	status := StatusInProgress
+	if err := r.workStore.Update(r.ctx, parent.ID, UpdateFields{Status: &status}); err != nil {
+		if r.ctx.Err() != nil {
+			return
+		}
+		slog.Warn("failed to reactivate parent work", "parentId", parent.ID, "error", err)
 		return
 	}
 

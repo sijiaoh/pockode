@@ -347,10 +347,10 @@ func TestAutoResumer_SendsMessageToParentOnChildClose(t *testing.T) {
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
-	// Parent stays done — the restarted agent decides its own status
+	// Parent transitioned to in_progress so the agent can call work_done again
 	parent := getWork(t, store, story.ID)
-	if parent.Status != StatusDone {
-		t.Errorf("parent status = %q, want %q (status unchanged)", parent.Status, StatusDone)
+	if parent.Status != StatusInProgress {
+		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
 	}
 
 	// Message sent to parent session
@@ -384,10 +384,10 @@ func TestAutoResumer_SendsMessageWhenLastChildCompletes(t *testing.T) {
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
-	// Parent stays done — the agent decides its own status after review
+	// Parent transitioned to in_progress for agent review
 	parent := getWork(t, store, story.ID)
-	if parent.Status != StatusDone {
-		t.Errorf("parent status = %q, want %q (awaiting review)", parent.Status, StatusDone)
+	if parent.Status != StatusInProgress {
+		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
 	}
 
 	// Message was sent to parent session
@@ -422,10 +422,10 @@ func TestAutoResumer_SendsMessageWhenSiblingsStillRunning(t *testing.T) {
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
-	// Parent stays done — only a message is sent
+	// Parent transitioned to in_progress
 	parent := getWork(t, store, story.ID)
-	if parent.Status != StatusDone {
-		t.Errorf("parent status = %q, want %q (status unchanged)", parent.Status, StatusDone)
+	if parent.Status != StatusInProgress {
+		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
 	}
 
 	msgs := sender.getMessages()
@@ -833,9 +833,9 @@ func TestAutoResumer_ConcurrentOnWorkChange(t *testing.T) {
 
 	doneWork(t, store, story.ID)
 
-	// Fire concurrent child closed events. Since handleParentReactivation
-	// no longer changes parent status, each call sees the parent as done
-	// and sends a message. This is safe — the agent handles duplicates.
+	// Fire concurrent child closed events. Only the first goroutine to read
+	// the parent as done will transition it to in_progress and send a message;
+	// the others see in_progress and skip. At least 1 message must be sent.
 	for _, task := range tasks {
 		go resumer.OnWorkChange(ChangeEvent{
 			Op:   OperationUpdate,
@@ -843,11 +843,16 @@ func TestAutoResumer_ConcurrentOnWorkChange(t *testing.T) {
 		})
 	}
 
-	waitFor(t, func() bool { return len(sender.getMessages()) >= len(tasks) })
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
 	msgs := sender.getMessages()
-	if len(msgs) != len(tasks) {
-		t.Errorf("expected %d reactivation messages, got %d", len(tasks), len(msgs))
+	if len(msgs) < 1 {
+		t.Error("expected at least 1 reactivation message")
+	}
+
+	parent := getWork(t, store, story.ID)
+	if parent.Status != StatusInProgress {
+		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
 	}
 }
 
