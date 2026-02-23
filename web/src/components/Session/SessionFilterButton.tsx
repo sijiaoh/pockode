@@ -40,8 +40,8 @@ export default function SessionFilterButton() {
 			>
 				<div className="py-2">
 					<FilterOption
-						label="Show task sessions"
-						description="Include sessions linked to tasks in the list"
+						label="Show subtask sessions"
+						description="Include sessions linked to subtasks in the list"
 						checked={showTaskSessions}
 						onChange={toggleShow}
 					/>

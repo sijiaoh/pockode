@@ -70,7 +70,7 @@ export default function CreateWorkForm({ type, parentId }: Props) {
 		[title, type, parentId, agentRoleId, createWork, isSubmitting, resetForm],
 	);
 
-	const buttonLabel = type === "story" ? "New Story" : "Add Task";
+	const buttonLabel = type === "story" ? "New Task" : "Add Subtask";
 
 	if (!isCreating) {
 		return (
@@ -116,7 +116,7 @@ export default function CreateWorkForm({ type, parentId }: Props) {
 					type="text"
 					value={title}
 					onChange={(e) => setTitle(e.target.value)}
-					placeholder={type === "story" ? "Story title" : "Task title"}
+					placeholder={type === "story" ? "Task title" : "Subtask title"}
 					className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
 					// biome-ignore lint/a11y/noAutofocus: inline creation form
 					autoFocus

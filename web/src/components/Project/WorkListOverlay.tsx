@@ -80,7 +80,7 @@ export default function WorkListOverlay({
 			<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
 				<BackToChatButton onClick={onBack} />
 				<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
-					Stories
+					Tasks
 				</h1>
 			</header>
 
@@ -100,7 +100,7 @@ export default function WorkListOverlay({
 					</div>
 				) : !hasStories ? (
 					<div className="py-8 text-center text-sm text-th-text-muted">
-						No stories yet
+						No tasks yet
 					</div>
 				) : (
 					<div className="space-y-2">
@@ -224,7 +224,7 @@ function StoryRow({
 						onClick={() => setTasksExpanded(!tasksExpanded)}
 						className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-th-text-muted"
 						aria-expanded={tasksExpanded}
-						aria-label={tasksExpanded ? "Collapse tasks" : "Expand tasks"}
+						aria-label={tasksExpanded ? "Collapse subtasks" : "Expand subtasks"}
 					>
 						{tasksExpanded ? (
 							<ChevronDown className="size-3.5" />
@@ -260,7 +260,7 @@ function StoryRow({
 					<>
 						<span aria-hidden="true">&middot;</span>
 						<span>
-							{doneTasks}/{totalTasks} tasks
+							{doneTasks}/{totalTasks} subtasks
 						</span>
 					</>
 				)}

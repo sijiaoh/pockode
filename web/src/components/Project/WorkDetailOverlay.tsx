@@ -124,8 +124,8 @@ export default function WorkDetailOverlay({
 }
 
 const typeLabels: Record<WorkType, string> = {
-	story: "Story",
-	task: "Task",
+	story: "Task",
+	task: "Subtask",
 };
 
 function DetailHeader({
@@ -137,7 +137,7 @@ function DetailHeader({
 }) {
 	return (
 		<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-			<BackButton onClick={onBack} aria-label="Back to stories" />
+			<BackButton onClick={onBack} aria-label="Back to tasks" />
 			<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
 				{type ? typeLabels[type] : "Detail"}
 			</h1>
@@ -544,7 +544,7 @@ function ChildrenSection({
 	return (
 		<div>
 			<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
-				Tasks{" "}
+				Subtasks{" "}
 				{tasks.length > 0 && (
 					<span>
 						({doneTasks}/{tasks.length})
@@ -552,7 +552,7 @@ function ChildrenSection({
 				)}
 			</h3>
 			{tasks.length === 0 ? (
-				<p className="py-2 text-sm text-th-text-muted">No tasks yet</p>
+				<p className="py-2 text-sm text-th-text-muted">No subtasks yet</p>
 			) : (
 				<div className="space-y-0.5">
 					{tasks.map((child) => (
@@ -671,10 +671,10 @@ function DeleteSection({
 
 	if (work.status === "closed") return null;
 
-	const typeLabel = work.type === "story" ? "Story" : "Task";
+	const typeLabel = work.type === "story" ? "Task" : "Subtask";
 	const confirmMessage =
 		childCount > 0
-			? `Delete "${work.title}" and its ${childCount} child task${childCount > 1 ? "s" : ""}? This cannot be undone.`
+			? `Delete "${work.title}" and its ${childCount} child subtask${childCount > 1 ? "s" : ""}? This cannot be undone.`
 			: `Delete "${work.title}"? This cannot be undone.`;
 
 	return (
