@@ -1,5 +1,5 @@
 import { ClipboardList, Square } from "lucide-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -35,6 +35,31 @@ function isInputBarHidden(overlay: OverlayState | undefined): boolean {
 	return !!overlay && inputBarHiddenOverlays.includes(overlay.type);
 }
 
+function LinkedWorkButton({
+	sessionId,
+	onOpenWorkDetail,
+}: {
+	sessionId: string;
+	onOpenWorkDetail?: (workId: string) => void;
+}) {
+	const linkedWork = useWorkStore((s) =>
+		s.works.find((w) => w.session_id === sessionId),
+	);
+
+	if (!linkedWork) return null;
+
+	return (
+		<button
+			type="button"
+			onClick={() => onOpenWorkDetail?.(linkedWork.id)}
+			className="flex min-w-0 items-center gap-1 rounded px-2 py-1 text-xs text-th-text-secondary transition-all hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
+		>
+			<ClipboardList className="size-3.5 shrink-0" />
+			<span className="max-w-[120px] truncate">{linkedWork.title}</span>
+		</button>
+	);
+}
+
 interface Props {
 	sessionId: string;
 	sessionTitle: string;
@@ -65,11 +90,6 @@ function ChatPanel({
 	onOpenAgentRoleDetail,
 }: Props) {
 	const projectTitle = useWSStore((state) => state.projectTitle);
-	const works = useWorkStore((s) => s.works);
-	const linkedWork = useMemo(
-		() => works.find((w) => w.session_id === sessionId),
-		[works, sessionId],
-	);
 
 	const {
 		messages,
@@ -263,16 +283,10 @@ function ChatPanel({
 						onModeChange={setMode}
 						disabled={isStreaming}
 					/>
-					{linkedWork && (
-						<button
-							type="button"
-							onClick={() => onOpenWorkDetail?.(linkedWork.id)}
-							className="flex min-w-0 items-center gap-1 rounded px-2 py-1 text-xs text-th-text-secondary transition-all hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
-						>
-							<ClipboardList className="size-3.5 shrink-0" />
-							<span className="max-w-[120px] truncate">{linkedWork.title}</span>
-						</button>
-					)}
+					<LinkedWorkButton
+						sessionId={sessionId}
+						onOpenWorkDetail={onOpenWorkDetail}
+					/>
 					{isStreaming ? (
 						<button
 							type="button"

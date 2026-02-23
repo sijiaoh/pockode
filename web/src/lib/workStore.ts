@@ -29,7 +29,7 @@ export const useWorkStore = create<WorkStore>((set) => ({
 export function collectTaskSessionIds(works: Work[]): Set<string> {
 	const ids = new Set<string>();
 	for (const w of works) {
-		if (w.session_id) ids.add(w.session_id);
+		if (w.type === "task" && w.session_id) ids.add(w.session_id);
 	}
 	return ids;
 }
