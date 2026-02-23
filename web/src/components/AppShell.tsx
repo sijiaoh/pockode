@@ -1,5 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
 import { useIsDesktop } from "../hooks/useIsDesktop";
 import { useRouteState } from "../hooks/useRouteState";
 import { useSession } from "../hooks/useSession";
@@ -77,6 +78,7 @@ function AppShell() {
 
 	useSettingsSubscription(hasAuthToken);
 	useWorkSubscription(hasAuthToken);
+	useAgentRoleSubscription(hasAuthToken);
 
 	// Redirect to main when URL worktree doesn't exist in worktree list
 	useEffect(() => {

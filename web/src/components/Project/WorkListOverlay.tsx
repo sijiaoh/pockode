@@ -6,7 +6,6 @@ import {
 	Play,
 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -27,8 +26,6 @@ export default function WorkListOverlay({
 	onOpenWorkDetail,
 	onNavigateToSession,
 }: Props) {
-	useAgentRoleSubscription(true);
-
 	const works = useWorkStore((s) => s.works);
 	const isLoading = useWorkStore((s) => s.isLoading);
 	const error = useWorkStore((s) => s.error);

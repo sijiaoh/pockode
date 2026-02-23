@@ -10,7 +10,6 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useInlineEdit } from "../../hooks/useInlineEdit";
 import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
@@ -39,8 +38,6 @@ export default function WorkDetailOverlay({
 	onNavigateToSession,
 	onOpenWorkDetail,
 }: Props) {
-	useAgentRoleSubscription(true);
-
 	const { work, comments, loading, error } = useWorkDetailSubscription(workId);
 
 	const works = useWorkStore((s) => s.works);

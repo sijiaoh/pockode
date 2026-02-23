@@ -7,7 +7,6 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useCallback, useState } from "react";
-import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useSettingsStore } from "../../lib/settingsStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -23,8 +22,6 @@ export default function AgentRoleListOverlay({
 	onBack,
 	onOpenAgentRoleDetail,
 }: Props) {
-	useAgentRoleSubscription(true);
-
 	const roles = useAgentRoleStore((s) => s.roles);
 	const isLoading = useAgentRoleStore((s) => s.isLoading);
 	const error = useAgentRoleStore((s) => s.error);

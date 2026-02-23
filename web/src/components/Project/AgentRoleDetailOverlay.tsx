@@ -1,6 +1,5 @@
 import { AlertCircle, Check, Loader2, Pencil, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
 import { useInlineEdit } from "../../hooks/useInlineEdit";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -16,8 +15,6 @@ interface Props {
 }
 
 export default function AgentRoleDetailOverlay({ roleId, onBack }: Props) {
-	useAgentRoleSubscription(true);
-
 	const roles = useAgentRoleStore((s) => s.roles);
 	const role = useMemo(
 		() => roles.find((r) => r.id === roleId),
