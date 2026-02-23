@@ -1,6 +1,7 @@
 import { AlertCircle, Check, Loader2, Pencil, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
+import { useInlineEdit } from "../../hooks/useInlineEdit";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
@@ -62,50 +63,30 @@ function DetailHeader({ onBack }: { onBack: () => void }) {
 
 function InlineEditableName({ role }: { role: AgentRole }) {
 	const updateAgentRole = useWSStore((s) => s.actions.updateAgentRole);
-	const [editing, setEditing] = useState(false);
-	const [value, setValue] = useState(role.name);
-	const [saving, setSaving] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const inputRef = useRef<HTMLInputElement>(null);
-
-	useEffect(() => {
-		if (!editing) setValue(role.name);
-	}, [role.name, editing]);
-
-	useEffect(() => {
-		if (editing) inputRef.current?.focus();
-	}, [editing]);
-
-	const save = useCallback(async () => {
-		const trimmed = value.trim();
-		if (!trimmed || trimmed === role.name) {
-			setEditing(false);
-			return;
-		}
-		setError(null);
-		setSaving(true);
-		try {
-			await updateAgentRole({ id: role.id, name: trimmed });
-			setEditing(false);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Failed to save");
-		} finally {
-			setSaving(false);
-		}
-	}, [value, role.id, role.name, updateAgentRole]);
-
-	const cancel = useCallback(() => {
-		setValue(role.name);
-		setEditing(false);
-		setError(null);
-	}, [role.name]);
+	const {
+		editing,
+		setEditing,
+		value,
+		setValue,
+		saving,
+		error,
+		ref,
+		save,
+		cancel,
+	} = useInlineEdit<HTMLInputElement>({
+		initialValue: role.name,
+		onSave: useCallback(
+			(trimmed: string) => updateAgentRole({ id: role.id, name: trimmed }),
+			[updateAgentRole, role.id],
+		),
+	});
 
 	if (editing) {
 		return (
 			<div>
 				<div className="flex items-center gap-1">
 					<input
-						ref={inputRef}
+						ref={ref}
 						type="text"
 						value={value}
 						onChange={(e) => setValue(e.target.value)}
@@ -167,46 +148,32 @@ function InlineEditableName({ role }: { role: AgentRole }) {
 
 function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 	const updateAgentRole = useWSStore((s) => s.actions.updateAgentRole);
-	const [editing, setEditing] = useState(false);
-	const [value, setValue] = useState(role.role_prompt);
-	const [saving, setSaving] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const {
+		editing,
+		setEditing,
+		value,
+		setValue,
+		saving,
+		error,
+		ref,
+		save,
+		cancel,
+	} = useInlineEdit<HTMLTextAreaElement>({
+		initialValue: role.role_prompt,
+		onSave: useCallback(
+			(trimmed: string) =>
+				updateAgentRole({ id: role.id, role_prompt: trimmed }),
+			[updateAgentRole, role.id],
+		),
+		allowEmpty: true,
+	});
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: ref.current is a mutable ref, not a reactive dependency
 	useEffect(() => {
-		if (!editing) setValue(role.role_prompt);
-	}, [role.role_prompt, editing]);
-
-	useEffect(() => {
-		if (editing && textareaRef.current) {
-			textareaRef.current.focus();
-			autoResizeTextarea(textareaRef.current);
+		if (editing && ref.current) {
+			autoResizeTextarea(ref.current);
 		}
 	}, [editing]);
-
-	const save = useCallback(async () => {
-		const trimmed = value.trim();
-		if (trimmed === role.role_prompt.trim()) {
-			setEditing(false);
-			return;
-		}
-		setError(null);
-		setSaving(true);
-		try {
-			await updateAgentRole({ id: role.id, role_prompt: trimmed });
-			setEditing(false);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Failed to save");
-		} finally {
-			setSaving(false);
-		}
-	}, [value, role.id, role.role_prompt, updateAgentRole]);
-
-	const cancel = useCallback(() => {
-		setValue(role.role_prompt);
-		setEditing(false);
-		setError(null);
-	}, [role.role_prompt]);
 
 	if (editing) {
 		return (
@@ -215,7 +182,7 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 					Role Prompt
 				</h3>
 				<textarea
-					ref={textareaRef}
+					ref={ref}
 					value={value}
 					onChange={(e) => {
 						setValue(e.target.value);

@@ -9,8 +9,9 @@ import {
 	Trash2,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAgentRoleSubscription } from "../../hooks/useAgentRoleSubscription";
+import { useInlineEdit } from "../../hooks/useInlineEdit";
 import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
@@ -250,50 +251,30 @@ function ActionBar({
 
 function InlineEditableTitle({ work }: { work: Work }) {
 	const updateWork = useWSStore((s) => s.actions.updateWork);
-	const [editing, setEditing] = useState(false);
-	const [value, setValue] = useState(work.title);
-	const [saving, setSaving] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const inputRef = useRef<HTMLInputElement>(null);
-
-	useEffect(() => {
-		if (!editing) setValue(work.title);
-	}, [work.title, editing]);
-
-	useEffect(() => {
-		if (editing) inputRef.current?.focus();
-	}, [editing]);
-
-	const save = useCallback(async () => {
-		const trimmed = value.trim();
-		if (!trimmed || trimmed === work.title) {
-			setEditing(false);
-			return;
-		}
-		setError(null);
-		setSaving(true);
-		try {
-			await updateWork({ id: work.id, title: trimmed });
-			setEditing(false);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Failed to save");
-		} finally {
-			setSaving(false);
-		}
-	}, [value, work.id, work.title, updateWork]);
-
-	const cancel = useCallback(() => {
-		setValue(work.title);
-		setEditing(false);
-		setError(null);
-	}, [work.title]);
+	const {
+		editing,
+		setEditing,
+		value,
+		setValue,
+		saving,
+		error,
+		ref,
+		save,
+		cancel,
+	} = useInlineEdit<HTMLInputElement>({
+		initialValue: work.title,
+		onSave: useCallback(
+			(trimmed: string) => updateWork({ id: work.id, title: trimmed }),
+			[updateWork, work.id],
+		),
+	});
 
 	if (editing) {
 		return (
 			<div>
 				<div className="flex items-center gap-1">
 					<input
-						ref={inputRef}
+						ref={ref}
 						type="text"
 						value={value}
 						onChange={(e) => setValue(e.target.value)}
@@ -435,46 +416,31 @@ function RoleSection({ work }: { work: Work }) {
 
 function InlineEditableBody({ work }: { work: Work }) {
 	const updateWork = useWSStore((s) => s.actions.updateWork);
-	const [editing, setEditing] = useState(false);
-	const [value, setValue] = useState(work.body ?? "");
-	const [saving, setSaving] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const {
+		editing,
+		setEditing,
+		value,
+		setValue,
+		saving,
+		error,
+		ref,
+		save,
+		cancel,
+	} = useInlineEdit<HTMLTextAreaElement>({
+		initialValue: work.body ?? "",
+		onSave: useCallback(
+			(trimmed: string) => updateWork({ id: work.id, body: trimmed }),
+			[updateWork, work.id],
+		),
+		allowEmpty: true,
+	});
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: ref.current is a mutable ref, not a reactive dependency
 	useEffect(() => {
-		if (!editing) setValue(work.body ?? "");
-	}, [work.body, editing]);
-
-	useEffect(() => {
-		if (editing && textareaRef.current) {
-			textareaRef.current.focus();
-			autoResizeTextarea(textareaRef.current);
+		if (editing && ref.current) {
+			autoResizeTextarea(ref.current);
 		}
 	}, [editing]);
-
-	const save = useCallback(async () => {
-		const trimmed = value.trim();
-		if (trimmed === (work.body ?? "").trim()) {
-			setEditing(false);
-			return;
-		}
-		setError(null);
-		setSaving(true);
-		try {
-			await updateWork({ id: work.id, body: trimmed });
-			setEditing(false);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Failed to save");
-		} finally {
-			setSaving(false);
-		}
-	}, [value, work.id, work.body, updateWork]);
-
-	const cancel = useCallback(() => {
-		setValue(work.body ?? "");
-		setEditing(false);
-		setError(null);
-	}, [work.body]);
 
 	if (editing) {
 		return (
@@ -483,7 +449,7 @@ function InlineEditableBody({ work }: { work: Work }) {
 					Description
 				</h3>
 				<textarea
-					ref={textareaRef}
+					ref={ref}
 					value={value}
 					onChange={(e) => {
 						setValue(e.target.value);
