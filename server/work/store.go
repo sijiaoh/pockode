@@ -5,15 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
-	"syscall"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/google/uuid"
+	"github.com/pockode/server/filestore"
 )
 
 // Store provides CRUD operations and change notifications for Work items.
@@ -58,30 +55,26 @@ type indexData struct {
 
 // FileStore persists Work items to a JSON file with flock-based inter-process safety.
 type FileStore struct {
-	dataDir          string
+	file             *filestore.File
 	worksMu          sync.RWMutex
 	works            []Work
 	comments         []Comment
 	listeners        []OnChangeListener
 	commentListeners []OnCommentChangeListener
-
-	// writeGen is incremented on every in-process write (Create/Update/Delete/MarkDone).
-	// reloadFromDisk uses it to skip stale fsnotify-triggered reloads.
-	writeGen atomic.Int64
-
-	// fsnotify for detecting external changes (MCP writes)
-	watcher    *fsnotify.Watcher
-	debounce   *time.Timer
-	debounceMu sync.Mutex
 }
 
 func NewFileStore(dataDir string) (*FileStore, error) {
-	worksDir := filepath.Join(dataDir, "works")
-	if err := os.MkdirAll(worksDir, 0755); err != nil {
+	store := &FileStore{}
+
+	f, err := filestore.New(filestore.Config{
+		Path:     filepath.Join(dataDir, "works", "index.json"),
+		Label:    "work",
+		OnReload: store.reloadFromDisk,
+	})
+	if err != nil {
 		return nil, err
 	}
-
-	store := &FileStore{dataDir: dataDir}
+	store.file = f
 
 	idx, err := store.readIndexFromDisk()
 	if err != nil {
@@ -91,10 +84,6 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	store.comments = idx.Comments
 
 	return store, nil
-}
-
-func (s *FileStore) indexPath() string {
-	return filepath.Join(s.dataDir, "works", "index.json")
 }
 
 // --- Read operations ---
@@ -504,41 +493,19 @@ func notifyComment(listeners []OnCommentChangeListener, event CommentEvent) {
 	}
 }
 
-// --- File I/O with flock ---
-//
-// A dedicated lock file (index.json.lock) is used for flock because the data
-// file may be replaced via rename, which changes its inode. A stable lock file
-// ensures flock works correctly across processes.
-
-func (s *FileStore) lockPath() string {
-	return s.indexPath() + ".lock"
-}
+// --- File I/O ---
 
 func (s *FileStore) readIndexFromDisk() (indexData, error) {
-	// Acquire shared lock to prevent reading mid-rename
-	lockF, err := os.OpenFile(s.lockPath(), os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return indexData{}, fmt.Errorf("open lock file: %w", err)
-	}
-	defer lockF.Close()
-
-	if err := syscall.Flock(int(lockF.Fd()), syscall.LOCK_SH); err != nil {
-		return indexData{}, fmt.Errorf("flock shared: %w", err)
-	}
-	defer syscall.Flock(int(lockF.Fd()), syscall.LOCK_UN)
-
-	path := s.indexPath()
-	f, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return indexData{Works: []Work{}}, nil
-	}
+	data, err := s.file.Read()
 	if err != nil {
 		return indexData{}, err
 	}
-	defer f.Close()
+	if data == nil {
+		return indexData{Works: []Work{}}, nil
+	}
 
 	var idx indexData
-	if err := json.NewDecoder(f).Decode(&idx); err != nil {
+	if err := json.Unmarshal(data, &idx); err != nil {
 		return indexData{}, err
 	}
 	if idx.Works == nil {
@@ -550,138 +517,21 @@ func (s *FileStore) readIndexFromDisk() (indexData, error) {
 	return idx, nil
 }
 
-// persistIndex writes the index atomically using write-temp-fsync-rename.
-// A crash at any point leaves either the old file intact or the new file
-// fully written — never a partial/empty file.
 func (s *FileStore) persistIndex() error {
-	data, err := json.MarshalIndent(indexData{Works: s.works, Comments: s.comments}, "", "  ")
+	data, err := filestore.MarshalIndex(indexData{Works: s.works, Comments: s.comments})
 	if err != nil {
 		return err
 	}
-
-	// Acquire exclusive lock
-	lockF, err := os.OpenFile(s.lockPath(), os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return fmt.Errorf("open lock file: %w", err)
-	}
-	defer lockF.Close()
-
-	if err := syscall.Flock(int(lockF.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("flock exclusive: %w", err)
-	}
-	defer syscall.Flock(int(lockF.Fd()), syscall.LOCK_UN)
-
-	// Write to temp file in the same directory (same filesystem for atomic rename)
-	path := s.indexPath()
-	tmpPath := path + ".tmp"
-
-	tmpF, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-
-	if _, err := tmpF.Write(data); err != nil {
-		tmpF.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := tmpF.Sync(); err != nil {
-		tmpF.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("fsync temp file: %w", err)
-	}
-	if err := tmpF.Close(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("close temp file: %w", err)
-	}
-
-	// Atomic rename
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("rename temp to index: %w", err)
-	}
-
-	s.writeGen.Add(1)
-	return nil
+	return s.file.Write(data)
 }
 
-// --- fsnotify: detect external changes (MCP writes) ---
+// --- fsnotify ---
 
-func (s *FileStore) StartWatching() error {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return err
-	}
-	s.watcher = watcher
-
-	// Watch the directory (file-level watches don't survive file replacements)
-	dir := filepath.Dir(s.indexPath())
-	if err := watcher.Add(dir); err != nil {
-		watcher.Close()
-		return err
-	}
-
-	go s.watchLoop()
-	slog.Info("WorkStore watching for external changes", "path", s.indexPath())
-	return nil
-}
-
-func (s *FileStore) StopWatching() {
-	// Stop debounce timer first to prevent a pending reload from firing
-	// after watcher.Close() but before we cancel the timer.
-	s.debounceMu.Lock()
-	if s.debounce != nil {
-		s.debounce.Stop()
-	}
-	s.debounceMu.Unlock()
-
-	if s.watcher != nil {
-		s.watcher.Close()
-	}
-}
-
-func (s *FileStore) watchLoop() {
-	for {
-		select {
-		case event, ok := <-s.watcher.Events:
-			if !ok {
-				return
-			}
-			if filepath.Base(event.Name) != "index.json" {
-				continue
-			}
-			if event.Op&(fsnotify.Write|fsnotify.Create) == 0 {
-				continue
-			}
-			s.scheduleReload()
-		case err, ok := <-s.watcher.Errors:
-			if !ok {
-				return
-			}
-			slog.Error("work store fsnotify error", "error", err)
-		}
-	}
-}
-
-const reloadDebounce = 100 * time.Millisecond
-
-func (s *FileStore) scheduleReload() {
-	s.debounceMu.Lock()
-	defer s.debounceMu.Unlock()
-
-	if s.debounce != nil {
-		s.debounce.Stop()
-	}
-	s.debounce = time.AfterFunc(reloadDebounce, s.reloadFromDisk)
-}
+func (s *FileStore) StartWatching() error { return s.file.StartWatching() }
+func (s *FileStore) StopWatching()        { s.file.StopWatching() }
 
 func (s *FileStore) reloadFromDisk() {
-	// Snapshot write generation before reading. If an in-process write
-	// happens between our disk read and the lock acquisition, the
-	// generation will differ and we skip this reload — the in-process
-	// write already updated in-memory state, and its own fsnotify event
-	// will trigger a fresh reload if needed.
-	genBefore := s.writeGen.Load()
+	genBefore := s.file.SnapshotGen()
 
 	idx, err := s.readIndexFromDisk()
 	if err != nil {
@@ -691,10 +541,7 @@ func (s *FileStore) reloadFromDisk() {
 
 	s.worksMu.Lock()
 
-	if s.writeGen.Load() != genBefore {
-		// An in-process write happened since we read the disk — our disk
-		// data may be stale. Skip this reload; the next fsnotify event
-		// (from the in-process write's rename) will trigger a fresh one.
+	if s.file.IsStale(genBefore) {
 		s.worksMu.Unlock()
 		return
 	}
@@ -705,9 +552,6 @@ func (s *FileStore) reloadFromDisk() {
 	listeners := s.copyListeners()
 	s.worksMu.Unlock()
 
-	// Diff against in-memory state: if our own write caused this reload,
-	// the data matches and no events are fired. External writes (MCP)
-	// produce a diff and trigger notifications.
 	events := diffWorks(old, idx.Works)
 	for i := range events {
 		events[i].External = true
@@ -718,36 +562,13 @@ func (s *FileStore) reloadFromDisk() {
 }
 
 func diffWorks(old, updated []Work) []ChangeEvent {
-	var events []ChangeEvent
-
-	oldMap := make(map[string]Work, len(old))
-	for _, w := range old {
-		oldMap[w.ID] = w
-	}
-
-	newMap := make(map[string]Work, len(updated))
-	for _, w := range updated {
-		newMap[w.ID] = w
-	}
-
-	// Deletes
-	for id, w := range oldMap {
-		if _, exists := newMap[id]; !exists {
-			events = append(events, ChangeEvent{Op: OperationDelete, Work: w})
-		}
-	}
-
-	// Creates and Updates
-	for id, w := range newMap {
-		oldW, exists := oldMap[id]
-		if !exists {
-			events = append(events, ChangeEvent{Op: OperationCreate, Work: w})
-		} else if workChanged(oldW, w) {
-			events = append(events, ChangeEvent{Op: OperationUpdate, Work: w})
-		}
-	}
-
-	return events
+	return filestore.Diff(old, updated,
+		func(w Work) string { return w.ID },
+		workChanged,
+		func(op filestore.Operation, w Work) ChangeEvent {
+			return ChangeEvent{Op: Operation(op), Work: w}
+		},
+	)
 }
 
 func workChanged(a, b Work) bool {
