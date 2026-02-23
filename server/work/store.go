@@ -239,7 +239,7 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) er
 
 	modified := map[string]bool{id: true}
 	if fields.Status != nil && *fields.Status == StatusDone {
-		s.autoCloseLeaf(w, now, modified)
+		s.autoClose(w, now, modified)
 	}
 
 	return s.persistAndNotifyUpdates(prev, modified)
@@ -319,7 +319,7 @@ func (s *FileStore) MarkDone(_ context.Context, id string) error {
 	w.UpdatedAt = now
 
 	modified := map[string]bool{id: true}
-	s.autoCloseLeaf(w, now, modified)
+	s.autoClose(w, now, modified)
 
 	return s.persistAndNotifyUpdates(prev, modified)
 }
@@ -357,17 +357,18 @@ func (s *FileStore) snapshotWorks() []Work {
 
 // --- Auto-close logic ---
 
-// autoCloseLeaf promotes a done item to closed if it has no children.
-// Stories with children stay done — the PM agent closes them explicitly.
+// autoClose promotes a done item to closed when all its children (if any)
+// are closed. This handles both leaf items (no children) and parents whose
+// children have all completed.
 // Caller must hold s.worksMu write lock.
-func (s *FileStore) autoCloseLeaf(w *Work, now time.Time, modified map[string]bool) {
+func (s *FileStore) autoClose(w *Work, now time.Time, modified map[string]bool) {
 	if w.Status != StatusDone {
 		return
 	}
 
 	for _, child := range s.works {
-		if child.ParentID == w.ID {
-			return // has children → stay done
+		if child.ParentID == w.ID && child.Status != StatusClosed {
+			return // has non-closed children → stay done
 		}
 	}
 

@@ -94,7 +94,7 @@ func TestNeedsInputSyncer_SkipsCompletedWork(t *testing.T) {
 	startWorkWithSession(t, s, task.ID, "sess-1")
 	doneWork(t, s, task.ID)
 
-	// After doneWork, autoCloseLeaf promotes to closed (no children)
+	// After doneWork, autoClose promotes to closed (no children)
 	w := getWork(t, s, task.ID)
 	statusBefore := w.Status
 

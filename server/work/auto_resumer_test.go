@@ -376,7 +376,7 @@ func TestAutoResumer_SendsMessageWhenLastChildCompletes(t *testing.T) {
 	// Parent done, waiting for children
 	doneWork(t, store, story.ID)
 
-	// MarkDone on the last task: autoCloseLeaf closes the task,
+	// MarkDone on the last task: autoClose closes the task,
 	// which triggers handleParentReactivation via OnWorkChange.
 	if err := store.MarkDone(context.Background(), task.ID); err != nil {
 		t.Fatalf("MarkDone task: %v", err)
@@ -384,10 +384,10 @@ func TestAutoResumer_SendsMessageWhenLastChildCompletes(t *testing.T) {
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
-	// Parent stays done — the agent decides its own status
+	// Parent stays done — the agent decides its own status after review
 	parent := getWork(t, store, story.ID)
 	if parent.Status != StatusDone {
-		t.Errorf("parent status = %q, want %q (status unchanged)", parent.Status, StatusDone)
+		t.Errorf("parent status = %q, want %q (awaiting review)", parent.Status, StatusDone)
 	}
 
 	// Message was sent to parent session

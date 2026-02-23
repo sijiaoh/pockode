@@ -500,6 +500,24 @@ func TestTransition_NeedsInputToInProgress(t *testing.T) {
 	}
 }
 
+func TestTransition_NeedsInputToStopped(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	niStatus := StatusNeedsInput
+	s.Update(context.Background(), story.ID, UpdateFields{Status: &niStatus})
+
+	stoppedStatus := StatusStopped
+	if err := s.Update(context.Background(), story.ID, UpdateFields{Status: &stoppedStatus}); err != nil {
+		t.Fatalf("needs_input → stopped: %v", err)
+	}
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusStopped {
+		t.Errorf("status = %q, want %q", got.Status, StatusStopped)
+	}
+}
+
 func TestTransition_Invalid_NeedsInputToDone(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
@@ -626,9 +644,9 @@ func TestMarkDone_ChildClosesButParentStaysDone(t *testing.T) {
 	if getWork(t, s, task.ID).Status != StatusClosed {
 		t.Error("task should be closed")
 	}
-	// Parent stays done — reactivation is handled by AutoResumer, not autoCloseLeaf
+	// Parent stays done — reactivation is handled by AutoResumer
 	if getWork(t, s, story.ID).Status != StatusDone {
-		t.Errorf("story should stay done, got %q", getWork(t, s, story.ID).Status)
+		t.Errorf("story should stay done (awaiting review), got %q", getWork(t, s, story.ID).Status)
 	}
 }
 
@@ -663,6 +681,26 @@ func TestAutoClose_StoryWithPendingChildren(t *testing.T) {
 	}
 }
 
+func TestAutoClose_StoryDoneWhenAllChildrenAlreadyClosed(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWork(t, s, story.ID)
+	startWork(t, s, task.ID)
+
+	// Close the child first
+	doneWork(t, s, task.ID)
+	if getWork(t, s, task.ID).Status != StatusClosed {
+		t.Fatal("precondition: task should be closed")
+	}
+
+	// Story done with all children already closed → auto-closes immediately
+	doneWork(t, s, story.ID)
+	if getWork(t, s, story.ID).Status != StatusClosed {
+		t.Errorf("story should auto-close when done with all children closed, got %q", getWork(t, s, story.ID).Status)
+	}
+}
+
 func TestAutoClose_ParentStaysDoneWhenChildrenClose(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
@@ -675,22 +713,22 @@ func TestAutoClose_ParentStaysDoneWhenChildrenClose(t *testing.T) {
 	// Mark story as done first (won't close because children pending)
 	doneWork(t, s, story.ID)
 
-	// Complete task1 → closed; parent stays done (reactivation is AutoResumer's job)
+	// Complete task1 → closed; parent stays done (awaiting review)
 	doneWork(t, s, task1.ID)
 	if getWork(t, s, task1.ID).Status != StatusClosed {
 		t.Error("task1 should be closed")
 	}
 	if getWork(t, s, story.ID).Status != StatusDone {
-		t.Errorf("story should stay done, got %q", getWork(t, s, story.ID).Status)
+		t.Errorf("story should stay done while task2 is running, got %q", getWork(t, s, story.ID).Status)
 	}
 
-	// Complete task2 → closed; parent still stays done
+	// Complete task2 → closed; parent stays done (AutoResumer handles reactivation)
 	doneWork(t, s, task2.ID)
 	if getWork(t, s, task2.ID).Status != StatusClosed {
 		t.Error("task2 should be closed")
 	}
 	if getWork(t, s, story.ID).Status != StatusDone {
-		t.Errorf("story should stay done, got %q", getWork(t, s, story.ID).Status)
+		t.Errorf("story should stay done (awaiting review), got %q", getWork(t, s, story.ID).Status)
 	}
 }
 
@@ -758,10 +796,9 @@ func TestListener_ChildCloseDoesNotFireParentEvent(t *testing.T) {
 		events = append(events, e)
 	}))
 
-	// Task done → auto-close; parent is not touched by autoCloseLeaf
+	// Task done → auto-close; parent stays done (awaiting review via AutoResumer)
 	doneWork(t, s, task.ID)
 
-	// Only 1 event: task closed (parent reactivation is AutoResumer's job)
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event (task closed only), got %d", len(events))
 	}
