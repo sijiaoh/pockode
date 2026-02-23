@@ -132,7 +132,7 @@ func TestToolsList(t *testing.T) {
 		names[td.Name] = true
 	}
 
-	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_done", "work_start", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get"} {
+	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_delete", "work_done", "work_start", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}
@@ -324,6 +324,41 @@ func TestWorkGet(t *testing.T) {
 func TestWorkGet_NotFound(t *testing.T) {
 	ts := newTestServer(t)
 	result := callTool(t, ts.Server, "work_get", map[string]string{"id": "nonexistent"})
+
+	if !result.IsError {
+		t.Error("expected error for nonexistent ID")
+	}
+}
+
+// --- Tool: work_delete ---
+
+func TestWorkDelete(t *testing.T) {
+	ts := newTestServer(t)
+
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Delete Me", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(createResult))
+
+	result := callTool(t, ts.Server, "work_delete", map[string]string{"id": id})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	if !strings.Contains(toolText(result), "Deleted") {
+		t.Errorf("result = %q, want to contain 'Deleted'", toolText(result))
+	}
+
+	// Verify it's gone
+	getResult := callTool(t, ts.Server, "work_get", map[string]string{"id": id})
+	if !getResult.IsError {
+		t.Error("expected error when getting deleted work")
+	}
+}
+
+func TestWorkDelete_NotFound(t *testing.T) {
+	ts := newTestServer(t)
+	result := callTool(t, ts.Server, "work_delete", map[string]string{"id": "nonexistent"})
 
 	if !result.IsError {
 		t.Error("expected error for nonexistent ID")

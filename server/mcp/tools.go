@@ -80,6 +80,17 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
+		Name:        "work_delete",
+		Description: "Delete a work item. If the item is a story, all its child tasks are also deleted.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id": {Type: "string", Description: "Work item ID to delete"},
+			},
+			Required: []string{"id"},
+		},
+	},
+	{
 		Name:        "work_done",
 		Description: "Mark a work item as done. If all sibling tasks are also done, the parent story will automatically close. If the item is still open (not yet in_progress), it will be automatically transitioned.",
 		InputSchema: inputSchema{
@@ -177,6 +188,8 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkUpdate, true
 	case "work_get":
 		return s.handleWorkGet, true
+	case "work_delete":
+		return s.handleWorkDelete, true
 	case "work_done":
 		return s.handleWorkDone, true
 	case "work_start":
@@ -370,6 +383,21 @@ func (s *Server) handleWorkGet(_ context.Context, args json.RawMessage) (string,
 		return "", fmt.Errorf("marshal work item: %w", err)
 	}
 	return string(b), nil
+}
+
+func (s *Server) handleWorkDelete(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	if err := s.store.Delete(ctx, params.ID); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Deleted work %s", params.ID), nil
 }
 
 func (s *Server) handleWorkDone(ctx context.Context, args json.RawMessage) (string, error) {
