@@ -2,9 +2,9 @@ package work
 
 import "testing"
 
-// --- ValidNextStatuses ---
+// --- validNextStatuses ---
 
-func TestValidNextStatuses(t *testing.T) {
+func Test_validNextStatuses(t *testing.T) {
 	tests := []struct {
 		from     WorkStatus
 		expected []WorkStatus
@@ -18,14 +18,14 @@ func TestValidNextStatuses(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		next := ValidNextStatuses(tt.from)
+		next := validNextStatuses(tt.from)
 		if len(next) != len(tt.expected) {
-			t.Errorf("ValidNextStatuses(%s) = %v, want %v", tt.from, next, tt.expected)
+			t.Errorf("validNextStatuses(%s) = %v, want %v", tt.from, next, tt.expected)
 			continue
 		}
 		for i, s := range next {
 			if s != tt.expected[i] {
-				t.Errorf("ValidNextStatuses(%s)[%d] = %s, want %s", tt.from, i, s, tt.expected[i])
+				t.Errorf("validNextStatuses(%s)[%d] = %s, want %s", tt.from, i, s, tt.expected[i])
 			}
 		}
 	}

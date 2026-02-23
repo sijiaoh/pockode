@@ -4,7 +4,7 @@
 
 ### Work
 
-A unit of work — either a **story** (top-level) or a **task** (child of a story).
+A unit of work — either a **task** (top-level, wire type `"story"`) or a **subtask** (child, wire type `"task"`).
 
 | Field         | Type         | Description                                            |
 | ------------- | ------------ | ------------------------------------------------------ |
@@ -15,7 +15,7 @@ A unit of work — either a **story** (top-level) or a **task** (child of a stor
 | title         | string       | Short description (required)                           |
 | body          | string?      | Detailed description or instructions                   |
 | status        | WorkStatus   | Current lifecycle state (see below)                    |
-| session_id    | string?      | Active agent session ID (set on start, cleared on end) |
+| session_id    | string?      | Agent session ID (set on start, preserved through stop/done/closed) |
 | created_at    | time         | Creation timestamp                                     |
 | updated_at    | time         | Last modification timestamp                            |
 
@@ -44,19 +44,18 @@ Defines an agent persona with a system prompt.
 
 ## Hierarchy
 
-Two-level only: **Story → Task**.
+Two-level only: **Task → Subtask** (wire types: `story` → `task`).
 
-- Stories are always top-level (no parent).
-- Tasks must have exactly one story parent.
-- `agent_role_id` is required on all work items (both stories and tasks).
-- A story cannot be deleted while it has children.
-- Children cannot be added to a closed story.
+- Tasks are always top-level (no parent).
+- Subtasks must have exactly one task parent.
+- `agent_role_id` is required on all work items.
+- Deleting a story cascade-deletes all its children.
 
 ## Status Lifecycle
 
 See [workflow-engine.md](workflow-engine.md) for the full status machine, transitions, auto-close, and session ID constraints.
 
-Summary: `open → in_progress → done → closed`, with `needs_input` as a pause state. `closed` is auto-derived, never set directly.
+Summary: `open → in_progress → done → closed`, with `needs_input` as a pause state and `stopped` for ended sessions. `closed` is auto-derived, never set directly.
 
 ## Persistence
 
@@ -106,25 +105,45 @@ A crash at any point leaves either the old file intact or the new file fully wri
 
 ### Rollback on persist failure
 
-If `persistIndex` fails, the in-memory state is reverted to match the on-disk state. Update/Delete/MarkDone snapshot the full state before mutation; Create/AddComment use append-then-truncate.
+If `persistIndex` fails, the in-memory state is reverted to match the on-disk state. Mutations that modify existing items snapshot the full state before mutation; Create/AddComment use append-then-truncate.
 
 ## Store Interface
 
 ### work.Store
 
-| Method             | Signature                                              | Behavior                                                              |
-| ------------------ | ------------------------------------------------------ | --------------------------------------------------------------------- |
-| List               | `() → ([]Work, error)`                                 | Returns all work items                                                |
-| Get                | `(id) → (Work, bool, error)`                           | Returns a single item; bool indicates found                           |
-| Create             | `(ctx, Work) → (Work, error)`                          | Validates type/parent/agent_role, assigns ID and timestamps           |
-| Update             | `(ctx, id, UpdateFields) → error`                      | Partial update; validates status transitions and session_id rules     |
-| Delete             | `(ctx, id) → error`                                    | Fails if the item has children                                        |
-| MarkDone           | `(ctx, id) → error`                                    | Atomically transitions to done; auto-advances from open if needed     |
-| AddComment         | `(ctx, workID, body) → (Comment, error)`               | Creates a comment; fails if work not found                            |
-| ListComments       | `(workID) → ([]Comment, error)`                        | Returns comments for a work item                                      |
-| AddOnChangeListener| `(OnChangeListener)`                                   | Registers a listener for create/update/delete events                  |
-| StartWatching      | `() → error`                                           | Starts fsnotify monitoring for external changes                       |
-| StopWatching       | `()`                                                   | Stops the watcher                                                     |
+**CRUD:**
+
+| Method       | Signature                             | Behavior                                                    |
+| ------------ | ------------------------------------- | ----------------------------------------------------------- |
+| List         | `() → ([]Work, error)`                | Returns all work items                                      |
+| Get          | `(id) → (Work, bool, error)`          | Returns a single item; bool indicates found                 |
+| FindBySessionID | `(sessionID) → (Work, bool, error)` | Finds a work item by its active session ID                  |
+| Create       | `(ctx, Work) → (Work, error)`         | Validates type/parent/agent_role, assigns ID and timestamps |
+| Update       | `(ctx, id, UpdateFields) → error`     | Partial update of data fields (title, body, agent_role_id)  |
+| Delete       | `(ctx, id) → error`                   | Cascade-deletes children                                    |
+
+**Intent-based transitions** (preferred way to change status):
+
+| Method        | Signature                              | Behavior                                                         |
+| ------------- | -------------------------------------- | ---------------------------------------------------------------- |
+| Start         | `(ctx, id, sessionID) → (Work, error)` | Transitions to `in_progress`, sets sessionID                    |
+| Stop          | `(ctx, id) → error`                    | Transitions `in_progress`/`needs_input` → `stopped`             |
+| MarkDone      | `(ctx, id) → error`                    | Transitions to `done`; auto-advances from `open` if needed      |
+| MarkNeedsInput| `(ctx, id) → error`                    | Transitions `in_progress` → `needs_input`                       |
+| Resume        | `(ctx, id) → error`                    | Transitions `needs_input` → `in_progress`                       |
+| Reactivate    | `(ctx, id) → error`                    | Transitions `stopped`/`done`/`closed` → `in_progress` (preserves sessionID) |
+| RollbackStart | `(ctx, id, wasRestart) → error`        | Reverts a failed Start (fresh → `open`; restart → `stopped`)   |
+
+**Comments and events:**
+
+| Method                    | Signature                      | Behavior                                                |
+| ------------------------- | ------------------------------ | ------------------------------------------------------- |
+| AddComment                | `(ctx, workID, body) → (Comment, error)` | Creates a comment; fails if work not found    |
+| ListComments              | `(workID) → ([]Comment, error)`          | Returns comments for a work item              |
+| AddOnChangeListener       | `(OnChangeListener)`                     | Registers a listener for work change events   |
+| AddOnCommentChangeListener| `(OnCommentChangeListener)`              | Registers a listener for comment events       |
+| StartWatching             | `() → error`                             | Starts fsnotify monitoring for external changes |
+| StopWatching              | `()`                                     | Stops the watcher                             |
 
 ### agentrole.Store
 
@@ -135,6 +154,7 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | Create             | `(ctx, AgentRole) → (AgentRole, error)`                | Validates name, assigns ID and timestamps                             |
 | Update             | `(ctx, id, UpdateFields) → error`                      | Partial update; name cannot be empty                                  |
 | Delete             | `(ctx, id) → error`                                    | Removes the role                                                      |
+| ResetDefaults      | `(ctx) → error`                                        | Deletes all roles and recreates built-in defaults                     |
 | AddOnChangeListener| `(OnChangeListener)`                                   | Registers a listener for create/update/delete events                  |
 | StartWatching      | `() → error`                                           | Starts fsnotify monitoring for external changes                       |
 | StopWatching       | `()`                                                   | Stops the watcher                                                     |

@@ -19,6 +19,7 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | `work_get` | `id` | — | `{id, type, parent_id?, agent_role_id?, status, title, body?}` |
 | `work_create` | `type`, `title`, `agent_role_id` | `parent_id`, `body` | Confirmation string with ID |
 | `work_update` | `id` | `title`, `body`, `agent_role_id` | Confirmation string |
+| `work_delete` | `id` | — | Confirmation string |
 | `work_done` | `id` | — | Confirmation string |
 | `work_start` | `id` | — | Confirmation string with session ID |
 | `work_needs_input` | `id`, `reason` | — | Confirmation string |
@@ -26,6 +27,7 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | `work_comment_list` | `work_id` | — | JSON array of `{id, work_id, body, created_at}` |
 | `agent_role_list` | — | — | JSON array of `{id, name}` |
 | `agent_role_get` | `id` | — | `{id, name, role_prompt}` |
+| `agent_role_reset_defaults` | — | — | Confirmation string |
 
 ### Security: Prompt Injection Prevention
 
@@ -36,10 +38,10 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 ### Behavior Notes
 
 - **`work_create`**: Requires `agent_role_id` (validated to exist). Stories are top-level; tasks require `parent_id`.
-- **`work_start`**: Requires the work item to have an `agent_role_id`. Generates a UUIDv7 session ID, transitions `open → in_progress` and attaches the session ID via `Store.Update`. The main server detects this state change via fsnotify (`AutoResumer` Trigger C) and handles session creation.
-- **`work_done`**: Calls `Store.MarkDone()`. If the item is still `open`, it auto-advances to `in_progress` first, then transitions to `done`. After that, `autoCloseRecursive` promotes `done → closed` if all children are complete, cascading upward to ancestors.
-- **`work_needs_input`**: Transitions `in_progress → needs_input`. Used when the agent needs user confirmation before continuing.
-- **`work_update`**: Uses pointer fields (`*string`) to distinguish "not provided" from "set to empty".
+- **`work_start`**: Requires the work item to have an `agent_role_id`. Generates a UUIDv7 session ID, transitions to `in_progress` and attaches the session ID via `Store.Start`. The main server detects this state change via fsnotify (`AutoResumer` Trigger C) and handles session creation.
+- **`work_done`**: Calls `Store.MarkDone()`. If the item is still `open`, it auto-advances to `in_progress` first, then transitions to `done`. After that, `autoClose` promotes `done → closed` if all children are `closed`.
+- **`work_needs_input`**: Calls `Store.MarkNeedsInput()`. Transitions `in_progress → needs_input`.
+- **`work_update`**: Uses pointer fields (`*string`) to distinguish "not provided" from "set to empty". Only updates data fields (title, body, agent_role_id).
 
 ## WebSocket RPC
 
@@ -52,10 +54,13 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | Method | Params | Result | Description |
 |--------|--------|--------|-------------|
 | `work.create` | `WorkCreateParams` | `Work` (full object) | Create a work item |
-| `work.update` | `WorkUpdateParams` | `{}` | Update fields (pointer semantics) |
-| `work.delete` | `WorkDeleteParams` | `{}` | Delete a work item |
+| `work.update` | `WorkUpdateParams` | `{}` | Update data fields (pointer semantics) |
+| `work.delete` | `WorkDeleteParams` | `{}` | Delete a work item (cascade-deletes children) |
 | `work.start` | `WorkStartParams` | `Work` (full object) | Atomic claim + session creation |
+| `work.stop` | `WorkStopParams` | `{}` | Stop a work item (in_progress/needs_input → stopped) |
 | `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
+| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{id, work, comments}` | Subscribe to a single work item + comments |
+| `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
 | `work.list.subscribe` | — | `{id, items: Work[]}` | Subscribe + get current snapshot |
 | `work.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
@@ -66,17 +71,20 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `agent_role.create` | `AgentRoleCreateParams` | `AgentRole` | Create a role |
 | `agent_role.update` | `AgentRoleUpdateParams` | `{}` | Update fields |
 | `agent_role.delete` | `AgentRoleDeleteParams` | `{}` | Delete (with referential integrity check) |
+| `agent_role.reset_defaults` | — | `{}` | Delete all roles and recreate defaults |
 | `agent_role.list.subscribe` | — | `{id, items: AgentRole[]}` | Subscribe + get current snapshot |
 | `agent_role.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
 ### Wire Types
 
 ```
-WorkCreateParams     { type, title, agent_role_id, parent_id?, body? }
-WorkUpdateParams     { id, title?, body?, agent_role_id?, status? }
-WorkDeleteParams     { id }
-WorkStartParams      { id }
-WorkCommentListParams { work_id }
+WorkCreateParams          { type, title, agent_role_id, parent_id?, body? }
+WorkUpdateParams          { id, title?, body?, agent_role_id? }
+WorkDeleteParams          { id }
+WorkStartParams           { id }
+WorkStopParams            { id }
+WorkCommentListParams     { work_id }
+WorkDetailSubscribeParams { work_id }
 
 AgentRoleCreateParams   { name, role_prompt }
 AgentRoleUpdateParams   { id, name?, role_prompt? }
@@ -87,12 +95,12 @@ Defined in `server/rpc/types.go`.
 
 ### `work.start` Atomicity
 
-`work.start` is the most complex RPC method. It performs a two-phase operation:
+`work.start` performs a two-phase operation:
 
-1. **Claim**: Atomically transitions `open → in_progress` and attaches a new UUIDv7 session ID. The store's mutex prevents concurrent claims on the same work item.
-2. **Session creation**: Calls `WorkStarter.HandleWorkStart()` to create the Claude session and send the kickoff message.
+1. **Claim**: Atomically transitions to `in_progress` and attaches a new UUIDv7 session ID via `Store.Start`. The store's mutex prevents concurrent claims.
+2. **Session creation**: Calls `WorkStarter.HandleWorkStart()` to create the Claude session and send the kickoff (or restart) message.
 
-If step 2 fails, the handler **rolls back** step 1 (reverts status to `open`, clears session ID). This prevents orphan sessions and stuck work items.
+If step 2 fails, the handler calls `Store.RollbackStart` — fresh starts revert to `open` (clears sessionID); restarts revert to `stopped` (preserves sessionID).
 
 ### `agent_role.delete` Referential Integrity
 

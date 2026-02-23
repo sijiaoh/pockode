@@ -132,7 +132,7 @@ func TestToolsList(t *testing.T) {
 		names[td.Name] = true
 	}
 
-	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_delete", "work_done", "work_start", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get"} {
+	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_delete", "work_done", "work_start", "work_needs_input", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get", "agent_role_reset_defaults"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}
@@ -487,6 +487,61 @@ func TestWorkStart_AlreadyInProgress(t *testing.T) {
 	}
 }
 
+// --- Tool: work_needs_input ---
+
+func TestWorkNeedsInput(t *testing.T) {
+	ts := newTestServer(t)
+
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(createResult))
+
+	// Transition to in_progress first
+	callTool(t, ts.Server, "work_start", map[string]string{"id": id})
+
+	result := callTool(t, ts.Server, "work_needs_input", map[string]string{
+		"id": id, "reason": "Need clarification on requirements",
+	})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	text := toolText(result)
+	if !strings.Contains(text, "waiting for user input") {
+		t.Errorf("result = %q, want to contain 'waiting for user input'", text)
+	}
+	if !strings.Contains(text, "Need clarification on requirements") {
+		t.Errorf("result = %q, want to contain reason", text)
+	}
+
+	// Verify status changed
+	w, found, err := ts.store.Get(id)
+	if err != nil || !found {
+		t.Fatal("work not found after needs_input")
+	}
+	if w.Status != work.StatusNeedsInput {
+		t.Errorf("status = %q, want needs_input", w.Status)
+	}
+}
+
+func TestWorkNeedsInput_NotInProgress(t *testing.T) {
+	ts := newTestServer(t)
+
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(createResult))
+
+	// Try needs_input from open status (invalid)
+	result := callTool(t, ts.Server, "work_needs_input", map[string]string{
+		"id": id, "reason": "some reason",
+	})
+	if !result.IsError {
+		t.Error("expected error for needs_input from open status")
+	}
+}
+
 func TestWorkStart_NoAgentRole(t *testing.T) {
 	ts := newTestServer(t)
 
@@ -539,6 +594,21 @@ func TestAgentRoleGet(t *testing.T) {
 	}
 	if !strings.Contains(text, "You are a test engineer.") {
 		t.Errorf("result = %q, want to contain role_prompt", text)
+	}
+}
+
+// --- Tool: agent_role_reset_defaults ---
+
+func TestAgentRoleResetDefaults(t *testing.T) {
+	ts := newTestServer(t)
+
+	result := callTool(t, ts.Server, "agent_role_reset_defaults", map[string]string{})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	if !strings.Contains(toolText(result), "reset to defaults") {
+		t.Errorf("result = %q, want to contain 'reset to defaults'", toolText(result))
 	}
 }
 

@@ -25,10 +25,10 @@ Both stores expose the same action pattern:
 Mutation operations are defined as RPC action creators, injected into `wsStore.actions`:
 
 **Work** (`web/src/lib/rpc/work.ts`):
-`createWork`, `updateWork`, `deleteWork`, `startWork`, `listWorkComments`
+`createWork`, `updateWork`, `deleteWork`, `startWork`, `stopWork`
 
 **AgentRole** (`web/src/lib/rpc/agentRole.ts`):
-`createAgentRole`, `updateAgentRole`, `deleteAgentRole`
+`createAgentRole`, `updateAgentRole`, `deleteAgentRole`, `resetAgentRoleDefaults`
 
 Each creator takes a `getClient` thunk that returns the JSON-RPC requester. The creator calls `requireClient()` to throw if not connected, then delegates to `client.request()`.
 
@@ -36,13 +36,14 @@ Each creator takes a `getClient` thunk that returns the JSON-RPC requester. The 
 
 `wsStore` (`web/src/lib/wsStore.ts`) owns the WebSocket connection and exposes subscribe/unsubscribe methods:
 
-- `workListSubscribe` — Sends `work.list.subscribe` RPC, registers callback in `workListWatchCallbacks` map, returns initial `Work[]`
-- `workListUnsubscribe` — Removes callback and sends `work.list.unsubscribe` RPC
-- `agentRoleListSubscribe` / `agentRoleListUnsubscribe` — Same pattern for `agent_role.list.*`
+- `workListSubscribe` / `workListUnsubscribe` — `work.list.*` RPCs, callbacks in `workListWatchCallbacks` map
+- `workDetailSubscribe` / `workDetailUnsubscribe` — `work.detail.*` RPCs, callbacks in `workDetailWatchCallbacks` map
+- `agentRoleListSubscribe` / `agentRoleListUnsubscribe` — `agent_role.list.*` RPCs, callbacks in `agentRoleListWatchCallbacks` map
 
 Incoming notifications are routed by method name in `handleNotification()`:
 
 - `work.list.changed` → dispatches to the callback registered for that subscription ID
+- `work.detail.changed` → same pattern
 - `agent_role.list.changed` → same pattern
 
 On WebSocket close, `clearWatchSubscriptions()` clears all callback maps (including Work and AgentRole). When the connection is re-established, `useSubscription` detects the `connected` status change and resubscribes automatically.
@@ -79,9 +80,9 @@ Both `useWorkSubscription` and `useAgentRoleSubscription` follow the same update
 ```
 ProjectTab
   ├── "Work List"       → WorkListOverlay
-  │                         └── (tap story) → WorkDetailOverlay
-  │                                              └── (tap child task) → WorkDetailOverlay
-  │                                              └── "Open Chat" → Chat session
+  │                         └── (tap task) → WorkDetailOverlay
+  │                                            └── (tap subtask) → WorkDetailOverlay
+  │                                            └── "Open Chat" → Chat session
   └── "Agent Roles"     → AgentRoleListOverlay
                              └── (tap role) → AgentRoleDetailOverlay
 ```
@@ -94,30 +95,31 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 
 **Display logic:**
 
-1. Stories are extracted from `works` (items with `type === "story"`)
-2. Stories are grouped by status in this order: **in_progress → needs_input → open → done → closed**
+1. Tasks are extracted from `works` (items with `type === "story"`)
+2. Tasks are grouped by status in this order: **in_progress → needs_input → stopped → open → done → closed**
 3. Each group is a collapsible section (`StatusGroup`); `closed` group is collapsed by default
 4. Each group header shows: collapse toggle, status icon, status label, count badge
-5. Each story row shows: status icon, title, task progress (`doneTasks/totalTasks tasks done`)
-6. A "New Story" button at the top opens an inline creation form (title + role selector)
+5. Each task row shows: status icon, title, subtask progress (`doneTasks/totalTasks subtasks`)
+6. A "New Task" button at the top opens an inline creation form (title + role selector)
 
-**Task progress:** Tasks are indexed by `parent_id` into a `Map<string, Work[]>`. For each story, done count is tasks with status `done` or `closed`.
+**Subtask progress:** Subtasks are indexed by `parent_id` into a `Map<string, Work[]>`. For each task, done count is subtasks with status `done` or `closed`.
 
 ### WorkDetailOverlay
 
-Shows the detail view for a single work item (story or task). Sections:
+Shows the detail view for a single work item (task or subtask). Sections:
 
-- **Parent link** — If the item is a task, shows a tappable link to the parent story
+- **Parent link** — If the item is a subtask, shows a tappable link to the parent task
 - **Title** — Inline-editable (tap pencil icon to enter edit mode)
 - **Status** — Read-only badge
 - **Role** — Inline-editable select (tap to switch role)
 - **Description** — Inline-editable textarea with Markdown rendering
-- **Tasks** (story only) — List of child tasks with status icons, "Chat" shortcut, and inline task creation
-- **Comments** — Loaded via `listWorkComments` RPC on mount (not subscription-based)
+- **Subtasks** (task only) — List of child subtasks with status icons, "Chat" shortcut, and inline subtask creation
+- **Comments** — Loaded via `work.detail.subscribe` (real-time)
 - **Delete** — Confirmation dialog; hidden for `closed` items
 
 **Bottom action bar:**
-- `status === "open"` → **Start** button (calls `startWork` RPC)
+- `status === "open"` or `"stopped"` → **Start/Restart** button (calls `startWork` RPC)
+- `status === "in_progress"` or `"needs_input"` → **Stop** button (calls `stopWork` RPC)
 - `session_id` exists → **Open Chat** button (navigates to chat session)
 
 ### AgentRoleListOverlay

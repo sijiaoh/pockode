@@ -9,6 +9,7 @@ The workflow engine manages work item lifecycles through status transitions, aut
 | `open`        | Created, not yet started                                 |
 | `in_progress` | Agent session is actively working                        |
 | `needs_input` | Agent paused, waiting for user confirmation              |
+| `stopped`     | Agent session ended (retry limit, interrupt, or orphan)  |
 | `done`        | Direct work complete; children may still be pending      |
 | `closed`      | Fully complete — auto-derived, never set directly by API |
 
@@ -17,87 +18,90 @@ The workflow engine manages work item lifecycles through status transitions, aut
 ```
                     ┌──────────────┐
           ┌────────►│  in_progress │◄───────────┐
-          │         └──┬───┬───┬───┘            │
-          │            │   │   │                 │
-          │            │   │   │                 │
-          │            ▼   │   ▼                 │
-       ┌──┴──┐   ┌────────┐   ┌────────────┐   │
-       │open │   │  done  │   │needs_input │   │
-       └─────┘   └───┬────┘   └────────────┘   │
-                     │                          │
-                     ▼ (auto)                   │
-                 ┌────────┐                     │
-                 │closed  │─────────────────────┘
-                 └────────┘
+          │         └┬───┬───┬──┬─┘             │
+          │          │   │   │  │                │
+          │          ▼   │   ▼  ▼                │
+       ┌──┴──┐  ┌──────┐ │ ┌────────────┐ ┌─────┴──┐
+       │open │  │ done │ │ │needs_input │ │stopped │
+       └─────┘  └──┬───┘ │ └────────────┘ └────────┘
+                   │     │
+                   ▼     │
+               ┌────────┐│
+               │closed  │┘
+               └────────┘
 ```
 
 ### Transition Table
 
 | From           | To             | Trigger                                    |
 | -------------- | -------------- | ------------------------------------------ |
-| `open`         | `in_progress`  | `work_start` (external or internal)        |
-| `in_progress`  | `open`         | Rollback on failed session start           |
-| `in_progress`  | `needs_input`  | Agent calls `work_needs_input`             |
-| `in_progress`  | `done`         | Agent calls `work_done`                    |
-| `needs_input`  | `in_progress`  | User confirms, agent resumes               |
-| `done`         | `in_progress`  | Parent reactivation (Trigger B)            |
-| `closed`       | `in_progress`  | Parent reactivation after auto-close       |
-| `done`         | `closed`       | Auto-close (not an API transition)         |
+| `open`         | `in_progress`  | `Store.Start` (fresh start)                |
+| `in_progress`  | `open`         | `Store.RollbackStart` (fresh start failed) |
+| `in_progress`  | `needs_input`  | `Store.MarkNeedsInput`                     |
+| `in_progress`  | `stopped`      | `Store.Stop` (process ended/interrupted)   |
+| `in_progress`  | `done`         | `Store.MarkDone`                           |
+| `needs_input`  | `in_progress`  | `Store.Resume` (user confirms)             |
+| `needs_input`  | `stopped`      | `Store.Stop` (process ended while paused)  |
+| `stopped`      | `in_progress`  | `Store.Start` (restart) or `Store.Reactivate` |
+| `done`         | `in_progress`  | `Store.Reactivate` (parent reactivation)   |
+| `closed`       | `in_progress`  | `Store.Reactivate` (parent reactivation)   |
+| `done`         | `closed`       | Auto-close (internal, not an API call)     |
 
 > Source: `server/work/validation.go` — `validTransitions` map.
 
-### SessionID Constraints
+### SessionID Management
 
-`SessionID` can only change alongside a status transition:
+SessionID changes are encapsulated in intent-based Store methods:
 
-- **Set** (non-empty) — only when transitioning **to** `in_progress`
-- **Cleared** (empty) — only when transitioning **to** `open` (rollback)
+- **`Start`** — sets a new sessionID (fresh start or restart)
+- **`RollbackStart`** — clears sessionID on fresh-start failure; preserves on restart failure (→ `stopped`)
+- **`Reactivate`** — preserves existing sessionID (used for parent reactivation, process-running detection)
+- All other transitions leave sessionID unchanged
 
-This prevents orphaned sessions from accumulating and ensures every active work item has exactly one associated session.
-
-> Source: `server/work/validation.go` — `validateSessionIDChange`.
+> Source: `server/work/store.go` — intent-based transition methods.
 
 ## Auto-Close
 
-When a work item transitions to `done`, the engine checks whether it can be promoted to `closed`. The rule:
+When a work item transitions to `done`, the engine checks whether it can be promoted to `closed`:
 
-1. A `done` item with **all children `done` or `closed`** (or no children) is promoted to `closed`.
-2. After promotion, the engine recursively checks the **parent** — if the parent is also `done` and all its children are now `done`/`closed`, the parent is promoted too.
-3. Recursion depth is capped at 10 (current model only has story → task, depth 2).
+A `done` item with **all children `closed`** (or no children) is promoted to `closed`.
 
-This means a single `work_done` call on the last child task can cascade: child → `done` → `closed`, parent story → `done` → `closed`.
+Note: the parent cascade is **not** recursive within `autoClose`. Instead, the child's `closed` event fires Trigger B (parent reactivation), which sends a message to the parent agent. The parent then calls `work_done` itself, triggering its own auto-close check.
 
-> Source: `server/work/store.go` — `autoCloseRecursive`.
+> Source: `server/work/store.go` — `autoClose`.
 
 ## AutoResumer
 
-The `AutoResumer` listens to work change events and process state changes, triggering three automatic behaviors:
+The `AutoResumer` listens to work change events and process state changes. It handles process lifecycle sync and two event-driven triggers.
 
-### Trigger A: Auto-Continuation
+### Process Lifecycle Sync
 
-**When:** An agent process goes idle (stops) while its work item is still `in_progress`.
+`HandleProcessStateChange` syncs work status with process lifecycle:
 
-**Flow:**
-1. Process emits idle state (not `needsInput`, not the initial idle on creation).
-2. Wait **2 seconds** (settle delay) — allows `work_done` writes from MCP to propagate via fsnotify before checking status.
-3. Look up the work item by `sessionID`. If still `in_progress`, send a continuation message.
-4. Retry counter per session, max **3 retries**. Counter resets when work transitions to `done`/`closed` or is deleted.
+| Process State | Work Action |
+|---|---|
+| `running` | Reactivate `stopped` work → `in_progress` (handles user sending a message directly to a stopped session) |
+| `idle` (not initial, not interrupted) | After settle delay, send auto-continuation if still `in_progress` |
+| `idle` (interrupted) | After settle delay, stop work → `stopped` |
+| `ended` | After settle delay, stop `in_progress`/`needs_input` work → `stopped` |
 
-**Purpose:** Recover from transient agent failures or premature stops without losing work context.
+**Auto-continuation details:**
+1. Wait **2 seconds** (settle delay) — allows `work_done` writes from MCP to propagate via fsnotify.
+2. Look up the work item by `sessionID`. If still `in_progress`, send a continuation message.
+3. Retry counter per session (configurable `maxRetries`). On limit, work transitions to `stopped`. Counter resets on `done`/`closed`/`stopped` transitions or deletion.
 
 > Source: `server/work/auto_resumer.go` — `HandleProcessStateChange`, `handleAutoContinuation`.
 
 ### Trigger B: Parent Reactivation
 
-**When:** A child work item transitions to `closed` and the parent has a `sessionID`.
+**When:** A child work item transitions to `closed` and the parent is `done` with a `sessionID`.
 
 **Flow:**
 1. Child transitions to `closed` (via auto-close after `done`).
-2. Look up parent. If parent is `done` or `closed` with a non-empty `sessionID`:
-   - Transition parent back to `in_progress`.
+2. Look up parent. If parent is `done` with a non-empty `sessionID`:
+   - Reactivate parent to `in_progress` (preserving sessionID).
    - Reset parent's retry counter.
    - Send a reactivation message to the parent's existing session.
-3. The reactivation message instructs the parent to read the child's report, check remaining tasks, and decide next steps.
 
 **Purpose:** Stories (coordinators) are automatically woken up when a child task completes, so they can review results and continue orchestration.
 
@@ -121,18 +125,22 @@ The `AutoResumer` listens to work change events and process state changes, trigg
 
 `WorkStarter` implements `WorkStartHandler` and performs the session initialization sequence for work items that have already been claimed (`status=in_progress`, `sessionID` set).
 
-**Sequence:**
-1. **Validate agent role** — verify the work item's `agent_role_id` exists in the agent role store.
-2. **Acquire main worktree** — get the main worktree from the worktree manager.
-3. **Create session** — create a new chat session with the pre-assigned `sessionID`.
-4. **Set session title** — set the session title to the work item's title (best-effort, failure logged but not fatal).
-5. **Send kickoff message** — send `BuildKickoffMessage` to start the agent. On failure, the session is cleaned up (deleted).
+**Fresh start sequence:**
+1. Validate `agent_role_id` exists.
+2. Acquire the main worktree.
+3. Check if a session with the `sessionID` already exists. If not (fresh start):
+4. Create a new chat session, set its title (best-effort).
+5. Send `BuildKickoffMessage`. On failure, the session is cleaned up (deleted).
+
+**Restart sequence** (session already exists, e.g. stopped work restarted):
+1–3 same as above, but the existing session is detected, so:
+4. Send `BuildRestartMessage` to the existing session instead of creating a new one.
 
 > Source: `server/worktree/work_starter.go`.
 
 ## Prompt Builders
 
-Three prompt builders generate messages for different lifecycle events. All share a common base structure:
+Four prompt builders generate messages for different lifecycle events. All share a common base structure:
 
 **Base (`buildBase`):**
 - Agent role reference (instructs agent to fetch its role via `agent_role_get`)
@@ -146,11 +154,17 @@ Three prompt builders generate messages for different lifecycle events. All shar
 
 Returns the base message. Used when a work item is first started.
 
+### BuildRestartMessage
+
+Base + a restart nudge appropriate to the work type:
+- **Story:** "Your story was stopped and is now being restarted. Review your tasks…"
+- **Task:** "Your task was stopped and is now being restarted. Review what you've done…"
+
 ### BuildAutoContinuationMessage
 
 Base + a nudge appropriate to the work type:
-- **Story:** "Review your tasks, then call `work_done`."
-- **Task:** "Review what you've done so far, then complete remaining work or call `work_done`."
+- **Story:** "Your story is still in_progress but your session was interrupted. Review your tasks…"
+- **Task:** "Your task is still in_progress but your session was interrupted. Review what you've done…"
 
 ### BuildParentReactivationMessage
 

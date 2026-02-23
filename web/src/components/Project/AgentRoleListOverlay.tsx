@@ -31,10 +31,19 @@ export default function AgentRoleListOverlay({
 	);
 	const updateSettings = useWSStore((s) => s.actions.updateSettings);
 
+	const [defaultRoleError, setDefaultRoleError] = useState<string | null>(null);
+
 	const handleToggleDefault = useCallback(
-		(roleId: string) => {
+		async (roleId: string) => {
 			const newId = defaultRoleId === roleId ? "" : roleId;
-			updateSettings({ default_agent_role_id: newId });
+			setDefaultRoleError(null);
+			try {
+				await updateSettings({ default_agent_role_id: newId });
+			} catch (err) {
+				setDefaultRoleError(
+					err instanceof Error ? err.message : "Failed to update default role",
+				);
+			}
 		},
 		[defaultRoleId, updateSettings],
 	);
@@ -77,9 +86,9 @@ export default function AgentRoleListOverlay({
 				</button>
 			</header>
 
-			{resetError && (
+			{(resetError || defaultRoleError) && (
 				<p className="px-3 py-1.5 text-xs text-th-error" role="alert">
-					{resetError}
+					{resetError || defaultRoleError}
 				</p>
 			)}
 

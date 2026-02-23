@@ -79,7 +79,7 @@ func (b *BaseWatcher) NotifyAll(method string, makeParams func(sub *Subscription
 	for _, sub := range subs {
 		params := makeParams(sub)
 		n := Notification{Method: method, Params: params}
-		if err := sub.Notifier.Notify(context.Background(), n); err != nil {
+		if err := sub.Notifier.Notify(b.ctx, n); err != nil {
 			slog.Debug("failed to notify subscriber",
 				"id", sub.ID,
 				"error", err)

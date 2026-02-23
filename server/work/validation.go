@@ -34,9 +34,9 @@ func ValidateTransition(from, to WorkStatus) bool {
 	return false
 }
 
-// ValidNextStatuses returns the statuses that a work item can transition to
+// validNextStatuses returns the statuses that a work item can transition to
 // from the given status.
-func ValidNextStatuses(from WorkStatus) []WorkStatus {
+func validNextStatuses(from WorkStatus) []WorkStatus {
 	next := validTransitions[from]
 	out := make([]WorkStatus, len(next))
 	copy(out, next)

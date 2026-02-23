@@ -34,7 +34,6 @@ export interface WorkUpdateParams {
 	title?: string;
 	body?: string;
 	agent_role_id?: string;
-	status?: Exclude<WorkStatus, "stopped" | "closed">;
 }
 
 export interface Comment {
