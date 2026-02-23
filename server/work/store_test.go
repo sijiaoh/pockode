@@ -612,7 +612,7 @@ func TestMarkDone_NotFound(t *testing.T) {
 	}
 }
 
-func TestMarkDone_CascadesAutoClose(t *testing.T) {
+func TestMarkDone_ChildClosesButParentStaysDone(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
@@ -626,8 +626,9 @@ func TestMarkDone_CascadesAutoClose(t *testing.T) {
 	if getWork(t, s, task.ID).Status != StatusClosed {
 		t.Error("task should be closed")
 	}
-	if getWork(t, s, story.ID).Status != StatusClosed {
-		t.Error("story should be closed (cascade)")
+	// Parent stays done — reactivation is handled by AutoResumer, not autoCloseLeaf
+	if getWork(t, s, story.ID).Status != StatusDone {
+		t.Errorf("story should stay done, got %q", getWork(t, s, story.ID).Status)
 	}
 }
 
@@ -662,7 +663,7 @@ func TestAutoClose_StoryWithPendingChildren(t *testing.T) {
 	}
 }
 
-func TestAutoClose_Cascade(t *testing.T) {
+func TestAutoClose_ParentStaysDoneWhenChildrenClose(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task1 := createTask(t, s, story.ID, "T1")
@@ -674,20 +675,22 @@ func TestAutoClose_Cascade(t *testing.T) {
 	// Mark story as done first (won't close because children pending)
 	doneWork(t, s, story.ID)
 
-	// Complete task1 → closed, story still done (task2 in_progress)
+	// Complete task1 → closed; parent stays done (reactivation is AutoResumer's job)
 	doneWork(t, s, task1.ID)
+	if getWork(t, s, task1.ID).Status != StatusClosed {
+		t.Error("task1 should be closed")
+	}
 	if getWork(t, s, story.ID).Status != StatusDone {
-		t.Fatal("story should stay done while task2 is in_progress")
+		t.Errorf("story should stay done, got %q", getWork(t, s, story.ID).Status)
 	}
 
-	// Complete task2 → closed, cascade closes story
+	// Complete task2 → closed; parent still stays done
 	doneWork(t, s, task2.ID)
-
 	if getWork(t, s, task2.ID).Status != StatusClosed {
 		t.Error("task2 should be closed")
 	}
-	if getWork(t, s, story.ID).Status != StatusClosed {
-		t.Error("story should be closed (all children closed, cascade)")
+	if getWork(t, s, story.ID).Status != StatusDone {
+		t.Errorf("story should stay done, got %q", getWork(t, s, story.ID).Status)
 	}
 }
 
@@ -742,7 +745,7 @@ func TestListener_Events(t *testing.T) {
 	}
 }
 
-func TestListener_AutoCloseFiresFinalState(t *testing.T) {
+func TestListener_ChildCloseDoesNotFireParentEvent(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
@@ -755,22 +758,17 @@ func TestListener_AutoCloseFiresFinalState(t *testing.T) {
 		events = append(events, e)
 	}))
 
-	// Task done → auto-close → cascade closes story
+	// Task done → auto-close; parent is not touched by autoCloseLeaf
 	doneWork(t, s, task.ID)
 
-	// Should have 2 events: task closed + story closed
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events (task+story closed), got %d", len(events))
+	// Only 1 event: task closed (parent reactivation is AutoResumer's job)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (task closed only), got %d", len(events))
 	}
 
 	taskEvent := findEvent(events, task.ID)
-	storyEvent := findEvent(events, story.ID)
-
 	if taskEvent == nil || taskEvent.Work.Status != StatusClosed {
 		t.Error("expected task event with status=closed")
-	}
-	if storyEvent == nil || storyEvent.Work.Status != StatusClosed {
-		t.Error("expected story event with status=closed")
 	}
 }
 

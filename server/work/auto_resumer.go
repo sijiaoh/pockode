@@ -30,8 +30,9 @@ type WorkStartHandler interface {
 //   - running → transition stopped work back to in_progress.
 //   - ended → transition in_progress/needs_input work to stopped.
 //
-// Trigger B: When a child Work closes, reactivate the parent Work's
-// agent to review and continue.
+// Trigger B: When a child Work closes, send a message to the parent Work's
+// session so the agent can review and continue. The agent decides its own
+// status transitions.
 //
 // Trigger C: When a work item is started externally (e.g. via MCP),
 // create the session and send the kickoff message.
@@ -349,26 +350,9 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 		return
 	}
 
-	// Reactivate if parent is done (waiting for children) or closed (auto-closed
-	// because the last child completed in the same MarkDone batch).
-	if (parent.Status != StatusDone && parent.Status != StatusClosed) || parent.SessionID == "" {
-		return
-	}
-
-	// Skip reactivation if all children are complete — the parent was
-	// auto-closed because all work is finished, not because a single child
-	// reported back while others are still running.
-	if r.allChildrenComplete(parent.ID) {
-		return
-	}
-
-	// Reactivate: done/closed → in_progress
-	status := StatusInProgress
-	if err := r.workStore.Update(r.ctx, parent.ID, UpdateFields{Status: &status}); err != nil {
-		if r.ctx.Err() != nil {
-			return
-		}
-		slog.Warn("failed to reactivate parent work", "parentId", parent.ID, "error", err)
+	// Only trigger when the parent is done (waiting for children).
+	// The restarted agent decides whether to transition its own status.
+	if parent.Status != StatusDone || parent.SessionID == "" {
 		return
 	}
 
@@ -386,20 +370,6 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 	} else {
 		slog.Info("parent reactivation sent", "parentId", parent.ID, "childId", child.ID)
 	}
-}
-
-func (r *AutoResumer) allChildrenComplete(parentID string) bool {
-	works, err := r.workStore.List()
-	if err != nil {
-		slog.Warn("failed to list works for child completeness check", "parentId", parentID, "error", err)
-		return false // assume incomplete so we don't skip reactivation on error
-	}
-	for _, w := range works {
-		if w.ParentID == parentID && w.Status != StatusDone && w.Status != StatusClosed {
-			return false
-		}
-	}
-	return true
 }
 
 func (r *AutoResumer) stopWork(workID string) error {

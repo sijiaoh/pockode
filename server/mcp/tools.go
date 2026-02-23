@@ -92,7 +92,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "work_done",
-		Description: "Mark a work item as done. If all sibling tasks are also done, the parent story will automatically close. If the item is still open (not yet in_progress), it will be automatically transitioned.",
+		Description: "Mark a work item as done. If the item is still open (not yet in_progress), it will be automatically transitioned.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{

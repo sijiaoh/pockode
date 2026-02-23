@@ -327,7 +327,7 @@ func TestAutoResumer_NoMessageWhenWorkDone(t *testing.T) {
 
 // --- Trigger B: parent reactivation ---
 
-func TestAutoResumer_ReactivatesParent(t *testing.T) {
+func TestAutoResumer_SendsMessageToParentOnChildClose(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
 	story := createStory(t, store, "Story")
@@ -347,10 +347,10 @@ func TestAutoResumer_ReactivatesParent(t *testing.T) {
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
-	// Parent should be reactivated to in_progress
+	// Parent stays done — the restarted agent decides its own status
 	parent := getWork(t, store, story.ID)
-	if parent.Status != StatusInProgress {
-		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
+	if parent.Status != StatusDone {
+		t.Errorf("parent status = %q, want %q (status unchanged)", parent.Status, StatusDone)
 	}
 
 	// Message sent to parent session
@@ -363,7 +363,7 @@ func TestAutoResumer_ReactivatesParent(t *testing.T) {
 	}
 }
 
-func TestAutoResumer_NoReactivateWhenAllChildrenComplete(t *testing.T) {
+func TestAutoResumer_SendsMessageWhenLastChildCompletes(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 	store.AddOnChangeListener(resumer)
 
@@ -376,28 +376,31 @@ func TestAutoResumer_NoReactivateWhenAllChildrenComplete(t *testing.T) {
 	// Parent done, waiting for children
 	doneWork(t, store, story.ID)
 
-	// MarkDone on the last task: autoCloseRecursive closes both task and
-	// parent in one batch. No reactivation should occur because all
-	// children are complete — the parent is fully done.
+	// MarkDone on the last task: autoCloseLeaf closes the task,
+	// which triggers handleParentReactivation via OnWorkChange.
 	if err := store.MarkDone(context.Background(), task.ID); err != nil {
 		t.Fatalf("MarkDone task: %v", err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
-	// Parent should remain closed (not reactivated)
+	// Parent stays done — the agent decides its own status
 	parent := getWork(t, store, story.ID)
-	if parent.Status != StatusClosed {
-		t.Errorf("parent status = %q, want %q", parent.Status, StatusClosed)
+	if parent.Status != StatusDone {
+		t.Errorf("parent status = %q, want %q (status unchanged)", parent.Status, StatusDone)
 	}
 
+	// Message was sent to parent session
 	msgs := sender.getMessages()
-	if len(msgs) != 0 {
-		t.Errorf("expected 0 reactivation messages, got %d", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 reactivation message, got %d", len(msgs))
+	}
+	if msgs[0].SessionID != parentSid {
+		t.Errorf("sessionID = %q, want %q", msgs[0].SessionID, parentSid)
 	}
 }
 
-func TestAutoResumer_ReactivatesParentWhenSiblingsStillRunning(t *testing.T) {
+func TestAutoResumer_SendsMessageWhenSiblingsStillRunning(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
 	story := createStory(t, store, "Story")
@@ -419,10 +422,10 @@ func TestAutoResumer_ReactivatesParentWhenSiblingsStillRunning(t *testing.T) {
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
-	// Parent should be reactivated because task2 is still in_progress
+	// Parent stays done — only a message is sent
 	parent := getWork(t, store, story.ID)
-	if parent.Status != StatusInProgress {
-		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
+	if parent.Status != StatusDone {
+		t.Errorf("parent status = %q, want %q (status unchanged)", parent.Status, StatusDone)
 	}
 
 	msgs := sender.getMessages()
@@ -830,8 +833,9 @@ func TestAutoResumer_ConcurrentOnWorkChange(t *testing.T) {
 
 	doneWork(t, store, story.ID)
 
-	// Fire concurrent child closed events — only one reactivation should succeed
-	// because after the first reactivation the parent is in_progress, not done.
+	// Fire concurrent child closed events. Since handleParentReactivation
+	// no longer changes parent status, each call sees the parent as done
+	// and sends a message. This is safe — the agent handles duplicates.
 	for _, task := range tasks {
 		go resumer.OnWorkChange(ChangeEvent{
 			Op:   OperationUpdate,
@@ -839,15 +843,11 @@ func TestAutoResumer_ConcurrentOnWorkChange(t *testing.T) {
 		})
 	}
 
-	// Wait for goroutines to complete
-	time.Sleep(100 * time.Millisecond)
+	waitFor(t, func() bool { return len(sender.getMessages()) >= len(tasks) })
 
 	msgs := sender.getMessages()
-	// Only one reactivation message should have been sent because the parent
-	// transitions from done → in_progress on the first call; subsequent calls
-	// see in_progress and skip.
-	if len(msgs) != 1 {
-		t.Errorf("expected 1 reactivation message (concurrent dedup), got %d", len(msgs))
+	if len(msgs) != len(tasks) {
+		t.Errorf("expected %d reactivation messages, got %d", len(tasks), len(msgs))
 	}
 }
 

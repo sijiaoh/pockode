@@ -239,7 +239,7 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) er
 
 	modified := map[string]bool{id: true}
 	if fields.Status != nil && *fields.Status == StatusDone {
-		s.autoCloseRecursive(w, now, modified)
+		s.autoCloseLeaf(w, now, modified)
 	}
 
 	return s.persistAndNotifyUpdates(prev, modified)
@@ -319,7 +319,7 @@ func (s *FileStore) MarkDone(_ context.Context, id string) error {
 	w.UpdatedAt = now
 
 	modified := map[string]bool{id: true}
-	s.autoCloseRecursive(w, now, modified)
+	s.autoCloseLeaf(w, now, modified)
 
 	return s.persistAndNotifyUpdates(prev, modified)
 }
@@ -357,50 +357,23 @@ func (s *FileStore) snapshotWorks() []Work {
 
 // --- Auto-close logic ---
 
-// maxAutoCloseDepth prevents runaway recursion in autoCloseRecursive.
-// Current model only has story → task (depth 2), so 10 is very generous.
-const maxAutoCloseDepth = 10
-
-// autoCloseRecursive promotes done → closed when all children are complete,
-// and cascades upward to the parent. Caller must hold s.worksMu write lock.
-func (s *FileStore) autoCloseRecursive(w *Work, now time.Time, modified map[string]bool) {
-	s.autoCloseRecursiveN(w, now, modified, 0)
-}
-
-func (s *FileStore) autoCloseRecursiveN(w *Work, now time.Time, modified map[string]bool, depth int) {
-	if depth >= maxAutoCloseDepth {
-		slog.Warn("autoCloseRecursive depth limit reached", "workId", w.ID, "depth", depth)
-		return
-	}
-
+// autoCloseLeaf promotes a done item to closed if it has no children.
+// Stories with children stay done — the PM agent closes them explicitly.
+// Caller must hold s.worksMu write lock.
+func (s *FileStore) autoCloseLeaf(w *Work, now time.Time, modified map[string]bool) {
 	if w.Status != StatusDone {
 		return
 	}
 
-	// Check if all children are done or closed
 	for _, child := range s.works {
 		if child.ParentID == w.ID {
-			if child.Status != StatusDone && child.Status != StatusClosed {
-				return
-			}
+			return // has children → stay done
 		}
 	}
 
-	// All children complete (or no children) → promote to closed
 	w.Status = StatusClosed
 	w.UpdatedAt = now
 	modified[w.ID] = true
-
-	// Cascade: check if parent can also close
-	if w.ParentID == "" {
-		return
-	}
-	for i := range s.works {
-		if s.works[i].ID == w.ParentID && s.works[i].Status == StatusDone {
-			s.autoCloseRecursiveN(&s.works[i], now, modified, depth+1)
-			return
-		}
-	}
 }
 
 // --- Comments ---
