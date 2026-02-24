@@ -1,6 +1,6 @@
 # Frontend Integration
 
-How the Work system is integrated into the React frontend: state management, real-time sync, and UI.
+How the Projects system is integrated into the React frontend: state management, real-time sync, and UI.
 
 ## State Management
 
@@ -79,7 +79,7 @@ Both `useWorkSubscription` and `useAgentRoleSubscription` follow the same update
 
 ```
 ProjectTab
-  ├── "Work List"       → WorkListOverlay
+  ├── "Stories"         → WorkListOverlay
   │                         └── (tap task) → WorkDetailOverlay
   │                                            └── (tap task) → WorkDetailOverlay
   │                                            └── "Open Chat" → Chat session

@@ -68,7 +68,7 @@ export default function WorkDetailOverlay({
 				<DetailHeader onBack={onBack} />
 				<div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-th-text-muted">
 					<AlertCircle className="size-5" />
-					<p>{error ?? "Work item not found"}</p>
+					<p>{error ?? "Item not found"}</p>
 				</div>
 			</div>
 		);
