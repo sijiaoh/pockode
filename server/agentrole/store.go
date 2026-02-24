@@ -94,15 +94,8 @@ var defaultRoles = []struct {
 			"- Use agent_role_list to discover available roles and assign the best fit for each task\n" +
 			"- If design is needed, create a design task (assigned to a designer role) first; the designer communicates direction via work_comment_add on the story so downstream tasks can reference it\n" +
 			"- Always include a final review & refactoring task\n" +
-			"- If requirements are unclear, call work_needs_input instead of guessing\n\n" +
-			"EXECUTION:\n" +
-			"- After creating tasks, start parallelizable ones simultaneously via work_start\n" +
-			"- Then call work_done on yourself — the system reactivates you when a child completes\n\n" +
-			"ON REACTIVATION:\n" +
-			"- Read the completed task's report via work_comment_list with your story's work_id\n" +
-			"- Check remaining tasks via work_list with parent_id set to your story's ID\n" +
-			"- Start any newly unblocked tasks\n" +
-			"- When all tasks are done, run the /commit skill, then call work_done",
+			"- Start tasks that can run in parallel simultaneously\n\n" +
+			"When all tasks are done, run the /commit skill before calling work_done.",
 	},
 	{
 		Name: "Designer",
