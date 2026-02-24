@@ -137,7 +137,7 @@ function DetailHeader({
 }) {
 	return (
 		<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-			<BackButton onClick={onBack} aria-label="Back to tasks" />
+			<BackButton onClick={onBack} aria-label="Back to stories" />
 			<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
 				{type ? typeLabels[type] : "Detail"}
 			</h1>
