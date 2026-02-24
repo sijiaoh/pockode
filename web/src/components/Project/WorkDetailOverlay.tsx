@@ -76,18 +76,16 @@ export default function WorkDetailOverlay({
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<DetailHeader onBack={onBack} type={work.type} />
+			<DetailHeader
+				onBack={parent ? () => onOpenWorkDetail(parent.id) : onBack}
+				type={work.type}
+				backLabel={parent ? "Back to parent story" : "Back to stories"}
+			/>
 			<div className="min-h-0 flex-1 overflow-auto">
 				<div className="space-y-5 p-4">
 					<div>
 						{parent && (
-							<button
-								type="button"
-								onClick={() => onOpenWorkDetail(parent.id)}
-								className="mb-1 flex min-h-[44px] items-center text-xs text-th-text-muted hover:text-th-accent"
-							>
-								{parent.title}
-							</button>
+							<p className="mb-1 text-xs text-th-text-muted">{parent.title}</p>
 						)}
 						<InlineEditableTitle work={work} />
 						<div className="mt-2">
@@ -131,13 +129,15 @@ const typeLabels: Record<WorkType, string> = {
 function DetailHeader({
 	onBack,
 	type,
+	backLabel = "Back to stories",
 }: {
 	onBack: () => void;
 	type?: WorkType;
+	backLabel?: string;
 }) {
 	return (
 		<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-			<BackButton onClick={onBack} aria-label="Back to stories" />
+			<BackButton onClick={onBack} aria-label={backLabel} />
 			<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
 				{type ? typeLabels[type] : "Detail"}
 			</h1>
