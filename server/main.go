@@ -446,6 +446,11 @@ func runMCP() {
 		os.Exit(1)
 	}
 
+	if err := agentRoleStore.StartWatching(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to start agent role file watcher: %v\n", err)
+	}
+	defer agentRoleStore.StopWatching()
+
 	server := mcp.NewServer(store, agentRoleStore)
 	if err := server.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
