@@ -4,7 +4,7 @@
 
 ### Work
 
-A unit of work — either a **task** (top-level, wire type `"story"`) or a **subtask** (child, wire type `"task"`).
+A unit of work — either a **story** (top-level, wire type `"story"`) or a **task** (child, wire type `"task"`).
 
 | Field         | Type         | Description                                            |
 | ------------- | ------------ | ------------------------------------------------------ |
@@ -44,10 +44,10 @@ Defines an agent persona with a system prompt.
 
 ## Hierarchy
 
-Two-level only: **Task → Subtask** (wire types: `story` → `task`).
+Two-level only: **Story → Task** (wire types: `story` → `task`).
 
-- Tasks are always top-level (no parent).
-- Subtasks must have exactly one task parent.
+- Stories are always top-level (no parent).
+- Tasks must have exactly one story parent.
 - `agent_role_id` is required on all work items.
 - Deleting a story cascade-deletes all its children.
 

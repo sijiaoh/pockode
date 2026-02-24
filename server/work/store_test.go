@@ -98,7 +98,7 @@ func TestCreate_Task(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "Story")
 
-	task := createTask(t, s, story.ID, "Subtask")
+	task := createTask(t, s, story.ID, "Task")
 
 	if task.ParentID != story.ID {
 		t.Errorf("parent_id = %q, want %q", task.ParentID, story.ID)
@@ -118,7 +118,7 @@ func TestCreate_TaskCannotBeUnderTask(t *testing.T) {
 	story := createStory(t, s, "Story")
 	task := createTask(t, s, story.ID, "Task")
 
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: task.ID, Title: "Sub-task", AgentRoleID: testRoleID})
+	_, err := s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: task.ID, Title: "Nested task", AgentRoleID: testRoleID})
 	if err == nil {
 		t.Fatal("expected error for task under task")
 	}

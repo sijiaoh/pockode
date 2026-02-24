@@ -224,7 +224,7 @@ function StoryRow({
 						onClick={() => setTasksExpanded(!tasksExpanded)}
 						className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-th-text-muted"
 						aria-expanded={tasksExpanded}
-						aria-label={tasksExpanded ? "Collapse subtasks" : "Expand subtasks"}
+						aria-label={tasksExpanded ? "Collapse tasks" : "Expand tasks"}
 					>
 						{tasksExpanded ? (
 							<ChevronDown className="size-3.5" />
@@ -260,7 +260,7 @@ function StoryRow({
 					<>
 						<span aria-hidden="true">&middot;</span>
 						<span>
-							{doneTasks}/{totalTasks} subtasks
+							{doneTasks}/{totalTasks} tasks
 						</span>
 					</>
 				)}

@@ -81,7 +81,7 @@ Both `useWorkSubscription` and `useAgentRoleSubscription` follow the same update
 ProjectTab
   ├── "Work List"       → WorkListOverlay
   │                         └── (tap task) → WorkDetailOverlay
-  │                                            └── (tap subtask) → WorkDetailOverlay
+  │                                            └── (tap task) → WorkDetailOverlay
   │                                            └── "Open Chat" → Chat session
   └── "Agent Roles"     → AgentRoleListOverlay
                              └── (tap role) → AgentRoleDetailOverlay
@@ -95,25 +95,25 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 
 **Display logic:**
 
-1. Tasks are extracted from `works` (items with `type === "story"`)
-2. Tasks are grouped by status in this order: **in_progress → needs_input → stopped → open → done → closed**
+1. Stories are extracted from `works` (items with `type === "story"`)
+2. Stories are grouped by status in this order: **in_progress → needs_input → stopped → open → done → closed**
 3. Each group is a collapsible section (`StatusGroup`); `closed` group is collapsed by default
 4. Each group header shows: collapse toggle, status icon, status label, count badge
-5. Each task row shows: status icon, title, subtask progress (`doneTasks/totalTasks subtasks`)
-6. A "New Task" button at the top opens an inline creation form (title + role selector)
+5. Each story row shows: status icon, title, task progress (`doneTasks/totalTasks tasks`)
+6. A "New Story" button at the top opens an inline creation form (title + role selector)
 
-**Subtask progress:** Subtasks are indexed by `parent_id` into a `Map<string, Work[]>`. For each task, done count is subtasks with status `done` or `closed`.
+**Task progress:** Tasks are indexed by `parent_id` into a `Map<string, Work[]>`. For each story, done count is tasks with status `done` or `closed`.
 
 ### WorkDetailOverlay
 
-Shows the detail view for a single work item (task or subtask). Sections:
+Shows the detail view for a single work item (story or task). Sections:
 
-- **Parent link** — If the item is a subtask, shows a tappable link to the parent task
+- **Parent link** — If the item is a task, shows a tappable link to the parent story
 - **Title** — Inline-editable (tap pencil icon to enter edit mode)
 - **Status** — Read-only badge
 - **Role** — Inline-editable select (tap to switch role)
 - **Description** — Inline-editable textarea with Markdown rendering
-- **Subtasks** (task only) — List of child subtasks with status icons, "Chat" shortcut, and inline subtask creation
+- **Tasks** (story only) — List of child tasks with status icons, "Chat" shortcut, and inline task creation
 - **Comments** — Loaded via `work.detail.subscribe` (real-time)
 - **Delete** — Confirmation dialog; hidden for `closed` items
 

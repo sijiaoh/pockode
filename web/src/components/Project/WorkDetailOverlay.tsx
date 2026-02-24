@@ -124,8 +124,8 @@ export default function WorkDetailOverlay({
 }
 
 const typeLabels: Record<WorkType, string> = {
-	story: "Task",
-	task: "Subtask",
+	story: "Story",
+	task: "Task",
 };
 
 function DetailHeader({
@@ -544,7 +544,7 @@ function ChildrenSection({
 	return (
 		<div>
 			<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
-				Subtasks{" "}
+				Tasks{" "}
 				{tasks.length > 0 && (
 					<span>
 						({doneTasks}/{tasks.length})
@@ -552,7 +552,7 @@ function ChildrenSection({
 				)}
 			</h3>
 			{tasks.length === 0 ? (
-				<p className="py-2 text-sm text-th-text-muted">No subtasks yet</p>
+				<p className="py-2 text-sm text-th-text-muted">No tasks yet</p>
 			) : (
 				<div className="space-y-0.5">
 					{tasks.map((child) => (
@@ -671,10 +671,10 @@ function DeleteSection({
 
 	if (work.status === "closed") return null;
 
-	const typeLabel = work.type === "story" ? "Task" : "Subtask";
+	const typeLabel = work.type === "story" ? "Story" : "Task";
 	const confirmMessage =
 		childCount > 0
-			? `Delete "${work.title}" and its ${childCount} child subtask${childCount > 1 ? "s" : ""}? This cannot be undone.`
+			? `Delete "${work.title}" and its ${childCount} child task${childCount > 1 ? "s" : ""}? This cannot be undone.`
 			: `Delete "${work.title}"? This cannot be undone.`;
 
 	return (
