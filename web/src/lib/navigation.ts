@@ -44,10 +44,10 @@ interface NavToSettingsOverlay {
 	sessionId: string | null;
 }
 
-interface NavToWorksOverlay {
+interface NavToWorkListOverlay {
 	type: "overlay";
 	worktree: string;
-	overlayType: "works";
+	overlayType: "work-list";
 	sessionId: string | null;
 }
 
@@ -59,10 +59,10 @@ interface NavToWorkDetailOverlay {
 	sessionId: string | null;
 }
 
-interface NavToAgentRolesOverlay {
+interface NavToAgentRoleListOverlay {
 	type: "overlay";
 	worktree: string;
-	overlayType: "agent-roles";
+	overlayType: "agent-role-list";
 	sessionId: string | null;
 }
 
@@ -77,9 +77,9 @@ interface NavToAgentRoleDetailOverlay {
 type NavToOverlay =
 	| NavToFileOverlay
 	| NavToSettingsOverlay
-	| NavToWorksOverlay
+	| NavToWorkListOverlay
 	| NavToWorkDetailOverlay
-	| NavToAgentRolesOverlay
+	| NavToAgentRoleListOverlay
 	| NavToAgentRoleDetailOverlay;
 
 interface NavToHome {
@@ -153,7 +153,7 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
-					overlayType: "works" as const,
+					overlayType: "work-list" as const,
 					sessionId,
 				};
 			case "work-detail":
@@ -168,7 +168,7 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
-					overlayType: "agent-roles" as const,
+					overlayType: "agent-role-list" as const,
 					sessionId,
 				};
 			case "agent-role-detail":
@@ -234,13 +234,13 @@ export function buildNavigation(
 				}
 			} else if (
 				target.overlayType === "settings" ||
-				target.overlayType === "works" ||
-				target.overlayType === "agent-roles"
+				target.overlayType === "work-list" ||
+				target.overlayType === "agent-role-list"
 			) {
 				const routeKeyMap = {
 					settings: "settings",
-					works: "works",
-					"agent-roles": "agentRoles",
+					"work-list": "works",
+					"agent-role-list": "agentRoles",
 				} as const;
 				const routeKey = routeKeyMap[target.overlayType];
 				result.to = isMain ? ROUTES[routeKey] : WT_ROUTES[routeKey];
