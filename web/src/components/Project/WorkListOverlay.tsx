@@ -80,7 +80,7 @@ export default function WorkListOverlay({
 			<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
 				<BackToChatButton onClick={onBack} />
 				<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
-					Stories
+					Project
 				</h1>
 			</header>
 

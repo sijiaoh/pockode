@@ -1,6 +1,6 @@
 # Frontend Integration
 
-How the Projects system is integrated into the React frontend: state management, real-time sync, and UI.
+How the Project system is integrated into the React frontend: state management, real-time sync, and UI.
 
 ## State Management
 

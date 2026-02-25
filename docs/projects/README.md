@@ -1,6 +1,6 @@
-# Projects
+# Project
 
-The Projects system lets users manage development stories through AI agents. Users create stories (high-level goals) that coordinate tasks (concrete units of work), each executed by an agent session with automatic lifecycle management.
+The Project system lets users manage development stories through AI agents. Users create stories (high-level goals) that coordinate tasks (concrete units of work), each executed by an agent session with automatic lifecycle management.
 
 ## Architecture
 

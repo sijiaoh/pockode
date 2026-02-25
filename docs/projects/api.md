@@ -1,6 +1,6 @@
-# Projects API
+# Project API
 
-The Projects system exposes two API layers:
+The Project system exposes two API layers:
 
 - **MCP (Model Context Protocol)** — Used by AI agents (Claude) via stdio subprocess. Sensitive fields (body, role_prompt) excluded from list operations to resist prompt injection.
 - **WebSocket RPC** — Used by the React client. Full CRUD with real-time subscriptions.
