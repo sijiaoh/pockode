@@ -6,7 +6,7 @@ import {
 	Play,
 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { useRoleNameMap } from "../../hooks/useRoleNameMap";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { Work, WorkStatus } from "../../types/work";
@@ -29,15 +29,7 @@ export default function WorkListOverlay({
 	const works = useWorkStore((s) => s.works);
 	const isLoading = useWorkStore((s) => s.isLoading);
 	const error = useWorkStore((s) => s.error);
-	const roles = useAgentRoleStore((s) => s.roles);
-
-	const roleNameMap = useMemo(() => {
-		const map = new Map<string, string>();
-		for (const r of roles) {
-			map.set(r.id, r.name);
-		}
-		return map;
-	}, [roles]);
+	const roleNameMap = useRoleNameMap();
 
 	const tasksByParentId = useMemo(() => {
 		const map = new Map<string, Work[]>();
@@ -347,7 +339,7 @@ function TaskRow({
 	);
 }
 
-function StartButton({
+export function StartButton({
 	workId,
 	iconOnly,
 }: {

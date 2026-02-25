@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInlineEdit } from "../../hooks/useInlineEdit";
+import { useRoleNameMap } from "../../hooks/useRoleNameMap";
 import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
@@ -24,6 +25,7 @@ import BottomActionBar from "../ui/BottomActionBar";
 import StatusBadge from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
 import CreateWorkForm from "./CreateWorkForm";
+import { StartButton } from "./WorkListOverlay";
 
 interface Props {
 	workId: string;
@@ -41,6 +43,7 @@ export default function WorkDetailOverlay({
 	const { work, comments, loading, error } = useWorkDetailSubscription(workId);
 
 	const works = useWorkStore((s) => s.works);
+	const roleNameMap = useRoleNameMap();
 	const children = useMemo(
 		() => works.filter((w) => w.parent_id === workId),
 		[works, workId],
@@ -101,6 +104,7 @@ export default function WorkDetailOverlay({
 						<ChildrenSection
 							storyId={work.id}
 							tasks={children}
+							roleNameMap={roleNameMap}
 							onOpenWorkDetail={onOpenWorkDetail}
 							onNavigateToSession={onNavigateToSession}
 						/>
@@ -529,11 +533,13 @@ function InlineEditableBody({ work }: { work: Work }) {
 function ChildrenSection({
 	storyId,
 	tasks,
+	roleNameMap,
 	onOpenWorkDetail,
 	onNavigateToSession,
 }: {
 	storyId: string;
 	tasks: Work[];
+	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string) => void;
 }) {
@@ -559,6 +565,7 @@ function ChildrenSection({
 						<ChildRow
 							key={child.id}
 							work={child}
+							roleNameMap={roleNameMap}
 							onOpenWorkDetail={onOpenWorkDetail}
 							onNavigateToSession={onNavigateToSession}
 						/>
@@ -574,13 +581,18 @@ function ChildrenSection({
 
 function ChildRow({
 	work,
+	roleNameMap,
 	onOpenWorkDetail,
 	onNavigateToSession,
 }: {
 	work: Work;
+	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string) => void;
 }) {
+	const roleName = work.agent_role_id
+		? (roleNameMap.get(work.agent_role_id) ?? null)
+		: null;
 	const isNeedsInput = work.status === "needs_input";
 	const isStopped = work.status === "stopped";
 
@@ -596,6 +608,9 @@ function ChildRow({
 			>
 				{work.title}
 			</button>
+			<span className="shrink-0 text-xs text-th-text-muted">
+				{roleName ?? "—"}
+			</span>
 			{work.session_id && (
 				<button
 					type="button"
@@ -605,6 +620,8 @@ function ChildRow({
 					Chat
 				</button>
 			)}
+			{((work.status === "open" && !work.session_id) ||
+				work.status === "stopped") && <StartButton workId={work.id} iconOnly />}
 		</div>
 	);
 }
