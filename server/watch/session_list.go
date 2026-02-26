@@ -178,8 +178,8 @@ type sessionListChangedParams struct {
 }
 
 type sessionListSyncParams struct {
-	ID        string               `json:"id"`
-	Operation string               `json:"operation"`
+	ID        string                `json:"id"`
+	Operation string                `json:"operation"`
 	Sessions  []rpc.SessionListItem `json:"sessions"`
 }
 
