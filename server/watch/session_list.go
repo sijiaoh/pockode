@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
@@ -33,6 +34,7 @@ type SessionListWatcher struct {
 	viewingChecker       ViewingChecker
 	workNeedsInputSyncer WorkNeedsInputSyncer
 	eventCh              chan session.SessionChangeEvent
+	dirty                atomic.Bool // set when an event is dropped; triggers full sync
 }
 
 func NewSessionListWatcher(store session.Store) *SessionListWatcher {
@@ -75,7 +77,11 @@ func (w *SessionListWatcher) eventLoop() {
 		case <-w.Context().Done():
 			return
 		case event := <-w.eventCh:
-			w.notifyChange(event)
+			if w.dirty.Swap(false) {
+				w.notifySync()
+			} else {
+				w.notifyChange(event)
+			}
 		}
 	}
 }
@@ -110,6 +116,34 @@ func (w *SessionListWatcher) notifyChange(event session.SessionChangeEvent) {
 	slog.Debug("notified session list change", "operation", event.Op)
 }
 
+// notifySync sends the full session list to all subscribers after dropped events.
+func (w *SessionListWatcher) notifySync() {
+	if !w.HasSubscriptions() {
+		return
+	}
+
+	sessions, err := w.store.List()
+	if err != nil {
+		slog.Error("failed to list sessions for sync", "error", err)
+		return
+	}
+
+	items := make([]rpc.SessionListItem, len(sessions))
+	for i, sess := range sessions {
+		items[i] = w.buildItem(sess)
+	}
+
+	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
+		return sessionListSyncParams{
+			ID:        sub.ID,
+			Operation: "sync",
+			Sessions:  items,
+		}
+	})
+
+	slog.Info("sent full sync to subscribers after event drop")
+}
+
 // Subscribe registers a subscriber and returns the subscription ID along with
 // the current session list enriched with runtime state.
 func (w *SessionListWatcher) Subscribe(notifier Notifier) (string, []rpc.SessionListItem, error) {
@@ -141,6 +175,12 @@ type sessionListChangedParams struct {
 	Operation string               `json:"operation"`
 	Session   *rpc.SessionListItem `json:"session,omitempty"`
 	SessionID string               `json:"sessionId,omitempty"`
+}
+
+type sessionListSyncParams struct {
+	ID        string               `json:"id"`
+	Operation string               `json:"operation"`
+	Sessions  []rpc.SessionListItem `json:"sessions"`
 }
 
 // HandleProcessStateChange updates NeedsInput/Unread in the store and notifies subscribers.
@@ -218,13 +258,10 @@ func (w *SessionListWatcher) OnSessionChange(event session.SessionChangeEvent) {
 		return
 	}
 
-	// Non-blocking send: if buffer is full, drop the event
-	// This should be rare with a reasonable buffer size
-	// TODO: If buffer overflows, disconnect all subscribers to force re-sync.
-	// Dropping events silently can cause clients to have stale data.
 	select {
 	case w.eventCh <- event:
 	default:
-		slog.Warn("session list change event dropped (buffer full)", "operation", event.Op)
+		w.dirty.Store(true)
+		slog.Warn("session list change event dropped, will sync on next event", "operation", event.Op)
 	}
 }

@@ -25,6 +25,10 @@ export function useSessionSubscription(enabled: boolean) {
 
 	const handleNotification = useCallback(
 		(params: SessionListChangedNotification) => {
+			if (params.operation === "sync") {
+				setSessions(params.sessions);
+				return;
+			}
 			updateSessions((old) => {
 				switch (params.operation) {
 					case "create":
@@ -38,7 +42,7 @@ export function useSessionSubscription(enabled: boolean) {
 				}
 			});
 		},
-		[updateSessions],
+		[setSessions, updateSessions],
 	);
 
 	const { refresh } = useSubscription<

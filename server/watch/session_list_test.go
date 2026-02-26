@@ -308,3 +308,52 @@ func TestHandleProcessStateChange_NoSyncer_NoPanic(t *testing.T) {
 		NeedsInput: true,
 	})
 }
+
+func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
+	store := &mockSessionStore{
+		sessions: []session.SessionMeta{
+			{ID: "sess-1", Title: "Session 1"},
+			{ID: "sess-2", Title: "Session 2"},
+		},
+	}
+	w := &SessionListWatcher{
+		BaseWatcher: NewBaseWatcher("sl"),
+		store:       store,
+		eventCh:     make(chan session.SessionChangeEvent, 1),
+	}
+	store.SetOnChangeListener(w)
+	w.SetProcessStateGetter(&mockProcessStateGetter{})
+
+	notifier := &captureNotifier{}
+	w.Subscribe(notifier)
+
+	// Simulate the dirty flag being set (as if events were dropped)
+	w.dirty.Store(true)
+
+	w.Start()
+	defer w.Stop()
+
+	// Send a single event — eventLoop sees dirty=true and sends sync instead
+	w.eventCh <- session.SessionChangeEvent{
+		Op:      session.OperationUpdate,
+		Session: session.SessionMeta{ID: "sess-1"},
+	}
+
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+
+	raw := notifier.last()
+	var params sessionListSyncParams
+	if err := json.Unmarshal(raw, &params); err != nil {
+		t.Fatalf("unmarshal sync params: %v", err)
+	}
+	if params.Operation != "sync" {
+		t.Errorf("operation = %q, want %q", params.Operation, "sync")
+	}
+	if len(params.Sessions) != 2 {
+		t.Errorf("expected 2 sessions in sync, got %d", len(params.Sessions))
+	}
+
+	if w.dirty.Load() {
+		t.Error("dirty flag should be cleared after sync")
+	}
+}

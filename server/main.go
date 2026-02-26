@@ -269,6 +269,9 @@ func main() {
 		slog.Error("failed to initialize settings store", "error", err)
 		os.Exit(1)
 	}
+	if err := settingsStore.StartWatching(); err != nil {
+		slog.Warn("failed to start settings store file watcher", "error", err)
+	}
 
 	// Initialize worktree setup hook
 	if err := worktree.InitSetupHook(dataDir); err != nil {
@@ -392,6 +395,7 @@ func main() {
 		wsHandler.Stop()
 		workAutoResumer.Stop()
 		worktreeManager.Shutdown()
+		settingsStore.StopWatching()
 		workStore.StopWatching()
 		agentRoleStore.StopWatching()
 		close(shutdownDone)
