@@ -88,7 +88,13 @@ export default function WorkDetailOverlay({
 				<div className="space-y-5 p-4">
 					<div>
 						{parent && (
-							<p className="mb-1 text-xs text-th-text-muted">{parent.title}</p>
+							<button
+								type="button"
+								onClick={() => onOpenWorkDetail(parent.id)}
+								className="mb-1 text-xs text-th-text-muted hover:text-th-accent"
+							>
+								{parent.title}
+							</button>
 						)}
 						<InlineEditableTitle work={work} />
 						<div className="mt-2">
