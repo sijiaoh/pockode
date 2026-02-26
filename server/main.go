@@ -299,6 +299,15 @@ func main() {
 		slog.Warn("failed to start agent role store file watcher", "error", err)
 	}
 
+	// Set PM as default agent role on first launch
+	if pmID := agentRoleStore.SeededPMRoleID(); pmID != "" {
+		s := settingsStore.Get()
+		s.DefaultAgentRoleID = pmID
+		if err := settingsStore.Update(s); err != nil {
+			slog.Error("failed to set default agent role", "error", err)
+		}
+	}
+
 	// Initialize worktree registry and manager
 	claudeAgent := claude.New()
 	registry := worktree.NewRegistry(workDir, dataDir)

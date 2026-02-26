@@ -582,7 +582,9 @@ func (s *Server) handleAgentRoleGet(_ context.Context, args json.RawMessage) (st
 }
 
 func (s *Server) handleAgentRoleResetDefaults(ctx context.Context, _ json.RawMessage) (string, error) {
-	if err := s.agentRoleStore.ResetDefaults(ctx); err != nil {
+	// TODO: MCP server has no access to settings store, so the default agent role
+	// is not updated here. The WebSocket handler (rpc_agent_role.go) handles it.
+	if _, err := s.agentRoleStore.ResetDefaults(ctx); err != nil {
 		return "", err
 	}
 	return "Agent roles reset to defaults", nil

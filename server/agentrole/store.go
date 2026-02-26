@@ -21,7 +21,8 @@ type Store interface {
 	Create(ctx context.Context, r AgentRole) (AgentRole, error)
 	Update(ctx context.Context, id string, fields UpdateFields) error
 	Delete(ctx context.Context, id string) error
-	ResetDefaults(ctx context.Context) error
+	// ResetDefaults replaces all roles with built-in defaults and returns the PM role ID.
+	ResetDefaults(ctx context.Context) (string, error)
 
 	AddOnChangeListener(listener OnChangeListener)
 
@@ -46,6 +47,9 @@ type FileStore struct {
 	rolesMu   sync.RWMutex
 	roles     []AgentRole
 	listeners []OnChangeListener
+
+	// seededPMRoleID is set during initial seeding so the caller can configure the default agent role.
+	seededPMRoleID string
 }
 
 func NewFileStore(dataDir string) (*FileStore, error) {
@@ -68,9 +72,11 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	store.roles = idx.Roles
 
 	if len(store.roles) == 0 {
-		if err := store.seedDefaults(); err != nil {
+		pmID, err := store.seedDefaults()
+		if err != nil {
 			return nil, fmt.Errorf("seed default roles: %w", err)
 		}
+		store.seededPMRoleID = pmID
 	}
 
 	return store, nil
@@ -119,14 +125,20 @@ var defaultRoles = []struct {
 	},
 }
 
-func (s *FileStore) seedDefaults() error {
+func (s *FileStore) seedDefaults() (string, error) {
 	s.roles = buildDefaultRoles()
 	if err := s.persistIndex(); err != nil {
 		s.roles = nil
-		return err
+		return "", err
 	}
 	slog.Info("seeded default agent roles", "count", len(defaultRoles))
-	return nil
+	return s.roles[0].ID, nil // defaultRoles[0] is always PM
+}
+
+// SeededPMRoleID returns the PM role ID if this store was freshly seeded.
+// Returns empty string if roles already existed on disk.
+func (s *FileStore) SeededPMRoleID() string {
+	return s.seededPMRoleID
 }
 
 func buildDefaultRoles() []AgentRole {
@@ -269,7 +281,7 @@ func (s *FileStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (s *FileStore) ResetDefaults(_ context.Context) error {
+func (s *FileStore) ResetDefaults(_ context.Context) (string, error) {
 	s.rolesMu.Lock()
 
 	prev := s.roles
@@ -279,9 +291,10 @@ func (s *FileStore) ResetDefaults(_ context.Context) error {
 	if err := s.persistIndex(); err != nil {
 		s.roles = prev
 		s.rolesMu.Unlock()
-		return err
+		return "", err
 	}
 
+	pmRoleID := newRoles[0].ID // defaultRoles[0] is always PM
 	listeners := s.copyListeners()
 	s.rolesMu.Unlock()
 
@@ -291,7 +304,7 @@ func (s *FileStore) ResetDefaults(_ context.Context) error {
 	}
 
 	slog.Info("agent roles reset to defaults", "count", len(defaultRoles))
-	return nil
+	return pmRoleID, nil
 }
 
 // --- Listener management ---

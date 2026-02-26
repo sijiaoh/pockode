@@ -382,6 +382,40 @@ func TestSeed_NewStoreHasDefaults(t *testing.T) {
 	}
 }
 
+func TestSeed_PMRoleID(t *testing.T) {
+	s := newTestStore(t)
+
+	pmID := s.SeededPMRoleID()
+	if pmID == "" {
+		t.Fatal("expected non-empty SeededPMRoleID on fresh store")
+	}
+
+	roles, _ := s.List()
+	if roles[0].Name != "PM" || roles[0].ID != pmID {
+		t.Errorf("SeededPMRoleID = %q, want PM role ID %q", pmID, roles[0].ID)
+	}
+}
+
+func TestSeed_PMRoleID_EmptyWhenExisting(t *testing.T) {
+	dir := t.TempDir()
+
+	s1, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s1.SeededPMRoleID() == "" {
+		t.Fatal("expected non-empty SeededPMRoleID on first create")
+	}
+
+	s2, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.SeededPMRoleID() != "" {
+		t.Error("expected empty SeededPMRoleID on reopen")
+	}
+}
+
 func TestSeed_Persisted(t *testing.T) {
 	dir := t.TempDir()
 
@@ -442,13 +476,22 @@ func TestResetDefaults(t *testing.T) {
 		t.Fatalf("expected %d roles before reset, got %d", len(defaultRoles)+2, len(rolesBefore))
 	}
 
-	if err := s.ResetDefaults(context.Background()); err != nil {
+	pmRoleID, err := s.ResetDefaults(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	rolesAfter, _ := s.List()
 	if len(rolesAfter) != len(defaultRoles) {
 		t.Fatalf("expected %d roles after reset, got %d", len(defaultRoles), len(rolesAfter))
+	}
+
+	// Verify PM role ID is returned correctly
+	if rolesAfter[0].Name != "PM" {
+		t.Errorf("first role name = %q, want %q", rolesAfter[0].Name, "PM")
+	}
+	if pmRoleID != rolesAfter[0].ID {
+		t.Errorf("returned PM ID = %q, want %q", pmRoleID, rolesAfter[0].ID)
 	}
 
 	// Verify all default role names and prompts are present
@@ -486,7 +529,7 @@ func TestResetDefaults_Listener(t *testing.T) {
 		events = append(events, e)
 	}))
 
-	if err := s.ResetDefaults(context.Background()); err != nil {
+	if _, err := s.ResetDefaults(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -517,7 +560,7 @@ func TestResetDefaults_Persisted(t *testing.T) {
 	}
 	createRole(t, s1, "Custom", "prompt")
 
-	if err := s1.ResetDefaults(context.Background()); err != nil {
+	if _, err := s1.ResetDefaults(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 

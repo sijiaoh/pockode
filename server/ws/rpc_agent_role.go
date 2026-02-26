@@ -112,17 +112,17 @@ func (h *rpcMethodHandler) handleAgentRoleDelete(ctx context.Context, conn *json
 }
 
 func (h *rpcMethodHandler) handleAgentRoleResetDefaults(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	if err := h.agentRoleStore.ResetDefaults(ctx); err != nil {
+	pmRoleID, err := h.agentRoleStore.ResetDefaults(ctx)
+	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to reset agent roles")
 		return
 	}
 
-	// Clear default agent role since old IDs are no longer valid
-	if s := h.settingsStore.Get(); s.DefaultAgentRoleID != "" {
-		s.DefaultAgentRoleID = ""
-		if err := h.settingsStore.Update(s); err != nil {
-			h.log.Error("failed to clear default agent role after reset", "error", err)
-		}
+	// Set PM as default agent role
+	s := h.settingsStore.Get()
+	s.DefaultAgentRoleID = pmRoleID
+	if err := h.settingsStore.Update(s); err != nil {
+		h.log.Error("failed to set default agent role after reset", "error", err)
 	}
 
 	h.log.Info("agent roles reset to defaults")
