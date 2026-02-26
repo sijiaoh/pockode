@@ -18,7 +18,7 @@ type Store interface {
 	Get(sessionID string) (SessionMeta, bool, error)
 
 	// Session metadata (with I/O)
-	Create(ctx context.Context, sessionID string) (SessionMeta, error)
+	Create(ctx context.Context, sessionID string, mode Mode) (SessionMeta, error)
 	Delete(ctx context.Context, sessionID string) error
 	Update(ctx context.Context, sessionID string, title string) error
 	Activate(ctx context.Context, sessionID string) error
@@ -142,9 +142,13 @@ func (s *FileStore) Get(sessionID string) (SessionMeta, bool, error) {
 	return SessionMeta{}, false, nil
 }
 
-func (s *FileStore) Create(ctx context.Context, sessionID string) (SessionMeta, error) {
+func (s *FileStore) Create(ctx context.Context, sessionID string, mode Mode) (SessionMeta, error) {
 	if err := ctx.Err(); err != nil {
 		return SessionMeta{}, err
+	}
+
+	if mode == "" {
+		mode = ModeDefault
 	}
 
 	s.mu.Lock()
@@ -156,7 +160,7 @@ func (s *FileStore) Create(ctx context.Context, sessionID string) (SessionMeta, 
 		Title:     "New Chat",
 		CreatedAt: now,
 		UpdatedAt: now,
-		Mode:      ModeDefault,
+		Mode:      mode,
 	}
 
 	s.sessions = append([]SessionMeta{session}, s.sessions...)

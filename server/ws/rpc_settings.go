@@ -42,6 +42,12 @@ func (h *rpcMethodHandler) handleSettingsUpdate(ctx context.Context, conn *jsonr
 		}
 	}
 
+	// Validate default mode if set
+	if params.Settings.DefaultMode != "" && !params.Settings.DefaultMode.IsValid() {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid default mode")
+		return
+	}
+
 	if err := h.settingsStore.Update(params.Settings); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to update settings")
 		return

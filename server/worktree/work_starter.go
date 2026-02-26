@@ -67,7 +67,7 @@ func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work
 }
 
 func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w work.Work) error {
-	if _, err := wt.SessionStore.Create(ctx, w.SessionID); err != nil {
+	if _, err := wt.SessionStore.Create(ctx, w.SessionID, ""); err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
 
