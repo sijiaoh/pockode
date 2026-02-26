@@ -2,14 +2,22 @@ package work
 
 import "fmt"
 
+// pockodeMCPPrefix grounds the agent in Pockode's tool namespace,
+// preventing confusion with tools from other MCP servers.
+const pockodeMCPPrefix = "All work_* and agent_role_* tools in this session belong to Pockode's project management system. Use them exactly as described below."
+
 func roleReference(agentRoleID string) string {
 	return fmt.Sprintf(
-		"Your agent role ID is %s. Use the agent_role_get tool to retrieve your role instructions.",
+		"Your agent role ID is %s. Use agent_role_get with this ID to retrieve your role instructions.",
 		agentRoleID,
 	)
 }
 
-const storyBehaviorRules = "You are a coordinator. Break down the work into tasks using work_create, then call work_done on YOUR story immediately — do NOT wait for tasks to finish. You will be automatically reactivated when a task completes. Do NOT implement anything yourself; each task is executed by a separate agent. Do NOT call work_done on child tasks; task agents handle that themselves."
+const storyBehaviorRules = `You are a COORDINATOR for this story. Follow these rules strictly:
+1. Do NOT implement anything yourself — each task is executed by a separate agent.
+2. Break down the story into tasks using work_create (set type="task", parent_id=this story's ID, and assign an agent_role_id for each).
+3. After creating all tasks, call work_done on YOUR story immediately. Do NOT wait for tasks to finish — you will be automatically reactivated when a task completes.
+4. Do NOT call work_done on child tasks; task agents handle their own lifecycle.`
 
 // buildBase builds the common message shared by all prompt types.
 func buildBase(w Work) string {
@@ -20,7 +28,7 @@ func buildBase(w Work) string {
 	var rules string
 	if w.Type == WorkTypeStory {
 		rules = fmt.Sprintf(
-			"%s Call work_done with ID %s as soon as you've created the tasks. If you need user input to proceed, call work_needs_input with ID %s.",
+			"%s\nCall work_done with ID %s as soon as you've created the tasks. If you need user input to proceed, call work_needs_input with ID %s.",
 			storyBehaviorRules, w.ID, w.ID,
 		)
 	} else {
@@ -37,7 +45,7 @@ func buildBase(w Work) string {
 		}
 	}
 
-	return role + "\n\n" + workCtx + "\n\n" + rules
+	return pockodeMCPPrefix + "\n\n" + role + "\n\n" + workCtx + "\n\n" + rules
 }
 
 func BuildKickoffMessage(w Work) string {
@@ -92,8 +100,8 @@ func BuildParentReactivationMessage(parent Work, childTitle, childID string) str
 	base := buildBase(parent)
 
 	nudge := fmt.Sprintf(
-		"Task %q (ID: %s) has been completed. Use work_comment_list with work_id %s to read the task's report. Then use work_list with parent_id %s to check remaining tasks. If all tasks are done, call work_done with ID %s. If tasks remain, review progress and adjust the plan as needed, then call work_done with ID %s to wait for the next completion.",
-		childTitle, childID, parent.ID, parent.ID, parent.ID, parent.ID,
+		"Task %q (ID: %s) has been completed. Use work_comment_list with work_id %s to read the task's report. Then use work_list with parent_id %s to check remaining tasks. If all tasks are done, call work_done with ID %s. If tasks remain, review progress and adjust the plan as needed, then call work_done with ID %s — this returns you to a dormant state until the next task completes.",
+		childTitle, childID, childID, parent.ID, parent.ID, parent.ID,
 	)
 
 	return base + "\n\n" + nudge
