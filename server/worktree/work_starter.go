@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
 )
 
@@ -14,12 +15,14 @@ import (
 type WorkStarter struct {
 	worktreeManager *Manager
 	agentRoleStore  agentrole.Store
+	settingsStore   *settings.Store
 }
 
-func NewWorkStarter(wm *Manager, ars agentrole.Store) *WorkStarter {
+func NewWorkStarter(wm *Manager, ars agentrole.Store, ss *settings.Store) *WorkStarter {
 	return &WorkStarter{
 		worktreeManager: wm,
 		agentRoleStore:  ars,
+		settingsStore:   ss,
 	}
 }
 
@@ -67,7 +70,8 @@ func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work
 }
 
 func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w work.Work) error {
-	if _, err := wt.SessionStore.Create(ctx, w.SessionID, ""); err != nil {
+	defaultMode := s.settingsStore.Get().DefaultMode
+	if _, err := wt.SessionStore.Create(ctx, w.SessionID, defaultMode); err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
 

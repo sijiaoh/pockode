@@ -49,7 +49,7 @@ func TestHealthEndpoint(t *testing.T) {
 	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute)
 	defer scopeManager.Shutdown()
 
-	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore)
+	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(scopeManager, workStore)
 	wsHandler := ws.NewRPCHandler("test-token", "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	handler := newHandler("test-token", true, wsHandler)
@@ -78,7 +78,7 @@ func TestPingEndpoint(t *testing.T) {
 	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute)
 	defer scopeManager.Shutdown()
 
-	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore)
+	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(scopeManager, workStore)
 	wsHandler := ws.NewRPCHandler(token, "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	handler := newHandler(token, true, wsHandler)

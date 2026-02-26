@@ -314,7 +314,7 @@ func main() {
 	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout)
 	worktreeManager.SetWorkAutoResumer(workAutoResumer)
 	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
-	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore)
+	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
 	workAutoResumer.SetStartHandler(workStarter)
 	if err := worktreeManager.Start(); err != nil {
