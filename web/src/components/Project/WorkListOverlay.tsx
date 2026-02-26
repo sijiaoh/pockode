@@ -92,7 +92,7 @@ export default function WorkListOverlay({
 					</div>
 				) : !hasStories ? (
 					<div className="py-8 text-center text-sm text-th-text-muted">
-						No stories yet
+						No items yet
 					</div>
 				) : (
 					<div className="space-y-2">

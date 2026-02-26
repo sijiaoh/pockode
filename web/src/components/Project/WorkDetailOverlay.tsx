@@ -82,7 +82,7 @@ export default function WorkDetailOverlay({
 			<DetailHeader
 				onBack={parent ? () => onOpenWorkDetail(parent.id) : onBack}
 				type={work.type}
-				backLabel={parent ? "Back to parent story" : "Back to stories"}
+				backLabel={parent ? "Back to parent story" : "Back to project"}
 			/>
 			<div className="min-h-0 flex-1 overflow-auto">
 				<div className="space-y-5 p-4">
@@ -139,7 +139,7 @@ const typeLabels: Record<WorkType, string> = {
 function DetailHeader({
 	onBack,
 	type,
-	backLabel = "Back to stories",
+	backLabel = "Back to project",
 }: {
 	onBack: () => void;
 	type?: WorkType;
