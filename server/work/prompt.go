@@ -34,8 +34,8 @@ func buildBase(w Work) string {
 	} else {
 		if w.ParentID != "" {
 			rules = fmt.Sprintf(
-				"IMPORTANT: When you finish, you MUST first report your results by calling work_comment_add with work_id %s (the parent), then call work_done with ID %s. If you need user input to proceed, call work_needs_input with ID %s. Do not end your turn without calling one of these.",
-				w.ParentID, w.ID, w.ID,
+				"Before starting, use work_comment_list with work_id %s to check for any instructions or feedback on the parent story.\n\nIMPORTANT: When you finish, you MUST first report your results by calling work_comment_add with work_id %s (the parent), then call work_done with ID %s. If you need user input to proceed, call work_needs_input with ID %s. Do not end your turn without calling one of these.",
+				w.ParentID, w.ParentID, w.ID, w.ID,
 			)
 		} else {
 			rules = fmt.Sprintf(

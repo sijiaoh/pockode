@@ -99,6 +99,7 @@ func TestBuildKickoffMessage_TaskWithParent_ReportViaComment(t *testing.T) {
 
 	msg := BuildKickoffMessage(w)
 
+	assertContains(t, msg, "work_comment_list", "work_comment_list instruction for parent comments")
 	assertContains(t, msg, "work_comment_add", "work_comment_add instruction")
 	assertContains(t, msg, "story-1", "parent work ID")
 	assertContains(t, msg, "work_done", "work_done instruction")
@@ -116,6 +117,9 @@ func TestBuildKickoffMessage_TaskWithoutParent_NoCommentInstruction(t *testing.T
 
 	if strings.Contains(msg, "work_comment_add") {
 		t.Error("task without parent should not mention work_comment_add")
+	}
+	if strings.Contains(msg, "work_comment_list") {
+		t.Error("task without parent should not mention work_comment_list")
 	}
 }
 
