@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/work"
 )
 
 // Client → Server
@@ -286,4 +288,78 @@ type SettingsSubscribeResult struct {
 
 type SettingsUpdateParams struct {
 	Settings settings.Settings `json:"settings"`
+}
+
+// Work namespace
+
+type WorkCreateParams struct {
+	Type        work.WorkType `json:"type"`
+	ParentID    string        `json:"parent_id,omitempty"`
+	AgentRoleID string        `json:"agent_role_id"`
+	Title       string        `json:"title"`
+	Body        string        `json:"body,omitempty"`
+}
+
+type WorkUpdateParams struct {
+	ID          string  `json:"id"`
+	Title       *string `json:"title,omitempty"`
+	Body        *string `json:"body,omitempty"`
+	AgentRoleID *string `json:"agent_role_id,omitempty"`
+}
+
+type WorkDeleteParams struct {
+	ID string `json:"id"`
+}
+
+type WorkStartParams struct {
+	ID string `json:"id"`
+}
+
+type WorkStopParams struct {
+	ID string `json:"id"`
+}
+
+type WorkListSubscribeResult struct {
+	ID    string      `json:"id"`
+	Items []work.Work `json:"items"`
+}
+
+type WorkCommentListParams struct {
+	WorkID string `json:"work_id"`
+}
+
+type WorkCommentListResult struct {
+	Comments []work.Comment `json:"comments"`
+}
+
+type WorkDetailSubscribeParams struct {
+	WorkID string `json:"work_id"`
+}
+
+type WorkDetailSubscribeResult struct {
+	ID       string         `json:"id"`
+	Work     work.Work      `json:"work"`
+	Comments []work.Comment `json:"comments"`
+}
+
+// AgentRole namespace
+
+type AgentRoleCreateParams struct {
+	Name       string `json:"name"`
+	RolePrompt string `json:"role_prompt"`
+}
+
+type AgentRoleUpdateParams struct {
+	ID         string  `json:"id"`
+	Name       *string `json:"name,omitempty"`
+	RolePrompt *string `json:"role_prompt,omitempty"`
+}
+
+type AgentRoleDeleteParams struct {
+	ID string `json:"id"`
+}
+
+type AgentRoleListSubscribeResult struct {
+	ID    string                `json:"id"`
+	Items []agentrole.AgentRole `json:"items"`
 }

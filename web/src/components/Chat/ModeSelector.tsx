@@ -1,5 +1,5 @@
-import { Shield, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
+import { SESSION_MODE_INFO, SESSION_MODES } from "../../lib/sessionMode";
 import type { SessionMode } from "../../types/message";
 
 interface Props {
@@ -8,26 +8,15 @@ interface Props {
 	disabled?: boolean;
 }
 
-interface ModeConfig {
-	label: string;
-	description: string;
-	icon: typeof Shield;
-	iconColor: string;
-	labelColor: string;
-}
-
-const modeConfig: Record<SessionMode, ModeConfig> = {
+const ICON_COLORS: Record<
+	SessionMode,
+	{ iconColor: string; labelColor: string }
+> = {
 	default: {
-		label: "Default",
-		description: "Ask before actions",
-		icon: Shield,
 		iconColor: "text-th-text-secondary group-hover:text-th-text-primary",
 		labelColor: "text-th-text-primary",
 	},
 	yolo: {
-		label: "YOLO",
-		description: "Skip all permissions",
-		icon: Zap,
 		iconColor: "text-th-warning",
 		labelColor: "text-th-warning",
 	},
@@ -47,7 +36,8 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 		setIsOpen(false);
 	};
 
-	const currentConfig = modeConfig[mode] ?? modeConfig.default;
+	const currentInfo = SESSION_MODE_INFO[mode] ?? SESSION_MODE_INFO.default;
+	const currentColors = ICON_COLORS[mode] ?? ICON_COLORS.default;
 
 	// Close dropdown on Escape key
 	useEffect(() => {
@@ -70,10 +60,10 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 				onClick={() => setIsOpen(!isOpen)}
 				disabled={disabled}
 				className="group flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary h-8 w-8 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50"
-				aria-label={currentConfig.label}
+				aria-label={currentInfo.label}
 			>
-				<currentConfig.icon
-					className={`h-4 w-4 ${currentConfig.iconColor}`}
+				<currentInfo.icon
+					className={`h-4 w-4 ${currentColors.iconColor}`}
 					aria-hidden="true"
 				/>
 			</button>
@@ -86,8 +76,9 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 						onClick={() => setIsOpen(false)}
 					/>
 					<div className="absolute bottom-full left-0 z-50 mb-1 min-w-52 overflow-hidden rounded-lg border border-th-border bg-th-bg-secondary shadow-lg">
-						{(Object.keys(modeConfig) as SessionMode[]).map((modeKey) => {
-							const config = modeConfig[modeKey];
+						{SESSION_MODES.map((modeKey) => {
+							const info = SESSION_MODE_INFO[modeKey];
+							const colors = ICON_COLORS[modeKey];
 							const isSelected = mode === modeKey;
 							return (
 								<button
@@ -124,13 +115,13 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 									</div>
 									<div className="flex-1">
 										<div
-											className={`flex items-center gap-1.5 text-sm font-medium ${config.labelColor}`}
+											className={`flex items-center gap-1.5 text-sm font-medium ${colors.labelColor}`}
 										>
-											<config.icon className="h-3.5 w-3.5" aria-hidden="true" />
-											{config.label}
+											<info.icon className="h-3.5 w-3.5" aria-hidden="true" />
+											{info.label}
 										</div>
 										<div className="mt-0.5 whitespace-pre text-xs text-th-text-muted">
-											{config.description}
+											{info.description}
 										</div>
 									</div>
 								</button>

@@ -1,9 +1,11 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
 import { useIsDesktop } from "../hooks/useIsDesktop";
 import { useRouteState } from "../hooks/useRouteState";
 import { useSession } from "../hooks/useSession";
 import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
+import { useWorkSubscription } from "../hooks/useWorkSubscription";
 import { useWorktree } from "../hooks/useWorktree";
 import {
 	authActions,
@@ -75,6 +77,8 @@ function AppShell() {
 	} = useWorktree({ enabled: hasAuthToken });
 
 	useSettingsSubscription(hasAuthToken);
+	useWorkSubscription(hasAuthToken);
+	useAgentRoleSubscription(hasAuthToken);
 
 	// Redirect to main when URL worktree doesn't exist in worktree list
 	useEffect(() => {
@@ -101,7 +105,7 @@ function AppShell() {
 	const activeCommitHash = overlay?.type === "commit" ? overlay.hash : null;
 
 	const {
-		sessions,
+		filteredSessions,
 		currentSessionId,
 		currentSession,
 		redirectSessionId,
@@ -184,7 +188,7 @@ function AppShell() {
 	const handleDeleteSession = useCallback(
 		async (id: string) => {
 			const isCurrentSession = id === currentSessionId;
-			const remaining = sessions.filter((s) => s.id !== id);
+			const remaining = filteredSessions.filter((s) => s.id !== id);
 
 			await deleteSession(id);
 
@@ -201,7 +205,7 @@ function AppShell() {
 				);
 			}
 		},
-		[currentSessionId, sessions, deleteSession, navigate, urlWorktree],
+		[currentSessionId, filteredSessions, deleteSession, navigate, urlWorktree],
 	);
 
 	const handleSelectDiffFile = useCallback(
@@ -263,6 +267,63 @@ function AppShell() {
 		);
 	}, [navigate, urlWorktree, currentSessionId]);
 
+	const handleOpenWorkList = useCallback(() => {
+		setSidebarOpen(false);
+		navigate(
+			overlayToNavigation({ type: "work-list" }, urlWorktree, currentSessionId),
+		);
+	}, [navigate, urlWorktree, currentSessionId]);
+
+	const handleOpenWorkDetail = useCallback(
+		(workId: string) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "work-detail", workId },
+					urlWorktree,
+					currentSessionId,
+				),
+			);
+		},
+		[navigate, urlWorktree, currentSessionId],
+	);
+
+	const handleOpenAgentRoleList = useCallback(() => {
+		setSidebarOpen(false);
+		navigate(
+			overlayToNavigation(
+				{ type: "agent-role-list" },
+				urlWorktree,
+				currentSessionId,
+			),
+		);
+	}, [navigate, urlWorktree, currentSessionId]);
+
+	const handleOpenAgentRoleDetail = useCallback(
+		(roleId: string) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "agent-role-detail", roleId },
+					urlWorktree,
+					currentSessionId,
+				),
+			);
+		},
+		[navigate, urlWorktree, currentSessionId],
+	);
+
+	const handleNavigateToSession = useCallback(
+		(sessionId: string) => {
+			navigate(
+				buildNavigation({
+					type: "session",
+					worktree: urlWorktree,
+					sessionId,
+				}),
+			);
+		},
+		[navigate, urlWorktree],
+	);
+
 	if (!hasAuthToken) {
 		return <TokenInput onSubmit={handleTokenSubmit} />;
 	}
@@ -313,6 +374,8 @@ function AppShell() {
 				activeCommitHash={activeCommitHash}
 				onSelectFile={handleSelectFile}
 				activeFilePath={activeFilePath}
+				onOpenWorkList={handleOpenWorkList}
+				onOpenAgentRoleList={handleOpenAgentRoleList}
 				isDesktop={isDesktop}
 			/>
 			<ChatPanel
@@ -323,6 +386,11 @@ function AppShell() {
 				onOpenSettings={handleOpenSettings}
 				overlay={overlay}
 				onCloseOverlay={handleCloseOverlay}
+				onNavigateToSession={handleNavigateToSession}
+				onOpenWorkDetail={handleOpenWorkDetail}
+				onOpenWorkList={handleOpenWorkList}
+				onOpenAgentRoleList={handleOpenAgentRoleList}
+				onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
 			/>
 		</div>
 	);

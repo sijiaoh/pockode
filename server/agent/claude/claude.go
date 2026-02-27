@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +35,36 @@ type Agent struct{}
 // New creates a new Claude Agent.
 func New() *Agent {
 	return &Agent{}
+}
+
+// ensureMCPConfig writes the MCP config file and returns its path.
+// The config points to the current binary with the "mcp" subcommand.
+func ensureMCPConfig(dataDir string) (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable path: %w", err)
+	}
+
+	config := map[string]interface{}{
+		"mcpServers": map[string]interface{}{
+			"pockode": map[string]interface{}{
+				"command": exe,
+				"args":    []string{"mcp", "--data-dir", dataDir},
+			},
+		},
+	}
+
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return "", err
+	}
+
+	configPath := filepath.Join(dataDir, "mcp-config.json")
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		return "", err
+	}
+
+	return configPath, nil
 }
 
 // Start launches a persistent Claude CLI process.
@@ -58,6 +90,14 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		} else {
 			claudeArgs = append(claudeArgs, "--session-id", opts.SessionID)
 		}
+	}
+
+	// Add MCP config for work management tools
+	mcpConfigPath, err := ensureMCPConfig(opts.DataDir)
+	if err != nil {
+		slog.Warn("failed to create MCP config, continuing without MCP", "error", err)
+	} else {
+		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfigPath)
 	}
 
 	cmd := exec.CommandContext(procCtx, Binary, claudeArgs...)

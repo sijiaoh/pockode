@@ -54,10 +54,10 @@ React SPA (前端)
 
 - **使用英语** — 所有代码注释、TODO、文档字符串必须使用英语
 - **只写代码无法表达的信息** — 函数名、类型、代码结构能说明的事情通常不需要注释
-  - ❌ 描述代码做什么（What）— 代码本身已经说明（过度复杂或特殊的逻辑除外）
-  - ✅ 解释为什么这样做（Why）— 设计决策、非显而易见的理由
-  - ✅ 说明何时使用（When）— 如果使用场景不自明
-  - ✅ 记录值的来源（Where）— 魔法数字、外部依赖的关联
+    - ❌ 描述代码做什么（What）— 代码本身已经说明（过度复杂或特殊的逻辑除外）
+    - ✅ 解释为什么这样做（Why）— 设计决策、非显而易见的理由
+    - ✅ 说明何时使用（When）— 如果使用场景不自明
+    - ✅ 记录值的来源（Where）— 魔法数字、外部依赖的关联
 - **避免噪音** — 自明注释、类型/函数名的重复描述都是噪音
 - **保持同步** — 过时注释比没有更有害；改代码时同步更新注释
 - **TODO 要有上下文** — 如 `// TODO: Remove after upstream API supports X`
@@ -65,6 +65,7 @@ React SPA (前端)
 
 ### Git 规范
 
+- **不要用 `-C` option**
 - 分支命名：`feature/xxx`、`fix/xxx`、`refactor/xxx`
 - Commit 信息简洁明了，说明「做了什么」而非「怎么做的」
 - 保持 commit 粒度合理，一个 commit 做一件事
@@ -101,6 +102,7 @@ React SPA (前端)
 ## 参考资料
 
 **参考项目**（按需克隆到 `./refs/`）：
+
 - [happy-cli](https://github.com/slopus/happy-cli) — schema 及实现参考
 - [claude-code-chat](https://github.com/andrepimenta/claude-code-chat) — stream-json 实现参考
 - [anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go) — API 类型定义参考

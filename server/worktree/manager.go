@@ -15,6 +15,7 @@ import (
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/watch"
+	"github.com/pockode/server/work"
 )
 
 const idleReleaseDelay = 30 * time.Second
@@ -26,6 +27,9 @@ type Manager struct {
 	dataDir         string
 	idleTimeout     time.Duration
 	WorktreeWatcher *watch.WorktreeWatcher
+
+	workAutoResumer      *work.AutoResumer
+	workNeedsInputSyncer *work.NeedsInputSyncer
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
@@ -44,6 +48,14 @@ func NewManager(registry *Registry, ag agent.Agent, dataDir string, idleTimeout 
 
 func (m *Manager) Registry() *Registry {
 	return m.registry
+}
+
+func (m *Manager) SetWorkAutoResumer(ar *work.AutoResumer) {
+	m.workAutoResumer = ar
+}
+
+func (m *Manager) SetWorkNeedsInputSyncer(s *work.NeedsInputSyncer) {
+	m.workNeedsInputSyncer = s
 }
 
 func (m *Manager) Start() error {
@@ -164,15 +176,33 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	gitDiffWatcher := watch.NewGitDiffWatcher(workDir)
 	sessionListWatcher := watch.NewSessionListWatcher(sessionStore)
 	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore)
-	processManager := process.NewManager(m.agent, workDir, sessionStore, m.idleTimeout)
+	processManager := process.NewManager(m.agent, workDir, m.dataDir, sessionStore, m.idleTimeout)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetProcessStateGetter(processManager)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
+	if m.workNeedsInputSyncer != nil {
+		sessionListWatcher.SetWorkNeedsInputSyncer(m.workNeedsInputSyncer)
+	}
 	processManager.SetOnStateChange(func(e process.StateChangeEvent) {
 		sessionListWatcher.HandleProcessStateChange(e)
+		if m.workAutoResumer != nil {
+			m.workAutoResumer.HandleProcessStateChange(e.SessionID, string(e.State), e.NeedsInput, e.IsInitial, e.Interrupted)
+		}
 	})
 
 	chatClient := chat.NewClient(sessionStore, processManager)
+	chatClient.SetBroadcaster(func(sessionID string, event agent.MessageEvent, exclude any) {
+		var n watch.Notifier
+		if exclude != nil {
+			n = exclude.(watch.Notifier)
+		}
+		chatMessagesWatcher.NotifyMessage(sessionID, event, n)
+	})
+
+	// Set sender for auto-resumer when creating the main worktree
+	if name == "" && m.workAutoResumer != nil {
+		m.workAutoResumer.SetSender(chatClient)
+	}
 
 	wt := &Worktree{
 		Name:                name,

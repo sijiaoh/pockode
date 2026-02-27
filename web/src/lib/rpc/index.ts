@@ -1,3 +1,7 @@
+export {
+	type AgentRoleActions,
+	createAgentRoleActions,
+} from "./agentRole";
 export { type ChatActions, createChatActions } from "./chat";
 export {
 	type Command,
@@ -8,4 +12,5 @@ export { createFileActions, type FileActions } from "./file";
 export { createGitActions, type GitActions } from "./git";
 export { createSessionActions, type SessionActions } from "./session";
 export { createSettingsActions, type SettingsActions } from "./settings";
+export { createWorkActions, type WorkActions } from "./work";
 export { createWorktreeActions, type WorktreeActions } from "./worktree";

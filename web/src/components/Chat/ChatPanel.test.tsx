@@ -25,6 +25,14 @@ vi.mock("react-virtuoso", () => ({
 	),
 }));
 
+// Mock Project overlays to avoid router dependency
+vi.mock("../Project", () => ({
+	WorkListOverlay: () => <div data-testid="work-list-overlay" />,
+	WorkDetailOverlay: () => <div data-testid="work-detail-overlay" />,
+	AgentRoleListOverlay: () => <div data-testid="agent-role-list-overlay" />,
+	AgentRoleDetailOverlay: () => <div data-testid="agent-role-detail-overlay" />,
+}));
+
 // Use vi.hoisted to ensure mockState is available when vi.mock factory runs
 const mockState = vi.hoisted(() => ({
 	sendMessage: vi.fn(() => Promise.resolve()),
@@ -345,6 +353,37 @@ describe("ChatPanel", () => {
 			await user.keyboard("{Escape}");
 
 			expect(mockState.interrupt).toHaveBeenCalledWith("test-session");
+		});
+
+		it("does not interrupt on Escape when input-bar-hiding overlay is active", async () => {
+			const user = userEvent.setup();
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const textarea = screen.getByRole("textbox");
+			await user.type(textarea, "Hi");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			act(() => {
+				mockState.onNotification?.({
+					type: "text",
+					content: "Hello",
+				});
+			});
+			mockState.interrupt.mockClear();
+
+			// Re-render with work-list overlay (hides InputBar)
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "work-list" }}
+					onCloseOverlay={vi.fn()}
+				/>,
+			);
+
+			await user.keyboard("{Escape}");
+
+			expect(mockState.interrupt).not.toHaveBeenCalled();
 		});
 	});
 
