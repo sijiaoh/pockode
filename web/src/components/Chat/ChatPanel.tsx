@@ -1,6 +1,7 @@
 import { Square } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
+import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { unreadActions } from "../../lib/unreadStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
@@ -13,7 +14,7 @@ import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
 import { SettingsPage } from "../Settings";
-import InputBar from "./InputBar";
+import DefaultInputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
 
@@ -37,6 +38,13 @@ function ChatPanel({
 	onCloseOverlay,
 }: Props) {
 	const projectTitle = useWSStore((state) => state.projectTitle);
+	const {
+		InputBar: CustomInputBar,
+		ModeSelector: CustomModeSelector,
+		StopButton: CustomStopButton,
+		ChatTopContent,
+	} = useChatUIConfig();
+	const InputBar = CustomInputBar ?? DefaultInputBar;
 
 	const {
 		messages,
@@ -153,6 +161,7 @@ function ChatPanel({
 					isProcessRunning={isProcessRunning}
 					onPermissionRespond={handlePermissionRespond}
 					onQuestionRespond={handleQuestionRespond}
+					onHintClick={handleSend}
 				/>
 			);
 		}
@@ -198,34 +207,52 @@ function ChatPanel({
 			onOpenSidebar={onOpenSidebar}
 			onOpenSettings={onOpenSettings}
 		>
+			{!overlay && ChatTopContent && <ChatTopContent sessionId={sessionId} />}
 			{renderContent()}
-			{/* Session action bar - only shown when not in overlay */}
-			{!overlay && (
-				<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
-					<ModeSelector
-						mode={mode}
-						onModeChange={setMode}
-						disabled={isStreaming}
-					/>
-					{isStreaming && (
-						<button
-							type="button"
-							onClick={handleInterrupt}
-							aria-label="Stop"
-							className="flex h-8 items-center gap-1.5 rounded bg-th-error px-2.5 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
-						>
-							<Square className="size-3.5 fill-current" />
-							{!hasCoarsePointer() && (
-								<span className="text-xs opacity-80">Esc</span>
-							)}
-						</button>
-					)}
-				</div>
-			)}
+			{/* Session action bar */}
+			{!overlay &&
+				(CustomModeSelector !== null ||
+					(isStreaming && CustomStopButton !== null)) && (
+					<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
+						{CustomModeSelector === null ? (
+							<div />
+						) : CustomModeSelector ? (
+							<CustomModeSelector
+								mode={mode}
+								onModeChange={setMode}
+								disabled={isStreaming}
+							/>
+						) : (
+							<ModeSelector
+								mode={mode}
+								onModeChange={setMode}
+								disabled={isStreaming}
+							/>
+						)}
+						{isStreaming &&
+							(CustomStopButton === null ? null : CustomStopButton ? (
+								<CustomStopButton onStop={handleInterrupt} />
+							) : (
+								<button
+									type="button"
+									onClick={handleInterrupt}
+									aria-label="Stop"
+									className="flex h-8 items-center gap-1.5 rounded bg-th-error px-2.5 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
+								>
+									<Square className="size-3.5 fill-current" />
+									{!hasCoarsePointer() && (
+										<span className="text-xs opacity-80">Esc</span>
+									)}
+								</button>
+							))}
+					</div>
+				)}
 			<InputBar
 				sessionId={sessionId}
 				onSend={handleSend}
 				canSend={status === "connected" && !isLoadingHistory}
+				isStreaming={isStreaming}
+				onStop={handleInterrupt}
 			/>
 		</MainContainer>
 	);
