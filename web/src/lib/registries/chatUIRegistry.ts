@@ -41,23 +41,18 @@ export interface ChatUIConfig {
 	/** Custom class for assistant bubble */
 	assistantBubbleClass?: string;
 
-	// InputBar slot - replaces entire InputBar component
 	/** Custom InputBar component (replaces default) */
 	InputBar?: ComponentType<InputBarProps>;
 
-	// ModeSelector slot - set to null to hide, or provide custom component
 	/** Custom ModeSelector component (set to null to hide) */
 	ModeSelector?: ComponentType<ModeSelectorProps> | null;
 
-	// StopButton slot - set to null to hide, or provide custom component
 	/** Custom StopButton component (set to null to hide) */
 	StopButton?: ComponentType<StopButtonProps> | null;
 
-	// EmptyState slot - replaces the empty message list state
 	/** Custom EmptyState component (shown when there are no messages) */
 	EmptyState?: ComponentType<EmptyStateProps>;
 
-	// ChatTopContent slot - shown above message list (always visible)
 	/** Custom component shown above the message list */
 	ChatTopContent?: ComponentType<ChatTopContentProps>;
 }
@@ -67,7 +62,7 @@ const defaultConfig: ChatUIConfig = {};
 let config: ChatUIConfig = { ...defaultConfig };
 const listeners = new Set<() => void>();
 
-function emit(): void {
+function notifyListeners(): void {
 	for (const listener of listeners) {
 		listener();
 	}
@@ -82,20 +77,29 @@ function getSnapshot(): ChatUIConfig {
 	return config;
 }
 
+/**
+ * @internal Use `ctx.chatUI.configure()` from extension context instead.
+ */
 export function setChatUIConfig(newConfig: Partial<ChatUIConfig>): void {
 	config = { ...config, ...newConfig };
-	emit();
+	notifyListeners();
 }
 
 export function useChatUIConfig(): ChatUIConfig {
 	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
+/**
+ * @internal For testing only.
+ */
 export function getChatUIConfig(): ChatUIConfig {
 	return config;
 }
 
+/**
+ * @internal For testing only.
+ */
 export function resetChatUIConfig(): void {
 	config = { ...defaultConfig };
-	emit();
+	notifyListeners();
 }

@@ -13,10 +13,19 @@ export interface SettingsSectionConfig {
 let sections: SettingsSectionConfig[] = [];
 const listeners = new Set<() => void>();
 
-function notifyListeners() {
+function notifyListeners(): void {
 	for (const listener of listeners) {
 		listener();
 	}
+}
+
+function subscribe(listener: () => void): () => void {
+	listeners.add(listener);
+	return () => listeners.delete(listener);
+}
+
+function getSnapshot(): SettingsSectionConfig[] {
+	return sections;
 }
 
 /**
@@ -34,13 +43,7 @@ export function registerSettingsSection(
 }
 
 export function useSettingsSections(): SettingsSectionConfig[] {
-	return useSyncExternalStore(
-		(callback) => {
-			listeners.add(callback);
-			return () => listeners.delete(callback);
-		},
-		() => sections,
-	);
+	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 /**
@@ -53,7 +56,7 @@ export function getSettingsSections(): SettingsSectionConfig[] {
 /**
  * @internal For testing only.
  */
-export function resetSettingsSections() {
+export function resetSettingsSections(): void {
 	sections = [];
 	notifyListeners();
 }

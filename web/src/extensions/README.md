@@ -73,7 +73,6 @@ ctx.chatUI.configure({
   StopButton: null,
 
   // Style customization
-  maxWidth: "800px",
   userBubbleClass: "custom-user-bubble",
   assistantBubbleClass: "custom-assistant-bubble",
 });

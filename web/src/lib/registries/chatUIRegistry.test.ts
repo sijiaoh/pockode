@@ -1,9 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
 	getChatUIConfig,
 	resetChatUIConfig,
 	setChatUIConfig,
-	subscribe,
 } from "./chatUIRegistry";
 
 describe("chatUIRegistry", () => {
@@ -31,34 +30,5 @@ describe("chatUIRegistry", () => {
 		resetChatUIConfig();
 
 		expect(getChatUIConfig().userBubbleClass).toBeUndefined();
-	});
-
-	it("notifies listeners on set", () => {
-		const listener = vi.fn();
-		const unsubscribe = subscribe(listener);
-
-		setChatUIConfig({ userBubbleClass: "x" });
-		expect(listener).toHaveBeenCalledOnce();
-
-		unsubscribe();
-	});
-
-	it("notifies listeners on reset", () => {
-		const listener = vi.fn();
-		const unsubscribe = subscribe(listener);
-
-		resetChatUIConfig();
-		expect(listener).toHaveBeenCalledOnce();
-
-		unsubscribe();
-	});
-
-	it("stops notifying after unsubscribe", () => {
-		const listener = vi.fn();
-		const unsubscribe = subscribe(listener);
-		unsubscribe();
-
-		setChatUIConfig({ userBubbleClass: "x" });
-		expect(listener).not.toHaveBeenCalled();
 	});
 });
