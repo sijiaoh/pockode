@@ -1,0 +1,32 @@
+package work
+
+import "testing"
+
+// --- validNextStatuses ---
+
+func Test_validNextStatuses(t *testing.T) {
+	tests := []struct {
+		from     WorkStatus
+		expected []WorkStatus
+	}{
+		{StatusOpen, []WorkStatus{StatusInProgress}},
+		{StatusInProgress, []WorkStatus{StatusOpen, StatusNeedsInput, StatusStopped, StatusDone}},
+		{StatusNeedsInput, []WorkStatus{StatusInProgress, StatusStopped}},
+		{StatusStopped, []WorkStatus{StatusInProgress}},
+		{StatusDone, []WorkStatus{StatusInProgress}},
+		{StatusClosed, []WorkStatus{StatusInProgress}},
+	}
+
+	for _, tt := range tests {
+		next := validNextStatuses(tt.from)
+		if len(next) != len(tt.expected) {
+			t.Errorf("validNextStatuses(%s) = %v, want %v", tt.from, next, tt.expected)
+			continue
+		}
+		for i, s := range next {
+			if s != tt.expected[i] {
+				t.Errorf("validNextStatuses(%s)[%d] = %s, want %s", tt.from, i, s, tt.expected[i])
+			}
+		}
+	}
+}

@@ -1,9 +1,15 @@
-import { FolderOpen, GitCompare, MessageSquare } from "lucide-react";
+import {
+	FolderOpen,
+	GitCompare,
+	ListChecks,
+	MessageSquare,
+} from "lucide-react";
 import { useCallback, useMemo } from "react";
-import { unreadActions, useHasAnyUnread } from "../../lib/unreadStore";
+import { useSession } from "../../hooks/useSession";
 import { FilesTab } from "../Files";
 import { DiffTab } from "../Git";
 import { TabbedSidebar, type TabConfig } from "../Layout";
+import { ProjectTab } from "../Project";
 import { WorktreeSwitcher } from "../Worktree";
 import SessionsTab from "./SessionsTab";
 
@@ -20,6 +26,8 @@ interface Props {
 	activeCommitHash: string | null;
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
+	onOpenWorkList: () => void;
+	onOpenAgentRoleList: () => void;
 	isDesktop: boolean;
 }
 
@@ -36,9 +44,11 @@ function SessionSidebar({
 	activeCommitHash,
 	onSelectFile,
 	activeFilePath,
+	onOpenWorkList,
+	onOpenAgentRoleList,
 	isDesktop,
 }: Props) {
-	const hasAnyUnread = useHasAnyUnread();
+	const { hasAnyUnread } = useSession();
 
 	const tabs: TabConfig[] = useMemo(
 		() => [
@@ -50,13 +60,13 @@ function SessionSidebar({
 			},
 			{ id: "files", label: "Files", icon: FolderOpen },
 			{ id: "git", label: "Git", icon: GitCompare },
+			{ id: "project", label: "Project", icon: ListChecks },
 		],
 		[hasAnyUnread],
 	);
 
 	const handleSelectSession = useCallback(
 		(id: string) => {
-			unreadActions.markRead(id);
 			onSelectSession(id);
 			if (!isDesktop) onClose();
 		},
@@ -113,6 +123,10 @@ function SessionSidebar({
 				onSelectCommit={handleSelectCommit}
 				activeFile={activeDiffFile}
 				activeCommitHash={activeCommitHash}
+			/>
+			<ProjectTab
+				onOpenWorkList={onOpenWorkList}
+				onOpenAgentRoleList={onOpenAgentRoleList}
 			/>
 		</TabbedSidebar>
 	);

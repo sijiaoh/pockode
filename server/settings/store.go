@@ -2,10 +2,11 @@ package settings
 
 import (
 	"encoding/json"
-	"errors"
-	"os"
+	"log/slog"
 	"path/filepath"
 	"sync"
+
+	"github.com/pockode/server/filestore"
 )
 
 // OnChangeListener is notified when settings are updated.
@@ -14,7 +15,7 @@ type OnChangeListener interface {
 }
 
 type Store struct {
-	path     string
+	file     *filestore.File
 	dataMu   sync.RWMutex
 	data     Settings
 	listener OnChangeListener
@@ -23,9 +24,18 @@ type Store struct {
 // NewStore loads existing settings from disk or uses defaults.
 func NewStore(dataDir string) (*Store, error) {
 	s := &Store{
-		path: filepath.Join(dataDir, "settings.json"),
 		data: Default(),
 	}
+
+	f, err := filestore.New(filestore.Config{
+		Path:     filepath.Join(dataDir, "settings.json"),
+		Label:    "settings",
+		OnReload: s.reloadFromDisk,
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.file = f
 
 	if err := s.load(); err != nil {
 		return nil, err
@@ -41,17 +51,24 @@ func (s *Store) Get() Settings {
 }
 
 func (s *Store) Update(settings Settings) error {
-	s.dataMu.Lock()
-	defer s.dataMu.Unlock()
+	data, err := filestore.MarshalIndex(settings)
+	if err != nil {
+		return err
+	}
 
-	if err := s.save(settings); err != nil {
+	s.dataMu.Lock()
+
+	if err := s.file.Write(data); err != nil {
+		s.dataMu.Unlock()
 		return err
 	}
 
 	s.data = settings
+	listener := s.listener
+	s.dataMu.Unlock()
 
-	if s.listener != nil {
-		s.listener.OnSettingsChange(settings)
+	if listener != nil {
+		listener.OnSettingsChange(settings)
 	}
 
 	return nil
@@ -63,13 +80,21 @@ func (s *Store) SetOnChangeListener(listener OnChangeListener) {
 	s.listener = listener
 }
 
+func (s *Store) StartWatching() error {
+	return s.file.StartWatching()
+}
+
+func (s *Store) StopWatching() {
+	s.file.StopWatching()
+}
+
 func (s *Store) load() error {
-	data, err := os.ReadFile(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
+	data, err := s.file.Read()
 	if err != nil {
 		return err
+	}
+	if data == nil {
+		return nil
 	}
 
 	var settings Settings
@@ -82,34 +107,34 @@ func (s *Store) load() error {
 	return nil
 }
 
-func (s *Store) save(settings Settings) error {
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
+func (s *Store) reloadFromDisk() {
+	genBefore := s.file.SnapshotGen()
 
-	data, err := json.MarshalIndent(settings, "", "  ")
+	data, err := s.file.Read()
 	if err != nil {
-		return err
+		slog.Error("settings: failed to read from disk on reload", "error", err)
+		return
 	}
 
-	// Atomic write: write to temp file then rename
-	tmp, err := os.CreateTemp(dir, "settings-*.json.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return err
+	var settings Settings
+	if data == nil {
+		settings = Default()
+	} else if err := json.Unmarshal(data, &settings); err != nil {
+		slog.Error("settings: failed to unmarshal on reload", "error", err)
+		return
 	}
 
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
+	s.dataMu.Lock()
+	if s.file.IsStale(genBefore) {
+		s.dataMu.Unlock()
+		return
 	}
+	old := s.data
+	s.data = settings
+	listener := s.listener
+	s.dataMu.Unlock()
 
-	return os.Rename(tmpPath, s.path)
+	if listener != nil && old != settings {
+		listener.OnSettingsChange(settings)
+	}
 }

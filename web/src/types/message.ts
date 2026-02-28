@@ -8,6 +8,8 @@ export interface SessionListItem {
 	updated_at: string;
 	mode: SessionMode;
 	state: ProcessState;
+	needs_input: boolean;
+	unread: boolean;
 }
 
 export type MessageStatus =
@@ -224,7 +226,8 @@ export interface SessionListUnsubscribeParams {
 
 export type SessionListChangedNotification =
 	| { id: string; operation: "create" | "update"; session: SessionListItem }
-	| { id: string; operation: "delete"; sessionId: string };
+	| { id: string; operation: "delete"; sessionId: string }
+	| { id: string; operation: "sync"; sessions: SessionListItem[] };
 
 export interface ChatMessagesSubscribeParams {
 	session_id: string;

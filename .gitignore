@@ -24,7 +24,10 @@ Thumbs.db
 refs/
 
 # Data directory
-.pockode/
+.pockode/*
+!.pockode/agent-roles
+.pockode/agent-roles/*
+!.pockode/agent-roles/index.json
 
 # Build output
 dist/

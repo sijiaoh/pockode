@@ -2,6 +2,7 @@ import type { Element } from "hast";
 import type { ComponentPropsWithoutRef } from "react";
 import Markdown from "react-markdown";
 import { isInlineCode } from "react-shiki";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { MermaidBlock } from "./MermaidBlock";
@@ -39,7 +40,7 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
 	return (
 		<div className="prose dark:prose-invert prose-sm max-w-none prose-code:before:content-none prose-code:after:content-none prose-pre:bg-transparent prose-pre:p-0 prose-pre:text-[length:inherit]">
 			<Markdown
-				remarkPlugins={[remarkGfm]}
+				remarkPlugins={[remarkGfm, remarkBreaks]}
 				components={{
 					code: CodeBlock,
 				}}

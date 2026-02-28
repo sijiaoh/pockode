@@ -44,7 +44,43 @@ interface NavToSettingsOverlay {
 	sessionId: string | null;
 }
 
-type NavToOverlay = NavToFileOverlay | NavToSettingsOverlay;
+interface NavToWorkListOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "work-list";
+	sessionId: string | null;
+}
+
+interface NavToWorkDetailOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "work-detail";
+	workId: string;
+	sessionId: string | null;
+}
+
+interface NavToAgentRoleListOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "agent-role-list";
+	sessionId: string | null;
+}
+
+interface NavToAgentRoleDetailOverlay {
+	type: "overlay";
+	worktree: string;
+	overlayType: "agent-role-detail";
+	roleId: string;
+	sessionId: string | null;
+}
+
+type NavToOverlay =
+	| NavToFileOverlay
+	| NavToSettingsOverlay
+	| NavToWorkListOverlay
+	| NavToWorkDetailOverlay
+	| NavToAgentRoleListOverlay
+	| NavToAgentRoleDetailOverlay;
 
 interface NavToHome {
 	type: "home";
@@ -113,6 +149,36 @@ export function overlayToNavigation(
 					overlayType: "settings" as const,
 					sessionId,
 				};
+			case "work-list":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "work-list" as const,
+					sessionId,
+				};
+			case "work-detail":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "work-detail" as const,
+					workId: overlay.workId,
+					sessionId,
+				};
+			case "agent-role-list":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "agent-role-list" as const,
+					sessionId,
+				};
+			case "agent-role-detail":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "agent-role-detail" as const,
+					roleId: overlay.roleId,
+					sessionId,
+				};
 		}
 	})();
 	return buildNavigation(target);
@@ -148,8 +214,36 @@ export function buildNavigation(
 		}
 
 		case "overlay": {
-			if (target.overlayType === "settings") {
-				result.to = isMain ? ROUTES.settings : WT_ROUTES.settings;
+			if (target.overlayType === "agent-role-detail") {
+				result.to = isMain ? ROUTES.agentRoleDetail : WT_ROUTES.agentRoleDetail;
+				result.params = { roleId: target.roleId };
+				if (!isMain) {
+					result.params.worktree = target.worktree;
+				}
+				if (target.sessionId) {
+					result.search = { session: target.sessionId };
+				}
+			} else if (target.overlayType === "work-detail") {
+				result.to = isMain ? ROUTES.workDetail : WT_ROUTES.workDetail;
+				result.params = { workId: target.workId };
+				if (!isMain) {
+					result.params.worktree = target.worktree;
+				}
+				if (target.sessionId) {
+					result.search = { session: target.sessionId };
+				}
+			} else if (
+				target.overlayType === "settings" ||
+				target.overlayType === "work-list" ||
+				target.overlayType === "agent-role-list"
+			) {
+				const routeKeyMap = {
+					settings: "settings",
+					"work-list": "works",
+					"agent-role-list": "agentRoles",
+				} as const;
+				const routeKey = routeKeyMap[target.overlayType];
+				result.to = isMain ? ROUTES[routeKey] : WT_ROUTES[routeKey];
 				if (!isMain) {
 					result.params = { worktree: target.worktree };
 				}

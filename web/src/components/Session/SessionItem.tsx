@@ -1,5 +1,4 @@
 import { memo } from "react";
-import { useHasUnread } from "../../lib/unreadStore";
 import type { SessionListItem } from "../../types/message";
 import DeleteButton from "../common/DeleteButton";
 import SidebarListItem from "../common/SidebarListItem";
@@ -36,14 +35,13 @@ const SessionItem = memo(function SessionItem({
 	onSelect,
 	onDelete,
 }: Props) {
-	const hasUnread = useHasUnread(session.id);
-
 	return (
 		<SidebarListItem
 			title={session.title}
 			subtitle={formatDate(session.updated_at)}
 			isActive={isActive}
-			hasChanges={hasUnread}
+			hasChanges={session.unread}
+			needsInput={session.needs_input}
 			isRunning={session.state === "running"}
 			onSelect={() => onSelect(session.id)}
 			actions={

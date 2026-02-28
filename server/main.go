@@ -20,13 +20,16 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent/claude"
+	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/startup"
+	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
 	"github.com/pockode/server/ws"
 )
@@ -156,6 +159,15 @@ func findAvailablePort(startPort int) int {
 }
 
 func main() {
+	// Handle subcommands before flag.Parse()
+	if len(os.Args) > 1 && os.Args[0] != "-" {
+		switch os.Args[1] {
+		case "mcp":
+			runMCP()
+			return
+		}
+	}
+
 	portFlag := flag.Int("port", 0, fmt.Sprintf("server port (default %d)", defaultPort))
 	tokenFlag := flag.String("auth-token", "", "authentication token (required)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
@@ -257,6 +269,9 @@ func main() {
 		slog.Error("failed to initialize settings store", "error", err)
 		os.Exit(1)
 	}
+	if err := settingsStore.StartWatching(); err != nil {
+		slog.Warn("failed to start settings store file watcher", "error", err)
+	}
 
 	// Initialize worktree setup hook
 	if err := worktree.InitSetupHook(dataDir); err != nil {
@@ -264,15 +279,52 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize work store and auto-resumer
+	workStore, err := work.NewFileStore(dataDir)
+	if err != nil {
+		slog.Error("failed to initialize work store", "error", err)
+		os.Exit(1)
+	}
+	workAutoResumer := work.NewAutoResumer(workStore, 3)
+	workAutoResumer.StopOrphanedWork()
+	workStore.AddOnChangeListener(workAutoResumer)
+	if err := workStore.StartWatching(); err != nil {
+		slog.Warn("failed to start work store file watcher", "error", err)
+	}
+
+	// Initialize agent role store
+	agentRoleStore, err := agentrole.NewFileStore(dataDir)
+	if err != nil {
+		slog.Error("failed to initialize agent role store", "error", err)
+		os.Exit(1)
+	}
+	if err := agentRoleStore.StartWatching(); err != nil {
+		slog.Warn("failed to start agent role store file watcher", "error", err)
+	}
+
+	// Set PM as default agent role on first launch
+	if pmID := agentRoleStore.SeededPMRoleID(); pmID != "" {
+		s := settingsStore.Get()
+		s.DefaultAgentRoleID = pmID
+		if err := settingsStore.Update(s); err != nil {
+			slog.Error("failed to set default agent role", "error", err)
+		}
+	}
+
 	// Initialize worktree registry and manager
 	claudeAgent := claude.New()
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout)
+	worktreeManager.SetWorkAutoResumer(workAutoResumer)
+	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
+	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
+	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
+	workAutoResumer.SetStartHandler(workStarter)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
 
-	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore)
+	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	handler := newHandler(token, devMode, wsHandler)
 
 	portStr := strconv.Itoa(port)
@@ -341,7 +393,11 @@ func main() {
 			relayManager.Stop()
 		}
 		wsHandler.Stop()
+		workAutoResumer.Stop()
 		worktreeManager.Shutdown()
+		settingsStore.StopWatching()
+		workStore.StopWatching()
+		agentRoleStore.StopWatching()
 		close(shutdownDone)
 	}()
 
@@ -371,4 +427,46 @@ func main() {
 	}
 	<-shutdownDone
 	slog.Info("server stopped")
+}
+
+func runMCP() {
+	mcpFlags := flag.NewFlagSet("mcp", flag.ExitOnError)
+	dataDirFlag := mcpFlags.String("data-dir", "", "data directory (required)")
+	mcpFlags.Parse(os.Args[2:])
+
+	dataDir := *dataDirFlag
+	if dataDir == "" {
+		fmt.Fprintln(os.Stderr, "Error: --data-dir is required")
+		os.Exit(1)
+	}
+
+	store, err := work.NewFileStore(dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to initialize work store: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Watch for external changes so the in-memory cache stays in sync
+	// when the main server modifies the work index file.
+	if err := store.StartWatching(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to start file watcher: %v\n", err)
+	}
+	defer store.StopWatching()
+
+	agentRoleStore, err := agentrole.NewFileStore(dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to initialize agent role store: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := agentRoleStore.StartWatching(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to start agent role file watcher: %v\n", err)
+	}
+	defer agentRoleStore.StopWatching()
+
+	server := mcp.NewServer(store, agentRoleStore)
+	if err := server.Run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
+		os.Exit(1)
+	}
 }

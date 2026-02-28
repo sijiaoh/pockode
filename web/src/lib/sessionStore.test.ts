@@ -9,6 +9,8 @@ const mockSession = (id: string, title = "Test"): SessionListItem => ({
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default",
 	state: "ended",
+	needs_input: false,
+	unread: false,
 });
 
 describe("prependSession", () => {

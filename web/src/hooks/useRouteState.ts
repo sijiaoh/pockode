@@ -68,6 +68,38 @@ export function useRouteState(): RouteInfo {
 		from: WT_ROUTES.settings,
 		shouldThrow: false,
 	});
+	const workDetailMatch = useMatch({
+		from: ROUTES.workDetail,
+		shouldThrow: false,
+	});
+	const wtWorkDetailMatch = useMatch({
+		from: WT_ROUTES.workDetail,
+		shouldThrow: false,
+	});
+	const worksMatch = useMatch({
+		from: ROUTES.works,
+		shouldThrow: false,
+	});
+	const wtWorksMatch = useMatch({
+		from: WT_ROUTES.works,
+		shouldThrow: false,
+	});
+	const agentRoleDetailMatch = useMatch({
+		from: ROUTES.agentRoleDetail,
+		shouldThrow: false,
+	});
+	const wtAgentRoleDetailMatch = useMatch({
+		from: WT_ROUTES.agentRoleDetail,
+		shouldThrow: false,
+	});
+	const agentRolesMatch = useMatch({
+		from: ROUTES.agentRoles,
+		shouldThrow: false,
+	});
+	const wtAgentRolesMatch = useMatch({
+		from: WT_ROUTES.agentRoles,
+		shouldThrow: false,
+	});
 
 	const sessionId =
 		sessionMatch?.params.sessionId ?? wtSessionMatch?.params.sessionId ?? null;
@@ -138,6 +170,51 @@ export function useRouteState(): RouteInfo {
 			wtSettingsMatch?.search) as OverlaySearchParams;
 		return {
 			overlay: { type: "settings" },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	const workDetailParams = workDetailMatch?.params ?? wtWorkDetailMatch?.params;
+	if (workDetailParams) {
+		const workId = (workDetailParams as { workId: string }).workId;
+		const search = (workDetailMatch?.search ??
+			wtWorkDetailMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "work-detail", workId },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	if (worksMatch || wtWorksMatch) {
+		const search = (worksMatch?.search ??
+			wtWorksMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "work-list" },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	const agentRoleDetailParams =
+		agentRoleDetailMatch?.params ?? wtAgentRoleDetailMatch?.params;
+	if (agentRoleDetailParams) {
+		const roleId = (agentRoleDetailParams as { roleId: string }).roleId;
+		const search = (agentRoleDetailMatch?.search ??
+			wtAgentRoleDetailMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "agent-role-detail", roleId },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	if (agentRolesMatch || wtAgentRolesMatch) {
+		const search = (agentRolesMatch?.search ??
+			wtAgentRolesMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "agent-role-list" },
 			sessionId: search.session ?? null,
 			worktree,
 		};
