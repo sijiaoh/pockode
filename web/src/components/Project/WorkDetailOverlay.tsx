@@ -9,7 +9,8 @@ import {
 	Trash2,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import TextareaAutosize from "react-textarea-autosize";
 import { useInlineEdit } from "../../hooks/useInlineEdit";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
 import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription";
@@ -17,7 +18,6 @@ import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { Comment, Work, WorkType } from "../../types/work";
-import { autoResizeTextarea } from "../../utils/dom";
 import { MarkdownContent } from "../Chat/MarkdownContent";
 import ConfirmDialog from "../common/ConfirmDialog";
 import BackButton from "../ui/BackButton";
@@ -442,32 +442,22 @@ function InlineEditableBody({ work }: { work: Work }) {
 		allowEmpty: true,
 	});
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: ref.current is a mutable ref, not a reactive dependency
-	useEffect(() => {
-		if (editing && ref.current) {
-			autoResizeTextarea(ref.current);
-		}
-	}, [editing]);
-
 	if (editing) {
 		return (
 			<div>
 				<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
 					Description
 				</h3>
-				<textarea
+				<TextareaAutosize
 					ref={ref}
 					value={value}
-					onChange={(e) => {
-						setValue(e.target.value);
-						autoResizeTextarea(e.target);
-					}}
+					onChange={(e) => setValue(e.target.value)}
 					onKeyDown={(e) => {
 						if (e.key === "Escape") cancel();
 					}}
 					disabled={saving}
 					placeholder="Add description..."
-					rows={3}
+					minRows={3}
 					className="w-full resize-none rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
 				/>
 				<div className="mt-2 flex items-center gap-2">
