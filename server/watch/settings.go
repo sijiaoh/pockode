@@ -2,6 +2,7 @@ package watch
 
 import (
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/pockode/server/settings"
 )
@@ -12,14 +13,15 @@ import (
 type SettingsWatcher struct {
 	*BaseWatcher
 	store   *settings.Store
-	eventCh chan settings.Settings
+	eventCh chan struct{}
+	dirty   atomic.Bool // set when an event is dropped; triggers full resend from store
 }
 
 func NewSettingsWatcher(store *settings.Store) *SettingsWatcher {
 	w := &SettingsWatcher{
 		BaseWatcher: NewBaseWatcher("st"),
 		store:       store,
-		eventCh:     make(chan settings.Settings, 16),
+		eventCh:     make(chan struct{}, 16),
 	}
 	store.SetOnChangeListener(w)
 	return w
@@ -41,8 +43,11 @@ func (w *SettingsWatcher) eventLoop() {
 		select {
 		case <-w.Context().Done():
 			return
-		case s := <-w.eventCh:
-			w.notifyChange(s)
+		case <-w.eventCh:
+			if w.dirty.Swap(false) {
+				slog.Info("recovering from dropped settings event, sending latest from store")
+			}
+			w.notifyChange(w.store.Get())
 		}
 	}
 }
@@ -88,8 +93,9 @@ func (w *SettingsWatcher) OnSettingsChange(s settings.Settings) {
 	}
 
 	select {
-	case w.eventCh <- s:
+	case w.eventCh <- struct{}{}:
 	default:
-		slog.Warn("settings change event dropped (buffer full)")
+		w.dirty.Store(true)
+		slog.Warn("settings change event dropped, will resend on next event")
 	}
 }

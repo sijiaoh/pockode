@@ -12,6 +12,7 @@ export interface SessionActions {
 	deleteSession: (sessionId: string) => Promise<void>;
 	updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
 	setSessionMode: (sessionId: string, mode: SessionMode) => Promise<void>;
+	markSessionRead: (sessionId: string) => Promise<void>;
 }
 
 export function createSessionActions(
@@ -54,6 +55,12 @@ export function createSessionActions(
 				session_id: sessionId,
 				mode,
 			} as SessionSetModeParams);
+		},
+
+		markSessionRead: async (sessionId: string): Promise<void> => {
+			await requireClient().request("session.mark_read", {
+				session_id: sessionId,
+			});
 		},
 	};
 }

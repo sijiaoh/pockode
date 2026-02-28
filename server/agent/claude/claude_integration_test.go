@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/session"
 )
 
 // requireFields validates that expected fields are non-empty for each event type.
@@ -63,6 +64,8 @@ func requireNonEmpty(t *testing.T, field, value string) {
 //   - claude CLI installed and in PATH
 //   - Valid API credentials configured
 
+const chatTimeout = 60 * time.Second
+
 func TestIntegration_ClaudeCliAvailable(t *testing.T) {
 	_, err := exec.LookPath(Binary)
 	if err != nil {
@@ -70,53 +73,182 @@ func TestIntegration_ClaudeCliAvailable(t *testing.T) {
 	}
 }
 
-func TestIntegration_SimplePrompt(t *testing.T) {
+type chatCase struct {
+	name       string
+	prompt     string
+	expectType agent.EventType
+	mode       session.Mode // empty = default
+}
+
+func TestIntegration_Chat(t *testing.T) {
+	cases := []chatCase{
+		{
+			name:       "TextEvent",
+			prompt:     "Hi",
+			expectType: agent.EventTypeText,
+		},
+		{
+			name:       "ToolCallEvent",
+			prompt:     "Run this exact bash command: echo hi",
+			expectType: agent.EventTypeToolCall,
+		},
+		{
+			name:       "ToolResultEvent",
+			prompt:     "Run this exact bash command: echo hi",
+			expectType: agent.EventTypeToolResult,
+		},
+		{
+			name:       "PermissionRequestEvent",
+			prompt:     "Run this exact bash command: ruby --version",
+			expectType: agent.EventTypePermissionRequest,
+		},
+		{
+			name:       "AskUserQuestionEvent",
+			prompt:     "Use AskUserQuestion to ask if I like bread. Two options: Yes and No.",
+			expectType: agent.EventTypeAskUserQuestion,
+		},
+		// Yolo mode: tool permissions (Bash, Edit, etc.) are auto-approved
+		{
+			name:       "ToolCallEvent/yolo",
+			prompt:     "Run this exact bash command: echo hi",
+			expectType: agent.EventTypeToolCall,
+			mode:       session.ModeYolo,
+		},
+		{
+			name:       "ToolResultEvent/yolo",
+			prompt:     "Run this exact bash command: echo hi",
+			expectType: agent.EventTypeToolResult,
+			mode:       session.ModeYolo,
+		},
+		{
+			name:       "AskUserQuestionEvent/yolo",
+			prompt:     "Use AskUserQuestion to ask if I like bread. Two options: Yes and No.",
+			expectType: agent.EventTypeAskUserQuestion,
+			mode:       session.ModeYolo,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runChatScenario(t, tc)
+		})
+	}
+}
+
+func runChatScenario(t *testing.T, tc chatCase) {
 	a := New()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), chatTimeout)
 	defer cancel()
 
-	session, err := a.Start(ctx, t.TempDir(), "", false)
+	session, err := a.Start(ctx, agent.StartOptions{WorkDir: t.TempDir(), Mode: tc.mode})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 	defer session.Close()
 
-	// Send the first message
-	if err := session.SendMessage("Reply with exactly: OK"); err != nil {
+	if err := session.SendMessage(tc.prompt); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
-	var textEvents, doneEvents int
+	found := false
 
-eventLoop:
 	for {
 		select {
 		case event, ok := <-session.Events():
 			if !ok {
-				break eventLoop
+				if !found {
+					t.Fatalf("channel closed before %s event received", tc.expectType)
+				}
+				return
 			}
+
 			requireFields(t, event)
-			switch e := event.(type) {
-			case agent.TextEvent:
-				textEvents++
-				t.Logf("text: %s", e.Content)
-			case agent.DoneEvent:
-				doneEvents++
-				break eventLoop // Message complete, exit loop
-			case agent.ErrorEvent:
-				t.Errorf("error event: %s", e.Error)
+			t.Logf("event: %s", event.EventType())
+
+			if event.EventType() == tc.expectType {
+				found = true
 			}
+
+			// Handle interactive events and terminal conditions
+			switch e := event.(type) {
+			case agent.PermissionRequestEvent:
+				data := agent.PermissionRequestData{
+					RequestID:             e.RequestID,
+					ToolInput:             e.ToolInput,
+					ToolUseID:             e.ToolUseID,
+					PermissionSuggestions: e.PermissionSuggestions,
+				}
+				if err := session.SendPermissionResponse(data, agent.PermissionAllow); err != nil {
+					t.Fatalf("failed to send permission response: %v", err)
+				}
+			case agent.AskUserQuestionEvent:
+				if len(e.Questions) > 0 && len(e.Questions[0].Options) > 0 {
+					answers := map[string]string{
+						e.Questions[0].Question: e.Questions[0].Options[0].Label,
+					}
+					data := agent.QuestionRequestData{
+						RequestID: e.RequestID,
+						ToolUseID: e.ToolUseID,
+					}
+					if err := session.SendQuestionResponse(data, answers); err != nil {
+						t.Fatalf("failed to send question response: %v", err)
+					}
+				}
+			case agent.ErrorEvent:
+				t.Fatalf("error event: %s", e.Error)
+			case agent.DoneEvent:
+				if !found {
+					t.Fatalf("DoneEvent reached but %s event never received", tc.expectType)
+				}
+				return
+			}
+
 		case <-ctx.Done():
-			t.Fatal("timeout waiting for events")
+			t.Fatalf("timeout waiting for %s event", tc.expectType)
 		}
 	}
+}
 
-	if textEvents == 0 {
-		t.Error("expected at least one text event")
+// TestIntegration_YoloNoPermission verifies that yolo mode skips permission prompts.
+// Uses the same command that triggers PermissionRequestEvent in default mode.
+func TestIntegration_YoloNoPermission(t *testing.T) {
+	a := New()
+
+	ctx, cancel := context.WithTimeout(context.Background(), chatTimeout)
+	defer cancel()
+
+	session, err := a.Start(ctx, agent.StartOptions{WorkDir: t.TempDir(), Mode: session.ModeYolo})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
 	}
-	if doneEvents != 1 {
-		t.Errorf("expected exactly 1 done event, got %d", doneEvents)
+	defer session.Close()
+
+	if err := session.SendMessage("Run this exact bash command: ruby --version"); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	for {
+		select {
+		case event, ok := <-session.Events():
+			if !ok {
+				return
+			}
+			requireFields(t, event)
+			t.Logf("event: %s", event.EventType())
+
+			switch e := event.(type) {
+			case agent.PermissionRequestEvent:
+				t.Fatalf("unexpected permission_request in yolo mode: tool=%s", e.ToolName)
+			case agent.ErrorEvent:
+				t.Fatalf("error event: %s", e.Error)
+			case agent.DoneEvent:
+				return
+			}
+		case <-ctx.Done():
+			t.Fatal("timeout")
+		}
 	}
 }
 
@@ -126,7 +258,7 @@ func TestIntegration_PermissionFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	session, err := a.Start(ctx, t.TempDir(), "", false)
+	session, err := a.Start(ctx, agent.StartOptions{WorkDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -201,7 +333,7 @@ func TestIntegration_Interrupt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	session, err := a.Start(ctx, t.TempDir(), "", false)
+	session, err := a.Start(ctx, agent.StartOptions{WorkDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -251,7 +383,7 @@ func TestIntegration_PermissionDeny(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	session, err := a.Start(ctx, t.TempDir(), "", false)
+	session, err := a.Start(ctx, agent.StartOptions{WorkDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -325,7 +457,7 @@ func TestIntegration_PermissionAlwaysAllow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	session, err := a.Start(ctx, t.TempDir(), "", false)
+	session, err := a.Start(ctx, agent.StartOptions{WorkDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -415,7 +547,7 @@ func TestIntegration_AskUserQuestionFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	session, err := a.Start(ctx, t.TempDir(), "", false)
+	session, err := a.Start(ctx, agent.StartOptions{WorkDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}

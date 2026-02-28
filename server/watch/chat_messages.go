@@ -25,6 +25,7 @@ type ChatMessagesWatcher struct {
 
 var _ process.ChatMessageListener = (*ChatMessagesWatcher)(nil)
 var _ Watcher = (*ChatMessagesWatcher)(nil)
+var _ ViewingChecker = (*ChatMessagesWatcher)(nil)
 
 func NewChatMessagesWatcher(store session.Store) *ChatMessagesWatcher {
 	return &ChatMessagesWatcher{
@@ -175,6 +176,13 @@ func (w *ChatMessagesWatcher) removeSessionMapping(id string) {
 	if len(w.sessionToIDs[sessionID]) == 0 {
 		delete(w.sessionToIDs, sessionID)
 	}
+}
+
+// IsViewing returns true if any client is subscribed to the given session's chat messages.
+func (w *ChatMessagesWatcher) IsViewing(sessionID string) bool {
+	w.sessionMu.RLock()
+	defer w.sessionMu.RUnlock()
+	return len(w.sessionToIDs[sessionID]) > 0
 }
 
 // NotifyMessage broadcasts a user message to all session subscribers except the sender.

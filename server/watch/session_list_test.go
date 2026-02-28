@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
 )
 
@@ -19,10 +20,15 @@ func (m *mockSessionStore) List() ([]session.SessionMeta, error) {
 }
 
 func (m *mockSessionStore) Get(sessionID string) (session.SessionMeta, bool, error) {
+	for _, s := range m.sessions {
+		if s.ID == sessionID {
+			return s, true, nil
+		}
+	}
 	return session.SessionMeta{}, false, nil
 }
 
-func (m *mockSessionStore) Create(ctx context.Context, sessionID string) (session.SessionMeta, error) {
+func (m *mockSessionStore) Create(ctx context.Context, sessionID string, mode session.Mode) (session.SessionMeta, error) {
 	return session.SessionMeta{}, nil
 }
 
@@ -51,6 +57,14 @@ func (m *mockSessionStore) Touch(ctx context.Context, sessionID string) error {
 }
 
 func (m *mockSessionStore) SetMode(ctx context.Context, sessionID string, mode session.Mode) error {
+	return nil
+}
+
+func (m *mockSessionStore) SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error {
+	return nil
+}
+
+func (m *mockSessionStore) SetUnread(ctx context.Context, sessionID string, unread bool) error {
 	return nil
 }
 
@@ -174,10 +188,172 @@ func TestSessionListWatcher_Subscribe_ListError(t *testing.T) {
 	}
 }
 
-func TestSessionListWatcher_NotifyProcessStateChange_NoSubscribers(t *testing.T) {
+func TestSessionListWatcher_HandleProcessStateChange_NoSubscribers(t *testing.T) {
 	store := &mockSessionStore{}
 	w := NewSessionListWatcher(store)
 
 	// Should not panic when no subscribers
-	w.NotifyProcessStateChange("sess-1", "running")
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID: "sess-1",
+		State:     process.ProcessStateRunning,
+	})
+}
+
+type recordingSyncer struct {
+	calls []syncCall
+}
+
+type syncCall struct {
+	SessionID  string
+	NeedsInput bool
+}
+
+func (r *recordingSyncer) SyncNeedsInput(_ context.Context, sessionID string, needsInput bool) {
+	r.calls = append(r.calls, syncCall{SessionID: sessionID, NeedsInput: needsInput})
+}
+
+func TestHandleProcessStateChange_IdleNeedsInput_SyncsWork(t *testing.T) {
+	store := &mockSessionStore{}
+	w := NewSessionListWatcher(store)
+	syncer := &recordingSyncer{}
+	w.SetWorkNeedsInputSyncer(syncer)
+
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID:  "sess-1",
+		State:      process.ProcessStateIdle,
+		NeedsInput: true,
+	})
+
+	if len(syncer.calls) != 1 {
+		t.Fatalf("expected 1 sync call, got %d", len(syncer.calls))
+	}
+	if syncer.calls[0].SessionID != "sess-1" || !syncer.calls[0].NeedsInput {
+		t.Errorf("unexpected call: %+v", syncer.calls[0])
+	}
+}
+
+func TestHandleProcessStateChange_IdleNoNeedsInput_NoSync(t *testing.T) {
+	store := &mockSessionStore{}
+	w := NewSessionListWatcher(store)
+	syncer := &recordingSyncer{}
+	w.SetWorkNeedsInputSyncer(syncer)
+
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID:  "sess-1",
+		State:      process.ProcessStateIdle,
+		NeedsInput: false,
+	})
+
+	if len(syncer.calls) != 0 {
+		t.Errorf("expected no sync calls for idle without needsInput, got %d", len(syncer.calls))
+	}
+}
+
+func TestHandleProcessStateChange_Running_SyncsWorkWhenSessionWasNeedsInput(t *testing.T) {
+	store := &mockSessionStore{
+		sessions: []session.SessionMeta{
+			{ID: "sess-1", NeedsInput: true},
+		},
+	}
+	w := NewSessionListWatcher(store)
+	syncer := &recordingSyncer{}
+	w.SetWorkNeedsInputSyncer(syncer)
+
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID: "sess-1",
+		State:     process.ProcessStateRunning,
+	})
+
+	if len(syncer.calls) != 1 {
+		t.Fatalf("expected 1 sync call, got %d", len(syncer.calls))
+	}
+	if syncer.calls[0].SessionID != "sess-1" || syncer.calls[0].NeedsInput {
+		t.Errorf("unexpected call: %+v", syncer.calls[0])
+	}
+}
+
+func TestHandleProcessStateChange_Running_SyncsWorkEvenWhenSessionNotNeedsInput(t *testing.T) {
+	store := &mockSessionStore{
+		sessions: []session.SessionMeta{
+			{ID: "sess-1", NeedsInput: false},
+		},
+	}
+	w := NewSessionListWatcher(store)
+	syncer := &recordingSyncer{}
+	w.SetWorkNeedsInputSyncer(syncer)
+
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID: "sess-1",
+		State:     process.ProcessStateRunning,
+	})
+
+	// MCP work_needs_input sets work status without the session flag,
+	// so we must always sync to handle that path.
+	if len(syncer.calls) != 1 {
+		t.Fatalf("expected 1 sync call (MCP path), got %d", len(syncer.calls))
+	}
+	if syncer.calls[0].SessionID != "sess-1" || syncer.calls[0].NeedsInput {
+		t.Errorf("unexpected call: %+v", syncer.calls[0])
+	}
+}
+
+func TestHandleProcessStateChange_NoSyncer_NoPanic(t *testing.T) {
+	store := &mockSessionStore{}
+	w := NewSessionListWatcher(store)
+
+	// No syncer set — should not panic
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID:  "sess-1",
+		State:      process.ProcessStateIdle,
+		NeedsInput: true,
+	})
+}
+
+func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
+	store := &mockSessionStore{
+		sessions: []session.SessionMeta{
+			{ID: "sess-1", Title: "Session 1"},
+			{ID: "sess-2", Title: "Session 2"},
+		},
+	}
+	w := &SessionListWatcher{
+		BaseWatcher: NewBaseWatcher("sl"),
+		store:       store,
+		eventCh:     make(chan session.SessionChangeEvent, 1),
+	}
+	store.SetOnChangeListener(w)
+	w.SetProcessStateGetter(&mockProcessStateGetter{})
+
+	notifier := &captureNotifier{}
+	w.Subscribe(notifier)
+
+	// Simulate the dirty flag being set (as if events were dropped)
+	w.dirty.Store(true)
+
+	w.Start()
+	defer w.Stop()
+
+	// Send a single event — eventLoop sees dirty=true and sends sync instead
+	w.eventCh <- session.SessionChangeEvent{
+		Op:      session.OperationUpdate,
+		Session: session.SessionMeta{ID: "sess-1"},
+	}
+
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+
+	raw := notifier.last()
+	var params sessionListSyncParams
+	if err := json.Unmarshal(raw, &params); err != nil {
+		t.Fatalf("unmarshal sync params: %v", err)
+	}
+	if params.Operation != "sync" {
+		t.Errorf("operation = %q, want %q", params.Operation, "sync")
+	}
+	if len(params.Sessions) != 2 {
+		t.Errorf("expected 2 sessions in sync, got %d", len(params.Sessions))
+	}
+
+	if w.dirty.Load() {
+		t.Error("dirty flag should be cleared after sync")
+	}
 }

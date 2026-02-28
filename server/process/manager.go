@@ -20,14 +20,18 @@ const (
 )
 
 type StateChangeEvent struct {
-	SessionID string
-	State     ProcessState
+	SessionID   string
+	State       ProcessState
+	NeedsInput  bool
+	IsInitial   bool // true only for the initial idle emitted on process creation
+	Interrupted bool // true when idle is caused by user interrupt
 }
 
 // Manager manages agent processes.
 type Manager struct {
 	agent        agent.Agent
 	workDir      string
+	dataDir      string
 	sessionStore session.Store
 	idleTimeout  time.Duration
 
@@ -60,11 +64,12 @@ type Process struct {
 }
 
 // NewManager creates a new manager with the given idle timeout.
-func NewManager(ag agent.Agent, workDir string, store session.Store, idleTimeout time.Duration) *Manager {
+func NewManager(ag agent.Agent, workDir, dataDir string, store session.Store, idleTimeout time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		agent:        ag,
 		workDir:      workDir,
+		dataDir:      dataDir,
 		sessionStore: store,
 		idleTimeout:  idleTimeout,
 		processes:    make(map[string]*Process),
@@ -84,9 +89,15 @@ func (m *Manager) SetOnStateChange(fn func(StateChangeEvent)) {
 	m.onStateChange = fn
 }
 
-func (m *Manager) emitStateChange(sessionID string, state ProcessState) {
+func (m *Manager) emitStateChange(sessionID string, state ProcessState, needsInput bool) {
 	if m.onStateChange != nil {
-		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: state})
+		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: state, NeedsInput: needsInput})
+	}
+}
+
+func (m *Manager) emitStateChangeEvent(e StateChangeEvent) {
+	if m.onStateChange != nil {
+		m.onStateChange(e)
 	}
 }
 
@@ -103,22 +114,24 @@ func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent) {
 // GetOrCreateProcess returns an existing process or creates a new one.
 func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resume bool, mode session.Mode) (*Process, bool, error) {
 	m.processesMu.Lock()
-	defer m.processesMu.Unlock()
 
 	if proc, exists := m.processes[sessionID]; exists {
 		proc.touch()
+		m.processesMu.Unlock()
 		return proc, false, nil
 	}
 
 	// Use manager's context for process lifecycle, not request context
 	opts := agent.StartOptions{
 		WorkDir:   m.workDir,
+		DataDir:   m.dataDir,
 		SessionID: sessionID,
 		Resume:    resume,
 		Mode:      mode,
 	}
 	sess, err := m.agent.Start(m.ctx, opts)
 	if err != nil {
+		m.processesMu.Unlock()
 		return nil, false, err
 	}
 
@@ -138,13 +151,18 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 				logger.LogPanic(r, "session crashed", "sessionId", sessionID)
 			}
 			m.remove(sessionID)
-			m.emitStateChange(sessionID, ProcessStateEnded)
+			m.emitStateChange(sessionID, ProcessStateEnded, false)
 			slog.Info("process ended", "sessionId", sessionID)
 		}()
 		proc.streamEvents(m.ctx)
 	}()
 
-	m.emitStateChange(sessionID, ProcessStateIdle)
+	m.processesMu.Unlock()
+
+	// Emit after releasing processesMu — callbacks may acquire it.
+	if m.onStateChange != nil {
+		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: ProcessStateIdle, IsInitial: true})
+	}
 	slog.Info("process created", "sessionId", sessionID, "resume", resume, "mode", mode)
 	return proc, true, nil
 }
@@ -270,6 +288,7 @@ func (m *Manager) reapIdle() {
 	})
 	for _, proc := range procs {
 		proc.agentSession.Close()
+		m.emitStateChange(proc.sessionID, ProcessStateEnded, false)
 		slog.Info("idle process reaped", "sessionId", proc.sessionID)
 	}
 }
@@ -327,16 +346,31 @@ func (p *Process) SetRunning() {
 		return
 	}
 	p.setState(ProcessStateRunning)
-	p.manager.emitStateChange(p.sessionID, ProcessStateRunning)
+	p.manager.emitStateChange(p.sessionID, ProcessStateRunning, false)
 }
 
 // SetIdle transitions the process to idle state and notifies subscribers.
-func (p *Process) SetIdle() {
+// needsInput indicates whether the AI is waiting for user input (permission/question).
+func (p *Process) SetIdle(needsInput bool) {
+	p.setIdle(needsInput, false)
+}
+
+// SetIdleInterrupted transitions to idle due to a user interrupt.
+func (p *Process) SetIdleInterrupted() {
+	p.setIdle(false, true)
+}
+
+func (p *Process) setIdle(needsInput, interrupted bool) {
 	if p.State() == ProcessStateIdle {
 		return
 	}
 	p.setState(ProcessStateIdle)
-	p.manager.emitStateChange(p.sessionID, ProcessStateIdle)
+	p.manager.emitStateChangeEvent(StateChangeEvent{
+		SessionID:   p.sessionID,
+		State:       ProcessStateIdle,
+		NeedsInput:  needsInput,
+		Interrupted: interrupted,
+	})
 }
 
 // streamEvents routes events to history and emits to the event listener.
@@ -358,7 +392,13 @@ func (p *Process) streamEvents(ctx context.Context) {
 		}
 
 		if eventType.AwaitsUserInput() {
-			p.SetIdle()
+			if eventType == agent.EventTypeInterrupted {
+				p.SetIdleInterrupted()
+			} else {
+				needsInput := eventType == agent.EventTypePermissionRequest ||
+					eventType == agent.EventTypeAskUserQuestion
+				p.SetIdle(needsInput)
+			}
 			if err := p.sessionStore.Touch(ctx, p.sessionID); err != nil {
 				log.Error("failed to touch session", "error", err)
 			}

@@ -141,16 +141,18 @@ func (r *Registry) Create(name, branch, baseBranch string) (Info, error) {
 
 	// Try without -b first (works for existing local/remote branches),
 	// fall back to -b for new branches.
-	cmd := exec.Command("git", "-C", r.mainDir, "worktree", "add", worktreePath, branch)
+	cmd := exec.Command("git", "worktree", "add", worktreePath, branch)
+	cmd.Dir = r.mainDir
 	if _, err := cmd.CombinedOutput(); err != nil {
 		// Create new branch: git worktree add -b <branch> <path> [<base>]
-		args := []string{"-C", r.mainDir, "worktree", "add", "-b", branch, worktreePath}
+		args := []string{"worktree", "add", "-b", branch, worktreePath}
 		if baseBranch != "" {
 			args = append(args, baseBranch)
 		}
 		cmd = exec.Command("git", args...)
+		cmd.Dir = r.mainDir
 		if output, err := cmd.CombinedOutput(); err != nil {
-			return Info{}, fmt.Errorf("git worktree add failed: %s", strings.TrimSpace(string(output)))
+			return Info{}, fmt.Errorf("git worktree add: %w: %s", err, strings.TrimSpace(string(output)))
 		}
 	}
 
@@ -169,7 +171,7 @@ func (r *Registry) Create(name, branch, baseBranch string) (Info, error) {
 		if delErr := r.Delete(name); delErr != nil {
 			slog.Warn("failed to cleanup worktree after setup hook failure", "name", name, "error", delErr)
 		}
-		return Info{}, fmt.Errorf("setup hook failed: %s", err)
+		return Info{}, fmt.Errorf("setup hook failed: %w", err)
 	}
 
 	return info, nil
@@ -194,11 +196,10 @@ func (r *Registry) Delete(name string) error {
 		return ErrWorktreeNotFound
 	}
 
-	args := []string{"-C", r.mainDir, "worktree", "remove", "--force", info.Path}
-
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", "worktree", "remove", "--force", info.Path)
+	cmd.Dir = r.mainDir
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git worktree remove failed: %s", strings.TrimSpace(string(output)))
+		return fmt.Errorf("git worktree remove: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 
 	r.invalidateCache()
@@ -230,7 +231,8 @@ func (r *Registry) refresh() {
 		return
 	}
 
-	cmd := exec.Command("git", "-C", r.mainDir, "worktree", "list", "--porcelain")
+	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	cmd.Dir = r.mainDir
 	output, err := cmd.Output()
 	if err != nil {
 		// Not a git repo or git not available

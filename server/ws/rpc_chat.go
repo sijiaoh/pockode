@@ -40,6 +40,8 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	}
 	h.state.trackSubscription(id, wt.ChatMessagesWatcher)
 
+	wt.SessionListWatcher.MarkRead(params.SessionID)
+
 	result := rpc.ChatMessagesSubscribeResult{
 		ID:      id,
 		History: history,
@@ -67,14 +69,10 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	log.Info("received prompt", "length", len(params.Content))
 
-	if err := wt.ChatClient.SendMessage(ctx, params.SessionID, params.Content); err != nil {
+	if err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier()); err != nil {
 		h.replyErrorForChat(ctx, conn, req.ID, err)
 		return
 	}
-
-	// Notify other clients watching this session (e.g., other tabs)
-	event := agent.MessageEvent{Content: params.Content}
-	wt.ChatMessagesWatcher.NotifyMessage(params.SessionID, event, h.state.getNotifier())
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		log.Error("failed to send response", "error", err)

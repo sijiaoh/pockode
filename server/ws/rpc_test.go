@@ -14,10 +14,12 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -28,6 +30,8 @@ type testEnv struct {
 	t               *testing.T
 	mock            *mockAgent
 	worktreeManager *worktree.Manager
+	workStore       work.Store
+	testRoleID      string // pre-created agent role ID for tests
 	server          *httptest.Server
 	conn            *websocket.Conn
 	ctx             context.Context
@@ -50,10 +54,31 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 		t.Fatalf("failed to create settings store: %v", err)
 	}
 
+	workStore, err := work.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("failed to create work store: %v", err)
+	}
+
+	agentRoleStore, err := agentrole.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("failed to create agent role store: %v", err)
+	}
+
+	// Create a default role for tests
+	testRole, err := agentRoleStore.Create(context.Background(), agentrole.AgentRole{
+		Name:       "Test Engineer",
+		RolePrompt: "You are a test engineer.",
+	})
+	if err != nil {
+		t.Fatalf("failed to create test agent role: %v", err)
+	}
+
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, mock, dataDir, 10*time.Minute)
+	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
+	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
 
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	server := httptest.NewServer(h)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -70,6 +95,8 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 		t:               t,
 		mock:            mock,
 		worktreeManager: worktreeManager,
+		workStore:       workStore,
+		testRoleID:      testRole.ID,
 		server:          server,
 		conn:            conn,
 		ctx:             ctx,
@@ -205,11 +232,15 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
+	workStore, _ := work.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
 	defer worktreeManager.Shutdown()
 
-	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore)
+	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
+	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
+	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
+	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -252,11 +283,15 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
 	settingsStore, _ := settings.NewStore(dataDir)
+	workStore, _ := work.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, &mockAgent{}, dataDir, 10*time.Minute)
 	defer worktreeManager.Shutdown()
+	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore)
+	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
+	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -296,7 +331,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 
 func TestHandler_ChatMessagesSubscribe(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "")
 
 	result := env.subscribeChatMessages("sess")
 
@@ -317,7 +352,7 @@ func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	wt := env.getMainWorktree()
-	wt.SessionStore.Create(bgCtx, "sess")
+	wt.SessionStore.Create(bgCtx, "sess", "")
 
 	// Start process by sending message
 	env.subscribeChatMessages("sess")
@@ -354,7 +389,7 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "")
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "Hello AI")
@@ -380,8 +415,8 @@ func TestHandler_MultipleSessions(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "session-A")
-	store.Create(bgCtx, "session-B")
+	store.Create(bgCtx, "session-A", "")
+	store.Create(bgCtx, "session-B", "")
 
 	env.subscribeChatMessages("session-A")
 	env.subscribeChatMessages("session-B")
@@ -413,7 +448,7 @@ func TestHandler_PermissionRequest(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "")
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "run ls")
@@ -441,7 +476,7 @@ func TestHandler_AgentStartError(t *testing.T) {
 		startErr: fmt.Errorf("failed to start agent"),
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "")
 
 	env.subscribeChatMessages("sess")
 	resp := env.call("chat.message", rpc.MessageParams{SessionID: "sess", Content: "hello"})
@@ -459,7 +494,7 @@ func TestHandler_Interrupt(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "")
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "hello")
@@ -501,7 +536,7 @@ func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "new-session")
+	store.Create(bgCtx, "new-session", "")
 
 	env.subscribeChatMessages("new-session")
 	env.sendMessage("new-session", "hello")
@@ -526,7 +561,7 @@ func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "activated-session")
+	store.Create(bgCtx, "activated-session", "")
 	store.Activate(bgCtx, "activated-session")
 
 	env.subscribeChatMessages("activated-session")
@@ -557,7 +592,7 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "")
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "ask me")
@@ -610,8 +645,8 @@ func TestHandler_Message_SessionNotInStore(t *testing.T) {
 func TestHandler_SessionListSubscribe(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "session-1")
-	store.Create(bgCtx, "session-2")
+	store.Create(bgCtx, "session-1", "")
+	store.Create(bgCtx, "session-2", "")
 
 	resp := env.call("session.list.subscribe", nil)
 
@@ -664,7 +699,7 @@ func TestHandler_SessionCreate(t *testing.T) {
 func TestHandler_SessionDelete(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "to-delete")
+	sess, _ := store.Create(bgCtx, "to-delete", "")
 
 	resp := env.call("session.delete", rpc.SessionDeleteParams{SessionID: sess.ID})
 
@@ -681,7 +716,7 @@ func TestHandler_SessionDelete(t *testing.T) {
 func TestHandler_SessionDelete_ClosesProcess(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	wt := env.getMainWorktree()
-	sess, _ := wt.SessionStore.Create(bgCtx, "to-delete-with-process")
+	sess, _ := wt.SessionStore.Create(bgCtx, "to-delete-with-process", "")
 	env.sendMessage(sess.ID, "hello")
 
 	if !wt.ProcessManager.HasProcess(sess.ID) {
@@ -701,7 +736,7 @@ func TestHandler_SessionDelete_ClosesProcess(t *testing.T) {
 func TestHandler_SessionUpdateTitle(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "to-update")
+	sess, _ := store.Create(bgCtx, "to-update", "")
 
 	resp := env.call("session.update_title", rpc.SessionUpdateTitleParams{
 		SessionID: sess.ID,
@@ -720,7 +755,7 @@ func TestHandler_SessionUpdateTitle(t *testing.T) {
 
 func TestHandler_SessionUpdateTitle_EmptyTitle(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
-	sess, _ := env.getMainWorktree().SessionStore.Create(bgCtx, "to-update")
+	sess, _ := env.getMainWorktree().SessionStore.Create(bgCtx, "to-update", "")
 
 	resp := env.call("session.update_title", rpc.SessionUpdateTitleParams{
 		SessionID: sess.ID,
@@ -748,7 +783,7 @@ func TestHandler_SessionUpdateTitle_NotFound(t *testing.T) {
 func TestHandler_ChatMessagesSubscribe_History(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "with-history")
+	sess, _ := store.Create(bgCtx, "with-history", "")
 	store.AppendToHistory(bgCtx, sess.ID, map[string]string{"type": "message", "content": "hello"})
 
 	result := env.subscribeChatMessages(sess.ID)

@@ -1,22 +1,65 @@
-import { Square } from "lucide-react";
+import { ClipboardList, Square } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
-import { unreadActions } from "../../lib/unreadStore";
+import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
 	AskUserQuestionRequest,
 	PermissionRequest,
 } from "../../types/message";
 import type { OverlayState } from "../../types/overlay";
-import { hasCoarsePointer } from "../../utils/breakpoints";
 import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
+import {
+	AgentRoleDetailOverlay,
+	AgentRoleListOverlay,
+	WorkDetailOverlay,
+	WorkListOverlay,
+} from "../Project";
 import { SettingsPage } from "../Settings";
 import DefaultInputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
+
+const noop = () => {};
+
+const inputBarHiddenOverlays: NonNullable<OverlayState>["type"][] = [
+	"work-list",
+	"work-detail",
+	"agent-role-list",
+	"agent-role-detail",
+];
+
+function isInputBarHidden(overlay: OverlayState | undefined): boolean {
+	return !!overlay && inputBarHiddenOverlays.includes(overlay.type);
+}
+
+function LinkedWorkButton({
+	sessionId,
+	onOpenWorkDetail,
+}: {
+	sessionId: string;
+	onOpenWorkDetail?: (workId: string) => void;
+}) {
+	const linkedWork = useWorkStore((s) =>
+		s.works.find((w) => w.session_id === sessionId),
+	);
+
+	if (!linkedWork) return null;
+
+	return (
+		<button
+			type="button"
+			onClick={() => onOpenWorkDetail?.(linkedWork.id)}
+			className="flex min-w-0 items-center gap-1 rounded px-2 py-1 text-xs text-th-text-secondary transition-all hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
+		>
+			<ClipboardList className="size-3.5 shrink-0" />
+			<span className="max-w-[120px] truncate">{linkedWork.title}</span>
+		</button>
+	);
+}
 
 interface Props {
 	sessionId: string;
@@ -26,6 +69,11 @@ interface Props {
 	onOpenSettings?: () => void;
 	overlay?: OverlayState;
 	onCloseOverlay?: () => void;
+	onNavigateToSession?: (sessionId: string) => void;
+	onOpenWorkDetail?: (workId: string) => void;
+	onOpenWorkList?: () => void;
+	onOpenAgentRoleList?: () => void;
+	onOpenAgentRoleDetail?: (roleId: string) => void;
 }
 
 function ChatPanel({
@@ -36,6 +84,11 @@ function ChatPanel({
 	onOpenSettings,
 	overlay,
 	onCloseOverlay,
+	onNavigateToSession,
+	onOpenWorkDetail,
+	onOpenWorkList,
+	onOpenAgentRoleList,
+	onOpenAgentRoleDetail,
 }: Props) {
 	const projectTitle = useWSStore((state) => state.projectTitle);
 	const {
@@ -64,16 +117,15 @@ function ChatPanel({
 		sessionId,
 	});
 
-	// Mark session as viewing when chat is visible (not showing overlay)
+	const markSessionRead = useWSStore((s) => s.actions.markSessionRead);
+
+	// Subscribe already marks read server-side, but we also need to mark read
+	// when returning from an overlay (where new messages may have arrived).
 	useEffect(() => {
 		if (!overlay) {
-			unreadActions.setViewingSession(sessionId);
-			unreadActions.markRead(sessionId);
-		} else {
-			unreadActions.setViewingSession(null);
+			markSessionRead(sessionId).catch(() => {});
 		}
-		return () => unreadActions.setViewingSession(null);
-	}, [sessionId, overlay]);
+	}, [sessionId, overlay, markSessionRead]);
 
 	const handleSend = useCallback(
 		(content: string) => {
@@ -135,6 +187,7 @@ function ChatPanel({
 		const handleKeyDown = (e: KeyboardEvent) => {
 			// Skip if already handled (e.g., by CommandPalette)
 			if (e.defaultPrevented) return;
+			if (isInputBarHidden(overlay)) return;
 			if (e.key === "Escape" && isStreaming) {
 				handleInterrupt();
 			}
@@ -142,7 +195,7 @@ function ChatPanel({
 
 		document.addEventListener("keydown", handleKeyDown);
 		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, [isStreaming, handleInterrupt]);
+	}, [isStreaming, handleInterrupt, overlay]);
 
 	const renderContent = () => {
 		if (!overlay) {
@@ -172,32 +225,55 @@ function ChatPanel({
 					<DiffView
 						path={overlay.path}
 						staged={overlay.staged}
-						onBack={onCloseOverlay ?? (() => {})}
+						onBack={onCloseOverlay ?? noop}
 					/>
 				);
 			case "file":
 				if (overlay.edit) {
 					return (
-						<FileEditor
-							path={overlay.path}
-							onBack={onCloseOverlay ?? (() => {})}
-						/>
+						<FileEditor path={overlay.path} onBack={onCloseOverlay ?? noop} />
 					);
 				}
-				return (
-					<FileView path={overlay.path} onBack={onCloseOverlay ?? (() => {})} />
-				);
+				return <FileView path={overlay.path} onBack={onCloseOverlay ?? noop} />;
 			case "commit":
 				return (
-					<CommitView
-						hash={overlay.hash}
-						onBack={onCloseOverlay ?? (() => {})}
-					/>
+					<CommitView hash={overlay.hash} onBack={onCloseOverlay ?? noop} />
 				);
 			case "commit-diff":
 				return <CommitDiffView hash={overlay.hash} path={overlay.path} />;
 			case "settings":
-				return <SettingsPage onBack={onCloseOverlay ?? (() => {})} />;
+				return <SettingsPage onBack={onCloseOverlay ?? noop} />;
+			case "work-list":
+				return (
+					<WorkListOverlay
+						onBack={onCloseOverlay ?? noop}
+						onOpenWorkDetail={onOpenWorkDetail ?? noop}
+						onNavigateToSession={onNavigateToSession ?? noop}
+					/>
+				);
+			case "work-detail":
+				return (
+					<WorkDetailOverlay
+						workId={overlay.workId}
+						onBack={onOpenWorkList ?? onCloseOverlay ?? noop}
+						onNavigateToSession={onNavigateToSession ?? noop}
+						onOpenWorkDetail={onOpenWorkDetail ?? noop}
+					/>
+				);
+			case "agent-role-list":
+				return (
+					<AgentRoleListOverlay
+						onBack={onCloseOverlay ?? noop}
+						onOpenAgentRoleDetail={onOpenAgentRoleDetail ?? noop}
+					/>
+				);
+			case "agent-role-detail":
+				return (
+					<AgentRoleDetailOverlay
+						roleId={overlay.roleId}
+						onBack={onOpenAgentRoleList ?? onCloseOverlay ?? noop}
+					/>
+				);
 		}
 	};
 
@@ -210,50 +286,54 @@ function ChatPanel({
 			{!overlay && ChatTopContent && <ChatTopContent sessionId={sessionId} />}
 			{renderContent()}
 			{/* Session action bar */}
-			{!overlay &&
-				(CustomModeSelector !== null ||
-					(isStreaming && CustomStopButton !== null)) && (
-					<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
-						{CustomModeSelector === null ? (
-							<div />
-						) : CustomModeSelector ? (
-							<CustomModeSelector
-								mode={mode}
-								onModeChange={setMode}
-								disabled={isStreaming}
-							/>
+			{!overlay && (
+				<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
+					{CustomModeSelector === null ? (
+						<div />
+					) : CustomModeSelector ? (
+						<CustomModeSelector
+							mode={mode}
+							onModeChange={setMode}
+							disabled={isStreaming}
+						/>
+					) : (
+						<ModeSelector
+							mode={mode}
+							onModeChange={setMode}
+							disabled={isStreaming}
+						/>
+					)}
+					<LinkedWorkButton
+						sessionId={sessionId}
+						onOpenWorkDetail={onOpenWorkDetail}
+					/>
+					{isStreaming ? (
+						CustomStopButton === null ? null : CustomStopButton ? (
+							<CustomStopButton onStop={handleInterrupt} />
 						) : (
-							<ModeSelector
-								mode={mode}
-								onModeChange={setMode}
-								disabled={isStreaming}
-							/>
-						)}
-						{isStreaming &&
-							(CustomStopButton === null ? null : CustomStopButton ? (
-								<CustomStopButton onStop={handleInterrupt} />
-							) : (
-								<button
-									type="button"
-									onClick={handleInterrupt}
-									aria-label="Stop"
-									className="flex h-8 items-center gap-1.5 rounded bg-th-error px-2.5 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
-								>
-									<Square className="size-3.5 fill-current" />
-									{!hasCoarsePointer() && (
-										<span className="text-xs opacity-80">Esc</span>
-									)}
-								</button>
-							))}
-					</div>
-				)}
-			<InputBar
-				sessionId={sessionId}
-				onSend={handleSend}
-				canSend={status === "connected" && !isLoadingHistory}
-				isStreaming={isStreaming}
-				onStop={handleInterrupt}
-			/>
+							<button
+								type="button"
+								onClick={handleInterrupt}
+								aria-label="Stop"
+								className="flex size-8 shrink-0 items-center justify-center rounded bg-th-error text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
+							>
+								<Square className="size-3.5 fill-current" />
+							</button>
+						)
+					) : (
+						<div className="size-8 shrink-0" />
+					)}
+				</div>
+			)}
+			{!isInputBarHidden(overlay) && (
+				<InputBar
+					sessionId={sessionId}
+					onSend={handleSend}
+					canSend={status === "connected" && !isLoadingHistory}
+					isStreaming={isStreaming}
+					onStop={handleInterrupt}
+				/>
+			)}
 		</MainContainer>
 	);
 }

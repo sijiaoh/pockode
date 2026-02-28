@@ -15,9 +15,14 @@ interface SubscriptionOptions<TInitial> {
 	 */
 	onSubscribed?: (initial: TInitial) => void;
 	/**
-	 * Called when subscription is reset: on failure, disable, disconnect, or worktree change.
+	 * Called when subscription is reset: on disable, disconnect, or worktree change.
 	 */
 	onReset?: () => void;
+	/**
+	 * Called when subscription fails with an error.
+	 * If not provided, falls back to onReset.
+	 */
+	onError?: (err: unknown) => void;
 }
 
 interface SubscribeResult<TInitial> {
@@ -50,6 +55,7 @@ export function useSubscription<TNotification = void, TInitial = void>(
 		resubscribeOnWorktreeChange = true,
 		onSubscribed,
 		onReset,
+		onError,
 	} = options;
 	const status = useWSStore((s) => s.status);
 	const isConnected = status === "connected";
@@ -62,6 +68,9 @@ export function useSubscription<TNotification = void, TInitial = void>(
 
 	const onResetRef = useRef(onReset);
 	onResetRef.current = onReset;
+
+	const onErrorRef = useRef(onError);
+	onErrorRef.current = onError;
 
 	const subscriptionIdRef = useRef<string | null>(null);
 	const generationRef = useRef(0);
@@ -95,7 +104,11 @@ export function useSubscription<TNotification = void, TInitial = void>(
 		} catch (err) {
 			console.error("Subscription failed:", err);
 			if (!isStale()) {
-				onResetRef.current?.();
+				if (onErrorRef.current) {
+					onErrorRef.current(err);
+				} else {
+					onResetRef.current?.();
+				}
 			}
 		}
 	}, [subscribe, unsubscribe]);

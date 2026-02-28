@@ -13,18 +13,42 @@ import (
 
 var ErrSessionNotFound = errors.New("session not found")
 
+// MessageBroadcastFunc broadcasts a user message to all session subscribers,
+// optionally excluding one notifier. The exclude parameter is typed as any
+// to avoid importing the watch package; the wiring code casts it.
+type MessageBroadcastFunc func(sessionID string, event agent.MessageEvent, exclude any)
+
 // Client coordinates chat operations across session and process management.
 // It is the single entry point for programmatic chat interactions.
 type Client struct {
-	store session.Store
-	pm    *process.Manager
+	store     session.Store
+	pm        *process.Manager
+	broadcast MessageBroadcastFunc
 }
 
 func NewClient(store session.Store, pm *process.Manager) *Client {
 	return &Client{store: store, pm: pm}
 }
 
+// SetBroadcaster sets the function used to broadcast user messages to subscribers.
+func (c *Client) SetBroadcaster(fn MessageBroadcastFunc) {
+	c.broadcast = fn
+}
+
+// SendMessage sends a user message to the agent process, persists it to
+// history, and broadcasts it to all session subscribers.
 func (c *Client) SendMessage(ctx context.Context, sessionID, content string) error {
+	return c.sendMessage(ctx, sessionID, content, nil)
+}
+
+// SendMessageExcluding is like SendMessage but excludes one notifier from
+// the broadcast. Used when the caller already notified itself (e.g. the
+// WebSocket client that sent the message).
+func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content string, exclude any) error {
+	return c.sendMessage(ctx, sessionID, content, exclude)
+}
+
+func (c *Client) sendMessage(ctx context.Context, sessionID, content string, exclude any) error {
 	proc, err := c.getOrCreateProcess(ctx, sessionID)
 	if err != nil {
 		return err
@@ -36,7 +60,15 @@ func (c *Client) SendMessage(ctx context.Context, sessionID, content string) err
 		slog.Error("failed to persist user message", "sessionId", sessionID, "error", err)
 	}
 
-	return proc.SendMessage(content)
+	if err := proc.SendMessage(content); err != nil {
+		return err
+	}
+
+	if c.broadcast != nil {
+		c.broadcast(sessionID, event, exclude)
+	}
+
+	return nil
 }
 
 func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, data agent.PermissionRequestData, choice agent.PermissionChoice) error {

@@ -1,8 +1,9 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type { Settings } from "../../types/settings";
+import { useSettingsStore } from "../settingsStore";
 
 export interface SettingsActions {
-	updateSettings: (settings: Settings) => Promise<void>;
+	updateSettings: (patch: Partial<Settings>) => Promise<void>;
 }
 
 export function createSettingsActions(
@@ -17,7 +18,10 @@ export function createSettingsActions(
 	};
 
 	return {
-		updateSettings: async (settings: Settings): Promise<void> => {
+		// Merge with current settings to avoid overwriting unrelated fields
+		updateSettings: async (patch: Partial<Settings>): Promise<void> => {
+			const current = useSettingsStore.getState().settings ?? {};
+			const settings: Settings = { ...current, ...patch };
 			await requireClient().request("settings.update", { settings });
 		},
 	};

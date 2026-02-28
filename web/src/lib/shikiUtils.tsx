@@ -1,4 +1,5 @@
 import { getDiffViewHighlighter } from "@git-diff-view/shiki";
+import { Check, Copy } from "lucide-react";
 import * as React from "react";
 import { useShikiHighlighter } from "react-shiki";
 import {
@@ -77,15 +78,38 @@ export function CodeHighlighter({
 }) {
 	const isDesktop = useIsDesktop();
 	const fontSize = isDesktop ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
+	const [copied, setCopied] = React.useState(false);
+	const timerRef = React.useRef<number | undefined>(undefined);
 
 	const highlighted = useShikiHighlighter(children, language, cssVarTheme);
+
+	React.useEffect(() => {
+		return () => clearTimeout(timerRef.current);
+	}, []);
+
+	const handleCopy = async () => {
+		await navigator.clipboard.writeText(children);
+		setCopied(true);
+		clearTimeout(timerRef.current);
+		timerRef.current = window.setTimeout(() => setCopied(false), 2000);
+	};
 
 	const style = { "--code-font-size": `${fontSize}px` } as React.CSSProperties;
 
 	return (
-		<pre className="code-block" style={style}>
-			{highlighted ?? <code>{children}</code>}
-		</pre>
+		<div className="code-block-wrapper">
+			<button
+				type="button"
+				onClick={handleCopy}
+				className="code-copy-button"
+				aria-label={copied ? "Copied" : "Copy code"}
+			>
+				{copied ? <Check size={14} /> : <Copy size={14} />}
+			</button>
+			<pre className="code-block" style={style}>
+				{highlighted ?? <code>{children}</code>}
+			</pre>
+		</div>
 	);
 }
 
