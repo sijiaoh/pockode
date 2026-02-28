@@ -36,8 +36,6 @@ export interface ChatUIConfig {
 	UserAvatar?: ComponentType<AvatarProps>;
 	/** Custom component for assistant avatar */
 	AssistantAvatar?: ComponentType<AvatarProps>;
-	/** Max width for chat messages (CSS value) */
-	maxWidth?: string;
 	/** Custom class for user bubble */
 	userBubbleClass?: string;
 	/** Custom class for assistant bubble */
