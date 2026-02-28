@@ -1,6 +1,7 @@
 import { ClipboardList, Square } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
+import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
@@ -18,7 +19,7 @@ import {
 	WorkListOverlay,
 } from "../Project";
 import { SettingsPage } from "../Settings";
-import InputBar from "./InputBar";
+import DefaultInputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
 
@@ -90,6 +91,13 @@ function ChatPanel({
 	onOpenAgentRoleDetail,
 }: Props) {
 	const projectTitle = useWSStore((state) => state.projectTitle);
+	const {
+		InputBar: CustomInputBar,
+		ModeSelector: CustomModeSelector,
+		StopButton: CustomStopButton,
+		ChatTopContent,
+	} = useChatUIConfig();
+	const InputBar = CustomInputBar ?? DefaultInputBar;
 
 	const {
 		messages,
@@ -206,6 +214,7 @@ function ChatPanel({
 					isProcessRunning={isProcessRunning}
 					onPermissionRespond={handlePermissionRespond}
 					onQuestionRespond={handleQuestionRespond}
+					onHintClick={handleSend}
 				/>
 			);
 		}
@@ -274,28 +283,43 @@ function ChatPanel({
 			onOpenSidebar={onOpenSidebar}
 			onOpenSettings={onOpenSettings}
 		>
+			{!overlay && ChatTopContent && <ChatTopContent sessionId={sessionId} />}
 			{renderContent()}
-			{/* Session action bar - only shown when not in overlay */}
+			{/* Session action bar */}
 			{!overlay && (
 				<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
-					<ModeSelector
-						mode={mode}
-						onModeChange={setMode}
-						disabled={isStreaming}
-					/>
+					{CustomModeSelector === null ? (
+						<div />
+					) : CustomModeSelector ? (
+						<CustomModeSelector
+							mode={mode}
+							onModeChange={setMode}
+							disabled={isStreaming}
+						/>
+					) : (
+						<ModeSelector
+							mode={mode}
+							onModeChange={setMode}
+							disabled={isStreaming}
+						/>
+					)}
 					<LinkedWorkButton
 						sessionId={sessionId}
 						onOpenWorkDetail={onOpenWorkDetail}
 					/>
 					{isStreaming ? (
-						<button
-							type="button"
-							onClick={handleInterrupt}
-							aria-label="Stop"
-							className="flex size-8 shrink-0 items-center justify-center rounded bg-th-error text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
-						>
-							<Square className="size-3.5 fill-current" />
-						</button>
+						CustomStopButton === null ? null : CustomStopButton ? (
+							<CustomStopButton onStop={handleInterrupt} />
+						) : (
+							<button
+								type="button"
+								onClick={handleInterrupt}
+								aria-label="Stop"
+								className="flex size-8 shrink-0 items-center justify-center rounded bg-th-error text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
+							>
+								<Square className="size-3.5 fill-current" />
+							</button>
+						)
 					) : (
 						<div className="size-8 shrink-0" />
 					)}
@@ -306,6 +330,8 @@ function ChatPanel({
 					sessionId={sessionId}
 					onSend={handleSend}
 					canSend={status === "connected" && !isLoadingHistory}
+					isStreaming={isStreaming}
+					onStop={handleInterrupt}
 				/>
 			)}
 		</MainContainer>
