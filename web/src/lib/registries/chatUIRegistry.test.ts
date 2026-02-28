@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	getChatUIConfig,
 	resetChatUIConfig,
 	setChatUIConfig,
+	subscribe,
 } from "./chatUIRegistry";
 
 describe("chatUIRegistry", () => {
@@ -11,24 +12,53 @@ describe("chatUIRegistry", () => {
 	});
 
 	it("sets config values", () => {
-		setChatUIConfig({ maxWidth: "800px" });
+		setChatUIConfig({ userBubbleClass: "custom-bubble" });
 
-		expect(getChatUIConfig().maxWidth).toBe("800px");
+		expect(getChatUIConfig().userBubbleClass).toBe("custom-bubble");
 	});
 
 	it("merges config with existing values", () => {
-		setChatUIConfig({ maxWidth: "800px" });
 		setChatUIConfig({ userBubbleClass: "custom-bubble" });
+		setChatUIConfig({ assistantBubbleClass: "ai-bubble" });
 
 		const config = getChatUIConfig();
-		expect(config.maxWidth).toBe("800px");
 		expect(config.userBubbleClass).toBe("custom-bubble");
+		expect(config.assistantBubbleClass).toBe("ai-bubble");
 	});
 
 	it("resets config to default", () => {
-		setChatUIConfig({ maxWidth: "800px" });
+		setChatUIConfig({ userBubbleClass: "custom-bubble" });
 		resetChatUIConfig();
 
-		expect(getChatUIConfig().maxWidth).toBeUndefined();
+		expect(getChatUIConfig().userBubbleClass).toBeUndefined();
+	});
+
+	it("notifies listeners on set", () => {
+		const listener = vi.fn();
+		const unsubscribe = subscribe(listener);
+
+		setChatUIConfig({ userBubbleClass: "x" });
+		expect(listener).toHaveBeenCalledOnce();
+
+		unsubscribe();
+	});
+
+	it("notifies listeners on reset", () => {
+		const listener = vi.fn();
+		const unsubscribe = subscribe(listener);
+
+		resetChatUIConfig();
+		expect(listener).toHaveBeenCalledOnce();
+
+		unsubscribe();
+	});
+
+	it("stops notifying after unsubscribe", () => {
+		const listener = vi.fn();
+		const unsubscribe = subscribe(listener);
+		unsubscribe();
+
+		setChatUIConfig({ userBubbleClass: "x" });
+		expect(listener).not.toHaveBeenCalled();
 	});
 });
