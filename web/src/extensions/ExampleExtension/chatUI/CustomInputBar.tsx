@@ -33,7 +33,7 @@ export default function CustomInputBar({
 				onKeyDown={handleKeyDown}
 				placeholder="Type a message..."
 				disabled={!canSend}
-				className="flex-1 rounded-full border border-th-border bg-th-bg-primary px-4 py-2 text-sm th-text-primary placeholder:th-text-muted focus:outline-none focus:ring-2 focus:ring-th-accent"
+				className="flex-1 rounded-full border border-th-border bg-th-bg-primary px-4 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:outline-none focus:ring-2 focus:ring-th-accent"
 			/>
 			{isStreaming && onStop ? (
 				<button

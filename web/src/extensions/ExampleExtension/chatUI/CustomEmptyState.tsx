@@ -10,10 +10,10 @@ export default function CustomEmptyState({ onHintClick }: EmptyStateProps) {
 	return (
 		<div className="flex flex-col items-center justify-center gap-4 p-8 text-center flex-1">
 			<div className="text-4xl">👋</div>
-			<h2 className="text-xl font-semibold th-text-primary">
+			<h2 className="text-xl font-semibold text-th-text-primary">
 				Welcome to Custom Chat!
 			</h2>
-			<p className="th-text-secondary">
+			<p className="text-th-text-secondary">
 				This is a custom empty state from the CustomChatUI extension.
 			</p>
 			{onHintClick && (
@@ -23,7 +23,7 @@ export default function CustomEmptyState({ onHintClick }: EmptyStateProps) {
 							key={hint}
 							type="button"
 							onClick={() => onHintClick(hint)}
-							className="rounded-full px-4 py-2 text-sm th-bg-secondary th-text-primary hover:opacity-80"
+							className="rounded-full bg-th-bg-secondary px-4 py-2 text-sm text-th-text-primary hover:opacity-80"
 						>
 							{hint}
 						</button>
