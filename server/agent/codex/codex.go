@@ -8,22 +8,19 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
 
-const (
-	Binary            = "codex"
-	stderrReadTimeout = 5 * time.Second
-)
+const Binary = "codex"
 
 // Agent implements agent.Agent using Codex CLI via MCP.
 type Agent struct{}
@@ -31,6 +28,25 @@ type Agent struct{}
 // New creates a new Codex Agent.
 func New() *Agent {
 	return &Agent{}
+}
+
+// buildMCPArgs returns `-c` flags that register the Pockode MCP server
+// so Codex can access work management tools (work_list, work_done, etc.).
+func buildMCPArgs(dataDir string) []string {
+	if dataDir == "" {
+		return nil
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		slog.Warn("failed to resolve executable path, continuing without MCP", "error", err)
+		return nil
+	}
+
+	return []string{
+		"-c", fmt.Sprintf("mcp_servers.pockode.command=%q", exe),
+		"-c", fmt.Sprintf(`mcp_servers.pockode.args=["mcp", "--data-dir", %q]`, dataDir),
+	}
 }
 
 // Start launches a persistent Codex MCP server process.
@@ -43,7 +59,10 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(procCtx, Binary, mcpSubcommand)
+	args := []string{mcpSubcommand}
+	args = append(args, buildMCPArgs(opts.DataDir)...)
+
+	cmd := exec.CommandContext(procCtx, Binary, args...)
 	cmd.Dir = opts.WorkDir
 
 	stdin, err := cmd.StdinPipe()
@@ -102,9 +121,9 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		defer stdout.Close()
 		defer stderr.Close()
 
-		stderrCh := readStderr(stderr)
+		stderrCh := agent.ReadStderr(stderr, "codex")
 		sess.runMCPLoop(procCtx, stdout)
-		waitForProcess(procCtx, log, cmd, stderrCh, events)
+		agent.WaitForProcess(procCtx, log, cmd, stderrCh, events)
 
 		select {
 		case events <- agent.ProcessEndedEvent{}:
@@ -902,49 +921,3 @@ func parseMCPSubcommand(version string) string {
 	return "mcp"
 }
 
-// --- Process management (shared patterns with Claude agent) ---
-
-func readStderr(stderr io.Reader) <-chan string {
-	ch := make(chan string, 1)
-	go func() {
-		var content strings.Builder
-		defer func() {
-			if r := recover(); r != nil {
-				logger.LogPanic(r, "failed to read codex stderr")
-			}
-			ch <- content.String()
-		}()
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			content.WriteString(scanner.Text())
-			content.WriteString("\n")
-		}
-		if err := scanner.Err(); err != nil {
-			slog.Error("stderr scanner error", "error", err)
-		}
-	}()
-	return ch
-}
-
-func waitForProcess(ctx context.Context, log *slog.Logger, cmd *exec.Cmd, stderrCh <-chan string, events chan<- agent.AgentEvent) {
-	var stderrContent string
-	select {
-	case stderrContent = <-stderrCh:
-	case <-time.After(stderrReadTimeout):
-	}
-
-	if err := cmd.Wait(); err != nil {
-		if ctx.Err() == nil {
-			errMsg := stderrContent
-			if errMsg == "" {
-				errMsg = err.Error()
-			}
-			select {
-			case events <- agent.ErrorEvent{Error: errMsg}:
-			case <-ctx.Done():
-			}
-		}
-	}
-
-	log.Info("codex process exited")
-}
