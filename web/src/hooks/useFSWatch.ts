@@ -21,5 +21,11 @@ export function useFSWatch({
 		[fsSubscribe, path],
 	);
 
-	useSubscription(subscribe, fsUnsubscribe, onChanged, { enabled });
+	useSubscription(subscribe, fsUnsubscribe, onChanged, {
+		enabled,
+		// Invalidate cache when subscription is (re-)established.
+		// While unsubscribed (e.g. component unmounted), FS change notifications
+		// are lost; triggering onChanged here ensures stale cache is refreshed.
+		onSubscribed: onChanged,
+	});
 }
