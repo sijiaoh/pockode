@@ -279,34 +279,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize work store and auto-resumer
-	workStore, err := work.NewFileStore(dataDir)
+	// Initialize work and agent role stores
+	s, err := initStores(dataDir)
 	if err != nil {
-		slog.Error("failed to initialize work store", "error", err)
+		slog.Error("failed to initialize stores", "error", err)
 		os.Exit(1)
 	}
+	workStore := s.work
+	agentRoleStore := s.agentRole
+
 	workAutoResumer := work.NewAutoResumer(workStore, 3)
 	workAutoResumer.StopOrphanedWork()
 	workStore.AddOnChangeListener(workAutoResumer)
-	if err := workStore.StartWatching(); err != nil {
-		slog.Warn("failed to start work store file watcher", "error", err)
-	}
-
-	// Initialize agent role store
-	agentRoleStore, err := agentrole.NewFileStore(dataDir)
-	if err != nil {
-		slog.Error("failed to initialize agent role store", "error", err)
-		os.Exit(1)
-	}
-	if err := agentRoleStore.StartWatching(); err != nil {
-		slog.Warn("failed to start agent role store file watcher", "error", err)
-	}
+	s.StartWatching()
 
 	// Set PM as default agent role on first launch
 	if pmID := agentRoleStore.SeededPMRoleID(); pmID != "" {
-		s := settingsStore.Get()
-		s.DefaultAgentRoleID = pmID
-		if err := settingsStore.Update(s); err != nil {
+		cfg := settingsStore.Get()
+		cfg.DefaultAgentRoleID = pmID
+		if err := settingsStore.Update(cfg); err != nil {
 			slog.Error("failed to set default agent role", "error", err)
 		}
 	}
@@ -396,8 +387,7 @@ func main() {
 		workAutoResumer.Stop()
 		worktreeManager.Shutdown()
 		settingsStore.StopWatching()
-		workStore.StopWatching()
-		agentRoleStore.StopWatching()
+		s.StopWatching()
 		close(shutdownDone)
 	}()
 
@@ -429,6 +419,41 @@ func main() {
 	slog.Info("server stopped")
 }
 
+// stores holds the shared data stores used by both the main server and MCP subcommand.
+type stores struct {
+	work      *work.FileStore
+	agentRole *agentrole.FileStore
+}
+
+// initStores creates work and agent-role stores from the given data directory.
+func initStores(dataDir string) (*stores, error) {
+	workStore, err := work.NewFileStore(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize work store: %w", err)
+	}
+
+	agentRoleStore, err := agentrole.NewFileStore(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize agent role store: %w", err)
+	}
+
+	return &stores{work: workStore, agentRole: agentRoleStore}, nil
+}
+
+func (s *stores) StartWatching() {
+	if err := s.work.StartWatching(); err != nil {
+		slog.Warn("failed to start work store file watcher", "error", err)
+	}
+	if err := s.agentRole.StartWatching(); err != nil {
+		slog.Warn("failed to start agent role store file watcher", "error", err)
+	}
+}
+
+func (s *stores) StopWatching() {
+	s.work.StopWatching()
+	s.agentRole.StopWatching()
+}
+
 func runMCP() {
 	mcpFlags := flag.NewFlagSet("mcp", flag.ExitOnError)
 	dataDirFlag := mcpFlags.String("data-dir", "", "data directory (required)")
@@ -440,31 +465,15 @@ func runMCP() {
 		os.Exit(1)
 	}
 
-	store, err := work.NewFileStore(dataDir)
+	s, err := initStores(dataDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to initialize work store: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	s.StartWatching()
+	defer s.StopWatching()
 
-	// Watch for external changes so the in-memory cache stays in sync
-	// when the main server modifies the work index file.
-	if err := store.StartWatching(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to start file watcher: %v\n", err)
-	}
-	defer store.StopWatching()
-
-	agentRoleStore, err := agentrole.NewFileStore(dataDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to initialize agent role store: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := agentRoleStore.StartWatching(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to start agent role file watcher: %v\n", err)
-	}
-	defer agentRoleStore.StopWatching()
-
-	server := mcp.NewServer(store, agentRoleStore)
+	server := mcp.NewServer(s.work, s.agentRole)
 	if err := server.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
 		os.Exit(1)
