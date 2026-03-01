@@ -70,8 +70,8 @@ func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work
 }
 
 func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w work.Work) error {
-	defaultMode := s.settingsStore.Get().DefaultMode
-	if _, err := wt.SessionStore.Create(ctx, w.SessionID, defaultMode); err != nil {
+	defaults := s.settingsStore.Get()
+	if _, err := wt.SessionStore.Create(ctx, w.SessionID, defaults.DefaultAgentType, defaults.DefaultMode); err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
 

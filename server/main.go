@@ -19,7 +19,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agent/claude"
+	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
@@ -27,6 +29,7 @@ import (
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/relay"
+	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/startup"
 	"github.com/pockode/server/work"
@@ -311,10 +314,14 @@ func main() {
 		}
 	}
 
+	// Initialize agent registry
+	agents := agent.NewRegistry()
+	agents.Register(session.AgentTypeClaude, claude.New())
+	agents.Register(session.AgentTypeCodex, codex.New())
+
 	// Initialize worktree registry and manager
-	claudeAgent := claude.New()
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, claudeAgent, dataDir, idleTimeout)
+	worktreeManager := worktree.NewManager(registry, agents, dataDir, idleTimeout)
 	worktreeManager.SetWorkAutoResumer(workAutoResumer)
 	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)

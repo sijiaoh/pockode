@@ -28,8 +28,12 @@ func (m *mockSessionStore) Get(sessionID string) (session.SessionMeta, bool, err
 	return session.SessionMeta{}, false, nil
 }
 
-func (m *mockSessionStore) Create(ctx context.Context, sessionID string, mode session.Mode) (session.SessionMeta, error) {
+func (m *mockSessionStore) Create(ctx context.Context, sessionID string, agentType session.AgentType, mode session.Mode) (session.SessionMeta, error) {
 	return session.SessionMeta{}, nil
+}
+
+func (m *mockSessionStore) SetAgentType(ctx context.Context, sessionID string, agentType session.AgentType) error {
+	return nil
 }
 
 func (m *mockSessionStore) Delete(ctx context.Context, sessionID string) error {

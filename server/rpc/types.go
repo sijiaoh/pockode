@@ -65,6 +65,11 @@ type SessionUpdateTitleParams struct {
 	Title     string `json:"title"`
 }
 
+type SessionSetAgentTypeParams struct {
+	SessionID string            `json:"session_id"`
+	AgentType session.AgentType `json:"agent_type"`
+}
+
 type SessionSetModeParams struct {
 	SessionID string       `json:"session_id"`
 	Mode      session.Mode `json:"mode"`

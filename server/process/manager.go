@@ -29,7 +29,7 @@ type StateChangeEvent struct {
 
 // Manager manages agent processes.
 type Manager struct {
-	agent        agent.Agent
+	agents       *agent.Registry
 	workDir      string
 	dataDir      string
 	sessionStore session.Store
@@ -64,10 +64,10 @@ type Process struct {
 }
 
 // NewManager creates a new manager with the given idle timeout.
-func NewManager(ag agent.Agent, workDir, dataDir string, store session.Store, idleTimeout time.Duration) *Manager {
+func NewManager(agents *agent.Registry, workDir, dataDir string, store session.Store, idleTimeout time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		agent:        ag,
+		agents:       agents,
 		workDir:      workDir,
 		dataDir:      dataDir,
 		sessionStore: store,
@@ -112,13 +112,19 @@ func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent) {
 }
 
 // GetOrCreateProcess returns an existing process or creates a new one.
-func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resume bool, mode session.Mode) (*Process, bool, error) {
+func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resume bool, agentType session.AgentType, mode session.Mode) (*Process, bool, error) {
 	m.processesMu.Lock()
 
 	if proc, exists := m.processes[sessionID]; exists {
 		proc.touch()
 		m.processesMu.Unlock()
 		return proc, false, nil
+	}
+
+	ag, err := m.agents.Get(agentType)
+	if err != nil {
+		m.processesMu.Unlock()
+		return nil, false, err
 	}
 
 	// Use manager's context for process lifecycle, not request context
@@ -129,7 +135,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 		Resume:    resume,
 		Mode:      mode,
 	}
-	sess, err := m.agent.Start(m.ctx, opts)
+	sess, err := ag.Start(m.ctx, opts)
 	if err != nil {
 		m.processesMu.Unlock()
 		return nil, false, err
@@ -163,7 +169,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 	if m.onStateChange != nil {
 		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: ProcessStateIdle, IsInitial: true})
 	}
-	slog.Info("process created", "sessionId", sessionID, "resume", resume, "mode", mode)
+	slog.Info("process created", "sessionId", sessionID, "resume", resume, "agentType", agentType, "mode", mode)
 	return proc, true, nil
 }
 

@@ -134,7 +134,7 @@ func (c *Client) getOrCreateProcess(ctx context.Context, sessionID string) (*pro
 	}
 
 	resume := meta.Activated
-	proc, created, err := c.pm.GetOrCreateProcess(ctx, sessionID, resume, meta.Mode)
+	proc, created, err := c.pm.GetOrCreateProcess(ctx, sessionID, resume, meta.AgentType, meta.Mode)
 	if err != nil {
 		return nil, err
 	}
