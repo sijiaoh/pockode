@@ -9,6 +9,13 @@ globalThis.ResizeObserver = class ResizeObserver {
 	disconnect() {}
 };
 
+// Mock IntersectionObserver for components that use it
+globalThis.IntersectionObserver = class IntersectionObserver {
+	observe() {}
+	unobserve() {}
+	disconnect() {}
+} as unknown as typeof globalThis.IntersectionObserver;
+
 // Mock window.matchMedia for theme detection
 Object.defineProperty(window, "matchMedia", {
 	writable: true,
