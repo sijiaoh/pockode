@@ -69,7 +69,20 @@ function MessageList({
 	const [showScrollButton, setShowScrollButton] = useState(false);
 	const isAtBottomRef = useRef(true);
 
+	// When new items are added, followOutput handles the scroll.
+	// Skip the next totalListHeightChanged to avoid a competing scroll.
+	const messageCountRef = useRef(messages.length);
+	const skipHeightChangeRef = useRef(false);
+	if (messageCountRef.current !== messages.length) {
+		messageCountRef.current = messages.length;
+		skipHeightChangeRef.current = true;
+	}
+
 	const handleTotalListHeightChanged = useCallback(() => {
+		if (skipHeightChangeRef.current) {
+			skipHeightChangeRef.current = false;
+			return;
+		}
 		if (isAtBottomRef.current) {
 			virtuosoRef.current?.scrollToIndex({
 				index: "LAST",
@@ -83,7 +96,10 @@ function MessageList({
 		setShowScrollButton(!atBottom);
 	}, []);
 
-	const followOutput = useCallback((isAtBottom: boolean) => isAtBottom, []);
+	const followOutput = useCallback(
+		(isAtBottom: boolean): false | "auto" => (isAtBottom ? "auto" : false),
+		[],
+	);
 
 	const handleScrollToBottom = useCallback(() => {
 		virtuosoRef.current?.scrollToIndex({
