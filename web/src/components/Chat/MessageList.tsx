@@ -67,32 +67,7 @@ function MessageList({
 	const { EmptyState: CustomEmptyState } = useChatUIConfig();
 	const virtuosoRef = useRef<VirtuosoHandle>(null);
 	const [showScrollButton, setShowScrollButton] = useState(false);
-	const isAtBottomRef = useRef(true);
-
-	// When new items are added, followOutput handles the scroll.
-	// Skip the next totalListHeightChanged to avoid a competing scroll.
-	const messageCountRef = useRef(messages.length);
-	const skipHeightChangeRef = useRef(false);
-	if (messageCountRef.current !== messages.length) {
-		messageCountRef.current = messages.length;
-		skipHeightChangeRef.current = true;
-	}
-
-	const handleTotalListHeightChanged = useCallback(() => {
-		if (skipHeightChangeRef.current) {
-			skipHeightChangeRef.current = false;
-			return;
-		}
-		if (isAtBottomRef.current) {
-			virtuosoRef.current?.scrollToIndex({
-				index: "LAST",
-				align: "end",
-			});
-		}
-	}, []);
-
 	const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
-		isAtBottomRef.current = atBottom;
 		setShowScrollButton(!atBottom);
 	}, []);
 
@@ -165,14 +140,14 @@ function MessageList({
 				initialTopMostItemIndex={{ index: "LAST", align: "end" }}
 				// Align items to bottom when list is shorter than viewport
 				alignToBottom
-				// Auto-scroll when new items added (only if already at bottom)
+				// Auto-scroll on new items or content growth (only if already at bottom)
 				followOutput={followOutput}
 				// Track scroll position for button visibility
 				atBottomStateChange={handleAtBottomStateChange}
-				// Re-scroll on height changes
-				totalListHeightChanged={handleTotalListHeightChanged}
 				// Consider "at bottom" if within 50px of bottom
 				atBottomThreshold={50}
+				// Pre-render items outside viewport to reduce layout shift from measurement
+				increaseViewportBy={{ top: 200, bottom: 200 }}
 				className="h-full"
 			/>
 
