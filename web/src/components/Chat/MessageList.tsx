@@ -109,17 +109,20 @@ function MessageList({
 	);
 
 	const itemContent = useCallback(
-		(index: number, message: Message, context: MessageListContext) => (
-			<div className="py-1.5 sm:py-2">
-				<MessageItem
-					message={message}
-					isLast={index === context.messageCount - 1}
-					isProcessRunning={context.isProcessRunning}
-					onPermissionRespond={context.onPermissionRespond}
-					onQuestionRespond={context.onQuestionRespond}
-				/>
-			</div>
-		),
+		(index: number, message: Message, context: MessageListContext) => {
+			const isLast = index === context.messageCount - 1;
+			return (
+				<div className="py-1.5 sm:py-2">
+					<MessageItem
+						message={message}
+						isLast={isLast}
+						isProcessRunning={isLast && context.isProcessRunning}
+						onPermissionRespond={context.onPermissionRespond}
+						onQuestionRespond={context.onQuestionRespond}
+					/>
+				</div>
+			);
+		},
 		[],
 	);
 
