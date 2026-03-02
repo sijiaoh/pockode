@@ -6,15 +6,11 @@ import (
 )
 
 func TestBuildMCPArgs(t *testing.T) {
-	t.Run("empty dataDir returns nil", func(t *testing.T) {
-		args := buildMCPArgs("")
-		if args != nil {
-			t.Errorf("expected nil, got %v", args)
-		}
-	})
-
 	t.Run("non-empty dataDir returns config flags", func(t *testing.T) {
-		args := buildMCPArgs("/tmp/test-data")
+		args, err := buildMCPArgs("/tmp/test-data")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if len(args) != 4 {
 			t.Fatalf("expected 4 args (-c val -c val), got %d: %v", len(args), args)
 		}

@@ -32,21 +32,16 @@ func New() *Agent {
 
 // buildMCPArgs returns `-c` flags that register the Pockode MCP server
 // so Codex can access work management tools (work_list, work_done, etc.).
-func buildMCPArgs(dataDir string) []string {
-	if dataDir == "" {
-		return nil
-	}
-
+func buildMCPArgs(dataDir string) ([]string, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		slog.Warn("failed to resolve executable path, continuing without MCP", "error", err)
-		return nil
+		return nil, fmt.Errorf("resolve executable path: %w", err)
 	}
 
 	return []string{
 		"-c", fmt.Sprintf("mcp_servers.pockode.command=%q", exe),
 		"-c", fmt.Sprintf(`mcp_servers.pockode.args=["mcp", "--data-dir", %q]`, dataDir),
-	}
+	}, nil
 }
 
 // Start launches a persistent Codex MCP server process.
@@ -59,8 +54,14 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		return nil, err
 	}
 
+	mcpArgs, err := buildMCPArgs(opts.DataDir)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to build MCP args: %w", err)
+	}
+
 	args := []string{mcpSubcommand}
-	args = append(args, buildMCPArgs(opts.DataDir)...)
+	args = append(args, mcpArgs...)
 
 	cmd := exec.CommandContext(procCtx, Binary, args...)
 	cmd.Dir = opts.WorkDir
