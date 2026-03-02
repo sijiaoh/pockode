@@ -1,5 +1,5 @@
 import { ArrowDown } from "lucide-react";
-import { forwardRef, useCallback, useRef, useState } from "react";
+import { forwardRef, useCallback, useMemo, useRef, useState } from "react";
 import { type Components, Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import type {
@@ -23,9 +23,17 @@ interface Props {
 	onHintClick?: (hint: string) => void;
 }
 
+interface MessageListContext {
+	messageCount: number;
+	isProcessRunning: boolean;
+	onPermissionRespond: Props["onPermissionRespond"];
+	onQuestionRespond: Props["onQuestionRespond"];
+}
+
 // Custom scroller: prevent horizontal overflow
+// Destructure `context` to prevent Virtuoso's context prop from leaking to the DOM.
 const Scroller = forwardRef<HTMLDivElement, React.ComponentPropsWithRef<"div">>(
-	(props, ref) => (
+	({ context: _, ...props }, ref) => (
 		<div
 			{...props}
 			ref={ref}
@@ -38,11 +46,13 @@ Scroller.displayName = "Scroller";
 
 // Custom list container: horizontal padding
 const List = forwardRef<HTMLDivElement, React.ComponentPropsWithRef<"div">>(
-	(props, ref) => <div {...props} ref={ref} className="px-3 sm:px-4" />,
+	({ context: _, ...props }, ref) => (
+		<div {...props} ref={ref} className="px-3 sm:px-4" />
+	),
 );
 List.displayName = "List";
 
-const virtuosoComponents: Components<Message> = {
+const virtuosoComponents: Components<Message, MessageListContext> = {
 	Scroller,
 	List,
 };
@@ -88,19 +98,29 @@ function MessageList({
 		[],
 	);
 
+	const virtuosoContext = useMemo<MessageListContext>(
+		() => ({
+			messageCount: messages.length,
+			isProcessRunning,
+			onPermissionRespond,
+			onQuestionRespond,
+		}),
+		[messages.length, isProcessRunning, onPermissionRespond, onQuestionRespond],
+	);
+
 	const itemContent = useCallback(
-		(index: number, message: Message) => (
+		(index: number, message: Message, context: MessageListContext) => (
 			<div className="py-1.5 sm:py-2">
 				<MessageItem
 					message={message}
-					isLast={index === messages.length - 1}
-					isProcessRunning={isProcessRunning}
-					onPermissionRespond={onPermissionRespond}
-					onQuestionRespond={onQuestionRespond}
+					isLast={index === context.messageCount - 1}
+					isProcessRunning={context.isProcessRunning}
+					onPermissionRespond={context.onPermissionRespond}
+					onQuestionRespond={context.onQuestionRespond}
 				/>
 			</div>
 		),
-		[messages.length, isProcessRunning, onPermissionRespond, onQuestionRespond],
+		[],
 	);
 
 	if (messages.length === 0) {
@@ -119,6 +139,7 @@ function MessageList({
 			<Virtuoso
 				ref={virtuosoRef}
 				data={messages}
+				context={virtuosoContext}
 				computeItemKey={computeItemKey}
 				itemContent={itemContent}
 				components={virtuosoComponents}

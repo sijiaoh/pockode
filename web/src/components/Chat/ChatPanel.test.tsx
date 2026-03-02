@@ -14,11 +14,12 @@ vi.mock("react-virtuoso", () => ({
 		data,
 		itemContent,
 		computeItemKey,
+		context,
 	}: ComponentProps<typeof import("react-virtuoso").Virtuoso>) => (
 		<div data-testid="virtuoso-mock">
 			{(data as unknown[])?.map((item, index) => (
-				<div key={computeItemKey?.(index, item, {}) ?? index}>
-					{itemContent?.(index, item, {})}
+				<div key={computeItemKey?.(index, item, context) ?? index}>
+					{itemContent?.(index, item, context)}
 				</div>
 			))}
 		</div>
