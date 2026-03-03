@@ -30,20 +30,6 @@ func New() *Agent {
 	return &Agent{}
 }
 
-// buildMCPArgs returns `-c` flags that register the Pockode MCP server
-// so Codex can access work management tools (work_list, work_done, etc.).
-func buildMCPArgs(dataDir string) ([]string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("resolve executable path: %w", err)
-	}
-
-	return []string{
-		"-c", fmt.Sprintf("mcp_servers.pockode.command=%q", exe),
-		"-c", fmt.Sprintf(`mcp_servers.pockode.args=["mcp", "--data-dir", %q]`, dataDir),
-	}, nil
-}
-
 // Start launches a persistent Codex MCP server process.
 func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	procCtx, cancel := context.WithCancel(ctx)
@@ -54,16 +40,13 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		return nil, err
 	}
 
-	mcpArgs, err := buildMCPArgs(opts.DataDir)
+	exe, err := os.Executable()
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("failed to build MCP args: %w", err)
+		return nil, fmt.Errorf("resolve executable path: %w", err)
 	}
 
-	args := []string{mcpSubcommand}
-	args = append(args, mcpArgs...)
-
-	cmd := exec.CommandContext(procCtx, Binary, args...)
+	cmd := exec.CommandContext(procCtx, Binary, mcpSubcommand)
 	cmd.Dir = opts.WorkDir
 
 	stdin, err := cmd.StdinPipe()
@@ -107,6 +90,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		cancel:            cancel,
 		procCtx:           procCtx,
 		opts:              opts,
+		exe:               exe,
 		pendingRPCResults: &sync.Map{},
 		pendingElicit:     &sync.Map{},
 	}
@@ -150,6 +134,7 @@ type mcpSession struct {
 	cancel  func()
 	procCtx context.Context
 	opts    agent.StartOptions
+	exe     string // resolved executable path for MCP server config
 
 	nextID            atomic.Int64
 	pendingRPCResults *sync.Map // id -> chan *rpcResponse
@@ -440,6 +425,14 @@ func (s *mcpSession) buildStartConfig(prompt string) map[string]interface{} {
 	config := map[string]interface{}{
 		"prompt": prompt,
 		"cwd":    s.opts.WorkDir,
+		"config": map[string]interface{}{
+			"mcp_servers": map[string]interface{}{
+				"pockode": map[string]interface{}{
+					"command": s.exe,
+					"args":    []string{"mcp", "--data-dir", s.opts.DataDir},
+				},
+			},
+		},
 	}
 
 	switch s.opts.Mode {

@@ -1,36 +1,47 @@
 package codex
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/pockode/server/agent"
+	"github.com/pockode/server/session"
 )
 
-func TestBuildMCPArgs(t *testing.T) {
-	t.Run("non-empty dataDir returns config flags", func(t *testing.T) {
-		args, err := buildMCPArgs("/tmp/test-data")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(args) != 4 {
-			t.Fatalf("expected 4 args (-c val -c val), got %d: %v", len(args), args)
-		}
+func TestBuildStartConfig_MCPServers(t *testing.T) {
+	sess := &mcpSession{
+		opts: agent.StartOptions{
+			WorkDir: "/tmp/work",
+			DataDir: "/tmp/data",
+			Mode:    session.ModeDefault,
+		},
+		exe: "/usr/local/bin/pockode",
+	}
 
-		// Verify structure: alternating -c and value
-		if args[0] != "-c" || args[2] != "-c" {
-			t.Errorf("expected -c flags at positions 0 and 2, got %v", args)
-		}
+	config := sess.buildStartConfig("hello")
 
-		// Verify command config references pockode MCP server
-		if !strings.HasPrefix(args[1], "mcp_servers.pockode.command=") {
-			t.Errorf("expected command config, got %q", args[1])
-		}
+	// Verify config.mcp_servers.pockode exists with correct values.
+	cfgObj, ok := config["config"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected config key in start config")
+	}
+	mcpServers, ok := cfgObj["mcp_servers"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected mcp_servers in config")
+	}
+	pockode, ok := mcpServers["pockode"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected pockode server in mcp_servers")
+	}
 
-		// Verify args config contains the data dir
-		if !strings.Contains(args[3], "/tmp/test-data") {
-			t.Errorf("expected data dir in args config, got %q", args[3])
-		}
-		if !strings.Contains(args[3], "mcp_servers.pockode.args=") {
-			t.Errorf("expected args config key, got %q", args[3])
-		}
-	})
+	if pockode["command"] != "/usr/local/bin/pockode" {
+		t.Errorf("expected command to be exe path, got %v", pockode["command"])
+	}
+
+	args, ok := pockode["args"].([]string)
+	if !ok {
+		t.Fatal("expected args to be []string")
+	}
+	if len(args) != 3 || args[0] != "mcp" || args[1] != "--data-dir" || args[2] != "/tmp/data" {
+		t.Errorf("unexpected args: %v", args)
+	}
 }
