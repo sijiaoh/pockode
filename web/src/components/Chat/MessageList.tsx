@@ -123,7 +123,23 @@ function MessageList({
 		}
 	}, [hasMessages]);
 
-	// Auto-scroll on content growth (new messages, streaming)
+	// Scroll to bottom when new messages are added (e.g. user sends a message).
+	// ResizeObserver alone is not reliable here: it fires asynchronously, and
+	// isAtBottomRef may become stale by that time. useLayoutEffect fires
+	// synchronously after DOM commit, so it captures isAtBottomRef before any
+	// async events can modify it.
+	const prevTotalCountRef = useRef(totalCount);
+	useLayoutEffect(() => {
+		const prev = prevTotalCountRef.current;
+		prevTotalCountRef.current = totalCount;
+
+		const el = scrollRef.current;
+		if (el && totalCount > prev && isAtBottomRef.current) {
+			el.scrollTop = el.scrollHeight;
+		}
+	}, [totalCount]);
+
+	// Auto-scroll on content growth (streaming text within existing messages)
 	// biome-ignore lint/correctness/useExhaustiveDependencies: hasMessages triggers re-observe when scroll container mounts
 	useEffect(() => {
 		const content = contentRef.current;
