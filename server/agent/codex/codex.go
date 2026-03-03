@@ -584,7 +584,7 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 		})
 		s.emitEvent(agent.ToolCallEvent{
 			ToolUseID: ev.CallID,
-			ToolName:  "CodexBash",
+			ToolName:  "Bash",
 			ToolInput: input,
 		})
 
@@ -621,7 +621,7 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 		})
 		s.emitEvent(agent.ToolCallEvent{
 			ToolUseID: ev.CallID,
-			ToolName:  "CodexPatch",
+			ToolName:  "Patch",
 			ToolInput: input,
 		})
 
@@ -704,7 +704,7 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 	// Emit permission request event.
 	s.emitEvent(agent.PermissionRequestEvent{
 		RequestID: requestID,
-		ToolName:  "CodexBash",
+		ToolName:  "Bash",
 		ToolInput: toolInput,
 		ToolUseID: params.CodexMCPToolCallID,
 	})
