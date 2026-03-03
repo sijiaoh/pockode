@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pockode/server/agent"
@@ -43,5 +44,90 @@ func TestBuildStartConfig_MCPServers(t *testing.T) {
 	}
 	if len(args) != 3 || args[0] != "mcp" || args[1] != "--data-dir" || args[2] != "/tmp/data" {
 		t.Errorf("unexpected args: %v", args)
+	}
+}
+
+func TestNormalizeCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+		want string
+	}{
+		{"string", json.RawMessage(`"ls -la"`), "ls -la"},
+		{"array", json.RawMessage(`["git","status","-s"]`), "git status -s"},
+		{"empty", json.RawMessage(``), ""},
+		{"null", json.RawMessage(`null`), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeCommand(tt.raw); got != tt.want {
+				t.Errorf("normalizeCommand() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifyExecCommand(t *testing.T) {
+	tests := []struct {
+		command      string
+		wantTool     string
+		wantFilePath string
+	}{
+		{"cat main.go", "Read", "main.go"},
+		{"head -n 20 README.md", "Read", "README.md"},
+		{"tail -f /var/log/syslog", "Read", "/var/log/syslog"},
+		{"cat -n src/app.ts", "Read", "src/app.ts"},
+		{"ls -la", "Bash", ""},
+		{"git status", "Bash", ""},
+		{"cat file.txt | grep error", "Bash", ""},
+		{"echo hello > out.txt", "Bash", ""},
+		{"cat file.txt && rm file.txt", "Bash", ""},
+		{"", "Bash", ""},
+		{"cat", "Bash", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			gotTool, gotPath := classifyExecCommand(tt.command)
+			if gotTool != tt.wantTool || gotPath != tt.wantFilePath {
+				t.Errorf("classifyExecCommand(%q) = (%q, %q), want (%q, %q)",
+					tt.command, gotTool, gotPath, tt.wantTool, tt.wantFilePath)
+			}
+		})
+	}
+}
+
+func TestExtractFilePath(t *testing.T) {
+	tests := []struct {
+		name    string
+		changes json.RawMessage
+		want    string
+	}{
+		{
+			"single file",
+			json.RawMessage(`{"src/main.go": "diff content"}`),
+			"src/main.go",
+		},
+		{
+			"multiple files",
+			json.RawMessage(`{"a.go": "diff1", "b.go": "diff2"}`),
+			"",
+		},
+		{
+			"invalid JSON",
+			json.RawMessage(`not json`),
+			"",
+		},
+		{
+			"empty object",
+			json.RawMessage(`{}`),
+			"",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := extractFilePath(tt.changes); got != tt.want {
+				t.Errorf("extractFilePath() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

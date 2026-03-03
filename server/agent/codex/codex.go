@@ -578,13 +578,19 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 			s.log.Warn("failed to parse exec event", "error", err)
 			return
 		}
-		input, _ := json.Marshal(map[string]interface{}{
-			"command": ev.Command,
+		command := normalizeCommand(ev.Command)
+		toolName, filePath := classifyExecCommand(command)
+		inputMap := map[string]interface{}{
+			"command": command,
 			"cwd":     ev.Cwd,
-		})
+		}
+		if filePath != "" {
+			inputMap["file_path"] = filePath
+		}
+		input, _ := json.Marshal(inputMap)
 		s.emitEvent(agent.ToolCallEvent{
 			ToolUseID: ev.CallID,
-			ToolName:  "Bash",
+			ToolName:  toolName,
 			ToolInput: input,
 		})
 
@@ -616,12 +622,16 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 			s.log.Warn("failed to parse patch_apply_begin", "error", err)
 			return
 		}
-		input, _ := json.Marshal(map[string]interface{}{
+		inputMap := map[string]interface{}{
 			"changes": ev.Changes,
-		})
+		}
+		if fp := extractFilePath(ev.Changes); fp != "" {
+			inputMap["file_path"] = fp
+		}
+		input, _ := json.Marshal(inputMap)
 		s.emitEvent(agent.ToolCallEvent{
 			ToolUseID: ev.CallID,
-			ToolName:  "Patch",
+			ToolName:  "Edit",
 			ToolInput: input,
 		})
 
@@ -693,10 +703,16 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 	}
 
 	// Build tool input for the permission request event.
-	toolInput, _ := json.Marshal(map[string]interface{}{
-		"command": params.CodexCommand,
+	command := normalizeCommand(params.CodexCommand)
+	toolName, filePath := classifyExecCommand(command)
+	inputMap := map[string]interface{}{
+		"command": command,
 		"cwd":     params.CodexCwd,
-	})
+	}
+	if filePath != "" {
+		inputMap["file_path"] = filePath
+	}
+	toolInput, _ := json.Marshal(inputMap)
 
 	ch := make(chan elicitAnswer, 1)
 	s.pendingElicit.Store(requestID, ch)
@@ -704,7 +720,7 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 	// Emit permission request event.
 	s.emitEvent(agent.PermissionRequestEvent{
 		RequestID: requestID,
-		ToolName:  "Bash",
+		ToolName:  toolName,
 		ToolInput: toolInput,
 		ToolUseID: params.CodexMCPToolCallID,
 	})
@@ -841,6 +857,65 @@ func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if v != "" {
 			return v
+		}
+	}
+	return ""
+}
+
+// --- Codex message helpers ---
+
+// normalizeCommand converts a Codex command field (string or array) to a plain string.
+// Codex emits command as either a JSON string or a JSON array of strings.
+func normalizeCommand(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var arr []string
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		return strings.Join(arr, " ")
+	}
+	return ""
+}
+
+var readCommands = map[string]bool{
+	"cat": true, "head": true, "tail": true,
+}
+
+// classifyExecCommand determines if a shell command is a file-read operation.
+// Returns the tool name ("Read" or "Bash") and the detected file path.
+func classifyExecCommand(command string) (toolName string, filePath string) {
+	if strings.ContainsAny(command, "|;&>") {
+		return "Bash", ""
+	}
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return "Bash", ""
+	}
+	if !readCommands[fields[0]] {
+		return "Bash", ""
+	}
+	for i := len(fields) - 1; i > 0; i-- {
+		if !strings.HasPrefix(fields[i], "-") {
+			return "Read", fields[i]
+		}
+	}
+	return "Bash", ""
+}
+
+// extractFilePath extracts the file path from a Codex patch changes object.
+// Returns the single file path when exactly one file is changed, empty otherwise.
+func extractFilePath(changes json.RawMessage) string {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(changes, &m); err != nil {
+		return ""
+	}
+	if len(m) == 1 {
+		for k := range m {
+			return k
 		}
 	}
 	return ""

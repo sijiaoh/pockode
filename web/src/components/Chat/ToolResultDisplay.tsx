@@ -50,7 +50,7 @@ function ReadResultDisplay({
 	const code = useMemo(() => lines.map((l) => l.content).join("\n"), [lines]);
 
 	if (lines.length === 0) {
-		return <pre className="text-th-text-muted">{result}</pre>;
+		return <FileContentDisplay content={result} filePath={filePath} />;
 	}
 
 	return <FileContentDisplay content={code} filePath={filePath} />;
