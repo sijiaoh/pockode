@@ -1,6 +1,11 @@
 import { ArrowDown } from "lucide-react";
-import { forwardRef, useCallback, useRef, useState } from "react";
-import { type Components, Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import type {
 	AskUserQuestionRequest,
@@ -8,6 +13,9 @@ import type {
 	PermissionRequest,
 } from "../../types/message";
 import MessageItem, { type PermissionChoice } from "./MessageItem";
+
+const PAGE_SIZE = 50;
+const AT_BOTTOM_THRESHOLD = 50;
 
 interface Props {
 	messages: Message[];
@@ -23,30 +31,6 @@ interface Props {
 	onHintClick?: (hint: string) => void;
 }
 
-// Custom scroller: prevent horizontal overflow
-const Scroller = forwardRef<HTMLDivElement, React.ComponentPropsWithRef<"div">>(
-	(props, ref) => (
-		<div
-			{...props}
-			ref={ref}
-			className="overscroll-contain"
-			style={{ ...props.style, overflowX: "hidden" }}
-		/>
-	),
-);
-Scroller.displayName = "Scroller";
-
-// Custom list container: horizontal padding
-const List = forwardRef<HTMLDivElement, React.ComponentPropsWithRef<"div">>(
-	(props, ref) => <div {...props} ref={ref} className="px-3 sm:px-4" />,
-);
-List.displayName = "List";
-
-const virtuosoComponents: Components<Message> = {
-	Scroller,
-	List,
-};
-
 function MessageList({
 	messages,
 	isProcessRunning,
@@ -55,53 +39,129 @@ function MessageList({
 	onHintClick,
 }: Props) {
 	const { EmptyState: CustomEmptyState } = useChatUIConfig();
-	const virtuosoRef = useRef<VirtuosoHandle>(null);
+	const scrollRef = useRef<HTMLDivElement>(null);
+	const contentRef = useRef<HTMLDivElement>(null);
+	const sentinelRef = useRef<HTMLDivElement>(null);
 	const [showScrollButton, setShowScrollButton] = useState(false);
+	const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 	const isAtBottomRef = useRef(true);
+	const isLoadingMoreRef = useRef(false);
+	const scrollAnchorRef = useRef<{
+		scrollHeight: number;
+		scrollTop: number;
+	} | null>(null);
 
-	const handleTotalListHeightChanged = useCallback(() => {
-		if (isAtBottomRef.current) {
-			virtuosoRef.current?.scrollToIndex({
-				index: "LAST",
-				align: "end",
-			});
+	const totalCount = messages.length;
+	const startIndex = Math.max(0, totalCount - visibleCount);
+	const visibleMessages = messages.slice(startIndex);
+	const hasMore = startIndex > 0;
+	// Scroll container is only mounted when messages are non-empty (see early return below).
+	// Effects that attach to the container must re-run on this transition.
+	const hasMessages = totalCount > 0;
+
+	// Track at-bottom state via scroll events
+	// biome-ignore lint/correctness/useExhaustiveDependencies: hasMessages triggers re-attach when scroll container mounts
+	useEffect(() => {
+		const el = scrollRef.current;
+		if (!el) return;
+
+		const handleScroll = () => {
+			const atBottom =
+				el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_THRESHOLD;
+			isAtBottomRef.current = atBottom;
+			setShowScrollButton(!atBottom);
+		};
+
+		el.addEventListener("scroll", handleScroll, { passive: true });
+		return () => el.removeEventListener("scroll", handleScroll);
+	}, [hasMessages]);
+
+	// Re-create observer after each page load so it fires again if sentinel is still visible
+	// biome-ignore lint/correctness/useExhaustiveDependencies: visibleCount is an intentional trigger to re-observe after prepend
+	useEffect(() => {
+		const sentinel = sentinelRef.current;
+		const scrollEl = scrollRef.current;
+		if (!sentinel || !scrollEl || !hasMore) return;
+
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (entries[0].isIntersecting && !isLoadingMoreRef.current) {
+					isLoadingMoreRef.current = true;
+					scrollAnchorRef.current = {
+						scrollHeight: scrollEl.scrollHeight,
+						scrollTop: scrollEl.scrollTop,
+					};
+					setVisibleCount((c) => c + PAGE_SIZE);
+				}
+			},
+			{ root: scrollEl, threshold: 0 },
+		);
+
+		observer.observe(sentinel);
+		return () => observer.disconnect();
+	}, [hasMore, visibleCount]);
+
+	// Restore scroll position after prepending older messages
+	// biome-ignore lint/correctness/useExhaustiveDependencies: visibleCount is an intentional trigger — runs when a new page is prepended
+	useLayoutEffect(() => {
+		const anchor = scrollAnchorRef.current;
+		const el = scrollRef.current;
+		if (!anchor || !el) return;
+
+		const heightDiff = el.scrollHeight - anchor.scrollHeight;
+		el.scrollTop = anchor.scrollTop + heightDiff;
+		scrollAnchorRef.current = null;
+		isLoadingMoreRef.current = false;
+	}, [visibleCount]);
+
+	// Initial scroll to bottom (before paint)
+	// biome-ignore lint/correctness/useExhaustiveDependencies: hasMessages triggers scroll when container first mounts
+	useLayoutEffect(() => {
+		const el = scrollRef.current;
+		if (el) {
+			el.scrollTop = el.scrollHeight;
 		}
-	}, []);
+	}, [hasMessages]);
 
-	const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
-		isAtBottomRef.current = atBottom;
-		setShowScrollButton(!atBottom);
-	}, []);
+	// Scroll to bottom when new messages are added (e.g. user sends a message).
+	// ResizeObserver alone is not reliable here: it fires asynchronously, and
+	// isAtBottomRef may become stale by that time. useLayoutEffect fires
+	// synchronously after DOM commit, so it captures isAtBottomRef before any
+	// async events can modify it.
+	const prevTotalCountRef = useRef(totalCount);
+	useLayoutEffect(() => {
+		const prev = prevTotalCountRef.current;
+		prevTotalCountRef.current = totalCount;
 
-	const followOutput = useCallback((isAtBottom: boolean) => isAtBottom, []);
+		const el = scrollRef.current;
+		if (el && totalCount > prev && isAtBottomRef.current) {
+			el.scrollTop = el.scrollHeight;
+		}
+	}, [totalCount]);
+
+	// Auto-scroll on content growth (streaming text within existing messages)
+	// biome-ignore lint/correctness/useExhaustiveDependencies: hasMessages triggers re-observe when scroll container mounts
+	useEffect(() => {
+		const content = contentRef.current;
+		const scrollEl = scrollRef.current;
+		if (!content || !scrollEl) return;
+
+		const observer = new ResizeObserver(() => {
+			if (isAtBottomRef.current) {
+				scrollEl.scrollTop = scrollEl.scrollHeight;
+			}
+		});
+
+		observer.observe(content);
+		return () => observer.disconnect();
+	}, [hasMessages]);
 
 	const handleScrollToBottom = useCallback(() => {
-		virtuosoRef.current?.scrollToIndex({
-			index: "LAST",
-			align: "end",
+		scrollRef.current?.scrollTo({
+			top: scrollRef.current.scrollHeight,
 			behavior: "smooth",
 		});
 	}, []);
-
-	const computeItemKey = useCallback(
-		(_index: number, message: Message) => message.id,
-		[],
-	);
-
-	const itemContent = useCallback(
-		(index: number, message: Message) => (
-			<div className="py-1.5 sm:py-2">
-				<MessageItem
-					message={message}
-					isLast={index === messages.length - 1}
-					isProcessRunning={isProcessRunning}
-					onPermissionRespond={onPermissionRespond}
-					onQuestionRespond={onQuestionRespond}
-				/>
-			</div>
-		),
-		[messages.length, isProcessRunning, onPermissionRespond, onQuestionRespond],
-	);
 
 	if (messages.length === 0) {
 		if (CustomEmptyState) {
@@ -116,25 +176,32 @@ function MessageList({
 
 	return (
 		<div className="relative min-h-0 flex-1 overflow-hidden">
-			<Virtuoso
-				ref={virtuosoRef}
-				data={messages}
-				computeItemKey={computeItemKey}
-				itemContent={itemContent}
-				components={virtuosoComponents}
-				initialTopMostItemIndex={{ index: "LAST", align: "end" }}
-				// Align items to bottom when list is shorter than viewport
-				alignToBottom
-				// Auto-scroll when new items added (only if already at bottom)
-				followOutput={followOutput}
-				// Track scroll position for button visibility
-				atBottomStateChange={handleAtBottomStateChange}
-				// Re-scroll on height changes
-				totalListHeightChanged={handleTotalListHeightChanged}
-				// Consider "at bottom" if within 50px of bottom
-				atBottomThreshold={50}
-				className="h-full"
-			/>
+			<div
+				ref={scrollRef}
+				className="h-full overflow-x-hidden overflow-y-auto overscroll-contain"
+			>
+				<div
+					ref={contentRef}
+					className="flex min-h-full flex-col justify-end px-3 sm:px-4"
+				>
+					{hasMore && <div ref={sentinelRef} className="h-1" />}
+					{visibleMessages.map((message, index) => {
+						const globalIndex = startIndex + index;
+						const isLast = globalIndex === totalCount - 1;
+						return (
+							<div key={message.id} className="py-1.5 sm:py-2">
+								<MessageItem
+									message={message}
+									isLast={isLast}
+									isProcessRunning={isLast && isProcessRunning}
+									onPermissionRespond={onPermissionRespond}
+									onQuestionRespond={onQuestionRespond}
+								/>
+							</div>
+						);
+					})}
+				</div>
+			</div>
 
 			{showScrollButton && (
 				<button

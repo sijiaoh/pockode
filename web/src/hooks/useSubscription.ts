@@ -11,7 +11,7 @@ interface SubscriptionOptions<TInitial> {
 	 */
 	resubscribeOnWorktreeChange?: boolean;
 	/**
-	 * Called when subscription succeeds with initial data (if any).
+	 * Called when subscription succeeds. Receives initial data if provided by the server.
 	 */
 	onSubscribed?: (initial: TInitial) => void;
 	/**
@@ -98,7 +98,7 @@ export function useSubscription<TNotification = void, TInitial = void>(
 			}
 
 			subscriptionIdRef.current = result.id;
-			if ("initial" in result && onSubscribedRef.current) {
+			if (onSubscribedRef.current) {
 				onSubscribedRef.current(result.initial as TInitial);
 			}
 		} catch (err) {

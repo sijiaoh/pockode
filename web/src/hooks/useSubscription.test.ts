@@ -317,7 +317,7 @@ describe("useSubscription", () => {
 			});
 		});
 
-		it("does not call onSubscribed when no initial data", async () => {
+		it("calls onSubscribed even when no initial data", async () => {
 			const onSubscribed = vi.fn();
 			mockSubscribe.mockResolvedValue({ id: "sub-no-init" });
 
@@ -328,10 +328,8 @@ describe("useSubscription", () => {
 			);
 
 			await waitFor(() => {
-				expect(mockSubscribe).toHaveBeenCalled();
+				expect(onSubscribed).toHaveBeenCalledTimes(1);
 			});
-			await new Promise((r) => setTimeout(r, 50));
-			expect(onSubscribed).not.toHaveBeenCalled();
 		});
 
 		it("calls onReset when disconnected", async () => {

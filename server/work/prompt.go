@@ -101,7 +101,7 @@ func BuildParentReactivationMessage(parent Work, childTitle, childID string) str
 
 	nudge := fmt.Sprintf(
 		"Task %q (ID: %s) has been completed. Use work_comment_list with work_id %s to read the task's report. Then use work_list with parent_id %s to check remaining tasks. If all tasks are done, call work_done with ID %s. If tasks remain, review progress and adjust the plan as needed, then call work_done with ID %s — this returns you to a dormant state until the next task completes.",
-		childTitle, childID, childID, parent.ID, parent.ID, parent.ID,
+		childTitle, childID, parent.ID, parent.ID, parent.ID, parent.ID,
 	)
 
 	return base + "\n\n" + nudge

@@ -68,6 +68,33 @@ describe("useFSWatch", () => {
 		});
 	});
 
+	it("calls onChanged when subscription is established", async () => {
+		renderHook(() =>
+			useFSWatch({ path: "/test/path", onChanged: mockOnChanged }),
+		);
+
+		await waitFor(() => {
+			expect(mockOnChanged).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it("calls onChanged on resubscription after path change", async () => {
+		const { rerender } = renderHook(
+			({ path }) => useFSWatch({ path, onChanged: mockOnChanged }),
+			{ initialProps: { path: "/path/a" } },
+		);
+
+		await waitFor(() => {
+			expect(mockOnChanged).toHaveBeenCalledTimes(1);
+		});
+
+		rerender({ path: "/path/b" });
+
+		await waitFor(() => {
+			expect(mockOnChanged).toHaveBeenCalledTimes(2);
+		});
+	});
+
 	it("does not resubscribe when path is the same", async () => {
 		const { rerender } = renderHook(
 			({ onChanged }) => useFSWatch({ path: "/same/path", onChanged }),

@@ -199,7 +199,7 @@ function ChatPanel({
 
 	const renderContent = () => {
 		if (!overlay) {
-			// Defer mounting until history loads so Virtuoso's initialTopMostItemIndex works
+			// Defer mounting until history loads so initial scroll-to-bottom works
 			if (isLoadingHistory) {
 				return (
 					<div className="flex min-h-0 flex-1 items-center justify-center">

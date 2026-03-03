@@ -57,7 +57,7 @@ export function useChatMessages({
 	sessionId,
 }: UseChatMessagesOptions): UseChatMessagesReturn {
 	const [messages, setMessages] = useState<Message[]>([]);
-	const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+	const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 	const [isProcessRunning, setIsProcessRunning] = useState(false);
 	const [mode, setModeState] = useState<SessionMode>("default");
 	const subscriptionIdRef = useRef<string | null>(null);
@@ -86,11 +86,14 @@ export function useChatMessages({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on sessionId change
 	useEffect(() => {
 		setMessages([]);
+		setIsLoadingHistory(true);
 		setIsProcessRunning(false);
 		setModeState("default");
 	}, [sessionId]);
 
-	// Subscribe to chat events when connected
+	// Subscribe to chat events when connected.
+	// Loading state is managed by the initial value and the reset effect above,
+	// so re-subscribe on reconnect won't flash the spinner.
 	useEffect(() => {
 		if (status !== "connected") {
 			return;
@@ -99,7 +102,6 @@ export function useChatMessages({
 		let cancelled = false;
 
 		async function subscribe() {
-			setIsLoadingHistory(true);
 			try {
 				const result = await chatMessagesSubscribe(
 					sessionId,
