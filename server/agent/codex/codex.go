@@ -437,7 +437,7 @@ func (s *mcpSession) buildStartConfig(prompt string) map[string]interface{} {
 
 	switch s.opts.Mode {
 	case session.ModeYolo:
-		config["approval-policy"] = "on-failure"
+		config["approval-policy"] = "never"
 		config["sandbox"] = "danger-full-access"
 	default:
 		config["approval-policy"] = "untrusted"
