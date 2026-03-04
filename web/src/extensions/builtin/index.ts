@@ -1,6 +1,5 @@
 import {
 	AccountSection,
-	AgentSection,
 	AppearanceSection,
 	SessionSection,
 	ThemeSection,
@@ -13,8 +12,7 @@ const PRIORITY = {
 	APPEARANCE: 10,
 	THEME: 20,
 	WORKTREE: 30,
-	AGENT: 40,
-	SESSION: 50,
+	SESSION: 40,
 	ACCOUNT: 90,
 } as const;
 
@@ -40,13 +38,6 @@ export const activate: Extension["activate"] = (ctx) => {
 		label: "Worktree",
 		priority: PRIORITY.WORKTREE,
 		component: WorktreeSection,
-	});
-
-	ctx.settings.register({
-		id: "agent",
-		label: "Agent",
-		priority: PRIORITY.AGENT,
-		component: AgentSection,
 	});
 
 	ctx.settings.register({
