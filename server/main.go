@@ -293,6 +293,7 @@ func main() {
 
 	workAutoResumer := work.NewAutoResumer(workStore, 3)
 	workAutoResumer.StopOrphanedWork()
+	session.ClearOrphanedNeedsInput(dataDir)
 	workStore.AddOnChangeListener(workAutoResumer)
 	s.StartWatching()
 

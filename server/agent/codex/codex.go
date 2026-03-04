@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,6 +96,10 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		pendingElicit:     &sync.Map{},
 	}
 
+	if opts.Resume {
+		sess.loadResumeState()
+	}
+
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -108,6 +113,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 		stderrCh := agent.ReadStderr(stderr, "codex")
 		sess.runMCPLoop(procCtx, stdout)
+		sess.cleanupPendingRequests()
 		agent.WaitForProcess(procCtx, log, cmd, stderrCh, events)
 
 		select {
@@ -247,6 +253,7 @@ func (s *mcpSession) SendInterrupt() error {
 func (s *mcpSession) Close() {
 	s.closeOnce.Do(func() {
 		s.log.Info("terminating codex process")
+		s.saveResumeState()
 		s.cancel()
 		s.stdinMu.Lock()
 		s.stdin.Close()
@@ -361,6 +368,11 @@ func (s *mcpSession) sendRPC(ctx context.Context, method string, params interfac
 // Events are emitted via the events channel as they arrive (from notifications).
 // The tool call result triggers a DoneEvent.
 func (s *mcpSession) callToolAsync(toolName string, args interface{}) error {
+	// Clear any stale interrupted flag from a previous turn.
+	// This prevents a late "turn_aborted" event from incorrectly
+	// converting the next turn's DoneEvent into an InterruptedEvent.
+	s.interrupted.Store(false)
+
 	id := s.nextID.Add(1)
 	ch := make(chan *rpcResponse, 1)
 	s.pendingRPCResults.Store(id, ch)
@@ -910,6 +922,79 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// --- Lifecycle helpers ---
+
+// cleanupPendingRequests resolves pending elicitations when the process terminates.
+// Called after runMCPLoop exits (stdout closed) to ensure the client receives
+// RequestCancelledEvent for any in-flight permission dialogs.
+func (s *mcpSession) cleanupPendingRequests() {
+	s.pendingElicit.Range(func(key, value any) bool {
+		requestID := key.(string)
+		ch := value.(chan elicitAnswer)
+		select {
+		case ch <- elicitAnswer{decision: "denied"}:
+		default:
+		}
+		s.emitEvent(agent.RequestCancelledEvent{RequestID: requestID})
+		return true
+	})
+}
+
+// --- Resume state ---
+
+type codexResumeState struct {
+	SessionID      string `json:"sessionId"`
+	ConversationID string `json:"conversationId"`
+}
+
+func (s *mcpSession) resumeStatePath() string {
+	return filepath.Join(s.opts.DataDir, "sessions", s.opts.SessionID, "codex_resume.json")
+}
+
+func (s *mcpSession) saveResumeState() {
+	s.idMu.Lock()
+	state := codexResumeState{
+		SessionID:      s.sessionID,
+		ConversationID: s.conversationID,
+	}
+	s.idMu.Unlock()
+
+	if state.SessionID == "" {
+		return
+	}
+
+	data, err := json.Marshal(state)
+	if err != nil {
+		s.log.Error("failed to marshal codex resume state", "error", err)
+		return
+	}
+
+	path := s.resumeStatePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		s.log.Error("failed to create state directory", "error", err)
+		return
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		s.log.Error("failed to write codex resume state", "error", err)
+	}
+}
+
+func (s *mcpSession) loadResumeState() {
+	path := s.resumeStatePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var state codexResumeState
+	if err := json.Unmarshal(data, &state); err != nil {
+		s.log.Warn("failed to parse codex resume state", "error", err)
+		return
+	}
+	s.sessionID = state.SessionID
+	s.conversationID = state.ConversationID
+	s.log.Info("resuming codex session", "codexSessionId", state.SessionID)
 }
 
 // --- Codex message helpers ---

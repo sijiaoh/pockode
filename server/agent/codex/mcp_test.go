@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/pockode/server/agent"
@@ -14,10 +17,12 @@ import (
 func newTestSession() *mcpSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &mcpSession{
-		log:     slog.Default(),
-		events:  make(chan agent.AgentEvent, 100),
-		procCtx: ctx,
-		cancel:  cancel,
+		log:               slog.Default(),
+		events:            make(chan agent.AgentEvent, 100),
+		procCtx:           ctx,
+		cancel:            cancel,
+		pendingRPCResults: &sync.Map{},
+		pendingElicit:     &sync.Map{},
 	}
 }
 
@@ -280,5 +285,191 @@ func TestProcessCodexMsg_MCPToolCallEnd_MultipleContent(t *testing.T) {
 	ev := events[0].(agent.ToolResultEvent)
 	if ev.ToolResult != "part1\npart2" {
 		t.Errorf("ToolResult = %q, want %q", ev.ToolResult, "part1\npart2")
+	}
+}
+
+// --- Fix 1: cleanupPendingRequests ---
+
+func TestCleanupPendingRequests_EmitsRequestCancelled(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	// Simulate a pending elicitation.
+	ch := make(chan elicitAnswer, 1)
+	sess.pendingElicit.Store("req-1", ch)
+
+	sess.cleanupPendingRequests()
+
+	// The elicitation channel should receive a denial.
+	select {
+	case ans := <-ch:
+		if ans.decision != "denied" {
+			t.Errorf("expected denied, got %q", ans.decision)
+		}
+	default:
+		t.Fatal("elicitation channel did not receive denial")
+	}
+
+	// A RequestCancelledEvent should be emitted.
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	cancelled, ok := events[0].(agent.RequestCancelledEvent)
+	if !ok {
+		t.Fatalf("expected RequestCancelledEvent, got %T", events[0])
+	}
+	if cancelled.RequestID != "req-1" {
+		t.Errorf("RequestID = %q, want %q", cancelled.RequestID, "req-1")
+	}
+}
+
+func TestCleanupPendingRequests_MultipleElicitations(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	ch1 := make(chan elicitAnswer, 1)
+	ch2 := make(chan elicitAnswer, 1)
+	sess.pendingElicit.Store("req-a", ch1)
+	sess.pendingElicit.Store("req-b", ch2)
+
+	sess.cleanupPendingRequests()
+
+	events := drainEvents(sess.events)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+
+	ids := map[string]bool{}
+	for _, ev := range events {
+		cancelled, ok := ev.(agent.RequestCancelledEvent)
+		if !ok {
+			t.Fatalf("expected RequestCancelledEvent, got %T", ev)
+		}
+		ids[cancelled.RequestID] = true
+	}
+	if !ids["req-a"] || !ids["req-b"] {
+		t.Errorf("expected both req-a and req-b, got %v", ids)
+	}
+}
+
+func TestCleanupPendingRequests_NoPendingIsNoop(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.cleanupPendingRequests()
+
+	events := drainEvents(sess.events)
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events, got %d", len(events))
+	}
+}
+
+// --- Fix 2: interrupted flag race ---
+
+func TestCallToolAsync_ClearsStaleInterruptedFlag(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stdin = &discardWriteCloser{}
+
+	// Simulate a stale interrupted flag from a previous turn.
+	sess.interrupted.Store(true)
+
+	// callToolAsync should clear the flag.
+	err := sess.callToolAsync("codex", map[string]interface{}{"prompt": "hello"})
+	if err != nil {
+		t.Fatalf("callToolAsync error: %v", err)
+	}
+
+	if sess.interrupted.Load() {
+		t.Error("interrupted flag should be cleared at the start of callToolAsync")
+	}
+}
+
+// discardWriteCloser is a no-op writer for tests that don't send data to a real process.
+type discardWriteCloser struct{}
+
+func (d *discardWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (d *discardWriteCloser) Close() error                { return nil }
+
+// --- Fix 3: resume state ---
+
+func TestResumeState_SaveAndLoad(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "test-session-123"
+
+	// Create a session with IDs set.
+	sess := &mcpSession{
+		log: slog.Default(),
+		opts: agent.StartOptions{
+			DataDir:   dir,
+			SessionID: sessionID,
+		},
+		sessionID:      "codex-sid-abc",
+		conversationID: "codex-cid-def",
+	}
+
+	sess.saveResumeState()
+
+	// Verify the file was created.
+	path := filepath.Join(dir, "sessions", sessionID, "codex_resume.json")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("resume state file not created: %v", err)
+	}
+
+	// Create a new session and load the state.
+	sess2 := &mcpSession{
+		log: slog.Default(),
+		opts: agent.StartOptions{
+			DataDir:   dir,
+			SessionID: sessionID,
+		},
+	}
+	sess2.loadResumeState()
+
+	if sess2.sessionID != "codex-sid-abc" {
+		t.Errorf("sessionID = %q, want %q", sess2.sessionID, "codex-sid-abc")
+	}
+	if sess2.conversationID != "codex-cid-def" {
+		t.Errorf("conversationID = %q, want %q", sess2.conversationID, "codex-cid-def")
+	}
+}
+
+func TestResumeState_SkipSaveWhenNoIDs(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "test-empty"
+
+	sess := &mcpSession{
+		log: slog.Default(),
+		opts: agent.StartOptions{
+			DataDir:   dir,
+			SessionID: sessionID,
+		},
+	}
+
+	sess.saveResumeState()
+
+	// File should not be created.
+	path := filepath.Join(dir, "sessions", sessionID, "codex_resume.json")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("resume state file should not be created when no IDs set")
+	}
+}
+
+func TestResumeState_LoadMissingFileIsNoop(t *testing.T) {
+	dir := t.TempDir()
+
+	sess := &mcpSession{
+		log: slog.Default(),
+		opts: agent.StartOptions{
+			DataDir:   dir,
+			SessionID: "nonexistent",
+		},
+	}
+
+	sess.loadResumeState()
+
+	if sess.sessionID != "" {
+		t.Errorf("sessionID should be empty, got %q", sess.sessionID)
 	}
 }

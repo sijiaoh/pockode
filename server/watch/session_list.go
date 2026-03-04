@@ -212,6 +212,13 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 		if w.workNeedsInputSyncer != nil {
 			w.workNeedsInputSyncer.SyncNeedsInput(w.Context(), e.SessionID, false)
 		}
+	case process.ProcessStateEnded:
+		if err := w.store.SetNeedsInput(ctx, e.SessionID, false); err != nil {
+			slog.Warn("failed to clear needs input on process end", "sessionId", e.SessionID, "error", err)
+		}
+		if w.workNeedsInputSyncer != nil {
+			w.workNeedsInputSyncer.SyncNeedsInput(w.Context(), e.SessionID, false)
+		}
 	}
 
 	// Notify ProcessState change (volatile, not covered by Store's OnSessionChange)
