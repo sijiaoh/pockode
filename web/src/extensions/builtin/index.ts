@@ -13,8 +13,8 @@ const PRIORITY = {
 	APPEARANCE: 10,
 	THEME: 20,
 	WORKTREE: 30,
-	SESSION: 40,
-	AGENT: 50,
+	AGENT: 40,
+	SESSION: 50,
 	ACCOUNT: 90,
 } as const;
 
@@ -43,17 +43,17 @@ export const activate: Extension["activate"] = (ctx) => {
 	});
 
 	ctx.settings.register({
-		id: "session",
-		label: "Session",
-		priority: PRIORITY.SESSION,
-		component: SessionSection,
-	});
-
-	ctx.settings.register({
 		id: "agent",
 		label: "Agent",
 		priority: PRIORITY.AGENT,
 		component: AgentSection,
+	});
+
+	ctx.settings.register({
+		id: "session",
+		label: "Session",
+		priority: PRIORITY.SESSION,
+		component: SessionSection,
 	});
 
 	ctx.settings.register({
