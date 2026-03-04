@@ -42,7 +42,10 @@ function AgentSelector({
 	}, [isOpen]);
 
 	return (
-		<div className="relative">
+		<div
+			className="relative"
+			title={disabled ? "Agent cannot be changed during a session" : undefined}
+		>
 			<button
 				type="button"
 				onClick={() => setIsOpen(!isOpen)}

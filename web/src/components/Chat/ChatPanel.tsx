@@ -297,13 +297,13 @@ function ChatPanel({
 							<CustomAgentSelector
 								agentType={agentType}
 								onAgentTypeChange={setAgentType}
-								disabled={isStreaming}
+								disabled={isStreaming || messages.length > 0}
 							/>
 						) : (
 							<AgentSelector
 								agentType={agentType}
 								onAgentTypeChange={setAgentType}
-								disabled={isStreaming}
+								disabled={isStreaming || messages.length > 0}
 							/>
 						)}
 						{CustomModeSelector === null ? null : CustomModeSelector ? (

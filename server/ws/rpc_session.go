@@ -93,14 +93,21 @@ func (h *rpcMethodHandler) handleSessionSetAgentType(ctx context.Context, conn *
 		return
 	}
 
-	// Close any running process (agent type change requires restart)
-	wt.ProcessManager.Close(params.SessionID)
+	meta, found, err := wt.SessionStore.Get(params.SessionID)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to get session")
+		return
+	}
+	if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+		return
+	}
+	if meta.Activated {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "cannot change agent type after session has started")
+		return
+	}
 
 	if err := wt.SessionStore.SetAgentType(ctx, params.SessionID, params.AgentType); err != nil {
-		if errors.Is(err, session.ErrSessionNotFound) {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
-			return
-		}
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to set agent type")
 		return
 	}

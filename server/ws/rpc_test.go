@@ -786,6 +786,55 @@ func TestHandler_SessionUpdateTitle_NotFound(t *testing.T) {
 	}
 }
 
+func TestHandler_SessionSetAgentType(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	store := env.getMainWorktree().SessionStore
+	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+
+	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
+		SessionID: sess.ID,
+		AgentType: session.AgentTypeCodex,
+	})
+
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %s", resp.Error.Message)
+	}
+
+	updated, _, _ := store.Get(sess.ID)
+	if updated.AgentType != session.AgentTypeCodex {
+		t.Errorf("expected agent type 'codex', got %q", updated.AgentType)
+	}
+}
+
+func TestHandler_SessionSetAgentType_ActivatedSession(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "activated", session.AgentTypeClaude, "")
+	store.Activate(bgCtx, "activated")
+
+	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
+		SessionID: "activated",
+		AgentType: session.AgentTypeCodex,
+	})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "cannot change agent type after session has started") {
+		t.Errorf("expected rejection for activated session, got %+v", resp)
+	}
+}
+
+func TestHandler_SessionSetAgentType_NotFound(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
+		SessionID: "non-existent",
+		AgentType: session.AgentTypeClaude,
+	})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
+		t.Errorf("expected session not found error, got %+v", resp)
+	}
+}
+
 func TestHandler_ChatMessagesSubscribe_History(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
