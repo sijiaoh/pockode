@@ -579,18 +579,14 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 			return
 		}
 		command := normalizeCommand(ev.Command)
-		toolName, filePath := classifyExecCommand(command)
 		inputMap := map[string]interface{}{
 			"command": command,
 			"cwd":     ev.Cwd,
 		}
-		if filePath != "" {
-			inputMap["file_path"] = filePath
-		}
 		input, _ := json.Marshal(inputMap)
 		s.emitEvent(agent.ToolCallEvent{
 			ToolUseID: ev.CallID,
-			ToolName:  toolName,
+			ToolName:  "Bash",
 			ToolInput: input,
 		})
 
@@ -655,6 +651,64 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 			ToolResult: result,
 		})
 
+	case "mcp_tool_call_begin":
+		var ev struct {
+			CallID     string `json:"call_id"`
+			Invocation struct {
+				Server    string          `json:"server"`
+				Tool      string          `json:"tool"`
+				Arguments json.RawMessage `json:"arguments"`
+			} `json:"invocation"`
+		}
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			s.log.Warn("failed to parse mcp_tool_call_begin", "error", err)
+			return
+		}
+		// Use arguments directly as input; server:tool is encoded in the name.
+		input := ev.Invocation.Arguments
+		if len(input) == 0 {
+			input = json.RawMessage("{}")
+		}
+		s.emitEvent(agent.ToolCallEvent{
+			ToolUseID: ev.CallID,
+			ToolName:  ev.Invocation.Server + ":" + ev.Invocation.Tool,
+			ToolInput: input,
+		})
+
+	case "mcp_tool_call_end":
+		var ev struct {
+			CallID string `json:"call_id"`
+			Result struct {
+				Ok *struct {
+					Content []struct {
+						Text string `json:"text"`
+					} `json:"content"`
+					IsError bool `json:"isError"`
+				} `json:"Ok"`
+				Err string `json:"Err"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			s.log.Warn("failed to parse mcp_tool_call_end", "error", err)
+			return
+		}
+		var result string
+		if ev.Result.Err != "" {
+			result = ev.Result.Err
+		} else if ev.Result.Ok != nil {
+			var parts []string
+			for _, c := range ev.Result.Ok.Content {
+				if c.Text != "" {
+					parts = append(parts, c.Text)
+				}
+			}
+			result = strings.Join(parts, "\n")
+		}
+		s.emitEvent(agent.ToolResultEvent{
+			ToolUseID:  ev.CallID,
+			ToolResult: result,
+		})
+
 	case "task_complete":
 		// Informational; the actual DoneEvent is sent when the RPC result arrives.
 
@@ -704,13 +758,9 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 
 	// Build tool input for the permission request event.
 	command := normalizeCommand(params.CodexCommand)
-	toolName, filePath := classifyExecCommand(command)
 	inputMap := map[string]interface{}{
 		"command": command,
 		"cwd":     params.CodexCwd,
-	}
-	if filePath != "" {
-		inputMap["file_path"] = filePath
 	}
 	toolInput, _ := json.Marshal(inputMap)
 
@@ -720,7 +770,7 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 	// Emit permission request event.
 	s.emitEvent(agent.PermissionRequestEvent{
 		RequestID: requestID,
-		ToolName:  toolName,
+		ToolName:  "Bash",
 		ToolInput: toolInput,
 		ToolUseID: params.CodexMCPToolCallID,
 	})
@@ -881,31 +931,6 @@ func normalizeCommand(raw json.RawMessage) string {
 	return ""
 }
 
-var readCommands = map[string]bool{
-	"cat": true, "head": true, "tail": true,
-}
-
-// classifyExecCommand determines if a shell command is a file-read operation.
-// Returns the tool name ("Read" or "Bash") and the detected file path.
-func classifyExecCommand(command string) (toolName string, filePath string) {
-	if strings.ContainsAny(command, "|;&>") {
-		return "Bash", ""
-	}
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return "Bash", ""
-	}
-	if !readCommands[fields[0]] {
-		return "Bash", ""
-	}
-	for i := len(fields) - 1; i > 0; i-- {
-		if !strings.HasPrefix(fields[i], "-") {
-			return "Read", fields[i]
-		}
-	}
-	return "Bash", ""
-}
-
 // extractFilePath extracts the file path from a Codex patch changes object.
 // Returns the single file path when exactly one file is changed, empty otherwise.
 func extractFilePath(changes json.RawMessage) string {
@@ -989,4 +1014,3 @@ func parseMCPSubcommand(version string) string {
 
 	return "mcp"
 }
-
