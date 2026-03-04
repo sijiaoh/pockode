@@ -19,6 +19,7 @@ import {
 	WorkListOverlay,
 } from "../Project";
 import { SettingsPage } from "../Settings";
+import AgentSelector from "./AgentSelector";
 import DefaultInputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
@@ -94,6 +95,7 @@ function ChatPanel({
 	const {
 		InputBar: CustomInputBar,
 		ModeSelector: CustomModeSelector,
+		AgentSelector: CustomAgentSelector,
 		StopButton: CustomStopButton,
 		ChatTopContent,
 	} = useChatUIConfig();
@@ -105,12 +107,14 @@ function ChatPanel({
 		isStreaming,
 		isProcessRunning,
 		mode,
+		agentType,
 		status,
 		sendUserMessage,
 		interrupt,
 		permissionResponse,
 		questionResponse,
 		setMode,
+		setAgentType,
 		updatePermissionStatus,
 		updateQuestionStatus,
 	} = useChatMessages({
@@ -288,21 +292,34 @@ function ChatPanel({
 			{/* Session action bar */}
 			{!overlay && (
 				<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
-					{CustomModeSelector === null ? (
-						<div />
-					) : CustomModeSelector ? (
-						<CustomModeSelector
-							mode={mode}
-							onModeChange={setMode}
-							disabled={isStreaming}
-						/>
-					) : (
-						<ModeSelector
-							mode={mode}
-							onModeChange={setMode}
-							disabled={isStreaming}
-						/>
-					)}
+					<div className="flex items-center gap-1.5">
+						{CustomAgentSelector === null ? null : CustomAgentSelector ? (
+							<CustomAgentSelector
+								agentType={agentType}
+								onAgentTypeChange={setAgentType}
+								disabled={isStreaming}
+							/>
+						) : (
+							<AgentSelector
+								agentType={agentType}
+								onAgentTypeChange={setAgentType}
+								disabled={isStreaming}
+							/>
+						)}
+						{CustomModeSelector === null ? null : CustomModeSelector ? (
+							<CustomModeSelector
+								mode={mode}
+								onModeChange={setMode}
+								disabled={isStreaming}
+							/>
+						) : (
+							<ModeSelector
+								mode={mode}
+								onModeChange={setMode}
+								disabled={isStreaming}
+							/>
+						)}
+					</div>
 					<LinkedWorkButton
 						sessionId={sessionId}
 						onOpenWorkDetail={onOpenWorkDetail}

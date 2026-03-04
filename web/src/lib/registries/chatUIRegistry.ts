@@ -19,6 +19,12 @@ export interface ModeSelectorProps {
 	disabled?: boolean;
 }
 
+export interface AgentSelectorProps {
+	agentType: "claude" | "codex";
+	onAgentTypeChange: (type: "claude" | "codex") => Promise<void>;
+	disabled?: boolean;
+}
+
 export interface StopButtonProps {
 	onStop: () => void;
 }
@@ -46,6 +52,9 @@ export interface ChatUIConfig {
 
 	/** Custom ModeSelector component (set to null to hide) */
 	ModeSelector?: ComponentType<ModeSelectorProps> | null;
+
+	/** Custom AgentSelector component (set to null to hide) */
+	AgentSelector?: ComponentType<AgentSelectorProps> | null;
 
 	/** Custom StopButton component (set to null to hide) */
 	StopButton?: ComponentType<StopButtonProps> | null;

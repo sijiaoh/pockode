@@ -18,6 +18,7 @@ import type {
 	SessionMode,
 	UserMessage,
 } from "../types/message";
+import type { AgentType } from "../types/settings";
 import { generateUUID } from "../utils/uuid";
 
 export type { ConnectionStatus } from "../lib/wsStore";
@@ -32,12 +33,14 @@ interface UseChatMessagesReturn {
 	isStreaming: boolean;
 	isProcessRunning: boolean;
 	mode: SessionMode;
+	agentType: AgentType;
 	status: ConnectionStatus;
 	sendUserMessage: (content: string) => Promise<boolean>;
 	interrupt: () => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
 	questionResponse: (params: QuestionResponseParams) => Promise<void>;
 	setMode: (mode: SessionMode) => Promise<void>;
+	setAgentType: (agentType: AgentType) => Promise<void>;
 	updatePermissionStatus: (
 		requestId: string,
 		status: "allowed" | "denied",
@@ -60,6 +63,7 @@ export function useChatMessages({
 	const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 	const [isProcessRunning, setIsProcessRunning] = useState(false);
 	const [mode, setModeState] = useState<SessionMode>("default");
+	const [agentType, setAgentTypeState] = useState<AgentType>("claude");
 	const subscriptionIdRef = useRef<string | null>(null);
 
 	const status = useWSStore((state) => state.status);
@@ -75,6 +79,16 @@ export function useChatMessages({
 		}
 	}, [sessionModeFromStore]);
 
+	// Sync agentType from session store (updated via session list notifications)
+	const sessionAgentTypeFromStore = useSessionStore(
+		(state) => state.sessions.find((s) => s.id === sessionId)?.agent_type,
+	);
+	useEffect(() => {
+		if (sessionAgentTypeFromStore !== undefined) {
+			setAgentTypeState(sessionAgentTypeFromStore);
+		}
+	}, [sessionAgentTypeFromStore]);
+
 	const handleNotification = useCallback((notification: ServerNotification) => {
 		setIsProcessRunning(notification.type !== "process_ended");
 
@@ -89,6 +103,7 @@ export function useChatMessages({
 		setIsLoadingHistory(true);
 		setIsProcessRunning(false);
 		setModeState("default");
+		setAgentTypeState("claude");
 	}, [sessionId]);
 
 	// Subscribe to chat events when connected.
@@ -116,6 +131,7 @@ export function useChatMessages({
 				if (result.initial) {
 					setIsProcessRunning(result.initial.state !== "ended");
 					setModeState(result.initial.mode);
+					setAgentTypeState(result.initial.agent_type);
 					setMessages(replayHistory(result.initial.history));
 				}
 			} catch (err) {
@@ -232,12 +248,26 @@ export function useChatMessages({
 		[actions, sessionId],
 	);
 
+	const setAgentType = useCallback(
+		async (newAgentType: AgentType) => {
+			try {
+				await actions.setSessionAgentType(sessionId, newAgentType);
+				setAgentTypeState(newAgentType);
+			} catch (error) {
+				console.error("Failed to set agent type:", error);
+				throw error;
+			}
+		},
+		[actions, sessionId],
+	);
+
 	return {
 		messages,
 		isLoadingHistory,
 		isStreaming,
 		isProcessRunning,
 		mode,
+		agentType,
 		status,
 		sendUserMessage: sendUserMessageHandler,
 		interrupt: useCallback(
@@ -247,6 +277,7 @@ export function useChatMessages({
 		permissionResponse: actions.permissionResponse,
 		questionResponse: actions.questionResponse,
 		setMode,
+		setAgentType,
 		updatePermissionStatus,
 		updateQuestionStatus,
 	};
