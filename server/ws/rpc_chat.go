@@ -43,10 +43,11 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	wt.SessionListWatcher.MarkRead(params.SessionID)
 
 	result := rpc.ChatMessagesSubscribeResult{
-		ID:      id,
-		History: history,
-		State:   wt.ProcessManager.GetProcessState(params.SessionID),
-		Mode:    meta.Mode,
+		ID:        id,
+		History:   history,
+		State:     wt.ProcessManager.GetProcessState(params.SessionID),
+		Mode:      meta.Mode,
+		AgentType: meta.AgentType,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)

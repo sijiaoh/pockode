@@ -213,10 +213,11 @@ type ChatMessagesSubscribeParams struct {
 }
 
 type ChatMessagesSubscribeResult struct {
-	ID      string            `json:"id"`
-	History []json.RawMessage `json:"history"`
-	State   string            `json:"state"` // "idle" | "running" | "ended"
-	Mode    session.Mode      `json:"mode"`
+	ID        string            `json:"id"`
+	History   []json.RawMessage `json:"history"`
+	State     string            `json:"state"` // "idle" | "running" | "ended"
+	Mode      session.Mode      `json:"mode"`
+	AgentType session.AgentType `json:"agent_type"`
 }
 
 type ChatMessagesUnsubscribeParams struct {
