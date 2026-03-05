@@ -30,9 +30,9 @@ export interface ToolCall {
 	result?: string;
 }
 
-export type PermissionStatus = "pending" | "allowed" | "denied";
+export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
 
-export type QuestionStatus = "pending" | "answered" | "cancelled";
+export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired";
 
 export type ContentPart =
 	| { type: "text"; content: string }

@@ -349,6 +349,7 @@ function PermissionRequestItem({
 		pending: { Icon: CircleHelp, color: "text-th-warning" },
 		allowed: { Icon: Check, color: "text-th-success" },
 		denied: { Icon: X, color: "text-th-error" },
+		expired: { Icon: X, color: "text-th-text-muted" },
 	};
 
 	const { Icon, color } = statusConfig[status];

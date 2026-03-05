@@ -629,6 +629,142 @@ describe("messageReducer", () => {
 			expect(messages[0]).toBe(initial);
 		});
 
+		it("expires pending permission_request on process_ended", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "permission_request",
+						request: {
+							requestId: "req-1",
+							toolName: "Bash",
+							toolInput: { command: "ls" },
+							toolUseId: "tool-1",
+						},
+						status: "pending",
+					},
+				],
+				status: "streaming",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], { type: "process_ended" });
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "permission_request",
+				status: "expired",
+			});
+		});
+
+		it("expires pending ask_user_question on process_ended", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "ask_user_question",
+						request: {
+							requestId: "q-1",
+							toolUseId: "toolu_q_1",
+							questions: sampleQuestions,
+						},
+						status: "pending",
+					},
+				],
+				status: "streaming",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], { type: "process_ended" });
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "expired",
+			});
+		});
+
+		it("does not expire already-resolved dialogs on process_ended", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "permission_request",
+						request: {
+							requestId: "req-1",
+							toolName: "Bash",
+							toolInput: { command: "ls" },
+							toolUseId: "tool-1",
+						},
+						status: "allowed",
+					},
+					{
+						type: "ask_user_question",
+						request: {
+							requestId: "q-1",
+							toolUseId: "toolu_q_1",
+							questions: sampleQuestions,
+						},
+						status: "answered",
+						answers: { "Which library?": "React" },
+					},
+				],
+				status: "streaming",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], { type: "process_ended" });
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "permission_request",
+				status: "allowed",
+			});
+			expect(assistant.parts[1]).toMatchObject({
+				type: "ask_user_question",
+				status: "answered",
+			});
+		});
+
+		it("expires pending dialogs on orphan process_ended (after interrupted)", () => {
+			const interrupted: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "permission_request",
+						request: {
+							requestId: "req-1",
+							toolName: "Bash",
+							toolInput: { command: "ls" },
+							toolUseId: "tool-1",
+						},
+						status: "pending",
+					},
+					{
+						type: "ask_user_question",
+						request: {
+							requestId: "q-1",
+							toolUseId: "toolu_q_1",
+							questions: sampleQuestions,
+						},
+						status: "pending",
+					},
+				],
+				status: "interrupted",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([interrupted], {
+				type: "process_ended",
+			});
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "permission_request",
+				status: "expired",
+			});
+			expect(assistant.parts[1]).toMatchObject({
+				type: "ask_user_question",
+				status: "expired",
+			});
+		});
+
 		it.each([
 			{ type: "interrupted" as const },
 			{ type: "process_ended" as const },
@@ -1040,6 +1176,36 @@ describe("messageReducer", () => {
 			expect(assistant.parts[0]).toMatchObject({
 				type: "ask_user_question",
 				status: "pending",
+			});
+		});
+
+		it("expires pending dialogs on process_ended during replay", () => {
+			const history = [
+				{ type: "message", content: "Do something" },
+				{
+					type: "permission_request",
+					request_id: "req-1",
+					tool_name: "Bash",
+					tool_input: { command: "ls" },
+					tool_use_id: "tool-1",
+				},
+				{
+					type: "ask_user_question",
+					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
+					questions: sampleQuestions,
+				},
+				{ type: "process_ended" },
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "permission_request",
+				status: "expired",
+			});
+			expect(assistant.parts[1]).toMatchObject({
+				type: "ask_user_question",
+				status: "expired",
 			});
 		});
 	});
