@@ -370,7 +370,7 @@ export function applyServerEvent(
 	return updated;
 }
 
-function expirePendingDialogs(messages: Message[]): Message[] {
+export function expirePendingDialogs(messages: Message[]): Message[] {
 	let anyChanged = false;
 	const updated = messages.map((msg) => {
 		if (msg.role !== "assistant") return msg;

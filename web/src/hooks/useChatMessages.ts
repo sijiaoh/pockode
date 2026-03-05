@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	applyServerEvent,
+	expirePendingDialogs,
 	normalizeEvent,
 	replayHistory,
 	updatePermissionRequestStatus,
@@ -132,7 +133,14 @@ export function useChatMessages({
 					setIsProcessRunning(result.initial.state !== "ended");
 					setModeState(result.initial.mode);
 					setAgentTypeState(result.initial.agent_type);
-					setMessages(replayHistory(result.initial.history));
+					let messages = replayHistory(result.initial.history);
+					// After server restart, history won't contain process_ended events
+					// for processes that were killed. Use the authoritative process state
+					// to expire any orphaned pending dialogs.
+					if (result.initial.state === "ended") {
+						messages = expirePendingDialogs(messages);
+					}
+					setMessages(messages);
 				}
 			} catch (err) {
 				console.error("Failed to subscribe to chat messages:", err);

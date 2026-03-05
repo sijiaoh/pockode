@@ -4,6 +4,7 @@ import {
 	applyEventToParts,
 	applyServerEvent,
 	applyUserMessage,
+	expirePendingDialogs,
 	normalizeEvent,
 	replayHistory,
 } from "./messageReducer";
@@ -1176,6 +1177,42 @@ describe("messageReducer", () => {
 			expect(assistant.parts[0]).toMatchObject({
 				type: "ask_user_question",
 				status: "pending",
+			});
+		});
+
+		it("expires pending dialogs via expirePendingDialogs when history lacks process_ended (server restart)", () => {
+			const history = [
+				{ type: "message", content: "Do something" },
+				{
+					type: "permission_request",
+					request_id: "req-1",
+					tool_name: "Bash",
+					tool_input: { command: "ls" },
+					tool_use_id: "tool-1",
+				},
+				{
+					type: "ask_user_question",
+					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
+					questions: sampleQuestions,
+				},
+			];
+			// Simulate: replay returns pending dialogs (no process_ended in history)
+			let messages = replayHistory(history);
+			expect((messages[1] as AssistantMessage).parts[0]).toMatchObject({
+				type: "permission_request",
+				status: "pending",
+			});
+			// Then expirePendingDialogs is called because process state is "ended"
+			messages = expirePendingDialogs(messages);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "permission_request",
+				status: "expired",
+			});
+			expect(assistant.parts[1]).toMatchObject({
+				type: "ask_user_question",
+				status: "expired",
 			});
 		});
 
