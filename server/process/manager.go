@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pockode/server/agent"
@@ -61,6 +62,10 @@ type Process struct {
 	mu         sync.Mutex
 	lastActive time.Time
 	state      ProcessState
+	// closed is set when the process is explicitly terminated (Close/Shutdown/reap).
+	// Prevents stale buffered events from emitting state changes (e.g. running/idle)
+	// that would incorrectly interact with the AutoResumer.
+	closed atomic.Bool
 }
 
 // NewManager creates a new manager with the given idle timeout.
@@ -252,6 +257,7 @@ func (m *Manager) removeWhere(predicate func(*Process) bool) []*Process {
 // Close terminates a specific process.
 func (m *Manager) Close(sessionID string) {
 	if proc := m.remove(sessionID); proc != nil {
+		proc.closed.Store(true)
 		proc.agentSession.Close()
 		slog.Info("process closed", "sessionId", sessionID)
 	}
@@ -262,6 +268,7 @@ func (m *Manager) Shutdown() {
 	m.cancel()
 	procs := m.removeWhere(func(*Process) bool { return true })
 	for _, p := range procs {
+		p.closed.Store(true)
 		p.agentSession.Close()
 	}
 	slog.Info("manager shutdown complete", "processesClosed", len(procs))
@@ -293,8 +300,10 @@ func (m *Manager) reapIdle() {
 		return now.Sub(p.getLastActive()) > m.idleTimeout
 	})
 	for _, proc := range procs {
+		proc.closed.Store(true)
 		proc.agentSession.Close()
-		m.emitStateChange(proc.sessionID, ProcessStateEnded, false)
+		// ProcessStateEnded is emitted by the streamEvents goroutine's defer
+		// when the events channel closes — no need to emit here.
 		slog.Info("idle process reaped", "sessionId", proc.sessionID)
 	}
 }
@@ -348,7 +357,7 @@ func (p *Process) setState(state ProcessState) {
 
 // SetRunning transitions the process to running state and notifies subscribers.
 func (p *Process) SetRunning() {
-	if p.State() == ProcessStateRunning {
+	if p.closed.Load() || p.State() == ProcessStateRunning {
 		return
 	}
 	p.setState(ProcessStateRunning)
@@ -367,7 +376,7 @@ func (p *Process) SetIdleInterrupted() {
 }
 
 func (p *Process) setIdle(needsInput, interrupted bool) {
-	if p.State() == ProcessStateIdle {
+	if p.closed.Load() || p.State() == ProcessStateIdle {
 		return
 	}
 	p.setState(ProcessStateIdle)

@@ -392,6 +392,43 @@ type discardWriteCloser struct{}
 func (d *discardWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (d *discardWriteCloser) Close() error                { return nil }
 
+func TestTurnAborted_DoesNotSetInterruptedFlag(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	// Simulate: turn_aborted arrives but interrupted flag is false
+	// (e.g., late turn_aborted from a previous turn after a new turn started).
+	sess.interrupted.Store(false)
+
+	raw := json.RawMessage(`{"type": "turn_aborted"}`)
+	sess.processCodexMsg(raw)
+
+	if sess.interrupted.Load() {
+		t.Error("turn_aborted should not set the interrupted flag (race with next turn)")
+	}
+}
+
+func TestLateTurnAborted_DoesNotCorruptNextTurn(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stdin = &discardWriteCloser{}
+
+	// Simulate a new turn starting (clears the flag).
+	err := sess.callToolAsync("codex-reply", map[string]interface{}{"prompt": "next"})
+	if err != nil {
+		t.Fatalf("callToolAsync error: %v", err)
+	}
+
+	// Simulate a late turn_aborted from the previous turn arriving.
+	raw := json.RawMessage(`{"type": "turn_aborted"}`)
+	sess.processCodexMsg(raw)
+
+	// The flag must still be false — a late turn_aborted must not corrupt the new turn.
+	if sess.interrupted.Load() {
+		t.Error("late turn_aborted should not set interrupted for the new turn")
+	}
+}
+
 // --- Fix 3: resume state ---
 
 func TestResumeState_SaveAndLoad(t *testing.T) {
@@ -482,11 +519,11 @@ func TestHandleElicitation_PatchApply(t *testing.T) {
 	defer sess.cancel()
 
 	params := map[string]interface{}{
-		"message":               "Apply patch?",
-		"codex_elicitation":     "patch_apply",
-		"codex_call_id":         "call-edit-1",
-		"codex_command":         map[string]interface{}{"src/main.go": "diff content"},
-		"codex_cwd":             "/tmp",
+		"message":                "Apply patch?",
+		"codex_elicitation":      "patch_apply",
+		"codex_call_id":          "call-edit-1",
+		"codex_command":          map[string]interface{}{"src/main.go": "diff content"},
+		"codex_cwd":              "/tmp",
 		"codex_mcp_tool_call_id": "toolu-edit-1",
 	}
 	paramsJSON, _ := json.Marshal(params)
@@ -533,11 +570,11 @@ func TestHandleElicitation_ExecCommand(t *testing.T) {
 	defer sess.cancel()
 
 	params := map[string]interface{}{
-		"message":               "Run command?",
-		"codex_elicitation":     "exec_command",
-		"codex_call_id":         "call-bash-1",
-		"codex_command":         "ls -la",
-		"codex_cwd":             "/home/user",
+		"message":                "Run command?",
+		"codex_elicitation":      "exec_command",
+		"codex_call_id":          "call-bash-1",
+		"codex_command":          "ls -la",
+		"codex_cwd":              "/home/user",
 		"codex_mcp_tool_call_id": "toolu-bash-1",
 	}
 	paramsJSON, _ := json.Marshal(params)

@@ -713,9 +713,10 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 		// Informational; the actual DoneEvent is sent when the RPC result arrives.
 
 	case "turn_aborted":
-		// Mark as interrupted so the callToolAsync goroutine emits InterruptedEvent
-		// instead of DoneEvent when the RPC response arrives.
-		s.interrupted.Store(true)
+		// Informational only. SendInterrupt already sets the interrupted flag;
+		// setting it here would race with the next turn's callToolAsync (which
+		// clears the flag) if this event arrives late.
+		s.log.Info("codex turn aborted")
 
 	default:
 		s.log.Debug("unhandled codex event type", "type", codexMsg.Type)

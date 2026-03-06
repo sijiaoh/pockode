@@ -295,6 +295,43 @@ func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
 	}
 }
 
+func TestProcess_ClosedFlagSuppressesStateChanges(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, 10*time.Minute)
+	defer m.Shutdown()
+
+	var mu sync.Mutex
+	var events []StateChangeEvent
+	m.SetOnStateChange(func(e StateChangeEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	})
+
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+
+	// Close sets the closed flag, preventing further state changes.
+	m.Close("sess-1")
+
+	// Wait for the streamEvents goroutine to exit.
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	events = nil // clear initial idle + ended
+	mu.Unlock()
+
+	// After Close, SetRunning and SetIdle must be no-ops.
+	proc.SetRunning()
+	proc.SetIdle(false)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 0 {
+		t.Errorf("expected no state changes after Close, got %v", events)
+	}
+}
+
 func TestProcess_SetRunning_EmitsStateChange(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
