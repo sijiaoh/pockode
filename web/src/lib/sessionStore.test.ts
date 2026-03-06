@@ -8,6 +8,7 @@ const mockSession = (id: string, title = "Test"): SessionListItem => ({
 	created_at: "2024-01-01T00:00:00Z",
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default",
+	agent_type: "codex",
 	state: "ended",
 	needs_input: false,
 	unread: false,
