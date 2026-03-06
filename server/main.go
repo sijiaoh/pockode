@@ -257,7 +257,7 @@ func main() {
 	}
 
 	// Initialize process manager with idle timeout
-	idleTimeout := 10 * time.Minute
+	idleTimeout := 8 * time.Hour
 	if env := os.Getenv("IDLE_TIMEOUT"); env != "" {
 		if d, err := time.ParseDuration(env); err == nil {
 			idleTimeout = d
