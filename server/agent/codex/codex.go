@@ -113,7 +113,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 		stderrCh := agent.ReadStderr(stderr, "codex")
 		sess.runMCPLoop(procCtx, stdout)
-		sess.cleanupPendingRequests()
+		sess.cleanupPendingElicitations()
 		agent.WaitForProcess(procCtx, log, cmd, stderrCh, events)
 
 		select {
@@ -214,6 +214,11 @@ func (s *mcpSession) SendInterrupt() error {
 	s.log.Info("sending interrupt (cancel notification)")
 	s.interrupted.Store(true)
 
+	// Resolve pending elicitations FIRST so RequestCancelledEvent is enqueued
+	// before InterruptedEvent (which is emitted when callToolAsync receives
+	// the synthetic RPC response below).
+	s.cleanupPendingElicitations()
+
 	// Send MCP cancellation for pending requests.
 	s.pendingRPCResults.Range(func(key, value any) bool {
 		id := key.(int64)
@@ -231,16 +236,6 @@ func (s *mcpSession) SendInterrupt() error {
 		ch := value.(chan *rpcResponse)
 		select {
 		case ch <- &rpcResponse{Error: &rpcError{Code: -32800, Message: "cancelled"}}:
-		default:
-		}
-		return true
-	})
-
-	// Resolve any pending elicitation requests.
-	s.pendingElicit.Range(func(key, value any) bool {
-		ch := value.(chan elicitAnswer)
-		select {
-		case ch <- elicitAnswer{decision: "denied"}:
 		default:
 		}
 		return true
@@ -926,10 +921,10 @@ func firstNonEmpty(values ...string) string {
 
 // --- Lifecycle helpers ---
 
-// cleanupPendingRequests resolves pending elicitations when the process terminates.
-// Called after runMCPLoop exits (stdout closed) to ensure the client receives
-// RequestCancelledEvent for any in-flight permission dialogs.
-func (s *mcpSession) cleanupPendingRequests() {
+// cleanupPendingElicitations resolves all pending elicitations by denying them
+// and emitting RequestCancelledEvent for each. Called during interrupt and
+// after process exit (as a safety net for in-flight permission dialogs).
+func (s *mcpSession) cleanupPendingElicitations() {
 	s.pendingElicit.Range(func(key, value any) bool {
 		requestID := key.(string)
 		ch := value.(chan elicitAnswer)

@@ -446,7 +446,7 @@ describe("messageReducer", () => {
 			});
 		});
 
-		it("updates permission_request status to denied on request_cancelled", () => {
+		it("updates permission_request status to expired on request_cancelled", () => {
 			const initial: AssistantMessage = {
 				id: "msg-1",
 				role: "assistant",
@@ -472,11 +472,11 @@ describe("messageReducer", () => {
 			const assistant = messages[0] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
 				type: "permission_request",
-				status: "denied",
+				status: "expired",
 			});
 		});
 
-		it("updates ask_user_question status to cancelled on request_cancelled", () => {
+		it("updates ask_user_question status to expired on request_cancelled", () => {
 			const initial: AssistantMessage = {
 				id: "msg-1",
 				role: "assistant",
@@ -501,7 +501,7 @@ describe("messageReducer", () => {
 			const assistant = messages[0] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
 				type: "ask_user_question",
-				status: "cancelled",
+				status: "expired",
 			});
 		});
 
@@ -535,6 +535,59 @@ describe("messageReducer", () => {
 				status: "pending",
 			});
 			// Verify same object reference (no unnecessary copy)
+			expect(messages[0]).toBe(initial);
+		});
+
+		it("ignores late permission_response on already-expired permission", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "permission_request",
+						request: {
+							requestId: "req-1",
+							toolName: "Bash",
+							toolInput: { command: "ls" },
+							toolUseId: "tool-1",
+						},
+						status: "expired",
+					},
+				],
+				status: "interrupted",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], {
+				type: "permission_response",
+				requestId: "req-1",
+				choice: "allow",
+			});
+			expect(messages[0]).toBe(initial);
+		});
+
+		it("ignores late question_response on already-expired question", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "ask_user_question",
+						request: {
+							requestId: "q-1",
+							toolUseId: "toolu_q_1",
+							questions: sampleQuestions,
+						},
+						status: "expired",
+					},
+				],
+				status: "interrupted",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], {
+				type: "question_response",
+				requestId: "q-1",
+				answers: { "Which library?": "React" },
+			});
 			expect(messages[0]).toBe(initial);
 		});
 

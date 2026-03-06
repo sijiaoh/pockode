@@ -288,9 +288,9 @@ func TestProcessCodexMsg_MCPToolCallEnd_MultipleContent(t *testing.T) {
 	}
 }
 
-// --- Fix 1: cleanupPendingRequests ---
+// --- Fix 1: cleanupPendingElicitations ---
 
-func TestCleanupPendingRequests_EmitsRequestCancelled(t *testing.T) {
+func TestCleanupPendingElicitations_EmitsRequestCancelled(t *testing.T) {
 	sess := newTestSession()
 	defer sess.cancel()
 
@@ -298,7 +298,7 @@ func TestCleanupPendingRequests_EmitsRequestCancelled(t *testing.T) {
 	ch := make(chan elicitAnswer, 1)
 	sess.pendingElicit.Store("req-1", ch)
 
-	sess.cleanupPendingRequests()
+	sess.cleanupPendingElicitations()
 
 	// The elicitation channel should receive a denial.
 	select {
@@ -324,7 +324,7 @@ func TestCleanupPendingRequests_EmitsRequestCancelled(t *testing.T) {
 	}
 }
 
-func TestCleanupPendingRequests_MultipleElicitations(t *testing.T) {
+func TestCleanupPendingElicitations_Multiple(t *testing.T) {
 	sess := newTestSession()
 	defer sess.cancel()
 
@@ -333,7 +333,7 @@ func TestCleanupPendingRequests_MultipleElicitations(t *testing.T) {
 	sess.pendingElicit.Store("req-a", ch1)
 	sess.pendingElicit.Store("req-b", ch2)
 
-	sess.cleanupPendingRequests()
+	sess.cleanupPendingElicitations()
 
 	events := drainEvents(sess.events)
 	if len(events) != 2 {
@@ -353,11 +353,11 @@ func TestCleanupPendingRequests_MultipleElicitations(t *testing.T) {
 	}
 }
 
-func TestCleanupPendingRequests_NoPendingIsNoop(t *testing.T) {
+func TestCleanupPendingElicitations_NoPendingIsNoop(t *testing.T) {
 	sess := newTestSession()
 	defer sess.cancel()
 
-	sess.cleanupPendingRequests()
+	sess.cleanupPendingElicitations()
 
 	events := drainEvents(sess.events)
 	if len(events) != 0 {
