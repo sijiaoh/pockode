@@ -625,17 +625,10 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 			s.log.Warn("failed to parse patch_apply_begin", "error", err)
 			return
 		}
-		inputMap := map[string]interface{}{
-			"changes": ev.Changes,
-		}
-		if fp := extractFilePath(ev.Changes); fp != "" {
-			inputMap["file_path"] = fp
-		}
-		input, _ := json.Marshal(inputMap)
 		s.emitEvent(agent.ToolCallEvent{
 			ToolUseID: ev.CallID,
 			ToolName:  "Edit",
-			ToolInput: input,
+			ToolInput: buildEditInput(ev.Changes),
 		})
 
 	case "patch_apply_end":
@@ -763,13 +756,21 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 		requestID = fmt.Sprintf("elicit-%d", *msg.ID)
 	}
 
-	// Build tool input for the permission request event.
-	command := normalizeCommand(params.CodexCommand)
-	inputMap := map[string]interface{}{
-		"command": command,
-		"cwd":     params.CodexCwd,
+	// Route based on elicitation type.
+	toolName := "Bash"
+	var toolInput json.RawMessage
+	switch params.CodexElicitation {
+	case "patch_apply":
+		toolName = "Edit"
+		toolInput = buildEditInput(params.CodexCommand)
+	default:
+		command := normalizeCommand(params.CodexCommand)
+		inputMap := map[string]interface{}{
+			"command": command,
+			"cwd":     params.CodexCwd,
+		}
+		toolInput, _ = json.Marshal(inputMap)
 	}
-	toolInput, _ := json.Marshal(inputMap)
 
 	ch := make(chan elicitAnswer, 1)
 	s.pendingElicit.Store(requestID, ch)
@@ -777,7 +778,7 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 	// Emit permission request event.
 	s.emitEvent(agent.PermissionRequestEvent{
 		RequestID: requestID,
-		ToolName:  "Bash",
+		ToolName:  toolName,
 		ToolInput: toolInput,
 		ToolUseID: params.CodexMCPToolCallID,
 	})
@@ -1009,6 +1010,19 @@ func normalizeCommand(raw json.RawMessage) string {
 		return strings.Join(arr, " ")
 	}
 	return ""
+}
+
+// buildEditInput builds the ToolInput JSON for an Edit permission/tool-call event.
+// Used by both patch_apply_begin notifications and patch_apply elicitations.
+func buildEditInput(changes json.RawMessage) json.RawMessage {
+	inputMap := map[string]interface{}{
+		"changes": changes,
+	}
+	if fp := extractFilePath(changes); fp != "" {
+		inputMap["file_path"] = fp
+	}
+	data, _ := json.Marshal(inputMap)
+	return data
 }
 
 // extractFilePath extracts the file path from a Codex patch changes object.

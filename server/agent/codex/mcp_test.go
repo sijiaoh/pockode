@@ -473,3 +473,106 @@ func TestResumeState_LoadMissingFileIsNoop(t *testing.T) {
 		t.Errorf("sessionID should be empty, got %q", sess.sessionID)
 	}
 }
+
+// --- handleElicitation routing ---
+
+func TestHandleElicitation_PatchApply(t *testing.T) {
+	sess := newTestSession()
+	sess.stdin = &discardWriteCloser{}
+	defer sess.cancel()
+
+	params := map[string]interface{}{
+		"message":               "Apply patch?",
+		"codex_elicitation":     "patch_apply",
+		"codex_call_id":         "call-edit-1",
+		"codex_command":         map[string]interface{}{"src/main.go": "diff content"},
+		"codex_cwd":             "/tmp",
+		"codex_mcp_tool_call_id": "toolu-edit-1",
+	}
+	paramsJSON, _ := json.Marshal(params)
+	msgID := int64(1)
+	msg := rpcMessage{
+		ID:     &msgID,
+		Method: "elicitation/create",
+		Params: paramsJSON,
+	}
+
+	go sess.handleElicitation(sess.procCtx, msg)
+
+	// Wait for the permission request event (goroutine unblocks via deferred cancel).
+	ev := <-sess.events
+	perm, ok := ev.(agent.PermissionRequestEvent)
+	if !ok {
+		t.Fatalf("expected PermissionRequestEvent, got %T", ev)
+	}
+	if perm.ToolName != "Edit" {
+		t.Errorf("ToolName = %q, want %q", perm.ToolName, "Edit")
+	}
+	if perm.RequestID != "call-edit-1" {
+		t.Errorf("RequestID = %q, want %q", perm.RequestID, "call-edit-1")
+	}
+	if perm.ToolUseID != "toolu-edit-1" {
+		t.Errorf("ToolUseID = %q, want %q", perm.ToolUseID, "toolu-edit-1")
+	}
+
+	var input map[string]interface{}
+	if err := json.Unmarshal(perm.ToolInput, &input); err != nil {
+		t.Fatalf("failed to unmarshal ToolInput: %v", err)
+	}
+	if input["file_path"] != "src/main.go" {
+		t.Errorf("file_path = %v, want %q", input["file_path"], "src/main.go")
+	}
+	if input["changes"] == nil {
+		t.Error("expected changes in ToolInput")
+	}
+}
+
+func TestHandleElicitation_ExecCommand(t *testing.T) {
+	sess := newTestSession()
+	sess.stdin = &discardWriteCloser{}
+	defer sess.cancel()
+
+	params := map[string]interface{}{
+		"message":               "Run command?",
+		"codex_elicitation":     "exec_command",
+		"codex_call_id":         "call-bash-1",
+		"codex_command":         "ls -la",
+		"codex_cwd":             "/home/user",
+		"codex_mcp_tool_call_id": "toolu-bash-1",
+	}
+	paramsJSON, _ := json.Marshal(params)
+	msgID := int64(2)
+	msg := rpcMessage{
+		ID:     &msgID,
+		Method: "elicitation/create",
+		Params: paramsJSON,
+	}
+
+	go sess.handleElicitation(sess.procCtx, msg)
+
+	ev := <-sess.events
+	perm, ok := ev.(agent.PermissionRequestEvent)
+	if !ok {
+		t.Fatalf("expected PermissionRequestEvent, got %T", ev)
+	}
+	if perm.ToolName != "Bash" {
+		t.Errorf("ToolName = %q, want %q", perm.ToolName, "Bash")
+	}
+	if perm.RequestID != "call-bash-1" {
+		t.Errorf("RequestID = %q, want %q", perm.RequestID, "call-bash-1")
+	}
+	if perm.ToolUseID != "toolu-bash-1" {
+		t.Errorf("ToolUseID = %q, want %q", perm.ToolUseID, "toolu-bash-1")
+	}
+
+	var input map[string]interface{}
+	if err := json.Unmarshal(perm.ToolInput, &input); err != nil {
+		t.Fatalf("failed to unmarshal ToolInput: %v", err)
+	}
+	if input["command"] != "ls -la" {
+		t.Errorf("command = %v, want %q", input["command"], "ls -la")
+	}
+	if input["cwd"] != "/home/user" {
+		t.Errorf("cwd = %v, want %q", input["cwd"], "/home/user")
+	}
+}
