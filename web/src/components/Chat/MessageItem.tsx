@@ -255,6 +255,7 @@ type PermissionChoice = "deny" | "allow" | "always_allow";
 interface PermissionRequestItemProps {
 	request: PermissionRequest;
 	status: PermissionStatus;
+	isCodex?: boolean;
 	onRespond?: (request: PermissionRequest, choice: PermissionChoice) => void;
 }
 
@@ -320,6 +321,7 @@ function hasRules(
 function PermissionRequestItem({
 	request,
 	status,
+	isCodex,
 	onRespond,
 }: PermissionRequestItemProps) {
 	const isPending = status === "pending";
@@ -415,16 +417,17 @@ function PermissionRequestItem({
 					>
 						Deny
 					</button>
-					{request.permissionSuggestions &&
-						request.permissionSuggestions.length > 0 && (
-							<button
-								type="button"
-								onClick={() => onRespond(request, "always_allow")}
-								className="rounded bg-th-success/20 px-2 py-1 text-th-success hover:bg-th-success/30"
-							>
-								Always Allow
-							</button>
-						)}
+					{(isCodex ||
+						(request.permissionSuggestions &&
+							request.permissionSuggestions.length > 0)) && (
+						<button
+							type="button"
+							onClick={() => onRespond(request, "always_allow")}
+							className="rounded bg-th-success/20 px-2 py-1 text-th-success hover:bg-th-success/30"
+						>
+							Always Allow
+						</button>
+					)}
 					<button
 						type="button"
 						onClick={() => onRespond(request, "allow")}
@@ -440,6 +443,7 @@ function PermissionRequestItem({
 
 interface ContentPartItemProps {
 	part: ContentPart;
+	isCodex?: boolean;
 	onPermissionRespond?: (
 		request: PermissionRequest,
 		choice: PermissionChoice,
@@ -452,6 +456,7 @@ interface ContentPartItemProps {
 
 function ContentPartItem({
 	part,
+	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
 }: ContentPartItemProps) {
@@ -466,6 +471,7 @@ function ContentPartItem({
 			<PermissionRequestItem
 				request={part.request}
 				status={part.status}
+				isCodex={isCodex}
 				onRespond={onPermissionRespond}
 			/>
 		);
@@ -496,6 +502,7 @@ interface Props {
 	message: Message;
 	isLast?: boolean;
 	isProcessRunning?: boolean;
+	isCodex?: boolean;
 	onPermissionRespond?: (
 		request: PermissionRequest,
 		choice: PermissionChoice,
@@ -510,6 +517,7 @@ const MessageItem = memo(function MessageItem({
 	message,
 	isLast,
 	isProcessRunning,
+	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
 }: Props) {
@@ -555,6 +563,7 @@ const MessageItem = memo(function MessageItem({
 								<ContentPartItem
 									key={key}
 									part={part}
+									isCodex={isCodex}
 									onPermissionRespond={onPermissionRespond}
 									onQuestionRespond={onQuestionRespond}
 								/>

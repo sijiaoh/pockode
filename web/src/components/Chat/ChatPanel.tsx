@@ -216,6 +216,7 @@ function ChatPanel({
 					key={sessionId}
 					messages={messages}
 					isProcessRunning={isProcessRunning}
+					isCodex={agentType === "codex"}
 					onPermissionRespond={handlePermissionRespond}
 					onQuestionRespond={handleQuestionRespond}
 					onHintClick={handleSend}
