@@ -70,6 +70,8 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	log.Info("received prompt", "length", len(params.Content))
 
+	wt.SessionListWatcher.ClearNeedsInput(params.SessionID)
+
 	if err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier()); err != nil {
 		h.replyErrorForChat(ctx, conn, req.ID, err)
 		return
@@ -118,6 +120,8 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 	}
 	choice := parsePermissionChoice(params.Choice)
 
+	wt.SessionListWatcher.ClearNeedsInput(params.SessionID)
+
 	if err := wt.ChatClient.SendPermissionResponse(ctx, params.SessionID, data, choice); err != nil {
 		h.replyErrorForChat(ctx, conn, req.ID, err)
 		return
@@ -143,6 +147,8 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 		RequestID: params.RequestID,
 		ToolUseID: params.ToolUseID,
 	}
+
+	wt.SessionListWatcher.ClearNeedsInput(params.SessionID)
 
 	if err := wt.ChatClient.SendQuestionResponse(ctx, params.SessionID, data, params.Answers); err != nil {
 		h.replyErrorForChat(ctx, conn, req.ID, err)

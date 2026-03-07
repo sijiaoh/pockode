@@ -203,15 +203,8 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 			w.workNeedsInputSyncer.SyncNeedsInput(w.Context(), e.SessionID, true)
 		}
 	case process.ProcessStateRunning:
-		if err := w.store.SetNeedsInput(ctx, e.SessionID, false); err != nil {
-			slog.Warn("failed to clear needs input", "sessionId", e.SessionID, "error", err)
-		}
-		// Always sync: MCP work_needs_input sets work status without the session flag,
-		// so we can't rely on session NeedsInput alone. The syncer's own guard
-		// (work.Status != needs_input → skip) prevents spurious transitions.
-		if w.workNeedsInputSyncer != nil {
-			w.workNeedsInputSyncer.SyncNeedsInput(w.Context(), e.SessionID, false)
-		}
+		// needs_input is NOT cleared here — it is cleared by user events
+		// (message, permission response, question response) via ClearNeedsInput.
 	case process.ProcessStateEnded:
 		if err := w.store.SetNeedsInput(ctx, e.SessionID, false); err != nil {
 			slog.Warn("failed to clear needs input on process end", "sessionId", e.SessionID, "error", err)
@@ -244,6 +237,18 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 			Session:   &item,
 		}
 	})
+}
+
+// ClearNeedsInput clears needs_input on the session and syncs work status.
+// Called when a user event is received (message, permission response, question response).
+func (w *SessionListWatcher) ClearNeedsInput(sessionID string) {
+	ctx := context.Background()
+	if err := w.store.SetNeedsInput(ctx, sessionID, false); err != nil {
+		slog.Warn("failed to clear needs input", "sessionId", sessionID, "error", err)
+	}
+	if w.workNeedsInputSyncer != nil {
+		w.workNeedsInputSyncer.SyncNeedsInput(ctx, sessionID, false)
+	}
 }
 
 func (w *SessionListWatcher) MarkRead(sessionID string) {
