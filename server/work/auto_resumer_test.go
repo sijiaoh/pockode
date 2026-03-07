@@ -670,6 +670,31 @@ func TestAutoResumer_ProcessEndedNoopWhenWorkDone(t *testing.T) {
 	}
 }
 
+func TestAutoResumer_ProcessEndedNoopWhenWorkDoneNotClosed(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+	startWork(t, store, task.ID)
+
+	// Story done — stays done (not auto-closed) because task is still running
+	doneWork(t, store, story.ID)
+	if getWork(t, store, story.ID).Status != StatusDone {
+		t.Fatal("precondition: story should be done (not closed)")
+	}
+
+	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
+
+	time.Sleep(50 * time.Millisecond)
+
+	w := getWork(t, store, story.ID)
+	if w.Status != StatusDone {
+		t.Errorf("status = %q, want %q (should remain done)", w.Status, StatusDone)
+	}
+}
+
 // --- StopOrphanedWork ---
 
 func TestAutoResumer_StopOrphanedWork(t *testing.T) {
@@ -730,6 +755,35 @@ func TestAutoResumer_StopOrphanedWork_SkipsNonInProgress(t *testing.T) {
 	tk := getWork(t, store, task.ID)
 	if tk.Status != StatusClosed {
 		t.Errorf("task status = %q, want %q (should remain closed)", tk.Status, StatusClosed)
+	}
+}
+
+func TestAutoResumer_StopOrphanedWork_SkipsDone(t *testing.T) {
+	store := newTestStore(t)
+	resumer := NewAutoResumer(store, 3)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	startWorkWithSession(t, store, story.ID, "s1")
+	startWorkWithSession(t, store, task.ID, "s2")
+
+	// Story done — stays done because task is in_progress
+	doneWork(t, store, story.ID)
+	if getWork(t, store, story.ID).Status != StatusDone {
+		t.Fatal("precondition: story should be done")
+	}
+
+	resumer.StopOrphanedWork()
+
+	// Story should remain done (orphan detection only targets in_progress/needs_input)
+	s := getWork(t, store, story.ID)
+	if s.Status != StatusDone {
+		t.Errorf("story status = %q, want %q (done should not be stopped)", s.Status, StatusDone)
+	}
+	// Task was in_progress → should be stopped
+	tk := getWork(t, store, task.ID)
+	if tk.Status != StatusStopped {
+		t.Errorf("task status = %q, want %q (in_progress should be stopped)", tk.Status, StatusStopped)
 	}
 }
 
