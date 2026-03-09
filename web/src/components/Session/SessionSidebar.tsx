@@ -6,9 +6,11 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { useSession } from "../../hooks/useSession";
+import { useSidebarUIConfig } from "../../lib/registries/sidebarUIRegistry";
+import { SidebarContainerContext } from "../../lib/sidebarContainerContext";
 import { FilesTab } from "../Files";
 import { DiffTab } from "../Git";
-import { TabbedSidebar, type TabConfig } from "../Layout";
+import { Sidebar, TabbedSidebar, type TabConfig } from "../Layout";
 import { ProjectTab } from "../Project";
 import { WorktreeSwitcher } from "../Worktree";
 import SessionsTab from "./SessionsTab";
@@ -49,6 +51,7 @@ function SessionSidebar({
 	isDesktop,
 }: Props) {
 	const { hasAnyUnread } = useSession();
+	const { SidebarContent } = useSidebarUIConfig();
 
 	const tabs: TabConfig[] = useMemo(
 		() => [
@@ -96,6 +99,16 @@ function SessionSidebar({
 		},
 		[onSelectFile, isDesktop, onClose],
 	);
+
+	if (SidebarContent) {
+		return (
+			<SidebarContainerContext.Provider value={{ onClose, isDesktop }}>
+				<Sidebar isOpen={isOpen} onClose={onClose} isDesktop={isDesktop}>
+					<SidebarContent />
+				</Sidebar>
+			</SidebarContainerContext.Provider>
+		);
+	}
 
 	return (
 		<TabbedSidebar
