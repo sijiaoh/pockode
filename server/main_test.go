@@ -7,14 +7,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
 	"github.com/pockode/server/ws"
 )
+
+func newAgentRegistry() *agent.Registry {
+	r := agent.NewRegistry()
+	r.Register(session.AgentTypeClaude, claude.New())
+	return r
+}
 
 func TestFindAvailablePort(t *testing.T) {
 	t.Run("returns requested port when available", func(t *testing.T) {
@@ -46,7 +54,7 @@ func TestHealthEndpoint(t *testing.T) {
 	workStore, _ := work.NewFileStore(dataDir)
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute)
+	scopeManager := worktree.NewManager(registry, newAgentRegistry(), dataDir, 10*time.Minute)
 	defer scopeManager.Shutdown()
 
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)
@@ -75,7 +83,7 @@ func TestPingEndpoint(t *testing.T) {
 	workStore, _ := work.NewFileStore(dataDir)
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	scopeManager := worktree.NewManager(registry, claude.New(), dataDir, 10*time.Minute)
+	scopeManager := worktree.NewManager(registry, newAgentRegistry(), dataDir, 10*time.Minute)
 	defer scopeManager.Shutdown()
 
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)

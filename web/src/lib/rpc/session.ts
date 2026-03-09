@@ -3,15 +3,21 @@ import type {
 	SessionDeleteParams,
 	SessionListItem,
 	SessionMode,
+	SessionSetAgentTypeParams,
 	SessionSetModeParams,
 	SessionUpdateTitleParams,
 } from "../../types/message";
+import type { AgentType } from "../../types/settings";
 
 export interface SessionActions {
 	createSession: () => Promise<SessionListItem>;
 	deleteSession: (sessionId: string) => Promise<void>;
 	updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
 	setSessionMode: (sessionId: string, mode: SessionMode) => Promise<void>;
+	setSessionAgentType: (
+		sessionId: string,
+		agentType: AgentType,
+	) => Promise<void>;
 	markSessionRead: (sessionId: string) => Promise<void>;
 }
 
@@ -55,6 +61,16 @@ export function createSessionActions(
 				session_id: sessionId,
 				mode,
 			} as SessionSetModeParams);
+		},
+
+		setSessionAgentType: async (
+			sessionId: string,
+			agentType: AgentType,
+		): Promise<void> => {
+			await requireClient().request("session.set_agent_type", {
+				session_id: sessionId,
+				agent_type: agentType,
+			} as SessionSetAgentTypeParams);
 		},
 
 		markSessionRead: async (sessionId: string): Promise<void> => {

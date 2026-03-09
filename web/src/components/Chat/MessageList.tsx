@@ -20,6 +20,7 @@ const AT_BOTTOM_THRESHOLD = 50;
 interface Props {
 	messages: Message[];
 	isProcessRunning: boolean;
+	isCodex?: boolean;
 	onPermissionRespond?: (
 		request: PermissionRequest,
 		choice: PermissionChoice,
@@ -34,6 +35,7 @@ interface Props {
 function MessageList({
 	messages,
 	isProcessRunning,
+	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
 	onHintClick,
@@ -194,6 +196,7 @@ function MessageList({
 									message={message}
 									isLast={isLast}
 									isProcessRunning={isLast && isProcessRunning}
+									isCodex={isCodex}
 									onPermissionRespond={onPermissionRespond}
 									onQuestionRespond={onQuestionRespond}
 								/>

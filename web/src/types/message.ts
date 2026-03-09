@@ -1,3 +1,5 @@
+import type { AgentType } from "./settings";
+
 export type SessionMode = "default" | "yolo";
 export type ProcessState = "idle" | "running" | "ended";
 
@@ -7,6 +9,7 @@ export interface SessionListItem {
 	created_at: string;
 	updated_at: string;
 	mode: SessionMode;
+	agent_type: AgentType;
 	state: ProcessState;
 	needs_input: boolean;
 	unread: boolean;
@@ -27,9 +30,9 @@ export interface ToolCall {
 	result?: string;
 }
 
-export type PermissionStatus = "pending" | "allowed" | "denied";
+export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
 
-export type QuestionStatus = "pending" | "answered" | "cancelled";
+export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired";
 
 export type ContentPart =
 	| { type: "text"; content: string }
@@ -238,11 +241,17 @@ export interface ChatMessagesSubscribeResult {
 	history: unknown[];
 	state: ProcessState;
 	mode: SessionMode;
+	agent_type: AgentType;
 }
 
 export interface SessionSetModeParams {
 	session_id: string;
 	mode: SessionMode;
+}
+
+export interface SessionSetAgentTypeParams {
+	session_id: string;
+	agent_type: AgentType;
 }
 
 // JSON-RPC 2.0 Notification Params (Server → Client)

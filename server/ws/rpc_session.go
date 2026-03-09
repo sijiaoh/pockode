@@ -14,8 +14,8 @@ import (
 func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
 	sessionID := uuid.Must(uuid.NewV7()).String()
 
-	defaultMode := h.settingsStore.Get().DefaultMode
-	sess, err := wt.SessionStore.Create(ctx, sessionID, defaultMode)
+	s := h.settingsStore.Get()
+	sess, err := wt.SessionStore.Create(ctx, sessionID, s.DefaultAgentType, s.DefaultMode)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to create session")
 		return
@@ -78,6 +78,44 @@ func (h *rpcMethodHandler) handleSessionUpdateTitle(ctx context.Context, conn *j
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		h.log.Error("failed to send session update response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleSessionSetAgentType(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.SessionSetAgentTypeParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if !params.AgentType.IsValid() {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid agent type")
+		return
+	}
+
+	meta, found, err := wt.SessionStore.Get(params.SessionID)
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to get session")
+		return
+	}
+	if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+		return
+	}
+	if meta.Activated {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "cannot change agent type after session has started")
+		return
+	}
+
+	if err := wt.SessionStore.SetAgentType(ctx, params.SessionID, params.AgentType); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to set agent type")
+		return
+	}
+
+	h.log.Info("session agent type changed", "sessionId", params.SessionID, "agentType", params.AgentType)
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send session set agent type response", "error", err)
 	}
 }
 

@@ -18,10 +18,11 @@ type Store interface {
 	Get(sessionID string) (SessionMeta, bool, error)
 
 	// Session metadata (with I/O)
-	Create(ctx context.Context, sessionID string, mode Mode) (SessionMeta, error)
+	Create(ctx context.Context, sessionID string, agentType AgentType, mode Mode) (SessionMeta, error)
 	Delete(ctx context.Context, sessionID string) error
 	Update(ctx context.Context, sessionID string, title string) error
 	Activate(ctx context.Context, sessionID string) error
+	SetAgentType(ctx context.Context, sessionID string, agentType AgentType) error
 	SetMode(ctx context.Context, sessionID string, mode Mode) error
 	SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error
 	SetUnread(ctx context.Context, sessionID string, unread bool) error
@@ -85,8 +86,11 @@ func (s *FileStore) readIndexFromDisk() (indexData, error) {
 		return indexData{}, err
 	}
 
-	// Migrate: ensure all sessions have a valid mode
+	// Migrate: ensure all sessions have valid defaults
 	for i := range idx.Sessions {
+		if idx.Sessions[i].AgentType == "" {
+			idx.Sessions[i].AgentType = AgentTypeClaude
+		}
 		if idx.Sessions[i].Mode == "" {
 			idx.Sessions[i].Mode = ModeDefault
 		}
@@ -142,11 +146,14 @@ func (s *FileStore) Get(sessionID string) (SessionMeta, bool, error) {
 	return SessionMeta{}, false, nil
 }
 
-func (s *FileStore) Create(ctx context.Context, sessionID string, mode Mode) (SessionMeta, error) {
+func (s *FileStore) Create(ctx context.Context, sessionID string, agentType AgentType, mode Mode) (SessionMeta, error) {
 	if err := ctx.Err(); err != nil {
 		return SessionMeta{}, err
 	}
 
+	if agentType == "" {
+		agentType = AgentTypeClaude
+	}
 	if mode == "" {
 		mode = ModeDefault
 	}
@@ -160,6 +167,7 @@ func (s *FileStore) Create(ctx context.Context, sessionID string, mode Mode) (Se
 		Title:     "New Chat",
 		CreatedAt: now,
 		UpdatedAt: now,
+		AgentType: agentType,
 		Mode:      mode,
 	}
 
@@ -238,6 +246,29 @@ func (s *FileStore) Activate(ctx context.Context, sessionID string) error {
 	for i := range s.sessions {
 		if s.sessions[i].ID == sessionID {
 			s.sessions[i].Activated = true
+			s.sessions[i].UpdatedAt = time.Now()
+			if err := s.persistIndex(); err != nil {
+				return err
+			}
+			s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
+			return nil
+		}
+	}
+
+	return ErrSessionNotFound
+}
+
+func (s *FileStore) SetAgentType(ctx context.Context, sessionID string, agentType AgentType) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.sessions {
+		if s.sessions[i].ID == sessionID {
+			s.sessions[i].AgentType = agentType
 			s.sessions[i].UpdatedAt = time.Now()
 			if err := s.persistIndex(); err != nil {
 				return err

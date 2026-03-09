@@ -28,8 +28,12 @@ func (m *mockSessionStore) Get(sessionID string) (session.SessionMeta, bool, err
 	return session.SessionMeta{}, false, nil
 }
 
-func (m *mockSessionStore) Create(ctx context.Context, sessionID string, mode session.Mode) (session.SessionMeta, error) {
+func (m *mockSessionStore) Create(ctx context.Context, sessionID string, agentType session.AgentType, mode session.Mode) (session.SessionMeta, error) {
 	return session.SessionMeta{}, nil
+}
+
+func (m *mockSessionStore) SetAgentType(ctx context.Context, sessionID string, agentType session.AgentType) error {
+	return nil
 }
 
 func (m *mockSessionStore) Delete(ctx context.Context, sessionID string) error {
@@ -199,6 +203,21 @@ func TestSessionListWatcher_HandleProcessStateChange_NoSubscribers(t *testing.T)
 	})
 }
 
+type recordingSessionStore struct {
+	mockSessionStore
+	needsInputCalls []needsInputCall
+}
+
+type needsInputCall struct {
+	SessionID  string
+	NeedsInput bool
+}
+
+func (r *recordingSessionStore) SetNeedsInput(_ context.Context, sessionID string, needsInput bool) error {
+	r.needsInputCalls = append(r.needsInputCalls, needsInputCall{SessionID: sessionID, NeedsInput: needsInput})
+	return nil
+}
+
 type recordingSyncer struct {
 	calls []syncCall
 }
@@ -249,12 +268,8 @@ func TestHandleProcessStateChange_IdleNoNeedsInput_NoSync(t *testing.T) {
 	}
 }
 
-func TestHandleProcessStateChange_Running_SyncsWorkWhenSessionWasNeedsInput(t *testing.T) {
-	store := &mockSessionStore{
-		sessions: []session.SessionMeta{
-			{ID: "sess-1", NeedsInput: true},
-		},
-	}
+func TestHandleProcessStateChange_Running_DoesNotClearNeedsInput(t *testing.T) {
+	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
 	w.SetWorkNeedsInputSyncer(syncer)
@@ -264,33 +279,37 @@ func TestHandleProcessStateChange_Running_SyncsWorkWhenSessionWasNeedsInput(t *t
 		State:     process.ProcessStateRunning,
 	})
 
-	if len(syncer.calls) != 1 {
-		t.Fatalf("expected 1 sync call, got %d", len(syncer.calls))
+	// Running should NOT clear needs_input — that is done by user events via ClearNeedsInput.
+	if len(store.needsInputCalls) != 0 {
+		t.Errorf("expected no SetNeedsInput calls on Running, got %d", len(store.needsInputCalls))
 	}
-	if syncer.calls[0].SessionID != "sess-1" || syncer.calls[0].NeedsInput {
-		t.Errorf("unexpected call: %+v", syncer.calls[0])
+	if len(syncer.calls) != 0 {
+		t.Errorf("expected no sync calls on Running, got %d", len(syncer.calls))
 	}
 }
 
-func TestHandleProcessStateChange_Running_SyncsWorkEvenWhenSessionNotNeedsInput(t *testing.T) {
-	store := &mockSessionStore{
-		sessions: []session.SessionMeta{
-			{ID: "sess-1", NeedsInput: false},
-		},
-	}
+func TestHandleProcessStateChange_Ended_ClearsNeedsInputAndSyncsWork(t *testing.T) {
+	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
 	w.SetWorkNeedsInputSyncer(syncer)
 
 	w.HandleProcessStateChange(process.StateChangeEvent{
 		SessionID: "sess-1",
-		State:     process.ProcessStateRunning,
+		State:     process.ProcessStateEnded,
 	})
 
-	// MCP work_needs_input sets work status without the session flag,
-	// so we must always sync to handle that path.
+	// NeedsInput must be cleared in the store
+	if len(store.needsInputCalls) != 1 {
+		t.Fatalf("expected 1 SetNeedsInput call, got %d", len(store.needsInputCalls))
+	}
+	if store.needsInputCalls[0].SessionID != "sess-1" || store.needsInputCalls[0].NeedsInput {
+		t.Errorf("expected SetNeedsInput(sess-1, false), got %+v", store.needsInputCalls[0])
+	}
+
+	// Work syncer must be called to clear needs_input
 	if len(syncer.calls) != 1 {
-		t.Fatalf("expected 1 sync call (MCP path), got %d", len(syncer.calls))
+		t.Fatalf("expected 1 sync call, got %d", len(syncer.calls))
 	}
 	if syncer.calls[0].SessionID != "sess-1" || syncer.calls[0].NeedsInput {
 		t.Errorf("unexpected call: %+v", syncer.calls[0])
@@ -355,5 +374,40 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 
 	if w.dirty.Load() {
 		t.Error("dirty flag should be cleared after sync")
+	}
+}
+
+func TestClearNeedsInput_ClearsStoreAndSyncsWork(t *testing.T) {
+	store := &recordingSessionStore{}
+	w := NewSessionListWatcher(store)
+	syncer := &recordingSyncer{}
+	w.SetWorkNeedsInputSyncer(syncer)
+
+	w.ClearNeedsInput("sess-1")
+
+	if len(store.needsInputCalls) != 1 {
+		t.Fatalf("expected 1 SetNeedsInput call, got %d", len(store.needsInputCalls))
+	}
+	if store.needsInputCalls[0].SessionID != "sess-1" || store.needsInputCalls[0].NeedsInput {
+		t.Errorf("expected SetNeedsInput(sess-1, false), got %+v", store.needsInputCalls[0])
+	}
+
+	if len(syncer.calls) != 1 {
+		t.Fatalf("expected 1 sync call, got %d", len(syncer.calls))
+	}
+	if syncer.calls[0].SessionID != "sess-1" || syncer.calls[0].NeedsInput {
+		t.Errorf("unexpected call: %+v", syncer.calls[0])
+	}
+}
+
+func TestClearNeedsInput_NoSyncer_NoPanic(t *testing.T) {
+	store := &recordingSessionStore{}
+	w := NewSessionListWatcher(store)
+
+	// No syncer set — should not panic
+	w.ClearNeedsInput("sess-1")
+
+	if len(store.needsInputCalls) != 1 {
+		t.Fatalf("expected 1 SetNeedsInput call, got %d", len(store.needsInputCalls))
 	}
 }

@@ -248,18 +248,9 @@ export function applyServerEvent(
 
 	// Request cancelled (CLI cancelled either permission or question request)
 	if (event.type === "request_cancelled") {
-		let updated = updatePermissionRequestStatus(
-			messages,
-			event.requestId,
-			"denied",
-		);
+		let updated = expirePermissionRequest(messages, event.requestId);
 		if (updated !== messages) return updated;
-		updated = updateQuestionStatus(
-			messages,
-			event.requestId,
-			"cancelled",
-			null,
-		);
+		updated = updateQuestionStatus(messages, event.requestId, "expired", null);
 		return updated;
 	}
 
@@ -302,7 +293,10 @@ export function applyServerEvent(
 		index = updated.length - 1;
 	} else {
 		if (isTerminalEvent) {
-			// No active message to terminate - ignore orphan terminal event
+			// No active message to terminate — but still expire pending dialogs on process end
+			if (event.type === "process_ended") {
+				return expirePendingDialogs(messages);
+			}
 			return messages;
 		}
 		// For content events, create new assistant message to hold orphan event.
@@ -347,6 +341,11 @@ export function applyServerEvent(
 
 	updated[index] = message;
 
+	// Expire all pending dialogs when process ends
+	if (event.type === "process_ended") {
+		updated = expirePendingDialogs(updated);
+	}
+
 	// After a terminal event, remove any orphan empty sending messages.
 	if (isTerminalEvent) {
 		updated = updated.filter(
@@ -362,6 +361,59 @@ export function applyServerEvent(
 	return updated;
 }
 
+export function expirePendingDialogs(messages: Message[]): Message[] {
+	let anyChanged = false;
+	const updated = messages.map((msg) => {
+		if (msg.role !== "assistant") return msg;
+
+		let changed = false;
+		const updatedParts = msg.parts.map((part) => {
+			if (part.type === "permission_request" && part.status === "pending") {
+				changed = true;
+				return { ...part, status: "expired" as const };
+			}
+			if (part.type === "ask_user_question" && part.status === "pending") {
+				changed = true;
+				return { ...part, status: "expired" as const };
+			}
+			return part;
+		});
+
+		if (!changed) return msg;
+		anyChanged = true;
+		return { ...msg, parts: updatedParts };
+	});
+	return anyChanged ? updated : messages;
+}
+
+function expirePermissionRequest(
+	messages: Message[],
+	requestId: string,
+): Message[] {
+	let anyChanged = false;
+	const updated = messages.map((msg) => {
+		if (msg.role !== "assistant") return msg;
+
+		let changed = false;
+		const updatedParts = msg.parts.map((part) => {
+			if (
+				part.type === "permission_request" &&
+				part.request.requestId === requestId &&
+				part.status === "pending"
+			) {
+				changed = true;
+				return { ...part, status: "expired" as const };
+			}
+			return part;
+		});
+
+		if (!changed) return msg;
+		anyChanged = true;
+		return { ...msg, parts: updatedParts };
+	});
+	return anyChanged ? updated : messages;
+}
+
 export function updatePermissionRequestStatus(
 	messages: Message[],
 	requestId: string,
@@ -375,7 +427,8 @@ export function updatePermissionRequestStatus(
 		const updatedParts = msg.parts.map((part) => {
 			if (
 				part.type === "permission_request" &&
-				part.request.requestId === requestId
+				part.request.requestId === requestId &&
+				part.status === "pending"
 			) {
 				changed = true;
 				return { ...part, status: newStatus };
@@ -404,7 +457,8 @@ export function updateQuestionStatus(
 		const updatedParts = msg.parts.map((part) => {
 			if (
 				part.type === "ask_user_question" &&
-				part.request.requestId === requestId
+				part.request.requestId === requestId &&
+				part.status === "pending"
 			) {
 				changed = true;
 				return {

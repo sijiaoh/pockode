@@ -42,6 +42,12 @@ func (h *rpcMethodHandler) handleSettingsUpdate(ctx context.Context, conn *jsonr
 		}
 	}
 
+	// Validate default agent type if set
+	if params.Settings.DefaultAgentType != "" && !params.Settings.DefaultAgentType.IsValid() {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid default agent type")
+		return
+	}
+
 	// Validate default mode if set
 	if params.Settings.DefaultMode != "" && !params.Settings.DefaultMode.IsValid() {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid default mode")
