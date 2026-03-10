@@ -16,18 +16,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
 
-const (
-	// Binary is the Claude CLI executable name.
-	Binary            = "claude"
-	stderrReadTimeout = 5 * time.Second
-)
+// Binary is the Claude CLI executable name.
+const Binary = "claude"
 
 // Agent implements agent.Agent using Claude CLI.
 type Agent struct{}
@@ -95,10 +91,10 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	// Add MCP config for work management tools
 	mcpConfigPath, err := ensureMCPConfig(opts.DataDir)
 	if err != nil {
-		slog.Warn("failed to create MCP config, continuing without MCP", "error", err)
-	} else {
-		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfigPath)
+		cancel()
+		return nil, fmt.Errorf("failed to create MCP config: %w", err)
 	}
+	claudeArgs = append(claudeArgs, "--mcp-config", mcpConfigPath)
 
 	cmd := exec.CommandContext(procCtx, Binary, claudeArgs...)
 	cmd.Dir = opts.WorkDir
@@ -161,9 +157,9 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		defer stdout.Close()
 		defer stderr.Close()
 
-		stderrCh := readStderr(stderr)
+		stderrCh := agent.ReadStderr(stderr, "claude")
 		streamOutput(procCtx, log, stdout, events, pendingRequests)
-		waitForProcess(procCtx, log, cmd, stderrCh, events)
+		agent.WaitForProcess(procCtx, log, cmd, stderrCh, events)
 
 		// Notify client that process has ended (abnormal: process should stay alive)
 		select {
@@ -340,30 +336,6 @@ func (s *cliSession) writeStdin(data []byte) error {
 	return err
 }
 
-// --- Process management ---
-
-func readStderr(stderr io.Reader) <-chan string {
-	ch := make(chan string, 1)
-	go func() {
-		var content strings.Builder
-		defer func() {
-			if r := recover(); r != nil {
-				logger.LogPanic(r, "failed to read claude stderr")
-			}
-			ch <- content.String()
-		}()
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			content.WriteString(scanner.Text())
-			content.WriteString("\n")
-		}
-		if err := scanner.Err(); err != nil {
-			slog.Error("stderr scanner error", "error", err)
-		}
-	}()
-	return ch
-}
-
 func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
@@ -399,29 +371,6 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		case <-ctx.Done():
 		}
 	}
-}
-
-func waitForProcess(ctx context.Context, log *slog.Logger, cmd *exec.Cmd, stderrCh <-chan string, events chan<- agent.AgentEvent) {
-	var stderrContent string
-	select {
-	case stderrContent = <-stderrCh:
-	case <-time.After(stderrReadTimeout):
-	}
-
-	if err := cmd.Wait(); err != nil {
-		if ctx.Err() == nil {
-			errMsg := stderrContent
-			if errMsg == "" {
-				errMsg = err.Error()
-			}
-			select {
-			case events <- agent.ErrorEvent{Error: errMsg}:
-			case <-ctx.Done():
-			}
-		}
-	}
-
-	log.Info("claude process exited")
 }
 
 // --- Types ---

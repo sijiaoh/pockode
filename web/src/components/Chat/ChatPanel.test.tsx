@@ -260,6 +260,66 @@ describe("ChatPanel", () => {
 			});
 		});
 
+		it("shows Always Allow button for Codex sessions", async () => {
+			const user = userEvent.setup();
+			mockState.chatMessagesSubscribe.mockImplementation(() =>
+				Promise.resolve({
+					id: "sub-1",
+					initial: {
+						history: [],
+						state: "ended",
+						agent_type: "codex",
+					},
+				}),
+			);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			act(() => {
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-codex",
+					tool_name: "Bash",
+					tool_input: { command: "npm test" },
+					tool_use_id: "tool-codex",
+				});
+			});
+
+			expect(
+				screen.getByRole("button", { name: "Always Allow" }),
+			).toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Always Allow" }));
+
+			expect(mockState.permissionResponse).toHaveBeenCalledWith({
+				session_id: "test-session",
+				request_id: "req-codex",
+				tool_use_id: "tool-codex",
+				tool_input: { command: "npm test" },
+				permission_suggestions: undefined,
+				choice: "always_allow",
+			});
+		});
+
+		it("hides Always Allow button for Claude sessions without permissionSuggestions", async () => {
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			act(() => {
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-claude",
+					tool_name: "Bash",
+					tool_input: { command: "ls" },
+					tool_use_id: "tool-claude",
+				});
+			});
+
+			expect(
+				screen.queryByRole("button", { name: "Always Allow" }),
+			).not.toBeInTheDocument();
+		});
+
 		it("shows inline permission request and sends deny response", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);

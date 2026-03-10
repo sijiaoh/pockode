@@ -36,6 +36,7 @@ function AskUserQuestionItem({
 		pending: { Icon: CircleHelp, color: "text-th-warning" },
 		answered: { Icon: Check, color: "text-th-success" },
 		cancelled: { Icon: X, color: "text-th-error" },
+		expired: { Icon: X, color: "text-th-text-muted" },
 	};
 
 	const { Icon, color } = statusConfig[status];
@@ -253,7 +254,11 @@ function AskUserQuestionItem({
 									<span className="text-th-text-muted">{q.header}:</span>{" "}
 									<span className="text-th-text-primary">
 										{savedAnswers?.[q.question] ||
-											(status === "cancelled" ? "(cancelled)" : "(no answer)")}
+											(status === "cancelled"
+												? "(cancelled)"
+												: status === "expired"
+													? "(expired)"
+													: "(no answer)")}
 									</span>
 								</div>
 							))}

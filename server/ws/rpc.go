@@ -363,6 +363,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSessionDelete(ctx, conn, req, wt)
 	case "session.update_title":
 		h.handleSessionUpdateTitle(ctx, conn, req, wt)
+	case "session.set_agent_type":
+		h.handleSessionSetAgentType(ctx, conn, req, wt)
 	case "session.set_mode":
 		h.handleSessionSetMode(ctx, conn, req, wt)
 	case "session.mark_read":

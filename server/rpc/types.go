@@ -65,6 +65,11 @@ type SessionUpdateTitleParams struct {
 	Title     string `json:"title"`
 }
 
+type SessionSetAgentTypeParams struct {
+	SessionID string            `json:"session_id"`
+	AgentType session.AgentType `json:"agent_type"`
+}
+
 type SessionSetModeParams struct {
 	SessionID string       `json:"session_id"`
 	Mode      session.Mode `json:"mode"`
@@ -208,10 +213,11 @@ type ChatMessagesSubscribeParams struct {
 }
 
 type ChatMessagesSubscribeResult struct {
-	ID      string            `json:"id"`
-	History []json.RawMessage `json:"history"`
-	State   string            `json:"state"` // "idle" | "running" | "ended"
-	Mode    session.Mode      `json:"mode"`
+	ID        string            `json:"id"`
+	History   []json.RawMessage `json:"history"`
+	State     string            `json:"state"` // "idle" | "running" | "ended"
+	Mode      session.Mode      `json:"mode"`
+	AgentType session.AgentType `json:"agent_type"`
 }
 
 type ChatMessagesUnsubscribeParams struct {

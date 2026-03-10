@@ -23,7 +23,7 @@ const idleReleaseDelay = 30 * time.Second
 // Manager manages the lifecycle of worktrees with lazy creation and reference-counted cleanup.
 type Manager struct {
 	registry        *Registry
-	agent           agent.Agent
+	agents          *agent.Registry
 	dataDir         string
 	idleTimeout     time.Duration
 	WorktreeWatcher *watch.WorktreeWatcher
@@ -35,10 +35,10 @@ type Manager struct {
 	worktrees map[string]*Worktree
 }
 
-func NewManager(registry *Registry, ag agent.Agent, dataDir string, idleTimeout time.Duration) *Manager {
+func NewManager(registry *Registry, agents *agent.Registry, dataDir string, idleTimeout time.Duration) *Manager {
 	return &Manager{
 		registry:        registry,
-		agent:           ag,
+		agents:          agents,
 		dataDir:         dataDir,
 		idleTimeout:     idleTimeout,
 		WorktreeWatcher: watch.NewWorktreeWatcher(registry.MainDir()),
@@ -176,7 +176,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	gitDiffWatcher := watch.NewGitDiffWatcher(workDir)
 	sessionListWatcher := watch.NewSessionListWatcher(sessionStore)
 	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore)
-	processManager := process.NewManager(m.agent, workDir, m.dataDir, sessionStore, m.idleTimeout)
+	processManager := process.NewManager(m.agents, workDir, m.dataDir, sessionStore, m.idleTimeout)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetProcessStateGetter(processManager)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)

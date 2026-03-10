@@ -7,6 +7,24 @@ import (
 
 var ErrSessionNotFound = errors.New("session not found")
 
+// AgentType identifies which AI agent backend a session uses.
+type AgentType string
+
+const (
+	AgentTypeClaude AgentType = "claude"
+	AgentTypeCodex  AgentType = "codex"
+)
+
+// IsValid returns true if the agent type is a known valid type.
+func (a AgentType) IsValid() bool {
+	switch a {
+	case AgentTypeClaude, AgentTypeCodex:
+		return true
+	default:
+		return false
+	}
+}
+
 // Mode represents the agent mode for a session.
 type Mode string
 
@@ -36,6 +54,7 @@ type SessionMeta struct {
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 	Activated  bool      `json:"activated"`   // true after first message sent
+	AgentType  AgentType `json:"agent_type"`  // which AI backend (claude, codex)
 	Mode       Mode      `json:"mode"`        // agent mode (default, yolo, plan)
 	NeedsInput bool      `json:"needs_input"` // true when waiting for user input (permission/question)
 	Unread     bool      `json:"unread"`      // true when session has unread changes

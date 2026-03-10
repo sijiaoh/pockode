@@ -43,10 +43,11 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	wt.SessionListWatcher.MarkRead(params.SessionID)
 
 	result := rpc.ChatMessagesSubscribeResult{
-		ID:      id,
-		History: history,
-		State:   wt.ProcessManager.GetProcessState(params.SessionID),
-		Mode:    meta.Mode,
+		ID:        id,
+		History:   history,
+		State:     wt.ProcessManager.GetProcessState(params.SessionID),
+		Mode:      meta.Mode,
+		AgentType: meta.AgentType,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)
@@ -68,6 +69,8 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 	h.recordCommandIfSlash(params.Content)
 
 	log.Info("received prompt", "length", len(params.Content))
+
+	wt.SessionListWatcher.ClearNeedsInput(params.SessionID)
 
 	if err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier()); err != nil {
 		h.replyErrorForChat(ctx, conn, req.ID, err)
@@ -117,6 +120,8 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 	}
 	choice := parsePermissionChoice(params.Choice)
 
+	wt.SessionListWatcher.ClearNeedsInput(params.SessionID)
+
 	if err := wt.ChatClient.SendPermissionResponse(ctx, params.SessionID, data, choice); err != nil {
 		h.replyErrorForChat(ctx, conn, req.ID, err)
 		return
@@ -142,6 +147,8 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 		RequestID: params.RequestID,
 		ToolUseID: params.ToolUseID,
 	}
+
+	wt.SessionListWatcher.ClearNeedsInput(params.SessionID)
 
 	if err := wt.ChatClient.SendQuestionResponse(ctx, params.SessionID, data, params.Answers); err != nil {
 		h.replyErrorForChat(ctx, conn, req.ID, err)

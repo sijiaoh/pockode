@@ -184,7 +184,11 @@ function StatusGroup({
 	);
 }
 
-const collapsedByDefault: ReadonlySet<WorkStatus> = new Set(["done", "closed"]);
+const TASK_LIST_COLLAPSIBLE_STATUS: WorkStatus = "closed";
+const COMPLETED_TASK_STATUSES: ReadonlySet<WorkStatus> = new Set([
+	"done",
+	"closed",
+]);
 
 function StoryRow({
 	story,
@@ -199,36 +203,49 @@ function StoryRow({
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string) => void;
 }) {
+	const storySessionId = story.session_id;
 	const totalTasks = tasks?.length ?? 0;
 	const doneTasks =
-		tasks?.filter((t) => t.status === "done" || t.status === "closed").length ??
-		0;
+		tasks?.filter((t) => COMPLETED_TASK_STATUSES.has(t.status)).length ?? 0;
 	const roleName = story.agent_role_id
 		? (roleNameMap.get(story.agent_role_id) ?? null)
 		: null;
 	const hasTasks = totalTasks > 0;
+	const isTaskListCollapsible = story.status === TASK_LIST_COLLAPSIBLE_STATUS;
 	const [tasksExpanded, setTasksExpanded] = useState(
-		() => !collapsedByDefault.has(story.status),
+		() => !isTaskListCollapsible,
 	);
+	const isTaskListExpanded = isTaskListCollapsible ? tasksExpanded : true;
 
 	return (
 		<div className="rounded-lg">
 			{/* Title row */}
 			<div className="flex min-h-[44px] items-center px-1">
 				{hasTasks ? (
-					<button
-						type="button"
-						onClick={() => setTasksExpanded(!tasksExpanded)}
-						className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-th-text-muted"
-						aria-expanded={tasksExpanded}
-						aria-label={tasksExpanded ? "Collapse tasks" : "Expand tasks"}
-					>
-						{tasksExpanded ? (
+					isTaskListCollapsible ? (
+						<button
+							type="button"
+							onClick={() => setTasksExpanded(!tasksExpanded)}
+							className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-th-text-muted"
+							aria-expanded={isTaskListExpanded}
+							aria-label={
+								isTaskListExpanded ? "Collapse tasks" : "Expand tasks"
+							}
+						>
+							{isTaskListExpanded ? (
+								<ChevronDown className="size-3.5" />
+							) : (
+								<ChevronRight className="size-3.5" />
+							)}
+						</button>
+					) : (
+						<div
+							className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-th-text-muted"
+							aria-hidden="true"
+						>
 							<ChevronDown className="size-3.5" />
-						) : (
-							<ChevronRight className="size-3.5" />
-						)}
-					</button>
+						</div>
+					)
 				) : (
 					<div className="min-h-[44px] min-w-[44px] shrink-0" />
 				)}
@@ -261,12 +278,12 @@ function StoryRow({
 						</span>
 					</>
 				)}
-				{story.session_id && (
+				{storySessionId && (
 					<>
 						<span aria-hidden="true">&middot;</span>
 						<button
 							type="button"
-							onClick={() => onNavigateToSession(story.session_id ?? "")}
+							onClick={() => onNavigateToSession(storySessionId)}
 							className="-my-2 py-2 text-th-accent"
 						>
 							Chat
@@ -279,7 +296,7 @@ function StoryRow({
 			</div>
 
 			{/* Task list — collapsible */}
-			{tasksExpanded && hasTasks && (
+			{isTaskListExpanded && hasTasks && (
 				<div className="pb-1 pl-[3rem] pr-2">
 					{tasks?.map((task) => (
 						<TaskRow
@@ -307,6 +324,7 @@ function TaskRow({
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string) => void;
 }) {
+	const taskSessionId = task.session_id;
 	const roleName = task.agent_role_id
 		? (roleNameMap.get(task.agent_role_id) ?? null)
 		: null;
@@ -329,16 +347,16 @@ function TaskRow({
 			<span className="shrink-0 text-xs text-th-text-muted">
 				{roleName ?? "—"}
 			</span>
-			{task.session_id && (
+			{taskSessionId && (
 				<button
 					type="button"
-					onClick={() => onNavigateToSession(task.session_id ?? "")}
+					onClick={() => onNavigateToSession(taskSessionId)}
 					className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-xs text-th-accent"
 				>
 					Chat
 				</button>
 			)}
-			{((task.status === "open" && !task.session_id) ||
+			{((task.status === "open" && !taskSessionId) ||
 				task.status === "stopped") && <StartButton workId={task.id} iconOnly />}
 		</div>
 	);

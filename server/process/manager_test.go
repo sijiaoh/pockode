@@ -10,6 +10,12 @@ import (
 	"github.com/pockode/server/session"
 )
 
+func mockRegistry(mock *mockAgent) *agent.Registry {
+	r := agent.NewRegistry()
+	r.Register(session.AgentTypeClaude, mock)
+	return r
+}
+
 type mockAgent struct {
 	mu         sync.Mutex
 	startCalls []startCall
@@ -71,10 +77,10 @@ func (s *mockSession) isClosed() bool {
 func TestManager_GetOrCreateProcess_NewSession(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mock, "/tmp", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	proc, created, err := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	proc, created, err := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -98,11 +104,11 @@ func TestManager_GetOrCreateProcess_NewSession(t *testing.T) {
 func TestManager_GetOrCreateProcess_ExistingSession(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mock, "/tmp", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	proc1, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
-	proc2, created, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	proc1, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	proc2, created, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
 	if created {
 		t.Error("expected created=false for existing session")
@@ -119,10 +125,10 @@ func TestManager_IdleReaper(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
 	idleTimeout := 50 * time.Millisecond
-	m := NewManager(mock, "/tmp", "", store, idleTimeout)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, idleTimeout)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
 	time.Sleep(idleTimeout * 2)
 
@@ -138,7 +144,7 @@ func TestManager_IdleReaper_EmitsProcessStateEnded(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
 	idleTimeout := 50 * time.Millisecond
-	m := NewManager(mock, "/tmp", "", store, idleTimeout)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, idleTimeout)
 	defer m.Shutdown()
 
 	var mu sync.Mutex
@@ -149,7 +155,7 @@ func TestManager_IdleReaper_EmitsProcessStateEnded(t *testing.T) {
 		mu.Unlock()
 	})
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
 	time.Sleep(idleTimeout * 2)
 
@@ -172,10 +178,10 @@ func TestManager_Touch_PreventsReaping(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
 	idleTimeout := 50 * time.Millisecond
-	m := NewManager(mock, "/tmp", "", store, idleTimeout)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, idleTimeout)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
 	// Touch periodically for 2x idleTimeout
 	// Reaper runs multiple times, but process survives due to Touch
@@ -196,10 +202,10 @@ func TestManager_Touch_PreventsReaping(t *testing.T) {
 func TestManager_Shutdown_ClosesAllProcesses(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mock, "/tmp", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, 10*time.Minute)
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-2", false, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-2", false, session.AgentTypeClaude, session.ModeDefault)
 
 	m.Shutdown()
 
@@ -220,11 +226,11 @@ func TestManager_Shutdown_ClosesAllProcesses(t *testing.T) {
 func TestManager_Close_SpecificProcess(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mock, "/tmp", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-2", false, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-2", false, session.AgentTypeClaude, session.ModeDefault)
 
 	m.Close("sess-1")
 
@@ -245,7 +251,7 @@ func TestManager_Close_SpecificProcess(t *testing.T) {
 func TestManager_HasProcess(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mock, "/tmp", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
 	// No process initially
@@ -254,7 +260,7 @@ func TestManager_HasProcess(t *testing.T) {
 	}
 
 	// Create process
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
 	if !m.HasProcess("sess-1") {
 		t.Error("expected HasProcess to return true after process creation")
@@ -265,10 +271,10 @@ func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
 	idleTimeout := 50 * time.Millisecond
-	m := NewManager(mock, "/tmp", "", store, idleTimeout)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, idleTimeout)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
 	// Send events periodically for 2x idleTimeout
 	// Process should survive because streamEvents calls touch() on each event
@@ -289,10 +295,47 @@ func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
 	}
 }
 
+func TestProcess_ClosedFlagSuppressesStateChanges(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, 10*time.Minute)
+	defer m.Shutdown()
+
+	var mu sync.Mutex
+	var events []StateChangeEvent
+	m.SetOnStateChange(func(e StateChangeEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	})
+
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+
+	// Close sets the closed flag, preventing further state changes.
+	m.Close("sess-1")
+
+	// Wait for the streamEvents goroutine to exit.
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	events = nil // clear initial idle + ended
+	mu.Unlock()
+
+	// After Close, SetRunning and SetIdle must be no-ops.
+	proc.SetRunning()
+	proc.SetIdle(false)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 0 {
+		t.Errorf("expected no state changes after Close, got %v", events)
+	}
+}
+
 func TestProcess_SetRunning_EmitsStateChange(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mock, "/tmp", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
 	var events []StateChangeEvent
@@ -300,7 +343,7 @@ func TestProcess_SetRunning_EmitsStateChange(t *testing.T) {
 		events = append(events, e)
 	})
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
 	// Initial state is idle, creation emits idle
 	if len(events) != 1 || events[0].State != ProcessStateIdle {
@@ -323,7 +366,7 @@ func TestProcess_SetRunning_EmitsStateChange(t *testing.T) {
 func TestProcess_SetIdle_EmitsStateChange(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mock, "/tmp", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
 	var events []StateChangeEvent
@@ -331,7 +374,7 @@ func TestProcess_SetIdle_EmitsStateChange(t *testing.T) {
 		events = append(events, e)
 	})
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 	proc.SetRunning()
 
 	// SetIdle should emit idle
@@ -350,7 +393,7 @@ func TestProcess_SetIdle_EmitsStateChange(t *testing.T) {
 func TestProcess_SendMessage_SetsRunning(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mock, "/tmp", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(mock), "/tmp", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
 	var events []StateChangeEvent
@@ -358,7 +401,7 @@ func TestProcess_SendMessage_SetsRunning(t *testing.T) {
 		events = append(events, e)
 	})
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.ModeDefault)
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
 	if proc.State() != ProcessStateIdle {
 		t.Fatalf("expected initial state to be idle")

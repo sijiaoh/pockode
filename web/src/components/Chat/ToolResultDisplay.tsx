@@ -21,6 +21,17 @@ interface EditInput {
 	replace_all?: boolean;
 }
 
+interface CodexEditChange {
+	type: string;
+	unified_diff: string;
+	move_path: string | null;
+}
+
+interface CodexEditInput {
+	changes: Record<string, CodexEditChange>;
+	file_path?: string;
+}
+
 interface WriteInput {
 	file_path: string;
 	content: string;
@@ -50,7 +61,7 @@ function ReadResultDisplay({
 	const code = useMemo(() => lines.map((l) => l.content).join("\n"), [lines]);
 
 	if (lines.length === 0) {
-		return <pre className="text-th-text-muted">{result}</pre>;
+		return <FileContentDisplay content={result} filePath={filePath} />;
 	}
 
 	return <FileContentDisplay content={code} filePath={filePath} />;
@@ -63,6 +74,23 @@ function EditResultDisplay({ input }: { input: EditInput }) {
 	);
 
 	return <DiffViewer fileName={input.file_path} hunks={[unifiedDiff]} />;
+}
+
+function CodexEditResultDisplay({ input }: { input: CodexEditInput }) {
+	const entries = useMemo(() => {
+		return Object.entries(input.changes).map(([filePath, change]) => {
+			const diff = `--- a/${filePath}\n+++ b/${filePath}\n${change.unified_diff}`;
+			return { filePath, diff };
+		});
+	}, [input.changes]);
+
+	return (
+		<div className="space-y-2">
+			{entries.map(({ filePath, diff }) => (
+				<DiffViewer key={filePath} fileName={filePath} hunks={[diff]} />
+			))}
+		</div>
+	);
 }
 
 function MultiEditResultDisplay({ input }: { input: MultiEditInput }) {
@@ -147,6 +175,19 @@ function isEditInput(input: unknown): input is EditInput {
 	);
 }
 
+function isCodexEditInput(input: unknown): input is CodexEditInput {
+	const i = input as Record<string, unknown>;
+	if (!i?.changes || typeof i.changes !== "object" || Array.isArray(i.changes))
+		return false;
+	const changes = i.changes as Record<string, unknown>;
+	return Object.values(changes).some(
+		(v) =>
+			v != null &&
+			typeof v === "object" &&
+			typeof (v as Record<string, unknown>).unified_diff === "string",
+	);
+}
+
 function isWriteInput(input: unknown): input is WriteInput {
 	const i = input as Record<string, unknown>;
 	return typeof i?.file_path === "string" && typeof i?.content === "string";
@@ -178,6 +219,9 @@ function ToolResultDisplay({
 		case "Edit":
 			if (isEditInput(toolInput)) {
 				return <EditResultDisplay input={toolInput} />;
+			}
+			if (isCodexEditInput(toolInput)) {
+				return <CodexEditResultDisplay input={toolInput} />;
 			}
 			return <pre className="text-th-text-muted">{result}</pre>;
 
