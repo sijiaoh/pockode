@@ -11,7 +11,10 @@ import {
 	getSettingsSections,
 	resetSettingsSections,
 } from "./registries/settingsRegistry";
-import { resetSidebarUIConfig } from "./registries/sidebarUIRegistry";
+import {
+	getSidebarUIConfig,
+	resetSidebarUIConfig,
+} from "./registries/sidebarUIRegistry";
 
 function createExtension(overrides: Partial<Extension> = {}): Extension {
 	return { id: "test", activate: vi.fn(), ...overrides };
@@ -84,6 +87,23 @@ describe("extensions", () => {
 			expect(result).toBe(true);
 			expect(getSettingsSections()).toHaveLength(0);
 			expect(isExtensionLoaded("test")).toBe(false);
+		});
+
+		it("cleans up sidebarUI config", () => {
+			const Component = () => null;
+			loadExtension(
+				createExtension({
+					activate: (ctx) => {
+						ctx.sidebarUI.configure({ SidebarContent: Component });
+					},
+				}),
+			);
+
+			expect(getSidebarUIConfig().SidebarContent).toBe(Component);
+
+			unloadExtension("test");
+
+			expect(getSidebarUIConfig().SidebarContent).toBeUndefined();
 		});
 
 		it("returns false for non-existent extension", () => {

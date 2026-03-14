@@ -36,15 +36,19 @@ export default function SessionsTab() {
 	);
 
 	const handleCreateSession = useCallback(async () => {
-		const newSession = await createSession();
-		navigate(
-			buildNavigation({
-				type: "session",
-				worktree,
-				sessionId: newSession.id,
-			}),
-		);
-		if (!isDesktop) onClose();
+		try {
+			const newSession = await createSession();
+			navigate(
+				buildNavigation({
+					type: "session",
+					worktree,
+					sessionId: newSession.id,
+				}),
+			);
+			if (!isDesktop) onClose();
+		} catch (error) {
+			console.error("Failed to create session:", error);
+		}
 	}, [createSession, navigate, worktree, isDesktop, onClose]);
 
 	return (
