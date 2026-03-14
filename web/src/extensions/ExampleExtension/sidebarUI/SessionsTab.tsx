@@ -21,7 +21,6 @@ export default function SessionsTab() {
 		refresh,
 	} = useSession({ routeSessionId });
 	const { isActive } = useSidebarRefresh("sessions", refresh);
-
 	const handleSelectSession = useCallback(
 		(id: string) => {
 			navigate(
@@ -48,10 +47,10 @@ export default function SessionsTab() {
 		if (!isDesktop) onClose();
 	}, [createSession, navigate, worktree, isDesktop, onClose]);
 
-	if (!isActive) return null;
-
 	return (
-		<div className="flex flex-1 flex-col overflow-hidden">
+		<div
+			className={isActive ? "flex flex-1 flex-col overflow-hidden" : "hidden"}
+		>
 			<div className="p-2">
 				<button
 					type="button"

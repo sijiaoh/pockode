@@ -7,8 +7,6 @@ export default function NotesTab() {
 	const [notes, setNotes] = useState<string[]>([]);
 	const [input, setInput] = useState("");
 
-	if (!isActive) return null;
-
 	const handleAdd = () => {
 		const text = input.trim();
 		if (text) {
@@ -29,7 +27,7 @@ export default function NotesTab() {
 	};
 
 	return (
-		<div className="flex flex-col gap-3 p-4">
+		<div className={isActive ? "flex flex-col gap-3 p-4" : "hidden"}>
 			<div className="flex gap-2">
 				<input
 					type="text"
@@ -43,7 +41,7 @@ export default function NotesTab() {
 					type="button"
 					onClick={handleAdd}
 					disabled={!input.trim()}
-					className="rounded bg-th-accent p-1.5 text-th-text-inverse disabled:opacity-50"
+					className="rounded bg-th-accent p-1.5 text-th-accent-text disabled:opacity-50"
 					aria-label="Add note"
 				>
 					<Plus className="size-4" />

@@ -5,6 +5,7 @@
 import { createContext, useContext } from "react";
 
 export interface SidebarContainerContextValue {
+	isOpen: boolean;
 	onClose: () => void;
 	isDesktop: boolean;
 }

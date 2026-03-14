@@ -1,4 +1,5 @@
-// Internal context for TabbedSidebar tab state (activeTab, refreshSignal).
+// Sidebar tab state (activeTab, refreshSignal) used by both TabbedSidebar
+// and custom SidebarContent components via useSidebarRefresh.
 // Separate from sidebarContainerContext which provides container-level props
 // (onClose, isDesktop) for extension SidebarContent components.
 import { createContext } from "react";

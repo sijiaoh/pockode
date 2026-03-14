@@ -100,9 +100,14 @@ function SessionSidebar({
 		[onSelectFile, isDesktop, onClose],
 	);
 
+	const containerContext = useMemo(
+		() => ({ isOpen, onClose, isDesktop }),
+		[isOpen, onClose, isDesktop],
+	);
+
 	if (SidebarContent) {
 		return (
-			<SidebarContainerContext.Provider value={{ onClose, isDesktop }}>
+			<SidebarContainerContext.Provider value={containerContext}>
 				<Sidebar isOpen={isOpen} onClose={onClose} isDesktop={isDesktop}>
 					<SidebarContent />
 				</Sidebar>

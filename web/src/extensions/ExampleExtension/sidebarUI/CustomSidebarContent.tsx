@@ -1,6 +1,7 @@
 import { MessageSquare, StickyNote } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SidebarContext } from "../../../components/Layout/SidebarContext";
+import { useSidebarContainer } from "../../../lib/sidebarContainerContext";
 import NotesTab from "./NotesTab";
 import SessionsTab from "./SessionsTab";
 import SidebarHeader from "./SidebarHeader";
@@ -11,8 +12,17 @@ const TABS = [
 ] as const;
 
 export default function CustomSidebarContent() {
+	const { isOpen } = useSidebarContainer();
 	const [activeTab, setActiveTab] = useState<string>("sessions");
 	const [refreshSignal, setRefreshSignal] = useState(0);
+	const prevOpenRef = useRef(isOpen);
+
+	useEffect(() => {
+		if (isOpen && !prevOpenRef.current) {
+			setRefreshSignal((s) => s + 1);
+		}
+		prevOpenRef.current = isOpen;
+	}, [isOpen]);
 
 	const contextValue = useMemo(
 		() => ({ activeTab, refreshSignal }),

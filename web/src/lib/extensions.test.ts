@@ -6,6 +6,7 @@ import {
 	loadExtension,
 	unloadExtension,
 } from "./extensions";
+import { resetChatUIConfig } from "./registries/chatUIRegistry";
 import {
 	getSettingsSections,
 	resetSettingsSections,
@@ -18,7 +19,11 @@ function createExtension(overrides: Partial<Extension> = {}): Extension {
 
 describe("extensions", () => {
 	afterEach(() => {
+		for (const id of getLoadedExtensions()) {
+			unloadExtension(id);
+		}
 		resetSettingsSections();
+		resetChatUIConfig();
 		resetSidebarUIConfig();
 	});
 

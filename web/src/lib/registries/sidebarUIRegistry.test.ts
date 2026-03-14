@@ -5,11 +5,11 @@ import {
 	setSidebarUIConfig,
 } from "./sidebarUIRegistry";
 
-afterEach(() => {
-	resetSidebarUIConfig();
-});
+describe("sidebarUIRegistry", () => {
+	afterEach(() => {
+		resetSidebarUIConfig();
+	});
 
-describe("sidebarUIConfig", () => {
 	it("sets config values", () => {
 		const Component = () => null;
 		setSidebarUIConfig({ SidebarContent: Component });
