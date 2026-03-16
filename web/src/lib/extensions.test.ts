@@ -1,26 +1,37 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Extension } from "./extensions";
-import { resetSettingsSections } from "./registries/settingsRegistry";
+import {
+	type Extension,
+	getLoadedExtensions,
+	isExtensionLoaded,
+	loadExtension,
+	unloadExtension,
+} from "./extensions";
+import { resetChatUIConfig } from "./registries/chatUIRegistry";
+import {
+	getSettingsSections,
+	resetSettingsSections,
+} from "./registries/settingsRegistry";
+import {
+	getSidebarUIConfig,
+	resetSidebarUIConfig,
+} from "./registries/sidebarUIRegistry";
 
 function createExtension(overrides: Partial<Extension> = {}): Extension {
 	return { id: "test", activate: vi.fn(), ...overrides };
 }
 
-async function importExtensions() {
-	return import("./extensions");
-}
-
 describe("extensions", () => {
 	afterEach(() => {
-		vi.resetModules();
+		for (const id of getLoadedExtensions()) {
+			unloadExtension(id);
+		}
 		resetSettingsSections();
+		resetChatUIConfig();
+		resetSidebarUIConfig();
 	});
 
 	describe("loadExtension", () => {
-		it("activates extension with context containing extension id", async () => {
-			const { loadExtension, unloadExtension, isExtensionLoaded } =
-				await importExtensions();
-
+		it("activates extension with context containing extension id", () => {
 			const activate = vi.fn();
 			const result = loadExtension(createExtension({ activate }));
 
@@ -34,8 +45,7 @@ describe("extensions", () => {
 			unloadExtension("test");
 		});
 
-		it("rejects duplicate extension id", async () => {
-			const { loadExtension, unloadExtension } = await importExtensions();
+		it("rejects duplicate extension id", () => {
 			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			const activate = vi.fn();
@@ -55,13 +65,7 @@ describe("extensions", () => {
 	});
 
 	describe("unloadExtension", () => {
-		it("cleans up registrations", async () => {
-			const { loadExtension, unloadExtension, isExtensionLoaded } =
-				await importExtensions();
-			const { getSettingsSections } = await import(
-				"./registries/settingsRegistry"
-			);
-
+		it("cleans up registrations", () => {
 			loadExtension(
 				createExtension({
 					activate: (ctx) => {
@@ -85,20 +89,30 @@ describe("extensions", () => {
 			expect(isExtensionLoaded("test")).toBe(false);
 		});
 
-		it("returns false for non-existent extension", async () => {
-			const { unloadExtension } = await importExtensions();
+		it("cleans up sidebarUI config", () => {
+			const Component = () => null;
+			loadExtension(
+				createExtension({
+					activate: (ctx) => {
+						ctx.sidebarUI.configure({ SidebarContent: Component });
+					},
+				}),
+			);
 
+			expect(getSidebarUIConfig().SidebarContent).toBe(Component);
+
+			unloadExtension("test");
+
+			expect(getSidebarUIConfig().SidebarContent).toBeUndefined();
+		});
+
+		it("returns false for non-existent extension", () => {
 			expect(unloadExtension("non-existent")).toBe(false);
 		});
 	});
 
 	describe("settings.register", () => {
-		it("namespaces section id with extension id", async () => {
-			const { loadExtension, unloadExtension } = await importExtensions();
-			const { getSettingsSections } = await import(
-				"./registries/settingsRegistry"
-			);
-
+		it("namespaces section id with extension id", () => {
 			loadExtension(
 				createExtension({
 					id: "my-ext",
@@ -122,10 +136,7 @@ describe("extensions", () => {
 	});
 
 	describe("getLoadedExtensions", () => {
-		it("returns all loaded extension ids", async () => {
-			const { loadExtension, unloadExtension, getLoadedExtensions } =
-				await importExtensions();
-
+		it("returns all loaded extension ids", () => {
 			loadExtension(createExtension({ id: "ext-a" }));
 			loadExtension(createExtension({ id: "ext-b" }));
 
