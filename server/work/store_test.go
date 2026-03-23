@@ -397,7 +397,7 @@ func TestRollbackStart_FreshStartRollsBackToOpen(t *testing.T) {
 	}
 }
 
-func TestReactivate_DoneToInProgress(t *testing.T) {
+func TestReactivate_DoneRejected(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -412,13 +412,51 @@ func TestReactivate_DoneToInProgress(t *testing.T) {
 		t.Fatalf("status = %q, want %q (child still open)", got.Status, StatusDone)
 	}
 
-	// Re-activate parent (done → in_progress)
-	if err := s.Reactivate(context.Background(), story.ID); err != nil {
+	// Reactivate rejects done work (must use ReactivateParent instead)
+	if err := s.Reactivate(context.Background(), story.ID); err == nil {
+		t.Fatal("expected error for Reactivate on done work")
+	}
+}
+
+func TestReactivateParent_DoneToInProgress(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	// Create a child task so story doesn't auto-close
+	task := createTask(t, s, story.ID, "T")
+	startWork(t, s, task.ID)
+
+	doneWork(t, s, story.ID)
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusDone {
+		t.Fatalf("status = %q, want %q (child still open)", got.Status, StatusDone)
+	}
+
+	// ReactivateParent allows done → in_progress
+	if err := s.ReactivateParent(context.Background(), story.ID); err != nil {
 		t.Fatalf("done → in_progress: %v", err)
 	}
 	got = getWork(t, s, story.ID)
 	if got.Status != StatusInProgress {
 		t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
+	}
+}
+
+func TestReactivateParent_RejectsNonTerminalStatus(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	// in_progress → ReactivateParent should fail
+	if err := s.ReactivateParent(context.Background(), story.ID); err == nil {
+		t.Fatal("expected error for ReactivateParent on in_progress work")
+	}
+
+	// stopped → ReactivateParent should fail
+	s.Stop(context.Background(), story.ID)
+	if err := s.ReactivateParent(context.Background(), story.ID); err == nil {
+		t.Fatal("expected error for ReactivateParent on stopped work")
 	}
 }
 
@@ -444,7 +482,7 @@ func TestTransition_StoppedToInProgress(t *testing.T) {
 	}
 }
 
-func TestTransition_ClosedToInProgress(t *testing.T) {
+func TestTransition_ClosedToInProgress_ViaReactivateParent(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -455,8 +493,13 @@ func TestTransition_ClosedToInProgress(t *testing.T) {
 		t.Fatalf("precondition: story should be closed, got %q", got.Status)
 	}
 
-	// closed → in_progress (parent reactivation via Reactivate)
-	if err := s.Reactivate(context.Background(), story.ID); err != nil {
+	// Reactivate rejects closed work
+	if err := s.Reactivate(context.Background(), story.ID); err == nil {
+		t.Fatal("expected error for Reactivate on closed work")
+	}
+
+	// ReactivateParent allows closed → in_progress
+	if err := s.ReactivateParent(context.Background(), story.ID); err != nil {
 		t.Fatalf("closed → in_progress: %v", err)
 	}
 	got = getWork(t, s, story.ID)

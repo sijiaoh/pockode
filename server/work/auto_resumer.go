@@ -350,7 +350,7 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 
 	// Transition parent back to in_progress so the agent can work and
 	// call work_done again (done→done would be an invalid transition).
-	if err := r.workStore.Reactivate(r.ctx, parent.ID); err != nil {
+	if err := r.workStore.ReactivateParent(r.ctx, parent.ID); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
