@@ -120,7 +120,7 @@ func (h *rpcMethodHandler) handleWorkDelete(ctx context.Context, conn *jsonrpc2.
 	}
 }
 
-// collectWorkSessionIDs returns non-empty session IDs from the target work and its children.
+// collectWorkSessionIDs returns non-empty session IDs from the target work and all its descendants.
 func (h *rpcMethodHandler) collectWorkSessionIDs(workID string) []string {
 	works, err := h.workStore.List()
 	if err != nil {
@@ -128,9 +128,11 @@ func (h *rpcMethodHandler) collectWorkSessionIDs(workID string) []string {
 		return nil
 	}
 
+	descendantIDs := work.CollectDescendantIDs(works, workID)
+
 	var sessionIDs []string
 	for _, w := range works {
-		if (w.ID == workID || w.ParentID == workID) && w.SessionID != "" {
+		if descendantIDs[w.ID] && w.SessionID != "" {
 			sessionIDs = append(sessionIDs, w.SessionID)
 		}
 	}

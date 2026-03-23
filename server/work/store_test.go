@@ -300,6 +300,44 @@ func TestDelete_WithChildren(t *testing.T) {
 	}
 }
 
+func TestCollectDescendantIDs(t *testing.T) {
+	// Build a tree: A → B → C, A → D (two branches, one 3 levels deep)
+	works := []Work{
+		{ID: "A"},
+		{ID: "B", ParentID: "A"},
+		{ID: "C", ParentID: "B"},
+		{ID: "D", ParentID: "A"},
+		{ID: "E"}, // unrelated root
+	}
+
+	ids := CollectDescendantIDs(works, "A")
+
+	for _, want := range []string{"A", "B", "C", "D"} {
+		if !ids[want] {
+			t.Errorf("expected %s in descendants", want)
+		}
+	}
+	if ids["E"] {
+		t.Error("unrelated item E should not be in descendants")
+	}
+}
+
+func TestCollectDescendantIDs_LeafNode(t *testing.T) {
+	works := []Work{
+		{ID: "A"},
+		{ID: "B", ParentID: "A"},
+	}
+
+	ids := CollectDescendantIDs(works, "B")
+
+	if !ids["B"] {
+		t.Error("expected B in descendants")
+	}
+	if ids["A"] {
+		t.Error("parent A should not be in descendants of B")
+	}
+}
+
 func TestDelete_NotFound(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.Delete(context.Background(), "nonexistent"); err == nil {

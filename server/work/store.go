@@ -258,13 +258,8 @@ func (s *FileStore) Delete(_ context.Context, id string) error {
 		return ErrWorkNotFound
 	}
 
-	// Collect the target and its children for cascade delete.
-	deleteIDs := map[string]bool{id: true}
-	for _, w := range s.works {
-		if w.ParentID == id {
-			deleteIDs[w.ID] = true
-		}
-	}
+	// Collect the target and all descendants for cascade delete.
+	deleteIDs := CollectDescendantIDs(s.works, id)
 
 	var deleted []Work
 	newWorks := make([]Work, 0, len(s.works)-len(deleteIDs))
@@ -770,6 +765,21 @@ func workChanged(a, b Work) bool {
 }
 
 // --- Helpers ---
+
+// CollectDescendantIDs returns a set containing rootID and all transitive descendants.
+func CollectDescendantIDs(works []Work, rootID string) map[string]bool {
+	ids := map[string]bool{rootID: true}
+	for changed := true; changed; {
+		changed = false
+		for _, w := range works {
+			if w.ParentID != "" && ids[w.ParentID] && !ids[w.ID] {
+				ids[w.ID] = true
+				changed = true
+			}
+		}
+	}
+	return ids
+}
 
 func (s *FileStore) findIndex(id string) int {
 	for i, w := range s.works {
