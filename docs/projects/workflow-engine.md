@@ -139,6 +139,18 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 
 > Source: `server/worktree/work_starter.go`.
 
+## WorkStopper
+
+`WorkStopper` is the counterpart to `WorkStarter`. It transitions a work item to `stopped` and terminates the associated agent process.
+
+> Source: `server/worktree/work_stopper.go`.
+
+## NeedsInputSyncer
+
+`NeedsInputSyncer` bridges session-level `needs_input` state to work status. When a session enters `needs_input`, the associated `in_progress` work transitions to `needs_input`; when the session resumes, the work transitions back to `in_progress`.
+
+> Source: `server/work/needs_input_syncer.go`.
+
 ## Prompt Builders
 
 Four prompt builders generate messages for different lifecycle events. All share a common base structure:
