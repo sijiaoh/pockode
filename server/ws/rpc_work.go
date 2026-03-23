@@ -102,15 +102,59 @@ func (h *rpcMethodHandler) handleWorkDelete(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
+	// Collect session IDs from the target and its children before deletion.
+	sessionIDs := h.collectWorkSessionIDs(params.ID)
+
 	if err := h.workStore.Delete(ctx, params.ID); err != nil {
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to delete work")
 		return
 	}
 
+	// Cascade delete: close processes and remove sessions (best-effort).
+	h.deleteWorkSessions(ctx, sessionIDs)
+
 	h.log.Info("work deleted", "workId", params.ID)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		h.log.Error("failed to send work delete response", "error", err)
+	}
+}
+
+// collectWorkSessionIDs returns non-empty session IDs from the target work and its children.
+func (h *rpcMethodHandler) collectWorkSessionIDs(workID string) []string {
+	works, err := h.workStore.List()
+	if err != nil {
+		h.log.Warn("failed to list works for session cleanup", "workId", workID, "error", err)
+		return nil
+	}
+
+	var sessionIDs []string
+	for _, w := range works {
+		if (w.ID == workID || w.ParentID == workID) && w.SessionID != "" {
+			sessionIDs = append(sessionIDs, w.SessionID)
+		}
+	}
+	return sessionIDs
+}
+
+// deleteWorkSessions closes processes and deletes sessions for the given IDs.
+func (h *rpcMethodHandler) deleteWorkSessions(ctx context.Context, sessionIDs []string) {
+	if len(sessionIDs) == 0 {
+		return
+	}
+
+	mainWt, err := h.worktreeManager.Get("")
+	if err != nil {
+		h.log.Warn("could not get worktree for session cleanup", "error", err)
+		return
+	}
+	defer h.worktreeManager.Release(mainWt)
+
+	for _, sid := range sessionIDs {
+		mainWt.ProcessManager.Close(sid)
+		if err := mainWt.SessionStore.Delete(ctx, sid); err != nil {
+			h.log.Warn("failed to delete session during work cleanup", "sessionId", sid, "error", err)
+		}
 	}
 }
 

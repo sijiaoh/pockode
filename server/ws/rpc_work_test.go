@@ -268,6 +268,55 @@ func TestHandler_WorkDelete_WithChildren(t *testing.T) {
 	}
 }
 
+func TestHandler_WorkDelete_CascadesSessionDeletion(t *testing.T) {
+	mock := &mockAgent{}
+	env := newTestEnv(t, mock)
+
+	// Create story → task, then start the task (which creates a session)
+	storyResp := env.call("work.create", rpc.WorkCreateParams{
+		Type:        work.WorkTypeStory,
+		AgentRoleID: env.testRoleID,
+		Title:       "Parent story",
+	})
+	var story work.Work
+	json.Unmarshal(storyResp.Result, &story)
+
+	taskResp := env.call("work.create", rpc.WorkCreateParams{
+		Type:        work.WorkTypeTask,
+		ParentID:    story.ID,
+		AgentRoleID: env.testRoleID,
+		Title:       "Child task",
+	})
+	var task work.Work
+	json.Unmarshal(taskResp.Result, &task)
+
+	startResp := env.call("work.start", rpc.WorkStartParams{ID: task.ID})
+	var started work.Work
+	json.Unmarshal(startResp.Result, &started)
+	sessionID := started.SessionID
+	if sessionID == "" {
+		t.Fatal("expected non-empty session_id after start")
+	}
+
+	// Verify session exists before delete
+	wt := env.getMainWorktree()
+	defer env.worktreeManager.Release(wt)
+	if _, found, _ := wt.SessionStore.Get(sessionID); !found {
+		t.Fatal("expected session to exist before delete")
+	}
+
+	// Delete parent story — should cascade delete work items AND sessions
+	resp := env.call("work.delete", rpc.WorkDeleteParams{ID: story.ID})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	// Verify session is also deleted
+	if _, found, _ := wt.SessionStore.Get(sessionID); found {
+		t.Error("expected session to be cascade-deleted with work")
+	}
+}
+
 // --- work.start ---
 
 func TestHandler_WorkStart(t *testing.T) {

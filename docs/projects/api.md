@@ -55,7 +55,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 |--------|--------|--------|-------------|
 | `work.create` | `WorkCreateParams` | `Work` (full object) | Create a work item |
 | `work.update` | `WorkUpdateParams` | `{}` | Update data fields (pointer semantics) |
-| `work.delete` | `WorkDeleteParams` | `{}` | Delete a work item (cascade-deletes children) |
+| `work.delete` | `WorkDeleteParams` | `{}` | Delete a work item (cascade-deletes children and sessions) |
 | `work.start` | `WorkStartParams` | `Work` (full object) | Atomic claim + session creation |
 | `work.stop` | `WorkStopParams` | `{}` | Stop a work item (in_progress/needs_input → stopped) |
 | `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
