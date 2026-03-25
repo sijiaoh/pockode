@@ -13,8 +13,8 @@ func Test_validNextStatuses(t *testing.T) {
 		{StatusInProgress, []WorkStatus{StatusOpen, StatusNeedsInput, StatusStopped, StatusDone}},
 		{StatusNeedsInput, []WorkStatus{StatusInProgress, StatusStopped}},
 		{StatusStopped, []WorkStatus{StatusInProgress}},
-		{StatusDone, []WorkStatus{StatusInProgress}},
-		{StatusClosed, []WorkStatus{StatusInProgress}},
+		{StatusDone, []WorkStatus{}},
+		{StatusClosed, []WorkStatus{}},
 	}
 
 	for _, tt := range tests {

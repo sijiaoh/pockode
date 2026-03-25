@@ -43,11 +43,11 @@ The workflow engine manages work item lifecycles through status transitions, aut
 | `needs_input`  | `in_progress`  | `Store.Resume` (user confirms)             |
 | `needs_input`  | `stopped`      | `Store.Stop` (process ended while paused)  |
 | `stopped`      | `in_progress`  | `Store.Start` (restart) or `Store.Reactivate` |
-| `done`         | `in_progress`  | `Store.Reactivate` (parent reactivation)   |
-| `closed`       | `in_progress`  | `Store.Reactivate` (parent reactivation)   |
+| `done`         | `in_progress`  | `Store.ReactivateParent` (parent reactivation) |
+| `closed`       | `in_progress`  | `Store.ReactivateParent` (parent reactivation) |
 | `done`         | `closed`       | Auto-close (internal, not an API call)     |
 
-> Source: `server/work/validation.go` — `validTransitions` map.
+> Source: `server/work/validation.go` — `validTransitions` map; `done`/`closed` rows handled by `Store.ReactivateParent`.
 
 ### SessionID Management
 
@@ -55,7 +55,8 @@ SessionID changes are encapsulated in intent-based Store methods:
 
 - **`Start`** — sets a new sessionID (fresh start or restart)
 - **`RollbackStart`** — clears sessionID on fresh-start failure; preserves on restart failure (→ `stopped`)
-- **`Reactivate`** — preserves existing sessionID (used for parent reactivation, process-running detection)
+- **`Reactivate`** — preserves existing sessionID (used for process-running detection)
+- **`ReactivateParent`** — preserves existing sessionID (used for parent reactivation)
 - All other transitions leave sessionID unchanged
 
 > Source: `server/work/store.go` — intent-based transition methods.
@@ -99,7 +100,7 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 **Flow:**
 1. Child transitions to `closed` (via auto-close after `done`).
 2. Look up parent. If parent is `done` with a non-empty `sessionID`:
-   - Reactivate parent to `in_progress` (preserving sessionID).
+   - `ReactivateParent` transitions parent to `in_progress` (preserving sessionID).
    - Reset parent's retry counter.
    - Send a reactivation message to the parent's existing session.
 
@@ -137,6 +138,18 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 4. Send `BuildRestartMessage` to the existing session instead of creating a new one.
 
 > Source: `server/worktree/work_starter.go`.
+
+## WorkStopper
+
+`WorkStopper` is the counterpart to `WorkStarter`. It transitions a work item to `stopped` and terminates the associated agent process.
+
+> Source: `server/worktree/work_stopper.go`.
+
+## NeedsInputSyncer
+
+`NeedsInputSyncer` bridges session-level `needs_input` state to work status. When a session enters `needs_input`, the associated `in_progress` work transitions to `needs_input`; when the session resumes, the work transitions back to `in_progress`.
+
+> Source: `server/work/needs_input_syncer.go`.
 
 ## Prompt Builders
 

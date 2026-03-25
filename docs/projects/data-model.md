@@ -131,7 +131,8 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | MarkDone      | `(ctx, id) → error`                    | Transitions to `done`; auto-advances from `open` if needed      |
 | MarkNeedsInput| `(ctx, id) → error`                    | Transitions `in_progress` → `needs_input`                       |
 | Resume        | `(ctx, id) → error`                    | Transitions `needs_input` → `in_progress`                       |
-| Reactivate    | `(ctx, id) → error`                    | Transitions `stopped`/`done`/`closed` → `in_progress` (preserves sessionID) |
+| Reactivate    | `(ctx, id) → error`                    | Transitions `stopped` → `in_progress` (preserves sessionID)                 |
+| ReactivateParent | `(ctx, id) → error`                 | Transitions `done`/`closed` → `in_progress` (preserves sessionID)           |
 | RollbackStart | `(ctx, id, wasRestart) → error`        | Reverts a failed Start (fresh → `open`; restart → `stopped`)   |
 
 **Comments and events:**

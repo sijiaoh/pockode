@@ -1,6 +1,9 @@
 import { DEFAULT_PRIORITY, type Extension } from "../../lib/extensions";
 import AboutSection from "./settings/AboutSection";
 
+// Uncomment below import to enable custom sidebar UI
+// import CustomSidebarContent from "./sidebarUI/CustomSidebarContent";
+
 // Uncomment below imports to enable custom chat UI
 // import CustomAssistantAvatar from "./chatUI/CustomAssistantAvatar";
 // import CustomChatTopContent from "./chatUI/CustomChatTopContent";
@@ -17,6 +20,11 @@ export const activate: Extension["activate"] = (ctx) => {
 		priority: DEFAULT_PRIORITY + 100,
 		component: AboutSection,
 	});
+
+	// Uncomment below to enable custom sidebar UI (replaces default tabbed sidebar)
+	// ctx.sidebarUI.configure({
+	// 	SidebarContent: CustomSidebarContent,
+	// });
 
 	// Uncomment below to enable custom chat UI (avatars, input bar, empty state, etc.)
 	// ctx.chatUI.configure({

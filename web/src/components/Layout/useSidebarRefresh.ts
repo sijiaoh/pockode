@@ -4,7 +4,9 @@ import { SidebarContext } from "./SidebarContext";
 export function useSidebarRefresh(tabId: string, onRefresh?: () => void) {
 	const context = useContext(SidebarContext);
 	if (!context) {
-		throw new Error("useSidebarRefresh must be used within TabbedSidebar");
+		throw new Error(
+			"useSidebarRefresh must be used within a SidebarContext provider",
+		);
 	}
 
 	const { activeTab, refreshSignal } = context;

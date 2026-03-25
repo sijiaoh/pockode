@@ -8,6 +8,11 @@ import {
 	registerSettingsSection,
 	type SettingsSectionConfig,
 } from "./registries/settingsRegistry";
+import {
+	resetSidebarUIConfig,
+	type SidebarUIConfig,
+	setSidebarUIConfig,
+} from "./registries/sidebarUIRegistry";
 import { registerTheme, type ThemeInfo } from "./themeStore";
 
 export { DEFAULT_PRIORITY };
@@ -21,6 +26,9 @@ export interface ExtensionContext {
 	};
 	readonly chatUI: {
 		configure(config: Partial<ChatUIConfig>): void;
+	};
+	readonly sidebarUI: {
+		configure(config: Partial<SidebarUIConfig>): void;
 	};
 	readonly theme: {
 		/** Register a custom theme. CSS should define `.theme-{name}` with theme variables. */
@@ -56,6 +64,12 @@ function createContext(extensionId: string): InternalContext {
 			configure(config) {
 				setChatUIConfig(config);
 				disposables.push(() => resetChatUIConfig());
+			},
+		},
+		sidebarUI: {
+			configure(config) {
+				setSidebarUIConfig(config);
+				disposables.push(() => resetSidebarUIConfig());
 			},
 		},
 		theme: {

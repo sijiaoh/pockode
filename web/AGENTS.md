@@ -20,9 +20,10 @@ pnpm exec tsc -b         # 类型检查
 
 ```
 src/
-  components/            # React 组件（Auth, Chat, common, Files, Git, Layout, Session, Worktree, ui）
-  hooks/                 # 自定义 Hooks（useSession, useTheme, useChatMessages 等）
-  lib/                   # 状态管理 + API（*Store.ts, *Api.ts）
+  components/            # React 组件（Auth, Chat, common, Files, Git, Layout, Project, Session, Settings, Worktree, ui）
+  extensions/            # 扩展系统（builtin, ExampleExtension）
+  hooks/                 # 自定义 Hooks（useSession, useSubscription, useChatMessages 等）
+  lib/                   # 状态管理 + RPC（*Store.ts, rpc/, registries/）
   types/                 # 类型定义
   utils/                 # 工具函数
   test/                  # 测试配置（setup.ts）

@@ -22,7 +22,7 @@ pockode/
 ├── web/            # React 前端（见 web/AGENTS.md）
 ├── server/         # Go 后端（见 server/AGENTS.md）
 ├── site/           # pockode.com 官网（Hugo）
-└── docs/           # 补充文档
+└── docs/           # 设计文档（入口：docs/concept.md）
 ```
 
 ## 架构概览
@@ -34,7 +34,7 @@ React SPA (前端)
    Go 服务 (后端)
         │ spawn + stream-json
         ▼
-   AI CLI (claude / gemini / ...)
+   AI CLI (claude / codex / ...)
 ```
 
 ## 开发规范

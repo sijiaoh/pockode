@@ -25,18 +25,29 @@ go test -tags=integration ./agent/claude -v
 
 ```
 main.go                 # 入口 + 路由 + graceful shutdown
-agent/agent.go          # Agent/Session 接口（小接口原则）
-agent/event.go          # 事件类型
-agent/claude/           # Claude CLI 实现
-session/store.go        # Session 内存存储
-session/types.go        # Session 类型定义
-ws/rpc.go               # WebSocket RPC 处理
-ws/rpc_*.go             # 各领域 RPC 方法（chat, file, git, session 等）
-rpc/types.go            # RPC 消息类型定义
-middleware/auth.go      # Token 认证中间件
-logger/logger.go        # 结构化日志 (slog)
-git/git.go              # Git 仓库初始化
-worktree/               # Worktree 管理
+agent/                  # Agent 抽象（接口, 事件, 进程管理, 注册表）
+  claude/               # Claude CLI 实现
+  codex/                # Codex CLI 实现
+agentrole/              # AgentRole 存储 + 类型定义
+chat/                   # Chat 客户端
+command/                # 命令存储
+contents/               # 文件内容获取
+filestore/              # JSON 文件存储基础设施
+git/                    # Git 操作
+logger/                 # 结构化日志 (slog)
+mcp/                    # MCP 服务器（stdio JSON-RPC，供 AI CLI 使用）
+middleware/             # Token 认证中间件
+process/                # 进程管理器
+relay/                  # HTTP 中继 / 多路复用（NAT 穿透）
+rpc/                    # RPC 消息类型定义
+session/                # Session 存储 + 清理
+settings/               # 设置存储
+startup/                # 启动横幅
+static/                 # 静态文件（构建后的前端资源）
+watch/                  # 实时订阅（WebSocket 通知的分发引擎）
+work/                   # Work 存储, 状态机, AutoResumer, 提示词构建器
+worktree/               # Worktree 管理, WorkStarter, WorkStopper
+ws/                     # WebSocket RPC 处理（rpc_*.go 按领域分割）
 ```
 
 ## 风格

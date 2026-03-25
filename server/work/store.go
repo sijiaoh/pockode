@@ -28,9 +28,8 @@ type Store interface {
 	// encapsulates validation, sessionID management, and side effects.
 
 	// Start transitions a work item to in_progress and assigns a sessionID.
-	// Allowed from any state that can reach in_progress (open, stopped,
-	// needs_input, done, closed). Use Reactivate instead when sessionID
-	// should not be changed (e.g. process-running detection, parent reactivation).
+	// Allowed from: open, stopped, needs_input. Use Reactivate for
+	// process-running detection, or ReactivateParent for parent reactivation.
 	Start(ctx context.Context, id string, sessionID string) (Work, error)
 
 	// Stop transitions in_progress/needs_input → stopped.
@@ -47,9 +46,14 @@ type Store interface {
 	// Resume transitions needs_input → in_progress.
 	Resume(ctx context.Context, id string) error
 
-	// Reactivate transitions stopped/done/closed → in_progress without
-	// changing sessionID. Used for process-running detection and parent reactivation.
+	// Reactivate transitions stopped → in_progress without changing sessionID.
+	// Used for process-running detection (user sends message to stopped session).
 	Reactivate(ctx context.Context, id string) error
+
+	// ReactivateParent transitions done/closed → in_progress without
+	// changing sessionID. Used exclusively for parent reactivation when
+	// a child work item closes.
+	ReactivateParent(ctx context.Context, id string) error
 
 	// RollbackStart reverts a failed Start. Fresh starts roll back to open
 	// (clearing sessionID); restarts roll back to stopped (preserving sessionID).
@@ -438,9 +442,33 @@ func (s *FileStore) Reactivate(_ context.Context, id string) error {
 	}
 
 	w := &s.works[idx]
-	if !ValidateTransition(w.Status, StatusInProgress) {
+	if w.Status != StatusStopped {
 		s.worksMu.Unlock()
-		return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusInProgress)
+		return fmt.Errorf("%w: invalid transition %s → %s (Reactivate requires stopped)", ErrInvalidWork, w.Status, StatusInProgress)
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Status = StatusInProgress
+	w.UpdatedAt = time.Now()
+
+	modified := map[string]bool{id: true}
+	return s.persistAndNotifyUpdates(prev, modified)
+}
+
+func (s *FileStore) ReactivateParent(_ context.Context, id string) error {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if w.Status != StatusDone && w.Status != StatusClosed {
+		s.worksMu.Unlock()
+		return fmt.Errorf("%w: invalid transition %s → %s (ReactivateParent requires done or closed)", ErrInvalidWork, w.Status, StatusInProgress)
 	}
 
 	prev := s.snapshotWorks()
