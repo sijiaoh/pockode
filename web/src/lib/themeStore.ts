@@ -186,6 +186,7 @@ let customThemes = new Map<string, ThemeInfo>();
 const themeListeners = new Set<() => void>();
 
 function notifyThemeListeners() {
+	allThemesCache = null;
 	for (const listener of themeListeners) {
 		listener();
 	}
@@ -235,13 +236,21 @@ export function registerTheme(
 	};
 }
 
+let allThemesCache: Array<{ name: string; info: ThemeInfo }> | null = null;
+
 function getAllThemesSnapshot(): Array<{ name: string; info: ThemeInfo }> {
-	const builtin = THEME_NAMES.map((name) => ({ name, info: THEME_INFO[name] }));
-	const custom = Array.from(customThemes.entries()).map(([name, info]) => ({
-		name,
-		info,
-	}));
-	return [...builtin, ...custom];
+	if (allThemesCache === null) {
+		const builtin = THEME_NAMES.map((name) => ({
+			name,
+			info: THEME_INFO[name],
+		}));
+		const custom = Array.from(customThemes.entries()).map(([name, info]) => ({
+			name,
+			info,
+		}));
+		allThemesCache = [...builtin, ...custom];
+	}
+	return allThemesCache;
 }
 
 /**
