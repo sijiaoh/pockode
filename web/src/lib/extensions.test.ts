@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Extension } from "./extensions";
 import { resetSettingsSections } from "./registries/settingsRegistry";
+import { resetCustomThemes } from "./themeStore";
 
 function createExtension(overrides: Partial<Extension> = {}): Extension {
 	return { id: "test", activate: vi.fn(), ...overrides };
@@ -14,6 +15,7 @@ describe("extensions", () => {
 	afterEach(() => {
 		vi.resetModules();
 		resetSettingsSections();
+		resetCustomThemes();
 	});
 
 	describe("loadExtension", () => {
@@ -83,6 +85,37 @@ describe("extensions", () => {
 			expect(result).toBe(true);
 			expect(getSettingsSections()).toHaveLength(0);
 			expect(isExtensionLoaded("test")).toBe(false);
+		});
+
+		it("cleans up registered themes", async () => {
+			const { loadExtension, unloadExtension } = await importExtensions();
+			const { getAllThemes } = await import("./themeStore");
+
+			loadExtension(
+				createExtension({
+					activate: (ctx) => {
+						ctx.theme.register(
+							"test-theme",
+							{
+								label: "Test",
+								description: "Test theme",
+								accent: { light: "#000", dark: "#fff" },
+								bg: { light: "#fff", dark: "#000" },
+								text: { light: "#000", dark: "#fff" },
+								textMuted: { light: "#666", dark: "#999" },
+							},
+							".theme-test-theme { --th-accent: #000; }",
+						);
+					},
+				}),
+			);
+
+			const builtinCount = 5;
+			expect(getAllThemes()).toHaveLength(builtinCount + 1);
+
+			unloadExtension("test");
+
+			expect(getAllThemes()).toHaveLength(builtinCount);
 		});
 
 		it("returns false for non-existent extension", async () => {

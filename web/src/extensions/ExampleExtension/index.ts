@@ -28,4 +28,14 @@ export const activate: Extension["activate"] = (ctx) => {
 	// 	ModeSelector: null,
 	// 	StopButton: null,
 	// });
+
+	// Uncomment below to register a custom theme
+	// ctx.theme.register("my-theme", {
+	// 	label: "My Theme",
+	// 	description: "Custom theme example",
+	// 	accent: { light: "#0ea5e9", dark: "#7dd3fc" },
+	// 	bg: { light: "#f8fafc", dark: "#0c1929" },
+	// 	text: { light: "#0c1929", dark: "#f0f9ff" },
+	// 	textMuted: { light: "#64748b", dark: "#94a3b8" },
+	// }, `.theme-my-theme { --th-accent: #0ea5e9; }`);
 };
