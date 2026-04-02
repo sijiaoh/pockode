@@ -13,7 +13,7 @@ import {
 	type SidebarUIConfig,
 	setSidebarUIConfig,
 } from "./registries/sidebarUIRegistry";
-import { registerTheme, type ThemeInfo } from "./themeStore";
+import { registerTheme, type ThemeInfo } from "./registries/themeRegistry";
 
 export { DEFAULT_PRIORITY };
 export type { SettingsSectionConfig };

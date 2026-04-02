@@ -15,7 +15,7 @@ import {
 	getSidebarUIConfig,
 	resetSidebarUIConfig,
 } from "./registries/sidebarUIRegistry";
-import { getAllThemes, resetCustomThemes } from "./themeStore";
+import { getAllThemes, resetCustomThemes } from "./registries/themeRegistry";
 
 function createExtension(overrides: Partial<Extension> = {}): Extension {
 	return { id: "test", activate: vi.fn(), ...overrides };

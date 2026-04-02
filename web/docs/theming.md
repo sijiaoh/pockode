@@ -150,6 +150,8 @@
 
 ## 添加新主题
 
+### 内置主题
+
 1. 在 `src/index.css` 中添加新的主题类：
 
 ```css
@@ -160,7 +162,11 @@
 }
 ```
 
-2. 在 `useTheme.ts` 中添加新主题选项。
+2. 在 `src/lib/registries/themeRegistry.ts` 的 `THEME_NAMES` 和 `THEME_INFO` 中注册。
+
+### 通过扩展注册
+
+扩展可以在运行时注册自定义主题，无需修改核心文件。详见 `src/extensions/README.md` 的 `ctx.theme.register()` 文档。
 
 ## 暗色模式适配
 
