@@ -13,6 +13,7 @@ import {
 	type SidebarUIConfig,
 	setSidebarUIConfig,
 } from "./registries/sidebarUIRegistry";
+import { registerTheme, type ThemeInfo } from "./themeStore";
 
 export { DEFAULT_PRIORITY };
 export type { SettingsSectionConfig };
@@ -28,6 +29,10 @@ export interface ExtensionContext {
 	};
 	readonly sidebarUI: {
 		configure(config: Partial<SidebarUIConfig>): void;
+	};
+	readonly theme: {
+		/** Register a custom theme. CSS should define `.theme-{name}` with theme variables. */
+		register(name: string, info: ThemeInfo, css: string): void;
 	};
 }
 
@@ -65,6 +70,12 @@ function createContext(extensionId: string): InternalContext {
 			configure(config) {
 				setSidebarUIConfig(config);
 				disposables.push(() => resetSidebarUIConfig());
+			},
+		},
+		theme: {
+			register(name, info, css) {
+				const unregister = registerTheme(name, info, css);
+				disposables.push(unregister);
 			},
 		},
 		dispose() {

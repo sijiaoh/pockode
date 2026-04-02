@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { create } from "zustand";
 
 const THEME_MODES = ["light", "dark", "system"] as const;
@@ -89,13 +90,17 @@ function resolveMode(mode: ThemeMode): "light" | "dark" {
 	return mode === "system" ? getSystemTheme() : mode;
 }
 
-function applyThemeToDOM(mode: ThemeMode, name: ThemeName) {
+function applyThemeToDOM(mode: ThemeMode, name: string) {
 	const root = document.documentElement;
 	const resolved = resolveMode(mode);
 
 	root.classList.toggle("dark", resolved === "dark");
 
+	// Remove all theme classes (builtin and custom)
 	for (const themeName of THEME_NAMES) {
+		root.classList.remove(`theme-${themeName}`);
+	}
+	for (const themeName of customThemes.keys()) {
 		root.classList.remove(`theme-${themeName}`);
 	}
 	root.classList.add(`theme-${name}`);
@@ -136,11 +141,15 @@ export const themeActions = {
 		});
 	},
 
-	setTheme: (newTheme: ThemeName) => {
+	setTheme: (newTheme: string) => {
+		if (!isValidTheme(newTheme)) {
+			console.warn(`Invalid theme: ${newTheme}`);
+			return;
+		}
 		const { mode } = useThemeStore.getState();
 		localStorage.setItem(NAME_STORAGE_KEY, newTheme);
 		applyThemeToDOM(mode, newTheme);
-		useThemeStore.setState({ theme: newTheme });
+		useThemeStore.setState({ theme: newTheme as ThemeName });
 	},
 
 	init: () => {
@@ -167,4 +176,125 @@ export function useTheme() {
 		setMode: themeActions.setMode,
 		setTheme: themeActions.setTheme,
 	};
+}
+
+// ============================================
+// Custom Theme Extension API
+// ============================================
+
+let customThemes = new Map<string, ThemeInfo>();
+const themeListeners = new Set<() => void>();
+
+function notifyThemeListeners() {
+	allThemesCache = null;
+	for (const listener of themeListeners) {
+		listener();
+	}
+}
+
+function injectThemeCSS(name: string, css: string) {
+	const styleId = `theme-${name}`;
+	let style = document.getElementById(styleId) as HTMLStyleElement | null;
+	if (!style) {
+		style = document.createElement("style");
+		style.id = styleId;
+		document.head.appendChild(style);
+	}
+	style.textContent = css;
+}
+
+function removeThemeCSS(name: string) {
+	const style = document.getElementById(`theme-${name}`);
+	if (style) {
+		style.remove();
+	}
+}
+
+/**
+ * Register a custom theme at runtime.
+ * The CSS should define `.theme-{name}` class with theme variables.
+ *
+ * @internal Use `ctx.theme.register()` from extension context instead.
+ * @returns Unregister function that removes the theme.
+ */
+export function registerTheme(
+	name: string,
+	info: ThemeInfo,
+	css: string,
+): () => void {
+	// Immutable update for React change detection
+	customThemes = new Map(customThemes);
+	customThemes.set(name, info);
+	injectThemeCSS(name, css);
+	notifyThemeListeners();
+
+	return () => {
+		customThemes = new Map(customThemes);
+		customThemes.delete(name);
+		removeThemeCSS(name);
+		notifyThemeListeners();
+	};
+}
+
+let allThemesCache: Array<{ name: string; info: ThemeInfo }> | null = null;
+
+function getAllThemesSnapshot(): Array<{ name: string; info: ThemeInfo }> {
+	if (allThemesCache === null) {
+		const builtin = THEME_NAMES.map((name) => ({
+			name,
+			info: THEME_INFO[name],
+		}));
+		const custom = Array.from(customThemes.entries()).map(([name, info]) => ({
+			name,
+			info,
+		}));
+		allThemesCache = [...builtin, ...custom];
+	}
+	return allThemesCache;
+}
+
+/**
+ * React hook to get all themes (builtin + custom).
+ * Auto re-renders when custom themes are added.
+ */
+export function useAllThemes(): Array<{ name: string; info: ThemeInfo }> {
+	return useSyncExternalStore((callback) => {
+		themeListeners.add(callback);
+		return () => themeListeners.delete(callback);
+	}, getAllThemesSnapshot);
+}
+
+/**
+ * Get all themes (builtin + custom) for non-React use.
+ */
+export function getAllThemes(): Array<{ name: string; info: ThemeInfo }> {
+	return getAllThemesSnapshot();
+}
+
+/**
+ * Check if a theme name is valid (builtin or custom).
+ */
+export function isValidTheme(name: string): boolean {
+	return THEME_NAMES.includes(name as ThemeName) || customThemes.has(name);
+}
+
+/**
+ * Get theme info by name (builtin or custom).
+ */
+export function getThemeInfo(name: string): ThemeInfo | undefined {
+	if (THEME_NAMES.includes(name as ThemeName)) {
+		return THEME_INFO[name as ThemeName];
+	}
+	return customThemes.get(name);
+}
+
+/**
+ * @internal For testing only.
+ */
+export function resetCustomThemes(): void {
+	for (const name of customThemes.keys()) {
+		removeThemeCSS(name);
+	}
+	customThemes = new Map();
+	notifyThemeListeners();
 }
