@@ -15,6 +15,11 @@ import {
 	getSidebarUIConfig,
 	resetSidebarUIConfig,
 } from "./registries/sidebarUIRegistry";
+import {
+	getAllThemes,
+	resetCustomThemes,
+	THEME_NAMES,
+} from "./registries/themeRegistry";
 
 function createExtension(overrides: Partial<Extension> = {}): Extension {
 	return { id: "test", activate: vi.fn(), ...overrides };
@@ -28,6 +33,7 @@ describe("extensions", () => {
 		resetSettingsSections();
 		resetChatUIConfig();
 		resetSidebarUIConfig();
+		resetCustomThemes();
 	});
 
 	describe("loadExtension", () => {
@@ -104,6 +110,33 @@ describe("extensions", () => {
 			unloadExtension("test");
 
 			expect(getSidebarUIConfig().SidebarContent).toBeUndefined();
+		});
+
+		it("cleans up registered themes", () => {
+			loadExtension(
+				createExtension({
+					activate: (ctx) => {
+						ctx.theme.register(
+							"test-theme",
+							{
+								label: "Test",
+								description: "Test theme",
+								accent: { light: "#000", dark: "#fff" },
+								bg: { light: "#fff", dark: "#000" },
+								text: { light: "#000", dark: "#fff" },
+								textMuted: { light: "#666", dark: "#999" },
+							},
+							".theme-test-theme { --th-accent: #000; }",
+						);
+					},
+				}),
+			);
+
+			expect(getAllThemes()).toHaveLength(THEME_NAMES.length + 1);
+
+			unloadExtension("test");
+
+			expect(getAllThemes()).toHaveLength(THEME_NAMES.length);
 		});
 
 		it("returns false for non-existent extension", () => {

@@ -1,80 +1,18 @@
 import { create } from "zustand";
+import {
+	getCustomThemeNames,
+	isValidTheme,
+	subscribeThemeRegistry,
+	THEME_NAMES,
+	type ThemeName,
+} from "./registries/themeRegistry";
 
 const THEME_MODES = ["light", "dark", "system"] as const;
 export type ThemeMode = (typeof THEME_MODES)[number];
 
-export const THEME_NAMES = [
-	"abyss",
-	"aurora",
-	"ember",
-	"mint",
-	"void",
-] as const;
-export type ThemeName = (typeof THEME_NAMES)[number];
-
 function isValidThemeMode(value: string | null): value is ThemeMode {
 	return value !== null && THEME_MODES.includes(value as ThemeMode);
 }
-
-function isValidThemeName(value: string | null): value is ThemeName {
-	return value !== null && THEME_NAMES.includes(value as ThemeName);
-}
-
-// Theme colors for preview display.
-// These values must match the CSS custom properties in index.css.
-// We duplicate them here because the theme preview needs to show colors
-// for themes that aren't currently applied to the DOM.
-export interface ThemeInfo {
-	label: string;
-	description: string;
-	accent: { light: string; dark: string };
-	bg: { light: string; dark: string };
-	text: { light: string; dark: string };
-	textMuted: { light: string; dark: string };
-}
-
-export const THEME_INFO: Record<ThemeName, ThemeInfo> = {
-	abyss: {
-		label: "Abyss",
-		description: "Ocean depths",
-		accent: { light: "#0d9488", dark: "#2dd4bf" },
-		bg: { light: "#f8fafb", dark: "#0c1220" },
-		text: { light: "#0f172a", dark: "#f1f5f9" },
-		textMuted: { light: "#64748b", dark: "#94a3b8" },
-	},
-	aurora: {
-		label: "Aurora",
-		description: "Northern lights",
-		accent: { light: "#9333ea", dark: "#c084fc" },
-		bg: { light: "#fbf9fe", dark: "#150a24" },
-		text: { light: "#1e1030", dark: "#f5f3ff" },
-		textMuted: { light: "#6b21a8", dark: "#a78bfa" },
-	},
-	ember: {
-		label: "Ember",
-		description: "Glowing coals",
-		accent: { light: "#c2410c", dark: "#fb923c" },
-		bg: { light: "#fefcfa", dark: "#1c1412" },
-		text: { light: "#1c1412", dark: "#fef3e2" },
-		textMuted: { light: "#9a3412", dark: "#fdba74" },
-	},
-	mint: {
-		label: "Mint",
-		description: "Cool breeze",
-		accent: { light: "#0891b2", dark: "#22d3ee" },
-		bg: { light: "#f8fcfa", dark: "#0a1610" },
-		text: { light: "#083344", dark: "#ecfeff" },
-		textMuted: { light: "#0e7490", dark: "#67e8f9" },
-	},
-	void: {
-		label: "Void",
-		description: "Pure simplicity",
-		accent: { light: "#18181b", dark: "#fafafa" },
-		bg: { light: "#ffffff", dark: "#09090b" },
-		text: { light: "#09090b", dark: "#fafafa" },
-		textMuted: { light: "#71717a", dark: "#a1a1aa" },
-	},
-};
 
 const MODE_STORAGE_KEY = "theme-mode";
 const NAME_STORAGE_KEY = "theme-name";
@@ -89,13 +27,17 @@ function resolveMode(mode: ThemeMode): "light" | "dark" {
 	return mode === "system" ? getSystemTheme() : mode;
 }
 
-function applyThemeToDOM(mode: ThemeMode, name: ThemeName) {
+function applyThemeToDOM(mode: ThemeMode, name: string) {
 	const root = document.documentElement;
 	const resolved = resolveMode(mode);
 
 	root.classList.toggle("dark", resolved === "dark");
 
+	// Remove all theme classes (builtin and custom)
 	for (const themeName of THEME_NAMES) {
+		root.classList.remove(`theme-${themeName}`);
+	}
+	for (const themeName of getCustomThemeNames()) {
 		root.classList.remove(`theme-${themeName}`);
 	}
 	root.classList.add(`theme-${name}`);
@@ -103,7 +45,8 @@ function applyThemeToDOM(mode: ThemeMode, name: ThemeName) {
 
 interface ThemeState {
 	mode: ThemeMode;
-	theme: ThemeName;
+	/** Builtin ThemeName or custom theme name registered via extensions. */
+	theme: string;
 	resolvedMode: "light" | "dark";
 }
 
@@ -112,9 +55,8 @@ function getInitialMode(): ThemeMode {
 	return isValidThemeMode(stored) ? stored : "system";
 }
 
-function getInitialTheme(): ThemeName {
-	const stored = localStorage.getItem(NAME_STORAGE_KEY);
-	return isValidThemeName(stored) ? stored : "abyss";
+function getInitialTheme(): string {
+	return localStorage.getItem(NAME_STORAGE_KEY) ?? "abyss";
 }
 
 const initialMode = getInitialMode();
@@ -136,28 +78,70 @@ export const themeActions = {
 		});
 	},
 
-	setTheme: (newTheme: ThemeName) => {
+	setTheme: (newTheme: string) => {
+		if (!isValidTheme(newTheme)) {
+			console.warn(`Invalid theme: ${newTheme}`);
+			return;
+		}
 		const { mode } = useThemeStore.getState();
 		localStorage.setItem(NAME_STORAGE_KEY, newTheme);
 		applyThemeToDOM(mode, newTheme);
 		useThemeStore.setState({ theme: newTheme });
 	},
 
-	init: () => {
-		const { mode, theme } = useThemeStore.getState();
-		applyThemeToDOM(mode, theme);
+	init: (() => {
+		let initialized = false;
 
-		// Listen to system preference changes (called once at app startup, no cleanup needed)
-		const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-		mediaQuery.addEventListener("change", () => {
-			const { mode: currentMode, theme: currentTheme } =
-				useThemeStore.getState();
-			if (currentMode === "system") {
-				applyThemeToDOM("system", currentTheme);
-				useThemeStore.setState({ resolvedMode: getSystemTheme() });
+		return () => {
+			if (initialized) return;
+			initialized = true;
+
+			const { mode, theme } = useThemeStore.getState();
+			if (isValidTheme(theme)) {
+				applyThemeToDOM(mode, theme);
+			} else {
+				// Pending custom theme: apply mode only, theme deferred to registry subscriber
+				document.documentElement.classList.toggle(
+					"dark",
+					resolveMode(mode) === "dark",
+				);
 			}
-		});
-	},
+
+			const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+			mediaQuery.addEventListener("change", () => {
+				const { mode: currentMode, theme: currentTheme } =
+					useThemeStore.getState();
+				if (currentMode === "system") {
+					applyThemeToDOM("system", currentTheme);
+					useThemeStore.setState({ resolvedMode: getSystemTheme() });
+				}
+			});
+
+			// Sync store with registry changes (theme added/removed)
+			subscribeThemeRegistry(() => {
+				const { theme: current, mode } = useThemeStore.getState();
+
+				if (isValidTheme(current)) {
+					// Apply once when a pending custom theme becomes available
+					if (
+						!document.documentElement.classList.contains(`theme-${current}`)
+					) {
+						applyThemeToDOM(mode, current);
+					}
+					return;
+				}
+
+				// Fall back to default if active theme was unregistered
+				const fallback: ThemeName = "abyss";
+				// Remove stale class — applyThemeToDOM won't find it
+				// since it's already gone from the registry
+				document.documentElement.classList.remove(`theme-${current}`);
+				localStorage.setItem(NAME_STORAGE_KEY, fallback);
+				applyThemeToDOM(mode, fallback);
+				useThemeStore.setState({ theme: fallback });
+			});
+		};
+	})(),
 };
 
 export function useTheme() {

@@ -42,6 +42,7 @@
 | `th-bg-secondary` | 次级背景/卡片 | 侧边栏、对话框、输入框 |
 | `th-bg-tertiary` | 三级背景/悬浮 | hover 状态、下拉菜单 |
 | `th-bg-overlay` | 遮罩层 | 模态框背景遮罩 |
+| `th-overlay-hover` | 悬浮反馈层 | 列表项 hover 状态 |
 
 ### 文本色 (Text)
 
@@ -150,6 +151,8 @@
 
 ## 添加新主题
 
+### 内置主题
+
 1. 在 `src/index.css` 中添加新的主题类：
 
 ```css
@@ -160,7 +163,24 @@
 }
 ```
 
-2. 在 `useTheme.ts` 中添加新主题选项。
+2. 在 `src/lib/registries/themeRegistry.ts` 的 `THEME_NAMES` 和 `THEME_INFO` 中注册。
+
+### 通过扩展注册
+
+扩展可以在运行时注册自定义主题，无需修改核心文件。详见 `src/extensions/README.md` 的 `ctx.theme.register()` 文档。
+
+用户选择的自定义主题会保存到 localStorage。页面重载时，扩展重新注册后，主题会自动恢复——无需扩展自行处理持久化。
+
+## 模块结构
+
+主题系统由两个独立模块组成：
+
+| 模块 | 路径 | 职责 |
+|------|------|------|
+| **Theme Registry** | `src/lib/registries/themeRegistry.ts` | 主题定义、注册、查询（`THEME_NAMES`, `registerTheme`, `useAllThemes` 等） |
+| **Theme Store** | `src/lib/themeStore.ts` | 用户选择的状态管理（当前主题、模式、DOM 应用） |
+
+组件需要主题列表时，直接从 registry 导入；需要当前主题状态或切换操作时，从 store 导入。
 
 ## 暗色模式适配
 

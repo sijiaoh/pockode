@@ -80,6 +80,37 @@ ctx.chatUI.configure({
 
 See `chatUIRegistry.ts` for prop interfaces (`AvatarProps`, `InputBarProps`, etc.).
 
+### ctx.sidebarUI.configure()
+
+Replace the default tabbed sidebar with a custom component.
+
+```ts
+ctx.sidebarUI.configure({
+  SidebarContent: CustomSidebarContent,
+});
+```
+
+### ctx.theme.register()
+
+Register a custom theme at runtime. The CSS must define a `.theme-{name}` class containing `--th-*` variable overrides (see `web/docs/theming.md` for the full token list).
+
+```ts
+ctx.theme.register(
+  "my-theme",
+  {
+    label: "My Theme",
+    description: "Custom theme example",
+    accent: { light: "#0ea5e9", dark: "#7dd3fc" },
+    bg: { light: "#f8fafc", dark: "#0c1929" },
+    text: { light: "#0c1929", dark: "#f0f9ff" },
+    textMuted: { light: "#64748b", dark: "#94a3b8" },
+  },
+  `.theme-my-theme { --th-accent: #0ea5e9; /* ... */ }`,
+);
+```
+
+The theme CSS is injected into the DOM automatically. When the extension is unloaded, the theme is removed.
+
 ## How It Works
 
 Extensions are automatically discovered and loaded at startup via Vite's `import.meta.glob`.
@@ -87,8 +118,4 @@ Any directory under `extensions/` with an `index.ts` exporting `id` and `activat
 
 ## Example
 
-See `ExampleExtension/` for working examples:
-- `settings/` - Adds an "About" section to Settings
-- `chatUI/` - Custom chat UI components (avatars, input bar, empty state, etc.)
-
-Note: The chatUI customization in `ExampleExtension/index.ts` is commented out by default. Uncomment the imports and `ctx.chatUI.configure()` call to enable it.
+See `ExampleExtension/` for working examples of settings, chatUI, sidebarUI, and theme customization. Non-settings examples are commented out by default — uncomment to enable.

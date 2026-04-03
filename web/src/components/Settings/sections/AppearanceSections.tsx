@@ -1,12 +1,10 @@
 import { Check, Monitor, Moon, Sun } from "lucide-react";
 import type { ReactNode } from "react";
 import {
-	THEME_INFO,
-	THEME_NAMES,
-	type ThemeMode,
-	type ThemeName,
-	useTheme,
-} from "../../../lib/themeStore";
+	type ThemeInfo,
+	useAllThemes,
+} from "../../../lib/registries/themeRegistry";
+import { type ThemeMode, useTheme } from "../../../lib/themeStore";
 
 const MODE_OPTIONS: { value: ThemeMode; label: string; icon: ReactNode }[] = [
 	{
@@ -35,15 +33,14 @@ function isLightColor(hex: string): boolean {
 }
 
 function ThemePreview({
-	themeName,
+	info,
 	isSelected,
 	mode,
 }: {
-	themeName: ThemeName;
+	info: ThemeInfo;
 	isSelected: boolean;
 	mode: "light" | "dark";
 }) {
-	const info = THEME_INFO[themeName];
 	const accentColor = info.accent[mode];
 	const bgColor = info.bg[mode];
 	const textColor = info.text[mode];
@@ -117,6 +114,7 @@ export function AppearanceSection() {
 
 export function ThemeSection() {
 	const { theme, setTheme, resolvedMode: mode } = useTheme();
+	const allThemes = useAllThemes();
 
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: fieldset is for forms; this is an instant-apply selection
@@ -125,8 +123,7 @@ export function ThemeSection() {
 			aria-label="Theme selection"
 			className="grid grid-cols-1 gap-2"
 		>
-			{THEME_NAMES.map((name) => {
-				const info = THEME_INFO[name];
+			{allThemes.map(({ name, info }) => {
 				const isSelected = theme === name;
 				return (
 					<button
@@ -140,11 +137,7 @@ export function ThemeSection() {
 								: "border-th-border hover:border-th-text-muted"
 						}`}
 					>
-						<ThemePreview
-							themeName={name}
-							isSelected={isSelected}
-							mode={mode}
-						/>
+						<ThemePreview info={info} isSelected={isSelected} mode={mode} />
 						<div
 							className="flex min-h-12 items-center justify-between px-3 py-2"
 							style={{ backgroundColor: info.bg[mode] }}
