@@ -242,5 +242,34 @@ describe("themeStore", () => {
 
 			resetCustomThemes();
 		});
+
+		it("falls back to default when active custom theme is unregistered", async () => {
+			localStorage.setItem("theme-name", "neon");
+
+			const { registerTheme } = await import("./registries/themeRegistry");
+			const { useThemeStore, themeActions } = await import("./themeStore");
+
+			themeActions.init();
+
+			// Register and auto-restore
+			const unregister = registerTheme(
+				"neon",
+				NEON_THEME,
+				".theme-neon { --accent: #e91e63; }",
+			);
+			expect(useThemeStore.getState().theme).toBe("neon");
+
+			// Unregister — should fall back to "abyss"
+			unregister();
+
+			expect(useThemeStore.getState().theme).toBe("abyss");
+			expect(localStorage.getItem("theme-name")).toBe("abyss");
+			expect(document.documentElement.classList.contains("theme-neon")).toBe(
+				false,
+			);
+			expect(document.documentElement.classList.contains("theme-abyss")).toBe(
+				true,
+			);
+		});
 	});
 });

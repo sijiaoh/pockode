@@ -14,7 +14,7 @@ function isValidThemeMode(value: string | null): value is ThemeMode {
 	return value !== null && THEME_MODES.includes(value as ThemeMode);
 }
 
-function isValidThemeName(value: string | null): value is ThemeName {
+function isBuiltinThemeName(value: string | null): value is ThemeName {
 	return value !== null && THEME_NAMES.includes(value as ThemeName);
 }
 
@@ -61,7 +61,7 @@ function getInitialMode(): ThemeMode {
 
 function getInitialTheme(): ThemeName {
 	const stored = localStorage.getItem(NAME_STORAGE_KEY);
-	return isValidThemeName(stored) ? stored : "abyss";
+	return isBuiltinThemeName(stored) ? stored : "abyss";
 }
 
 const initialMode = getInitialMode();
@@ -114,16 +114,27 @@ export const themeActions = {
 				}
 			});
 
-			// Restore custom theme from localStorage after extension registration
+			// Sync store with registry changes (theme added/removed)
 			subscribeThemeRegistry(() => {
+				const { theme: current, mode } = useThemeStore.getState();
 				const stored = localStorage.getItem(NAME_STORAGE_KEY);
-				if (
-					stored &&
-					stored !== useThemeStore.getState().theme &&
-					isValidTheme(stored)
-				) {
-					applyThemeToDOM(useThemeStore.getState().mode, stored);
+
+				// Restore custom theme from localStorage after extension registers it
+				if (stored && stored !== current && isValidTheme(stored)) {
+					applyThemeToDOM(mode, stored);
 					useThemeStore.setState({ theme: stored });
+					return;
+				}
+
+				// Fall back to default if active theme was unregistered
+				if (!isValidTheme(current)) {
+					const fallback: ThemeName = "abyss";
+					// Remove stale class — applyThemeToDOM won't find it
+					// since it's already gone from the registry
+					document.documentElement.classList.remove(`theme-${current}`);
+					localStorage.setItem(NAME_STORAGE_KEY, fallback);
+					applyThemeToDOM(mode, fallback);
+					useThemeStore.setState({ theme: fallback });
 				}
 			});
 		};
