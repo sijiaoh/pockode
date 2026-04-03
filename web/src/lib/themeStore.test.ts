@@ -1,4 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ThemeInfo } from "./registries/themeRegistry";
+
+const NEON_THEME: ThemeInfo = {
+	label: "Neon",
+	description: "Neon glow",
+	accent: { light: "#e91e63", dark: "#f48fb1" },
+	bg: { light: "#fff", dark: "#1a0011" },
+	text: { light: "#1a0011", dark: "#fff" },
+	textMuted: { light: "#880e4f", dark: "#f48fb1" },
+};
 
 describe("themeStore", () => {
 	beforeEach(() => {
@@ -121,6 +131,59 @@ describe("themeStore", () => {
 			expect(document.documentElement.classList.contains("theme-void")).toBe(
 				true,
 			);
+		});
+
+		it("switches to a registered custom theme", async () => {
+			const { useThemeStore, themeActions, registerTheme, resetCustomThemes } =
+				await import("./themeStore");
+
+			registerTheme("neon", NEON_THEME, ".theme-neon { --accent: #e91e63; }");
+
+			themeActions.setTheme("neon");
+
+			expect(useThemeStore.getState().theme).toBe("neon");
+			expect(localStorage.getItem("theme-name")).toBe("neon");
+			expect(document.documentElement.classList.contains("theme-neon")).toBe(
+				true,
+			);
+
+			resetCustomThemes();
+		});
+
+		it("rejects unregistered custom theme", async () => {
+			const { useThemeStore, themeActions } = await import("./themeStore");
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			themeActions.setTheme("abyss");
+			themeActions.setTheme("nonexistent");
+
+			expect(warnSpy).toHaveBeenCalledWith("Invalid theme: nonexistent");
+			expect(useThemeStore.getState().theme).toBe("abyss");
+			expect(
+				document.documentElement.classList.contains("theme-nonexistent"),
+			).toBe(false);
+
+			warnSpy.mockRestore();
+		});
+
+		it("removes previous builtin theme class when switching to custom", async () => {
+			const { themeActions, registerTheme, resetCustomThemes } = await import(
+				"./themeStore"
+			);
+
+			registerTheme("neon", NEON_THEME, ".theme-neon { --accent: #e91e63; }");
+
+			themeActions.setTheme("ember");
+			themeActions.setTheme("neon");
+
+			expect(document.documentElement.classList.contains("theme-ember")).toBe(
+				false,
+			);
+			expect(document.documentElement.classList.contains("theme-neon")).toBe(
+				true,
+			);
+
+			resetCustomThemes();
 		});
 	});
 
