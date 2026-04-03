@@ -42,6 +42,7 @@
 | `th-bg-secondary` | 次级背景/卡片 | 侧边栏、对话框、输入框 |
 | `th-bg-tertiary` | 三级背景/悬浮 | hover 状态、下拉菜单 |
 | `th-bg-overlay` | 遮罩层 | 模态框背景遮罩 |
+| `th-overlay-hover` | 悬浮反馈层 | 列表项 hover 状态 |
 
 ### 文本色 (Text)
 
