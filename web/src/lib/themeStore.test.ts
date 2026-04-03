@@ -203,5 +203,44 @@ describe("themeStore", () => {
 				true,
 			);
 		});
+
+		it("is idempotent — second call is a no-op", async () => {
+			localStorage.setItem("theme-name", "ember");
+
+			const { themeActions } = await import("./themeStore");
+			themeActions.init();
+
+			// Manually remove class to detect if init re-applies
+			document.documentElement.classList.remove("theme-ember");
+			themeActions.init();
+
+			expect(document.documentElement.classList.contains("theme-ember")).toBe(
+				false,
+			);
+		});
+
+		it("restores custom theme from localStorage after extension registers it", async () => {
+			localStorage.setItem("theme-name", "neon");
+
+			const { registerTheme, resetCustomThemes } = await import(
+				"./registries/themeRegistry"
+			);
+			const { useThemeStore, themeActions } = await import("./themeStore");
+
+			// Custom theme not yet registered — falls back to "abyss"
+			expect(useThemeStore.getState().theme).toBe("abyss");
+
+			themeActions.init();
+
+			// Extension registers the theme — store should auto-restore "neon"
+			registerTheme("neon", NEON_THEME, ".theme-neon { --accent: #e91e63; }");
+
+			expect(useThemeStore.getState().theme).toBe("neon");
+			expect(document.documentElement.classList.contains("theme-neon")).toBe(
+				true,
+			);
+
+			resetCustomThemes();
+		});
 	});
 });

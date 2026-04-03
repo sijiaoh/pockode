@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
 	getCustomThemeNames,
 	isValidTheme,
+	subscribeThemeRegistry,
 	THEME_NAMES,
 	type ThemeName,
 } from "./registries/themeRegistry";
@@ -93,21 +94,40 @@ export const themeActions = {
 		useThemeStore.setState({ theme: newTheme });
 	},
 
-	init: () => {
-		const { mode, theme } = useThemeStore.getState();
-		applyThemeToDOM(mode, theme);
+	init: (() => {
+		let initialized = false;
 
-		// Listen to system preference changes (called once at app startup, no cleanup needed)
-		const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-		mediaQuery.addEventListener("change", () => {
-			const { mode: currentMode, theme: currentTheme } =
-				useThemeStore.getState();
-			if (currentMode === "system") {
-				applyThemeToDOM("system", currentTheme);
-				useThemeStore.setState({ resolvedMode: getSystemTheme() });
-			}
-		});
-	},
+		return () => {
+			if (initialized) return;
+			initialized = true;
+
+			const { mode, theme } = useThemeStore.getState();
+			applyThemeToDOM(mode, theme);
+
+			const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+			mediaQuery.addEventListener("change", () => {
+				const { mode: currentMode, theme: currentTheme } =
+					useThemeStore.getState();
+				if (currentMode === "system") {
+					applyThemeToDOM("system", currentTheme);
+					useThemeStore.setState({ resolvedMode: getSystemTheme() });
+				}
+			});
+
+			// Restore custom theme from localStorage after extension registration
+			subscribeThemeRegistry(() => {
+				const stored = localStorage.getItem(NAME_STORAGE_KEY);
+				if (
+					stored &&
+					stored !== useThemeStore.getState().theme &&
+					isValidTheme(stored)
+				) {
+					applyThemeToDOM(useThemeStore.getState().mode, stored);
+					useThemeStore.setState({ theme: stored });
+				}
+			});
+		};
+	})(),
 };
 
 export function useTheme() {

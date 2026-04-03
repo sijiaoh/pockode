@@ -84,6 +84,12 @@ function subscribe(listener: () => void): () => void {
 	return () => themeListeners.delete(listener);
 }
 
+/**
+ * Subscribe to theme registry changes (custom theme add/remove).
+ * @returns Unsubscribe function.
+ */
+export const subscribeThemeRegistry = subscribe;
+
 function injectThemeCSS(name: string, css: string) {
 	const styleId = `theme-${name}`;
 	let style = document.getElementById(styleId) as HTMLStyleElement | null;
