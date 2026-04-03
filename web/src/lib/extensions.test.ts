@@ -15,7 +15,11 @@ import {
 	getSidebarUIConfig,
 	resetSidebarUIConfig,
 } from "./registries/sidebarUIRegistry";
-import { getAllThemes, resetCustomThemes } from "./registries/themeRegistry";
+import {
+	getAllThemes,
+	resetCustomThemes,
+	THEME_NAMES,
+} from "./registries/themeRegistry";
 
 function createExtension(overrides: Partial<Extension> = {}): Extension {
 	return { id: "test", activate: vi.fn(), ...overrides };
@@ -128,12 +132,11 @@ describe("extensions", () => {
 				}),
 			);
 
-			const builtinCount = 5;
-			expect(getAllThemes()).toHaveLength(builtinCount + 1);
+			expect(getAllThemes()).toHaveLength(THEME_NAMES.length + 1);
 
 			unloadExtension("test");
 
-			expect(getAllThemes()).toHaveLength(builtinCount);
+			expect(getAllThemes()).toHaveLength(THEME_NAMES.length);
 		});
 
 		it("returns false for non-existent extension", () => {

@@ -114,6 +114,11 @@ export function registerTheme(
 	info: ThemeInfo,
 	css: string,
 ): () => void {
+	if (THEME_NAMES.includes(name as ThemeName)) {
+		console.warn(`Theme "${name}" conflicts with a builtin theme, ignoring`);
+		return () => {};
+	}
+
 	if (customThemes.has(name)) {
 		console.warn(`Theme "${name}" is already registered, overwriting`);
 	}

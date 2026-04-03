@@ -47,6 +47,20 @@ describe("themeRegistry", () => {
 			expect(style?.textContent).toBe(".theme-custom { --c: 1; }");
 		});
 
+		it("rejects theme name that conflicts with builtin", () => {
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			registerTheme("abyss", createThemeInfo({ label: "Fake Abyss" }), "");
+
+			expect(warnSpy).toHaveBeenCalledWith(
+				'Theme "abyss" conflicts with a builtin theme, ignoring',
+			);
+			expect(getAllThemes()).toHaveLength(BUILTIN_COUNT);
+			expect(getThemeInfo("abyss")).toBe(THEME_INFO.abyss);
+
+			warnSpy.mockRestore();
+		});
+
 		it("warns on duplicate theme name", () => {
 			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
