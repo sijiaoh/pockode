@@ -14,10 +14,6 @@ function isValidThemeMode(value: string | null): value is ThemeMode {
 	return value !== null && THEME_MODES.includes(value as ThemeMode);
 }
 
-function isBuiltinThemeName(value: string | null): value is ThemeName {
-	return value !== null && THEME_NAMES.includes(value as ThemeName);
-}
-
 const MODE_STORAGE_KEY = "theme-mode";
 const NAME_STORAGE_KEY = "theme-name";
 
@@ -59,9 +55,8 @@ function getInitialMode(): ThemeMode {
 	return isValidThemeMode(stored) ? stored : "system";
 }
 
-function getInitialTheme(): ThemeName {
-	const stored = localStorage.getItem(NAME_STORAGE_KEY);
-	return isBuiltinThemeName(stored) ? stored : "abyss";
+function getInitialTheme(): string {
+	return localStorage.getItem(NAME_STORAGE_KEY) ?? "abyss";
 }
 
 const initialMode = getInitialMode();
@@ -102,7 +97,15 @@ export const themeActions = {
 			initialized = true;
 
 			const { mode, theme } = useThemeStore.getState();
-			applyThemeToDOM(mode, theme);
+			if (isValidTheme(theme)) {
+				applyThemeToDOM(mode, theme);
+			} else {
+				// Pending custom theme: apply mode only, theme deferred to registry subscriber
+				document.documentElement.classList.toggle(
+					"dark",
+					resolveMode(mode) === "dark",
+				);
+			}
 
 			const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 			mediaQuery.addEventListener("change", () => {
@@ -117,25 +120,25 @@ export const themeActions = {
 			// Sync store with registry changes (theme added/removed)
 			subscribeThemeRegistry(() => {
 				const { theme: current, mode } = useThemeStore.getState();
-				const stored = localStorage.getItem(NAME_STORAGE_KEY);
 
-				// Restore custom theme from localStorage after extension registers it
-				if (stored && stored !== current && isValidTheme(stored)) {
-					applyThemeToDOM(mode, stored);
-					useThemeStore.setState({ theme: stored });
+				if (isValidTheme(current)) {
+					// Apply once when a pending custom theme becomes available
+					if (
+						!document.documentElement.classList.contains(`theme-${current}`)
+					) {
+						applyThemeToDOM(mode, current);
+					}
 					return;
 				}
 
 				// Fall back to default if active theme was unregistered
-				if (!isValidTheme(current)) {
-					const fallback: ThemeName = "abyss";
-					// Remove stale class — applyThemeToDOM won't find it
-					// since it's already gone from the registry
-					document.documentElement.classList.remove(`theme-${current}`);
-					localStorage.setItem(NAME_STORAGE_KEY, fallback);
-					applyThemeToDOM(mode, fallback);
-					useThemeStore.setState({ theme: fallback });
-				}
+				const fallback: ThemeName = "abyss";
+				// Remove stale class — applyThemeToDOM won't find it
+				// since it's already gone from the registry
+				document.documentElement.classList.remove(`theme-${current}`);
+				localStorage.setItem(NAME_STORAGE_KEY, fallback);
+				applyThemeToDOM(mode, fallback);
+				useThemeStore.setState({ theme: fallback });
 			});
 		};
 	})(),

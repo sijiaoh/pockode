@@ -53,11 +53,11 @@ describe("themeStore", () => {
 			expect(useThemeStore.getState().theme).toBe("abyss");
 		});
 
-		it("defaults to abyss theme when stored value is invalid", async () => {
-			localStorage.setItem("theme-name", "invalid");
+		it("preserves stored custom theme name before registration", async () => {
+			localStorage.setItem("theme-name", "neon");
 
 			const { useThemeStore } = await import("./themeStore");
-			expect(useThemeStore.getState().theme).toBe("abyss");
+			expect(useThemeStore.getState().theme).toBe("neon");
 		});
 	});
 
@@ -219,7 +219,7 @@ describe("themeStore", () => {
 			);
 		});
 
-		it("restores custom theme from localStorage after extension registers it", async () => {
+		it("applies custom theme once when extension registers it", async () => {
 			localStorage.setItem("theme-name", "neon");
 
 			const { registerTheme, resetCustomThemes } = await import(
@@ -227,12 +227,20 @@ describe("themeStore", () => {
 			);
 			const { useThemeStore, themeActions } = await import("./themeStore");
 
-			// Custom theme not yet registered — falls back to "abyss"
-			expect(useThemeStore.getState().theme).toBe("abyss");
+			// Store preserves the custom theme name before registration
+			expect(useThemeStore.getState().theme).toBe("neon");
 
 			themeActions.init();
 
-			// Extension registers the theme — store should auto-restore "neon"
+			// init() defers DOM application for unregistered custom themes
+			expect(document.documentElement.classList.contains("theme-abyss")).toBe(
+				false,
+			);
+			expect(document.documentElement.classList.contains("theme-neon")).toBe(
+				false,
+			);
+
+			// Extension registers the theme — applied to DOM for the first time
 			registerTheme("neon", NEON_THEME, ".theme-neon { --accent: #e91e63; }");
 
 			expect(useThemeStore.getState().theme).toBe("neon");
@@ -251,7 +259,6 @@ describe("themeStore", () => {
 
 			themeActions.init();
 
-			// Register and auto-restore
 			const unregister = registerTheme(
 				"neon",
 				NEON_THEME,
