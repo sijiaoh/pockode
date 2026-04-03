@@ -169,6 +169,19 @@
 
 扩展可以在运行时注册自定义主题，无需修改核心文件。详见 `src/extensions/README.md` 的 `ctx.theme.register()` 文档。
 
+用户选择的自定义主题会保存到 localStorage。页面重载时，扩展重新注册后，主题会自动恢复——无需扩展自行处理持久化。
+
+## 模块结构
+
+主题系统由两个独立模块组成：
+
+| 模块 | 路径 | 职责 |
+|------|------|------|
+| **Theme Registry** | `src/lib/registries/themeRegistry.ts` | 主题定义、注册、查询（`THEME_NAMES`, `registerTheme`, `useAllThemes` 等） |
+| **Theme Store** | `src/lib/themeStore.ts` | 用户选择的状态管理（当前主题、模式、DOM 应用） |
+
+组件需要主题列表时，直接从 registry 导入；需要当前主题状态或切换操作时，从 store 导入。
+
 ## 暗色模式适配
 
 使用 `dark:` 前缀处理暗色模式特殊情况：
