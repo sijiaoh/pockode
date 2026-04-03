@@ -134,8 +134,10 @@ describe("themeStore", () => {
 		});
 
 		it("switches to a registered custom theme", async () => {
-			const { useThemeStore, themeActions, registerTheme, resetCustomThemes } =
-				await import("./themeStore");
+			const { registerTheme, resetCustomThemes } = await import(
+				"./registries/themeRegistry"
+			);
+			const { useThemeStore, themeActions } = await import("./themeStore");
 
 			registerTheme("neon", NEON_THEME, ".theme-neon { --accent: #e91e63; }");
 
@@ -167,9 +169,10 @@ describe("themeStore", () => {
 		});
 
 		it("removes previous builtin theme class when switching to custom", async () => {
-			const { themeActions, registerTheme, resetCustomThemes } = await import(
-				"./themeStore"
+			const { registerTheme, resetCustomThemes } = await import(
+				"./registries/themeRegistry"
 			);
+			const { themeActions } = await import("./themeStore");
 
 			registerTheme("neon", NEON_THEME, ".theme-neon { --accent: #e91e63; }");
 

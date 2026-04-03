@@ -9,18 +9,6 @@ import {
 const THEME_MODES = ["light", "dark", "system"] as const;
 export type ThemeMode = (typeof THEME_MODES)[number];
 
-export type { ThemeInfo, ThemeName } from "./registries/themeRegistry";
-export { THEME_NAMES };
-export {
-	getAllThemes,
-	getThemeInfo,
-	isValidTheme,
-	registerTheme,
-	resetCustomThemes,
-	THEME_INFO,
-	useAllThemes,
-} from "./registries/themeRegistry";
-
 function isValidThemeMode(value: string | null): value is ThemeMode {
 	return value !== null && THEME_MODES.includes(value as ThemeMode);
 }

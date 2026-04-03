@@ -2,10 +2,9 @@ import { Check, Monitor, Moon, Sun } from "lucide-react";
 import type { ReactNode } from "react";
 import {
 	type ThemeInfo,
-	type ThemeMode,
 	useAllThemes,
-	useTheme,
-} from "../../../lib/themeStore";
+} from "../../../lib/registries/themeRegistry";
+import { type ThemeMode, useTheme } from "../../../lib/themeStore";
 
 const MODE_OPTIONS: { value: ThemeMode; label: string; icon: ReactNode }[] = [
 	{
