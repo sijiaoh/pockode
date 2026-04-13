@@ -1,4 +1,5 @@
 import { Menu, Settings } from "lucide-react";
+import { useHeaderUIConfig } from "../../lib/registries/headerUIRegistry";
 import { ConnectionStatus } from "../ui";
 
 interface Props {
@@ -14,6 +15,22 @@ function MainContainer({
 	onOpenSettings,
 	title = "Pockode",
 }: Props) {
+	const { HeaderContent, TitleComponent } = useHeaderUIConfig();
+
+	// If custom HeaderContent is provided, use it instead
+	if (HeaderContent) {
+		return (
+			<div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-th-bg-primary">
+				<HeaderContent
+					onOpenSidebar={onOpenSidebar}
+					onOpenSettings={onOpenSettings}
+					title={title}
+				/>
+				{children}
+			</div>
+		);
+	}
+
 	return (
 		<div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-th-bg-primary">
 			<header className="flex h-11 shrink-0 items-center justify-between border-b border-th-border px-3 sm:h-12 sm:px-4">
@@ -28,9 +45,13 @@ function MainContainer({
 							<Menu className="h-5 w-5" aria-hidden="true" />
 						</button>
 					)}
-					<h1 className="text-base font-bold text-th-text-primary sm:text-lg">
-						{title}
-					</h1>
+					{TitleComponent ? (
+						<TitleComponent />
+					) : (
+						<h1 className="text-base font-bold text-th-text-primary sm:text-lg">
+							{title}
+						</h1>
+					)}
 				</div>
 				<div className="flex items-center gap-2">
 					<ConnectionStatus />
