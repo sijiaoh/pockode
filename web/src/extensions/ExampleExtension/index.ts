@@ -1,6 +1,9 @@
 import { DEFAULT_PRIORITY, type Extension } from "../../lib/extensions";
 import AboutSection from "./settings/AboutSection";
 
+// Uncomment below import to enable custom header UI
+// import CustomHeaderTitle from "./headerUI/CustomHeaderTitle";
+
 // Uncomment below import to enable custom sidebar UI
 // import CustomSidebarContent from "./sidebarUI/CustomSidebarContent";
 
@@ -20,6 +23,11 @@ export const activate: Extension["activate"] = (ctx) => {
 		priority: DEFAULT_PRIORITY + 100,
 		component: AboutSection,
 	});
+
+	// Uncomment below to enable custom header title
+	// ctx.headerUI.configure({
+	// 	TitleComponent: CustomHeaderTitle,
+	// });
 
 	// Uncomment below to enable custom sidebar UI (replaces default tabbed sidebar)
 	// ctx.sidebarUI.configure({
