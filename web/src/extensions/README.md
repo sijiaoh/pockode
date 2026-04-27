@@ -98,6 +98,20 @@ ctx.headerUI.configure({
 
 See `headerUIRegistry.ts` for prop interfaces (`HeaderContentProps`).
 
+> **Heads up:** `HeaderContent` replaces the **entire** header, including the
+> menu button, settings button, and the connection status indicator. Pockode
+> drives long-running AI sessions, so the connection indicator is part of the
+> baseline UX — if you replace `HeaderContent`, render it yourself:
+>
+> ```tsx
+> import { ConnectionStatus } from "../../components/ui";
+> // ...inside your custom header
+> <ConnectionStatus />
+> ```
+>
+> The menu / settings buttons must likewise be re-implemented from the
+> `onOpenSidebar` / `onOpenSettings` props if you want to keep them.
+
 ### ctx.sidebarUI.configure()
 
 Replace the default tabbed sidebar with a custom component.
@@ -107,6 +121,15 @@ ctx.sidebarUI.configure({
   SidebarContent: CustomSidebarContent,
 });
 ```
+
+### A note on `configure()` and multiple extensions
+
+`chatUI.configure()`, `headerUI.configure()`, and `sidebarUI.configure()` all
+write into a single global registry, and an extension's disposable resets the
+**entire** registry on unload. If two extensions configure the same registry
+(for example, extension A sets `HeaderContent` while extension B sets
+`TitleComponent`), unloading A will also clear B's settings. Until per-extension
+scoping lands, only one extension should call each `configure()` API at a time.
 
 ### ctx.theme.register()
 

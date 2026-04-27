@@ -5,6 +5,10 @@ export interface HeaderUIConfig {
 	/**
 	 * Custom Header component (replaces default header).
 	 * Receives onOpenSidebar, onOpenSettings, title as props.
+	 *
+	 * Replaces the entire header, including the connection status indicator
+	 * and the menu/settings buttons. Render `<ConnectionStatus />` from
+	 * `components/ui` yourself if you want to keep it.
 	 */
 	HeaderContent?: ComponentType<HeaderContentProps>;
 
