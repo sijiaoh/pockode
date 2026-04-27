@@ -80,6 +80,24 @@ ctx.chatUI.configure({
 
 See `chatUIRegistry.ts` for prop interfaces (`AvatarProps`, `InputBarProps`, etc.).
 
+### ctx.headerUI.configure()
+
+Customize the header bar by replacing the entire header or just the title.
+
+```ts
+// Replace the entire header (menu button, title, settings button, etc.)
+ctx.headerUI.configure({
+  HeaderContent: CustomHeader, // receives { onOpenSidebar, onOpenSettings, title }
+});
+
+// Or just replace the title
+ctx.headerUI.configure({
+  TitleComponent: CustomTitle, // no props - use hooks for data
+});
+```
+
+See `headerUIRegistry.ts` for prop interfaces (`HeaderContentProps`).
+
 ### ctx.sidebarUI.configure()
 
 Replace the default tabbed sidebar with a custom component.
@@ -118,4 +136,4 @@ Any directory under `extensions/` with an `index.ts` exporting `id` and `activat
 
 ## Example
 
-See `ExampleExtension/` for working examples of settings, chatUI, sidebarUI, and theme customization. Non-settings examples are commented out by default — uncomment to enable.
+See `ExampleExtension/` for working examples of settings, headerUI, chatUI, sidebarUI, and theme customization. Non-settings examples are commented out by default — uncomment to enable.
