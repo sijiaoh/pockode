@@ -92,11 +92,11 @@ ctx.headerUI.configure({
 
 // Or just replace the title
 ctx.headerUI.configure({
-  TitleComponent: CustomTitle, // no props - use hooks for data
+  TitleComponent: CustomTitle, // receives { title }
 });
 ```
 
-See `headerUIRegistry.ts` for prop interfaces (`HeaderContentProps`).
+See `headerUIRegistry.ts` for prop interfaces (`HeaderContentProps`, `TitleComponentProps`).
 
 > **Heads up:** `HeaderContent` replaces the **entire** header, including the
 > menu button, settings button, and the connection status indicator. Pockode

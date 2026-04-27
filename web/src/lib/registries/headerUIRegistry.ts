@@ -14,14 +14,18 @@ export interface HeaderUIConfig {
 
 	/**
 	 * Custom Title component (replaces default h1 title).
-	 * No props - use hooks to get data.
+	 * Receives the same `title` prop the default h1 would render.
 	 */
-	TitleComponent?: ComponentType;
+	TitleComponent?: ComponentType<TitleComponentProps>;
 }
 
 export interface HeaderContentProps {
 	onOpenSidebar?: () => void;
 	onOpenSettings?: () => void;
+	title?: string;
+}
+
+export interface TitleComponentProps {
 	title?: string;
 }
 

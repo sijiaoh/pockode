@@ -46,7 +46,7 @@ function MainContainer({
 						</button>
 					)}
 					{TitleComponent ? (
-						<TitleComponent />
+						<TitleComponent title={title} />
 					) : (
 						<h1 className="text-base font-bold text-th-text-primary sm:text-lg">
 							{title}
