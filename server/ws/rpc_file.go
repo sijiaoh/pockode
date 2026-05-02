@@ -57,10 +57,6 @@ func (h *rpcMethodHandler) handleFileWrite(ctx context.Context, conn *jsonrpc2.C
 	}
 
 	if err := contents.WriteFile(wt.WorkDir, params.Path, params.Content); err != nil {
-		if errors.Is(err, contents.ErrNotFound) {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
-			return
-		}
 		if errors.Is(err, contents.ErrInvalidPath) {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid path")
 			return
@@ -71,5 +67,30 @@ func (h *rpcMethodHandler) handleFileWrite(ctx context.Context, conn *jsonrpc2.C
 
 	if err := conn.Reply(ctx, req.ID, nil); err != nil {
 		h.log.Error("failed to send file write response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleFileDelete(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.FileDeleteParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if err := contents.DeleteFile(wt.WorkDir, params.Path); err != nil {
+		if errors.Is(err, contents.ErrInvalidPath) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid path")
+			return
+		}
+		if errors.Is(err, contents.ErrNotFound) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+			return
+		}
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, nil); err != nil {
+		h.log.Error("failed to send file delete response", "error", err)
 	}
 }

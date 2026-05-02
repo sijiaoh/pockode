@@ -7,17 +7,17 @@ Users browse directories and view/edit files in the workspace. Path traversal is
 ```
 React SPA ──WebSocket──▶ Go Server ──filesystem──▶ Workspace
                               │
-                         contents.go (validate, read, write)
+                         contents.go (validate, read, write, delete)
 ```
 
 ## Key Files
 
 | Layer | Path | Role |
 |-------|------|------|
-| RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write` |
-| File operations | `server/contents/contents.go` | Path validation, read (text/binary), write |
+| RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.delete` |
+| File operations | `server/contents/contents.go` | Path validation, read, write (upsert), delete |
 | Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode |
-| RPC actions | `web/src/lib/rpc/file.ts` | `fileGet`, `fileWrite` |
+| RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `deleteFile` |
 
 ## Operations
 
@@ -26,8 +26,18 @@ React SPA ──WebSocket──▶ Go Server ──filesystem──▶ Workspace
 - Text file → returns content as UTF-8
 - Binary file → returns content as base64
 
-**`file.write`** — Write file content to disk.
+**`file.write`** — Write file content to disk with upsert semantics.
+- Creates the file if it doesn't exist
+- Creates parent directories automatically
+- Updates existing files
+
+**`file.delete`** — Remove a file from disk.
+- Only files can be deleted (not directories)
+- Returns error if file doesn't exist
 
 ## Security
 
-`ValidatePath(workDir, path)` prevents directory traversal by resolving the absolute path and checking it stays within the workspace root.
+`ValidatePath(workDir, path)` prevents directory traversal by resolving the absolute path and checking it stays within the workspace root. Additional protections:
+- Empty path rejection (prevents accidental root operations)
+- Absolute path rejection
+- `../` traversal detection

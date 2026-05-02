@@ -178,18 +178,53 @@ func isBinary(content []byte) bool {
 }
 
 // WriteFile writes content to a file within workDir.
-// Returns ErrInvalidPath for path traversal attempts or absolute paths.
-// Returns ErrNotFound if file doesn't exist (no new file creation via edit).
+// Creates the file and parent directories if they don't exist.
+// Returns ErrInvalidPath for path traversal attempts, absolute paths, or empty paths.
 func WriteFile(workDir, path, content string) error {
+	if path == "" {
+		return fmt.Errorf("%w: empty path", ErrInvalidPath)
+	}
+
 	if err := ValidatePath(workDir, path); err != nil {
 		return err
 	}
 
 	fullPath := filepath.Join(workDir, path)
 
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		return fmt.Errorf("%w: %s", ErrNotFound, path)
+	dir := filepath.Dir(fullPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create parent directories: %w", err)
 	}
 
 	return os.WriteFile(fullPath, []byte(content), 0644)
+}
+
+// DeleteFile deletes a file within workDir.
+// Returns ErrInvalidPath for path traversal attempts, absolute paths, or empty paths.
+// Returns ErrNotFound if the file doesn't exist.
+// Returns error if the path is a directory (only files can be deleted).
+func DeleteFile(workDir, path string) error {
+	if path == "" {
+		return fmt.Errorf("%w: empty path", ErrInvalidPath)
+	}
+
+	if err := ValidatePath(workDir, path); err != nil {
+		return err
+	}
+
+	fullPath := filepath.Join(workDir, path)
+
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%w: %s", ErrNotFound, path)
+		}
+		return fmt.Errorf("failed to stat path: %w", err)
+	}
+
+	if info.IsDir() {
+		return fmt.Errorf("%w: cannot delete directory", ErrInvalidPath)
+	}
+
+	return os.Remove(fullPath)
 }

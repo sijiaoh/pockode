@@ -6,6 +6,11 @@ type ContentsResponse = Entry[] | FileContent;
 
 export const contentsQueryKey = (path: string) => ["contents", path] as const;
 
+export function isNotFoundError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	return error.message.startsWith("not found:");
+}
+
 export function useContents(path = "", enabled = true) {
 	const getFile = useWSStore((state) => state.actions.getFile);
 

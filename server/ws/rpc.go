@@ -378,6 +378,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleFileGet(ctx, conn, req, wt)
 	case "file.write":
 		h.handleFileWrite(ctx, conn, req, wt)
+	case "file.delete":
+		h.handleFileDelete(ctx, conn, req, wt)
 	// git namespace
 	case "git.status":
 		h.handleGitStatus(ctx, conn, req, wt)

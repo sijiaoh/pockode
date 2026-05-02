@@ -96,6 +96,10 @@ type FileWriteParams struct {
 	Content string `json:"content"`
 }
 
+type FileDeleteParams struct {
+	Path string `json:"path"`
+}
+
 // Git namespace
 
 type GitStatusResult = git.GitStatus

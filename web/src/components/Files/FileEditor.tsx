@@ -1,9 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Check, Eye, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Check, Eye, FilePlus, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Editor from "react-simple-code-editor";
-import { contentsQueryKey, useContents } from "../../hooks/useContents";
+import {
+	contentsQueryKey,
+	isNotFoundError,
+	useContents,
+} from "../../hooks/useContents";
 import { useIsDesktop } from "../../hooks/useIsDesktop";
 import { useCurrentWorktree, useRouteState } from "../../hooks/useRouteState";
 import { overlayToNavigation } from "../../lib/navigation";
@@ -36,6 +40,7 @@ function FileEditor({ path, onBack }: Props) {
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const [isInitialized, setIsInitialized] = useState(false);
 
+	const isNewFile = useMemo(() => isNotFoundError(error), [error]);
 	const isBinary = data && isFileContent(data) && data.encoding !== "text";
 	const language = getLanguageFromPath(path);
 	const highlight = useEditorHighlight(language);
@@ -50,15 +55,19 @@ function FileEditor({ path, onBack }: Props) {
 		);
 	}, [navigate, path, worktree, sessionId]);
 
-	// Initialize content when data loads (reset when path changes)
+	// Initialize content when data loads or when creating new file
 	// biome-ignore lint/correctness/useExhaustiveDependencies: path triggers re-init for new file
 	useEffect(() => {
-		if (data && isFileContent(data) && data.encoding === "text") {
+		if (isNewFile) {
+			setContent("");
+			setIsInitialized(true);
+			setSaveError(null);
+		} else if (data && isFileContent(data) && data.encoding === "text") {
 			setContent(data.content);
 			setIsInitialized(true);
 			setSaveError(null);
 		}
-	}, [data, path]);
+	}, [data, path, isNewFile]);
 
 	// Redirect to view if binary file accessed via direct URL
 	useEffect(() => {
@@ -84,14 +93,23 @@ function FileEditor({ path, onBack }: Props) {
 	const fontSize = isDesktop ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
 	const canSave = isInitialized && !isSaving;
 
+	// Only show non-"not found" errors
+	const displayError = error instanceof Error && !isNewFile ? error : null;
+
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
 			<ContentView
 				path={path}
 				isLoading={isLoading}
-				error={error instanceof Error ? error : null}
+				error={displayError}
 				onBack={onBack}
 			>
+				{isNewFile && (
+					<div className="flex items-center gap-1.5 border-b border-th-accent/20 bg-th-accent/10 px-4 py-2 text-sm text-th-accent">
+						<FilePlus className="h-4 w-4" aria-hidden="true" />
+						<span>New file</span>
+					</div>
+				)}
 				{saveError && (
 					<div className="border-b border-th-error/20 bg-th-error/10 px-4 py-2 text-sm text-th-error">
 						{saveError}

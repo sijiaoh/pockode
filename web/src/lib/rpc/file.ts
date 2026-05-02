@@ -16,9 +16,14 @@ interface FileWriteParams {
 	content: string;
 }
 
+interface FileDeleteParams {
+	path: string;
+}
+
 export interface FileActions {
 	getFile: (path?: string) => Promise<FileGetResult>;
 	writeFile: (path: string, content: string) => Promise<void>;
+	deleteFile: (path: string) => Promise<void>;
 }
 
 export function createFileActions(
@@ -43,6 +48,11 @@ export function createFileActions(
 				path,
 				content,
 			} as FileWriteParams);
+		},
+		deleteFile: async (path: string): Promise<void> => {
+			await requireClient().request("file.delete", {
+				path,
+			} as FileDeleteParams);
 		},
 	};
 }

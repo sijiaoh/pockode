@@ -978,16 +978,22 @@ func TestHandler_FileWrite(t *testing.T) {
 	}
 }
 
-func TestHandler_FileWrite_NotFound(t *testing.T) {
-	env := newWorkDirTestEnv(t, t.TempDir())
+func TestHandler_FileWrite_CreatesNewFile(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
 
-	resp := env.call("file.write", rpc.FileWriteParams{Path: "nonexistent.txt", Content: "test"})
+	resp := env.call("file.write", rpc.FileWriteParams{Path: "newfile.txt", Content: "new content"})
 
-	if resp.Error == nil {
-		t.Fatal("expected error")
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
 	}
-	if !strings.Contains(resp.Error.Message, "not found") {
-		t.Errorf("expected 'not found' error, got %q", resp.Error.Message)
+
+	content, err := os.ReadFile(filepath.Join(workDir, "newfile.txt"))
+	if err != nil {
+		t.Fatalf("failed to read created file: %v", err)
+	}
+	if string(content) != "new content" {
+		t.Errorf("expected 'new content', got %q", string(content))
 	}
 }
 
@@ -998,6 +1004,64 @@ func TestHandler_FileWrite_InvalidPath(t *testing.T) {
 
 	if resp.Error == nil {
 		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "invalid path") {
+		t.Errorf("expected 'invalid path' error, got %q", resp.Error.Message)
+	}
+}
+
+func TestHandler_FileDelete(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	testFile := filepath.Join(workDir, "test.txt")
+	os.WriteFile(testFile, []byte("content"), 0644)
+
+	resp := env.call("file.delete", rpc.FileDeleteParams{Path: "test.txt"})
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	if _, err := os.Stat(testFile); !os.IsNotExist(err) {
+		t.Error("expected file to be deleted")
+	}
+}
+
+func TestHandler_FileDelete_NotFound(t *testing.T) {
+	env := newWorkDirTestEnv(t, t.TempDir())
+
+	resp := env.call("file.delete", rpc.FileDeleteParams{Path: "nonexistent.txt"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "not found") {
+		t.Errorf("expected 'not found' error, got %q", resp.Error.Message)
+	}
+}
+
+func TestHandler_FileDelete_InvalidPath(t *testing.T) {
+	env := newWorkDirTestEnv(t, t.TempDir())
+
+	resp := env.call("file.delete", rpc.FileDeleteParams{Path: "../etc/passwd"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "invalid path") {
+		t.Errorf("expected 'invalid path' error, got %q", resp.Error.Message)
+	}
+}
+
+func TestHandler_FileDelete_Directory(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	os.Mkdir(filepath.Join(workDir, "subdir"), 0755)
+
+	resp := env.call("file.delete", rpc.FileDeleteParams{Path: "subdir"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error when deleting directory")
 	}
 	if !strings.Contains(resp.Error.Message, "invalid path") {
 		t.Errorf("expected 'invalid path' error, got %q", resp.Error.Message)
