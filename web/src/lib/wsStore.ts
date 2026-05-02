@@ -58,6 +58,7 @@ export type ConnectionStatus =
 	| "connecting"
 	| "connected"
 	| "disconnected"
+	| "reconnecting"
 	| "auth_failed"
 	| "error";
 
@@ -368,8 +369,12 @@ export const useWSStore = create<WSState>((set, get) => ({
 				return;
 			}
 
+			const isReconnecting = currentStatus === "reconnecting";
 			currentToken = token;
-			set({ status: "connecting" });
+			// Keep "reconnecting" status to preserve UI state during reconnection
+			if (!isReconnecting) {
+				set({ status: "connecting" });
+			}
 
 			const url = getWebSocketUrl();
 			const socket = new WebSocket(url);
@@ -463,7 +468,8 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 				// Retry if we have attempts left and a token
 				if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && currentToken) {
-					set({ status: "disconnected" });
+					// Use "reconnecting" to preserve UI state; "disconnected" is for intentional disconnect
+					set({ status: "reconnecting" });
 					reconnectAttempts += 1;
 					reconnectTimeout = window.setTimeout(() => {
 						if (currentToken) {

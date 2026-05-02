@@ -360,38 +360,50 @@ function AppShell() {
 	}
 
 	return (
-		<div className="flex h-dvh">
-			<SessionSidebar
-				isOpen={sidebarOpen}
-				onClose={() => setSidebarOpen(false)}
-				currentSessionId={currentSessionId}
-				onSelectSession={handleSelectSession}
-				onCreateSession={handleCreateSession}
-				onDeleteSession={handleDeleteSession}
-				onSelectDiffFile={handleSelectDiffFile}
-				activeDiffFile={activeDiffFile}
-				onSelectCommit={handleSelectCommit}
-				activeCommitHash={activeCommitHash}
-				onSelectFile={handleSelectFile}
-				activeFilePath={activeFilePath}
-				onOpenWorkList={handleOpenWorkList}
-				onOpenAgentRoleList={handleOpenAgentRoleList}
-				isDesktop={isDesktop}
-			/>
-			<ChatPanel
-				sessionId={currentSessionId}
-				sessionTitle={currentSession.title}
-				onUpdateTitle={(title) => updateTitle(currentSessionId, title)}
-				onOpenSidebar={handleOpenSidebar}
-				onOpenSettings={handleOpenSettings}
-				overlay={overlay}
-				onCloseOverlay={handleCloseOverlay}
-				onNavigateToSession={handleNavigateToSession}
-				onOpenWorkDetail={handleOpenWorkDetail}
-				onOpenWorkList={handleOpenWorkList}
-				onOpenAgentRoleList={handleOpenAgentRoleList}
-				onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
-			/>
+		<div className="flex h-dvh flex-col">
+			{wsStatus === "reconnecting" && (
+				// biome-ignore lint/a11y/useSemanticElements: status banner is not a form output
+				<div
+					className="flex items-center justify-center gap-2 bg-th-accent/20 px-4 py-1 text-sm text-th-text-muted"
+					role="status"
+				>
+					<span className="inline-block h-2 w-2 animate-pulse rounded-full bg-th-accent" />
+					Reconnecting...
+				</div>
+			)}
+			<div className="flex min-h-0 flex-1">
+				<SessionSidebar
+					isOpen={sidebarOpen}
+					onClose={() => setSidebarOpen(false)}
+					currentSessionId={currentSessionId}
+					onSelectSession={handleSelectSession}
+					onCreateSession={handleCreateSession}
+					onDeleteSession={handleDeleteSession}
+					onSelectDiffFile={handleSelectDiffFile}
+					activeDiffFile={activeDiffFile}
+					onSelectCommit={handleSelectCommit}
+					activeCommitHash={activeCommitHash}
+					onSelectFile={handleSelectFile}
+					activeFilePath={activeFilePath}
+					onOpenWorkList={handleOpenWorkList}
+					onOpenAgentRoleList={handleOpenAgentRoleList}
+					isDesktop={isDesktop}
+				/>
+				<ChatPanel
+					sessionId={currentSessionId}
+					sessionTitle={currentSession.title}
+					onUpdateTitle={(title) => updateTitle(currentSessionId, title)}
+					onOpenSidebar={handleOpenSidebar}
+					onOpenSettings={handleOpenSettings}
+					overlay={overlay}
+					onCloseOverlay={handleCloseOverlay}
+					onNavigateToSession={handleNavigateToSession}
+					onOpenWorkDetail={handleOpenWorkDetail}
+					onOpenWorkList={handleOpenWorkList}
+					onOpenAgentRoleList={handleOpenAgentRoleList}
+					onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
+				/>
+			</div>
 		</div>
 	);
 }

@@ -204,6 +204,35 @@ Key design points:
 - **Worktree switch handling**: Automatically resubscribes when worktree changes (since the server cleans up subscriptions for the old worktree)
 - **Connection state**: Triggers reset on disconnect, automatically recovers on reconnect
 
+### Reconnection Recovery
+
+During `reconnecting` state, `useSubscription` preserves existing data while invalidating subscription IDs. When the connection is restored:
+
+1. **Subscriptions are re-established**: Each subscription hook automatically calls its subscribe function
+2. **Initial data is refreshed**: The server returns current state via `initial` in the subscribe response
+3. **`onSubscribed` callback fires**: Hooks use this to update their state with fresh data
+
+This pattern ensures:
+- **No data loss**: Cached data remains visible during brief disconnections
+- **Eventual consistency**: Full state is restored when connection recovers
+- **No manual intervention**: Recovery is automatic and transparent
+
+#### Subscription Types and Their Recovery
+
+| Subscription | Returns Initial Data | Recovery Strategy |
+|--------------|---------------------|-------------------|
+| `session.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
+| `work.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
+| `work.detail.subscribe` | ✅ Full details | `onSubscribed` replaces state |
+| `settings.subscribe` | ✅ Full settings | `onSubscribed` replaces state |
+| `agent_role.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
+| `chat.messages.subscribe` | ✅ Full history | `onSubscribed` replaces state |
+| `git.diff.subscribe` | ✅ Diff data | `onSubscribed` updates state |
+| `fs.subscribe` | ❌ ID only | `onSubscribed` triggers refresh |
+| `git.subscribe` | ❌ ID only | `onSubscribed` triggers refresh |
+
+For subscriptions that don't return initial data, hooks pass their refresh callback to `onSubscribed`, ensuring the latest state is fetched immediately after reconnection.
+
 ## Authentication Flow
 
 The first request after WebSocket connection must be `auth`:
@@ -236,21 +265,33 @@ Client                              Server
 type ConnectionStatus =
   | "connecting"   // WebSocket connecting
   | "connected"    // Authenticated and ready
-  | "disconnected" // Closed (will auto-reconnect)
+  | "disconnected" // Intentionally closed (no auto-reconnect)
+  | "reconnecting" // Connection lost, attempting to reconnect
   | "auth_failed"  // Token invalid
   | "error";       // Terminal state (no auto-reconnect)
 ```
 
+**Key distinction**: `disconnected` indicates an intentional disconnect (user action), while `reconnecting` indicates an unexpected connection loss that triggers automatic recovery.
+
 ### Auto-Reconnect
 
-Automatically retries after disconnect, up to 5 times with 3-second intervals:
+Automatically retries after unexpected disconnect, up to 5 times with 3-second intervals:
 
 ```typescript
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_INTERVAL = 3000;
 ```
 
-`auth_failed` and `error` states do not trigger reconnection and require user intervention.
+**Reconnection behavior**:
+- Connection loss sets status to `reconnecting` (not `disconnected`)
+- UI remains stable during `reconnecting` state (no page refresh or data clearing)
+- Subscriptions are invalidated but data is preserved
+- On successful reconnect, subscriptions are automatically re-established
+- `auth_failed` and `error` states do not trigger reconnection and require user intervention
+
+### UI During Reconnection
+
+When the connection enters `reconnecting` state, a non-intrusive banner is displayed at the top of the screen to inform users. The rest of the UI remains functional with cached data, avoiding disruptive full-page loading states.
 
 ### Request Timeout
 

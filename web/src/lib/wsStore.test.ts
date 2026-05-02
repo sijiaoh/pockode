@@ -487,9 +487,9 @@ describe("wsStore", () => {
 			getMockWs()?.simulateError();
 			expect(useWSStore.getState().status).toBe("connecting");
 
-			// onclose triggers retry
+			// onclose triggers reconnection attempt
 			getMockWs()?.simulateClose();
-			expect(useWSStore.getState().status).toBe("disconnected");
+			expect(useWSStore.getState().status).toBe("reconnecting");
 		});
 
 		it("does not reconnect on auth failure", async () => {

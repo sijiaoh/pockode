@@ -59,6 +59,7 @@ export function useSubscription<TNotification = void, TInitial = void>(
 	} = options;
 	const status = useWSStore((s) => s.status);
 	const isConnected = status === "connected";
+	const isReconnecting = status === "reconnecting";
 
 	const onNotificationRef = useRef(onNotification);
 	onNotificationRef.current = onNotification;
@@ -122,6 +123,12 @@ export function useSubscription<TNotification = void, TInitial = void>(
 	}, [unsubscribe]);
 
 	useEffect(() => {
+		// During reconnection, keep existing data without resetting
+		if (isReconnecting) {
+			invalidate();
+			return;
+		}
+
 		if (!enabled || !isConnected) {
 			invalidate();
 			onResetRef.current?.();
@@ -149,6 +156,7 @@ export function useSubscription<TNotification = void, TInitial = void>(
 	}, [
 		enabled,
 		isConnected,
+		isReconnecting,
 		doSubscribe,
 		invalidate,
 		resubscribeOnWorktreeChange,

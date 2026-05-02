@@ -13,5 +13,10 @@ export function useGitWatch({
 	const gitSubscribe = useWSStore((s) => s.actions.gitSubscribe);
 	const gitUnsubscribe = useWSStore((s) => s.actions.gitUnsubscribe);
 
-	useSubscription(gitSubscribe, gitUnsubscribe, onChanged, { enabled });
+	useSubscription(gitSubscribe, gitUnsubscribe, onChanged, {
+		enabled,
+		// On reconnect, trigger a refresh to catch changes that may have
+		// occurred during the disconnect period.
+		onSubscribed: onChanged,
+	});
 }
