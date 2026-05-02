@@ -23,6 +23,7 @@ pockode/
 ├── server/         # Go 后端（见 server/AGENTS.md）
 ├── site/           # pockode.com 官网（Hugo）
 └── docs/           # 设计文档（入口：docs/concept.md）
+    └── code/       # 代码解说文档（见 docs/code/AGENTS.md）
 ```
 
 ## 架构概览
@@ -98,6 +99,7 @@ React SPA (前端)
 8. **DRY 原则** — 遵循《程序员修炼之道》理念，代码、测试、文档均不应有重复；每一处知识在系统中应有唯一、明确的表示
 9. **退一步看全局** — 遇到问题不要盲目修复；先思考问题的根源、设计是否合理，再决定行动
 10. **遵循最佳实践** — 任何工作都要意识到并遵循行业最佳实践
+11. **同步更新代码解说文档** — 修改核心模块（WebSocket、Agent、Work、Subscription、Relay）时，检查 `docs/code/` 是否需要同步更新
 
 ## 参考资料
 
