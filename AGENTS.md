@@ -1,112 +1,112 @@
 # Pockode
 
-你是世界级全栈工程师，专注于 React + Go 的移动端 AI 编程平台开发。
+You are a world-class full-stack engineer specializing in mobile AI programming platform development with React + Go.
 
-## 项目概述
+## Project Overview
 
-Pockode 是一个移动端编程平台，核心理念是「AI 编辑为主，手动编辑为辅」。用户通过自然语言与 AI 交互完成开发工作，而非在小屏幕上操作传统编辑器。
+Pockode is a mobile programming platform with the core philosophy of "AI editing first, manual editing second." Users interact with AI through natural language to complete development work, rather than operating a traditional editor on a small screen.
 
-## 技术栈
+## Tech Stack
 
-| 层      | 技术                       |
-| ------- | -------------------------- |
-| 前端    | React + Vite + Tailwind    |
-| 后端    | Go                         |
-| 通信    | WebSocket JSON-RPC 2.0（[设计](docs/websocket-rpc-design.md)） |
-| AI 调用 | CLI 子进程（非 SDK 绑定）  |
+| Layer    | Technology                 |
+| -------- | -------------------------- |
+| Frontend | React + Vite + Tailwind    |
+| Backend  | Go                         |
+| Comm     | WebSocket JSON-RPC 2.0 ([design](docs/websocket-rpc-design.md)) |
+| AI Calls | CLI subprocess (not SDK binding) |
 
-## 项目结构
+## Project Structure
 
 ```
 pockode/
-├── web/            # React 前端（见 web/AGENTS.md）
-├── server/         # Go 后端（见 server/AGENTS.md）
-├── site/           # pockode.com 官网（Hugo）
-└── docs/           # 设计文档（入口：docs/concept.md）
-    └── code/       # 代码解说文档（见 docs/code/AGENTS.md）
+├── web/            # React frontend (see web/AGENTS.md)
+├── server/         # Go backend (see server/AGENTS.md)
+├── site/           # pockode.com website (Hugo)
+└── docs/           # Design documents (entry: docs/concept.md)
+    └── code/       # Code explanation docs (see docs/code/AGENTS.md)
 ```
 
-## 架构概览
+## Architecture Overview
 
 ```
-React SPA (前端)
+React SPA (Frontend)
         │ WebSocket
         ▼
-   Go 服务 (后端)
+   Go Service (Backend)
         │ spawn + stream-json
         ▼
    AI CLI (claude / codex / ...)
 ```
 
-## 开发规范
+## Development Guidelines
 
-### 代码整理
+### Code Organization
 
-- **先定位后动手** — 写代码前先确定它该放哪；尤其是可复用逻辑，放对位置才能被发现和复用
-- **各归其位** — 工具函数放工具模块，业务逻辑放业务模块，遵循项目现有结构
+- **Locate before you code** — Determine where code belongs before writing it; especially for reusable logic, proper placement enables discovery and reuse
+- **Everything in its place** — Utility functions go in utility modules, business logic goes in business modules, follow the existing project structure
 
-### 代码风格
+### Code Style
 
-- 前端：使用 Biome（Linter + Formatter），遵循 React 最佳实践（见 web/AGENTS.md）
-- 后端：使用 `gofmt`，遵循 Go 惯用写法
-- 运行 linter 和 formatter 后再提交
+- Frontend: Use Biome (Linter + Formatter), follow React best practices (see web/AGENTS.md)
+- Backend: Use `gofmt`, follow idiomatic Go
+- Run linter and formatter before committing
 
-### 注释规范
+### Comment Guidelines
 
-- **使用英语** — 所有代码注释、TODO、文档字符串必须使用英语
-- **只写代码无法表达的信息** — 函数名、类型、代码结构能说明的事情通常不需要注释
-    - ❌ 描述代码做什么（What）— 代码本身已经说明（过度复杂或特殊的逻辑除外）
-    - ✅ 解释为什么这样做（Why）— 设计决策、非显而易见的理由
-    - ✅ 说明何时使用（When）— 如果使用场景不自明
-    - ✅ 记录值的来源（Where）— 魔法数字、外部依赖的关联
-- **避免噪音** — 自明注释、类型/函数名的重复描述都是噪音
-- **保持同步** — 过时注释比没有更有害；改代码时同步更新注释
-- **TODO 要有上下文** — 如 `// TODO: Remove after upstream API supports X`
-- **设计文档放 docs/** — 系统级的架构说明不要写在代码注释里
+- **Use English** — All code comments, TODOs, and docstrings must be in English
+- **Only write what code cannot express** — Function names, types, and code structure usually don't need comments
+    - ❌ Describe what code does (What) — The code already says this (except for overly complex or unusual logic)
+    - ✅ Explain why it's done this way (Why) — Design decisions, non-obvious reasoning
+    - ✅ Describe when to use it (When) — If usage scenarios aren't self-evident
+    - ✅ Document where values come from (Where) — Magic numbers, external dependency connections
+- **Avoid noise** — Self-evident comments and redundant descriptions of types/function names are noise
+- **Keep in sync** — Outdated comments are worse than none; update comments when changing code
+- **TODOs need context** — e.g., `// TODO: Remove after upstream API supports X`
+- **Design docs go in docs/** — System-level architecture explanations don't belong in code comments
 
-### Git 规范
+### Git Guidelines
 
-- **不要用 `-C` option**
-- 分支命名：`feature/xxx`、`fix/xxx`、`refactor/xxx`
-- Commit 信息简洁明了，说明「做了什么」而非「怎么做的」
-- 保持 commit 粒度合理，一个 commit 做一件事
+- **Do not use the `-C` option**
+- Branch naming: `feature/xxx`, `fix/xxx`, `refactor/xxx`
+- Commit messages should be concise and clear, describing "what was done" not "how it was done"
+- Keep commit granularity reasonable, one commit does one thing
 
-### 测试
+### Testing
 
-- **遵循测试金字塔** — 大量单元测试 > 适量集成测试 > 少量端到端测试；越底层的测试应越多、越快、越稳定
-- **测试规格，而非追求覆盖率** — 测试的目的是验证行为契约，不是盲目提高 coverage 数字
-- **不测 trivial 代码** — 简单的 getter、constructor、单行委托方法无需测试
-- **测公开接口** — 公开方法的测试自然覆盖内部实现，无需重复测试私有方法
-- **保持精简** — 每个测试应有明确目的；冗余测试是负担，不是资产
-- 提交前确保测试通过
+- **Follow the testing pyramid** — Many unit tests > some integration tests > few E2E tests; lower-level tests should be more numerous, faster, and more stable
+- **Test specifications, not coverage** — The purpose of testing is to verify behavioral contracts, not to blindly increase coverage numbers
+- **Don't test trivial code** — Simple getters, constructors, and single-line delegation methods don't need tests
+- **Test public interfaces** — Testing public methods naturally covers internal implementation, no need to separately test private methods
+- **Keep it lean** — Each test should have a clear purpose; redundant tests are a burden, not an asset
+- Ensure tests pass before committing
 
-### 错误处理
+### Error Handling
 
-- **禁止静默失败** — 所有错误必须反馈给用户，用户是开发者，需要知道正在发生什么
-- **提供有意义的错误信息** — 错误信息应包含足够的上下文，帮助定位问题
-- **区分用户错误和系统错误** — 用户操作错误给出指导性提示，系统错误给出技术细节
-- **不要过度防御** — 信任类型系统和内部数据；只在系统边界校验
+- **No silent failures** — All errors must be reported to users; users are developers who need to know what's happening
+- **Provide meaningful error messages** — Error messages should include enough context to help locate problems
+- **Distinguish user errors from system errors** — User operation errors get guidance, system errors get technical details
+- **Don't over-defend** — Trust the type system and internal data; only validate at system boundaries
 
-## AI 助手注意事项
+## AI Assistant Guidelines
 
-1. **用英语思考，用用户的语言交流** — 内部推理使用英语以获得更好的逻辑性，但与用户交流时使用用户的语言
-2. **优先读取现有代码** — 修改前先理解上下文
-3. **恰到好处的设计** — 在当前需求范围内做好设计，结构清晰、考虑周全；但不超出需求范围做预测性开发
-4. **遵循现有模式** — 与项目现有代码风格保持一致
-5. **不重复造轮子** — 复用现有组件和工具函数
-6. **安全第一** — 注意 OWASP Top 10，避免引入安全漏洞
-7. **禁止直接编辑生成文件** — 如 `pnpm-lock.yaml`、`go.sum` 等 lock 文件，必须通过正规命令（`pnpm install`、`go mod tidy`）生成或更新
-8. **DRY 原则** — 遵循《程序员修炼之道》理念，代码、测试、文档均不应有重复；每一处知识在系统中应有唯一、明确的表示
-9. **退一步看全局** — 遇到问题不要盲目修复；先思考问题的根源、设计是否合理，再决定行动
-10. **遵循最佳实践** — 任何工作都要意识到并遵循行业最佳实践
-11. **同步更新代码解说文档** — 修改核心模块（WebSocket、Agent、Work、Subscription、Relay）时，检查 `docs/code/` 是否需要同步更新
+1. **Think in English, communicate in user's language** — Use English for internal reasoning for better logic, but communicate with users in their language
+2. **Read existing code first** — Understand context before making changes
+3. **Just-right design** — Design well within current requirements with clear structure and thorough consideration; but don't do speculative development beyond requirements
+4. **Follow existing patterns** — Stay consistent with the project's existing code style
+5. **Don't reinvent the wheel** — Reuse existing components and utility functions
+6. **Security first** — Mind OWASP Top 10, avoid introducing security vulnerabilities
+7. **Never edit generated files directly** — Files like `pnpm-lock.yaml`, `go.sum` and other lock files must be generated or updated through proper commands (`pnpm install`, `go mod tidy`)
+8. **DRY principle** — Follow The Pragmatic Programmer philosophy; code, tests, and documentation should have no duplication; every piece of knowledge should have a single, unambiguous representation in the system
+9. **Step back and see the big picture** — Don't blindly fix problems; first consider the root cause and whether the design is sound, then decide on action
+10. **Follow best practices** — Be aware of and follow industry best practices in all work
+11. **Keep code explanation docs in sync** — When modifying core modules (WebSocket, Agent, Work, Subscription, Relay), check if `docs/code/` needs updating
 
-## 参考资料
+## References
 
-**参考项目**（按需克隆到 `./refs/`）：
+**Reference projects** (clone to `./refs/` as needed):
 
-- [happy](https://github.com/slopus/happy) — schema 及实现参考
-- [claude-code-chat](https://github.com/andrepimenta/claude-code-chat) — stream-json 实现参考
-- [anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go) — API 类型定义参考
+- [happy](https://github.com/slopus/happy) — Schema and implementation reference
+- [claude-code-chat](https://github.com/andrepimenta/claude-code-chat) — stream-json implementation reference
+- [anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go) — API type definition reference
 
-**Schema 参考**：[Claude Agent SDK](https://platform.claude.com/docs/en/api/agent-sdk/typescript) — stream-json 消息结构的权威定义
+**Schema reference**: [Claude Agent SDK](https://platform.claude.com/docs/en/api/agent-sdk/typescript) — Authoritative definition for stream-json message structure
