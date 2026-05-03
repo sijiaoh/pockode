@@ -437,6 +437,67 @@ Check if you have completed the current step:
 - **Retry counter resets per step**: Each new step gets a fresh retry budget.
 - **Step advance is atomic**: Uses `AdvanceStep` method to transition `done`/`closed` → `in_progress` and increment `CurrentStep` in one operation.
 
+## Prompt Configuration
+
+Prompt templates are externalized in `server/work/prompts.yaml`, embedded at compile time via `go:embed`. This separation enables:
+- Non-programmers to review and modify AI instructions
+- Clear separation between prompt content and rendering logic
+- Easy diffing and tracking of prompt changes
+
+### Configuration File
+
+```yaml
+# server/work/prompts.yaml
+
+# Each key is a template name, value is the template string
+# Uses Go text/template syntax: {{.FieldName}}
+
+pockode_mcp_prefix: |
+  All work_* and agent_role_* tools in this session...
+
+role_reference: |
+  Your agent role ID is {{.AgentRoleID}}. Use agent_role_get...
+
+work_context: |
+  You are working on: "{{.Title}}" (Work ID: {{.ID}})...
+```
+
+### Template Keys
+
+| Key | Used In | Placeholders |
+|-----|---------|--------------|
+| `pockode_mcp_prefix` | All messages | (none) |
+| `role_reference` | All messages | `AgentRoleID` |
+| `work_context` | All messages | `Title`, `ID` |
+| `story_behavior_rules` | Story kickoff | (none) |
+| `story_rules_suffix` | Story kickoff | `ID` |
+| `task_rules_with_parent` | Task with parent | `ParentID`, `ID` |
+| `task_rules_without_parent` | Standalone task | `ID` |
+| `story_restart_nudge` | Story restart | `ID` |
+| `task_restart_nudge` | Task restart | `ID` |
+| `story_auto_continue_nudge` | Story auto-continuation | `ID` |
+| `task_auto_continue_nudge` | Task auto-continuation | `ID` |
+| `task_step_auto_continue_nudge` | Task step auto-continuation | `CurrentStep`, `TotalSteps`, `ID` |
+| `parent_reactivation_nudge` | Parent reactivation | `ChildTitle`, `ChildID`, `ID` |
+| `step_advance_section` | Step advance | `PrevStep`, `TotalSteps`, `CurrentStep`, `StepPrompt` |
+| `current_step_section` | Initial step display | `CurrentStep`, `TotalSteps`, `StepPrompt` |
+
+### Rendering
+
+```go
+// server/work/prompt.go
+
+//go:embed prompts.yaml
+var promptsYAML []byte
+
+func render(tmplStr string, data any) string {
+    tmpl := template.New("").Parse(tmplStr)
+    var buf bytes.Buffer
+    tmpl.Execute(&buf, data)
+    return strings.TrimSuffix(buf.String(), "\n")
+}
+```
+
 ## Code Paths
 
 | Component | Path |
@@ -446,6 +507,7 @@ Check if you have completed the current step:
 | State validation | `server/work/validation.go` |
 | Auto resumer | `server/work/auto_resumer.go` |
 | Prompt builder | `server/work/prompt.go` |
+| Prompt templates | `server/work/prompts.yaml` |
 | MCP server | `server/mcp/server.go` |
 | MCP tools | `server/mcp/tools.go` |
 | File I/O | `server/filestore/filestore.go` |

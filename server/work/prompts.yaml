@@ -1,0 +1,94 @@
+# Prompt templates for work lifecycle management.
+# All placeholders use Go text/template syntax: {{.FieldName}}
+# This file is embedded at compile time via go:embed.
+
+# MCP namespace prefix - grounds the agent in Pockode's tool namespace
+pockode_mcp_prefix: |
+  All work_* and agent_role_* tools in this session belong to Pockode's project management system. Use them exactly as described below.
+
+# Agent role reference template
+# Placeholders: {{.AgentRoleID}}
+role_reference: |
+  Your agent role ID is {{.AgentRoleID}}. Use agent_role_get with this ID to retrieve your role instructions.
+
+# Work context template
+# Placeholders: {{.Title}}, {{.ID}}
+work_context: |
+  You are working on: "{{.Title}}" (Work ID: {{.ID}}). Use work_get with this ID to read the full details before starting.
+
+# Story coordinator behavior rules
+story_behavior_rules: |
+  You are a COORDINATOR for this story. Follow these rules strictly:
+  1. Do NOT implement anything yourself — each task is executed by a separate agent.
+  2. Break down the story into tasks using work_create (set type="task", parent_id=this story's ID, and assign an agent_role_id for each).
+  3. After creating all tasks, call work_done on YOUR story immediately. Do NOT wait for tasks to finish — you will be automatically reactivated when a task completes.
+  4. Do NOT call work_done on child tasks; task agents handle their own lifecycle.
+
+# Story rules suffix (appended to story_behavior_rules)
+# Placeholders: {{.ID}}
+story_rules_suffix: |
+  Call work_done with ID {{.ID}} as soon as you've created the tasks. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
+
+# Task rules when there is a parent story
+# Placeholders: {{.ParentID}}, {{.ID}}
+task_rules_with_parent: |
+  Before starting, use work_comment_list with work_id {{.ParentID}} to check for any instructions or feedback on the parent story.
+
+  IMPORTANT: When you finish, you MUST first report your results by calling work_comment_add with work_id {{.ParentID}} (the parent), then call work_done with ID {{.ID}}. If you need user input to proceed, call work_needs_input with ID {{.ID}}. Do not end your turn without calling one of these.
+
+# Task rules when there is no parent
+# Placeholders: {{.ID}}
+task_rules_without_parent: |
+  IMPORTANT: When you finish, you MUST call work_done with ID {{.ID}}. If you need user input to proceed, call work_needs_input with ID {{.ID}}. Do not end your turn without calling one of these.
+
+# Story restart nudge
+# Placeholders: {{.ID}}
+story_restart_nudge: |
+  Your story was stopped and is now being restarted. Review your tasks, then call work_done with ID {{.ID}}. You will be reactivated when a task completes.
+
+# Task restart nudge
+# Placeholders: {{.ID}}
+task_restart_nudge: |
+  Your task was stopped and is now being restarted. Review what you've done so far, then either complete the remaining work or call work_done with ID {{.ID}} if everything is finished.
+
+# Story auto-continuation nudge
+# Placeholders: {{.ID}}
+story_auto_continue_nudge: |
+  Your story is still in_progress but your session was interrupted. Review your tasks, then call work_done with ID {{.ID}}. You will be reactivated when a task completes.
+
+# Task auto-continuation nudge
+# Placeholders: {{.ID}}
+task_auto_continue_nudge: |
+  Your task is still in_progress but your session was interrupted. Review what you've done so far, then either complete the remaining work or call work_done with ID {{.ID}} if everything is finished.
+
+# Task step auto-continuation nudge (for tasks with steps)
+# Placeholders: {{.CurrentStep}}, {{.TotalSteps}}, {{.ID}}
+task_step_auto_continue_nudge: |
+  Your session was interrupted while working on step {{.CurrentStep}} of {{.TotalSteps}}.
+
+  Check if you have completed the current step:
+  - If YES: Call work_done with ID {{.ID}} to proceed to the next step.
+  - If NO: Continue working on this step.
+
+# Parent reactivation nudge (when a child task completes)
+# Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ID}}
+parent_reactivation_nudge: |
+  Task "{{.ChildTitle}}" (ID: {{.ChildID}}) has been completed. Use work_comment_list with work_id {{.ID}} to read the task's report. Then use work_list with parent_id {{.ID}} to check remaining tasks. If all tasks are done, call work_done with ID {{.ID}}. If tasks remain, review progress and adjust the plan as needed, then call work_done with ID {{.ID}} — this returns you to a dormant state until the next task completes.
+
+# Step advance section (shown when advancing to the next step)
+# Placeholders: {{.PrevStep}}, {{.TotalSteps}}, {{.CurrentStep}}, {{.StepPrompt}}
+step_advance_section: |
+  Step {{.PrevStep}} of {{.TotalSteps}} completed. Proceeding to the next step.
+
+  ## Current Step
+  Step {{.CurrentStep}} of {{.TotalSteps}}
+
+  {{.StepPrompt}}
+
+# Current step section (shown at kickoff with steps)
+# Placeholders: {{.CurrentStep}}, {{.TotalSteps}}, {{.StepPrompt}}
+current_step_section: |
+  ## Current Step
+  Step {{.CurrentStep}} of {{.TotalSteps}}
+
+  {{.StepPrompt}}

@@ -1,50 +1,95 @@
 package work
 
-import "fmt"
+import (
+	"bytes"
+	_ "embed"
+	"strings"
+	"text/template"
 
-// pockodeMCPPrefix grounds the agent in Pockode's tool namespace,
-// preventing confusion with tools from other MCP servers.
-const pockodeMCPPrefix = "All work_* and agent_role_* tools in this session belong to Pockode's project management system. Use them exactly as described below."
+	"gopkg.in/yaml.v3"
+)
 
-func roleReference(agentRoleID string) string {
-	return fmt.Sprintf(
-		"Your agent role ID is %s. Use agent_role_get with this ID to retrieve your role instructions.",
-		agentRoleID,
-	)
+//go:embed prompts.yaml
+var promptsYAML []byte
+
+// promptTemplates holds parsed templates from prompts.yaml.
+type promptTemplates struct {
+	PockodeMCPPrefix        string `yaml:"pockode_mcp_prefix"`
+	RoleReference           string `yaml:"role_reference"`
+	WorkContext             string `yaml:"work_context"`
+	StoryBehaviorRules      string `yaml:"story_behavior_rules"`
+	StoryRulesSuffix        string `yaml:"story_rules_suffix"`
+	TaskRulesWithParent     string `yaml:"task_rules_with_parent"`
+	TaskRulesWithoutParent  string `yaml:"task_rules_without_parent"`
+	StoryRestartNudge       string `yaml:"story_restart_nudge"`
+	TaskRestartNudge        string `yaml:"task_restart_nudge"`
+	StoryAutoContinueNudge  string `yaml:"story_auto_continue_nudge"`
+	TaskAutoContinueNudge   string `yaml:"task_auto_continue_nudge"`
+	TaskStepAutoContinue    string `yaml:"task_step_auto_continue_nudge"`
+	ParentReactivationNudge string `yaml:"parent_reactivation_nudge"`
+	StepAdvanceSection      string `yaml:"step_advance_section"`
+	CurrentStepSection      string `yaml:"current_step_section"`
 }
 
-const storyBehaviorRules = `You are a COORDINATOR for this story. Follow these rules strictly:
-1. Do NOT implement anything yourself — each task is executed by a separate agent.
-2. Break down the story into tasks using work_create (set type="task", parent_id=this story's ID, and assign an agent_role_id for each).
-3. After creating all tasks, call work_done on YOUR story immediately. Do NOT wait for tasks to finish — you will be automatically reactivated when a task completes.
-4. Do NOT call work_done on child tasks; task agents handle their own lifecycle.`
+var prompts promptTemplates
+
+func init() {
+	if err := yaml.Unmarshal(promptsYAML, &prompts); err != nil {
+		panic("failed to parse prompts.yaml: " + err.Error())
+	}
+}
+
+// render executes a template string with the given data.
+func render(tmplStr string, data any) string {
+	tmpl, err := template.New("").Parse(tmplStr)
+	if err != nil {
+		// Template parse errors should be caught during development
+		panic("invalid template: " + err.Error())
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		panic("template execution failed: " + err.Error())
+	}
+	return strings.TrimSuffix(buf.String(), "\n")
+}
+
+// storyBehaviorRules is kept for test compatibility.
+var storyBehaviorRules = strings.TrimSuffix(prompts.StoryBehaviorRules, "\n")
+
+func roleReference(agentRoleID string) string {
+	return render(prompts.RoleReference, map[string]string{
+		"AgentRoleID": agentRoleID,
+	})
+}
 
 // buildBase builds the common message shared by all prompt types.
 func buildBase(w Work) string {
 	role := roleReference(w.AgentRoleID)
 
-	workCtx := fmt.Sprintf("You are working on: %q (Work ID: %s). Use work_get with this ID to read the full details before starting.", w.Title, w.ID)
+	workCtx := render(prompts.WorkContext, map[string]string{
+		"Title": w.Title,
+		"ID":    w.ID,
+	})
 
 	var rules string
 	if w.Type == WorkTypeStory {
-		rules = fmt.Sprintf(
-			"%s\nCall work_done with ID %s as soon as you've created the tasks. If you need user input to proceed, call work_needs_input with ID %s.",
-			storyBehaviorRules, w.ID, w.ID,
-		)
+		rules = storyBehaviorRules + "\n" + render(prompts.StoryRulesSuffix, map[string]string{
+			"ID": w.ID,
+		})
 	} else {
 		if w.ParentID != "" {
-			rules = fmt.Sprintf(
-				"Before starting, use work_comment_list with work_id %s to check for any instructions or feedback on the parent story.\n\nIMPORTANT: When you finish, you MUST first report your results by calling work_comment_add with work_id %s (the parent), then call work_done with ID %s. If you need user input to proceed, call work_needs_input with ID %s. Do not end your turn without calling one of these.",
-				w.ParentID, w.ParentID, w.ID, w.ID,
-			)
+			rules = render(prompts.TaskRulesWithParent, map[string]string{
+				"ParentID": w.ParentID,
+				"ID":       w.ID,
+			})
 		} else {
-			rules = fmt.Sprintf(
-				"IMPORTANT: When you finish, you MUST call work_done with ID %s. If you need user input to proceed, call work_needs_input with ID %s. Do not end your turn without calling one of these.",
-				w.ID, w.ID,
-			)
+			rules = render(prompts.TaskRulesWithoutParent, map[string]string{
+				"ID": w.ID,
+			})
 		}
 	}
 
+	pockodeMCPPrefix := render(prompts.PockodeMCPPrefix, nil)
 	return pockodeMCPPrefix + "\n\n" + role + "\n\n" + workCtx + "\n\n" + rules
 }
 
@@ -58,10 +103,11 @@ func formatStepSection(steps []string, stepIndex int) string {
 	if len(steps) == 0 || stepIndex < 0 || stepIndex >= len(steps) {
 		return ""
 	}
-	return fmt.Sprintf(
-		"## Current Step\nStep %d of %d\n\n%s",
-		stepIndex+1, len(steps), steps[stepIndex],
-	)
+	return render(prompts.CurrentStepSection, map[string]any{
+		"CurrentStep": stepIndex + 1,
+		"TotalSteps":  len(steps),
+		"StepPrompt":  steps[stepIndex],
+	})
 }
 
 // BuildKickoffMessageWithSteps creates the kickoff message with step instructions.
@@ -84,15 +130,13 @@ func BuildRestartMessage(w Work) string {
 
 	var nudge string
 	if w.Type == WorkTypeStory {
-		nudge = fmt.Sprintf(
-			"Your story was stopped and is now being restarted. Review your tasks, then call work_done with ID %s. You will be reactivated when a task completes.",
-			w.ID,
-		)
+		nudge = render(prompts.StoryRestartNudge, map[string]string{
+			"ID": w.ID,
+		})
 	} else {
-		nudge = fmt.Sprintf(
-			"Your task was stopped and is now being restarted. Review what you've done so far, then either complete the remaining work or call work_done with ID %s if everything is finished.",
-			w.ID,
-		)
+		nudge = render(prompts.TaskRestartNudge, map[string]string{
+			"ID": w.ID,
+		})
 	}
 
 	return base + "\n\n" + nudge
@@ -105,15 +149,13 @@ func BuildAutoContinuationMessage(w Work) string {
 
 	var nudge string
 	if w.Type == WorkTypeStory {
-		nudge = fmt.Sprintf(
-			"Your story is still in_progress but your session was interrupted. Review your tasks, then call work_done with ID %s. You will be reactivated when a task completes.",
-			w.ID,
-		)
+		nudge = render(prompts.StoryAutoContinueNudge, map[string]string{
+			"ID": w.ID,
+		})
 	} else {
-		nudge = fmt.Sprintf(
-			"Your task is still in_progress but your session was interrupted. Review what you've done so far, then either complete the remaining work or call work_done with ID %s if everything is finished.",
-			w.ID,
-		)
+		nudge = render(prompts.TaskAutoContinueNudge, map[string]string{
+			"ID": w.ID,
+		})
 	}
 
 	return base + "\n\n" + nudge
@@ -136,14 +178,11 @@ func BuildAutoContinuationMessageWithSteps(w Work, steps []string, currentStep i
 
 	stepSection := formatStepSection(steps, currentStep)
 
-	nudge := fmt.Sprintf(
-		`Your session was interrupted while working on step %d of %d.
-
-Check if you have completed the current step:
-- If YES: Call work_done with ID %s to proceed to the next step.
-- If NO: Continue working on this step.`,
-		currentStep+1, len(steps), w.ID,
-	)
+	nudge := render(prompts.TaskStepAutoContinue, map[string]any{
+		"CurrentStep": currentStep + 1,
+		"TotalSteps":  len(steps),
+		"ID":          w.ID,
+	})
 
 	return base + "\n\n" + stepSection + "\n\n" + nudge
 }
@@ -153,10 +192,11 @@ Check if you have completed the current step:
 func BuildParentReactivationMessage(parent Work, childTitle, childID string) string {
 	base := buildBase(parent)
 
-	nudge := fmt.Sprintf(
-		"Task %q (ID: %s) has been completed. Use work_comment_list with work_id %s to read the task's report. Then use work_list with parent_id %s to check remaining tasks. If all tasks are done, call work_done with ID %s. If tasks remain, review progress and adjust the plan as needed, then call work_done with ID %s — this returns you to a dormant state until the next task completes.",
-		childTitle, childID, parent.ID, parent.ID, parent.ID, parent.ID,
-	)
+	nudge := render(prompts.ParentReactivationNudge, map[string]string{
+		"ChildTitle": childTitle,
+		"ChildID":    childID,
+		"ID":         parent.ID,
+	})
 
 	return base + "\n\n" + nudge
 }
@@ -166,11 +206,12 @@ func BuildParentReactivationMessage(parent Work, childTitle, childID string) str
 func BuildStepAdvanceMessage(w Work, stepPrompt string, stepNum, totalSteps int) string {
 	base := buildBase(w)
 
-	// Use same format as first step for consistency
-	stepSection := fmt.Sprintf(
-		"Step %d of %d completed. Proceeding to the next step.\n\n## Current Step\nStep %d of %d\n\n%s",
-		stepNum-1, totalSteps, stepNum, totalSteps, stepPrompt,
-	)
+	stepSection := render(prompts.StepAdvanceSection, map[string]any{
+		"PrevStep":    stepNum - 1,
+		"TotalSteps":  totalSteps,
+		"CurrentStep": stepNum,
+		"StepPrompt":  stepPrompt,
+	})
 
 	return base + "\n\n" + stepSection
 }
