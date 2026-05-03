@@ -3,6 +3,7 @@
 
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
+import { isNotFoundError } from "../../hooks/useContents";
 import { splitPath } from "../../utils/path";
 import BackToChatButton from "./BackToChatButton";
 import Spinner from "./Spinner";
@@ -85,11 +86,15 @@ export default function ContentView({
 						<Spinner className="text-th-text-muted" />
 					</div>
 				) : error ? (
-					<div className="p-4 text-center text-th-error">
-						<div>Failed to load</div>
-						<div className="mt-1 text-sm text-th-text-muted">
-							{error.message}
-						</div>
+					<div className="p-4 text-center text-th-text-muted">
+						{isNotFoundError(error) ? (
+							<div>File not found</div>
+						) : (
+							<>
+								<div className="text-th-error">Failed to load</div>
+								<div className="mt-1 text-sm">{error.message}</div>
+							</>
+						)}
 					</div>
 				) : (
 					children

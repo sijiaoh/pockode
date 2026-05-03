@@ -151,7 +151,7 @@ func TestDeleteFile(t *testing.T) {
 		}
 	})
 
-	t.Run("returns error for directory", func(t *testing.T) {
+	t.Run("deletes empty directory", func(t *testing.T) {
 		workDir := t.TempDir()
 		dirPath := "subdir"
 
@@ -160,8 +160,12 @@ func TestDeleteFile(t *testing.T) {
 		}
 
 		err := DeleteFile(workDir, dirPath)
-		if err == nil {
-			t.Fatal("expected error when deleting directory")
+		if err != nil {
+			t.Fatalf("DeleteFile failed: %v", err)
+		}
+
+		if _, err := os.Stat(filepath.Join(workDir, dirPath)); !os.IsNotExist(err) {
+			t.Error("expected directory to be deleted")
 		}
 	})
 
@@ -184,6 +188,108 @@ func TestDeleteFile(t *testing.T) {
 
 		if _, err := os.Stat(fullPath); !os.IsNotExist(err) {
 			t.Error("expected file to be deleted")
+		}
+	})
+}
+
+func TestDelete(t *testing.T) {
+	t.Run("deletes file", func(t *testing.T) {
+		workDir := t.TempDir()
+		path := "file.txt"
+
+		if err := os.WriteFile(filepath.Join(workDir, path), []byte("content"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+
+		err := Delete(workDir, path)
+		if err != nil {
+			t.Fatalf("Delete failed: %v", err)
+		}
+
+		if _, err := os.Stat(filepath.Join(workDir, path)); !os.IsNotExist(err) {
+			t.Error("expected file to be deleted")
+		}
+	})
+
+	t.Run("deletes empty directory", func(t *testing.T) {
+		workDir := t.TempDir()
+		path := "emptydir"
+
+		if err := os.Mkdir(filepath.Join(workDir, path), 0755); err != nil {
+			t.Fatalf("failed to create directory: %v", err)
+		}
+
+		err := Delete(workDir, path)
+		if err != nil {
+			t.Fatalf("Delete failed: %v", err)
+		}
+
+		if _, err := os.Stat(filepath.Join(workDir, path)); !os.IsNotExist(err) {
+			t.Error("expected directory to be deleted")
+		}
+	})
+
+	t.Run("deletes directory with contents recursively", func(t *testing.T) {
+		workDir := t.TempDir()
+		path := "parent"
+
+		parentDir := filepath.Join(workDir, path)
+		if err := os.MkdirAll(filepath.Join(parentDir, "child", "grandchild"), 0755); err != nil {
+			t.Fatalf("failed to create directories: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(parentDir, "file1.txt"), []byte("1"), 0644); err != nil {
+			t.Fatalf("failed to create file1: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(parentDir, "child", "file2.txt"), []byte("2"), 0644); err != nil {
+			t.Fatalf("failed to create file2: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(parentDir, "child", "grandchild", "file3.txt"), []byte("3"), 0644); err != nil {
+			t.Fatalf("failed to create file3: %v", err)
+		}
+
+		err := Delete(workDir, path)
+		if err != nil {
+			t.Fatalf("Delete failed: %v", err)
+		}
+
+		if _, err := os.Stat(parentDir); !os.IsNotExist(err) {
+			t.Error("expected directory to be deleted")
+		}
+	})
+
+	t.Run("returns error for empty path", func(t *testing.T) {
+		workDir := t.TempDir()
+
+		err := Delete(workDir, "")
+		if err == nil {
+			t.Fatal("expected error for empty path")
+		}
+	})
+
+	t.Run("returns error for path traversal", func(t *testing.T) {
+		workDir := t.TempDir()
+
+		err := Delete(workDir, "../outside")
+		if err == nil {
+			t.Fatal("expected error for path traversal")
+		}
+	})
+
+	t.Run("returns error for absolute path", func(t *testing.T) {
+		workDir := t.TempDir()
+
+		err := Delete(workDir, "/absolute/path")
+		if err == nil {
+			t.Fatal("expected error for absolute path")
+		}
+	})
+
+	t.Run("returns error for non-existent path", func(t *testing.T) {
+		workDir := t.TempDir()
+
+		err := Delete(workDir, "nonexistent")
+		if err == nil {
+			t.Fatal("expected error for non-existent path")
 		}
 	})
 }

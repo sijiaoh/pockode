@@ -31,9 +31,9 @@ React SPA ──WebSocket──▶ Go Server ──filesystem──▶ Workspace
 - Creates parent directories automatically
 - Updates existing files
 
-**`file.delete`** — Remove a file from disk.
-- Only files can be deleted (not directories)
-- Returns error if file doesn't exist
+**`file.delete`** — Remove a file or directory from disk.
+- Directories are deleted recursively (all contents removed)
+- Returns error if path doesn't exist
 
 ## Security
 

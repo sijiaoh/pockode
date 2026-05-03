@@ -199,11 +199,11 @@ func WriteFile(workDir, path, content string) error {
 	return os.WriteFile(fullPath, []byte(content), 0644)
 }
 
-// DeleteFile deletes a file within workDir.
+// Delete removes a file or directory within workDir.
+// For directories, it recursively removes all contents.
 // Returns ErrInvalidPath for path traversal attempts, absolute paths, or empty paths.
-// Returns ErrNotFound if the file doesn't exist.
-// Returns error if the path is a directory (only files can be deleted).
-func DeleteFile(workDir, path string) error {
+// Returns ErrNotFound if the path doesn't exist.
+func Delete(workDir, path string) error {
 	if path == "" {
 		return fmt.Errorf("%w: empty path", ErrInvalidPath)
 	}
@@ -214,17 +214,18 @@ func DeleteFile(workDir, path string) error {
 
 	fullPath := filepath.Join(workDir, path)
 
-	info, err := os.Stat(fullPath)
-	if err != nil {
+	if _, err := os.Stat(fullPath); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("%w: %s", ErrNotFound, path)
 		}
 		return fmt.Errorf("failed to stat path: %w", err)
 	}
 
-	if info.IsDir() {
-		return fmt.Errorf("%w: cannot delete directory", ErrInvalidPath)
-	}
+	return os.RemoveAll(fullPath)
+}
 
-	return os.Remove(fullPath)
+// DeleteFile deletes a file within workDir.
+// Deprecated: Use Delete instead, which handles both files and directories.
+func DeleteFile(workDir, path string) error {
+	return Delete(workDir, path)
 }

@@ -1,12 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-	contentsQueryKey,
-	isNotFoundError,
-	useContents,
-} from "../../hooks/useContents";
+import { useCallback, useMemo, useState } from "react";
+import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFSWatch } from "../../hooks/useFSWatch";
 import { useCurrentWorktree, useRouteState } from "../../hooks/useRouteState";
 import { overlayToNavigation } from "../../lib/navigation";
@@ -48,14 +44,6 @@ function FileView({ path, onBack }: Props) {
 			),
 		);
 	}, [navigate, path, worktree, sessionId]);
-
-	// Redirect to edit mode if file doesn't exist
-	const isNewFile = isNotFoundError(error);
-	useEffect(() => {
-		if (isNewFile) {
-			navigateToEdit();
-		}
-	}, [isNewFile, navigateToEdit]);
 
 	const handleDeleteClick = useCallback(() => {
 		setDeleteError(null);
