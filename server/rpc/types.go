@@ -355,14 +355,16 @@ type WorkDetailSubscribeResult struct {
 // AgentRole namespace
 
 type AgentRoleCreateParams struct {
-	Name       string `json:"name"`
-	RolePrompt string `json:"role_prompt"`
+	Name       string   `json:"name"`
+	RolePrompt string   `json:"role_prompt"`
+	Steps      []string `json:"steps,omitempty"`
 }
 
 type AgentRoleUpdateParams struct {
-	ID         string  `json:"id"`
-	Name       *string `json:"name,omitempty"`
-	RolePrompt *string `json:"role_prompt,omitempty"`
+	ID         string    `json:"id"`
+	Name       *string   `json:"name,omitempty"`
+	RolePrompt *string   `json:"role_prompt,omitempty"`
+	Steps      *[]string `json:"steps,omitempty"`
 }
 
 type AgentRoleDeleteParams struct {

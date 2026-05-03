@@ -3,6 +3,7 @@ package work
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -911,4 +912,291 @@ type errSender struct {
 
 func (s *errSender) SendMessage(_ context.Context, _, _ string) error {
 	return s.err
+}
+
+// --- Trigger D: step advance ---
+
+// mockStepProvider provides step information for tests.
+type mockStepProvider struct {
+	steps map[string][]string // agentRoleID → steps
+}
+
+func (m *mockStepProvider) GetSteps(agentRoleID string) ([]string, error) {
+	return m.steps[agentRoleID], nil
+}
+
+func TestAutoResumer_StepAdvance_TaskWithSteps(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	sp := &mockStepProvider{
+		steps: map[string][]string{
+			testRoleID: {"Step 1: Do something", "Step 2: Do another thing", "Step 3: Finish up"},
+		},
+	}
+	resumer.SetStepProvider(sp)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	sid := "session-1"
+	startWorkWithSession(t, store, task.ID, sid)
+
+	// Mark done — task with no children becomes closed immediately due to autoClose
+	doneWork(t, store, task.ID)
+
+	// Fire work change event (simulate internal update)
+	// Since autoClose promoted done→closed, we send a closed event
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: false,
+		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusClosed, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 0},
+	})
+
+	waitFor(t, func() bool {
+		w := getWork(t, store, task.ID)
+		return w.CurrentStep == 1
+	})
+
+	w := getWork(t, store, task.ID)
+	if w.CurrentStep != 1 {
+		t.Errorf("current_step = %d, want 1", w.CurrentStep)
+	}
+	if w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q", w.Status, StatusInProgress)
+	}
+
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].SessionID != sid {
+		t.Errorf("sessionID = %q, want %q", msgs[0].SessionID, sid)
+	}
+}
+
+func TestAutoResumer_StepAdvance_NoSteps(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	sp := &mockStepProvider{
+		steps: map[string][]string{
+			testRoleID: {}, // No steps
+		},
+	}
+	resumer.SetStepProvider(sp)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	sid := "session-1"
+	startWorkWithSession(t, store, task.ID, sid)
+
+	doneWork(t, store, task.ID)
+
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: false,
+		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusClosed, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 0},
+	})
+
+	// Should not send any messages or advance step
+	time.Sleep(50 * time.Millisecond)
+	if len(sender.getMessages()) != 0 {
+		t.Error("should not send message when no steps defined")
+	}
+}
+
+func TestAutoResumer_StepAdvance_LastStep(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	sp := &mockStepProvider{
+		steps: map[string][]string{
+			testRoleID: {"Step 1", "Step 2"},
+		},
+	}
+	resumer.SetStepProvider(sp)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	sid := "session-1"
+	startWorkWithSession(t, store, task.ID, sid)
+
+	doneWork(t, store, task.ID)
+
+	// Already at last step (current_step = 1, len(steps) = 2)
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: false,
+		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusClosed, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 1},
+	})
+
+	// Should not send any messages or advance step
+	time.Sleep(50 * time.Millisecond)
+	if len(sender.getMessages()) != 0 {
+		t.Error("should not send message when already at last step")
+	}
+}
+
+func TestAutoResumer_StepAdvance_StoryIgnored(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	sp := &mockStepProvider{
+		steps: map[string][]string{
+			testRoleID: {"Step 1", "Step 2"},
+		},
+	}
+	resumer.SetStepProvider(sp)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	doneWork(t, store, story.ID)
+
+	// Stories should be ignored for step advance
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: false,
+		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusDone, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 0},
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	if len(sender.getMessages()) != 0 {
+		t.Error("should not send step advance message for stories")
+	}
+}
+
+func TestAutoResumer_StepAdvance_ExternalIgnored(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	sp := &mockStepProvider{
+		steps: map[string][]string{
+			testRoleID: {"Step 1", "Step 2"},
+		},
+	}
+	resumer.SetStepProvider(sp)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	sid := "session-1"
+	startWorkWithSession(t, store, task.ID, sid)
+
+	doneWork(t, store, task.ID)
+
+	// External events should be ignored
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: true,
+		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusClosed, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 0},
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	if len(sender.getMessages()) != 0 {
+		t.Error("should not send step advance message for external events")
+	}
+}
+
+// --- Auto-continuation with step context ---
+
+func TestAutoResumer_AutoContinuation_WithSteps(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	sp := &mockStepProvider{
+		steps: map[string][]string{
+			testRoleID: {"Implement feature", "Write tests", "Update docs"},
+		},
+	}
+	resumer.SetStepProvider(sp)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	sid := "session-1"
+	startWorkWithSession(t, store, task.ID, sid)
+
+	// Simulate agent idle without calling work_done
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+
+	// Message should contain step context and step completion check prompt
+	msg := msgs[0].Content
+	if !containsAll(msg, "## Current Step", "Step 1 of 3", "Implement feature") {
+		t.Error("message should contain current step context")
+	}
+	if !containsAll(msg, "interrupted while working on step", "If YES: Call work_done", "If NO: Continue working") {
+		t.Error("message should contain step completion check prompt")
+	}
+}
+
+func TestAutoResumer_AutoContinuation_WithoutSteps(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	// No step provider set
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	sid := "session-1"
+	startWorkWithSession(t, store, task.ID, sid)
+
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+
+	// Message should be the standard auto-continuation message (no step info)
+	msg := msgs[0].Content
+	if containsAll(msg, "## Current Step") {
+		t.Error("message should NOT contain step context when no steps defined")
+	}
+	if !containsAll(msg, "still in_progress but your session was interrupted") {
+		t.Error("message should contain standard auto-continuation nudge")
+	}
+}
+
+func TestAutoResumer_AutoContinuation_StoryIgnoresSteps(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	sp := &mockStepProvider{
+		steps: map[string][]string{
+			testRoleID: {"Step 1", "Step 2"},
+		},
+	}
+	resumer.SetStepProvider(sp)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+
+	// Stories should use standard message (steps don't apply)
+	msg := msgs[0].Content
+	if containsAll(msg, "## Current Step") {
+		t.Error("story message should NOT contain step context")
+	}
+	if !containsAll(msg, "Your story is still in_progress") {
+		t.Error("story message should contain standard auto-continuation nudge")
+	}
+}
+
+// containsAll returns true if s contains all substrings.
+func containsAll(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }

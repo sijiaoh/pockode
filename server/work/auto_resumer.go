@@ -14,6 +14,12 @@ type MessageSender interface {
 	SendMessage(ctx context.Context, sessionID, content string) error
 }
 
+// StepProvider provides step information for agent roles.
+// The work package uses this interface to avoid importing agentrole.
+type StepProvider interface {
+	GetSteps(agentRoleID string) ([]string, error)
+}
+
 // WorkStartHandler handles the full lifecycle of starting a work session
 // (create session, set title, send kickoff message).
 // For restarts (reused sessionID), the implementation should detect the
@@ -35,10 +41,14 @@ type WorkStartHandler interface {
 //
 // Trigger C: When a work item is started externally (e.g. via MCP),
 // create the session and send the kickoff message.
+//
+// Trigger D: When a work item transitions to done and has more steps,
+// advance to the next step and send the step prompt.
 type AutoResumer struct {
 	workStore    Store
 	sender       atomic.Pointer[MessageSender]
 	startHandler atomic.Pointer[WorkStartHandler]
+	stepProvider atomic.Pointer[StepProvider]
 	ctx          context.Context
 	cancel       context.CancelFunc
 	retryMu      sync.Mutex
@@ -116,6 +126,18 @@ func (r *AutoResumer) SetStartHandler(h WorkStartHandler) {
 
 func (r *AutoResumer) getStartHandler() WorkStartHandler {
 	if p := r.startHandler.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// SetStepProvider sets the provider for agent role step information.
+func (r *AutoResumer) SetStepProvider(sp StepProvider) {
+	r.stepProvider.Store(&sp)
+}
+
+func (r *AutoResumer) getStepProvider() StepProvider {
+	if p := r.stepProvider.Load(); p != nil {
 		return *p
 	}
 	return nil
@@ -261,7 +283,19 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSen
 	r.retries[sessionID] = count + 1
 	r.retryMu.Unlock()
 
-	msg := BuildAutoContinuationMessage(*w)
+	// Build message with step context if available (for tasks only)
+	var msg string
+	if w.Type == WorkTypeTask {
+		if sp := r.getStepProvider(); sp != nil {
+			if steps, err := sp.GetSteps(w.AgentRoleID); err == nil && len(steps) > 0 {
+				msg = BuildAutoContinuationMessageWithSteps(*w, steps, w.CurrentStep)
+			}
+		}
+	}
+	if msg == "" {
+		msg = BuildAutoContinuationMessage(*w)
+	}
+
 	if err := sender.SendMessage(r.ctx, sessionID, msg); err != nil {
 		if r.ctx.Err() != nil {
 			return // shutting down, don't log
@@ -307,11 +341,28 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 		return
 	}
 
-	// Trigger B: child closed → parent reactivation
 	sender := r.getSender()
 	if sender == nil {
 		return
 	}
+
+	// Trigger D: work done/closed → check for next step
+	// Only for tasks (not stories), and only for non-external events to avoid double-triggering.
+	// We check both done and closed because autoClose may have already promoted done→closed
+	// for leaf tasks (tasks without children).
+	if !event.External && event.Work.Type == WorkTypeTask && (event.Work.Status == StatusDone || event.Work.Status == StatusClosed) && event.Work.SessionID != "" {
+		sp := r.getStepProvider()
+		if sp != nil {
+			steps, err := sp.GetSteps(event.Work.AgentRoleID)
+			if err == nil && len(steps) > 0 && event.Work.CurrentStep < len(steps)-1 {
+				// Has more steps — handle step advance and skip Trigger B
+				go r.handleStepAdvance(event.Work, sender, sp)
+				return
+			}
+		}
+	}
+
+	// Trigger B: child closed → parent reactivation
 	if event.Work.Status != StatusClosed || event.Work.ParentID == "" {
 		return
 	}
@@ -331,6 +382,46 @@ func (r *AutoResumer) handleExternalWorkStart(w Work, h WorkStartHandler) {
 		return
 	}
 	slog.Info("external work start completed", "workId", w.ID, "sessionId", w.SessionID)
+}
+
+func (r *AutoResumer) handleStepAdvance(w Work, sender MessageSender, sp StepProvider) {
+	// Re-fetch steps since we're in a goroutine and need current data
+	steps, err := sp.GetSteps(w.AgentRoleID)
+	if err != nil {
+		if r.ctx.Err() == nil {
+			slog.Warn("failed to get steps for agent role", "agentRoleId", w.AgentRoleID, "error", err)
+		}
+		return
+	}
+
+	// Double-check step bounds (race condition safety)
+	if len(steps) == 0 || w.CurrentStep >= len(steps)-1 {
+		return
+	}
+
+	// Advance to the next step
+	if err := r.workStore.AdvanceStep(r.ctx, w.ID); err != nil {
+		if r.ctx.Err() == nil {
+			slog.Warn("failed to advance step", "workId", w.ID, "error", err)
+		}
+		return
+	}
+
+	// Reset retry count (new step context)
+	r.retryMu.Lock()
+	delete(r.retries, w.SessionID)
+	r.retryMu.Unlock()
+
+	nextStep := w.CurrentStep + 1
+	msg := BuildStepAdvanceMessage(w, steps[nextStep], nextStep+1, len(steps))
+	if err := sender.SendMessage(r.ctx, w.SessionID, msg); err != nil {
+		if r.ctx.Err() != nil {
+			return
+		}
+		slog.Warn("failed to send step advance message", "workId", w.ID, "step", nextStep, "error", err)
+	} else {
+		slog.Info("step advance sent", "workId", w.ID, "sessionId", w.SessionID, "step", nextStep+1, "totalSteps", len(steps))
+	}
 }
 
 func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender) {

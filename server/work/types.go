@@ -44,6 +44,7 @@ type Work struct {
 	Body        string     `json:"body,omitempty"`
 	Status      WorkStatus `json:"status"`
 	SessionID   string     `json:"session_id,omitempty"`
+	CurrentStep int        `json:"current_step,omitempty"` // 0-indexed; used only when agent role has Steps
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 }

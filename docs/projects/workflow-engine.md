@@ -43,8 +43,8 @@ The workflow engine manages work item lifecycles through status transitions, aut
 | `needs_input`  | `in_progress`  | `Store.Resume` (user confirms)             |
 | `needs_input`  | `stopped`      | `Store.Stop` (process ended while paused)  |
 | `stopped`      | `in_progress`  | `Store.Start` (restart) or `Store.Reactivate` |
-| `done`         | `in_progress`  | `Store.ReactivateParent` (parent reactivation) |
-| `closed`       | `in_progress`  | `Store.ReactivateParent` (parent reactivation) |
+| `done`         | `in_progress`  | `Store.ReactivateParent` (parent reactivation) or `Store.AdvanceStep` (step advance) |
+| `closed`       | `in_progress`  | `Store.ReactivateParent` (parent reactivation) or `Store.AdvanceStep` (step advance) |
 | `done`         | `closed`       | Auto-close (internal, not an API call)     |
 
 > Source: `server/work/validation.go` — `validTransitions` map; `done`/`closed` rows handled by `Store.ReactivateParent`.
@@ -122,6 +122,29 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 
 > Source: `server/work/auto_resumer.go` — `handleExternalWorkStart`.
 
+### Trigger D: Step Advance
+
+**When:** A task transitions to `done` or `closed` and its agent role has more steps to execute.
+
+**Flow:**
+1. Task agent calls `work_done` on a task.
+2. Work transitions to `done` (and may be auto-closed to `closed` if no children).
+3. AutoResumer detects the transition is for a Task with an AgentRole that has `steps`.
+4. If `current_step < len(steps) - 1`:
+   - `AdvanceStep` transitions work from `done`/`closed` back to `in_progress` and increments `current_step`.
+   - Reset retry counter.
+   - Send `BuildStepAdvanceMessage` with the next step's instructions.
+5. If on the last step (`current_step == len(steps) - 1`), step advance is skipped, allowing normal completion or Trigger B (parent reactivation) to proceed.
+
+**Constraints:**
+- Only applies to Tasks (not Stories).
+- Only triggers for non-external events (to avoid double-triggering with MCP).
+- Mutually exclusive with Trigger B: if step advance fires, parent reactivation is skipped for this event.
+
+**Purpose:** Enable multi-step task execution where each step is treated as a mini-task within the same Work item.
+
+> Source: `server/work/auto_resumer.go` — `handleStepAdvance`.
+
 ## WorkStarter
 
 `WorkStarter` implements `WorkStartHandler` and performs the session initialization sequence for work items that have already been claimed (`status=in_progress`, `sessionID` set).
@@ -153,7 +176,7 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 
 ## Prompt Builders
 
-Four prompt builders generate messages for different lifecycle events. All share a common base structure:
+Six prompt builders generate messages for different lifecycle events. All share a common base structure:
 
 **Base (`buildBase`):**
 - Agent role reference (instructs agent to fetch its role via `agent_role_get`)
@@ -165,7 +188,21 @@ Four prompt builders generate messages for different lifecycle events. All share
 
 ### BuildKickoffMessage
 
-Returns the base message. Used when a work item is first started.
+Returns the base message. Used when a work item is first started (without steps).
+
+### BuildKickoffMessageWithSteps
+
+Base + step section if the agent role has steps. Format:
+```
+[Base message]
+
+## Current Step
+Step 1 of N
+
+<step instructions>
+```
+
+Used when a task's agent role has `steps` defined. Falls back to `BuildKickoffMessage` if no steps.
 
 ### BuildRestartMessage
 
@@ -179,11 +216,44 @@ Base + a nudge appropriate to the work type:
 - **Story:** "Your story is still in_progress but your session was interrupted. Review your tasks…"
 - **Task:** "Your task is still in_progress but your session was interrupted. Review what you've done…"
 
+### BuildAutoContinuationMessageWithSteps
+
+For tasks with steps, base + current step section + step completion check:
+```
+[Base message]
+
+## Current Step
+Step N of M
+
+<step instructions>
+
+Your session was interrupted while working on step N of M.
+Check if you have completed the current step:
+- If YES: Call work_done with ID xxx to proceed to the next step.
+- If NO: Continue working on this step.
+```
+
+Falls back to `BuildAutoContinuationMessage` for stories or when no steps are defined.
+
 ### BuildParentReactivationMessage
 
 Base + a nudge instructing the parent story to:
 1. Read task reports via `work_comment_list` on the parent (tasks report results by commenting on their parent).
 2. Check remaining tasks via `work_list` with the parent's ID.
 3. Call `work_done` if all tasks are finished, or adjust the plan and call `work_done` to wait for the next completion.
+
+### BuildStepAdvanceMessage
+
+Used when Trigger D advances to the next step. Format:
+```
+[Base message]
+
+Step N-1 of M completed. Proceeding to the next step.
+
+## Current Step
+Step N of M
+
+<step instructions>
+```
 
 > Source: `server/work/prompt.go`.

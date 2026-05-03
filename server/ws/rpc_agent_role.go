@@ -30,6 +30,7 @@ func (h *rpcMethodHandler) handleAgentRoleCreate(ctx context.Context, conn *json
 	role, err := h.agentRoleStore.Create(ctx, agentrole.AgentRole{
 		Name:       params.Name,
 		RolePrompt: params.RolePrompt,
+		Steps:      params.Steps,
 	})
 	if err != nil {
 		h.replyAgentRoleError(ctx, conn, req.ID, err, "failed to create agent role")
@@ -53,6 +54,7 @@ func (h *rpcMethodHandler) handleAgentRoleUpdate(ctx context.Context, conn *json
 	fields := agentrole.UpdateFields{
 		Name:       params.Name,
 		RolePrompt: params.RolePrompt,
+		Steps:      params.Steps,
 	}
 	if err := h.agentRoleStore.Update(ctx, params.ID, fields); err != nil {
 		h.replyAgentRoleError(ctx, conn, req.ID, err, "failed to update agent role")

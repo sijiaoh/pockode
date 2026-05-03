@@ -35,7 +35,7 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 		return fmt.Errorf("work %s has no agent_role_id", w.ID)
 	}
 
-	_, found, err := s.agentRoleStore.Get(w.AgentRoleID)
+	role, found, err := s.agentRoleStore.Get(w.AgentRoleID)
 	if err != nil {
 		return fmt.Errorf("get agent role: %w", err)
 	}
@@ -58,7 +58,7 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 	if sessionExists {
 		return s.sendRestart(ctx, mainWt, w)
 	}
-	return s.createAndSendKickoff(ctx, mainWt, w)
+	return s.createAndSendKickoff(ctx, mainWt, w, role.Steps)
 }
 
 func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work) error {
@@ -69,7 +69,7 @@ func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work
 	return nil
 }
 
-func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w work.Work) error {
+func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w work.Work, steps []string) error {
 	defaults := s.settingsStore.Get()
 	if _, err := wt.SessionStore.Create(ctx, w.SessionID, defaults.DefaultAgentType, defaults.DefaultMode); err != nil {
 		return fmt.Errorf("create session: %w", err)
@@ -79,7 +79,8 @@ func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w 
 		slog.Warn("failed to set session title", "sessionId", w.SessionID, "error", err)
 	}
 
-	msg := work.BuildKickoffMessage(w)
+	// Include first step in kickoff message if agent role has steps
+	msg := work.BuildKickoffMessageWithSteps(w, steps, w.CurrentStep)
 	if err := wt.ChatClient.SendMessage(ctx, w.SessionID, msg); err != nil {
 		if delErr := wt.SessionStore.Delete(ctx, w.SessionID); delErr != nil {
 			slog.Error("failed to clean up session after kickoff failure", "sessionId", w.SessionID, "error", delErr)

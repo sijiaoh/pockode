@@ -293,6 +293,7 @@ func main() {
 
 	workAutoResumer := work.NewAutoResumer(workStore, 3)
 	workAutoResumer.StopOrphanedWork()
+	workAutoResumer.SetStepProvider(&agentRoleStepAdapter{store: agentRoleStore})
 	session.ClearOrphanedNeedsInput(dataDir)
 	workStore.AddOnChangeListener(workAutoResumer)
 	s.StartWatching()
@@ -460,6 +461,22 @@ func (s *stores) StartWatching() {
 func (s *stores) StopWatching() {
 	s.work.StopWatching()
 	s.agentRole.StopWatching()
+}
+
+// agentRoleStepAdapter adapts agentrole.Store to work.StepProvider.
+type agentRoleStepAdapter struct {
+	store agentrole.Store
+}
+
+func (a *agentRoleStepAdapter) GetSteps(agentRoleID string) ([]string, error) {
+	role, found, err := a.store.Get(agentRoleID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	return role.Steps, nil
 }
 
 func runMCP() {

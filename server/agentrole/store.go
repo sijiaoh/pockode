@@ -33,8 +33,9 @@ type Store interface {
 
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
 type UpdateFields struct {
-	Name       *string `json:"name,omitempty"`
-	RolePrompt *string `json:"role_prompt,omitempty"`
+	Name       *string   `json:"name,omitempty"`
+	RolePrompt *string   `json:"role_prompt,omitempty"`
+	Steps      *[]string `json:"steps,omitempty"`
 }
 
 type indexData struct {
@@ -193,6 +194,7 @@ func (s *FileStore) Create(_ context.Context, r AgentRole) (AgentRole, error) {
 		ID:         uuid.Must(uuid.NewV7()).String(),
 		Name:       r.Name,
 		RolePrompt: r.RolePrompt,
+		Steps:      r.Steps,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -234,6 +236,9 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) er
 	}
 	if fields.RolePrompt != nil {
 		r.RolePrompt = *fields.RolePrompt
+	}
+	if fields.Steps != nil {
+		r.Steps = *fields.Steps
 	}
 	r.UpdatedAt = now
 
@@ -401,7 +406,20 @@ func diffRoles(old, updated []AgentRole) []ChangeEvent {
 func roleChanged(a, b AgentRole) bool {
 	return a.Name != b.Name ||
 		a.RolePrompt != b.RolePrompt ||
+		!stepsEqual(a.Steps, b.Steps) ||
 		!a.UpdatedAt.Equal(b.UpdatedAt)
+}
+
+func stepsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // --- Helpers ---

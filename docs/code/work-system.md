@@ -29,6 +29,7 @@ type Work struct {
     Body        string     // Detailed instructions (optional)
     Status      WorkStatus
     SessionID   string     // Active AI session, empty when not running
+    CurrentStep int        // 0-indexed; used only when agent role has Steps
     CreatedAt   time.Time
     UpdatedAt   time.Time
 }
@@ -61,14 +62,14 @@ open ──────────────► in_progress
               └──────────┴─────► (can return to in_progress)
 ```
 
-| State | Meaning | SessionID |
-|-------|---------|-----------|
-| `open` | Not started | empty |
-| `in_progress` | AI session active | set |
-| `needs_input` | Waiting for user | preserved |
-| `stopped` | Session ended unexpectedly | cleared |
-| `done` | Work completed | cleared |
-| `closed` | Fully closed (all children closed) | cleared |
+| State | Meaning | SessionID | CurrentStep |
+|-------|---------|-----------|-------------|
+| `open` | Not started | empty | 0 |
+| `in_progress` | AI session active | set | tracks current step |
+| `needs_input` | Waiting for user | preserved | preserved |
+| `stopped` | Session ended unexpectedly | preserved | preserved |
+| `done` | Work completed | preserved | preserved |
+| `closed` | Fully closed (all children closed) | preserved | preserved |
 
 ### Intent-Driven Transitions
 
@@ -83,6 +84,7 @@ The API exposes intent methods rather than raw status updates. Each method encap
 | `Resume(id)` | needs_input → in_progress | Continue after input |
 | `Reactivate(id)` | stopped → in_progress | Sync with running session |
 | `ReactivateParent(id)` | done/closed → in_progress | Resume parent when child closes |
+| `AdvanceStep(id)` | done/closed → in_progress | Advance to next step, increment CurrentStep |
 | `RollbackStart(id, wasRestart)` | in_progress → open/stopped | Undo failed start |
 
 **Why `MarkDone` can skip to done**: When an AI agent calls `work_done` on an `open` task, automatically transitioning through `in_progress` avoids forcing agents to call `work_start` first.
@@ -259,7 +261,7 @@ func handleToolCall(ctx, w, req) {
 
 The AutoResumer watches for state changes and automatically manages work lifecycle.
 
-### Three Triggers
+### Four Triggers
 
 **Trigger A: Process State Changes**
 
@@ -297,6 +299,27 @@ MCP: work_start ──► fsnotify ──► AutoResumer
                     Call WorkStartHandler
 ```
 
+**Trigger D: Step Advance**
+
+When a task completes (`done`/`closed`) and its agent role has more steps:
+
+```
+Task: done ──► AutoResumer
+                   │
+                   ▼
+         hasMoreSteps(agentRole)?
+              │        │
+            yes       no
+              │        │
+              ▼        ▼
+         AdvanceStep  Trigger B (parent reactivation)
+              │
+              ▼
+         Send step N+1 prompt
+```
+
+Step advance is mutually exclusive with Trigger B: if step advance fires, parent reactivation is skipped.
+
 ### Retry and Settle Delay
 
 ```go
@@ -332,6 +355,87 @@ export function collectWorkSessionIds(works: Work[]): Set<string> {
 ```
 
 The frontend subscribes to work changes via WebSocket and updates the Zustand store. Session IDs are collected to route chat messages to the correct work context.
+
+## Multi-Step Execution
+
+Agent roles can define a `steps` array to break task execution into sequential phases. This is useful for complex workflows like:
+- Research → Plan → Implement → Test
+- Design → Code → Document
+
+### Step Lifecycle
+
+```
+Start (step 0)
+     │
+     ▼
+┌─────────────────────┐
+│ Agent works on      │
+│ current step        │
+└─────────┬───────────┘
+          │
+          ▼
+   Agent calls work_done
+          │
+          ▼
+    More steps?
+     │        │
+   yes       no
+     │        │
+     ▼        ▼
+ AdvanceStep  Normal completion
+     │        (→ closed or parent reactivation)
+     │
+     ▼
+ Send next step prompt
+     │
+     └──────► (loop back to working)
+```
+
+### Prompt Format
+
+**Initial kickoff with steps:**
+```
+[Base message]
+
+## Current Step
+Step 1 of 3
+
+<step 1 instructions>
+```
+
+**Step advance message:**
+```
+[Base message]
+
+Step 1 of 3 completed. Proceeding to the next step.
+
+## Current Step
+Step 2 of 3
+
+<step 2 instructions>
+```
+
+**Auto-continuation with steps:**
+```
+[Base message]
+
+## Current Step
+Step 2 of 3
+
+<step 2 instructions>
+
+Your session was interrupted while working on step 2 of 3.
+Check if you have completed the current step:
+- If YES: Call work_done with ID xxx to proceed to the next step.
+- If NO: Continue working on this step.
+```
+
+### Design Notes
+
+- **Steps only apply to Tasks**: Stories coordinate, they don't execute steps.
+- **Step state persists**: `CurrentStep` is preserved through `stopped`/`done`/`closed` transitions.
+- **Retry counter resets per step**: Each new step gets a fresh retry budget.
+- **Step advance is atomic**: Uses `AdvanceStep` method to transition `done`/`closed` → `in_progress` and increment `CurrentStep` in one operation.
 
 ## Code Paths
 

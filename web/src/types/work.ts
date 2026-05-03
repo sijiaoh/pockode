@@ -17,6 +17,7 @@ export interface Work {
 	body?: string;
 	status: WorkStatus;
 	session_id?: string;
+	current_step?: number;
 	created_at: string;
 	updated_at: string;
 }

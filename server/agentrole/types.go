@@ -14,6 +14,7 @@ type AgentRole struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
 	RolePrompt string    `json:"role_prompt"`
+	Steps      []string  `json:"steps,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }

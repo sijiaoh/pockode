@@ -2,6 +2,7 @@ export interface AgentRole {
 	id: string;
 	name: string;
 	role_prompt: string;
+	steps?: string[];
 	created_at: string;
 	updated_at: string;
 }
@@ -9,12 +10,14 @@ export interface AgentRole {
 export interface AgentRoleCreateParams {
 	name: string;
 	role_prompt: string;
+	steps?: string[];
 }
 
 export interface AgentRoleUpdateParams {
 	id: string;
 	name?: string;
 	role_prompt?: string;
+	steps?: string[];
 }
 
 export interface AgentRoleListSubscribeResult {

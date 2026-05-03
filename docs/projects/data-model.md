@@ -16,6 +16,7 @@ A unit of work — either a **story** (top-level, wire type `"story"`) or a **ta
 | body          | string?      | Detailed description or instructions                   |
 | status        | WorkStatus   | Current lifecycle state (see below)                    |
 | session_id    | string?      | Agent session ID (set on start, preserved through stop/done/closed) |
+| current_step  | int?         | 0-indexed step index (only when agent role has steps)  |
 | created_at    | time         | Creation timestamp                                     |
 | updated_at    | time         | Last modification timestamp                            |
 
@@ -32,15 +33,23 @@ A note attached to a work item, used for progress reports and results.
 
 ### AgentRole
 
-Defines an agent persona with a system prompt.
+Defines an agent persona with a system prompt and optional execution steps.
 
-| Field       | Type   | Description                    |
-| ----------- | ------ | ------------------------------ |
-| id          | string | UUIDv7                         |
-| name        | string | Display name (required)        |
-| role_prompt | string | System prompt for the agent    |
-| created_at  | time   | Creation timestamp             |
-| updated_at  | time   | Last modification timestamp    |
+| Field       | Type       | Description                                  |
+| ----------- | ---------- | -------------------------------------------- |
+| id          | string     | UUIDv7                                       |
+| name        | string     | Display name (required)                      |
+| role_prompt | string     | System prompt for the agent                  |
+| steps       | []string   | Optional ordered list of step instructions   |
+| created_at  | time       | Creation timestamp                           |
+| updated_at  | time       | Last modification timestamp                  |
+
+#### Steps Field
+
+When `steps` is non-empty, tasks using this role execute in sequential steps:
+1. On task start, the agent receives step 1 instructions
+2. When the agent calls `work_done`, if there are more steps, the task advances to the next step instead of closing
+3. The process repeats until the final step completes
 
 ## Hierarchy
 
