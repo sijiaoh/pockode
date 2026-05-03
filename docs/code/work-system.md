@@ -84,7 +84,6 @@ The API exposes intent methods rather than raw status updates. Each method encap
 | `Resume(id)` | needs_input → in_progress | Continue after input |
 | `Reactivate(id)` | stopped → in_progress | Sync with running session |
 | `ReactivateParent(id)` | done/closed → in_progress | Resume parent when child closes |
-| `AdvanceStep(id)` | done/closed → in_progress | Advance to next step, increment CurrentStep |
 | `RollbackStart(id, wasRestart)` | in_progress → open/stopped | Undo failed start |
 
 **Why `MarkDone` can skip to done**: When an AI agent calls `work_done` on an `open` task, automatically transitioning through `in_progress` avoids forcing agents to call `work_start` first.

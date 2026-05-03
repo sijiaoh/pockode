@@ -1,6 +1,8 @@
 import {
 	AlertCircle,
 	Check,
+	ChevronDown,
+	ChevronUp,
 	GripVertical,
 	Loader2,
 	Pencil,
@@ -282,6 +284,7 @@ function StepsEditor({ role }: { role: AgentRole }) {
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [dragId, setDragId] = useState<string | null>(null);
+	const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
 
 	// Sync local state when role changes externally
 	useEffect(() => {
@@ -341,6 +344,26 @@ function StepsEditor({ role }: { role: AgentRole }) {
 		});
 	}, []);
 
+	const moveStepUp = useCallback((id: string) => {
+		setStepItems((prev) => {
+			const index = prev.findIndex((s) => s.id === id);
+			if (index <= 0) return prev;
+			const next = [...prev];
+			[next[index - 1], next[index]] = [next[index], next[index - 1]];
+			return next;
+		});
+	}, []);
+
+	const moveStepDown = useCallback((id: string) => {
+		setStepItems((prev) => {
+			const index = prev.findIndex((s) => s.id === id);
+			if (index === -1 || index >= prev.length - 1) return prev;
+			const next = [...prev];
+			[next[index], next[index + 1]] = [next[index + 1], next[index]];
+			return next;
+		});
+	}, []);
+
 	const handleDragStart = useCallback((id: string) => {
 		setDragId(id);
 	}, []);
@@ -348,16 +371,34 @@ function StepsEditor({ role }: { role: AgentRole }) {
 	const handleDragOver = useCallback(
 		(e: React.DragEvent, targetIndex: number) => {
 			e.preventDefault();
-			if (dragId !== null) {
-				moveStep(dragId, targetIndex);
-			}
+			setDropTargetIndex(targetIndex);
 		},
-		[dragId, moveStep],
+		[],
 	);
 
-	const handleDragEnd = useCallback(() => {
-		setDragId(null);
+	const handleDragLeave = useCallback((e: React.DragEvent) => {
+		// Only clear if leaving the container entirely (not just moving to a child)
+		const relatedTarget = e.relatedTarget as Node | null;
+		if (!e.currentTarget.contains(relatedTarget)) {
+			setDropTargetIndex(null);
+		}
 	}, []);
+
+	const handleDragEnd = useCallback(() => {
+		if (dragId !== null && dropTargetIndex !== null) {
+			// Adjust target index: if dragging down, account for the item being removed
+			const fromIndex = stepItems.findIndex((s) => s.id === dragId);
+			let adjustedIndex = dropTargetIndex;
+			if (fromIndex !== -1 && fromIndex < dropTargetIndex) {
+				adjustedIndex = dropTargetIndex - 1;
+			}
+			if (fromIndex !== adjustedIndex) {
+				moveStep(dragId, adjustedIndex);
+			}
+		}
+		setDragId(null);
+		setDropTargetIndex(null);
+	}, [dragId, dropTargetIndex, stepItems, moveStep]);
 
 	if (editing) {
 		return (
@@ -365,50 +406,105 @@ function StepsEditor({ role }: { role: AgentRole }) {
 				<h3 className="mb-2 text-xs font-medium uppercase text-th-text-muted">
 					Steps
 				</h3>
-				<ul className="space-y-2">
-					{stepItems.map((item, index) => (
-						<li
-							key={item.id}
-							draggable
-							onDragStart={() => handleDragStart(item.id)}
-							onDragOver={(e) => handleDragOver(e, index)}
-							onDragEnd={handleDragEnd}
-							className={`flex items-start gap-1 rounded-lg border border-th-border bg-th-bg-primary p-1 ${
-								dragId === item.id ? "opacity-50" : ""
-							}`}
+				{/* biome-ignore lint/a11y/noStaticElementInteractions: container for drag-and-drop */}
+				<div onDragLeave={handleDragLeave}>
+					<ul className="space-y-2">
+						{stepItems.map((item, index) => (
+							<li key={item.id} className="relative">
+								{/* Drop indicator line */}
+								{dropTargetIndex === index &&
+									dragId !== null &&
+									dragId !== item.id && (
+										<div className="absolute -top-1 left-0 right-0 z-10 flex items-center">
+											<div className="h-0.5 flex-1 rounded-full bg-th-accent" />
+											<div className="size-2 rounded-full bg-th-accent" />
+											<div className="h-0.5 flex-1 rounded-full bg-th-accent" />
+										</div>
+									)}
+								{/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for drag-and-drop reordering */}
+								<div
+									onDragOver={(e) => handleDragOver(e, index)}
+									className={`flex items-start gap-1 rounded-lg border bg-th-bg-primary p-1 transition-all duration-150 ${
+										dragId === item.id
+											? "scale-[0.98] border-th-accent opacity-50 shadow-lg"
+											: "border-th-border"
+									}`}
+								>
+									{/* Drag handle - only this is draggable */}
+									<button
+										type="button"
+										draggable
+										onDragStart={() => handleDragStart(item.id)}
+										onDragEnd={handleDragEnd}
+										className="mt-1.5 flex min-h-[36px] min-w-[36px] cursor-grab touch-none items-center justify-center text-th-text-muted active:cursor-grabbing"
+										aria-label="Drag to reorder"
+									>
+										<GripVertical className="size-4" />
+									</button>
+									<div className="flex min-w-0 flex-1 items-center gap-1">
+										<span className="shrink-0 text-xs font-medium text-th-text-muted">
+											{index + 1}.
+										</span>
+										<TextareaAutosize
+											value={item.value}
+											onChange={(e) => updateStep(item.id, e.target.value)}
+											disabled={saving}
+											placeholder="Enter step..."
+											minRows={1}
+											className="min-w-0 flex-1 resize-none rounded border-none bg-transparent px-1 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted focus:outline-none"
+										/>
+									</div>
+									{/* Move up/down buttons */}
+									<div className="mt-1.5 flex items-center gap-0.5">
+										<button
+											type="button"
+											onClick={() => moveStepUp(item.id)}
+											disabled={saving || index === 0}
+											className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary disabled:opacity-30"
+											aria-label="Move up"
+										>
+											<ChevronUp className="size-3.5" />
+										</button>
+										<button
+											type="button"
+											onClick={() => moveStepDown(item.id)}
+											disabled={saving || index === stepItems.length - 1}
+											className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary disabled:opacity-30"
+											aria-label="Move down"
+										>
+											<ChevronDown className="size-3.5" />
+										</button>
+										<button
+											type="button"
+											onClick={() => removeStep(item.id)}
+											disabled={saving}
+											className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-error"
+											aria-label="Remove step"
+										>
+											<Trash2 className="size-3.5" />
+										</button>
+									</div>
+								</div>
+							</li>
+						))}
+					</ul>
+					{/* Drop zone for appending at the end */}
+					{dragId !== null && (
+						// biome-ignore lint/a11y/noStaticElementInteractions: drop zone for drag-and-drop reordering
+						<div
+							onDragOver={(e) => handleDragOver(e, stepItems.length)}
+							className="h-8"
 						>
-							<button
-								type="button"
-								className="mt-1.5 flex min-h-[36px] min-w-[36px] cursor-grab items-center justify-center text-th-text-muted active:cursor-grabbing"
-								aria-label="Drag to reorder"
-							>
-								<GripVertical className="size-4" />
-							</button>
-							<div className="flex min-w-0 flex-1 items-center gap-1">
-								<span className="shrink-0 text-xs font-medium text-th-text-muted">
-									{index + 1}.
-								</span>
-								<TextareaAutosize
-									value={item.value}
-									onChange={(e) => updateStep(item.id, e.target.value)}
-									disabled={saving}
-									placeholder="Enter step..."
-									minRows={1}
-									className="min-w-0 flex-1 resize-none rounded border-none bg-transparent px-1 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted focus:outline-none"
-								/>
-							</div>
-							<button
-								type="button"
-								onClick={() => removeStep(item.id)}
-								disabled={saving}
-								className="mt-1.5 flex min-h-[36px] min-w-[36px] items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-error"
-								aria-label="Remove step"
-							>
-								<Trash2 className="size-3.5" />
-							</button>
-						</li>
-					))}
-				</ul>
+							{dropTargetIndex === stepItems.length && (
+								<div className="flex items-center py-3">
+									<div className="h-0.5 flex-1 rounded-full bg-th-accent" />
+									<div className="size-2 rounded-full bg-th-accent" />
+									<div className="h-0.5 flex-1 rounded-full bg-th-accent" />
+								</div>
+							)}
+						</div>
+					)}
+				</div>
 				<button
 					type="button"
 					onClick={addStep}

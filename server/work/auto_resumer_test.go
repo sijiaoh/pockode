@@ -914,7 +914,7 @@ func (s *errSender) SendMessage(_ context.Context, _, _ string) error {
 	return s.err
 }
 
-// --- Trigger D: step advance ---
+// --- Trigger E: External step_done (MCP step_done tool) ---
 
 // mockStepProvider provides step information for tests.
 type mockStepProvider struct {
@@ -924,8 +924,6 @@ type mockStepProvider struct {
 func (m *mockStepProvider) GetSteps(agentRoleID string) ([]string, error) {
 	return m.steps[agentRoleID], nil
 }
-
-// --- Trigger E: External step_done (MCP step_done tool) ---
 
 func TestAutoResumer_ExternalStepDone_SendsMessage(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)

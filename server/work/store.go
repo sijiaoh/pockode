@@ -55,10 +55,6 @@ type Store interface {
 	// a child work item closes.
 	ReactivateParent(ctx context.Context, id string) error
 
-	// AdvanceStep increments the work's CurrentStep and transitions it
-	// from done/closed back to in_progress for the next step.
-	AdvanceStep(ctx context.Context, id string) error
-
 	// StepDone marks the current step as complete and advances to the next.
 	// - If there are more steps: increments CurrentStep, keeps status in_progress.
 	// - If this is the last step: keeps current state unchanged (caller should use MarkDone).
@@ -478,33 +474,6 @@ func (s *FileStore) ReactivateParent(_ context.Context, id string) error {
 
 	prev := s.snapshotWorks()
 
-	w.Status = StatusInProgress
-	w.UpdatedAt = time.Now()
-
-	modified := map[string]bool{id: true}
-	return s.persistAndNotifyUpdates(prev, modified)
-}
-
-func (s *FileStore) AdvanceStep(_ context.Context, id string) error {
-	s.worksMu.Lock()
-
-	idx := s.findIndex(id)
-	if idx < 0 {
-		s.worksMu.Unlock()
-		return ErrWorkNotFound
-	}
-
-	w := &s.works[idx]
-	// Accept both done and closed — autoClose may have already promoted done→closed
-	// for leaf tasks (tasks without children).
-	if w.Status != StatusDone && w.Status != StatusClosed {
-		s.worksMu.Unlock()
-		return fmt.Errorf("%w: AdvanceStep requires done or closed status, got %s", ErrInvalidWork, w.Status)
-	}
-
-	prev := s.snapshotWorks()
-
-	w.CurrentStep++
 	w.Status = StatusInProgress
 	w.UpdatedAt = time.Now()
 

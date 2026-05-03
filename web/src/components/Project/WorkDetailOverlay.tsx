@@ -1,6 +1,9 @@
 import {
 	AlertCircle,
 	Check,
+	Circle,
+	CircleCheck,
+	CircleDot,
 	Loader2,
 	MessageSquare,
 	Pencil,
@@ -17,7 +20,8 @@ import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
-import type { Comment, Work, WorkType } from "../../types/work";
+import type { AgentRole } from "../../types/agentRole";
+import type { Comment, Work, WorkStatus, WorkType } from "../../types/work";
 import { MarkdownContent } from "../Chat/MarkdownContent";
 import ConfirmDialog from "../common/ConfirmDialog";
 import BackButton from "../ui/BackButton";
@@ -43,6 +47,7 @@ export default function WorkDetailOverlay({
 	const { work, comments, loading, error } = useWorkDetailSubscription(workId);
 
 	const works = useWorkStore((s) => s.works);
+	const roles = useAgentRoleStore((s) => s.roles);
 	const roleNameMap = useRoleNameMap();
 	const children = useMemo(
 		() => works.filter((w) => w.parent_id === workId),
@@ -51,6 +56,13 @@ export default function WorkDetailOverlay({
 	const parent = useMemo(
 		() => (work?.parent_id ? works.find((w) => w.id === work.parent_id) : null),
 		[works, work],
+	);
+	const role = useMemo(
+		() =>
+			work?.agent_role_id
+				? roles.find((r) => r.id === work.agent_role_id)
+				: undefined,
+		[roles, work?.agent_role_id],
 	);
 
 	if (loading) {
@@ -103,6 +115,10 @@ export default function WorkDetailOverlay({
 					</div>
 
 					<RoleSection work={work} />
+
+					{work.type === "task" && (
+						<StepProgressSection work={work} role={role} />
+					)}
 
 					<InlineEditableBody work={work} />
 
@@ -734,4 +750,111 @@ function formatCommentDate(dateString: string): string {
 		hour: "2-digit",
 		minute: "2-digit",
 	});
+}
+
+function StepProgressSection({
+	work,
+	role,
+}: {
+	work: Work;
+	role: AgentRole | undefined;
+}) {
+	const steps = role?.steps ?? [];
+	// Clamp currentStep to valid range
+	const rawCurrentStep = work.current_step ?? 0;
+	const currentStep = Math.max(0, Math.min(rawCurrentStep, steps.length - 1));
+
+	if (steps.length === 0) return null;
+
+	const isDone = work.status === "done" || work.status === "closed";
+	// Show progress for all active states (in_progress, needs_input, stopped)
+	const showProgress = !isDone && work.status !== "open";
+
+	return (
+		<div>
+			<h3 className="mb-1 text-xs font-medium uppercase text-th-text-muted">
+				Steps{" "}
+				{showProgress && (
+					<span className="text-th-accent">
+						({currentStep + 1}/{steps.length})
+					</span>
+				)}
+				{isDone && (
+					<span className="text-th-success">
+						({steps.length}/{steps.length})
+					</span>
+				)}
+			</h3>
+			<ol className="space-y-1 rounded-lg bg-th-bg-secondary px-3 py-2">
+				{steps.map((step, index) => (
+					<StepItem
+						// biome-ignore lint/suspicious/noArrayIndexKey: steps are strings without unique IDs, index is stable within the array
+						key={index}
+						step={step}
+						index={index}
+						currentStep={currentStep}
+						workStatus={work.status}
+					/>
+				))}
+			</ol>
+		</div>
+	);
+}
+
+function StepItem({
+	step,
+	index,
+	currentStep,
+	workStatus,
+}: {
+	step: string;
+	index: number;
+	currentStep: number;
+	workStatus: WorkStatus;
+}) {
+	const isDone = workStatus === "done" || workStatus === "closed";
+	const isCompleted = isDone || index < currentStep;
+	// Show as current only for active states (not open, done, or closed)
+	const isActiveState =
+		workStatus === "in_progress" ||
+		workStatus === "needs_input" ||
+		workStatus === "stopped";
+	const isCurrent = isActiveState && index === currentStep;
+
+	return (
+		<li
+			className={`flex items-start gap-3 rounded-lg px-3 py-2 transition-all duration-300 ${
+				isCurrent ? "border-l-2 border-th-accent bg-th-accent/10" : ""
+			}`}
+		>
+			<span
+				className={`mt-0.5 shrink-0 transition-colors duration-300 ${
+					isCompleted
+						? "text-th-success"
+						: isCurrent
+							? "text-th-accent"
+							: "text-th-text-muted"
+				}`}
+			>
+				{isCompleted ? (
+					<CircleCheck className="size-4" />
+				) : isCurrent ? (
+					<CircleDot className="size-4" />
+				) : (
+					<Circle className="size-4" />
+				)}
+			</span>
+			<span
+				className={`text-sm ${
+					isCompleted
+						? "text-th-text-muted"
+						: isCurrent
+							? "font-medium text-th-text-primary"
+							: "text-th-text-muted"
+				}`}
+			>
+				{step}
+			</span>
+		</li>
+	);
 }

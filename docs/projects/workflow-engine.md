@@ -43,8 +43,8 @@ The workflow engine manages work item lifecycles through status transitions, aut
 | `needs_input`  | `in_progress`  | `Store.Resume` (user confirms)             |
 | `needs_input`  | `stopped`      | `Store.Stop` (process ended while paused)  |
 | `stopped`      | `in_progress`  | `Store.Start` (restart) or `Store.Reactivate` |
-| `done`         | `in_progress`  | `Store.ReactivateParent` (parent reactivation) or `Store.AdvanceStep` (step advance) |
-| `closed`       | `in_progress`  | `Store.ReactivateParent` (parent reactivation) or `Store.AdvanceStep` (step advance) |
+| `done`         | `in_progress`  | `Store.ReactivateParent` (parent reactivation) |
+| `closed`       | `in_progress`  | `Store.ReactivateParent` (parent reactivation) |
 | `done`         | `closed`       | Auto-close (internal, not an API call)     |
 
 > Source: `server/work/validation.go` — `validTransitions` map; `done`/`closed` rows handled by `Store.ReactivateParent`.
@@ -122,28 +122,26 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 
 > Source: `server/work/auto_resumer.go` — `handleExternalWorkStart`.
 
-### Trigger D: Step Advance
+### Trigger E: Explicit Step Done
 
-**When:** A task transitions to `done` or `closed` and its agent role has more steps to execute.
+**When:** A task's `CurrentStep` is advanced externally via MCP `step_done` tool.
 
 **Flow:**
-1. Task agent calls `work_done` on a task.
-2. Work transitions to `done` (and may be auto-closed to `closed` if no children).
-3. AutoResumer detects the transition is for a Task with an AgentRole that has `steps`.
-4. If `current_step < len(steps) - 1`:
-   - `AdvanceStep` transitions work from `done`/`closed` back to `in_progress` and increments `current_step`.
-   - Reset retry counter.
+1. Task agent calls `step_done` MCP tool when it completes the current step.
+2. `Store.StepDone` increments `CurrentStep` (work remains `in_progress`).
+3. AutoResumer detects the step change via `knownSteps` tracking (External event).
+4. If there are more steps:
    - Send `BuildStepAdvanceMessage` with the next step's instructions.
-5. If on the last step (`current_step == len(steps) - 1`), step advance is skipped, allowing normal completion or Trigger B (parent reactivation) to proceed.
+5. If this is the last step, `step_done` returns guidance to use `work_done` instead.
 
 **Constraints:**
 - Only applies to Tasks (not Stories).
-- Only triggers for non-external events (to avoid double-triggering with MCP).
-- Mutually exclusive with Trigger B: if step advance fires, parent reactivation is skipped for this event.
+- Work must be `in_progress` to call `step_done`.
+- On the last step, agent should call `work_done` to complete the task.
 
-**Purpose:** Enable multi-step task execution where each step is treated as a mini-task within the same Work item.
+**Purpose:** Enable explicit step-by-step execution where the agent controls when to advance. This gives the agent full control over step completion timing, avoiding race conditions from automatic detection.
 
-> Source: `server/work/auto_resumer.go` — `handleStepAdvance`.
+> Source: `server/work/auto_resumer.go` — `handleExternalStepDone`, `server/mcp/tools.go` — `handleStepDone`.
 
 ## WorkStarter
 
@@ -244,7 +242,7 @@ Base + a nudge instructing the parent story to:
 
 ### BuildStepAdvanceMessage
 
-Used when Trigger D advances to the next step. Format:
+Used when Trigger E advances to the next step. Format:
 ```
 [Base message]
 

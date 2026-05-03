@@ -42,8 +42,7 @@ type WorkStartHandler interface {
 // Trigger C: When a work item is started externally (e.g. via MCP),
 // create the session and send the kickoff message.
 //
-// Trigger D: When a work item transitions to done and has more steps,
-// advance to the next step and send the step prompt.
+// Trigger D: Reserved (removed — step advance is now handled by Trigger E).
 //
 // Trigger E: When a work item's CurrentStep is advanced externally (via MCP step_done),
 // send the next step prompt to continue the task.
