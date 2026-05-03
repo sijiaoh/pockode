@@ -232,7 +232,7 @@ func TestFormatStepSection(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := formatStepSection(tc.steps, tc.index)
+			result := formatStepSection("test-work-id", tc.steps, tc.index)
 			if tc.wantNil {
 				if result != "" {
 					t.Errorf("expected empty string, got %q", result)
@@ -321,7 +321,8 @@ func TestBuildAutoContinuationMessageWithSteps_WithSteps(t *testing.T) {
 	assertContains(t, msg, "Step 2 of 3", "step number")
 	assertContains(t, msg, "Write tests", "step content")
 	assertContains(t, msg, "interrupted while working on step 2 of 3", "interrupt context")
-	assertContains(t, msg, "If YES: Call work_done", "yes instruction")
+	assertContains(t, msg, "If YES and this is NOT the last step: Call step_done", "step_done instruction")
+	assertContains(t, msg, "If YES and this IS the last step: Call work_done", "work_done instruction")
 	assertContains(t, msg, "If NO: Continue working", "no instruction")
 }
 

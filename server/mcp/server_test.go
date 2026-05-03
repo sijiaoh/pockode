@@ -698,6 +698,158 @@ func TestWorkCommentList_WithComments(t *testing.T) {
 	}
 }
 
+// --- step_done tests ---
+
+func TestStepDone_AdvancesStep(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := work.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arStore, err := agentrole.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a role with steps
+	role, err := arStore.Create(context.Background(), agentrole.AgentRole{
+		Name:       "Multi-Step Engineer",
+		RolePrompt: "You are an engineer.",
+		Steps:      []string{"Step 1: Plan", "Step 2: Implement", "Step 3: Test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewServer(store, arStore)
+
+	// Create a story first (tasks require a parent)
+	result := callTool(t, s, "work_create", map[string]string{
+		"type": "story", "title": "Test Story", "agent_role_id": role.ID,
+	})
+	storyID := extractID(t, toolText(result))
+
+	// Create and start a task under the story
+	result = callTool(t, s, "work_create", map[string]string{
+		"type": "task", "title": "Test Task", "agent_role_id": role.ID, "parent_id": storyID,
+	})
+	id := extractID(t, toolText(result))
+
+	callTool(t, s, "work_start", map[string]string{"id": id})
+
+	// Now call step_done
+	result = callTool(t, s, "step_done", map[string]string{"id": id})
+	text := toolText(result)
+
+	if !strings.Contains(text, "Step 1 completed") {
+		t.Errorf("expected step 1 completed message, got %q", text)
+	}
+	if !strings.Contains(text, "advancing to step 2") {
+		t.Errorf("expected advancing to step 2 message, got %q", text)
+	}
+
+	// Verify the step was advanced
+	w, _, _ := store.Get(id)
+	if w.CurrentStep != 1 {
+		t.Errorf("CurrentStep = %d, want 1", w.CurrentStep)
+	}
+	if w.Status != work.StatusInProgress {
+		t.Errorf("Status = %s, want in_progress", w.Status)
+	}
+}
+
+func TestStepDone_LastStep(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := work.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arStore, err := agentrole.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a role with 2 steps
+	role, err := arStore.Create(context.Background(), agentrole.AgentRole{
+		Name:       "Two-Step Engineer",
+		RolePrompt: "You are an engineer.",
+		Steps:      []string{"Step 1: Plan", "Step 2: Execute"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewServer(store, arStore)
+
+	// Create a story first
+	result := callTool(t, s, "work_create", map[string]string{
+		"type": "story", "title": "Test Story", "agent_role_id": role.ID,
+	})
+	storyID := extractID(t, toolText(result))
+
+	// Create and start a task
+	result = callTool(t, s, "work_create", map[string]string{
+		"type": "task", "title": "Test Task", "agent_role_id": role.ID, "parent_id": storyID,
+	})
+	id := extractID(t, toolText(result))
+
+	callTool(t, s, "work_start", map[string]string{"id": id})
+
+	// Advance to step 2 (index 1)
+	callTool(t, s, "step_done", map[string]string{"id": id})
+
+	// Now at last step, step_done should indicate to use work_done
+	result = callTool(t, s, "step_done", map[string]string{"id": id})
+	text := toolText(result)
+
+	if !strings.Contains(text, "final step") {
+		t.Errorf("expected final step message, got %q", text)
+	}
+	if !strings.Contains(text, "work_done") {
+		t.Errorf("expected work_done suggestion, got %q", text)
+	}
+
+	// Step should not have advanced beyond the last step
+	w, _, _ := store.Get(id)
+	if w.CurrentStep != 1 {
+		t.Errorf("CurrentStep = %d, want 1 (should not advance past last step)", w.CurrentStep)
+	}
+}
+
+func TestStepDone_NoSteps(t *testing.T) {
+	ts := newTestServer(t)
+
+	// Create a story first
+	result := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Test Story", "agent_role_id": ts.roleID,
+	})
+	storyID := extractID(t, toolText(result))
+
+	// Create and start a task (role has no steps)
+	result = callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "task", "title": "Test Task", "agent_role_id": ts.roleID, "parent_id": storyID,
+	})
+	id := extractID(t, toolText(result))
+
+	callTool(t, ts.Server, "work_start", map[string]string{"id": id})
+
+	// step_done should fail because the role has no steps
+	resp := callMethod(t, ts.Server, "tools/call", toolCallParams{
+		Name:      "step_done",
+		Arguments: json.RawMessage(`{"id":"` + id + `"}`),
+	})
+
+	// Should return an error result
+	if resp.Error == nil {
+		b, _ := json.Marshal(resp.Result)
+		var result toolCallResult
+		json.Unmarshal(b, &result)
+		if !result.IsError {
+			t.Errorf("expected error for step_done on work with no steps")
+		}
+	}
+}
+
 // --- Helpers ---
 
 // extractID parses "Created story "title" (ID: xxx)" to extract the ID.

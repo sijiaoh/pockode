@@ -99,7 +99,7 @@ func BuildKickoffMessage(w Work) string {
 
 // formatStepSection creates the step instruction section.
 // Format: "## Current Step\nStep N of M\n\n<step content>"
-func formatStepSection(steps []string, stepIndex int) string {
+func formatStepSection(workID string, steps []string, stepIndex int) string {
 	if len(steps) == 0 || stepIndex < 0 || stepIndex >= len(steps) {
 		return ""
 	}
@@ -107,6 +107,7 @@ func formatStepSection(steps []string, stepIndex int) string {
 		"CurrentStep": stepIndex + 1,
 		"TotalSteps":  len(steps),
 		"StepPrompt":  steps[stepIndex],
+		"ID":          workID,
 	})
 }
 
@@ -115,7 +116,7 @@ func formatStepSection(steps []string, stepIndex int) string {
 func BuildKickoffMessageWithSteps(w Work, steps []string, currentStep int) string {
 	base := buildBase(w)
 
-	stepSection := formatStepSection(steps, currentStep)
+	stepSection := formatStepSection(w.ID, steps, currentStep)
 	if stepSection == "" {
 		return base
 	}
@@ -176,7 +177,7 @@ func BuildAutoContinuationMessageWithSteps(w Work, steps []string, currentStep i
 		return BuildAutoContinuationMessage(w)
 	}
 
-	stepSection := formatStepSection(steps, currentStep)
+	stepSection := formatStepSection(w.ID, steps, currentStep)
 
 	nudge := render(prompts.TaskStepAutoContinue, map[string]any{
 		"CurrentStep": currentStep + 1,
@@ -211,6 +212,7 @@ func BuildStepAdvanceMessage(w Work, stepPrompt string, stepNum, totalSteps int)
 		"TotalSteps":  totalSteps,
 		"CurrentStep": stepNum,
 		"StepPrompt":  stepPrompt,
+		"ID":          w.ID,
 	})
 
 	return base + "\n\n" + stepSection

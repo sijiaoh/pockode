@@ -125,6 +125,17 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
+		Name:        "step_done",
+		Description: "Mark the current step as complete and proceed to the next step. The work item must be in_progress status. If there are more steps, this advances CurrentStep. If this is the last step, use work_done instead.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id": {Type: "string", Description: "Work item ID"},
+			},
+			Required: []string{"id"},
+		},
+	},
+	{
 		Name:        "work_comment_add",
 		Description: "Add a comment to a work item. Use this to report progress, results, or notes.",
 		InputSchema: inputSchema{
@@ -196,6 +207,8 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkStart, true
 	case "work_needs_input":
 		return s.handleWorkNeedsInput, true
+	case "step_done":
+		return s.handleStepDone, true
 	case "work_comment_add":
 		return s.handleWorkCommentAdd, true
 	case "work_comment_list":
@@ -471,6 +484,48 @@ func (s *Server) handleWorkNeedsInput(ctx context.Context, args json.RawMessage)
 	}
 
 	return fmt.Sprintf("Work %s is now waiting for user input: %s", params.ID, params.Reason), nil
+}
+
+func (s *Server) handleStepDone(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	// Get the work item to find its agent role
+	w, found, err := s.store.Get(params.ID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", work.ErrWorkNotFound
+	}
+
+	// Get step count from agent role
+	role, found, err := s.agentRoleStore.Get(w.AgentRoleID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get agent role: %w", err)
+	}
+	if !found {
+		return "", fmt.Errorf("agent role %s not found", w.AgentRoleID)
+	}
+
+	totalSteps := len(role.Steps)
+	if totalSteps == 0 {
+		return "", fmt.Errorf("work %s has no steps configured", params.ID)
+	}
+
+	hasMoreSteps, err := s.store.StepDone(ctx, params.ID, totalSteps)
+	if err != nil {
+		return "", err
+	}
+
+	if hasMoreSteps {
+		return fmt.Sprintf("Step %d completed for work %s, advancing to step %d of %d", w.CurrentStep+1, params.ID, w.CurrentStep+2, totalSteps), nil
+	}
+	return fmt.Sprintf("Step %d (final step) completed for work %s. Use work_done to complete the work.", w.CurrentStep+1, params.ID), nil
 }
 
 func (s *Server) handleWorkCommentAdd(ctx context.Context, args json.RawMessage) (string, error) {

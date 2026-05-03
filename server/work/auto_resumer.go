@@ -44,6 +44,9 @@ type WorkStartHandler interface {
 //
 // Trigger D: When a work item transitions to done and has more steps,
 // advance to the next step and send the step prompt.
+//
+// Trigger E: When a work item's CurrentStep is advanced externally (via MCP step_done),
+// send the next step prompt to continue the task.
 type AutoResumer struct {
 	workStore    Store
 	sender       atomic.Pointer[MessageSender]
@@ -54,6 +57,7 @@ type AutoResumer struct {
 	retryMu      sync.Mutex
 	retries      map[string]int  // sessionID → retry count
 	continuing   map[string]bool // sessionID → auto-continuation pending
+	knownSteps   map[string]int  // workID → last known CurrentStep (for detecting step_done)
 	maxRetries   int
 	settleDelay  time.Duration // delay before checking work status after process stop
 }
@@ -75,6 +79,7 @@ func NewAutoResumer(workStore Store, maxRetries int) *AutoResumer {
 		cancel:      cancel,
 		retries:     make(map[string]int),
 		continuing:  make(map[string]bool),
+		knownSteps:  make(map[string]int),
 		maxRetries:  maxRetries,
 		settleDelay: defaultSettleDelay,
 	}
@@ -308,19 +313,27 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSen
 
 // OnWorkChange implements OnChangeListener.
 func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
-	// Clean up retries on delete
+	// Clean up tracking state on delete
 	if event.Op == OperationDelete {
+		r.retryMu.Lock()
 		if event.Work.SessionID != "" {
-			r.retryMu.Lock()
 			delete(r.retries, event.Work.SessionID)
-			r.retryMu.Unlock()
 		}
+		delete(r.knownSteps, event.Work.ID)
+		r.retryMu.Unlock()
 		return
 	}
 
 	if event.Op != OperationUpdate {
 		return
 	}
+
+	// Detect step changes by comparing with known state
+	r.retryMu.Lock()
+	prevStep, hadPrevStep := r.knownSteps[event.Work.ID]
+	r.knownSteps[event.Work.ID] = event.Work.CurrentStep
+	stepAdvanced := hadPrevStep && event.Work.CurrentStep > prevStep
+	r.retryMu.Unlock()
 
 	// Reset retries when work completes or stops
 	if event.Work.Status == StatusDone || event.Work.Status == StatusClosed || event.Work.Status == StatusStopped {
@@ -331,38 +344,33 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 		}
 	}
 
+	// Trigger E: external step_done (via MCP step_done tool).
+	// When step is advanced externally and work is still in_progress, send the next step prompt.
+	if event.External && stepAdvanced && event.Work.Status == StatusInProgress && event.Work.SessionID != "" {
+		sender := r.getSender()
+		sp := r.getStepProvider()
+		if sender != nil && sp != nil {
+			go r.handleExternalStepDone(event.Work, sender, sp)
+		}
+		return
+	}
+
 	// Trigger C: external work start (e.g. MCP work_start).
 	// Only fires for External events (fsnotify) to avoid conflicting with
 	// in-process transitions like Trigger B's parent reactivation.
-	if event.External && event.Work.Status == StatusInProgress && event.Work.SessionID != "" {
+	// Skip if this is a step advance (handled by Trigger E above).
+	if event.External && event.Work.Status == StatusInProgress && event.Work.SessionID != "" && !stepAdvanced {
 		if h := r.getStartHandler(); h != nil {
 			go r.handleExternalWorkStart(event.Work, h)
 		}
 		return
 	}
 
+	// Trigger B: child closed → parent reactivation
 	sender := r.getSender()
 	if sender == nil {
 		return
 	}
-
-	// Trigger D: work done/closed → check for next step
-	// Only for tasks (not stories), and only for non-external events to avoid double-triggering.
-	// We check both done and closed because autoClose may have already promoted done→closed
-	// for leaf tasks (tasks without children).
-	if !event.External && event.Work.Type == WorkTypeTask && (event.Work.Status == StatusDone || event.Work.Status == StatusClosed) && event.Work.SessionID != "" {
-		sp := r.getStepProvider()
-		if sp != nil {
-			steps, err := sp.GetSteps(event.Work.AgentRoleID)
-			if err == nil && len(steps) > 0 && event.Work.CurrentStep < len(steps)-1 {
-				// Has more steps — handle step advance and skip Trigger B
-				go r.handleStepAdvance(event.Work, sender, sp)
-				return
-			}
-		}
-	}
-
-	// Trigger B: child closed → parent reactivation
 	if event.Work.Status != StatusClosed || event.Work.ParentID == "" {
 		return
 	}
@@ -384,26 +392,19 @@ func (r *AutoResumer) handleExternalWorkStart(w Work, h WorkStartHandler) {
 	slog.Info("external work start completed", "workId", w.ID, "sessionId", w.SessionID)
 }
 
-func (r *AutoResumer) handleStepAdvance(w Work, sender MessageSender, sp StepProvider) {
-	// Re-fetch steps since we're in a goroutine and need current data
+// handleExternalStepDone handles step advancement triggered by MCP step_done tool.
+// It sends the next step prompt to the agent session.
+func (r *AutoResumer) handleExternalStepDone(w Work, sender MessageSender, sp StepProvider) {
 	steps, err := sp.GetSteps(w.AgentRoleID)
 	if err != nil {
 		if r.ctx.Err() == nil {
-			slog.Warn("failed to get steps for agent role", "agentRoleId", w.AgentRoleID, "error", err)
+			slog.Warn("failed to get steps for external step_done", "agentRoleId", w.AgentRoleID, "error", err)
 		}
 		return
 	}
 
-	// Double-check step bounds (race condition safety)
-	if len(steps) == 0 || w.CurrentStep >= len(steps)-1 {
-		return
-	}
-
-	// Advance to the next step
-	if err := r.workStore.AdvanceStep(r.ctx, w.ID); err != nil {
-		if r.ctx.Err() == nil {
-			slog.Warn("failed to advance step", "workId", w.ID, "error", err)
-		}
+	// CurrentStep is already advanced by MCP; validate bounds
+	if len(steps) == 0 || w.CurrentStep >= len(steps) {
 		return
 	}
 
@@ -412,15 +413,14 @@ func (r *AutoResumer) handleStepAdvance(w Work, sender MessageSender, sp StepPro
 	delete(r.retries, w.SessionID)
 	r.retryMu.Unlock()
 
-	nextStep := w.CurrentStep + 1
-	msg := BuildStepAdvanceMessage(w, steps[nextStep], nextStep+1, len(steps))
+	msg := BuildStepAdvanceMessage(w, steps[w.CurrentStep], w.CurrentStep+1, len(steps))
 	if err := sender.SendMessage(r.ctx, w.SessionID, msg); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
-		slog.Warn("failed to send step advance message", "workId", w.ID, "step", nextStep, "error", err)
+		slog.Warn("failed to send step advance message for external step_done", "workId", w.ID, "step", w.CurrentStep, "error", err)
 	} else {
-		slog.Info("step advance sent", "workId", w.ID, "sessionId", w.SessionID, "step", nextStep+1, "totalSteps", len(steps))
+		slog.Info("external step_done message sent", "workId", w.ID, "sessionId", w.SessionID, "step", w.CurrentStep+1, "totalSteps", len(steps))
 	}
 }
 

@@ -59,6 +59,12 @@ type Store interface {
 	// from done/closed back to in_progress for the next step.
 	AdvanceStep(ctx context.Context, id string) error
 
+	// StepDone marks the current step as complete and advances to the next.
+	// - If there are more steps: increments CurrentStep, keeps status in_progress.
+	// - If this is the last step: keeps current state unchanged (caller should use MarkDone).
+	// Returns hasMoreSteps=true if there are remaining steps after advancement.
+	StepDone(ctx context.Context, id string, totalSteps int) (hasMoreSteps bool, err error)
+
 	// RollbackStart reverts a failed Start. Fresh starts roll back to open
 	// (clearing sessionID); restarts roll back to stopped (preserving sessionID).
 	RollbackStart(ctx context.Context, id string, wasRestart bool) error
@@ -504,6 +510,41 @@ func (s *FileStore) AdvanceStep(_ context.Context, id string) error {
 
 	modified := map[string]bool{id: true}
 	return s.persistAndNotifyUpdates(prev, modified)
+}
+
+func (s *FileStore) StepDone(_ context.Context, id string, totalSteps int) (bool, error) {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return false, ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if w.Status != StatusInProgress {
+		s.worksMu.Unlock()
+		return false, fmt.Errorf("%w: StepDone requires in_progress status, got %s", ErrInvalidWork, w.Status)
+	}
+
+	// Check if this is the last step
+	if w.CurrentStep >= totalSteps-1 {
+		// Last step: do not modify state, caller should use MarkDone
+		s.worksMu.Unlock()
+		return false, nil
+	}
+
+	// More steps remaining: advance to next step
+	prev := s.snapshotWorks()
+
+	w.CurrentStep++
+	w.UpdatedAt = time.Now()
+
+	modified := map[string]bool{id: true}
+	if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *FileStore) RollbackStart(_ context.Context, id string, wasRestart bool) error {

@@ -67,7 +67,8 @@ task_step_auto_continue_nudge: |
   Your session was interrupted while working on step {{.CurrentStep}} of {{.TotalSteps}}.
 
   Check if you have completed the current step:
-  - If YES: Call work_done with ID {{.ID}} to proceed to the next step.
+  - If YES and this is NOT the last step: Call step_done with ID {{.ID}} to proceed to the next step.
+  - If YES and this IS the last step: Call work_done with ID {{.ID}} to complete the task.
   - If NO: Continue working on this step.
 
 # Parent reactivation nudge (when a child task completes)
@@ -76,7 +77,7 @@ parent_reactivation_nudge: |
   Task "{{.ChildTitle}}" (ID: {{.ChildID}}) has been completed. Use work_comment_list with work_id {{.ID}} to read the task's report. Then use work_list with parent_id {{.ID}} to check remaining tasks. If all tasks are done, call work_done with ID {{.ID}}. If tasks remain, review progress and adjust the plan as needed, then call work_done with ID {{.ID}} — this returns you to a dormant state until the next task completes.
 
 # Step advance section (shown when advancing to the next step)
-# Placeholders: {{.PrevStep}}, {{.TotalSteps}}, {{.CurrentStep}}, {{.StepPrompt}}
+# Placeholders: {{.PrevStep}}, {{.TotalSteps}}, {{.CurrentStep}}, {{.StepPrompt}}, {{.ID}}
 step_advance_section: |
   Step {{.PrevStep}} of {{.TotalSteps}} completed. Proceeding to the next step.
 
@@ -85,10 +86,24 @@ step_advance_section: |
 
   {{.StepPrompt}}
 
+  When you finish this step:
+  {{- if eq .CurrentStep .TotalSteps}}
+  - Call work_done with ID {{.ID}} to complete the task.
+  {{- else}}
+  - Call step_done with ID {{.ID}} to proceed to the next step.
+  {{- end}}
+
 # Current step section (shown at kickoff with steps)
-# Placeholders: {{.CurrentStep}}, {{.TotalSteps}}, {{.StepPrompt}}
+# Placeholders: {{.CurrentStep}}, {{.TotalSteps}}, {{.StepPrompt}}, {{.ID}}
 current_step_section: |
   ## Current Step
   Step {{.CurrentStep}} of {{.TotalSteps}}
 
   {{.StepPrompt}}
+
+  When you finish this step:
+  {{- if eq .CurrentStep .TotalSteps}}
+  - Call work_done with ID {{.ID}} to complete the task.
+  {{- else}}
+  - Call step_done with ID {{.ID}} to proceed to the next step.
+  {{- end}}

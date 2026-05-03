@@ -1395,3 +1395,111 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("timed out waiting for condition")
 }
+
+// --- StepDone ---
+
+func TestStepDone_AdvancesToNextStep(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWork(t, s, task.ID)
+
+	// 3 total steps, currently on step 0
+	hasMore, err := s.StepDone(context.Background(), task.ID, 3)
+	if err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	if !hasMore {
+		t.Error("expected hasMoreSteps=true")
+	}
+
+	got := getWork(t, s, task.ID)
+	if got.CurrentStep != 1 {
+		t.Errorf("CurrentStep = %d, want 1", got.CurrentStep)
+	}
+	if got.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
+	}
+}
+
+func TestStepDone_LastStepDoesNotAdvance(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWork(t, s, task.ID)
+
+	// Advance to step 1 (second of 2)
+	s.StepDone(context.Background(), task.ID, 2)
+	got := getWork(t, s, task.ID)
+	if got.CurrentStep != 1 {
+		t.Fatalf("CurrentStep = %d, want 1 (precondition)", got.CurrentStep)
+	}
+
+	// Now on last step (index 1 of 2), StepDone should not advance
+	hasMore, err := s.StepDone(context.Background(), task.ID, 2)
+	if err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	if hasMore {
+		t.Error("expected hasMoreSteps=false for last step")
+	}
+
+	got = getWork(t, s, task.ID)
+	if got.CurrentStep != 1 {
+		t.Errorf("CurrentStep = %d, want 1 (unchanged)", got.CurrentStep)
+	}
+	if got.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q (unchanged)", got.Status, StatusInProgress)
+	}
+}
+
+func TestStepDone_RejectsNonInProgressStatus(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+
+	// Try on open status
+	_, err := s.StepDone(context.Background(), story.ID, 3)
+	if err == nil {
+		t.Fatal("expected error for StepDone on open work")
+	}
+
+	// Try on stopped status
+	startWork(t, s, story.ID)
+	s.Stop(context.Background(), story.ID)
+	_, err = s.StepDone(context.Background(), story.ID, 3)
+	if err == nil {
+		t.Fatal("expected error for StepDone on stopped work")
+	}
+}
+
+func TestStepDone_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.StepDone(context.Background(), "nonexistent", 3)
+	if err == nil {
+		t.Fatal("expected error for nonexistent ID")
+	}
+}
+
+func TestStepDone_FiresUpdateEvent(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWork(t, s, task.ID)
+
+	var events []ChangeEvent
+	s.AddOnChangeListener(listenerFunc(func(e ChangeEvent) {
+		events = append(events, e)
+	}))
+
+	s.StepDone(context.Background(), task.ID, 3)
+
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Op != OperationUpdate {
+		t.Errorf("expected update event, got %s", events[0].Op)
+	}
+	if events[0].Work.CurrentStep != 1 {
+		t.Errorf("event Work.CurrentStep = %d, want 1", events[0].Work.CurrentStep)
+	}
+}

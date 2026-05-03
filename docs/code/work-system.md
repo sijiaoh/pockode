@@ -208,6 +208,7 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_start` | Begin execution | `id` |
 | `work_done` | Mark complete | `id` |
 | `work_needs_input` | Pause for user input | `id`, `reason` |
+| `step_done` | Complete current step, advance to next | `id` |
 | `work_comment_add` | Add progress note | `work_id`, `body` |
 | `work_comment_list` | List comments | `work_id` |
 
@@ -261,7 +262,7 @@ func handleToolCall(ctx, w, req) {
 
 The AutoResumer watches for state changes and automatically manages work lifecycle.
 
-### Four Triggers
+### Five Triggers
 
 **Trigger A: Process State Changes**
 
@@ -299,26 +300,39 @@ MCP: work_start ──► fsnotify ──► AutoResumer
                     Call WorkStartHandler
 ```
 
-**Trigger D: Step Advance**
+**Trigger D: Reserved**
 
-When a task completes (`done`/`closed`) and its agent role has more steps:
+(Removed — step advance is now handled by Trigger E)
+
+**Trigger E: External Step Done**
+
+When MCP `step_done` is called from an external process and the step advances:
 
 ```
-Task: done ──► AutoResumer
+MCP: step_done ──► store.StepDone()
+                        │
+                        ▼
+                 hasMoreSteps?
+                   │        │
+                 yes       no
+                   │        │
+                   ▼        ▼
+            CurrentStep++   Return "use work_done"
                    │
                    ▼
-         hasMoreSteps(agentRole)?
-              │        │
-            yes       no
-              │        │
-              ▼        ▼
-         AdvanceStep  Trigger B (parent reactivation)
-              │
-              ▼
-         Send step N+1 prompt
+            fsnotify ──► AutoResumer
+                              │
+                              ▼
+                  Detect CurrentStep change
+                              │
+                              ▼
+                  handleExternalStepDone()
+                              │
+                              ▼
+                  Send next step prompt
 ```
 
-Step advance is mutually exclusive with Trigger B: if step advance fires, parent reactivation is skipped.
+Unlike Trigger B (parent reactivation), step advancement is agent-initiated via `step_done` rather than automatic upon completion.
 
 ### Retry and Settle Delay
 
@@ -374,22 +388,27 @@ Start (step 0)
 └─────────┬───────────┘
           │
           ▼
-   Agent calls work_done
-          │
-          ▼
-    More steps?
+    Is last step?
      │        │
-   yes       no
+    no       yes
      │        │
      ▼        ▼
- AdvanceStep  Normal completion
+ step_done   work_done
+     │        │
+     ▼        ▼
+ CurrentStep++ Normal completion
      │        (→ closed or parent reactivation)
      │
      ▼
- Send next step prompt
+ AutoResumer sends
+ next step prompt
      │
      └──────► (loop back to working)
 ```
+
+**Key distinction**:
+- `step_done`: Complete current step and advance to next (agent stays in_progress)
+- `work_done`: Complete the entire task (triggers closure or parent reactivation)
 
 ### Prompt Format
 
@@ -401,6 +420,9 @@ Start (step 0)
 Step 1 of 3
 
 <step 1 instructions>
+
+When you finish this step:
+- Call step_done with ID xxx to proceed to the next step.
 ```
 
 **Step advance message:**
@@ -413,6 +435,24 @@ Step 1 of 3 completed. Proceeding to the next step.
 Step 2 of 3
 
 <step 2 instructions>
+
+When you finish this step:
+- Call step_done with ID xxx to proceed to the next step.
+```
+
+**Step advance message (last step):**
+```
+[Base message]
+
+Step 2 of 3 completed. Proceeding to the next step.
+
+## Current Step
+Step 3 of 3
+
+<step 3 instructions>
+
+When you finish this step:
+- Call work_done with ID xxx to complete the task.
 ```
 
 **Auto-continuation with steps:**
@@ -425,17 +465,22 @@ Step 2 of 3
 <step 2 instructions>
 
 Your session was interrupted while working on step 2 of 3.
+
 Check if you have completed the current step:
-- If YES: Call work_done with ID xxx to proceed to the next step.
+- If YES and this is NOT the last step: Call step_done with ID xxx to proceed to the next step.
+- If YES and this IS the last step: Call work_done with ID xxx to complete the task.
 - If NO: Continue working on this step.
 ```
 
 ### Design Notes
 
 - **Steps only apply to Tasks**: Stories coordinate, they don't execute steps.
-- **Step state persists**: `CurrentStep` is preserved through `stopped`/`done`/`closed` transitions.
+- **Step state persists**: `CurrentStep` is preserved through `stopped`/`needs_input` transitions.
 - **Retry counter resets per step**: Each new step gets a fresh retry budget.
-- **Step advance is atomic**: Uses `AdvanceStep` method to transition `done`/`closed` → `in_progress` and increment `CurrentStep` in one operation.
+- **Explicit step control**: Agents call `step_done` to advance steps, giving them control over when steps complete.
+- **step_done vs work_done**:
+  - `step_done`: Increments `CurrentStep` while keeping status as `in_progress`. Use for all steps except the last.
+  - `work_done`: Marks the task as `done`. Use only for the final step or tasks without steps.
 
 ## Prompt Configuration
 
@@ -479,8 +524,8 @@ work_context: |
 | `task_auto_continue_nudge` | Task auto-continuation | `ID` |
 | `task_step_auto_continue_nudge` | Task step auto-continuation | `CurrentStep`, `TotalSteps`, `ID` |
 | `parent_reactivation_nudge` | Parent reactivation | `ChildTitle`, `ChildID`, `ID` |
-| `step_advance_section` | Step advance | `PrevStep`, `TotalSteps`, `CurrentStep`, `StepPrompt` |
-| `current_step_section` | Initial step display | `CurrentStep`, `TotalSteps`, `StepPrompt` |
+| `step_advance_section` | Step advance | `PrevStep`, `TotalSteps`, `CurrentStep`, `StepPrompt`, `ID` |
+| `current_step_section` | Initial step display | `CurrentStep`, `TotalSteps`, `StepPrompt`, `ID` |
 
 ### Rendering
 
