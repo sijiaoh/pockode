@@ -1056,15 +1056,17 @@ func TestHandler_FileDelete_InvalidPath(t *testing.T) {
 func TestHandler_FileDelete_Directory(t *testing.T) {
 	workDir := t.TempDir()
 	env := newWorkDirTestEnv(t, workDir)
-	os.Mkdir(filepath.Join(workDir, "subdir"), 0755)
+	subdir := filepath.Join(workDir, "subdir")
+	os.Mkdir(subdir, 0755)
+	os.WriteFile(filepath.Join(subdir, "file.txt"), []byte("content"), 0644)
 
 	resp := env.call("file.delete", rpc.FileDeleteParams{Path: "subdir"})
 
-	if resp.Error == nil {
-		t.Fatal("expected error when deleting directory")
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
 	}
-	if !strings.Contains(resp.Error.Message, "invalid path") {
-		t.Errorf("expected 'invalid path' error, got %q", resp.Error.Message)
+	if _, err := os.Stat(subdir); !os.IsNotExist(err) {
+		t.Error("directory should be deleted")
 	}
 }
 
