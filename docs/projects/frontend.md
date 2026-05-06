@@ -112,15 +112,21 @@ Shows the detail view for a single work item (story or task). Sections:
 - **Title** — Inline-editable (tap pencil icon to enter edit mode)
 - **Status** — Read-only badge
 - **Role** — Inline-editable select (tap to switch role)
+- **Steps** (task only) — Step progress indicator showing current step position (if agent role has steps defined)
 - **Description** — Inline-editable textarea with Markdown rendering
 - **Tasks** (story only) — List of child tasks with status icons, "Chat" shortcut, and inline task creation
 - **Comments** — Loaded via `work.detail.subscribe` (real-time)
-- **Delete** — Confirmation dialog; hidden for `closed` items
 
 **Bottom action bar:**
-- `status === "open"` or `"stopped"` → **Start/Restart** button (calls `startWork` RPC)
-- `status === "in_progress"` or `"needs_input"` → **Stop** button (calls `stopWork` RPC)
-- `session_id` exists → **Open Chat** button (navigates to chat session)
+
+| Position | Action | Condition |
+|---|---|---|
+| Left (primary) | **Start/Restart** | `status === "open"` or `"stopped"` |
+| Left (primary) | **Stop** | `status === "in_progress"` or `"needs_input"` |
+| Left (primary) | **Open Chat** | `session_id` exists |
+| Right (secondary) | **Delete** (icon-only, 44x44px) | `status !== "closed"` |
+
+The delete button uses a subtle style (`text-th-text-muted`) to avoid accidental taps, switching to red (`text-th-error`) on hover to confirm intent. Confirmation dialog appears before deletion.
 
 ### AgentRoleListOverlay
 

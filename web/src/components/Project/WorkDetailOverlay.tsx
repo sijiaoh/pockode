@@ -133,16 +133,15 @@ export default function WorkDetailOverlay({
 					)}
 
 					<CommentsSection comments={comments} />
-
-					<DeleteSection
-						work={work}
-						childCount={children.length}
-						onBack={onBack}
-					/>
 				</div>
 			</div>
 
-			<ActionBar work={work} onNavigateToSession={onNavigateToSession} />
+			<ActionBar
+				work={work}
+				childCount={children.length}
+				onNavigateToSession={onNavigateToSession}
+				onBack={onBack}
+			/>
 		</div>
 	);
 }
@@ -173,15 +172,21 @@ function DetailHeader({
 
 function ActionBar({
 	work,
+	childCount,
 	onNavigateToSession,
+	onBack,
 }: {
 	work: Work;
+	childCount: number;
 	onNavigateToSession: (sessionId: string) => void;
+	onBack: () => void;
 }) {
 	const startWork = useWSStore((s) => s.actions.startWork);
 	const stopWork = useWSStore((s) => s.actions.stopWork);
+	const deleteWork = useWSStore((s) => s.actions.deleteWork);
 	const [isStarting, setIsStarting] = useState(false);
 	const [isStopping, setIsStopping] = useState(false);
+	const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	const handleStart = useCallback(async () => {
@@ -212,12 +217,30 @@ function ActionBar({
 		}
 	}, [stopWork, work.id]);
 
+	const handleDelete = useCallback(async () => {
+		try {
+			await deleteWork(work.id);
+			setShowDeleteConfirm(false);
+			onBack();
+		} catch (err) {
+			setError(
+				`Failed to delete: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			setShowDeleteConfirm(false);
+		}
+	}, [deleteWork, work.id, onBack]);
+
 	const showStart = work.status === "open" || work.status === "stopped";
 	const showStop =
 		work.status === "in_progress" || work.status === "needs_input";
 	const showChat = !!work.session_id;
+	const canDelete = work.status !== "closed";
 
-	if (!showStart && !showStop && !showChat) return null;
+	const typeLabel = work.type === "story" ? "Story" : "Task";
+	const confirmMessage =
+		childCount > 0
+			? `Delete "${work.title}" and its ${childCount} child task${childCount > 1 ? "s" : ""}? This cannot be undone.`
+			: `Delete "${work.title}"? This cannot be undone.`;
 
 	return (
 		<BottomActionBar>
@@ -226,48 +249,74 @@ function ActionBar({
 					{error}
 				</p>
 			)}
-			<div className="flex gap-2">
-				{showStart && (
+			<div className="flex items-center gap-2">
+				{/* Primary actions - left side */}
+				<div className="flex flex-1 gap-2">
+					{showStart && (
+						<button
+							type="button"
+							onClick={handleStart}
+							disabled={isStarting}
+							className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent text-sm font-medium text-th-accent-text disabled:opacity-50"
+						>
+							{isStarting ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								<Play className="size-4" />
+							)}
+							{work.status === "stopped" ? "Restart" : "Start"}
+						</button>
+					)}
+					{showStop && (
+						<button
+							type="button"
+							onClick={handleStop}
+							disabled={isStopping}
+							className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-error/10 text-sm font-medium text-th-error disabled:opacity-50"
+						>
+							{isStopping ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								<Square className="size-4" />
+							)}
+							Stop
+						</button>
+					)}
+					{showChat && (
+						<button
+							type="button"
+							onClick={() => onNavigateToSession(work.session_id ?? "")}
+							className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg border border-th-border text-sm font-medium text-th-text-primary hover:bg-th-bg-tertiary"
+						>
+							<MessageSquare className="size-4" />
+							Open Chat
+						</button>
+					)}
+				</div>
+
+				{/* Delete button - right side */}
+				{canDelete && (
 					<button
 						type="button"
-						onClick={handleStart}
-						disabled={isStarting}
-						className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent text-sm font-medium text-th-accent-text disabled:opacity-50"
+						onClick={() => setShowDeleteConfirm(true)}
+						className="flex size-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted hover:bg-th-error/10 hover:text-th-error"
+						aria-label={`Delete ${typeLabel}`}
 					>
-						{isStarting ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							<Play className="size-4" />
-						)}
-						{work.status === "stopped" ? "Restart" : "Start"}
-					</button>
-				)}
-				{showStop && (
-					<button
-						type="button"
-						onClick={handleStop}
-						disabled={isStopping}
-						className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-error/10 text-sm font-medium text-th-error disabled:opacity-50"
-					>
-						{isStopping ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							<Square className="size-4" />
-						)}
-						Stop
-					</button>
-				)}
-				{showChat && (
-					<button
-						type="button"
-						onClick={() => onNavigateToSession(work.session_id ?? "")}
-						className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg border border-th-border text-sm font-medium text-th-text-primary hover:bg-th-bg-tertiary"
-					>
-						<MessageSquare className="size-4" />
-						Open Chat
+						<Trash2 className="size-5" />
 					</button>
 				)}
 			</div>
+
+			{showDeleteConfirm && (
+				<ConfirmDialog
+					title={`Delete ${typeLabel}`}
+					message={confirmMessage}
+					confirmLabel="Delete"
+					variant="danger"
+					onConfirm={handleDelete}
+					onCancel={() => setShowDeleteConfirm(false)}
+				/>
+			)}
 		</BottomActionBar>
 	);
 }
@@ -668,69 +717,6 @@ function CommentsSection({ comments }: { comments: Comment[] }) {
 					</div>
 				))}
 			</div>
-		</div>
-	);
-}
-
-function DeleteSection({
-	work,
-	childCount,
-	onBack,
-}: {
-	work: Work;
-	childCount: number;
-	onBack: () => void;
-}) {
-	const deleteWork = useWSStore((s) => s.actions.deleteWork);
-	const [showConfirm, setShowConfirm] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-
-	const handleDelete = useCallback(async () => {
-		try {
-			await deleteWork(work.id);
-			setShowConfirm(false);
-			onBack();
-		} catch (err) {
-			setError(
-				`Failed to delete: ${err instanceof Error ? err.message : String(err)}`,
-			);
-			setShowConfirm(false);
-		}
-	}, [deleteWork, work.id, onBack]);
-
-	if (work.status === "closed") return null;
-
-	const typeLabel = work.type === "story" ? "Story" : "Task";
-	const confirmMessage =
-		childCount > 0
-			? `Delete "${work.title}" and its ${childCount} child task${childCount > 1 ? "s" : ""}? This cannot be undone.`
-			: `Delete "${work.title}"? This cannot be undone.`;
-
-	return (
-		<div className="border-t border-th-border pt-5">
-			<button
-				type="button"
-				onClick={() => setShowConfirm(true)}
-				className="flex min-h-[44px] items-center gap-2 rounded-lg px-3 text-sm text-th-error hover:bg-th-error/10"
-			>
-				<Trash2 className="size-4" />
-				Delete {typeLabel}
-			</button>
-			{error && (
-				<p className="mt-1 px-3 text-xs text-th-error" role="alert">
-					{error}
-				</p>
-			)}
-			{showConfirm && (
-				<ConfirmDialog
-					title={`Delete ${typeLabel}`}
-					message={confirmMessage}
-					confirmLabel="Delete"
-					variant="danger"
-					onConfirm={handleDelete}
-					onCancel={() => setShowConfirm(false)}
-				/>
-			)}
 		</div>
 	);
 }
