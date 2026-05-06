@@ -348,7 +348,7 @@ function InlineEditableTitle({ work }: { work: Work }) {
 			<button
 				type="button"
 				onClick={() => setEditing(true)}
-				className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
+				className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
 				aria-label="Edit title"
 			>
 				<Pencil className="size-4" />
@@ -425,7 +425,7 @@ function RoleSection({ work }: { work: Work }) {
 					className="group flex min-h-[44px] items-center gap-1.5 text-sm text-th-text-secondary hover:text-th-accent"
 				>
 					<span>{roleName ?? "—"}</span>
-					<Pencil className="size-3.5 text-th-text-muted opacity-60 md:opacity-0 md:group-hover:opacity-100" />
+					<Pencil className="size-3.5 text-th-text-muted opacity-60 group-hover:opacity-100" />
 				</button>
 			)}
 			{error && (
@@ -529,7 +529,7 @@ function InlineEditableBody({ work }: { work: Work }) {
 				<button
 					type="button"
 					onClick={() => setEditing(true)}
-					className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:bg-th-bg-tertiary hover:text-th-text-primary md:opacity-0 md:group-hover:opacity-100"
+					className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
 					aria-label="Edit description"
 				>
 					<Pencil className="size-3.5" />

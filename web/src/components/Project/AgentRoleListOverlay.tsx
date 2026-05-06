@@ -198,7 +198,7 @@ function RoleRow({
 				<button
 					type="button"
 					onClick={() => setShowDelete(true)}
-					className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted transition-opacity hover:text-th-error md:opacity-0 md:group-hover:opacity-100"
+					className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:opacity-100 hover:text-th-error"
 					aria-label="Delete"
 				>
 					<Trash2 className="size-4" />
