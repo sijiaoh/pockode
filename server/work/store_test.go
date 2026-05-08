@@ -546,6 +546,88 @@ func TestTransition_ClosedToInProgress_ViaReactivateParent(t *testing.T) {
 	}
 }
 
+func TestReopen_ClosedToInProgress(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+	doneWork(t, s, story.ID) // no children → auto-close → closed
+
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusClosed {
+		t.Fatalf("precondition: story should be closed, got %q", got.Status)
+	}
+
+	// Reopen allows closed → in_progress
+	if err := s.Reopen(context.Background(), story.ID); err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	got = getWork(t, s, story.ID)
+	if got.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
+	}
+}
+
+func TestReopen_RejectsNonClosedStatus(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	tests := []struct {
+		name   string
+		setup  func(id string)
+		status WorkStatus
+	}{
+		{
+			name:   "open",
+			setup:  func(id string) {},
+			status: StatusOpen,
+		},
+		{
+			name:   "in_progress",
+			setup:  func(id string) { startWork(t, s, id) },
+			status: StatusInProgress,
+		},
+		{
+			name:   "stopped",
+			setup:  func(id string) { startWork(t, s, id); s.Stop(ctx, id) },
+			status: StatusStopped,
+		},
+		{
+			name:   "needs_input",
+			setup:  func(id string) { startWork(t, s, id); s.MarkNeedsInput(ctx, id) },
+			status: StatusNeedsInput,
+		},
+		{
+			name:   "done",
+			setup:  func(id string) { startWork(t, s, id); createTask(t, s, id, "T"); doneWork(t, s, id) },
+			status: StatusDone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			story := createStory(t, s, "S-"+tt.name)
+			tt.setup(story.ID)
+
+			got := getWork(t, s, story.ID)
+			if got.Status != tt.status {
+				t.Fatalf("precondition: expected %q, got %q", tt.status, got.Status)
+			}
+
+			if err := s.Reopen(ctx, story.ID); err == nil {
+				t.Errorf("expected error for Reopen from %s status", tt.status)
+			}
+		})
+	}
+}
+
+func TestReopen_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	err := s.Reopen(context.Background(), "nonexistent")
+	if err != ErrWorkNotFound {
+		t.Errorf("expected ErrWorkNotFound, got %v", err)
+	}
+}
+
 func TestMarkDone_FromStopped(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")

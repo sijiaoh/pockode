@@ -23,6 +23,7 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | `work_done` | `id` | — | Confirmation string |
 | `work_start` | `id` | — | Confirmation string with session ID |
 | `work_needs_input` | `id`, `reason` | — | Confirmation string |
+| `work_reopen` | `id` | — | Confirmation string |
 | `work_comment_add` | `work_id`, `body` | — | Confirmation string with comment ID |
 | `work_comment_list` | `work_id` | — | JSON array of `{id, work_id, body, created_at}` |
 | `agent_role_list` | — | — | JSON array of `{id, name}` |
@@ -41,6 +42,7 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 - **`work_start`**: Requires the work item to have an `agent_role_id`. Generates a UUIDv7 session ID, transitions to `in_progress` and attaches the session ID via `Store.Start`. The main server detects this state change via fsnotify (`AutoResumer` Trigger C) and handles session creation.
 - **`work_done`**: Calls `Store.MarkDone()`. If the item is still `open`, it auto-advances to `in_progress` first, then transitions to `done`. After that, `autoClose` promotes `done → closed` if all children are `closed`.
 - **`work_needs_input`**: Calls `Store.MarkNeedsInput()`. Transitions `in_progress → needs_input`.
+- **`work_reopen`**: Calls `Store.Reopen()`. Transitions `closed → in_progress`. Use when you need to add more child work items or continue working on a completed item.
 - **`work_update`**: Uses pointer fields (`*string`) to distinguish "not provided" from "set to empty". Only updates data fields (title, body, agent_role_id).
 
 ## WebSocket RPC
@@ -58,6 +60,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.delete` | `WorkDeleteParams` | `{}` | Delete a work item (cascade-deletes children and sessions) |
 | `work.start` | `WorkStartParams` | `Work` (full object) | Atomic claim + session creation |
 | `work.stop` | `WorkStopParams` | `{}` | Stop a work item (in_progress/needs_input → stopped) |
+| `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → in_progress) |
 | `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
 | `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{id, work, comments}` | Subscribe to a single work item + comments |
 | `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
@@ -83,6 +86,7 @@ WorkUpdateParams          { id, title?, body?, agent_role_id? }
 WorkDeleteParams          { id }
 WorkStartParams           { id }
 WorkStopParams            { id }
+WorkReopenParams          { id }
 WorkCommentListParams     { work_id }
 WorkDetailSubscribeParams { work_id }
 

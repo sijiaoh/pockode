@@ -45,3 +45,4 @@ Subscriptions use the `*.subscribe` / `*.unsubscribe` pattern. Server notificati
 ## References
 
 - [JSON-RPC 2.0 Specification](https://www.jsonrpc.org/specification)
+- [Project API Reference](projects/api.md) — Detailed MCP tools and WebSocket RPC method specifications

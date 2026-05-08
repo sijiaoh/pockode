@@ -57,8 +57,8 @@ open ──────────────► in_progress
         needs_input   stopped     done
               │          │          │
               │          │          ▼
-              │          │       closed
-              │          │
+              │          │       closed ─────► in_progress
+              │          │                       (via Reopen)
               └──────────┴─────► (can return to in_progress)
 ```
 
@@ -84,6 +84,7 @@ The API exposes intent methods rather than raw status updates. Each method encap
 | `Resume(id)` | needs_input → in_progress | Continue after input |
 | `Reactivate(id)` | stopped → in_progress | Sync with running session |
 | `ReactivateParent(id)` | done/closed → in_progress | Resume parent when child closes |
+| `Reopen(id)` | closed → in_progress | Reopen a closed item to add children or continue |
 | `RollbackStart(id, wasRestart)` | in_progress → open/stopped | Undo failed start |
 
 **Why `MarkDone` can skip to done**: When an AI agent calls `work_done` on an `open` task, automatically transitioning through `in_progress` avoids forcing agents to call `work_start` first.
@@ -207,6 +208,7 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_start` | Begin execution | `id` |
 | `work_done` | Mark complete | `id` |
 | `work_needs_input` | Pause for user input | `id`, `reason` |
+| `work_reopen` | Reopen a closed work item | `id` |
 | `step_done` | Complete current step, advance to next | `id` |
 | `work_comment_add` | Add progress note | `work_id`, `body` |
 | `work_comment_list` | List comments | `work_id` |

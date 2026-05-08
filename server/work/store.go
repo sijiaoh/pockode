@@ -65,6 +65,10 @@ type Store interface {
 	// (clearing sessionID); restarts roll back to stopped (preserving sessionID).
 	RollbackStart(ctx context.Context, id string, wasRestart bool) error
 
+	// Reopen transitions a closed work item back to in_progress.
+	// This allows users to add more child work items or continue working.
+	Reopen(ctx context.Context, id string) error
+
 	AddComment(ctx context.Context, workID, body string) (Comment, error)
 	ListComments(workID string) ([]Comment, error)
 
@@ -189,7 +193,7 @@ func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
 	}
 	if parent != nil && parent.Status == StatusClosed {
 		s.worksMu.Unlock()
-		return Work{}, fmt.Errorf("%w: cannot add child to closed parent %s", ErrInvalidWork, parent.ID)
+		return Work{}, fmt.Errorf("%w: parent %s is closed; reopen it first to add children", ErrInvalidWork, parent.ID)
 	}
 
 	if w.AgentRoleID == "" {
@@ -544,6 +548,30 @@ func (s *FileStore) RollbackStart(_ context.Context, id string, wasRestart bool)
 		w.Status = StatusOpen
 		w.SessionID = ""
 	}
+	w.UpdatedAt = time.Now()
+
+	modified := map[string]bool{id: true}
+	return s.persistAndNotifyUpdates(prev, modified)
+}
+
+func (s *FileStore) Reopen(_ context.Context, id string) error {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if w.Status != StatusClosed {
+		s.worksMu.Unlock()
+		return fmt.Errorf("%w: Reopen requires closed status, got %s", ErrInvalidWork, w.Status)
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Status = StatusInProgress
 	w.UpdatedAt = time.Now()
 
 	modified := map[string]bool{id: true}

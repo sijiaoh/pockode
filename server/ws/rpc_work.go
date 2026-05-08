@@ -238,6 +238,25 @@ func (h *rpcMethodHandler) handleWorkStop(ctx context.Context, conn *jsonrpc2.Co
 	}
 }
 
+func (h *rpcMethodHandler) handleWorkReopen(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.WorkReopenParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if err := h.workStore.Reopen(ctx, params.ID); err != nil {
+		h.replyWorkError(ctx, conn, req.ID, err, "failed to reopen work")
+		return
+	}
+
+	h.log.Info("work reopened", "workId", params.ID)
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send work reopen response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleWorkCommentList(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	var params rpc.WorkCommentListParams
 	if err := unmarshalParams(req, &params); err != nil {

@@ -125,6 +125,17 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
+		Name:        "work_reopen",
+		Description: "Reopen a closed work item. Transitions from closed to in_progress. Use when you need to add more child work items or continue working on a completed item.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id": {Type: "string", Description: "Work item ID to reopen"},
+			},
+			Required: []string{"id"},
+		},
+	},
+	{
 		Name:        "step_done",
 		Description: "Mark the current step as complete and proceed to the next step. The work item must be in_progress status. If there are more steps, this advances CurrentStep. If this is the last step, use work_done instead.",
 		InputSchema: inputSchema{
@@ -207,6 +218,8 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkStart, true
 	case "work_needs_input":
 		return s.handleWorkNeedsInput, true
+	case "work_reopen":
+		return s.handleWorkReopen, true
 	case "step_done":
 		return s.handleStepDone, true
 	case "work_comment_add":
@@ -484,6 +497,21 @@ func (s *Server) handleWorkNeedsInput(ctx context.Context, args json.RawMessage)
 	}
 
 	return fmt.Sprintf("Work %s is now waiting for user input: %s", params.ID, params.Reason), nil
+}
+
+func (s *Server) handleWorkReopen(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	if err := s.store.Reopen(ctx, params.ID); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Reopened work %s", params.ID), nil
 }
 
 func (s *Server) handleStepDone(ctx context.Context, args json.RawMessage) (string, error) {

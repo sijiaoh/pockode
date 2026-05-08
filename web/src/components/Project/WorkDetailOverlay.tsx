@@ -8,6 +8,7 @@ import {
 	MessageSquare,
 	Pencil,
 	Play,
+	RotateCcw,
 	Square,
 	Trash2,
 	X,
@@ -184,8 +185,10 @@ function ActionBar({
 	const startWork = useWSStore((s) => s.actions.startWork);
 	const stopWork = useWSStore((s) => s.actions.stopWork);
 	const deleteWork = useWSStore((s) => s.actions.deleteWork);
+	const reopenWork = useWSStore((s) => s.actions.reopenWork);
 	const [isStarting, setIsStarting] = useState(false);
 	const [isStopping, setIsStopping] = useState(false);
+	const [isReopening, setIsReopening] = useState(false);
 	const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -217,6 +220,20 @@ function ActionBar({
 		}
 	}, [stopWork, work.id]);
 
+	const handleReopen = useCallback(async () => {
+		setError(null);
+		setIsReopening(true);
+		try {
+			await reopenWork(work.id);
+		} catch (err) {
+			setError(
+				`Failed to reopen: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		} finally {
+			setIsReopening(false);
+		}
+	}, [reopenWork, work.id]);
+
 	const handleDelete = useCallback(async () => {
 		try {
 			await deleteWork(work.id);
@@ -233,6 +250,7 @@ function ActionBar({
 	const showStart = work.status === "open" || work.status === "stopped";
 	const showStop =
 		work.status === "in_progress" || work.status === "needs_input";
+	const showReopen = work.status === "closed";
 	const showChat = !!work.session_id;
 	const canDelete = work.status !== "closed";
 
@@ -280,6 +298,21 @@ function ActionBar({
 								<Square className="size-4" />
 							)}
 							Stop
+						</button>
+					)}
+					{showReopen && (
+						<button
+							type="button"
+							onClick={handleReopen}
+							disabled={isReopening}
+							className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent text-sm font-medium text-th-accent-text disabled:opacity-50"
+						>
+							{isReopening ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								<RotateCcw className="size-4" />
+							)}
+							Reopen
 						</button>
 					)}
 					{showChat && (
