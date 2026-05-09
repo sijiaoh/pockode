@@ -336,6 +336,22 @@ MCP: step_done ──► store.StepDone()
 
 Unlike Trigger B (parent reactivation), step advancement is agent-initiated via `step_done` rather than automatic upon completion.
 
+**Trigger F: External Work Reopen**
+
+When MCP `work_reopen` is called from an external process:
+
+```
+MCP: work_reopen ──► fsnotify ──► AutoResumer
+                                       │
+                      detect closed → in_progress
+                                       │
+                      handleExternalReopen()
+                                       │
+                      Send reopen message
+```
+
+The reopen message instructs the agent to review its previous work and determine what additional changes are needed, then call `work_done` when complete.
+
 ### Retry and Settle Delay
 
 ```go
@@ -526,6 +542,8 @@ work_context: |
 | `task_auto_continue_nudge` | Task auto-continuation | `ID` |
 | `task_step_auto_continue_nudge` | Task step auto-continuation | `CurrentStep`, `TotalSteps`, `ID` |
 | `parent_reactivation_nudge` | Parent reactivation | `ChildTitle`, `ChildID`, `ID` |
+| `story_reopen_nudge` | Story reopen | `ID` |
+| `task_reopen_nudge` | Task reopen | `ID` |
 | `step_advance_section` | Step advance | `PrevStep`, `TotalSteps`, `CurrentStep`, `StepPrompt`, `ID` |
 | `current_step_section` | Initial step display | `CurrentStep`, `TotalSteps`, `StepPrompt`, `ID` |
 

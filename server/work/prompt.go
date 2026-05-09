@@ -23,6 +23,8 @@ type promptTemplates struct {
 	TaskRulesWithoutParent  string `yaml:"task_rules_without_parent"`
 	StoryRestartNudge       string `yaml:"story_restart_nudge"`
 	TaskRestartNudge        string `yaml:"task_restart_nudge"`
+	StoryReopenNudge        string `yaml:"story_reopen_nudge"`
+	TaskReopenNudge         string `yaml:"task_reopen_nudge"`
 	StoryAutoContinueNudge  string `yaml:"story_auto_continue_nudge"`
 	TaskAutoContinueNudge   string `yaml:"task_auto_continue_nudge"`
 	TaskStepAutoContinue    string `yaml:"task_step_auto_continue_nudge"`
@@ -216,4 +218,23 @@ func BuildStepAdvanceMessage(w Work, stepPrompt string, stepNum, totalSteps int)
 	})
 
 	return base + "\n\n" + stepSection
+}
+
+// BuildReopenMessage appends a reopen nudge to the base message
+// when a closed work item is reopened by the user.
+func BuildReopenMessage(w Work) string {
+	base := buildBase(w)
+
+	var nudge string
+	if w.Type == WorkTypeStory {
+		nudge = render(prompts.StoryReopenNudge, map[string]string{
+			"ID": w.ID,
+		})
+	} else {
+		nudge = render(prompts.TaskReopenNudge, map[string]string{
+			"ID": w.ID,
+		})
+	}
+
+	return base + "\n\n" + nudge
 }

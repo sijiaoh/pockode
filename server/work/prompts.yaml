@@ -71,6 +71,16 @@ task_step_auto_continue_nudge: |
   - If YES and this IS the last step: Call work_done with ID {{.ID}} to complete the task.
   - If NO: Continue working on this step.
 
+# Story reopen nudge (when a closed story is reopened)
+# Placeholders: {{.ID}}
+story_reopen_nudge: |
+  This story has been reopened. Review the current tasks and determine what additional work is needed. Create new tasks as necessary, then call work_done with ID {{.ID}} to return to a dormant state.
+
+# Task reopen nudge (when a closed task is reopened)
+# Placeholders: {{.ID}}
+task_reopen_nudge: |
+  This task has been reopened. Review your previous work and determine what additional changes are needed. Complete the required work, then call work_done with ID {{.ID}} to finish.
+
 # Parent reactivation nudge (when a child task completes)
 # Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ID}}
 parent_reactivation_nudge: |

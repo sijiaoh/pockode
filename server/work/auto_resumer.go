@@ -47,18 +47,19 @@ type WorkStartHandler interface {
 // Trigger E: When a work item's CurrentStep is advanced externally (via MCP step_done),
 // send the next step prompt to continue the task.
 type AutoResumer struct {
-	workStore    Store
-	sender       atomic.Pointer[MessageSender]
-	startHandler atomic.Pointer[WorkStartHandler]
-	stepProvider atomic.Pointer[StepProvider]
-	ctx          context.Context
-	cancel       context.CancelFunc
-	retryMu      sync.Mutex
-	retries      map[string]int  // sessionID → retry count
-	continuing   map[string]bool // sessionID → auto-continuation pending
-	knownSteps   map[string]int  // workID → last known CurrentStep (for detecting step_done)
-	maxRetries   int
-	settleDelay  time.Duration // delay before checking work status after process stop
+	workStore     Store
+	sender        atomic.Pointer[MessageSender]
+	startHandler  atomic.Pointer[WorkStartHandler]
+	stepProvider  atomic.Pointer[StepProvider]
+	ctx           context.Context
+	cancel        context.CancelFunc
+	retryMu       sync.Mutex
+	retries       map[string]int        // sessionID → retry count
+	continuing    map[string]bool       // sessionID → auto-continuation pending
+	knownSteps    map[string]int        // workID → last known CurrentStep (for detecting step_done)
+	knownStatuses map[string]WorkStatus // workID → last known Status (for detecting reopen)
+	maxRetries    int
+	settleDelay   time.Duration // delay before checking work status after process stop
 }
 
 // defaultSettleDelay is the time to wait after a process stops before checking
@@ -73,14 +74,15 @@ const defaultSettleDelay = 2 * time.Second
 func NewAutoResumer(workStore Store, maxRetries int) *AutoResumer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &AutoResumer{
-		workStore:   workStore,
-		ctx:         ctx,
-		cancel:      cancel,
-		retries:     make(map[string]int),
-		continuing:  make(map[string]bool),
-		knownSteps:  make(map[string]int),
-		maxRetries:  maxRetries,
-		settleDelay: defaultSettleDelay,
+		workStore:     workStore,
+		ctx:           ctx,
+		cancel:        cancel,
+		retries:       make(map[string]int),
+		continuing:    make(map[string]bool),
+		knownSteps:    make(map[string]int),
+		knownStatuses: make(map[string]WorkStatus),
+		maxRetries:    maxRetries,
+		settleDelay:   defaultSettleDelay,
 	}
 }
 
@@ -92,6 +94,7 @@ func (r *AutoResumer) Stop() {
 // StopOrphanedWork transitions all in_progress and needs_input work items to stopped.
 // Call this at server startup before any sessions are created, so that work
 // items left running from a previous server run are properly marked.
+// It also initializes knownStatuses to enable proper reopen detection.
 func (r *AutoResumer) StopOrphanedWork() {
 	works, err := r.workStore.List()
 	if err != nil {
@@ -109,6 +112,19 @@ func (r *AutoResumer) StopOrphanedWork() {
 			slog.Info("stopped orphaned work on startup", "workId", w.ID, "sessionId", w.SessionID)
 		}
 	}
+
+	// Initialize knownStatuses after stopping orphans.
+	// Re-read works to capture the updated status (stopped).
+	works, err = r.workStore.List()
+	if err != nil {
+		slog.Warn("failed to re-read works for status tracking", "error", err)
+		return
+	}
+	r.retryMu.Lock()
+	for _, w := range works {
+		r.knownStatuses[w.ID] = w.Status
+	}
+	r.retryMu.Unlock()
 }
 
 // SetSender sets the message sender. Called when the main worktree is initialized.
@@ -319,6 +335,7 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 			delete(r.retries, event.Work.SessionID)
 		}
 		delete(r.knownSteps, event.Work.ID)
+		delete(r.knownStatuses, event.Work.ID)
 		r.retryMu.Unlock()
 		return
 	}
@@ -327,11 +344,15 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 		return
 	}
 
-	// Detect step changes by comparing with known state
+	// Detect step and status changes by comparing with known state
 	r.retryMu.Lock()
 	prevStep, hadPrevStep := r.knownSteps[event.Work.ID]
 	r.knownSteps[event.Work.ID] = event.Work.CurrentStep
 	stepAdvanced := hadPrevStep && event.Work.CurrentStep > prevStep
+
+	prevStatus, hadPrevStatus := r.knownStatuses[event.Work.ID]
+	r.knownStatuses[event.Work.ID] = event.Work.Status
+	wasReopened := hadPrevStatus && prevStatus == StatusClosed && event.Work.Status == StatusInProgress
 	r.retryMu.Unlock()
 
 	// Reset retries when work completes or stops
@@ -354,11 +375,21 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 		return
 	}
 
+	// Trigger F: external work reopen (via MCP work_reopen tool).
+	// When a closed work is reopened externally, send the reopen message.
+	if event.External && wasReopened && event.Work.SessionID != "" {
+		sender := r.getSender()
+		if sender != nil {
+			go r.handleExternalReopen(event.Work, sender)
+		}
+		return
+	}
+
 	// Trigger C: external work start (e.g. MCP work_start).
 	// Only fires for External events (fsnotify) to avoid conflicting with
 	// in-process transitions like Trigger B's parent reactivation.
-	// Skip if this is a step advance (handled by Trigger E above).
-	if event.External && event.Work.Status == StatusInProgress && event.Work.SessionID != "" && !stepAdvanced {
+	// Skip if this is a step advance (handled by Trigger E above) or reopen (handled by Trigger F).
+	if event.External && event.Work.Status == StatusInProgress && event.Work.SessionID != "" && !stepAdvanced && !wasReopened {
 		if h := r.getStartHandler(); h != nil {
 			go r.handleExternalWorkStart(event.Work, h)
 		}
@@ -420,6 +451,25 @@ func (r *AutoResumer) handleExternalStepDone(w Work, sender MessageSender, sp St
 		slog.Warn("failed to send step advance message for external step_done", "workId", w.ID, "step", w.CurrentStep, "error", err)
 	} else {
 		slog.Info("external step_done message sent", "workId", w.ID, "sessionId", w.SessionID, "step", w.CurrentStep+1, "totalSteps", len(steps))
+	}
+}
+
+// handleExternalReopen handles work reopen triggered by MCP work_reopen tool.
+// It sends the reopen message to the agent session.
+func (r *AutoResumer) handleExternalReopen(w Work, sender MessageSender) {
+	// Reset retry count (new activity context)
+	r.retryMu.Lock()
+	delete(r.retries, w.SessionID)
+	r.retryMu.Unlock()
+
+	msg := BuildReopenMessage(w)
+	if err := sender.SendMessage(r.ctx, w.SessionID, msg); err != nil {
+		if r.ctx.Err() != nil {
+			return
+		}
+		slog.Warn("failed to send reopen message", "workId", w.ID, "error", err)
+	} else {
+		slog.Info("reopen message sent", "workId", w.ID, "sessionId", w.SessionID)
 	}
 }
 

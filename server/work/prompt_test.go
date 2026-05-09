@@ -352,3 +352,32 @@ func TestBuildAutoContinuationMessageWithSteps_InvalidIndex(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildReopenMessage_ContainsBaseAndNudge(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		w     Work
+		nudge string
+	}{
+		{
+			"task",
+			Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"},
+			"This task has been reopened",
+		},
+		{
+			"story",
+			Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"},
+			"This story has been reopened",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := BuildKickoffMessage(tc.w)
+			reopen := BuildReopenMessage(tc.w)
+
+			if !strings.Contains(reopen, base) {
+				t.Error("reopen message should contain the full kickoff base")
+			}
+			assertContains(t, reopen, tc.nudge, "nudge")
+		})
+	}
+}

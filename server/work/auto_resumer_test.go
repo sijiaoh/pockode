@@ -1217,3 +1217,181 @@ func containsAll(s string, substrs ...string) bool {
 	}
 	return true
 }
+
+// --- Trigger F: external work reopen ---
+
+func TestAutoResumer_ExternalReopen_SendsMessage(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// Mark done, then auto-close (no children = immediate close)
+	if err := store.MarkDone(context.Background(), story.ID); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+	w := getWork(t, store, story.ID)
+	if w.Status != StatusClosed {
+		t.Fatalf("expected closed status, got %s", w.Status)
+	}
+
+	// Establish known status state (closed)
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: false,
+		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusClosed, SessionID: sid, AgentRoleID: testRoleID},
+	})
+
+	// Simulate external reopen (MCP work_reopen transitions closed → in_progress)
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: true,
+		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].SessionID != sid {
+		t.Errorf("sessionID = %q, want %q", msgs[0].SessionID, sid)
+	}
+	if !strings.Contains(msgs[0].Content, "reopened") {
+		t.Error("message should contain 'reopened' nudge")
+	}
+}
+
+func TestAutoResumer_ExternalReopen_TaskSendsMessage(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	sid := "session-1"
+	startWorkWithSession(t, store, task.ID, sid)
+
+	// Mark done → auto-close
+	if err := store.MarkDone(context.Background(), task.ID); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+	w := getWork(t, store, task.ID)
+	if w.Status != StatusClosed {
+		t.Fatalf("expected closed status, got %s", w.Status)
+	}
+
+	// Establish known status
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: false,
+		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusClosed, SessionID: sid, AgentRoleID: testRoleID},
+	})
+
+	// Simulate external reopen
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: true,
+		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if !strings.Contains(msgs[0].Content, "reopened") {
+		t.Error("task message should contain 'reopened' nudge")
+	}
+}
+
+func TestAutoResumer_ExternalReopen_NoSessionNoMessage(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+
+	// Establish known status (closed, no session)
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: false,
+		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusClosed, SessionID: "", AgentRoleID: testRoleID},
+	})
+
+	// External reopen with no session
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: true,
+		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusInProgress, SessionID: "", AgentRoleID: testRoleID},
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	if len(sender.getMessages()) != 0 {
+		t.Error("should not send message when no session")
+	}
+}
+
+func TestAutoResumer_InternalReopen_NoMessage(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+	store.MarkDone(context.Background(), story.ID)
+
+	// Establish known status (closed)
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: false,
+		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusClosed, SessionID: sid, AgentRoleID: testRoleID},
+	})
+
+	// Internal reopen (not from MCP/fsnotify)
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: false,
+		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	if len(sender.getMessages()) != 0 {
+		t.Error("should not send message for internal reopen")
+	}
+}
+
+func TestAutoResumer_ExternalReopenAfterStartup_SendsMessage(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// Mark done → auto-close
+	if err := store.MarkDone(context.Background(), story.ID); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+	w := getWork(t, store, story.ID)
+	if w.Status != StatusClosed {
+		t.Fatalf("expected closed status, got %s", w.Status)
+	}
+
+	// Simulate server startup: StopOrphanedWork initializes knownStatuses
+	resumer.StopOrphanedWork()
+
+	// Now simulate external reopen (MCP via fsnotify after server startup)
+	resumer.OnWorkChange(ChangeEvent{
+		Op:       OperationUpdate,
+		External: true,
+		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if !strings.Contains(msgs[0].Content, "reopened") {
+		t.Errorf("message should contain 'reopened' nudge, got %q", msgs[0].Content)
+	}
+}
