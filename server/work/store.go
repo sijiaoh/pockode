@@ -70,6 +70,7 @@ type Store interface {
 	Reopen(ctx context.Context, id string) error
 
 	AddComment(ctx context.Context, workID, body string) (Comment, error)
+	UpdateComment(ctx context.Context, commentID, body string) (Comment, error)
 	ListComments(workID string) ([]Comment, error)
 
 	AddOnChangeListener(listener OnChangeListener)
@@ -677,6 +678,40 @@ func (s *FileStore) ListComments(workID string) ([]Comment, error) {
 		result = []Comment{}
 	}
 	return result, nil
+}
+
+func (s *FileStore) UpdateComment(_ context.Context, commentID, body string) (Comment, error) {
+	s.worksMu.Lock()
+
+	idx := -1
+	for i, c := range s.comments {
+		if c.ID == commentID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return Comment{}, ErrCommentNotFound
+	}
+
+	prev := make([]Comment, len(s.comments))
+	copy(prev, s.comments)
+
+	s.comments[idx].Body = body
+	updated := s.comments[idx]
+
+	if err := s.persistIndex(); err != nil {
+		s.comments = prev
+		s.worksMu.Unlock()
+		return Comment{}, err
+	}
+
+	commentListeners := s.copyCommentListeners()
+	s.worksMu.Unlock()
+
+	notifyComment(commentListeners, CommentEvent{Comment: updated})
+	return updated, nil
 }
 
 // --- Listener management ---

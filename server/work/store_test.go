@@ -1346,6 +1346,59 @@ func TestComments_Persistence(t *testing.T) {
 	}
 }
 
+func TestUpdateComment(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+
+	c, _ := s.AddComment(context.Background(), story.ID, "original")
+
+	updated, err := s.UpdateComment(context.Background(), c.ID, "edited")
+	if err != nil {
+		t.Fatalf("UpdateComment: %v", err)
+	}
+	if updated.Body != "edited" {
+		t.Errorf("body = %q, want %q", updated.Body, "edited")
+	}
+	if updated.ID != c.ID {
+		t.Errorf("id = %q, want %q", updated.ID, c.ID)
+	}
+	if updated.WorkID != story.ID {
+		t.Errorf("work_id = %q, want %q", updated.WorkID, story.ID)
+	}
+
+	comments, _ := s.ListComments(story.ID)
+	if len(comments) != 1 || comments[0].Body != "edited" {
+		t.Errorf("expected edited comment in list, got %v", comments)
+	}
+}
+
+func TestUpdateComment_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.UpdateComment(context.Background(), "nonexistent", "text")
+	if err != ErrCommentNotFound {
+		t.Errorf("expected ErrCommentNotFound, got %v", err)
+	}
+}
+
+func TestUpdateComment_Persistence(t *testing.T) {
+	dir := t.TempDir()
+
+	s1, _ := NewFileStore(dir)
+	story := createStory(t, s1, "S")
+	c, _ := s1.AddComment(context.Background(), story.ID, "original")
+	s1.UpdateComment(context.Background(), c.ID, "persisted edit")
+
+	s2, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("re-open: %v", err)
+	}
+
+	comments, _ := s2.ListComments(story.ID)
+	if len(comments) != 1 || comments[0].Body != "persisted edit" {
+		t.Fatalf("expected persisted edit, got %v", comments)
+	}
+}
+
 // --- diffComments ---
 
 func TestDiffComments_NoChanges(t *testing.T) {

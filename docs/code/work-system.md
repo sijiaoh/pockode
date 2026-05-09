@@ -212,6 +212,7 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `step_done` | Complete current step, advance to next | `id` |
 | `work_comment_add` | Add progress note | `work_id`, `body` |
 | `work_comment_list` | List comments | `work_id` |
+| `work_comment_update` | Update comment text | `id`, `body` |
 
 ### Agent Role Tools
 

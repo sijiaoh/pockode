@@ -279,6 +279,38 @@ func (h *rpcMethodHandler) handleWorkCommentList(ctx context.Context, conn *json
 	}
 }
 
+func (h *rpcMethodHandler) handleWorkCommentUpdate(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.WorkCommentUpdateParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+	if params.ID == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "id is required")
+		return
+	}
+	if params.Body == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "body is required")
+		return
+	}
+
+	comment, err := h.workStore.UpdateComment(ctx, params.ID, params.Body)
+	if err != nil {
+		if errors.Is(err, work.ErrCommentNotFound) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "comment not found")
+			return
+		}
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to update comment")
+		return
+	}
+
+	h.log.Info("comment updated", "commentId", params.ID)
+
+	if err := conn.Reply(ctx, req.ID, comment); err != nil {
+		h.log.Error("failed to send comment update response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	var params rpc.WorkDetailSubscribeParams
 	if err := unmarshalParams(req, &params); err != nil {

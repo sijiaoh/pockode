@@ -26,6 +26,7 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | `work_reopen` | `id` | — | Confirmation string |
 | `work_comment_add` | `work_id`, `body` | — | Confirmation string with comment ID |
 | `work_comment_list` | `work_id` | — | JSON array of `{id, work_id, body, created_at}` |
+| `work_comment_update` | `id`, `body` | — | Updated comment as `{id, work_id, body, created_at}` |
 | `agent_role_list` | — | — | JSON array of `{id, name}` |
 | `agent_role_get` | `id` | — | `{id, name, role_prompt}` |
 | `agent_role_reset_defaults` | — | — | Confirmation string |
@@ -62,6 +63,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.stop` | `WorkStopParams` | `{}` | Stop a work item (in_progress/needs_input → stopped) |
 | `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → in_progress) |
 | `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
+| `work.comment.update` | `WorkCommentUpdateParams` | `Comment` | Update a comment's body |
 | `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{id, work, comments}` | Subscribe to a single work item + comments |
 | `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
 | `work.list.subscribe` | — | `{id, items: Work[]}` | Subscribe + get current snapshot |
@@ -88,6 +90,7 @@ WorkStartParams           { id }
 WorkStopParams            { id }
 WorkReopenParams          { id }
 WorkCommentListParams     { work_id }
+WorkCommentUpdateParams   { id, body }
 WorkDetailSubscribeParams { work_id }
 
 AgentRoleCreateParams   { name, role_prompt }

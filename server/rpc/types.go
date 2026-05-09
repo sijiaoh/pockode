@@ -346,6 +346,11 @@ type WorkCommentListResult struct {
 	Comments []work.Comment `json:"comments"`
 }
 
+type WorkCommentUpdateParams struct {
+	ID   string `json:"id"`
+	Body string `json:"body"`
+}
+
 type WorkDetailSubscribeParams struct {
 	WorkID string `json:"work_id"`
 }

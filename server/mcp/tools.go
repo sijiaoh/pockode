@@ -170,6 +170,18 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
+		Name:        "work_comment_update",
+		Description: "Update a comment's body text.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id":   {Type: "string", Description: "Comment ID"},
+				"body": {Type: "string", Description: "New comment text"},
+			},
+			Required: []string{"id", "body"},
+		},
+	},
+	{
 		Name:        "agent_role_list",
 		Description: "List all available agent roles. Use this to find which roles can be assigned to work items. Use agent_role_get for full details including role_prompt.",
 		InputSchema: inputSchema{
@@ -226,6 +238,8 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkCommentAdd, true
 	case "work_comment_list":
 		return s.handleWorkCommentList, true
+	case "work_comment_update":
+		return s.handleWorkCommentUpdate, true
 	case "agent_role_list":
 		return s.handleAgentRoleList, true
 	case "agent_role_get":
@@ -604,6 +618,38 @@ func (s *Server) handleWorkCommentList(_ context.Context, args json.RawMessage) 
 	b, err := json.Marshal(items)
 	if err != nil {
 		return "", fmt.Errorf("marshal comment list: %w", err)
+	}
+	return string(b), nil
+}
+
+func (s *Server) handleWorkCommentUpdate(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ID   string `json:"id"`
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	comment, err := s.store.UpdateComment(ctx, params.ID, params.Body)
+	if err != nil {
+		return "", err
+	}
+
+	type commentDetail struct {
+		ID        string `json:"id"`
+		WorkID    string `json:"work_id"`
+		Body      string `json:"body"`
+		CreatedAt string `json:"created_at"`
+	}
+	b, err := json.Marshal(commentDetail{
+		ID:        comment.ID,
+		WorkID:    comment.WorkID,
+		Body:      comment.Body,
+		CreatedAt: comment.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal comment: %w", err)
 	}
 	return string(b), nil
 }

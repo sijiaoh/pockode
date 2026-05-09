@@ -698,6 +698,66 @@ func TestWorkCommentList_WithComments(t *testing.T) {
 	}
 }
 
+// --- Tool: work_comment_update ---
+
+func TestWorkCommentUpdate(t *testing.T) {
+	ts := newTestServer(t)
+
+	createResult := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	})
+	workID := extractID(t, toolText(createResult))
+
+	addResult := callTool(t, ts.Server, "work_comment_add", map[string]string{
+		"work_id": workID, "body": "original",
+	})
+	commentID := extractCommentID(t, toolText(addResult))
+
+	result := callTool(t, ts.Server, "work_comment_update", map[string]string{
+		"id": commentID, "body": "edited",
+	})
+
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	if !strings.Contains(toolText(result), "edited") {
+		t.Errorf("result = %q, want to contain 'edited'", toolText(result))
+	}
+
+	listResult := callTool(t, ts.Server, "work_comment_list", map[string]string{"work_id": workID})
+	if !strings.Contains(toolText(listResult), "edited") {
+		t.Errorf("list should show edited comment, got %q", toolText(listResult))
+	}
+}
+
+func TestWorkCommentUpdate_NotFound(t *testing.T) {
+	ts := newTestServer(t)
+
+	result := callTool(t, ts.Server, "work_comment_update", map[string]string{
+		"id": "nonexistent", "body": "text",
+	})
+
+	if !result.IsError {
+		t.Error("expected error for nonexistent comment ID")
+	}
+}
+
+// extractCommentID parses "Comment added (ID: xxx)" to get xxx
+func extractCommentID(t *testing.T, s string) string {
+	t.Helper()
+	const prefix = "(ID: "
+	idx := strings.Index(s, prefix)
+	if idx < 0 {
+		t.Fatalf("no ID found in %q", s)
+	}
+	start := idx + len(prefix)
+	end := strings.Index(s[start:], ")")
+	if end < 0 {
+		t.Fatalf("no closing paren in %q", s)
+	}
+	return s[start : start+end]
+}
+
 // --- step_done tests ---
 
 func TestStepDone_AdvancesStep(t *testing.T) {

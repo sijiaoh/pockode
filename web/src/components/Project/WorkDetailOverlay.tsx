@@ -739,16 +739,91 @@ function CommentsSection({ comments }: { comments: Comment[] }) {
 			</h3>
 			<div className="space-y-3">
 				{comments.map((comment) => (
-					<div
-						key={comment.id}
-						className="rounded-lg bg-th-bg-secondary px-3 py-2"
-					>
-						<MarkdownContent content={comment.body} />
-						<p className="mt-1.5 text-xs text-th-text-muted">
-							{formatCommentDate(comment.created_at)}
-						</p>
-					</div>
+					<CommentItem key={comment.id} comment={comment} />
 				))}
+			</div>
+		</div>
+	);
+}
+
+function CommentItem({ comment }: { comment: Comment }) {
+	const updateComment = useWSStore((s) => s.actions.updateComment);
+	const {
+		editing,
+		setEditing,
+		value,
+		setValue,
+		saving,
+		error,
+		ref,
+		save,
+		cancel,
+	} = useInlineEdit<HTMLTextAreaElement>({
+		initialValue: comment.body,
+		onSave: useCallback(
+			async (trimmed: string) => {
+				await updateComment({ id: comment.id, body: trimmed });
+			},
+			[updateComment, comment.id],
+		),
+	});
+
+	if (editing) {
+		return (
+			<div className="rounded-lg bg-th-bg-secondary px-3 py-2">
+				<TextareaAutosize
+					ref={ref}
+					value={value}
+					onChange={(e) => setValue(e.target.value)}
+					onKeyDown={(e) => {
+						if (e.key === "Escape") cancel();
+					}}
+					disabled={saving}
+					minRows={3}
+					className="w-full resize-none rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+				/>
+				<div className="mt-2 flex items-center gap-2">
+					<button
+						type="button"
+						onClick={save}
+						disabled={saving || !value.trim()}
+						className="min-h-[44px] rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text disabled:opacity-50"
+					>
+						{saving ? "Saving..." : "Save"}
+					</button>
+					<button
+						type="button"
+						onClick={cancel}
+						disabled={saving}
+						className="min-h-[44px] rounded-lg px-4 text-sm text-th-text-muted hover:bg-th-bg-tertiary"
+					>
+						Cancel
+					</button>
+				</div>
+				{error && (
+					<p className="mt-1 text-xs text-th-error" role="alert">
+						{error}
+					</p>
+				)}
+			</div>
+		);
+	}
+
+	return (
+		<div className="rounded-lg bg-th-bg-secondary px-3 py-2">
+			<MarkdownContent content={comment.body} />
+			<div className="mt-1.5 flex items-center justify-between">
+				<p className="text-xs text-th-text-muted">
+					{formatCommentDate(comment.created_at)}
+				</p>
+				<button
+					type="button"
+					onClick={() => setEditing(true)}
+					className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
+					aria-label="Edit comment"
+				>
+					<Pencil className="size-3.5" />
+				</button>
 			</div>
 		</div>
 	);

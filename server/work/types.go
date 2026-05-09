@@ -13,8 +13,9 @@ type Comment struct {
 }
 
 var (
-	ErrWorkNotFound = errors.New("work not found")
-	ErrInvalidWork  = errors.New("invalid work")
+	ErrWorkNotFound    = errors.New("work not found")
+	ErrCommentNotFound = errors.New("comment not found")
+	ErrInvalidWork     = errors.New("invalid work")
 )
 
 type WorkType string
