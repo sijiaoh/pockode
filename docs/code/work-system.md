@@ -488,7 +488,7 @@ Check if you have completed the current step:
 
 ### Design Notes
 
-- **Steps only apply to Tasks**: Stories coordinate, they don't execute steps.
+- **Steps apply to both Stories and Tasks**: Any work item with an agent role that has steps defined will display step progress.
 - **Step state persists**: `CurrentStep` is preserved through `stopped`/`needs_input` transitions.
 - **Retry counter resets per step**: Each new step gets a fresh retry budget.
 - **Explicit step control**: Agents call `step_done` to advance steps, giving them control over when steps complete.

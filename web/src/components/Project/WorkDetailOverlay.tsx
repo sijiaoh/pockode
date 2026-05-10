@@ -117,9 +117,7 @@ export default function WorkDetailOverlay({
 
 					<RoleSection work={work} />
 
-					{work.type === "task" && (
-						<StepProgressSection work={work} role={role} />
-					)}
+					<StepProgressSection work={work} role={role} />
 
 					<InlineEditableBody work={work} />
 
