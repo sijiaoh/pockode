@@ -125,7 +125,6 @@ const statusGroupOrder: WorkStatus[] = [
 	"needs_input",
 	"stopped",
 	"open",
-	"done",
 	"closed",
 ];
 
@@ -186,10 +185,7 @@ function StatusGroup({
 }
 
 const TASK_LIST_COLLAPSIBLE_STATUS: WorkStatus = "closed";
-const COMPLETED_TASK_STATUSES: ReadonlySet<WorkStatus> = new Set([
-	"done",
-	"closed",
-]);
+const COMPLETED_TASK_STATUSES: ReadonlySet<WorkStatus> = new Set(["closed"]);
 
 function StoryRow({
 	story,
@@ -206,7 +202,7 @@ function StoryRow({
 }) {
 	const storySessionId = story.session_id;
 	const totalTasks = tasks?.length ?? 0;
-	const doneTasks =
+	const closedTasks =
 		tasks?.filter((t) => COMPLETED_TASK_STATUSES.has(t.status)).length ?? 0;
 	const roleName = story.agent_role_id
 		? (roleNameMap.get(story.agent_role_id) ?? null)
@@ -275,7 +271,7 @@ function StoryRow({
 					<>
 						<span aria-hidden="true">&middot;</span>
 						<span>
-							{doneTasks}/{totalTasks} tasks
+							{closedTasks}/{totalTasks} tasks
 						</span>
 					</>
 				)}

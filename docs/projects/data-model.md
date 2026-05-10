@@ -15,7 +15,7 @@ A unit of work — either a **story** (top-level, wire type `"story"`) or a **ta
 | title         | string       | Short description (required)                           |
 | body          | string?      | Detailed description or instructions                   |
 | status        | WorkStatus   | Current lifecycle state (see below)                    |
-| session_id    | string?      | Agent session ID (set on start, preserved through stop/done/closed) |
+| session_id    | string?      | Agent session ID (set on start, preserved through stop/closed) |
 | current_step  | int?         | 0-indexed step index (only when agent role has steps)  |
 | created_at    | time         | Creation timestamp                                     |
 | updated_at    | time         | Last modification timestamp                            |
@@ -62,9 +62,9 @@ Two-level only: **Story → Task** (wire types: `story` → `task`).
 
 ## Status Lifecycle
 
-See [workflow-engine.md](workflow-engine.md) for the full status machine, transitions, auto-close, and session ID constraints.
+See [workflow-engine.md](workflow-engine.md) for the full status machine, transitions, and session ID constraints.
 
-Summary: `open → in_progress → done → closed`, with `needs_input` as a pause state and `stopped` for ended sessions. `closed` is auto-derived, never set directly.
+Summary: `open → in_progress → closed`, with `needs_input` and `waiting` as pause states, and `stopped` for ended sessions.
 
 ## Persistence
 
@@ -137,11 +137,14 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | ------------- | -------------------------------------- | ---------------------------------------------------------------- |
 | Start         | `(ctx, id, sessionID) → (Work, error)` | Transitions to `in_progress`, sets sessionID                    |
 | Stop          | `(ctx, id) → error`                    | Transitions `in_progress`/`needs_input` → `stopped`             |
-| MarkDone      | `(ctx, id) → error`                    | Transitions to `done`; auto-advances from `open` if needed      |
+| MarkDone      | `(ctx, id) → error`                    | Transitions `in_progress` → `closed`                            |
 | MarkNeedsInput| `(ctx, id) → error`                    | Transitions `in_progress` → `needs_input`                       |
+| MarkWaiting   | `(ctx, id) → error`                    | Transitions `in_progress` → `waiting`                           |
 | Resume        | `(ctx, id) → error`                    | Transitions `needs_input` → `in_progress`                       |
-| Reactivate    | `(ctx, id) → error`                    | Transitions `stopped` → `in_progress` (preserves sessionID)                 |
-| ReactivateParent | `(ctx, id) → error`                 | Transitions `done`/`closed` → `in_progress` (preserves sessionID)           |
+| ResumeFromWaiting | `(ctx, id) → error`                | Transitions `waiting` → `in_progress`                           |
+| Reactivate    | `(ctx, id) → error`                    | Transitions `stopped` → `in_progress` (preserves sessionID)     |
+| ReactivateParent | `(ctx, id) → error`                 | Transitions `closed` → `in_progress` (preserves sessionID)      |
+| Reopen        | `(ctx, id) → error`                    | Transitions `closed` → `in_progress` (reopens closed item)      |
 | RollbackStart | `(ctx, id, wasRestart) → error`        | Reverts a failed Start (fresh → `open`; restart → `stopped`)   |
 
 **Comments and events:**

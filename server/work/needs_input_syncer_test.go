@@ -94,13 +94,13 @@ func TestNeedsInputSyncer_SkipsCompletedWork(t *testing.T) {
 	startWorkWithSession(t, s, task.ID, "sess-1")
 	doneWork(t, s, task.ID)
 
-	// After doneWork, autoClose promotes to closed (no children)
+	// After doneWork, work goes directly to closed
 	w := getWork(t, s, task.ID)
 	statusBefore := w.Status
 
 	syncer := NewNeedsInputSyncer(s)
 
-	// Should not transition completed work (done or closed)
+	// Should not transition completed work (closed)
 	syncer.SyncNeedsInput(context.Background(), "sess-1", true)
 	w = getWork(t, s, task.ID)
 	if w.Status != statusBefore {

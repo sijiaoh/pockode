@@ -6,7 +6,6 @@ export type WorkStatus =
 	| "waiting"
 	| "needs_input"
 	| "stopped"
-	| "done"
 	| "closed";
 
 export interface Work {

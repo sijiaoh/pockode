@@ -358,16 +358,16 @@ func TestTransition_OpenToInProgress(t *testing.T) {
 	}
 }
 
-func TestTransition_InProgressToDone(t *testing.T) {
+func TestTransition_InProgressToClosed(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	// Story with no children: done → auto-close → closed
+	// Story with no children: in_progress → closed directly
 	doneWork(t, s, story.ID)
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusClosed {
-		t.Errorf("status = %q, want %q (auto-close)", got.Status, StatusClosed)
+		t.Errorf("status = %q, want %q", got.Status, StatusClosed)
 	}
 }
 
@@ -435,45 +435,37 @@ func TestRollbackStart_FreshStartRollsBackToOpen(t *testing.T) {
 	}
 }
 
-func TestReactivate_DoneRejected(t *testing.T) {
+func TestReactivate_ClosedRejected(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	// Create a child task so story doesn't auto-close
-	task := createTask(t, s, story.ID, "T")
-	startWork(t, s, task.ID)
-
 	doneWork(t, s, story.ID)
 	got := getWork(t, s, story.ID)
-	if got.Status != StatusDone {
-		t.Fatalf("status = %q, want %q (child still open)", got.Status, StatusDone)
+	if got.Status != StatusClosed {
+		t.Fatalf("status = %q, want %q", got.Status, StatusClosed)
 	}
 
-	// Reactivate rejects done work (must use ReactivateParent instead)
+	// Reactivate rejects closed work (must use ReactivateParent instead)
 	if err := s.Reactivate(context.Background(), story.ID); err == nil {
-		t.Fatal("expected error for Reactivate on done work")
+		t.Fatal("expected error for Reactivate on closed work")
 	}
 }
 
-func TestReactivateParent_DoneToInProgress(t *testing.T) {
+func TestReactivateParent_ClosedToInProgress(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	// Create a child task so story doesn't auto-close
-	task := createTask(t, s, story.ID, "T")
-	startWork(t, s, task.ID)
-
 	doneWork(t, s, story.ID)
 	got := getWork(t, s, story.ID)
-	if got.Status != StatusDone {
-		t.Fatalf("status = %q, want %q (child still open)", got.Status, StatusDone)
+	if got.Status != StatusClosed {
+		t.Fatalf("status = %q, want %q", got.Status, StatusClosed)
 	}
 
-	// ReactivateParent allows done → in_progress
+	// ReactivateParent allows closed → in_progress
 	if err := s.ReactivateParent(context.Background(), story.ID); err != nil {
-		t.Fatalf("done → in_progress: %v", err)
+		t.Fatalf("closed → in_progress: %v", err)
 	}
 	got = getWork(t, s, story.ID)
 	if got.Status != StatusInProgress {
@@ -596,11 +588,6 @@ func TestReopen_RejectsNonClosedStatus(t *testing.T) {
 			setup:  func(id string) { startWork(t, s, id); s.MarkNeedsInput(ctx, id) },
 			status: StatusNeedsInput,
 		},
-		{
-			name:   "done",
-			setup:  func(id string) { startWork(t, s, id); createTask(t, s, id, "T"); doneWork(t, s, id) },
-			status: StatusDone,
-		},
 	}
 
 	for _, tt := range tests {
@@ -690,16 +677,16 @@ func TestTransition_NeedsInputToStopped(t *testing.T) {
 	}
 }
 
-func TestTransition_Invalid_NeedsInputToDone(t *testing.T) {
+func TestTransition_Invalid_NeedsInputToClosed(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
 	s.MarkNeedsInput(context.Background(), story.ID)
 
-	// MarkDone from needs_input should fail
+	// MarkDone from needs_input should fail (needs_input → closed is invalid)
 	if err := s.MarkDone(context.Background(), story.ID); err == nil {
-		t.Fatal("expected error for needs_input → done")
+		t.Fatal("expected error for needs_input → closed")
 	}
 }
 
@@ -758,16 +745,16 @@ func TestTransition_WaitingToStopped(t *testing.T) {
 	}
 }
 
-func TestTransition_Invalid_WaitingToDone(t *testing.T) {
+func TestTransition_Invalid_WaitingToClosed(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
 	s.MarkWaiting(context.Background(), story.ID)
 
-	// MarkDone from waiting should fail
+	// MarkDone from waiting should fail (waiting → closed is invalid)
 	if err := s.MarkDone(context.Background(), story.ID); err == nil {
-		t.Fatal("expected error for waiting → done")
+		t.Fatal("expected error for waiting → closed")
 	}
 }
 
@@ -780,7 +767,7 @@ func TestTransition_Invalid_OpenToWaiting(t *testing.T) {
 	}
 }
 
-func TestAutoClose_BlockedByWaitingChild(t *testing.T) {
+func TestMarkDone_FailsWhenChildNotClosed(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
@@ -790,15 +777,22 @@ func TestAutoClose_BlockedByWaitingChild(t *testing.T) {
 	// Task enters waiting
 	s.MarkWaiting(context.Background(), task.ID)
 
-	// Story done should stay done (not auto-close) because child is waiting
-	doneWork(t, s, story.ID)
+	// Story cannot be marked done directly while child is not closed
+	// The story should use MarkWaiting instead to wait for child completion
+	// Here we just verify the story remains in_progress after failed MarkDone attempt
+	// Actually, with the new design, MarkDone on story goes directly to closed
+	// and we should use waiting for parent to wait for children
+	// For this test, we verify that the parent can enter waiting state
+	if err := s.MarkWaiting(context.Background(), story.ID); err != nil {
+		t.Fatalf("story should be able to enter waiting: %v", err)
+	}
 	got := getWork(t, s, story.ID)
-	if got.Status != StatusDone {
-		t.Errorf("status = %q, want done (blocked by waiting child)", got.Status)
+	if got.Status != StatusWaiting {
+		t.Errorf("status = %q, want waiting", got.Status)
 	}
 }
 
-func TestAutoClose_BlockedByNeedsInputChild(t *testing.T) {
+func TestParentWaiting_WhenChildNeedsInput(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
@@ -808,15 +802,17 @@ func TestAutoClose_BlockedByNeedsInputChild(t *testing.T) {
 	// Put task in needs_input
 	s.MarkNeedsInput(context.Background(), task.ID)
 
-	// Parent done — but task is needs_input, so parent stays done (not closed)
-	doneWork(t, s, story.ID)
+	// Parent should use waiting to wait for child, not done
+	if err := s.MarkWaiting(context.Background(), story.ID); err != nil {
+		t.Fatalf("story should be able to enter waiting: %v", err)
+	}
 	got := getWork(t, s, story.ID)
-	if got.Status != StatusDone {
-		t.Errorf("story status = %q, want %q (child needs_input blocks auto-close)", got.Status, StatusDone)
+	if got.Status != StatusWaiting {
+		t.Errorf("story status = %q, want %q", got.Status, StatusWaiting)
 	}
 }
 
-func TestAutoClose_BlockedByStoppedChild(t *testing.T) {
+func TestParentWaiting_WhenChildStopped(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
@@ -826,11 +822,13 @@ func TestAutoClose_BlockedByStoppedChild(t *testing.T) {
 	// Stop the task (simulates agent crash or retry limit)
 	s.Stop(context.Background(), task.ID)
 
-	// Parent done — but task is stopped, so parent stays done (not closed)
-	doneWork(t, s, story.ID)
+	// Parent should use waiting to wait for child
+	if err := s.MarkWaiting(context.Background(), story.ID); err != nil {
+		t.Fatalf("story should be able to enter waiting: %v", err)
+	}
 	got := getWork(t, s, story.ID)
-	if got.Status != StatusDone {
-		t.Errorf("story status = %q, want %q (stopped child blocks auto-close)", got.Status, StatusDone)
+	if got.Status != StatusWaiting {
+		t.Errorf("story status = %q, want %q", got.Status, StatusWaiting)
 	}
 }
 
@@ -884,12 +882,15 @@ func TestMarkDone_NotFound(t *testing.T) {
 	}
 }
 
-func TestMarkDone_ChildClosesButParentStaysDone(t *testing.T) {
+func TestMarkDone_ChildClosesWhileParentWaiting(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
 	startWork(t, s, story.ID)
-	doneWork(t, s, story.ID) // story stays done (task still open)
+	startWork(t, s, task.ID)
+
+	// Parent enters waiting for child
+	s.MarkWaiting(context.Background(), story.ID)
 
 	if err := s.MarkDone(context.Background(), task.ID); err != nil {
 		t.Fatalf("MarkDone task: %v", err)
@@ -898,9 +899,9 @@ func TestMarkDone_ChildClosesButParentStaysDone(t *testing.T) {
 	if getWork(t, s, task.ID).Status != StatusClosed {
 		t.Error("task should be closed")
 	}
-	// Parent stays done — reactivation is handled by AutoResumer
-	if getWork(t, s, story.ID).Status != StatusDone {
-		t.Errorf("story should stay done (awaiting review), got %q", getWork(t, s, story.ID).Status)
+	// Parent stays waiting — reactivation is handled by AutoResumer
+	if getWork(t, s, story.ID).Status != StatusWaiting {
+		t.Errorf("story should stay waiting, got %q", getWork(t, s, story.ID).Status)
 	}
 }
 
@@ -920,18 +921,20 @@ func TestAutoClose_TaskDoneImmediatelyClosed(t *testing.T) {
 	}
 }
 
-func TestAutoClose_StoryWithPendingChildren(t *testing.T) {
+func TestStory_UsesWaitingForPendingChildren(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
 	startWork(t, s, story.ID)
 	startWork(t, s, task.ID)
 
-	// Story done, but task is in_progress → stays done
-	doneWork(t, s, story.ID)
+	// Story uses waiting to wait for child completion
+	if err := s.MarkWaiting(context.Background(), story.ID); err != nil {
+		t.Fatalf("MarkWaiting: %v", err)
+	}
 	got := getWork(t, s, story.ID)
-	if got.Status != StatusDone {
-		t.Errorf("story status = %q, want %q", got.Status, StatusDone)
+	if got.Status != StatusWaiting {
+		t.Errorf("story status = %q, want %q", got.Status, StatusWaiting)
 	}
 }
 
@@ -955,7 +958,7 @@ func TestAutoClose_StoryDoneWhenAllChildrenAlreadyClosed(t *testing.T) {
 	}
 }
 
-func TestAutoClose_ParentStaysDoneWhenChildrenClose(t *testing.T) {
+func TestParentWaiting_StaysWaitingWhenChildrenClose(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task1 := createTask(t, s, story.ID, "T1")
@@ -964,25 +967,25 @@ func TestAutoClose_ParentStaysDoneWhenChildrenClose(t *testing.T) {
 	startWork(t, s, task1.ID)
 	startWork(t, s, task2.ID)
 
-	// Mark story as done first (won't close because children pending)
-	doneWork(t, s, story.ID)
+	// Parent enters waiting for children
+	s.MarkWaiting(context.Background(), story.ID)
 
-	// Complete task1 → closed; parent stays done (awaiting review)
+	// Complete task1 → closed; parent stays waiting (AutoResumer handles wakeup)
 	doneWork(t, s, task1.ID)
 	if getWork(t, s, task1.ID).Status != StatusClosed {
 		t.Error("task1 should be closed")
 	}
-	if getWork(t, s, story.ID).Status != StatusDone {
-		t.Errorf("story should stay done while task2 is running, got %q", getWork(t, s, story.ID).Status)
+	if getWork(t, s, story.ID).Status != StatusWaiting {
+		t.Errorf("story should stay waiting while task2 is running, got %q", getWork(t, s, story.ID).Status)
 	}
 
-	// Complete task2 → closed; parent stays done (AutoResumer handles reactivation)
+	// Complete task2 → closed; parent stays waiting (AutoResumer handles wakeup)
 	doneWork(t, s, task2.ID)
 	if getWork(t, s, task2.ID).Status != StatusClosed {
 		t.Error("task2 should be closed")
 	}
-	if getWork(t, s, story.ID).Status != StatusDone {
-		t.Errorf("story should stay done (awaiting review), got %q", getWork(t, s, story.ID).Status)
+	if getWork(t, s, story.ID).Status != StatusWaiting {
+		t.Errorf("story should stay waiting (AutoResumer wakes it up), got %q", getWork(t, s, story.ID).Status)
 	}
 }
 

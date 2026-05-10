@@ -6,7 +6,6 @@ export const statusLabels: Record<WorkStatus, string> = {
 	waiting: "Waiting",
 	needs_input: "Needs Input",
 	stopped: "Stopped",
-	done: "Done",
 	closed: "Closed",
 };
 
@@ -16,7 +15,6 @@ const styles: Record<WorkStatus, string> = {
 	waiting: "bg-th-accent/10 text-th-accent",
 	needs_input: "bg-th-warning/10 text-th-warning",
 	stopped: "bg-th-error/10 text-th-error",
-	done: "bg-th-success/10 text-th-success",
 	closed: "bg-th-bg-tertiary text-th-text-muted",
 };
 

@@ -29,8 +29,6 @@ export default function StatusIcon({
 			return <CirclePause className={`${base} text-th-warning`} />;
 		case "stopped":
 			return <CircleStop className={`${base} text-th-error`} />;
-		case "done":
-			return <CircleCheck className={`${base} text-th-success`} />;
 		case "closed":
 			return <CircleCheck className={`${base} text-th-text-muted`} />;
 	}

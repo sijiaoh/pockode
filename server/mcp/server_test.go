@@ -375,8 +375,8 @@ func TestWorkDone(t *testing.T) {
 	})
 	id := extractID(t, toolText(createResult))
 
-	// Pre-transition to in_progress to test the in_progress → done path specifically
-	// (the auto open → done path is tested in TestWorkDone_FromOpen_AutoTransitions)
+	// Pre-transition to in_progress to test the in_progress → closed path specifically
+	// (the auto open → closed path is tested in TestWorkDone_FromOpen_AutoTransitions)
 	ts.store.Start(context.Background(), id, "")
 
 	result := callTool(t, ts.Server, "work_done", map[string]string{"id": id})
@@ -392,7 +392,7 @@ func TestWorkDone(t *testing.T) {
 func TestWorkDone_FromOpen_AutoTransitions(t *testing.T) {
 	ts := newTestServer(t)
 
-	// Create story (status=open) → work_done auto-transitions open → in_progress → done
+	// Create story (status=open) → work_done auto-transitions open → in_progress → closed
 	createResult := callTool(t, ts.Server, "work_create", map[string]string{
 		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
 	})
@@ -400,14 +400,14 @@ func TestWorkDone_FromOpen_AutoTransitions(t *testing.T) {
 
 	result := callTool(t, ts.Server, "work_done", map[string]string{"id": id})
 	if result.IsError {
-		t.Errorf("expected success for open → done (auto-transition), got error: %s", toolText(result))
+		t.Errorf("expected success for open → closed (auto-transition), got error: %s", toolText(result))
 	}
 }
 
 func TestWorkDone_AlreadyClosed(t *testing.T) {
 	ts := newTestServer(t)
 
-	// Create and complete a story (will auto-close since no children)
+	// Create and complete a story (goes directly to closed)
 	createResult := callTool(t, ts.Server, "work_create", map[string]string{
 		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
 	})
@@ -420,7 +420,7 @@ func TestWorkDone_AlreadyClosed(t *testing.T) {
 	// Try to done again — already closed, should fail
 	result := callTool(t, ts.Server, "work_done", map[string]string{"id": id})
 	if !result.IsError {
-		t.Error("expected error for closed → done (invalid transition)")
+		t.Error("expected error for closed → closed (invalid transition)")
 	}
 }
 

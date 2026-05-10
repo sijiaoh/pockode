@@ -96,13 +96,13 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 **Display logic:**
 
 1. Stories are extracted from `works` (items with `type === "story"`)
-2. Stories are grouped by status in this order: **in_progress → needs_input → stopped → open → done → closed**
+2. Stories are grouped by status in this order: **in_progress → waiting → needs_input → stopped → open → closed**
 3. Each group is a collapsible section (`StatusGroup`); `closed` group is collapsed by default
 4. Each group header shows: collapse toggle, status icon, status label, count badge
-5. Each story row shows: status icon, title, task progress (`doneTasks/totalTasks tasks`)
+5. Each story row shows: status icon, title, task progress (`closedTasks/totalTasks tasks`)
 6. A "New Story" button at the top opens an inline creation form (title + role selector)
 
-**Task progress:** Tasks are indexed by `parent_id` into a `Map<string, Work[]>`. For each story, done count is tasks with status `done` or `closed`.
+**Task progress:** Tasks are indexed by `parent_id` into a `Map<string, Work[]>`. For each story, closed count is tasks with status `closed`.
 
 ### WorkDetailOverlay
 

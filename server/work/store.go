@@ -326,19 +326,17 @@ func (s *FileStore) MarkDone(_ context.Context, id string) error {
 	if w.Status == StatusOpen {
 		w.Status = StatusInProgress
 	}
-	if !ValidateTransition(w.Status, StatusDone) {
+	if !ValidateTransition(w.Status, StatusClosed) {
 		s.works = prev
 		s.worksMu.Unlock()
-		return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusDone)
+		return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusClosed)
 	}
 
 	now := time.Now()
-	w.Status = StatusDone
+	w.Status = StatusClosed
 	w.UpdatedAt = now
 
 	modified := map[string]bool{id: true}
-	s.autoClose(w, now, modified)
-
 	return s.persistAndNotifyUpdates(prev, modified)
 }
 
@@ -528,9 +526,9 @@ func (s *FileStore) ReactivateParent(_ context.Context, id string) error {
 	}
 
 	w := &s.works[idx]
-	if w.Status != StatusDone && w.Status != StatusClosed {
+	if w.Status != StatusClosed {
 		s.worksMu.Unlock()
-		return fmt.Errorf("%w: invalid transition %s → %s (ReactivateParent requires done or closed)", ErrInvalidWork, w.Status, StatusInProgress)
+		return fmt.Errorf("%w: invalid transition %s → %s (ReactivateParent requires closed)", ErrInvalidWork, w.Status, StatusInProgress)
 	}
 
 	prev := s.snapshotWorks()
@@ -664,28 +662,6 @@ func (s *FileStore) snapshotWorks() []Work {
 	out := make([]Work, len(s.works))
 	copy(out, s.works)
 	return out
-}
-
-// --- Auto-close logic ---
-
-// autoClose promotes a done item to closed when all its children (if any)
-// are closed. This handles both leaf items (no children) and parents whose
-// children have all completed.
-// Caller must hold s.worksMu write lock.
-func (s *FileStore) autoClose(w *Work, now time.Time, modified map[string]bool) {
-	if w.Status != StatusDone {
-		return
-	}
-
-	for _, child := range s.works {
-		if child.ParentID == w.ID && child.Status != StatusClosed {
-			return // has non-closed children → stay done
-		}
-	}
-
-	w.Status = StatusClosed
-	w.UpdatedAt = now
-	modified[w.ID] = true
 }
 
 // --- Comments ---

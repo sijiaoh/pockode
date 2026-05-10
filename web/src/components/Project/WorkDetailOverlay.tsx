@@ -639,9 +639,7 @@ function ChildrenSection({
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string) => void;
 }) {
-	const doneTasks = tasks.filter(
-		(t) => t.status === "done" || t.status === "closed",
-	).length;
+	const closedTasks = tasks.filter((t) => t.status === "closed").length;
 
 	return (
 		<div>
@@ -649,7 +647,7 @@ function ChildrenSection({
 				Tasks{" "}
 				{tasks.length > 0 && (
 					<span>
-						({doneTasks}/{tasks.length})
+						({closedTasks}/{tasks.length})
 					</span>
 				)}
 			</h3>
@@ -862,9 +860,9 @@ function StepProgressSection({
 
 	if (steps.length === 0) return null;
 
-	const isDone = work.status === "done" || work.status === "closed";
+	const isClosed = work.status === "closed";
 	// Show progress for all active states (in_progress, waiting, needs_input, stopped)
-	const showProgress = !isDone && work.status !== "open";
+	const showProgress = !isClosed && work.status !== "open";
 
 	return (
 		<div>
@@ -875,7 +873,7 @@ function StepProgressSection({
 						({currentStep + 1}/{steps.length})
 					</span>
 				)}
-				{isDone && (
+				{isClosed && (
 					<span className="text-th-success">
 						({steps.length}/{steps.length})
 					</span>
@@ -908,9 +906,9 @@ function StepItem({
 	currentStep: number;
 	workStatus: WorkStatus;
 }) {
-	const isDone = workStatus === "done" || workStatus === "closed";
-	const isCompleted = isDone || index < currentStep;
-	// Show as current only for active states (not open, done, or closed)
+	const isClosed = workStatus === "closed";
+	const isCompleted = isClosed || index < currentStep;
+	// Show as current only for active states (not open or closed)
 	const isActiveState =
 		workStatus === "in_progress" ||
 		workStatus === "waiting" ||

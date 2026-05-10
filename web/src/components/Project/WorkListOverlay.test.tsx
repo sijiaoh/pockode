@@ -50,7 +50,7 @@ describe("WorkListOverlay", () => {
 					type: "task",
 					parent_id: "story-in-progress",
 					title: "Task one",
-					status: "done",
+					status: "closed",
 				}),
 				createWork({
 					id: "task-2",
@@ -95,7 +95,7 @@ describe("WorkListOverlay", () => {
 					type: "task",
 					parent_id: "story-closed",
 					title: "Closed task",
-					status: "done",
+					status: "closed",
 				}),
 			],
 			isLoading: false,

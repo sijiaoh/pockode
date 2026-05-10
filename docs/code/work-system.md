@@ -46,7 +46,7 @@ On creation (`server/work/store.go:157-193`):
 
 ## State Machine
 
-### Seven States
+### Six States
 
 ```
 open ──────────────► in_progress
@@ -54,11 +54,9 @@ open ──────────────► in_progress
               ┌──────────┼──────────┬──────────┐
               │          │          │          │
               ▼          ▼          ▼          ▼
-        needs_input   waiting   stopped     done
-              │          │          │          │
-              │          │          │          ▼
-              │          │          │       closed ─────► in_progress
+        needs_input   waiting   stopped    closed ─────► in_progress
               │          │          │                       (via Reopen)
+              │          │          │
               └──────────┴──────────┴─────► (can return to in_progress)
 ```
 
@@ -69,8 +67,7 @@ open ──────────────► in_progress
 | `needs_input` | Waiting for user input | preserved | preserved |
 | `waiting` | Waiting for child work to complete | preserved | preserved |
 | `stopped` | Session ended unexpectedly | preserved | preserved |
-| `done` | Work completed | preserved | preserved |
-| `closed` | Fully closed (all children closed) | preserved | preserved |
+| `closed` | Work completed | preserved | preserved |
 
 ### Intent-Driven Transitions
 
@@ -80,17 +77,15 @@ The API exposes intent methods rather than raw status updates. Each method encap
 |--------|------------|---------|
 | `Start(id, sessionID)` | open/stopped/needs_input → in_progress | Launch AI session |
 | `Stop(id)` | in_progress/needs_input/waiting → stopped | Terminate session |
-| `MarkDone(id)` | * → done | Complete work |
+| `MarkDone(id)` | in_progress → closed | Complete work |
 | `MarkNeedsInput(id)` | in_progress → needs_input | Pause for user input |
 | `MarkWaiting(id)` | in_progress → waiting | Pause for child work completion |
 | `Resume(id)` | needs_input → in_progress | Continue after user input |
 | `ResumeFromWaiting(id)` | waiting → in_progress | Continue after child completes |
 | `Reactivate(id)` | stopped → in_progress | Sync with running session |
-| `ReactivateParent(id)` | done/closed → in_progress | Resume parent when child closes |
+| `ReactivateParent(id)` | closed → in_progress | Resume parent when child closes |
 | `Reopen(id)` | closed → in_progress | Reopen a closed item to add children or continue |
 | `RollbackStart(id, wasRestart)` | in_progress → open/stopped | Undo failed start |
-
-**Why `MarkDone` can skip to done**: When an AI agent calls `work_done` on an `open` task, automatically transitioning through `in_progress` avoids forcing agents to call `work_start` first.
 
 ### Waiting vs NeedsInput
 
@@ -105,30 +100,9 @@ Both `waiting` and `needs_input` pause the agent's work, but serve different pur
 
 Both states can be resumed by user messages, allowing users to interrupt the wait if needed.
 
-### Auto-Close Cascade
+### Direct Closure
 
-When a Work is marked done, the system checks if all siblings are closed:
-
-```go
-// server/work/store.go - autoClose logic
-func (s *FileStore) autoClose(w *Work, now time.Time, modified map[string]bool) {
-    if w.Status != StatusDone {
-        return
-    }
-
-    // Check all children of the same parent
-    for _, child := range s.works {
-        if child.ParentID == w.ID && child.Status != StatusClosed {
-            return  // Has unclosed children, stay done
-        }
-    }
-
-    w.Status = StatusClosed
-    modified[w.ID] = true
-}
-```
-
-This triggers parent reactivation: when all tasks under a story close, the story's coordinator agent is notified to review results.
+Work items transition directly from `in_progress` to `closed` via `MarkDone`. When a child task closes, the system automatically reactivates its parent story (if the parent is `waiting` or `closed`), allowing the coordinator agent to review results and continue orchestration.
 
 ## File-Based Storage
 
@@ -297,10 +271,10 @@ When an AI session's state changes, sync the work status:
 
 **Trigger B: Child Closure**
 
-When a task closes, either reactivate its parent story or resume a waiting parent:
+When a task closes, either reactivate its parent story (if closed) or resume a waiting parent:
 
 ```
-Task: closed ──► Parent Story (done) → in_progress
+Task: closed ──► Parent Story (closed) → in_progress
                        │
                        ▼
             Send "Task X completed" message
@@ -313,7 +287,7 @@ Task: closed ──► Parent Story (waiting) → in_progress
 ```
 
 The behavior differs based on the parent's state:
-- **Parent is `done`**: Uses `ReactivateParent` to wake the parent and notify it of the child completion
+- **Parent is `closed`**: Uses `ReactivateParent` to wake the parent and notify it of the child completion
 - **Parent is `waiting`**: Uses `ResumeFromWaiting` to resume the parent and send a `child_completion_nudge` message
 
 **Trigger C: External Work Start**
@@ -524,7 +498,7 @@ Check if you have completed the current step:
 - **Explicit step control**: Agents call `step_done` to advance steps, giving them control over when steps complete.
 - **step_done vs work_done**:
   - `step_done`: Increments `CurrentStep` while keeping status as `in_progress`. Use for all steps except the last.
-  - `work_done`: Marks the task as `done`. Use only for the final step or tasks without steps.
+  - `work_done`: Marks the task as `closed`. Use only for the final step or tasks without steps.
 
 ## Prompt Configuration
 

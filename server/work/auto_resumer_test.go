@@ -270,11 +270,11 @@ func TestAutoResumer_RetryResetOnCompletion(t *testing.T) {
 
 	// Complete → resets retry count
 	resumer.OnWorkChange(ChangeEvent{Op: OperationUpdate, Work: Work{
-		ID: task.ID, Status: StatusDone, SessionID: sid,
+		ID: task.ID, Status: StatusClosed, SessionID: sid,
 	}})
 
 	// Re-open task for more work
-	store.Reactivate(context.Background(), task.ID)
+	store.Reopen(context.Background(), task.ID)
 
 	// Should be able to retry again from 0
 	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
@@ -324,7 +324,7 @@ func TestAutoResumer_NoMessageWhenWorkDone(t *testing.T) {
 
 // --- Trigger B: parent reactivation ---
 
-func TestAutoResumer_SendsMessageToParentOnChildClose(t *testing.T) {
+func TestAutoResumer_ReactivatesClosedParentOnChildClose(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
 	story := createStory(t, store, "Story")
@@ -333,10 +333,14 @@ func TestAutoResumer_SendsMessageToParentOnChildClose(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, parentSid)
 	startWork(t, store, task.ID)
 
-	// Parent done, waiting for children
+	// Close parent while child is running (edge case: parent finished work_done
+	// before child, then child completes)
+	doneWork(t, store, task.ID)
 	doneWork(t, store, story.ID)
+	// Reopen child to simulate new work on it
+	store.Reopen(context.Background(), task.ID)
 
-	// Simulate child closed event
+	// Simulate child closed event when parent is already closed
 	resumer.OnWorkChange(ChangeEvent{
 		Op:   OperationUpdate,
 		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
@@ -344,7 +348,7 @@ func TestAutoResumer_SendsMessageToParentOnChildClose(t *testing.T) {
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
-	// Parent transitioned to in_progress so the agent can call work_done again
+	// Parent reactivated from closed to in_progress
 	parent := getWork(t, store, story.ID)
 	if parent.Status != StatusInProgress {
 		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
@@ -470,10 +474,10 @@ func TestAutoResumer_SendsMessageWhenLastChildCompletes(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, parentSid)
 	startWork(t, store, task.ID)
 
-	// Parent done, waiting for children
-	doneWork(t, store, story.ID)
+	// Parent enters waiting for child
+	store.MarkWaiting(context.Background(), story.ID)
 
-	// MarkDone on the last task: autoClose closes the task,
+	// MarkDone on the task: closes the task,
 	// which triggers handleParentReactivation via OnWorkChange.
 	if err := store.MarkDone(context.Background(), task.ID); err != nil {
 		t.Fatalf("MarkDone task: %v", err)
@@ -508,8 +512,8 @@ func TestAutoResumer_SendsMessageWhenSiblingsStillRunning(t *testing.T) {
 	startWork(t, store, task1.ID)
 	startWork(t, store, task2.ID)
 
-	// Parent done, waiting for children
-	doneWork(t, store, story.ID)
+	// Parent enters waiting for children
+	store.MarkWaiting(context.Background(), story.ID)
 
 	// Simulate child 1 closed event while child 2 is still running
 	resumer.OnWorkChange(ChangeEvent{
@@ -771,7 +775,7 @@ func TestAutoResumer_ProcessEndedNoopWhenWorkDone(t *testing.T) {
 	}
 }
 
-func TestAutoResumer_ProcessEndedNoopWhenWorkDoneNotClosed(t *testing.T) {
+func TestAutoResumer_ProcessEndedNoopWhenWorkWaiting(t *testing.T) {
 	store, resumer, _ := setupResumerTest(t)
 
 	story := createStory(t, store, "Story")
@@ -780,19 +784,23 @@ func TestAutoResumer_ProcessEndedNoopWhenWorkDoneNotClosed(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, sid)
 	startWork(t, store, task.ID)
 
-	// Story done — stays done (not auto-closed) because task is still running
-	doneWork(t, store, story.ID)
-	if getWork(t, store, story.ID).Status != StatusDone {
-		t.Fatal("precondition: story should be done (not closed)")
+	// Story enters waiting for child
+	store.MarkWaiting(context.Background(), story.ID)
+	if getWork(t, store, story.ID).Status != StatusWaiting {
+		t.Fatal("precondition: story should be waiting")
 	}
 
 	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
 
-	time.Sleep(50 * time.Millisecond)
+	// waiting work IS stopped on process ended
+	waitFor(t, func() bool {
+		w := getWork(t, store, story.ID)
+		return w.Status == StatusStopped
+	})
 
 	w := getWork(t, store, story.ID)
-	if w.Status != StatusDone {
-		t.Errorf("status = %q, want %q (should remain done)", w.Status, StatusDone)
+	if w.Status != StatusStopped {
+		t.Errorf("status = %q, want %q (waiting work should be stopped)", w.Status, StatusStopped)
 	}
 }
 
@@ -859,7 +867,7 @@ func TestAutoResumer_StopOrphanedWork_SkipsNonInProgress(t *testing.T) {
 	}
 }
 
-func TestAutoResumer_StopOrphanedWork_SkipsDone(t *testing.T) {
+func TestAutoResumer_StopOrphanedWork_SkipsClosed(t *testing.T) {
 	store := newTestStore(t)
 	resumer := NewAutoResumer(store, 3)
 
@@ -868,18 +876,25 @@ func TestAutoResumer_StopOrphanedWork_SkipsDone(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, "s1")
 	startWorkWithSession(t, store, task.ID, "s2")
 
-	// Story done — stays done because task is in_progress
+	// Close story (task is in_progress)
+	// Use Reopen approach: first close task, then story, then reopen task
+	doneWork(t, store, task.ID)
 	doneWork(t, store, story.ID)
-	if getWork(t, store, story.ID).Status != StatusDone {
-		t.Fatal("precondition: story should be done")
+	store.Reopen(context.Background(), task.ID)
+
+	if getWork(t, store, story.ID).Status != StatusClosed {
+		t.Fatal("precondition: story should be closed")
+	}
+	if getWork(t, store, task.ID).Status != StatusInProgress {
+		t.Fatal("precondition: task should be in_progress")
 	}
 
 	resumer.StopOrphanedWork()
 
-	// Story should remain done (orphan detection only targets in_progress/needs_input)
+	// Story should remain closed (orphan detection only targets in_progress/needs_input/waiting)
 	s := getWork(t, store, story.ID)
-	if s.Status != StatusDone {
-		t.Errorf("story status = %q, want %q (done should not be stopped)", s.Status, StatusDone)
+	if s.Status != StatusClosed {
+		t.Errorf("story status = %q, want %q (closed should not be stopped)", s.Status, StatusClosed)
 	}
 	// Task was in_progress → should be stopped
 	tk := getWork(t, store, task.ID)
@@ -969,7 +984,7 @@ func TestAutoResumer_ConcurrentProcessStateChanges(t *testing.T) {
 func TestAutoResumer_ConcurrentOnWorkChange(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
-	// Setup: story with multiple tasks (create tasks BEFORE marking story done)
+	// Setup: story with multiple tasks
 	story := createStory(t, store, "Story")
 	parentSid := "parent-session"
 	startWorkWithSession(t, store, story.ID, parentSid)
@@ -980,10 +995,11 @@ func TestAutoResumer_ConcurrentOnWorkChange(t *testing.T) {
 		startWork(t, store, tasks[i].ID)
 	}
 
-	doneWork(t, store, story.ID)
+	// Parent enters waiting for children
+	store.MarkWaiting(context.Background(), story.ID)
 
 	// Fire concurrent child closed events. Only the first goroutine to read
-	// the parent as done will transition it to in_progress and send a message;
+	// the parent as waiting will transition it to in_progress and send a message;
 	// the others see in_progress and skip. At least 1 message must be sent.
 	for _, task := range tasks {
 		go resumer.OnWorkChange(ChangeEvent{

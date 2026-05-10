@@ -9,9 +9,9 @@ The workflow engine manages work item lifecycles through status transitions, aut
 | `open`        | Created, not yet started                                 |
 | `in_progress` | Agent session is actively working                        |
 | `needs_input` | Agent paused, waiting for user confirmation              |
+| `waiting`     | Agent paused, waiting for child work to complete         |
 | `stopped`     | Agent session ended (retry limit, interrupt, or orphan)  |
-| `done`        | Direct work complete; children may still be pending      |
-| `closed`      | Fully complete — auto-derived, never set directly by API |
+| `closed`      | Work completed                                           |
 
 ## Status Transitions
 
@@ -21,14 +21,14 @@ The workflow engine manages work item lifecycles through status transitions, aut
           │         └┬───┬───┬──┬─┘             │
           │          │   │   │  │                │
           │          ▼   │   ▼  ▼                │
-       ┌──┴──┐  ┌──────┐ │ ┌────────────┐ ┌─────┴──┐
-       │open │  │ done │ │ │needs_input │ │stopped │
-       └─────┘  └──┬───┘ │ └────────────┘ └────────┘
-                   │     │
-                   ▼     │
-               ┌────────┐│
-               │closed  │┘
-               └────────┘
+       ┌──┴──┐ ┌───────┐ │ ┌────────────┐ ┌─────┴──┐
+       │open │ │waiting│ │ │needs_input │ │stopped │
+       └─────┘ └───────┘ │ └────────────┘ └────────┘
+                         │
+                         ▼
+                    ┌────────┐
+                    │closed  │
+                    └────────┘
 ```
 
 ### Transition Table
@@ -38,16 +38,17 @@ The workflow engine manages work item lifecycles through status transitions, aut
 | `open`         | `in_progress`  | `Store.Start` (fresh start)                |
 | `in_progress`  | `open`         | `Store.RollbackStart` (fresh start failed) |
 | `in_progress`  | `needs_input`  | `Store.MarkNeedsInput`                     |
+| `in_progress`  | `waiting`      | `Store.MarkWaiting`                        |
 | `in_progress`  | `stopped`      | `Store.Stop` (process ended/interrupted)   |
-| `in_progress`  | `done`         | `Store.MarkDone`                           |
+| `in_progress`  | `closed`       | `Store.MarkDone`                           |
 | `needs_input`  | `in_progress`  | `Store.Resume` (user confirms)             |
 | `needs_input`  | `stopped`      | `Store.Stop` (process ended while paused)  |
+| `waiting`      | `in_progress`  | `Store.ResumeFromWaiting` (child completes or user message) |
+| `waiting`      | `stopped`      | `Store.Stop` (process ended while waiting) |
 | `stopped`      | `in_progress`  | `Store.Start` (restart) or `Store.Reactivate` |
-| `done`         | `in_progress`  | `Store.ReactivateParent` (parent reactivation) |
-| `closed`       | `in_progress`  | `Store.ReactivateParent` (parent reactivation) |
-| `done`         | `closed`       | Auto-close (internal, not an API call)     |
+| `closed`       | `in_progress`  | `Store.ReactivateParent` (parent reactivation) or `Store.Reopen` |
 
-> Source: `server/work/validation.go` — `validTransitions` map; `done`/`closed` rows handled by `Store.ReactivateParent`.
+> Source: `server/work/validation.go` — `validTransitions` map.
 
 ### SessionID Management
 
@@ -61,15 +62,13 @@ SessionID changes are encapsulated in intent-based Store methods:
 
 > Source: `server/work/store.go` — intent-based transition methods.
 
-## Auto-Close
+## Direct Closure
 
-When a work item transitions to `done`, the engine checks whether it can be promoted to `closed`:
+Work items transition directly from `in_progress` to `closed` via `MarkDone`. There is no intermediate `done` state.
 
-A `done` item with **all children `closed`** (or no children) is promoted to `closed`.
+When a child work closes, its parent story is automatically reactivated (if the parent is `waiting` or `closed`), allowing the coordinator agent to review results and continue orchestration.
 
-Note: the parent cascade is **not** recursive within `autoClose`. Instead, the child's `closed` event fires Trigger B (parent reactivation), which sends a message to the parent agent. The parent then calls `work_done` itself, triggering its own auto-close check.
-
-> Source: `server/work/store.go` — `autoClose`.
+> Source: `server/work/store.go` — `MarkDone`, `ReactivateParent`.
 
 ## AutoResumer
 
@@ -89,20 +88,19 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 **Auto-continuation details:**
 1. Wait **2 seconds** (settle delay) — allows `work_done` writes from MCP to propagate via fsnotify.
 2. Look up the work item by `sessionID`. If still `in_progress`, send a continuation message.
-3. Retry counter per session (configurable `maxRetries`). On limit, work transitions to `stopped`. Counter resets on `done`/`closed`/`stopped` transitions or deletion.
+3. Retry counter per session (configurable `maxRetries`). On limit, work transitions to `stopped`. Counter resets on `closed`/`stopped` transitions or deletion.
 
 > Source: `server/work/auto_resumer.go` — `HandleProcessStateChange`, `handleAutoContinuation`.
 
 ### Trigger B: Parent Reactivation
 
-**When:** A child work item transitions to `closed` and the parent is `done` with a `sessionID`.
+**When:** A child work item transitions to `closed` and the parent is `waiting` or `closed` with a `sessionID`.
 
 **Flow:**
-1. Child transitions to `closed` (via auto-close after `done`).
-2. Look up parent. If parent is `done` with a non-empty `sessionID`:
-   - `ReactivateParent` transitions parent to `in_progress` (preserving sessionID).
-   - Reset parent's retry counter.
-   - Send a reactivation message to the parent's existing session.
+1. Child transitions to `closed`.
+2. Look up parent. If parent has a non-empty `sessionID`:
+   - **Parent is `closed`**: `ReactivateParent` transitions parent to `in_progress` (preserving sessionID), resets retry counter, and sends a reactivation message.
+   - **Parent is `waiting`**: `ResumeFromWaiting` transitions parent to `in_progress` and sends a child completion message.
 
 **Purpose:** Stories (coordinators) are automatically woken up when a child task completes, so they can review results and continue orchestration.
 
