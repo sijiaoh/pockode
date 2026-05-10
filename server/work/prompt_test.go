@@ -123,19 +123,6 @@ func TestBuildKickoffMessage_TaskWithoutParent_NoCommentInstruction(t *testing.T
 	}
 }
 
-func TestBuildParentReactivationMessage_ContainsCommentListNudge(t *testing.T) {
-	parent := Work{
-		ID:          "story-1",
-		Type:        WorkTypeStory,
-		AgentRoleID: testRoleID,
-		Title:       "Big feature",
-	}
-
-	msg := BuildParentReactivationMessage(parent, "Implement login", "task-42")
-	assertContains(t, msg, "work_comment_list", "work_comment_list instruction")
-	assertContains(t, msg, "work_id story-1", "parent work ID for comment list")
-}
-
 func TestBuildRestartMessage_ContainsBaseAndNudge(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -163,25 +150,6 @@ func TestBuildRestartMessage_ContainsBaseAndNudge(t *testing.T) {
 			assertContains(t, restart, tc.nudge, "nudge")
 		})
 	}
-}
-
-func TestBuildParentReactivationMessage_ContainsBaseAndNudge(t *testing.T) {
-	parent := Work{
-		ID:          "story-1",
-		Type:        WorkTypeStory,
-		AgentRoleID: testRoleID,
-		Title:       "Big feature",
-	}
-
-	base := BuildKickoffMessage(parent)
-	msg := BuildParentReactivationMessage(parent, "Implement login", "task-42")
-
-	if !strings.Contains(msg, base) {
-		t.Error("parent reactivation should contain the full kickoff base")
-	}
-	assertContains(t, msg, "Implement login", "child title")
-	assertContains(t, msg, "task-42", "child ID")
-	assertContains(t, msg, "has been completed", "reactivation nudge")
 }
 
 func TestFormatStepSection(t *testing.T) {

@@ -81,11 +81,6 @@ story_reopen_nudge: |
 task_reopen_nudge: |
   This task has been reopened. Review your previous work and determine what additional changes are needed. Complete the required work, then call work_done with ID {{.ID}} to finish.
 
-# Parent reactivation nudge (when a child task completes)
-# Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ID}}
-parent_reactivation_nudge: |
-  Task "{{.ChildTitle}}" (ID: {{.ChildID}}) has been completed. Use work_comment_list with work_id {{.ID}} to read the task's report. Then use work_list with parent_id {{.ID}} to check remaining tasks. If all tasks are done, call work_done with ID {{.ID}}. If tasks remain, review progress and adjust the plan as needed, then call work_done with ID {{.ID}} — this returns you to a dormant state until the next task completes.
-
 # Child completion nudge for waiting parent (when a child task completes and parent was waiting)
 # Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ID}}
 child_completion_nudge: |

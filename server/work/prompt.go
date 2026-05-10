@@ -14,24 +14,23 @@ var promptsYAML []byte
 
 // promptTemplates holds parsed templates from prompts.yaml.
 type promptTemplates struct {
-	PockodeMCPPrefix        string `yaml:"pockode_mcp_prefix"`
-	RoleReference           string `yaml:"role_reference"`
-	WorkContext             string `yaml:"work_context"`
-	StoryBehaviorRules      string `yaml:"story_behavior_rules"`
-	StoryRulesSuffix        string `yaml:"story_rules_suffix"`
-	TaskRulesWithParent     string `yaml:"task_rules_with_parent"`
-	TaskRulesWithoutParent  string `yaml:"task_rules_without_parent"`
-	StoryRestartNudge       string `yaml:"story_restart_nudge"`
-	TaskRestartNudge        string `yaml:"task_restart_nudge"`
-	StoryReopenNudge        string `yaml:"story_reopen_nudge"`
-	TaskReopenNudge         string `yaml:"task_reopen_nudge"`
-	StoryAutoContinueNudge  string `yaml:"story_auto_continue_nudge"`
-	TaskAutoContinueNudge   string `yaml:"task_auto_continue_nudge"`
-	TaskStepAutoContinue    string `yaml:"task_step_auto_continue_nudge"`
-	ParentReactivationNudge string `yaml:"parent_reactivation_nudge"`
-	ChildCompletionNudge    string `yaml:"child_completion_nudge"`
-	StepAdvanceSection      string `yaml:"step_advance_section"`
-	CurrentStepSection      string `yaml:"current_step_section"`
+	PockodeMCPPrefix       string `yaml:"pockode_mcp_prefix"`
+	RoleReference          string `yaml:"role_reference"`
+	WorkContext            string `yaml:"work_context"`
+	StoryBehaviorRules     string `yaml:"story_behavior_rules"`
+	StoryRulesSuffix       string `yaml:"story_rules_suffix"`
+	TaskRulesWithParent    string `yaml:"task_rules_with_parent"`
+	TaskRulesWithoutParent string `yaml:"task_rules_without_parent"`
+	StoryRestartNudge      string `yaml:"story_restart_nudge"`
+	TaskRestartNudge       string `yaml:"task_restart_nudge"`
+	StoryReopenNudge       string `yaml:"story_reopen_nudge"`
+	TaskReopenNudge        string `yaml:"task_reopen_nudge"`
+	StoryAutoContinueNudge string `yaml:"story_auto_continue_nudge"`
+	TaskAutoContinueNudge  string `yaml:"task_auto_continue_nudge"`
+	TaskStepAutoContinue   string `yaml:"task_step_auto_continue_nudge"`
+	ChildCompletionNudge   string `yaml:"child_completion_nudge"`
+	StepAdvanceSection     string `yaml:"step_advance_section"`
+	CurrentStepSection     string `yaml:"current_step_section"`
 }
 
 var prompts promptTemplates
@@ -189,20 +188,6 @@ func BuildAutoContinuationMessageWithSteps(w Work, steps []string, currentStep i
 	})
 
 	return base + "\n\n" + stepSection + "\n\n" + nudge
-}
-
-// BuildParentReactivationMessage appends a reactivation nudge to the base message
-// when one of a parent story's child tasks completes.
-func BuildParentReactivationMessage(parent Work, childTitle, childID string) string {
-	base := buildBase(parent)
-
-	nudge := render(prompts.ParentReactivationNudge, map[string]string{
-		"ChildTitle": childTitle,
-		"ChildID":    childID,
-		"ID":         parent.ID,
-	})
-
-	return base + "\n\n" + nudge
 }
 
 // BuildChildCompletionMessage appends a child completion nudge to the base message

@@ -101,7 +101,7 @@ Both states can be resumed by user messages, allowing users to interrupt the wai
 
 ### Direct Closure
 
-Work items transition directly from `in_progress` to `closed` via `MarkDone`. When a child task closes, the system automatically resumes its parent story (if the parent is `waiting`), allowing the coordinator agent to review results and continue orchestration.
+Work items transition directly from `in_progress` to `closed` via `MarkDone`. When a child task closes, the system automatically resumes its parent story only if the parent is `waiting`. Already closed parents are not reopened, preserving the intentional completion of coordinated work.
 
 ## File-Based Storage
 
@@ -270,16 +270,21 @@ When an AI session's state changes, sync the work status:
 
 **Trigger B: Child Closure**
 
-When a task closes, the system resumes its waiting parent:
+When a task closes, the system checks its parent status:
+
+- **Waiting parent**: Resumed via `ResumeFromWaiting` with a `child_completion_nudge` message
+- **Closed parent**: Not reopened (intentional completion is preserved)
 
 ```
 Task: closed ──► Parent Story (waiting) → in_progress
                        │
                        ▼
             Send "Child completed" message
+
+Task: closed ──► Parent Story (closed) → (no change)
 ```
 
-Uses `ResumeFromWaiting` to resume the parent and send a `child_completion_nudge` message.
+This design ensures that completed coordination work remains closed even if child tasks are created and completed afterward (e.g., via manual intervention or reopen workflows).
 
 **Trigger C: External Work Start**
 
@@ -325,7 +330,7 @@ MCP: step_done ──► store.StepDone()
                   Send next step prompt
 ```
 
-Unlike Trigger B (parent reactivation), step advancement is agent-initiated via `step_done` rather than automatic upon completion.
+Unlike Trigger B (child closure waking a waiting parent), step advancement is agent-initiated via `step_done` rather than automatic upon completion.
 
 **Trigger F: External Work Reopen**
 
@@ -406,7 +411,7 @@ Start (step 0)
      │        │
      ▼        ▼
  CurrentStep++ Normal completion
-     │        (→ closed or parent reactivation)
+     │        (→ closed; if parent is waiting, it resumes)
      │
      ▼
  AutoResumer sends
@@ -417,7 +422,7 @@ Start (step 0)
 
 **Key distinction**:
 - `step_done`: Complete current step and advance to next (agent stays in_progress)
-- `work_done`: Complete the entire task (triggers closure or parent reactivation)
+- `work_done`: Complete the entire task (triggers closure; if parent is waiting, it resumes)
 
 ### Prompt Format
 

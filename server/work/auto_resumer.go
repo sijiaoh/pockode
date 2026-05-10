@@ -36,8 +36,8 @@ type WorkStartHandler interface {
 //   - running → transition stopped work back to in_progress.
 //   - ended → transition in_progress/needs_input work to stopped.
 //
-// Trigger B: When a child Work closes, transition the parent from done to
-// in_progress and send a message so the agent can review and call work_done.
+// Trigger B: When a child Work closes, wake the parent if it's waiting.
+// The parent transitions from waiting to in_progress to continue its work.
 //
 // Trigger C: When a work item is started externally (e.g. via MCP),
 // create the session and send the kickoff message.
@@ -514,37 +514,8 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 		return
 	}
 
-	// Handle closed parent: reopen when child closes
-	// This happens when a parent explicitly closes before all children are done,
-	// and a child closure should wake it up.
-	if parent.Status != StatusClosed {
-		return
-	}
-
-	// Transition parent back to in_progress so the agent can work and
-	// call work_done again.
-	if err := r.workStore.Reopen(r.ctx, parent.ID); err != nil {
-		if r.ctx.Err() != nil {
-			return
-		}
-		slog.Warn("failed to reopen parent work", "parentId", parent.ID, "error", err)
-		return
-	}
-
-	// Reset retry count (new activity context)
-	r.retryMu.Lock()
-	delete(r.retries, parent.SessionID)
-	r.retryMu.Unlock()
-
-	msg := BuildParentReactivationMessage(parent, child.Title, child.ID)
-	if err := sender.SendMessage(r.ctx, parent.SessionID, msg); err != nil {
-		if r.ctx.Err() != nil {
-			return
-		}
-		slog.Warn("failed to send parent reactivation message", "parentId", parent.ID, "error", err)
-	} else {
-		slog.Info("parent reactivation sent", "parentId", parent.ID, "childId", child.ID)
-	}
+	// StatusClosed parents are not reactivated when children close.
+	// If a parent was explicitly closed, it stays closed.
 }
 
 func (r *AutoResumer) stopWork(workID string) error {

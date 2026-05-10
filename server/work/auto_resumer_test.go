@@ -322,9 +322,9 @@ func TestAutoResumer_NoMessageWhenWorkDone(t *testing.T) {
 	}
 }
 
-// --- Trigger B: parent reactivation ---
+// --- Trigger B: parent wake on child close ---
 
-func TestAutoResumer_ReactivatesClosedParentOnChildClose(t *testing.T) {
+func TestAutoResumer_ClosedParentStaysClosedOnChildClose(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
 	story := createStory(t, store, "Story")
@@ -333,12 +333,8 @@ func TestAutoResumer_ReactivatesClosedParentOnChildClose(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, parentSid)
 	startWork(t, store, task.ID)
 
-	// Close parent while child is running (edge case: parent finished work_done
-	// before child, then child completes)
-	doneWork(t, store, task.ID)
+	// Close parent while child is still running
 	doneWork(t, store, story.ID)
-	// Reopen child to simulate new work on it
-	store.Reopen(context.Background(), task.ID)
 
 	// Simulate child closed event when parent is already closed
 	resumer.OnWorkChange(ChangeEvent{
@@ -346,21 +342,18 @@ func TestAutoResumer_ReactivatesClosedParentOnChildClose(t *testing.T) {
 		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
 	})
 
-	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+	// Give some time for any async operations
+	time.Sleep(50 * time.Millisecond)
 
-	// Parent reactivated from closed to in_progress
+	// Parent should remain closed (not reactivated)
 	parent := getWork(t, store, story.ID)
-	if parent.Status != StatusInProgress {
-		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
+	if parent.Status != StatusClosed {
+		t.Errorf("parent status = %q, want %q (closed parent should not be reactivated)", parent.Status, StatusClosed)
 	}
 
-	// Message sent to parent session
-	msgs := sender.getMessages()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 reactivation message, got %d", len(msgs))
-	}
-	if msgs[0].SessionID != parentSid {
-		t.Errorf("sessionID = %q, want %q", msgs[0].SessionID, parentSid)
+	// No message should be sent
+	if len(sender.getMessages()) != 0 {
+		t.Error("no message should be sent when parent is already closed")
 	}
 }
 
