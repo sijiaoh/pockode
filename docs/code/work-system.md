@@ -83,7 +83,6 @@ The API exposes intent methods rather than raw status updates. Each method encap
 | `Resume(id)` | needs_input → in_progress | Continue after user input |
 | `ResumeFromWaiting(id)` | waiting → in_progress | Continue after child completes |
 | `Reactivate(id)` | stopped → in_progress | Sync with running session |
-| `ReactivateParent(id)` | closed → in_progress | Resume parent when child closes |
 | `Reopen(id)` | closed → in_progress | Reopen a closed item to add children or continue |
 | `RollbackStart(id, wasRestart)` | in_progress → open/stopped | Undo failed start |
 
@@ -102,7 +101,7 @@ Both states can be resumed by user messages, allowing users to interrupt the wai
 
 ### Direct Closure
 
-Work items transition directly from `in_progress` to `closed` via `MarkDone`. When a child task closes, the system automatically reactivates its parent story (if the parent is `waiting` or `closed`), allowing the coordinator agent to review results and continue orchestration.
+Work items transition directly from `in_progress` to `closed` via `MarkDone`. When a child task closes, the system automatically resumes its parent story (if the parent is `waiting`), allowing the coordinator agent to review results and continue orchestration.
 
 ## File-Based Storage
 
@@ -271,24 +270,16 @@ When an AI session's state changes, sync the work status:
 
 **Trigger B: Child Closure**
 
-When a task closes, either reactivate its parent story (if closed) or resume a waiting parent:
+When a task closes, the system resumes its waiting parent:
 
 ```
-Task: closed ──► Parent Story (closed) → in_progress
-                       │
-                       ▼
-            Send "Task X completed" message
-            Reset retry counter
-
 Task: closed ──► Parent Story (waiting) → in_progress
                        │
                        ▼
             Send "Child completed" message
 ```
 
-The behavior differs based on the parent's state:
-- **Parent is `closed`**: Uses `ReactivateParent` to wake the parent and notify it of the child completion
-- **Parent is `waiting`**: Uses `ResumeFromWaiting` to resume the parent and send a `child_completion_nudge` message
+Uses `ResumeFromWaiting` to resume the parent and send a `child_completion_nudge` message.
 
 **Trigger C: External Work Start**
 
@@ -541,7 +532,6 @@ work_context: |
 | `story_auto_continue_nudge` | Story auto-continuation | `ID` |
 | `task_auto_continue_nudge` | Task auto-continuation | `ID` |
 | `task_step_auto_continue_nudge` | Task step auto-continuation | `CurrentStep`, `TotalSteps`, `ID` |
-| `parent_reactivation_nudge` | Parent reactivation | `ChildTitle`, `ChildID`, `ID` |
 | `child_completion_nudge` | Waiting parent resume | `ChildTitle`, `ChildID`, `ID` |
 | `story_reopen_nudge` | Story reopen | `ID` |
 | `task_reopen_nudge` | Task reopen | `ID` |

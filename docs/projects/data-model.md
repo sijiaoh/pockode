@@ -143,7 +143,6 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | Resume        | `(ctx, id) → error`                    | Transitions `needs_input` → `in_progress`                       |
 | ResumeFromWaiting | `(ctx, id) → error`                | Transitions `waiting` → `in_progress`                           |
 | Reactivate    | `(ctx, id) → error`                    | Transitions `stopped` → `in_progress` (preserves sessionID)     |
-| ReactivateParent | `(ctx, id) → error`                 | Transitions `closed` → `in_progress` (preserves sessionID)      |
 | Reopen        | `(ctx, id) → error`                    | Transitions `closed` → `in_progress` (reopens closed item)      |
 | RollbackStart | `(ctx, id, wasRestart) → error`        | Reverts a failed Start (fresh → `open`; restart → `stopped`)   |
 

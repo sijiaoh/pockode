@@ -29,7 +29,7 @@ type Store interface {
 
 	// Start transitions a work item to in_progress and assigns a sessionID.
 	// Allowed from: open, stopped, needs_input. Use Reactivate for
-	// process-running detection, or ReactivateParent for parent reactivation.
+	// process-running detection.
 	Start(ctx context.Context, id string, sessionID string) (Work, error)
 
 	// Stop transitions in_progress/needs_input → stopped.
@@ -57,11 +57,6 @@ type Store interface {
 	// Reactivate transitions stopped → in_progress without changing sessionID.
 	// Used for process-running detection (user sends message to stopped session).
 	Reactivate(ctx context.Context, id string) error
-
-	// ReactivateParent transitions done/closed → in_progress without
-	// changing sessionID. Used exclusively for parent reactivation when
-	// a child work item closes.
-	ReactivateParent(ctx context.Context, id string) error
 
 	// StepDone marks the current step as complete and advances to the next.
 	// - If there are more steps: increments CurrentStep, keeps status in_progress.
@@ -505,30 +500,6 @@ func (s *FileStore) Reactivate(_ context.Context, id string) error {
 	if w.Status != StatusStopped {
 		s.worksMu.Unlock()
 		return fmt.Errorf("%w: invalid transition %s → %s (Reactivate requires stopped)", ErrInvalidWork, w.Status, StatusInProgress)
-	}
-
-	prev := s.snapshotWorks()
-
-	w.Status = StatusInProgress
-	w.UpdatedAt = time.Now()
-
-	modified := map[string]bool{id: true}
-	return s.persistAndNotifyUpdates(prev, modified)
-}
-
-func (s *FileStore) ReactivateParent(_ context.Context, id string) error {
-	s.worksMu.Lock()
-
-	idx := s.findIndex(id)
-	if idx < 0 {
-		s.worksMu.Unlock()
-		return ErrWorkNotFound
-	}
-
-	w := &s.works[idx]
-	if w.Status != StatusClosed {
-		s.worksMu.Unlock()
-		return fmt.Errorf("%w: invalid transition %s → %s (ReactivateParent requires closed)", ErrInvalidWork, w.Status, StatusInProgress)
 	}
 
 	prev := s.snapshotWorks()

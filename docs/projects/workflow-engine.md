@@ -46,7 +46,7 @@ The workflow engine manages work item lifecycles through status transitions, aut
 | `waiting`      | `in_progress`  | `Store.ResumeFromWaiting` (child completes or user message) |
 | `waiting`      | `stopped`      | `Store.Stop` (process ended while waiting) |
 | `stopped`      | `in_progress`  | `Store.Start` (restart) or `Store.Reactivate` |
-| `closed`       | `in_progress`  | `Store.ReactivateParent` (parent reactivation) or `Store.Reopen` |
+| `closed`       | `in_progress`  | `Store.Reopen` (reopen closed item) |
 
 > Source: `server/work/validation.go` — `validTransitions` map.
 
@@ -57,7 +57,6 @@ SessionID changes are encapsulated in intent-based Store methods:
 - **`Start`** — sets a new sessionID (fresh start or restart)
 - **`RollbackStart`** — clears sessionID on fresh-start failure; preserves on restart failure (→ `stopped`)
 - **`Reactivate`** — preserves existing sessionID (used for process-running detection)
-- **`ReactivateParent`** — preserves existing sessionID (used for parent reactivation)
 - All other transitions leave sessionID unchanged
 
 > Source: `server/work/store.go` — intent-based transition methods.
@@ -66,9 +65,9 @@ SessionID changes are encapsulated in intent-based Store methods:
 
 Work items transition directly from `in_progress` to `closed` via `MarkDone`. There is no intermediate `done` state.
 
-When a child work closes, its parent story is automatically reactivated (if the parent is `waiting` or `closed`), allowing the coordinator agent to review results and continue orchestration.
+When a child work closes, its parent story is automatically resumed (if the parent is `waiting`), allowing the coordinator agent to review results and continue orchestration.
 
-> Source: `server/work/store.go` — `MarkDone`, `ReactivateParent`.
+> Source: `server/work/store.go` — `MarkDone`.
 
 ## AutoResumer
 
@@ -92,19 +91,18 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 
 > Source: `server/work/auto_resumer.go` — `HandleProcessStateChange`, `handleAutoContinuation`.
 
-### Trigger B: Parent Reactivation
+### Trigger B: Parent Resume on Child Completion
 
-**When:** A child work item transitions to `closed` and the parent is `waiting` or `closed` with a `sessionID`.
+**When:** A child work item transitions to `closed` and the parent is `waiting` with a `sessionID`.
 
 **Flow:**
 1. Child transitions to `closed`.
-2. Look up parent. If parent has a non-empty `sessionID`:
-   - **Parent is `closed`**: `ReactivateParent` transitions parent to `in_progress` (preserving sessionID), resets retry counter, and sends a reactivation message.
-   - **Parent is `waiting`**: `ResumeFromWaiting` transitions parent to `in_progress` and sends a child completion message.
+2. Look up parent. If parent is `waiting` with a non-empty `sessionID`:
+   - `ResumeFromWaiting` transitions parent to `in_progress` and sends a child completion message.
 
 **Purpose:** Stories (coordinators) are automatically woken up when a child task completes, so they can review results and continue orchestration.
 
-> Source: `server/work/auto_resumer.go` — `handleParentReactivation`.
+> Source: `server/work/auto_resumer.go` — `handleParentResume`.
 
 ### Trigger C: External Work Start
 
@@ -230,13 +228,6 @@ Check if you have completed the current step:
 ```
 
 Falls back to `BuildAutoContinuationMessage` for stories or when no steps are defined.
-
-### BuildParentReactivationMessage
-
-Base + a nudge instructing the parent story to:
-1. Read task reports via `work_comment_list` on the parent (tasks report results by commenting on their parent).
-2. Check remaining tasks via `work_list` with the parent's ID.
-3. Call `work_done` if all tasks are finished, or adjust the plan and call `work_done` to wait for the next completion.
 
 ### BuildStepAdvanceMessage
 

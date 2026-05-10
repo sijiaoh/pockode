@@ -514,7 +514,7 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 		return
 	}
 
-	// Handle closed parent: reactivate when child closes
+	// Handle closed parent: reopen when child closes
 	// This happens when a parent explicitly closes before all children are done,
 	// and a child closure should wake it up.
 	if parent.Status != StatusClosed {
@@ -523,11 +523,11 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 
 	// Transition parent back to in_progress so the agent can work and
 	// call work_done again.
-	if err := r.workStore.ReactivateParent(r.ctx, parent.ID); err != nil {
+	if err := r.workStore.Reopen(r.ctx, parent.ID); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
-		slog.Warn("failed to reactivate parent work", "parentId", parent.ID, "error", err)
+		slog.Warn("failed to reopen parent work", "parentId", parent.ID, "error", err)
 		return
 	}
 
