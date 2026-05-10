@@ -249,7 +249,9 @@ function ActionBar({
 
 	const showStart = work.status === "open" || work.status === "stopped";
 	const showStop =
-		work.status === "in_progress" || work.status === "needs_input";
+		work.status === "in_progress" ||
+		work.status === "waiting" ||
+		work.status === "needs_input";
 	const showReopen = work.status === "closed";
 	const showChat = !!work.session_id;
 	const canDelete = work.status !== "closed";
@@ -861,7 +863,7 @@ function StepProgressSection({
 	if (steps.length === 0) return null;
 
 	const isDone = work.status === "done" || work.status === "closed";
-	// Show progress for all active states (in_progress, needs_input, stopped)
+	// Show progress for all active states (in_progress, waiting, needs_input, stopped)
 	const showProgress = !isDone && work.status !== "open";
 
 	return (
@@ -911,6 +913,7 @@ function StepItem({
 	// Show as current only for active states (not open, done, or closed)
 	const isActiveState =
 		workStatus === "in_progress" ||
+		workStatus === "waiting" ||
 		workStatus === "needs_input" ||
 		workStatus === "stopped";
 	const isCurrent = isActiveState && index === currentStep;

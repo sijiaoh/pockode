@@ -39,15 +39,22 @@ func (s *NeedsInputSyncer) SyncNeedsInput(ctx context.Context, sessionID string,
 				"workId", w.ID, "from", w.Status, "sessionId", sessionID)
 		}
 	} else {
-		if w.Status != StatusNeedsInput {
-			return
-		}
-		if err := s.store.Resume(ctx, w.ID); err != nil {
-			slog.Warn("failed to auto-transition work from needs_input",
-				"workId", w.ID, "from", w.Status, "error", err)
-		} else {
-			slog.Info("auto-transitioned work from needs_input",
-				"workId", w.ID, "from", w.Status, "sessionId", sessionID)
+		if w.Status == StatusNeedsInput {
+			if err := s.store.Resume(ctx, w.ID); err != nil {
+				slog.Warn("failed to auto-transition work from needs_input",
+					"workId", w.ID, "from", w.Status, "error", err)
+			} else {
+				slog.Info("auto-transitioned work from needs_input",
+					"workId", w.ID, "from", w.Status, "sessionId", sessionID)
+			}
+		} else if w.Status == StatusWaiting {
+			if err := s.store.ResumeFromWaiting(ctx, w.ID); err != nil {
+				slog.Warn("failed to auto-transition work from waiting",
+					"workId", w.ID, "from", w.Status, "error", err)
+			} else {
+				slog.Info("auto-transitioned work from waiting",
+					"workId", w.ID, "from", w.Status, "sessionId", sessionID)
+			}
 		}
 	}
 }

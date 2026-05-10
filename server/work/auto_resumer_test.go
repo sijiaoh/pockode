@@ -360,6 +360,106 @@ func TestAutoResumer_SendsMessageToParentOnChildClose(t *testing.T) {
 	}
 }
 
+func TestAutoResumer_WakesWaitingParentOnChildClose(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	parentSid := "parent-session"
+	startWorkWithSession(t, store, story.ID, parentSid)
+	startWork(t, store, task.ID)
+
+	// Parent enters waiting (agent is waiting for child to complete)
+	store.MarkWaiting(context.Background(), story.ID)
+
+	// Simulate child closed event
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	// Parent transitioned back to in_progress
+	parent := getWork(t, store, story.ID)
+	if parent.Status != StatusInProgress {
+		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
+	}
+
+	// Message sent to parent session
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 child completion message, got %d", len(msgs))
+	}
+	if msgs[0].SessionID != parentSid {
+		t.Errorf("sessionID = %q, want %q", msgs[0].SessionID, parentSid)
+	}
+	// Verify it's the child completion message, not the parent reactivation message
+	if !strings.Contains(msgs[0].Content, "has been completed") {
+		t.Errorf("expected child completion message, got: %s", msgs[0].Content[:min(100, len(msgs[0].Content))])
+	}
+}
+
+func TestAutoResumer_WaitingParentNoSessionNoMessage(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	startWork(t, store, story.ID)
+	startWork(t, store, task.ID)
+
+	// Parent enters waiting but has no session (edge case)
+	store.MarkWaiting(context.Background(), story.ID)
+	// Clear session manually to test edge case
+	store.worksMu.Lock()
+	for i := range store.works {
+		if store.works[i].ID == story.ID {
+			store.works[i].SessionID = ""
+			break
+		}
+	}
+	store.worksMu.Unlock()
+
+	// Simulate child closed event
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
+	})
+
+	// Wait a bit to ensure no message is sent
+	time.Sleep(50 * time.Millisecond)
+
+	// No messages should be sent
+	if len(sender.getMessages()) != 0 {
+		t.Errorf("expected no messages, got %d", len(sender.getMessages()))
+	}
+
+	// Parent should remain waiting (no session to send message to)
+	parent := getWork(t, store, story.ID)
+	if parent.Status != StatusWaiting {
+		t.Errorf("parent status = %q, want %q (no sessionID)", parent.Status, StatusWaiting)
+	}
+}
+
+func TestAutoResumer_StopOrphanedWork_IncludesWaiting(t *testing.T) {
+	store := newTestStore(t)
+	resumer := NewAutoResumer(store, 3)
+	resumer.settleDelay = 10 * time.Millisecond
+
+	// Create a work item in waiting status (simulating orphaned from previous server run)
+	story := createStory(t, store, "S")
+	startWorkWithSession(t, store, story.ID, "s1")
+	store.MarkWaiting(context.Background(), story.ID)
+
+	// Should transition waiting to stopped
+	resumer.StopOrphanedWork()
+
+	got := getWork(t, store, story.ID)
+	if got.Status != StatusStopped {
+		t.Errorf("status = %q, want stopped", got.Status)
+	}
+}
+
 func TestAutoResumer_SendsMessageWhenLastChildCompletes(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 	store.AddOnChangeListener(resumer)

@@ -3,6 +3,7 @@ export type WorkType = "story" | "task";
 export type WorkStatus =
 	| "open"
 	| "in_progress"
+	| "waiting"
 	| "needs_input"
 	| "stopped"
 	| "done"

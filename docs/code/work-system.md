@@ -46,27 +46,28 @@ On creation (`server/work/store.go:157-193`):
 
 ## State Machine
 
-### Six States
+### Seven States
 
 ```
 open ──────────────► in_progress
                          │
-              ┌──────────┼──────────┐
-              │          │          │
-              ▼          ▼          ▼
-        needs_input   stopped     done
-              │          │          │
-              │          │          ▼
-              │          │       closed ─────► in_progress
-              │          │                       (via Reopen)
-              └──────────┴─────► (can return to in_progress)
+              ┌──────────┼──────────┬──────────┐
+              │          │          │          │
+              ▼          ▼          ▼          ▼
+        needs_input   waiting   stopped     done
+              │          │          │          │
+              │          │          │          ▼
+              │          │          │       closed ─────► in_progress
+              │          │          │                       (via Reopen)
+              └──────────┴──────────┴─────► (can return to in_progress)
 ```
 
 | State | Meaning | SessionID | CurrentStep |
 |-------|---------|-----------|-------------|
 | `open` | Not started | empty | 0 |
 | `in_progress` | AI session active | set | tracks current step |
-| `needs_input` | Waiting for user | preserved | preserved |
+| `needs_input` | Waiting for user input | preserved | preserved |
+| `waiting` | Waiting for child work to complete | preserved | preserved |
 | `stopped` | Session ended unexpectedly | preserved | preserved |
 | `done` | Work completed | preserved | preserved |
 | `closed` | Fully closed (all children closed) | preserved | preserved |
@@ -78,16 +79,31 @@ The API exposes intent methods rather than raw status updates. Each method encap
 | Method | Transition | Purpose |
 |--------|------------|---------|
 | `Start(id, sessionID)` | open/stopped/needs_input → in_progress | Launch AI session |
-| `Stop(id)` | in_progress/needs_input → stopped | Terminate session |
+| `Stop(id)` | in_progress/needs_input/waiting → stopped | Terminate session |
 | `MarkDone(id)` | * → done | Complete work |
-| `MarkNeedsInput(id)` | in_progress → needs_input | Pause for user |
-| `Resume(id)` | needs_input → in_progress | Continue after input |
+| `MarkNeedsInput(id)` | in_progress → needs_input | Pause for user input |
+| `MarkWaiting(id)` | in_progress → waiting | Pause for child work completion |
+| `Resume(id)` | needs_input → in_progress | Continue after user input |
+| `ResumeFromWaiting(id)` | waiting → in_progress | Continue after child completes |
 | `Reactivate(id)` | stopped → in_progress | Sync with running session |
 | `ReactivateParent(id)` | done/closed → in_progress | Resume parent when child closes |
 | `Reopen(id)` | closed → in_progress | Reopen a closed item to add children or continue |
 | `RollbackStart(id, wasRestart)` | in_progress → open/stopped | Undo failed start |
 
 **Why `MarkDone` can skip to done**: When an AI agent calls `work_done` on an `open` task, automatically transitioning through `in_progress` avoids forcing agents to call `work_start` first.
+
+### Waiting vs NeedsInput
+
+Both `waiting` and `needs_input` pause the agent's work, but serve different purposes:
+
+| State | Purpose | Resumed By |
+|-------|---------|------------|
+| `needs_input` | Agent needs user confirmation or clarification | User sending a message |
+| `waiting` | Agent waiting for child work to complete | Child work closure, or user message |
+
+**Key difference**: `waiting` is used when a coordinator agent has created child tasks and wants to pause until they complete, while `needs_input` is used when the agent genuinely needs user input to proceed.
+
+Both states can be resumed by user messages, allowing users to interrupt the wait if needed.
 
 ### Auto-Close Cascade
 
@@ -208,6 +224,7 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_start` | Begin execution | `id` |
 | `work_done` | Mark complete | `id` |
 | `work_needs_input` | Pause for user input | `id`, `reason` |
+| `work_wait` | Pause for child work completion | `id` |
 | `work_reopen` | Reopen a closed work item | `id` |
 | `step_done` | Complete current step, advance to next | `id` |
 | `work_comment_add` | Add progress note | `work_id`, `body` |
@@ -275,20 +292,29 @@ When an AI session's state changes, sync the work status:
 | running | stopped → in_progress | User message to stopped session |
 | idle (first) | (ignored) | Initial process startup |
 | idle (normal) | in_progress → in_progress | Send auto-continuation |
-| interrupted | in_progress → stopped | User interrupt |
-| ended | in_progress → stopped | Process exited |
+| interrupted | in_progress/waiting → stopped | User interrupt |
+| ended | in_progress/waiting → stopped | Process exited |
 
 **Trigger B: Child Closure**
 
-When a task closes, reactivate its parent story:
+When a task closes, either reactivate its parent story or resume a waiting parent:
 
 ```
-Task: closed ──► Parent Story: done → in_progress
+Task: closed ──► Parent Story (done) → in_progress
                        │
                        ▼
             Send "Task X completed" message
             Reset retry counter
+
+Task: closed ──► Parent Story (waiting) → in_progress
+                       │
+                       ▼
+            Send "Child completed" message
 ```
+
+The behavior differs based on the parent's state:
+- **Parent is `done`**: Uses `ReactivateParent` to wake the parent and notify it of the child completion
+- **Parent is `waiting`**: Uses `ResumeFromWaiting` to resume the parent and send a `child_completion_nudge` message
 
 **Trigger C: External Work Start**
 
@@ -542,6 +568,7 @@ work_context: |
 | `task_auto_continue_nudge` | Task auto-continuation | `ID` |
 | `task_step_auto_continue_nudge` | Task step auto-continuation | `CurrentStep`, `TotalSteps`, `ID` |
 | `parent_reactivation_nudge` | Parent reactivation | `ChildTitle`, `ChildID`, `ID` |
+| `child_completion_nudge` | Waiting parent resume | `ChildTitle`, `ChildID`, `ID` |
 | `story_reopen_nudge` | Story reopen | `ID` |
 | `task_reopen_nudge` | Task reopen | `ID` |
 | `step_advance_section` | Step advance | `PrevStep`, `TotalSteps`, `CurrentStep`, `StepPrompt`, `ID` |

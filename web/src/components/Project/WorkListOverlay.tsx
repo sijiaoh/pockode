@@ -121,6 +121,7 @@ export default function WorkListOverlay({
 
 const statusGroupOrder: WorkStatus[] = [
 	"in_progress",
+	"waiting",
 	"needs_input",
 	"stopped",
 	"open",

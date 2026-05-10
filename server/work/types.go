@@ -31,6 +31,7 @@ const (
 	StatusOpen       WorkStatus = "open"
 	StatusInProgress WorkStatus = "in_progress"
 	StatusNeedsInput WorkStatus = "needs_input" // agent waiting for user confirmation
+	StatusWaiting    WorkStatus = "waiting"     // agent waiting for child work to complete
 	StatusStopped    WorkStatus = "stopped"     // agent session ended abnormally (retry limit, interrupt, orphan)
 	StatusDone       WorkStatus = "done"        // direct work complete, children may be pending
 	StatusClosed     WorkStatus = "closed"      // fully complete (auto-derived, never set directly)

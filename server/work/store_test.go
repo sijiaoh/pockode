@@ -712,6 +712,92 @@ func TestTransition_Invalid_OpenToNeedsInput(t *testing.T) {
 	}
 }
 
+func TestTransition_InProgressToWaiting(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	if err := s.MarkWaiting(context.Background(), story.ID); err != nil {
+		t.Fatalf("in_progress → waiting: %v", err)
+	}
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusWaiting {
+		t.Errorf("status = %q, want %q", got.Status, StatusWaiting)
+	}
+}
+
+func TestTransition_WaitingToInProgress(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	s.MarkWaiting(context.Background(), story.ID)
+
+	if err := s.ResumeFromWaiting(context.Background(), story.ID); err != nil {
+		t.Fatalf("waiting → in_progress: %v", err)
+	}
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
+	}
+}
+
+func TestTransition_WaitingToStopped(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	s.MarkWaiting(context.Background(), story.ID)
+
+	if err := s.Stop(context.Background(), story.ID); err != nil {
+		t.Fatalf("waiting → stopped: %v", err)
+	}
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusStopped {
+		t.Errorf("status = %q, want %q", got.Status, StatusStopped)
+	}
+}
+
+func TestTransition_Invalid_WaitingToDone(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	s.MarkWaiting(context.Background(), story.ID)
+
+	// MarkDone from waiting should fail
+	if err := s.MarkDone(context.Background(), story.ID); err == nil {
+		t.Fatal("expected error for waiting → done")
+	}
+}
+
+func TestTransition_Invalid_OpenToWaiting(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+
+	if err := s.MarkWaiting(context.Background(), story.ID); err == nil {
+		t.Fatal("expected error for open → waiting")
+	}
+}
+
+func TestAutoClose_BlockedByWaitingChild(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWork(t, s, story.ID)
+	startWork(t, s, task.ID)
+
+	// Task enters waiting
+	s.MarkWaiting(context.Background(), task.ID)
+
+	// Story done should stay done (not auto-close) because child is waiting
+	doneWork(t, s, story.ID)
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusDone {
+		t.Errorf("status = %q, want done (blocked by waiting child)", got.Status)
+	}
+}
+
 func TestAutoClose_BlockedByNeedsInputChild(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")

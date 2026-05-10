@@ -136,6 +136,17 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
+		Name:        "work_wait",
+		Description: "Pause a work item to wait for child work to complete. Transitions from in_progress to waiting. Use when the agent has started child tasks and needs to wait for them to finish before continuing.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id": {Type: "string", Description: "Work item ID to wait"},
+			},
+			Required: []string{"id"},
+		},
+	},
+	{
 		Name:        "step_done",
 		Description: "Mark the current step as complete and proceed to the next step. The work item must be in_progress status. If there are more steps, this advances CurrentStep. If this is the last step, use work_done instead.",
 		InputSchema: inputSchema{
@@ -232,6 +243,8 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkNeedsInput, true
 	case "work_reopen":
 		return s.handleWorkReopen, true
+	case "work_wait":
+		return s.handleWorkWait, true
 	case "step_done":
 		return s.handleStepDone, true
 	case "work_comment_add":
@@ -526,6 +539,21 @@ func (s *Server) handleWorkReopen(ctx context.Context, args json.RawMessage) (st
 	}
 
 	return fmt.Sprintf("Reopened work %s", params.ID), nil
+}
+
+func (s *Server) handleWorkWait(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	if err := s.store.MarkWaiting(ctx, params.ID); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Work %s is now waiting for child work to complete", params.ID), nil
 }
 
 func (s *Server) handleStepDone(ctx context.Context, args json.RawMessage) (string, error) {

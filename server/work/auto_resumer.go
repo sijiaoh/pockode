@@ -91,7 +91,7 @@ func (r *AutoResumer) Stop() {
 	r.cancel()
 }
 
-// StopOrphanedWork transitions all in_progress and needs_input work items to stopped.
+// StopOrphanedWork transitions all in_progress, needs_input, and waiting work items to stopped.
 // Call this at server startup before any sessions are created, so that work
 // items left running from a previous server run are properly marked.
 // It also initializes knownStatuses to enable proper reopen detection.
@@ -103,7 +103,7 @@ func (r *AutoResumer) StopOrphanedWork() {
 	}
 
 	for _, w := range works {
-		if w.Status != StatusInProgress && w.Status != StatusNeedsInput {
+		if w.Status != StatusInProgress && w.Status != StatusNeedsInput && w.Status != StatusWaiting {
 			continue
 		}
 		if err := r.stopWork(w.ID); err != nil {
@@ -215,7 +215,7 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 	go r.handleAutoContinuation(sessionID, sender)
 }
 
-// handleProcessEnded transitions in_progress work to stopped when its process terminates.
+// handleProcessEnded transitions in_progress/needs_input/waiting work to stopped when its process terminates.
 // This catches cases like user interrupt or unexpected process exit.
 func (r *AutoResumer) handleProcessEnded(sessionID string) {
 	// Use the same settle delay as auto-continuation to allow work_done to propagate.
@@ -225,7 +225,7 @@ func (r *AutoResumer) handleProcessEnded(sessionID string) {
 		return
 	}
 
-	w := r.findWorkBySessionID(sessionID, StatusInProgress, StatusNeedsInput)
+	w := r.findWorkBySessionID(sessionID, StatusInProgress, StatusNeedsInput, StatusWaiting)
 	if w == nil {
 		return
 	}
@@ -483,8 +483,39 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 		return
 	}
 
-	// Only trigger when the parent is done (waiting for children).
-	if parent.Status != StatusDone || parent.SessionID == "" {
+	if parent.SessionID == "" {
+		return
+	}
+
+	// Handle waiting parent: wake up when child closes
+	if parent.Status == StatusWaiting {
+		if err := r.workStore.ResumeFromWaiting(r.ctx, parent.ID); err != nil {
+			if r.ctx.Err() != nil {
+				return
+			}
+			slog.Warn("failed to resume waiting parent work", "parentId", parent.ID, "error", err)
+			return
+		}
+
+		// Reset retry count (new activity context)
+		r.retryMu.Lock()
+		delete(r.retries, parent.SessionID)
+		r.retryMu.Unlock()
+
+		msg := BuildChildCompletionMessage(parent, child.Title, child.ID)
+		if err := sender.SendMessage(r.ctx, parent.SessionID, msg); err != nil {
+			if r.ctx.Err() != nil {
+				return
+			}
+			slog.Warn("failed to send child completion message to waiting parent", "parentId", parent.ID, "error", err)
+		} else {
+			slog.Info("waiting parent resumed on child close", "parentId", parent.ID, "childId", child.ID)
+		}
+		return
+	}
+
+	// Handle done parent: reactivate when child closes (existing behavior)
+	if parent.Status != StatusDone {
 		return
 	}
 

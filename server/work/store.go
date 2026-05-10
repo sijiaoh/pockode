@@ -43,8 +43,16 @@ type Store interface {
 	// MarkNeedsInput transitions in_progress → needs_input.
 	MarkNeedsInput(ctx context.Context, id string) error
 
+	// MarkWaiting transitions in_progress → waiting.
+	// Used when the agent is waiting for child work to complete.
+	MarkWaiting(ctx context.Context, id string) error
+
 	// Resume transitions needs_input → in_progress.
 	Resume(ctx context.Context, id string) error
+
+	// ResumeFromWaiting transitions waiting → in_progress.
+	// Used when a child work completes or user sends input.
+	ResumeFromWaiting(ctx context.Context, id string) error
 
 	// Reactivate transitions stopped → in_progress without changing sessionID.
 	// Used for process-running detection (user sends message to stopped session).
@@ -427,6 +435,54 @@ func (s *FileStore) Resume(_ context.Context, id string) error {
 	if w.Status != StatusNeedsInput {
 		s.worksMu.Unlock()
 		return fmt.Errorf("%w: invalid transition %s → %s (Resume requires needs_input)", ErrInvalidWork, w.Status, StatusInProgress)
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Status = StatusInProgress
+	w.UpdatedAt = time.Now()
+
+	modified := map[string]bool{id: true}
+	return s.persistAndNotifyUpdates(prev, modified)
+}
+
+func (s *FileStore) MarkWaiting(_ context.Context, id string) error {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if !ValidateTransition(w.Status, StatusWaiting) {
+		s.worksMu.Unlock()
+		return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusWaiting)
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Status = StatusWaiting
+	w.UpdatedAt = time.Now()
+
+	modified := map[string]bool{id: true}
+	return s.persistAndNotifyUpdates(prev, modified)
+}
+
+func (s *FileStore) ResumeFromWaiting(_ context.Context, id string) error {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if w.Status != StatusWaiting {
+		s.worksMu.Unlock()
+		return fmt.Errorf("%w: invalid transition %s → %s (ResumeFromWaiting requires waiting)", ErrInvalidWork, w.Status, StatusInProgress)
 	}
 
 	prev := s.snapshotWorks()

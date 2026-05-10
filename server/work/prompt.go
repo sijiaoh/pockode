@@ -29,6 +29,7 @@ type promptTemplates struct {
 	TaskAutoContinueNudge   string `yaml:"task_auto_continue_nudge"`
 	TaskStepAutoContinue    string `yaml:"task_step_auto_continue_nudge"`
 	ParentReactivationNudge string `yaml:"parent_reactivation_nudge"`
+	ChildCompletionNudge    string `yaml:"child_completion_nudge"`
 	StepAdvanceSection      string `yaml:"step_advance_section"`
 	CurrentStepSection      string `yaml:"current_step_section"`
 }
@@ -196,6 +197,20 @@ func BuildParentReactivationMessage(parent Work, childTitle, childID string) str
 	base := buildBase(parent)
 
 	nudge := render(prompts.ParentReactivationNudge, map[string]string{
+		"ChildTitle": childTitle,
+		"ChildID":    childID,
+		"ID":         parent.ID,
+	})
+
+	return base + "\n\n" + nudge
+}
+
+// BuildChildCompletionMessage appends a child completion nudge to the base message
+// when a child task completes and the parent was in waiting state.
+func BuildChildCompletionMessage(parent Work, childTitle, childID string) string {
+	base := buildBase(parent)
+
+	nudge := render(prompts.ChildCompletionNudge, map[string]string{
 		"ChildTitle": childTitle,
 		"ChildID":    childID,
 		"ID":         parent.ID,

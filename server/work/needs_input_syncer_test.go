@@ -107,3 +107,44 @@ func TestNeedsInputSyncer_SkipsCompletedWork(t *testing.T) {
 		t.Errorf("expected status %s unchanged, got %s", statusBefore, w.Status)
 	}
 }
+
+func TestNeedsInputSyncer_WaitingToInProgress(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWorkWithSession(t, s, task.ID, "sess-1")
+
+	// Transition to waiting first
+	s.MarkWaiting(context.Background(), task.ID)
+
+	syncer := NewNeedsInputSyncer(s)
+
+	// User input should wake up waiting work
+	syncer.SyncNeedsInput(context.Background(), "sess-1", false)
+
+	w := getWork(t, s, task.ID)
+	if w.Status != StatusInProgress {
+		t.Errorf("expected status %s, got %s", StatusInProgress, w.Status)
+	}
+}
+
+func TestNeedsInputSyncer_WaitingSkipsNeedsInputTrue(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWorkWithSession(t, s, task.ID, "sess-1")
+
+	// Transition to waiting
+	s.MarkWaiting(context.Background(), task.ID)
+
+	syncer := NewNeedsInputSyncer(s)
+
+	// Calling with needsInput=true should not affect waiting status
+	// (MarkNeedsInput requires in_progress, and we don't want to change waiting to needs_input)
+	syncer.SyncNeedsInput(context.Background(), "sess-1", true)
+
+	w := getWork(t, s, task.ID)
+	if w.Status != StatusWaiting {
+		t.Errorf("expected status %s unchanged, got %s", StatusWaiting, w.Status)
+	}
+}
