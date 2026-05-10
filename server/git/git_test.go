@@ -305,7 +305,7 @@ func TestDiff_FileNotInStatus(t *testing.T) {
 	runGit(t, dir, "add", "test.txt")
 
 	// Request unstaged diff - file is staged only, not in unstaged status
-	diff, err := Diff(dir, "test.txt", false)
+	diff, err := Diff(dir, "test.txt", DiffOptions{Staged: false})
 	if err != nil {
 		t.Fatalf("Diff() error: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestDiff_WithSubmodule(t *testing.T) {
 		t.Fatalf("failed to modify sub.txt: %v", err)
 	}
 
-	diff, err := Diff(parentRepo, "mysub/sub.txt", false)
+	diff, err := Diff(parentRepo, "mysub/sub.txt", DiffOptions{Staged: false})
 	if err != nil {
 		t.Fatalf("Diff() error: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestDiffWithContent_WithSubmodule(t *testing.T) {
 		t.Fatalf("failed to modify sub.txt: %v", err)
 	}
 
-	result, err := DiffWithContent(parentRepo, "mysub/sub.txt", false)
+	result, err := DiffWithContent(parentRepo, "mysub/sub.txt", DiffOptions{Staged: false})
 	if err != nil {
 		t.Fatalf("DiffWithContent() error: %v", err)
 	}
@@ -370,6 +370,62 @@ func TestDiffWithContent_WithSubmodule(t *testing.T) {
 	}
 	if result.NewContent != "modified content\n" {
 		t.Errorf("NewContent = %q, want %q", result.NewContent, "modified content\n")
+	}
+}
+
+func TestDiff_HideWhitespace(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Create and commit a file (must be tracked for git diff -w to work)
+	testFile := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("hello world\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	runGit(t, dir, "add", "test.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+
+	// Modify with only whitespace changes (add trailing spaces)
+	if err := os.WriteFile(testFile, []byte("hello world  \n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	// Without HideWhitespace, diff should show changes
+	diffWithWS, err := Diff(dir, "test.txt", DiffOptions{Staged: false, HideWhitespace: false})
+	if err != nil {
+		t.Fatalf("Diff() error: %v", err)
+	}
+	if diffWithWS == "" {
+		t.Error("expected non-empty diff when HideWhitespace=false")
+	}
+	if !strings.Contains(diffWithWS, "-hello world") || !strings.Contains(diffWithWS, "+hello world  ") {
+		t.Errorf("diff should show whitespace change, got: %q", diffWithWS)
+	}
+
+	// With HideWhitespace, diff should be empty (only whitespace changed)
+	diffNoWS, err := Diff(dir, "test.txt", DiffOptions{Staged: false, HideWhitespace: true})
+	if err != nil {
+		t.Fatalf("Diff() error: %v", err)
+	}
+	if diffNoWS != "" {
+		t.Errorf("expected empty diff when HideWhitespace=true, got: %q", diffNoWS)
+	}
+
+	// Now add a real content change along with whitespace
+	if err := os.WriteFile(testFile, []byte("hello world  \nnew line\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	// With HideWhitespace, should still show content changes
+	diffMixed, err := Diff(dir, "test.txt", DiffOptions{Staged: false, HideWhitespace: true})
+	if err != nil {
+		t.Fatalf("Diff() error: %v", err)
+	}
+	if diffMixed == "" {
+		t.Error("expected non-empty diff for content changes even with HideWhitespace=true")
+	}
+	if !strings.Contains(diffMixed, "+new line") {
+		t.Errorf("diff should contain content change, got: %q", diffMixed)
 	}
 }
 
@@ -429,7 +485,7 @@ func TestShowFileDiff(t *testing.T) {
 	}
 	hash := strings.TrimSpace(string(hashBytes))
 
-	result, err := ShowFileDiff(dir, hash, "test.txt")
+	result, err := ShowFileDiff(dir, hash, "test.txt", false)
 	if err != nil {
 		t.Fatalf("ShowFileDiff() error: %v", err)
 	}
@@ -476,7 +532,7 @@ func TestShowFileDiff_DeletedFile(t *testing.T) {
 	}
 	hash := strings.TrimSpace(string(hashBytes))
 
-	result, err := ShowFileDiff(dir, hash, "to-delete.txt")
+	result, err := ShowFileDiff(dir, hash, "to-delete.txt", false)
 	if err != nil {
 		t.Fatalf("ShowFileDiff() error: %v", err)
 	}
@@ -521,7 +577,7 @@ func TestShowFileDiff_NewFile(t *testing.T) {
 	}
 	hash := strings.TrimSpace(string(hashBytes))
 
-	result, err := ShowFileDiff(dir, hash, "new.txt")
+	result, err := ShowFileDiff(dir, hash, "new.txt", false)
 	if err != nil {
 		t.Fatalf("ShowFileDiff() error: %v", err)
 	}
@@ -535,5 +591,80 @@ func TestShowFileDiff_NewFile(t *testing.T) {
 	}
 	if result.NewContent != "new content\n" {
 		t.Errorf("NewContent = %q, want %q", result.NewContent, "new content\n")
+	}
+}
+
+func TestShowFileDiff_HideWhitespace(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Create initial commit with a file
+	testFile := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("hello world\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	runGit(t, dir, "add", "test.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+
+	// Create second commit with only whitespace changes
+	if err := os.WriteFile(testFile, []byte("hello world  \n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	runGit(t, dir, "add", "test.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "whitespace only")
+
+	// Get the commit hash
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	hashBytes, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("failed to get commit hash: %v", err)
+	}
+	hash := strings.TrimSpace(string(hashBytes))
+
+	// Without hideWhitespace, should show the diff
+	resultWithWS, err := ShowFileDiff(dir, hash, "test.txt", false)
+	if err != nil {
+		t.Fatalf("ShowFileDiff() error: %v", err)
+	}
+	if resultWithWS.Diff == "" {
+		t.Error("expected non-empty diff when hideWhitespace=false")
+	}
+
+	// With hideWhitespace, diff should be empty (only whitespace changed)
+	resultNoWS, err := ShowFileDiff(dir, hash, "test.txt", true)
+	if err != nil {
+		t.Fatalf("ShowFileDiff() error: %v", err)
+	}
+	if resultNoWS.Diff != "" {
+		t.Errorf("expected empty diff when hideWhitespace=true, got: %q", resultNoWS.Diff)
+	}
+
+	// Create third commit with real content change
+	if err := os.WriteFile(testFile, []byte("hello world  \nnew line\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	runGit(t, dir, "add", "test.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "content change")
+
+	// Get the new commit hash
+	cmd = exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	hashBytes, err = cmd.Output()
+	if err != nil {
+		t.Fatalf("failed to get commit hash: %v", err)
+	}
+	hashContent := strings.TrimSpace(string(hashBytes))
+
+	// With hideWhitespace, should still show content changes
+	resultMixed, err := ShowFileDiff(dir, hashContent, "test.txt", true)
+	if err != nil {
+		t.Fatalf("ShowFileDiff() error: %v", err)
+	}
+	if resultMixed.Diff == "" {
+		t.Error("expected non-empty diff for content changes even with hideWhitespace=true")
+	}
+	if !strings.Contains(resultMixed.Diff, "+new line") {
+		t.Errorf("diff should contain content change, got: %q", resultMixed.Diff)
 	}
 }

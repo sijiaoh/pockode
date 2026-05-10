@@ -10,6 +10,7 @@ import { useSubscription } from "./useSubscription";
 interface UseGitDiffWatchOptions {
 	path: string;
 	staged: boolean;
+	hideWhitespace?: boolean;
 	enabled?: boolean;
 }
 
@@ -21,6 +22,7 @@ interface UseGitDiffWatchResult {
 export function useGitDiffWatch({
 	path,
 	staged,
+	hideWhitespace = false,
 	enabled = true,
 }: UseGitDiffWatchOptions): UseGitDiffWatchResult {
 	const gitDiffSubscribe = useWSStore((s) => s.actions.gitDiffSubscribe);
@@ -32,10 +34,15 @@ export function useGitDiffWatch({
 	const subscribe = useCallback(
 		async (onNotification: (params: GitDiffChangedNotification) => void) => {
 			setIsLoading(true);
-			const result = await gitDiffSubscribe(path, staged, onNotification);
+			const result = await gitDiffSubscribe(
+				path,
+				staged,
+				hideWhitespace,
+				onNotification,
+			);
 			return result;
 		},
-		[gitDiffSubscribe, path, staged],
+		[gitDiffSubscribe, path, staged, hideWhitespace],
 	);
 
 	const onNotification = useCallback((params: GitDiffChangedNotification) => {

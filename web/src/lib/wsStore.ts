@@ -87,6 +87,7 @@ export interface WatchActions {
 	gitDiffSubscribe: (
 		path: string,
 		staged: boolean,
+		hideWhitespace: boolean,
 		callback: (params: GitDiffChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<GitDiffSubscribeResult>>;
 	gitDiffUnsubscribe: (id: string) => Promise<void>;
@@ -552,6 +553,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		gitDiffSubscribe: async (
 			path: string,
 			staged: boolean,
+			hideWhitespace: boolean,
 			callback: (params: GitDiffChangedNotification) => void,
 		) => {
 			const client = getClient();
@@ -561,6 +563,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 			const result = (await client.request("git.diff.subscribe", {
 				path,
 				staged,
+				hide_whitespace: hideWhitespace,
 			})) as GitDiffSubscribeResult;
 			gitDiffWatchCallbacks.set(result.id, callback);
 			return { id: result.id, initial: result };

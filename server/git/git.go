@@ -226,6 +226,27 @@ func (s *GitStatus) HasFile(path string, staged bool) bool {
 	return false
 }
 
+// IsUntracked returns true if the file is untracked (status "?").
+// Supports submodule paths (e.g., "submodule/path/to/file").
+func (s *GitStatus) IsUntracked(path string) bool {
+	// Check submodules first
+	for subPath, subStatus := range s.Submodules {
+		prefix := subPath + "/"
+		if strings.HasPrefix(path, prefix) {
+			relativePath := strings.TrimPrefix(path, prefix)
+			return subStatus.IsUntracked(relativePath)
+		}
+	}
+
+	// Check root level
+	for _, f := range s.Unstaged {
+		if f.Path == path {
+			return f.Status == "?"
+		}
+	}
+	return false
+}
+
 // Status returns the current git status (staged and unstaged files).
 // Submodules are returned as nested GitStatus with their relative paths as keys.
 // Note: Pockode does not support nested submodules.
@@ -335,40 +356,52 @@ func getSubmodulePaths(dir string) []string {
 	return paths
 }
 
+// DiffOptions contains options for git diff operations.
+type DiffOptions struct {
+	Staged         bool
+	HideWhitespace bool
+}
+
 // Diff returns the unified diff for a specific file.
 // If staged is true, returns diff of staged changes (index vs HEAD).
 // If staged is false, returns diff of unstaged changes (worktree vs index).
+// If hideWhitespace is true, ignores whitespace changes (-w flag).
 // Returns empty string if file is not in git status (no changes).
 // For submodule paths (e.g., "submodule/path/to/file"), it runs diff inside the submodule.
-func Diff(dir, path string, staged bool) (string, error) {
+func Diff(dir, path string, opts DiffOptions) (string, error) {
 	status, err := Status(dir)
 	if err != nil {
 		return "", err
 	}
-	if !status.HasFile(path, staged) {
+	if !status.HasFile(path, opts.Staged) {
 		return "", nil
+	}
+
+	// Untracked files don't have a diff against index, generate synthetic diff
+	if !opts.Staged && status.IsUntracked(path) {
+		actualDir, relativePath := resolveSubmodulePath(dir, path)
+		return showUntrackedFile(actualDir, relativePath)
 	}
 
 	// Resolve submodule path if needed
 	actualDir, relativePath := resolveSubmodulePath(dir, path)
 
 	var args []string
-	if staged {
-		args = []string{"diff", "--cached", "--", relativePath}
+	if opts.Staged {
+		args = []string{"diff", "--cached"}
 	} else {
-		args = []string{"diff", "--", relativePath}
+		args = []string{"diff"}
 	}
+	if opts.HideWhitespace {
+		args = append(args, "-w")
+	}
+	args = append(args, "--", relativePath)
 
 	cmd := exec.Command("git", args...)
 	cmd.Dir = actualDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git diff failed: %w (output: %s)", err, string(output))
-	}
-
-	// Untracked files have empty git diff output
-	if len(output) == 0 && !staged {
-		return showUntrackedFile(actualDir, relativePath)
 	}
 
 	return string(output), nil
@@ -442,8 +475,8 @@ type DiffResult struct {
 // For staged changes: old = HEAD, new = index
 // For unstaged changes: old = index, new = worktree
 // Supports submodule paths (e.g., "submodule/path/to/file").
-func DiffWithContent(dir, path string, staged bool) (*DiffResult, error) {
-	diff, err := Diff(dir, path, staged)
+func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
+	diff, err := Diff(dir, path, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -456,7 +489,7 @@ func DiffWithContent(dir, path string, staged bool) (*DiffResult, error) {
 
 	var oldContent, newContent string
 
-	if staged {
+	if opts.Staged {
 		oldContent, _ = getFileFromRef(actualDir, "HEAD", relativePath)
 		newContent, _ = getFileFromIndex(actualDir, relativePath)
 	} else {
@@ -800,7 +833,8 @@ func parseNameStatus(output string) []FileChange {
 }
 
 // ShowFileDiff returns the diff of a specific file in a commit.
-func ShowFileDiff(dir, hash, path string) (*DiffResult, error) {
+// If hideWhitespace is true, ignores whitespace changes (-w flag).
+func ShowFileDiff(dir, hash, path string, hideWhitespace bool) (*DiffResult, error) {
 	if err := validateCommitHash(hash); err != nil {
 		return nil, err
 	}
@@ -809,7 +843,13 @@ func ShowFileDiff(dir, hash, path string) (*DiffResult, error) {
 	}
 
 	// Get the diff using git show
-	cmd := exec.Command("git", "show", "--format=", hash, "--", path)
+	args := []string{"show", "--format=", hash}
+	if hideWhitespace {
+		args = append(args, "-w")
+	}
+	args = append(args, "--", path)
+
+	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	output, err := cmd.Output()
 	if err != nil {

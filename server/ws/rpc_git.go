@@ -46,7 +46,7 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 	}
 
 	notifier := h.state.getNotifier()
-	id, result, err := wt.GitDiffWatcher.Subscribe(params.Path, params.Staged, notifier)
+	id, result, err := wt.GitDiffWatcher.Subscribe(params.Path, params.Staged, params.HideWhitespace, notifier)
 	if err != nil {
 		if strings.Contains(err.Error(), "file not found") {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
@@ -204,7 +204,7 @@ func (h *rpcMethodHandler) handleGitShowDiff(ctx context.Context, conn *jsonrpc2
 		return
 	}
 
-	result, err := git.ShowFileDiff(wt.WorkDir, params.Hash, params.Path)
+	result, err := git.ShowFileDiff(wt.WorkDir, params.Hash, params.Path, params.HideWhitespace)
 	if err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return

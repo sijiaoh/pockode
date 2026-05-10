@@ -107,8 +107,9 @@ type GitStatusResult = git.GitStatus
 // Git diff watch (subscription for file-specific diff changes)
 
 type GitDiffSubscribeParams struct {
-	Path   string `json:"path"`
-	Staged bool   `json:"staged"`
+	Path           string `json:"path"`
+	Staged         bool   `json:"staged"`
+	HideWhitespace bool   `json:"hide_whitespace"`
 }
 
 type GitDiffSubscribeResult struct {
@@ -147,8 +148,9 @@ type GitShowResult = git.ShowResult
 
 // GitShowDiffParams is the params for git.show.diff request.
 type GitShowDiffParams struct {
-	Hash string `json:"hash"`
-	Path string `json:"path"`
+	Hash           string `json:"hash"`
+	Path           string `json:"path"`
+	HideWhitespace bool   `json:"hide_whitespace"`
 }
 
 // GitShowDiffResult is the result of git.show.diff request.

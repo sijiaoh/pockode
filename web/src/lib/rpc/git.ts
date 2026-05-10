@@ -10,7 +10,11 @@ export interface GitActions {
 	getStatus: () => Promise<GitStatus>;
 	getLog: (limit?: number) => Promise<GitLogResult>;
 	getCommit: (hash: string) => Promise<GitShowResult>;
-	getCommitDiff: (hash: string, path: string) => Promise<GitDiffData>;
+	getCommitDiff: (
+		hash: string,
+		path: string,
+		hideWhitespace?: boolean,
+	) => Promise<GitDiffData>;
 	stage: (paths: string[]) => Promise<void>;
 	unstage: (paths: string[]) => Promise<void>;
 }
@@ -36,8 +40,16 @@ export function createGitActions(
 		getCommit: async (hash: string): Promise<GitShowResult> => {
 			return requireClient().request("git.show", { hash });
 		},
-		getCommitDiff: async (hash: string, path: string): Promise<GitDiffData> => {
-			return requireClient().request("git.show.diff", { hash, path });
+		getCommitDiff: async (
+			hash: string,
+			path: string,
+			hideWhitespace = false,
+		): Promise<GitDiffData> => {
+			return requireClient().request("git.show.diff", {
+				hash,
+				path,
+				hide_whitespace: hideWhitespace,
+			});
 		},
 		stage: async (paths: string[]): Promise<void> => {
 			await requireClient().request("git.add", { paths });

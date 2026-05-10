@@ -1,10 +1,18 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronLeft, ChevronRight, Loader2, Minus, Plus } from "lucide-react";
+import {
+	ALargeSmall,
+	ChevronLeft,
+	ChevronRight,
+	Loader2,
+	Minus,
+	Plus,
+} from "lucide-react";
 import { useMemo } from "react";
 import { useGitDiffWatch } from "../../hooks/useGitDiffWatch";
 import { useGitStage } from "../../hooks/useGitStage";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useRouteState } from "../../hooks/useRouteState";
+import { useDiffSettings } from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { flattenGitStatus } from "../../types/git";
 import { BottomActionBar, ContentView, getActionIconButtonClass } from "../ui";
@@ -19,7 +27,12 @@ interface Props {
 function DiffView({ path, staged, onBack }: Props) {
 	const navigate = useNavigate();
 	const { worktree, sessionId } = useRouteState();
-	const { data: diff, isLoading } = useGitDiffWatch({ path, staged });
+	const { hideWhitespace, toggleHideWhitespace } = useDiffSettings();
+	const { data: diff, isLoading } = useGitDiffWatch({
+		path,
+		staged,
+		hideWhitespace,
+	});
 	const { data: gitStatus } = useGitStatus();
 	const { stageMutation, unstageMutation } = useGitStage();
 
@@ -100,7 +113,7 @@ function DiffView({ path, staged, onBack }: Props) {
 			</ContentView>
 			<BottomActionBar>
 				<div className="flex items-center justify-between">
-					<div className="flex items-center">
+					<div className="flex items-center gap-1">
 						<button
 							type="button"
 							disabled={!prev}
@@ -120,24 +133,48 @@ function DiffView({ path, staged, onBack }: Props) {
 							<ChevronRight className="h-4 w-4" aria-hidden="true" />
 						</button>
 					</div>
-					<button
-						type="button"
-						onClick={handleToggleStage}
-						disabled={isToggling}
-						className={`flex items-center gap-1.5 rounded border border-th-border bg-th-bg-tertiary h-8 px-3 text-xs transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
-							isToggling
-								? "opacity-50 cursor-not-allowed text-th-text-muted"
-								: `${stageButtonColor} hover:border-th-border-focus`
-						}`}
-						aria-label={stageButtonLabel}
-					>
-						{isToggling ? (
-							<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-						) : (
-							<StageIcon className="h-4 w-4" aria-hidden="true" />
-						)}
-						{stageButtonLabel}
-					</button>
+					<div className="flex items-center gap-2">
+						<button
+							type="button"
+							onClick={toggleHideWhitespace}
+							aria-pressed={hideWhitespace}
+							aria-label={
+								hideWhitespace
+									? "Show whitespace changes"
+									: "Hide whitespace changes"
+							}
+							title={
+								hideWhitespace
+									? "Show whitespace changes"
+									: "Hide whitespace changes"
+							}
+							className={`flex h-8 w-8 items-center justify-center rounded border transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
+								hideWhitespace
+									? "bg-th-accent text-th-accent-text border-th-accent"
+									: "text-th-text-muted hover:text-th-text-secondary border-th-border bg-th-bg-tertiary hover:border-th-border-focus"
+							}`}
+						>
+							<ALargeSmall className="h-4 w-4" aria-hidden="true" />
+						</button>
+						<button
+							type="button"
+							onClick={handleToggleStage}
+							disabled={isToggling}
+							className={`flex items-center gap-1.5 rounded border border-th-border bg-th-bg-tertiary h-8 px-3 text-xs transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
+								isToggling
+									? "opacity-50 cursor-not-allowed text-th-text-muted"
+									: `${stageButtonColor} hover:border-th-border-focus`
+							}`}
+							aria-label={stageButtonLabel}
+						>
+							{isToggling ? (
+								<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+							) : (
+								<StageIcon className="h-4 w-4" aria-hidden="true" />
+							)}
+							{stageButtonLabel}
+						</button>
+					</div>
 				</div>
 			</BottomActionBar>
 		</div>

@@ -15,9 +15,10 @@ const gitDiffPollInterval = 3 * time.Second
 
 // gitDiffSubscription holds additional data for a diff subscription.
 type gitDiffSubscription struct {
-	path     string
-	staged   bool
-	lastHash string
+	path           string
+	staged         bool
+	hideWhitespace bool
+	lastHash       string
 }
 
 // GitDiffWatcher polls git diff for specific files and notifies subscribers when changes occur.
@@ -50,8 +51,9 @@ func (w *GitDiffWatcher) Stop() {
 
 // Subscribe starts watching diff changes for a specific file.
 // Returns subscription ID and initial diff content.
-func (w *GitDiffWatcher) Subscribe(path string, staged bool, notifier Notifier) (string, *git.DiffResult, error) {
-	result, err := git.DiffWithContent(w.workDir, path, staged)
+func (w *GitDiffWatcher) Subscribe(path string, staged bool, hideWhitespace bool, notifier Notifier) (string, *git.DiffResult, error) {
+	opts := git.DiffOptions{Staged: staged, HideWhitespace: hideWhitespace}
+	result, err := git.DiffWithContent(w.workDir, path, opts)
 	if err != nil {
 		return "", nil, err
 	}
@@ -66,9 +68,10 @@ func (w *GitDiffWatcher) Subscribe(path string, staged bool, notifier Notifier) 
 
 	w.dataMu.Lock()
 	w.subData[id] = &gitDiffSubscription{
-		path:     path,
-		staged:   staged,
-		lastHash: hash,
+		path:           path,
+		staged:         staged,
+		hideWhitespace: hideWhitespace,
+		lastHash:       hash,
 	}
 	w.dataMu.Unlock()
 
@@ -119,10 +122,12 @@ func (w *GitDiffWatcher) checkOne(sub *Subscription) {
 	// Copy values needed for diff check
 	path := data.path
 	staged := data.staged
+	hideWhitespace := data.hideWhitespace
 	lastHash := data.lastHash
 	w.dataMu.RUnlock()
 
-	result, err := git.DiffWithContent(w.workDir, path, staged)
+	opts := git.DiffOptions{Staged: staged, HideWhitespace: hideWhitespace}
+	result, err := git.DiffWithContent(w.workDir, path, opts)
 	if err != nil {
 		slog.Debug("git diff failed", "path", path, "staged", staged, "error", err)
 		return
