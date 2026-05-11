@@ -169,16 +169,23 @@ if opts.Mode == ModeYolo {
     args = append(args, "--permission-mode", "bypassPermissions")
 }
 
-if resume {
-    args = append(args, "--resume", sessionID)
+providerSessionID, shouldResume := resumeState.resolve()
+if shouldResume {
+    args = append(args, "--resume", providerSessionID)
 } else {
-    args = append(args, "--session-id", sessionID)
+    args = append(args, "--session-id", providerSessionID)
 }
 
 if mcpConfig != "" {
     args = append(args, "--mcp-config", mcpConfig)
 }
 ```
+
+Claude keeps its provider-side session ID in `claude_resume.json` under the
+Pockode session directory. A process resumes only when that file contains a
+Claude session ID; otherwise it starts with `--session-id` and writes the resume
+file after the first assistant event. Legacy sessions with assistant history but
+no resume file are migrated by using the Pockode session ID once.
 
 ### Message Type Mapping
 
@@ -198,12 +205,15 @@ if mcpConfig != "" {
 
 ```go
 // agent/claude/claude.go
-func (c *Claude) streamOutput(ctx context.Context, stdout io.Reader, events chan<- agent.AgentEvent) {
+func streamOutput(ctx context.Context, stdout io.Reader, events chan<- agent.AgentEvent, resumeState *claudeResumeStateManager) {
     scanner := bufio.NewScanner(stdout)
     scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer
 
     for scanner.Scan() {
         line := scanner.Bytes()
+        if resumeState != nil {
+            resumeState.observeLine(line)
+        }
         for _, event := range parseLine(log, line, pendingRequests) {
             select {
             case events <- event:
@@ -271,7 +281,7 @@ Interrupt requests are tracked via `pendingRequests *sync.Map`. When a response 
 | Protocol | stream-json | MCP JSON-RPC 2.0 |
 | Tool calls | Stateless (request → response) | Stateful (call → wait for result) |
 | Permission requests | `PermissionUpdate` objects | Elicitation mechanism |
-| Session recovery | `--resume <sessionID>` | Custom JSON state file |
+| Session recovery | `claude_resume.json` → `--resume <providerSessionID>` | Custom JSON state file |
 
 ### MCP Initialization
 

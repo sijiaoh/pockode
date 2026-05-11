@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -333,6 +335,197 @@ func TestParseLine_ControlResponseWithPendingInterrupt(t *testing.T) {
 	// Verify marker was removed
 	if _, exists := pendingRequests.Load(requestID); exists {
 		t.Error("interrupt marker should be removed after processing")
+	}
+}
+
+func TestClaudeResumeStateResolve(t *testing.T) {
+	tests := []struct {
+		name        string
+		resume      bool
+		stateID     string
+		history     []agent.AgentEvent
+		wantID      string
+		wantResume  bool
+		wantStateID string
+		wantNoState bool
+	}{
+		{
+			name:       "new session uses pockode session id",
+			wantID:     "pockode-session",
+			wantResume: false,
+		},
+		{
+			name:        "missing resume state starts new session",
+			resume:      true,
+			wantID:      "pockode-session",
+			wantResume:  false,
+			wantNoState: true,
+		},
+		{
+			name:        "user-only history still starts new session",
+			resume:      true,
+			history:     []agent.AgentEvent{agent.MessageEvent{Content: "hello"}},
+			wantID:      "pockode-session",
+			wantResume:  false,
+			wantNoState: true,
+		},
+		{
+			name:        "existing resume state resumes provider session",
+			resume:      true,
+			stateID:     "claude-session",
+			wantID:      "claude-session",
+			wantResume:  true,
+			wantStateID: "claude-session",
+		},
+		{
+			name:        "legacy assistant history migrates pockode session id",
+			resume:      true,
+			history:     []agent.AgentEvent{agent.MessageEvent{Content: "hello"}, agent.TextEvent{Content: "hi"}},
+			wantID:      "pockode-session",
+			wantResume:  true,
+			wantStateID: "pockode-session",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := agent.StartOptions{
+				DataDir:   dir,
+				SessionID: "pockode-session",
+				Resume:    tt.resume,
+			}
+			manager := newClaudeResumeStateManager(opts, testLogger())
+			if tt.stateID != "" {
+				manager.save(tt.stateID)
+			}
+			writeHistory(t, dir, opts.SessionID, tt.history)
+
+			gotID, gotResume := manager.resolve()
+			if gotID != tt.wantID {
+				t.Fatalf("provider session id = %q, want %q", gotID, tt.wantID)
+			}
+			if gotResume != tt.wantResume {
+				t.Fatalf("resume = %v, want %v", gotResume, tt.wantResume)
+			}
+
+			data, err := os.ReadFile(manager.path())
+			if tt.wantNoState {
+				if !os.IsNotExist(err) {
+					t.Fatalf("resume state should not exist, read err = %v", err)
+				}
+				return
+			}
+			if tt.wantStateID == "" {
+				return
+			}
+			if err != nil {
+				t.Fatalf("read resume state: %v", err)
+			}
+			var state claudeResumeState
+			if err := json.Unmarshal(data, &state); err != nil {
+				t.Fatalf("parse resume state: %v", err)
+			}
+			if state.SessionID != tt.wantStateID {
+				t.Fatalf("saved session id = %q, want %q", state.SessionID, tt.wantStateID)
+			}
+		})
+	}
+}
+
+func TestClaudeResumeStateResolveIgnoresInvalidState(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "malformed json",
+			data: `{`,
+		},
+		{
+			name: "empty session id",
+			data: `{"sessionId":""}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := agent.StartOptions{
+				DataDir:   dir,
+				SessionID: "pockode-session",
+				Resume:    true,
+			}
+			manager := newClaudeResumeStateManager(opts, testLogger())
+			path := manager.path()
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatalf("create resume dir: %v", err)
+			}
+			if err := os.WriteFile(path, []byte(tt.data), 0644); err != nil {
+				t.Fatalf("write resume state: %v", err)
+			}
+
+			gotID, gotResume := manager.resolve()
+			if gotID != "pockode-session" {
+				t.Fatalf("provider session id = %q, want pockode-session", gotID)
+			}
+			if gotResume {
+				t.Fatal("resume should be false for invalid resume state")
+			}
+		})
+	}
+}
+
+func TestClaudeResumeStateObserveLineSavesOnFirstAssistant(t *testing.T) {
+	dir := t.TempDir()
+	opts := agent.StartOptions{
+		DataDir:   dir,
+		SessionID: "pockode-session",
+	}
+	manager := newClaudeResumeStateManager(opts, testLogger())
+
+	manager.observeLine([]byte(`{"type":"system","subtype":"init","session_id":"claude-session"}`))
+	if _, err := os.Stat(manager.path()); !os.IsNotExist(err) {
+		t.Fatalf("resume state should not exist before assistant event, stat err = %v", err)
+	}
+
+	manager.observeLine([]byte(`{"type":"assistant","session_id":"claude-session","message":{"content":[{"type":"text","text":"hi"}]}}`))
+
+	data, err := os.ReadFile(manager.path())
+	if err != nil {
+		t.Fatalf("read resume state: %v", err)
+	}
+	var state claudeResumeState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("parse resume state: %v", err)
+	}
+	if state.SessionID != "claude-session" {
+		t.Fatalf("saved session id = %q, want claude-session", state.SessionID)
+	}
+}
+
+func writeHistory(t *testing.T, dataDir, sessionID string, events []agent.AgentEvent) {
+	t.Helper()
+	if len(events) == 0 {
+		return
+	}
+	path := filepath.Join(dataDir, "sessions", sessionID, "history.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("create history dir: %v", err)
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create history: %v", err)
+	}
+	defer file.Close()
+	for _, event := range events {
+		data, err := json.Marshal(agent.NewEventRecord(event))
+		if err != nil {
+			t.Fatalf("marshal history: %v", err)
+		}
+		if _, err := file.Write(append(data, '\n')); err != nil {
+			t.Fatalf("write history: %v", err)
+		}
 	}
 }
 

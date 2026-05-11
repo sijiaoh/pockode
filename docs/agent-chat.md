@@ -44,4 +44,4 @@ See [agent-event.md](agent-event.md) for the full event type catalog, data flow,
 
 ## Session Persistence
 
-Session metadata and chat history are stored via `server/session/store.go`. History is a JSON array of `EventRecord`s appended on each event. Sessions can be resumed with `--resume` flag (Claude).
+Session metadata and chat history are stored under the session data directory. History is JSON Lines of `EventRecord`s appended on each event. Claude resumes only when `claude_resume.json` contains a provider-side session ID; otherwise the next process starts a new Claude session for the same Pockode session.

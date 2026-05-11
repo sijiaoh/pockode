@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/logger"
@@ -24,6 +25,8 @@ import (
 
 // Binary is the Claude CLI executable name.
 const Binary = "claude"
+
+const resumeStateFile = "claude_resume.json"
 
 // Agent implements agent.Agent using Claude CLI.
 type Agent struct{}
@@ -80,11 +83,13 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		claudeArgs = append(claudeArgs, "--permission-mode", "bypassPermissions")
 	}
 
-	if opts.SessionID != "" {
-		if opts.Resume {
-			claudeArgs = append(claudeArgs, "--resume", opts.SessionID)
+	resumeState := newClaudeResumeStateManager(opts, slog.With("sessionId", opts.SessionID))
+	providerSessionID, shouldResume := resumeState.resolve()
+	if providerSessionID != "" {
+		if shouldResume {
+			claudeArgs = append(claudeArgs, "--resume", providerSessionID)
 		} else {
-			claudeArgs = append(claudeArgs, "--session-id", opts.SessionID)
+			claudeArgs = append(claudeArgs, "--session-id", providerSessionID)
 		}
 	}
 
@@ -158,7 +163,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		defer stderr.Close()
 
 		stderrCh := agent.ReadStderr(stderr, "claude")
-		streamOutput(procCtx, log, stdout, events, pendingRequests)
+		streamOutput(procCtx, log, stdout, events, pendingRequests, resumeState)
 		agent.WaitForProcess(procCtx, log, cmd, stderrCh, events)
 
 		// Notify client that process has ended (abnormal: process should stay alive)
@@ -336,7 +341,7 @@ func (s *cliSession) writeStdin(data []byte) error {
 	return err
 }
 
-func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map) {
+func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
@@ -344,6 +349,10 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
+		}
+
+		if resumeState != nil {
+			resumeState.observeLine(line)
 		}
 
 		for _, event := range parseLine(log, line, pendingRequests) {
@@ -371,6 +380,139 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		case <-ctx.Done():
 		}
 	}
+}
+
+// --- Resume state ---
+
+type claudeResumeState struct {
+	SessionID string `json:"sessionId"`
+}
+
+type claudeResumeStateManager struct {
+	opts agent.StartOptions
+	log  *slog.Logger
+
+	sessionID atomic.Value // string
+	saved     atomic.Bool
+}
+
+func newClaudeResumeStateManager(opts agent.StartOptions, log *slog.Logger) *claudeResumeStateManager {
+	m := &claudeResumeStateManager{opts: opts, log: log}
+	if opts.SessionID != "" {
+		m.sessionID.Store(opts.SessionID)
+	}
+	return m
+}
+
+func (m *claudeResumeStateManager) path() string {
+	return filepath.Join(m.opts.DataDir, "sessions", m.opts.SessionID, resumeStateFile)
+}
+
+func (m *claudeResumeStateManager) resolve() (providerSessionID string, resume bool) {
+	if m.opts.SessionID == "" {
+		return "", false
+	}
+	if !m.opts.Resume {
+		return m.opts.SessionID, false
+	}
+
+	state, ok := m.load()
+	if ok && state.SessionID != "" {
+		m.sessionID.Store(state.SessionID)
+		m.log.Info("resuming claude session", "claudeSessionId", state.SessionID)
+		return state.SessionID, true
+	}
+
+	if m.hasAssistantHistory() {
+		m.sessionID.Store(m.opts.SessionID)
+		m.save(m.opts.SessionID)
+		m.log.Info("migrated legacy claude session", "claudeSessionId", m.opts.SessionID)
+		return m.opts.SessionID, true
+	}
+
+	m.log.Info("starting new claude session because resume state is missing")
+	return m.opts.SessionID, false
+}
+
+func (m *claudeResumeStateManager) load() (claudeResumeState, bool) {
+	data, err := os.ReadFile(m.path())
+	if err != nil {
+		return claudeResumeState{}, false
+	}
+	var state claudeResumeState
+	if err := json.Unmarshal(data, &state); err != nil {
+		m.log.Warn("failed to parse claude resume state", "error", err)
+		return claudeResumeState{}, false
+	}
+	return state, true
+}
+
+func (m *claudeResumeStateManager) save(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	data, err := json.Marshal(claudeResumeState{SessionID: sessionID})
+	if err != nil {
+		m.log.Error("failed to marshal claude resume state", "error", err)
+		return
+	}
+	path := m.path()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		m.log.Error("failed to create claude resume state directory", "error", err)
+		return
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		m.log.Error("failed to write claude resume state", "error", err)
+	}
+}
+
+func (m *claudeResumeStateManager) observeLine(line []byte) {
+	var event cliEvent
+	if err := json.Unmarshal(line, &event); err != nil {
+		return
+	}
+	if event.SessionID != "" {
+		m.sessionID.Store(event.SessionID)
+	}
+	if event.Type != "assistant" || m.saved.Load() {
+		return
+	}
+	sessionID, _ := m.sessionID.Load().(string)
+	if sessionID == "" {
+		return
+	}
+	m.save(sessionID)
+	m.saved.Store(true)
+}
+
+func (m *claudeResumeStateManager) hasAssistantHistory() bool {
+	path := filepath.Join(m.opts.DataDir, "sessions", m.opts.SessionID, "history.jsonl")
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var record struct {
+			Type agent.EventType `json:"type"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			continue
+		}
+		switch record.Type {
+		case agent.EventTypeText, agent.EventTypeToolCall, agent.EventTypeToolResult,
+			agent.EventTypeDone, agent.EventTypeInterrupted, agent.EventTypePermissionRequest,
+			agent.EventTypeAskUserQuestion:
+			return true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		m.log.Warn("failed to scan claude history for legacy migration", "error", err)
+	}
+	return false
 }
 
 // --- Types ---
