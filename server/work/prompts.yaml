@@ -21,45 +21,45 @@ story_behavior_rules: |
   You are a COORDINATOR for this story. Follow these rules strictly:
   1. Do NOT implement anything yourself — each task is executed by a separate agent.
   2. Break down the story into tasks using work_create (set type="task", parent_id=this story's ID, and assign an agent_role_id for each).
-  3. After creating all tasks, call work_done on YOUR story immediately. Do NOT wait for tasks to finish — you will be automatically reactivated when a task completes.
-  4. Do NOT call work_done on child tasks; task agents handle their own lifecycle.
+  3. After creating all tasks, call step_done on YOUR story immediately. Do NOT wait for tasks to finish — you will be automatically reactivated when a task completes.
+  4. Do NOT call step_done on child tasks; task agents handle their own lifecycle.
 
 # Story rules suffix (appended to story_behavior_rules)
 # Placeholders: {{.ID}}
 story_rules_suffix: |
-  Call work_done with ID {{.ID}} as soon as you've created the tasks. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
+  Call step_done with ID {{.ID}} as soon as you've created the tasks. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
 
 # Task rules when there is a parent story
 # Placeholders: {{.ParentID}}, {{.ID}}
 task_rules_with_parent: |
   Before starting, use work_comment_list with work_id {{.ParentID}} to check for any instructions or feedback on the parent story.
 
-  IMPORTANT: When you finish, you MUST first report your results by calling work_comment_add with work_id {{.ParentID}} (the parent), then call work_done with ID {{.ID}}. If you need user input to proceed, call work_needs_input with ID {{.ID}}. Do not end your turn without calling one of these.
+  IMPORTANT: When you finish, you MUST first report your results by calling work_comment_add with work_id {{.ParentID}} (the parent), then call step_done with ID {{.ID}}. If you need user input to proceed, call work_needs_input with ID {{.ID}}. Do not end your turn without calling one of these.
 
 # Task rules when there is no parent
 # Placeholders: {{.ID}}
 task_rules_without_parent: |
-  IMPORTANT: When you finish, you MUST call work_done with ID {{.ID}}. If you need user input to proceed, call work_needs_input with ID {{.ID}}. Do not end your turn without calling one of these.
+  IMPORTANT: When you finish, you MUST call step_done with ID {{.ID}}. If you need user input to proceed, call work_needs_input with ID {{.ID}}. Do not end your turn without calling one of these.
 
 # Story restart nudge
 # Placeholders: {{.ID}}
 story_restart_nudge: |
-  Your story was stopped and is now being restarted. Review your tasks, then call work_done with ID {{.ID}}. You will be reactivated when a task completes.
+  Your story was stopped and is now being restarted. Review your tasks, then call step_done with ID {{.ID}}. You will be reactivated when a task completes.
 
 # Task restart nudge
 # Placeholders: {{.ID}}
 task_restart_nudge: |
-  Your task was stopped and is now being restarted. Review what you've done so far, then either complete the remaining work or call work_done with ID {{.ID}} if everything is finished.
+  Your task was stopped and is now being restarted. Review what you've done so far, then either complete the remaining work or call step_done with ID {{.ID}} if everything is finished.
 
 # Story auto-continuation nudge
 # Placeholders: {{.ID}}
 story_auto_continue_nudge: |
-  Your story is still in_progress but your session was interrupted. Review your tasks, then call work_done with ID {{.ID}}. You will be reactivated when a task completes.
+  Your story is still in_progress but your session was interrupted. Review your tasks, then call step_done with ID {{.ID}}. You will be reactivated when a task completes.
 
 # Task auto-continuation nudge
 # Placeholders: {{.ID}}
 task_auto_continue_nudge: |
-  Your task is still in_progress but your session was interrupted. Review what you've done so far, then either complete the remaining work or call work_done with ID {{.ID}} if everything is finished.
+  Your task is still in_progress but your session was interrupted. Review what you've done so far, then either complete the remaining work or call step_done with ID {{.ID}} if everything is finished.
 
 # Task step auto-continuation nudge (for tasks with steps)
 # Placeholders: {{.CurrentStep}}, {{.TotalSteps}}, {{.ID}}
@@ -68,18 +68,18 @@ task_step_auto_continue_nudge: |
 
   Check if you have completed the current step:
   - If YES and this is NOT the last step: Call step_done with ID {{.ID}} to proceed to the next step.
-  - If YES and this IS the last step: Call work_done with ID {{.ID}} to complete the task.
+  - If YES and this IS the last step: Call step_done with ID {{.ID}} to complete the task.
   - If NO: Continue working on this step.
 
 # Story reopen nudge (when a closed story is reopened)
 # Placeholders: {{.ID}}
 story_reopen_nudge: |
-  This story has been reopened. Review the current tasks and determine what additional work is needed. Create new tasks as necessary, then call work_done with ID {{.ID}} to return to a dormant state.
+  This story has been reopened. Review the current tasks and determine what additional work is needed. Create new tasks as necessary, then call step_done with ID {{.ID}} to return to a dormant state.
 
 # Task reopen nudge (when a closed task is reopened)
 # Placeholders: {{.ID}}
 task_reopen_nudge: |
-  This task has been reopened. Review your previous work and determine what additional changes are needed. Complete the required work, then call work_done with ID {{.ID}} to finish.
+  This task has been reopened. Review your previous work and determine what additional changes are needed. Complete the required work, then call step_done with ID {{.ID}} to finish.
 
 # Child completion nudge for waiting parent (when a child task completes and parent was waiting)
 # Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ID}}
@@ -98,7 +98,7 @@ step_advance_section: |
 
   When you finish this step:
   {{- if eq .CurrentStep .TotalSteps}}
-  - Call work_done with ID {{.ID}} to complete the task.
+  - Call step_done with ID {{.ID}} to complete the task.
   {{- else}}
   - Call step_done with ID {{.ID}} to proceed to the next step.
   {{- end}}
@@ -113,7 +113,7 @@ current_step_section: |
 
   When you finish this step:
   {{- if eq .CurrentStep .TotalSteps}}
-  - Call work_done with ID {{.ID}} to complete the task.
+  - Call step_done with ID {{.ID}} to complete the task.
   {{- else}}
   - Call step_done with ID {{.ID}} to proceed to the next step.
   {{- end}}

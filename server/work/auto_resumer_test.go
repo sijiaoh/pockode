@@ -333,7 +333,8 @@ func TestAutoResumer_ClosedParentStaysClosedOnChildClose(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, parentSid)
 	startWork(t, store, task.ID)
 
-	// Close parent while child is still running
+	// Close parent after child is complete.
+	doneWork(t, store, task.ID)
 	doneWork(t, store, story.ID)
 
 	// Simulate child closed event when parent is already closed
@@ -354,6 +355,39 @@ func TestAutoResumer_ClosedParentStaysClosedOnChildClose(t *testing.T) {
 	// No message should be sent
 	if len(sender.getMessages()) != 0 {
 		t.Error("no message should be sent when parent is already closed")
+	}
+}
+
+func TestAutoResumer_WakesStoryAfterStepDoneAndChildClose(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	parentSid := "parent-session"
+	startWorkWithSession(t, store, story.ID, parentSid)
+	startWork(t, store, task.ID)
+
+	if _, err := store.StepDone(context.Background(), story.ID, 0); err != nil {
+		t.Fatalf("StepDone story: %v", err)
+	}
+	if got := getWork(t, store, story.ID); got.Status != StatusWaiting {
+		t.Fatalf("story status after step_done = %q, want %q", got.Status, StatusWaiting)
+	}
+
+	doneWork(t, store, task.ID)
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	parent := getWork(t, store, story.ID)
+	if parent.Status != StatusInProgress {
+		t.Errorf("parent status = %q, want %q", parent.Status, StatusInProgress)
+	}
+	if msgs := sender.getMessages(); len(msgs) != 1 || msgs[0].SessionID != parentSid {
+		t.Fatalf("expected 1 message to parent session %q, got %#v", parentSid, msgs)
 	}
 }
 
@@ -470,11 +504,9 @@ func TestAutoResumer_SendsMessageWhenLastChildCompletes(t *testing.T) {
 	// Parent enters waiting for child
 	store.MarkWaiting(context.Background(), story.ID)
 
-	// MarkDone on the task: closes the task,
+	// step_done on the task closes it,
 	// which triggers handleParentReactivation via OnWorkChange.
-	if err := store.MarkDone(context.Background(), task.ID); err != nil {
-		t.Fatalf("MarkDone task: %v", err)
-	}
+	doneWork(t, store, task.ID)
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
 
@@ -1236,7 +1268,7 @@ func TestAutoResumer_AutoContinuation_WithSteps(t *testing.T) {
 	sid := "session-1"
 	startWorkWithSession(t, store, task.ID, sid)
 
-	// Simulate agent idle without calling work_done
+	// Simulate agent idle without calling step_done
 	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
@@ -1251,7 +1283,7 @@ func TestAutoResumer_AutoContinuation_WithSteps(t *testing.T) {
 	if !containsAll(msg, "## Current Step", "Step 1 of 3", "Implement feature") {
 		t.Error("message should contain current step context")
 	}
-	if !containsAll(msg, "interrupted while working on step", "Call step_done", "Call work_done", "If NO: Continue working") {
+	if !containsAll(msg, "interrupted while working on step", "Call step_done", "If NO: Continue working") {
 		t.Error("message should contain step completion check prompt")
 	}
 }
@@ -1336,10 +1368,7 @@ func TestAutoResumer_ExternalReopen_SendsMessage(t *testing.T) {
 	sid := "session-1"
 	startWorkWithSession(t, store, story.ID, sid)
 
-	// Mark done, then auto-close (no children = immediate close)
-	if err := store.MarkDone(context.Background(), story.ID); err != nil {
-		t.Fatalf("mark done: %v", err)
-	}
+	doneWork(t, store, story.ID)
 	w := getWork(t, store, story.ID)
 	if w.Status != StatusClosed {
 		t.Fatalf("expected closed status, got %s", w.Status)
@@ -1381,10 +1410,7 @@ func TestAutoResumer_ExternalReopen_TaskSendsMessage(t *testing.T) {
 	sid := "session-1"
 	startWorkWithSession(t, store, task.ID, sid)
 
-	// Mark done → auto-close
-	if err := store.MarkDone(context.Background(), task.ID); err != nil {
-		t.Fatalf("mark done: %v", err)
-	}
+	doneWork(t, store, task.ID)
 	w := getWork(t, store, task.ID)
 	if w.Status != StatusClosed {
 		t.Fatalf("expected closed status, got %s", w.Status)
@@ -1446,7 +1472,7 @@ func TestAutoResumer_InternalReopen_NoMessage(t *testing.T) {
 	story := createStory(t, store, "Story")
 	sid := "session-1"
 	startWorkWithSession(t, store, story.ID, sid)
-	store.MarkDone(context.Background(), story.ID)
+	doneWork(t, store, story.ID)
 
 	// Establish known status (closed)
 	resumer.OnWorkChange(ChangeEvent{
@@ -1475,10 +1501,7 @@ func TestAutoResumer_ExternalReopenAfterStartup_SendsMessage(t *testing.T) {
 	sid := "session-1"
 	startWorkWithSession(t, store, story.ID, sid)
 
-	// Mark done → auto-close
-	if err := store.MarkDone(context.Background(), story.ID); err != nil {
-		t.Fatalf("mark done: %v", err)
-	}
+	doneWork(t, store, story.ID)
 	w := getWork(t, store, story.ID)
 	if w.Status != StatusClosed {
 		t.Fatalf("expected closed status, got %s", w.Status)

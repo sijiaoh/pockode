@@ -132,10 +132,13 @@ func TestToolsList(t *testing.T) {
 		names[td.Name] = true
 	}
 
-	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_delete", "work_done", "work_start", "work_needs_input", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get", "agent_role_reset_defaults"} {
+	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_delete", "work_start", "work_needs_input", "step_done", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get", "agent_role_reset_defaults"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}
+	}
+	if names["work_done"] {
+		t.Error("work_done should not be exposed as an MCP tool")
 	}
 }
 
@@ -362,65 +365,6 @@ func TestWorkDelete_NotFound(t *testing.T) {
 
 	if !result.IsError {
 		t.Error("expected error for nonexistent ID")
-	}
-}
-
-// --- Tool: work_done ---
-
-func TestWorkDone(t *testing.T) {
-	ts := newTestServer(t)
-
-	createResult := callTool(t, ts.Server, "work_create", map[string]string{
-		"type": "story", "title": "My Story", "agent_role_id": ts.roleID,
-	})
-	id := extractID(t, toolText(createResult))
-
-	// Pre-transition to in_progress to test the in_progress → closed path specifically
-	// (the auto open → closed path is tested in TestWorkDone_FromOpen_AutoTransitions)
-	ts.store.Start(context.Background(), id, "")
-
-	result := callTool(t, ts.Server, "work_done", map[string]string{"id": id})
-
-	if result.IsError {
-		t.Fatalf("unexpected error: %s", toolText(result))
-	}
-	if !strings.Contains(toolText(result), "done") {
-		t.Errorf("result = %q, want to contain 'done'", toolText(result))
-	}
-}
-
-func TestWorkDone_FromOpen_AutoTransitions(t *testing.T) {
-	ts := newTestServer(t)
-
-	// Create story (status=open) → work_done auto-transitions open → in_progress → closed
-	createResult := callTool(t, ts.Server, "work_create", map[string]string{
-		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
-	})
-	id := extractID(t, toolText(createResult))
-
-	result := callTool(t, ts.Server, "work_done", map[string]string{"id": id})
-	if result.IsError {
-		t.Errorf("expected success for open → closed (auto-transition), got error: %s", toolText(result))
-	}
-}
-
-func TestWorkDone_AlreadyClosed(t *testing.T) {
-	ts := newTestServer(t)
-
-	// Create and complete a story (goes directly to closed)
-	createResult := callTool(t, ts.Server, "work_create", map[string]string{
-		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
-	})
-	id := extractID(t, toolText(createResult))
-
-	ts.store.Start(context.Background(), id, "")
-
-	callTool(t, ts.Server, "work_done", map[string]string{"id": id})
-
-	// Try to done again — already closed, should fail
-	result := callTool(t, ts.Server, "work_done", map[string]string{"id": id})
-	if !result.IsError {
-		t.Error("expected error for closed → closed (invalid transition)")
 	}
 }
 
@@ -858,21 +802,24 @@ func TestStepDone_LastStep(t *testing.T) {
 	// Advance to step 2 (index 1)
 	callTool(t, s, "step_done", map[string]string{"id": id})
 
-	// Now at last step, step_done should indicate to use work_done
+	// Now at last step, step_done should close the work.
 	result = callTool(t, s, "step_done", map[string]string{"id": id})
 	text := toolText(result)
 
 	if !strings.Contains(text, "final step") {
 		t.Errorf("expected final step message, got %q", text)
 	}
-	if !strings.Contains(text, "work_done") {
-		t.Errorf("expected work_done suggestion, got %q", text)
+	if !strings.Contains(text, "closed") {
+		t.Errorf("expected closed message, got %q", text)
 	}
 
 	// Step should not have advanced beyond the last step
 	w, _, _ := store.Get(id)
 	if w.CurrentStep != 1 {
 		t.Errorf("CurrentStep = %d, want 1 (should not advance past last step)", w.CurrentStep)
+	}
+	if w.Status != work.StatusClosed {
+		t.Errorf("Status = %s, want closed", w.Status)
 	}
 }
 
@@ -893,20 +840,47 @@ func TestStepDone_NoSteps(t *testing.T) {
 
 	callTool(t, ts.Server, "work_start", map[string]string{"id": id})
 
-	// step_done should fail because the role has no steps
-	resp := callMethod(t, ts.Server, "tools/call", toolCallParams{
-		Name:      "step_done",
-		Arguments: json.RawMessage(`{"id":"` + id + `"}`),
-	})
+	result = callTool(t, ts.Server, "step_done", map[string]string{"id": id})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	if !strings.Contains(toolText(result), "completed") {
+		t.Errorf("expected completed message, got %q", toolText(result))
+	}
 
-	// Should return an error result
-	if resp.Error == nil {
-		b, _ := json.Marshal(resp.Result)
-		var result toolCallResult
-		json.Unmarshal(b, &result)
-		if !result.IsError {
-			t.Errorf("expected error for step_done on work with no steps")
-		}
+	w, _, _ := ts.store.Get(id)
+	if w.Status != work.StatusClosed {
+		t.Errorf("Status = %s, want closed", w.Status)
+	}
+}
+
+func TestStepDone_StoryWithPendingChildWaits(t *testing.T) {
+	ts := newTestServer(t)
+
+	result := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Test Story", "agent_role_id": ts.roleID,
+	})
+	storyID := extractID(t, toolText(result))
+
+	result = callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "task", "title": "Test Task", "agent_role_id": ts.roleID, "parent_id": storyID,
+	})
+	taskID := extractID(t, toolText(result))
+
+	callTool(t, ts.Server, "work_start", map[string]string{"id": storyID})
+	callTool(t, ts.Server, "work_start", map[string]string{"id": taskID})
+
+	result = callTool(t, ts.Server, "step_done", map[string]string{"id": storyID})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	if !strings.Contains(toolText(result), "waiting for child work") {
+		t.Errorf("expected waiting message, got %q", toolText(result))
+	}
+
+	w, _, _ := ts.store.Get(storyID)
+	if w.Status != work.StatusWaiting {
+		t.Errorf("Status = %s, want waiting", w.Status)
 	}
 }
 

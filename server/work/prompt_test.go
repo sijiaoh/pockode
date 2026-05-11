@@ -26,7 +26,7 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 	assertContains(t, msg, "agent_role_get", "agent_role_get instruction")
 	assertContains(t, msg, "Fix the bug", "task title")
 	assertContains(t, msg, "task-1", "work ID")
-	assertContains(t, msg, "work_done", "work_done instruction")
+	assertContains(t, msg, "step_done", "step_done instruction")
 
 	if strings.Contains(msg, "coordinate") {
 		t.Error("task message should not contain story coordination rules")
@@ -102,7 +102,7 @@ func TestBuildKickoffMessage_TaskWithParent_ReportViaComment(t *testing.T) {
 	assertContains(t, msg, "work_comment_list", "work_comment_list instruction for parent comments")
 	assertContains(t, msg, "work_comment_add", "work_comment_add instruction")
 	assertContains(t, msg, "story-1", "parent work ID")
-	assertContains(t, msg, "work_done", "work_done instruction")
+	assertContains(t, msg, "step_done", "step_done instruction")
 }
 
 func TestBuildKickoffMessage_TaskWithoutParent_NoCommentInstruction(t *testing.T) {
@@ -290,7 +290,7 @@ func TestBuildAutoContinuationMessageWithSteps_WithSteps(t *testing.T) {
 	assertContains(t, msg, "Write tests", "step content")
 	assertContains(t, msg, "interrupted while working on step 2 of 3", "interrupt context")
 	assertContains(t, msg, "If YES and this is NOT the last step: Call step_done", "step_done instruction")
-	assertContains(t, msg, "If YES and this IS the last step: Call work_done", "work_done instruction")
+	assertContains(t, msg, "If YES and this IS the last step: Call step_done", "step_done instruction")
 	assertContains(t, msg, "If NO: Continue working", "no instruction")
 }
 

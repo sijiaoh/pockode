@@ -20,10 +20,10 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | `work_create` | `type`, `title`, `agent_role_id` | `parent_id`, `body` | Confirmation string with ID |
 | `work_update` | `id` | `title`, `body`, `agent_role_id` | Confirmation string |
 | `work_delete` | `id` | — | Confirmation string |
-| `work_done` | `id` | — | Confirmation string |
 | `work_start` | `id` | — | Confirmation string with session ID |
 | `work_needs_input` | `id`, `reason` | — | Confirmation string |
 | `work_reopen` | `id` | — | Confirmation string |
+| `step_done` | `id` | — | Confirmation string |
 | `work_comment_add` | `work_id`, `body` | — | Confirmation string with comment ID |
 | `work_comment_list` | `work_id` | — | JSON array of `{id, work_id, body, created_at}` |
 | `work_comment_update` | `id`, `body` | — | Updated comment as `{id, work_id, body, created_at}` |
@@ -41,7 +41,7 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 
 - **`work_create`**: Requires `agent_role_id` (validated to exist). Stories are top-level; tasks require `parent_id`.
 - **`work_start`**: Requires the work item to have an `agent_role_id`. Generates a UUIDv7 session ID, transitions to `in_progress` and attaches the session ID via `Store.Start`. The main server detects this state change via fsnotify (`AutoResumer` Trigger C) and handles session creation.
-- **`work_done`**: Calls `Store.MarkDone()`. Transitions `in_progress → closed`.
+- **`step_done`**: Calls `Store.StepDone()`. Tasks advance to the next configured step, or transition `in_progress → closed` when no steps remain. Stories transition `in_progress → waiting` while they have pending child work, or `in_progress → closed` when no pending children remain.
 - **`work_needs_input`**: Calls `Store.MarkNeedsInput()`. Transitions `in_progress → needs_input`.
 - **`work_reopen`**: Calls `Store.Reopen()`. Transitions `closed → in_progress`. Use when you need to add more child work items or continue working on a completed item.
 - **`work_update`**: Uses pointer fields (`*string`) to distinguish "not provided" from "set to empty". Only updates data fields (title, body, agent_role_id).

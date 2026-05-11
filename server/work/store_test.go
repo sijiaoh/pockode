@@ -56,8 +56,12 @@ func startWorkWithSession(t *testing.T, s *FileStore, id, sessionID string) {
 
 func doneWork(t *testing.T, s *FileStore, id string) {
 	t.Helper()
-	if err := s.MarkDone(context.Background(), id); err != nil {
-		t.Fatalf("Done work %s: %v", id, err)
+	w := getWork(t, s, id)
+	if w.Status == StatusOpen {
+		startWork(t, s, id)
+	}
+	if _, err := s.StepDone(context.Background(), id, 0); err != nil {
+		t.Fatalf("complete work %s: %v", id, err)
 	}
 }
 
@@ -551,20 +555,6 @@ func TestReopen_NotFound(t *testing.T) {
 	}
 }
 
-func TestMarkDone_FromStopped(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	startWork(t, s, story.ID)
-
-	// in_progress → stopped
-	s.Stop(context.Background(), story.ID)
-
-	// MarkDone from stopped should fail (stopped → done is not valid)
-	if err := s.MarkDone(context.Background(), story.ID); err == nil {
-		t.Fatal("expected error for MarkDone from stopped")
-	}
-}
-
 // --- needs_input transitions ---
 
 func TestTransition_InProgressToNeedsInput(t *testing.T) {
@@ -610,19 +600,6 @@ func TestTransition_NeedsInputToStopped(t *testing.T) {
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusStopped {
 		t.Errorf("status = %q, want %q", got.Status, StatusStopped)
-	}
-}
-
-func TestTransition_Invalid_NeedsInputToClosed(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	startWork(t, s, story.ID)
-
-	s.MarkNeedsInput(context.Background(), story.ID)
-
-	// MarkDone from needs_input should fail (needs_input → closed is invalid)
-	if err := s.MarkDone(context.Background(), story.ID); err == nil {
-		t.Fatal("expected error for needs_input → closed")
 	}
 }
 
@@ -681,19 +658,6 @@ func TestTransition_WaitingToStopped(t *testing.T) {
 	}
 }
 
-func TestTransition_Invalid_WaitingToClosed(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	startWork(t, s, story.ID)
-
-	s.MarkWaiting(context.Background(), story.ID)
-
-	// MarkDone from waiting should fail (waiting → closed is invalid)
-	if err := s.MarkDone(context.Background(), story.ID); err == nil {
-		t.Fatal("expected error for waiting → closed")
-	}
-}
-
 func TestTransition_Invalid_OpenToWaiting(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
@@ -703,7 +667,7 @@ func TestTransition_Invalid_OpenToWaiting(t *testing.T) {
 	}
 }
 
-func TestMarkDone_FailsWhenChildNotClosed(t *testing.T) {
+func TestParentCanWaitWhenChildNotClosed(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
@@ -713,12 +677,6 @@ func TestMarkDone_FailsWhenChildNotClosed(t *testing.T) {
 	// Task enters waiting
 	s.MarkWaiting(context.Background(), task.ID)
 
-	// Story cannot be marked done directly while child is not closed
-	// The story should use MarkWaiting instead to wait for child completion
-	// Here we just verify the story remains in_progress after failed MarkDone attempt
-	// Actually, with the new design, MarkDone on story goes directly to closed
-	// and we should use waiting for parent to wait for children
-	// For this test, we verify that the parent can enter waiting state
 	if err := s.MarkWaiting(context.Background(), story.ID); err != nil {
 		t.Fatalf("story should be able to enter waiting: %v", err)
 	}
@@ -768,57 +726,7 @@ func TestParentWaiting_WhenChildStopped(t *testing.T) {
 	}
 }
 
-// --- MarkDone (atomic open/in_progress → done) ---
-
-func TestMarkDone_FromOpen(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-
-	if err := s.MarkDone(context.Background(), story.ID); err != nil {
-		t.Fatalf("MarkDone from open: %v", err)
-	}
-	// No children → auto-closes
-	got := getWork(t, s, story.ID)
-	if got.Status != StatusClosed {
-		t.Errorf("status = %q, want %q", got.Status, StatusClosed)
-	}
-}
-
-func TestMarkDone_FromInProgress(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	startWork(t, s, story.ID)
-
-	if err := s.MarkDone(context.Background(), story.ID); err != nil {
-		t.Fatalf("MarkDone from in_progress: %v", err)
-	}
-	got := getWork(t, s, story.ID)
-	if got.Status != StatusClosed {
-		t.Errorf("status = %q, want %q", got.Status, StatusClosed)
-	}
-}
-
-func TestMarkDone_FromClosed(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-
-	s.MarkDone(context.Background(), story.ID) // open → closed
-
-	err := s.MarkDone(context.Background(), story.ID)
-	if err == nil {
-		t.Fatal("expected error for closed → done")
-	}
-}
-
-func TestMarkDone_NotFound(t *testing.T) {
-	s := newTestStore(t)
-	err := s.MarkDone(context.Background(), "nonexistent")
-	if err == nil {
-		t.Fatal("expected error for nonexistent ID")
-	}
-}
-
-func TestMarkDone_ChildClosesWhileParentWaiting(t *testing.T) {
+func TestStepDone_ChildClosesWhileParentWaiting(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
@@ -828,9 +736,7 @@ func TestMarkDone_ChildClosesWhileParentWaiting(t *testing.T) {
 	// Parent enters waiting for child
 	s.MarkWaiting(context.Background(), story.ID)
 
-	if err := s.MarkDone(context.Background(), task.ID); err != nil {
-		t.Fatalf("MarkDone task: %v", err)
-	}
+	doneWork(t, s, task.ID)
 
 	if getWork(t, s, task.ID).Status != StatusClosed {
 		t.Error("task should be closed")
@@ -1582,7 +1488,7 @@ func TestStepDone_AdvancesToNextStep(t *testing.T) {
 	}
 }
 
-func TestStepDone_LastStepDoesNotAdvance(t *testing.T) {
+func TestStepDone_LastStepClosesWork(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
@@ -1595,7 +1501,7 @@ func TestStepDone_LastStepDoesNotAdvance(t *testing.T) {
 		t.Fatalf("CurrentStep = %d, want 1 (precondition)", got.CurrentStep)
 	}
 
-	// Now on last step (index 1 of 2), StepDone should not advance
+	// Now on last step (index 1 of 2), StepDone should close the work.
 	hasMore, err := s.StepDone(context.Background(), task.ID, 2)
 	if err != nil {
 		t.Fatalf("StepDone: %v", err)
@@ -1608,27 +1514,85 @@ func TestStepDone_LastStepDoesNotAdvance(t *testing.T) {
 	if got.CurrentStep != 1 {
 		t.Errorf("CurrentStep = %d, want 1 (unchanged)", got.CurrentStep)
 	}
-	if got.Status != StatusInProgress {
-		t.Errorf("status = %q, want %q (unchanged)", got.Status, StatusInProgress)
+	if got.Status != StatusClosed {
+		t.Errorf("status = %q, want %q", got.Status, StatusClosed)
+	}
+}
+
+func TestStepDone_NoStepsClosesWork(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	hasMore, err := s.StepDone(context.Background(), story.ID, 0)
+	if err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	if hasMore {
+		t.Error("expected hasMoreSteps=false for work without steps")
+	}
+
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusClosed {
+		t.Errorf("status = %q, want %q", got.Status, StatusClosed)
+	}
+}
+
+func TestStepDone_StoryWithPendingChildrenWaits(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWork(t, s, story.ID)
+	startWork(t, s, task.ID)
+
+	hasMore, err := s.StepDone(context.Background(), story.ID, 0)
+	if err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	if hasMore {
+		t.Error("expected hasMoreSteps=false for story waiting on children")
+	}
+
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusWaiting {
+		t.Errorf("status = %q, want %q", got.Status, StatusWaiting)
 	}
 }
 
 func TestStepDone_RejectsNonInProgressStatus(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-
-	// Try on open status
-	_, err := s.StepDone(context.Background(), story.ID, 3)
-	if err == nil {
-		t.Fatal("expected error for StepDone on open work")
+	tests := []struct {
+		name  string
+		setup func(*FileStore, string)
+	}{
+		{"open", func(*FileStore, string) {}},
+		{"stopped", func(s *FileStore, id string) {
+			startWork(t, s, id)
+			s.Stop(context.Background(), id)
+		}},
+		{"needs_input", func(s *FileStore, id string) {
+			startWork(t, s, id)
+			s.MarkNeedsInput(context.Background(), id)
+		}},
+		{"waiting", func(s *FileStore, id string) {
+			startWork(t, s, id)
+			s.MarkWaiting(context.Background(), id)
+		}},
+		{"closed", func(s *FileStore, id string) {
+			doneWork(t, s, id)
+		}},
 	}
 
-	// Try on stopped status
-	startWork(t, s, story.ID)
-	s.Stop(context.Background(), story.ID)
-	_, err = s.StepDone(context.Background(), story.ID, 3)
-	if err == nil {
-		t.Fatal("expected error for StepDone on stopped work")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			story := createStory(t, s, "S")
+			tt.setup(s, story.ID)
+
+			_, err := s.StepDone(context.Background(), story.ID, 3)
+			if err == nil {
+				t.Fatalf("expected error for StepDone on %s work", tt.name)
+			}
+		})
 	}
 }
 

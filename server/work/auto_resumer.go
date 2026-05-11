@@ -63,10 +63,10 @@ type AutoResumer struct {
 }
 
 // defaultSettleDelay is the time to wait after a process stops before checking
-// whether its work is still in_progress. This allows MCP work_done writes to
-// propagate: agent calls work_done → MCP writes to disk → fsnotify fires
+// whether its work is still in_progress. This allows MCP step_done writes to
+// propagate: agent calls step_done → MCP writes to disk → fsnotify fires
 // (debounced 100ms) → store reloads → OnWorkChange resets retries.
-// The agent typically calls work_done before its result event triggers idle,
+// The agent typically calls step_done before its result event triggers idle,
 // so 2s is generous. If the write hasn't propagated in time, the worst case
 // is a single spurious continuation message.
 const defaultSettleDelay = 2 * time.Second
@@ -218,7 +218,7 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 // handleProcessEnded transitions in_progress/needs_input/waiting work to stopped when its process terminates.
 // This catches cases like user interrupt or unexpected process exit.
 func (r *AutoResumer) handleProcessEnded(sessionID string) {
-	// Use the same settle delay as auto-continuation to allow work_done to propagate.
+	// Use the same settle delay as auto-continuation to allow step_done to propagate.
 	select {
 	case <-time.After(r.settleDelay):
 	case <-r.ctx.Done():
@@ -275,7 +275,7 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSen
 		r.retryMu.Unlock()
 	}()
 
-	// Wait for MCP work_done writes to propagate via fsnotify.
+	// Wait for MCP step_done writes to propagate via fsnotify.
 	// Use select so we abort immediately on shutdown.
 	select {
 	case <-time.After(r.settleDelay):

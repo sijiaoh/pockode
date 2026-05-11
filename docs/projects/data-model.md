@@ -48,8 +48,8 @@ Defines an agent persona with a system prompt and optional execution steps.
 
 When `steps` is non-empty, tasks using this role execute in sequential steps:
 1. On task start, the agent receives step 1 instructions
-2. When the agent calls `work_done`, if there are more steps, the task advances to the next step instead of closing
-3. The process repeats until the final step completes
+2. When the agent calls `step_done`, the task advances to the next step if more steps remain
+3. When the final step completes, `step_done` closes the work item
 
 ## Hierarchy
 
@@ -137,7 +137,7 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | ------------- | -------------------------------------- | ---------------------------------------------------------------- |
 | Start         | `(ctx, id, sessionID) → (Work, error)` | Transitions to `in_progress`, sets sessionID                    |
 | Stop          | `(ctx, id) → error`                    | Transitions `in_progress`/`needs_input` → `stopped`             |
-| MarkDone      | `(ctx, id) → error`                    | Transitions `in_progress` → `closed`                            |
+| StepDone      | `(ctx, id, totalSteps) → (bool, error)` | Tasks advance to the next step or close; stories wait for pending children or close when none remain |
 | MarkNeedsInput| `(ctx, id) → error`                    | Transitions `in_progress` → `needs_input`                       |
 | MarkWaiting   | `(ctx, id) → error`                    | Transitions `in_progress` → `waiting`                           |
 | Resume        | `(ctx, id) → error`                    | Transitions `needs_input` → `in_progress`                       |

@@ -91,17 +91,6 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
-		Name:        "work_done",
-		Description: "Mark a work item as done. If the item is still open (not yet in_progress), it will be automatically transitioned.",
-		InputSchema: inputSchema{
-			Type: "object",
-			Properties: map[string]propertySchema{
-				"id": {Type: "string", Description: "Work item ID to mark as done"},
-			},
-			Required: []string{"id"},
-		},
-	},
-	{
 		Name:        "work_start",
 		Description: "Start a work item. Transitions it from open (or stopped) to in_progress and launches an agent session.",
 		InputSchema: inputSchema{
@@ -148,7 +137,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "step_done",
-		Description: "Mark the current step as complete and proceed to the next step. The work item must be in_progress status. If there are more steps, this advances CurrentStep. If this is the last step, use work_done instead.",
+		Description: "Mark current work progress as complete. The work item must be in_progress status. Tasks advance CurrentStep when more steps remain, otherwise close. Stories wait when they have pending child work, otherwise close.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
@@ -235,8 +224,6 @@ func (s *Server) getToolHandler(name string) (toolHandler, bool) {
 		return s.handleWorkGet, true
 	case "work_delete":
 		return s.handleWorkDelete, true
-	case "work_done":
-		return s.handleWorkDone, true
 	case "work_start":
 		return s.handleWorkStart, true
 	case "work_needs_input":
@@ -453,21 +440,6 @@ func (s *Server) handleWorkDelete(ctx context.Context, args json.RawMessage) (st
 	return fmt.Sprintf("Deleted work %s", params.ID), nil
 }
 
-func (s *Server) handleWorkDone(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
-
-	if err := s.store.MarkDone(ctx, params.ID); err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("Marked work %s as done", params.ID), nil
-}
-
 func (s *Server) handleWorkStart(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		ID string `json:"id"`
@@ -583,9 +555,6 @@ func (s *Server) handleStepDone(ctx context.Context, args json.RawMessage) (stri
 	}
 
 	totalSteps := len(role.Steps)
-	if totalSteps == 0 {
-		return "", fmt.Errorf("work %s has no steps configured", params.ID)
-	}
 
 	hasMoreSteps, err := s.store.StepDone(ctx, params.ID, totalSteps)
 	if err != nil {
@@ -595,7 +564,20 @@ func (s *Server) handleStepDone(ctx context.Context, args json.RawMessage) (stri
 	if hasMoreSteps {
 		return fmt.Sprintf("Step %d completed for work %s, advancing to step %d of %d", w.CurrentStep+1, params.ID, w.CurrentStep+2, totalSteps), nil
 	}
-	return fmt.Sprintf("Step %d (final step) completed for work %s. Use work_done to complete the work.", w.CurrentStep+1, params.ID), nil
+	updated, found, err := s.store.Get(params.ID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", work.ErrWorkNotFound
+	}
+	if updated.Status == work.StatusWaiting {
+		return fmt.Sprintf("Work %s is waiting for child work to complete", params.ID), nil
+	}
+	if totalSteps == 0 {
+		return fmt.Sprintf("Work %s completed", params.ID), nil
+	}
+	return fmt.Sprintf("Step %d (final step) completed for work %s. Work is now closed.", w.CurrentStep+1, params.ID), nil
 }
 
 func (s *Server) handleWorkCommentAdd(ctx context.Context, args json.RawMessage) (string, error) {

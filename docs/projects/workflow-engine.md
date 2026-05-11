@@ -38,9 +38,9 @@ The workflow engine manages work item lifecycles through status transitions, aut
 | `open`         | `in_progress`  | `Store.Start` (fresh start)                |
 | `in_progress`  | `open`         | `Store.RollbackStart` (fresh start failed) |
 | `in_progress`  | `needs_input`  | `Store.MarkNeedsInput`                     |
-| `in_progress`  | `waiting`      | `Store.MarkWaiting`                        |
+| `in_progress`  | `waiting`      | `Store.MarkWaiting`; `Store.StepDone` for stories with pending children |
 | `in_progress`  | `stopped`      | `Store.Stop` (process ended/interrupted)   |
-| `in_progress`  | `closed`       | `Store.MarkDone`                           |
+| `in_progress`  | `closed`       | `Store.StepDone`                           |
 | `needs_input`  | `in_progress`  | `Store.Resume` (user confirms)             |
 | `needs_input`  | `stopped`      | `Store.Stop` (process ended while paused)  |
 | `waiting`      | `in_progress`  | `Store.ResumeFromWaiting` (child completes or user message) |
@@ -61,13 +61,13 @@ SessionID changes are encapsulated in intent-based Store methods:
 
 > Source: `server/work/store.go` — intent-based transition methods.
 
-## Direct Closure
+## Step Completion
 
-Work items transition directly from `in_progress` to `closed` via `MarkDone`. There is no intermediate `done` state.
+Work items transition through `StepDone`; there is no intermediate `done` state. Tasks advance to the next step or close when no steps remain. Stories close when they have no pending children, and move to `waiting` when they still have open child work.
 
 When a child work closes, its parent story is automatically resumed (if the parent is `waiting`), allowing the coordinator agent to review results and continue orchestration.
 
-> Source: `server/work/store.go` — `MarkDone`.
+> Source: `server/work/store.go` — `StepDone`.
 
 ## AutoResumer
 
@@ -85,7 +85,7 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 | `ended` | After settle delay, stop `in_progress`/`needs_input` work → `stopped` |
 
 **Auto-continuation details:**
-1. Wait **2 seconds** (settle delay) — allows `work_done` writes from MCP to propagate via fsnotify.
+1. Wait **2 seconds** (settle delay) — allows `step_done` writes from MCP to propagate via fsnotify.
 2. Look up the work item by `sessionID`. If still `in_progress`, send a continuation message.
 3. Retry counter per session (configurable `maxRetries`). On limit, work transitions to `stopped`. Counter resets on `closed`/`stopped` transitions or deletion.
 
@@ -124,16 +124,16 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 
 **Flow:**
 1. Task agent calls `step_done` MCP tool when it completes the current step.
-2. `Store.StepDone` increments `CurrentStep` (work remains `in_progress`).
+2. `Store.StepDone` advances `CurrentStep` if more steps remain; otherwise it closes the work.
 3. AutoResumer detects the step change via `knownSteps` tracking (External event).
 4. If there are more steps:
    - Send `BuildStepAdvanceMessage` with the next step's instructions.
-5. If this is the last step, `step_done` returns guidance to use `work_done` instead.
+5. If this is the last step, `step_done` closes the work and no next-step prompt is sent.
 
 **Constraints:**
 - Only applies to Tasks (not Stories).
 - Work must be `in_progress` to call `step_done`.
-- On the last step, agent should call `work_done` to complete the task.
+- On the last step, agent should call `step_done` to complete the task.
 
 **Purpose:** Enable explicit step-by-step execution where the agent controls when to advance. This gives the agent full control over step completion timing, avoiding race conditions from automatic detection.
 
@@ -176,9 +176,9 @@ Six prompt builders generate messages for different lifecycle events. All share 
 - Agent role reference (instructs agent to fetch its role via `agent_role_get`)
 - Work context (title, ID, instruction to read full details via `work_get`)
 - Behavior rules (vary by work type):
-  - **Story:** Coordinator rules — break work into tasks, call `work_done` immediately, do not implement anything, do not call `work_done` on children.
-  - **Task with parent:** Must report results via `work_comment_add` on parent, then call `work_done`.
-  - **Task without parent:** Must call `work_done` when finished.
+  - **Story:** Coordinator rules — break work into tasks, call `step_done` immediately to wait for pending children, do not implement anything, do not call `step_done` on children.
+  - **Task with parent:** Must report results via `work_comment_add` on parent, then call `step_done`.
+  - **Task without parent:** Must call `step_done` when finished.
 
 ### BuildKickoffMessage
 
@@ -223,7 +223,7 @@ Step N of M
 
 Your session was interrupted while working on step N of M.
 Check if you have completed the current step:
-- If YES: Call work_done with ID xxx to proceed to the next step.
+- If YES: Call step_done with ID xxx to proceed to the next step or close the work.
 - If NO: Continue working on this step.
 ```
 

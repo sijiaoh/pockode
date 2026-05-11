@@ -35,11 +35,6 @@ type Store interface {
 	// Stop transitions in_progress/needs_input → stopped.
 	Stop(ctx context.Context, id string) error
 
-	// MarkDone atomically transitions a work item to done, auto-advancing
-	// from open → in_progress if needed. This avoids the TOCTOU race of a
-	// separate Get → Update sequence.
-	MarkDone(ctx context.Context, id string) error
-
 	// MarkNeedsInput transitions in_progress → needs_input.
 	MarkNeedsInput(ctx context.Context, id string) error
 
@@ -58,9 +53,9 @@ type Store interface {
 	// Used for process-running detection (user sends message to stopped session).
 	Reactivate(ctx context.Context, id string) error
 
-	// StepDone marks the current step as complete and advances to the next.
-	// - If there are more steps: increments CurrentStep, keeps status in_progress.
-	// - If this is the last step: keeps current state unchanged (caller should use MarkDone).
+	// StepDone marks current work progress as complete.
+	// - Tasks advance CurrentStep while more steps remain; otherwise they close.
+	// - Stories wait while pending child work exists; otherwise they close.
 	// Returns hasMoreSteps=true if there are remaining steps after advancement.
 	StepDone(ctx context.Context, id string, totalSteps int) (hasMoreSteps bool, err error)
 
@@ -86,7 +81,7 @@ type Store interface {
 
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
 // Status and SessionID are not included — use the intent-based transition
-// methods (Start, Stop, MarkDone, etc.) for status changes.
+// methods (Start, Stop, StepDone, etc.) for status changes.
 type UpdateFields struct {
 	Title       *string `json:"title,omitempty"`
 	Body        *string `json:"body,omitempty"`
@@ -303,38 +298,6 @@ func (s *FileStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (s *FileStore) MarkDone(_ context.Context, id string) error {
-	s.worksMu.Lock()
-
-	idx := s.findIndex(id)
-	if idx < 0 {
-		s.worksMu.Unlock()
-		return ErrWorkNotFound
-	}
-
-	w := &s.works[idx]
-
-	// Snapshot before any mutations so we can roll back on persist failure
-	prev := s.snapshotWorks()
-
-	// Auto-advance open → in_progress so callers don't need a separate step
-	if w.Status == StatusOpen {
-		w.Status = StatusInProgress
-	}
-	if !ValidateTransition(w.Status, StatusClosed) {
-		s.works = prev
-		s.worksMu.Unlock()
-		return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusClosed)
-	}
-
-	now := time.Now()
-	w.Status = StatusClosed
-	w.UpdatedAt = now
-
-	modified := map[string]bool{id: true}
-	return s.persistAndNotifyUpdates(prev, modified)
-}
-
 func (s *FileStore) Start(_ context.Context, id string, sessionID string) (Work, error) {
 	s.worksMu.Lock()
 
@@ -526,15 +489,43 @@ func (s *FileStore) StepDone(_ context.Context, id string, totalSteps int) (bool
 		return false, fmt.Errorf("%w: StepDone requires in_progress status, got %s", ErrInvalidWork, w.Status)
 	}
 
-	// Check if this is the last step
-	if w.CurrentStep >= totalSteps-1 {
-		// Last step: do not modify state, caller should use MarkDone
-		s.worksMu.Unlock()
+	prev := s.snapshotWorks()
+
+	if w.Type == WorkTypeStory {
+		for i := range s.works {
+			child := &s.works[i]
+			if child.ParentID == w.ID && child.Status != StatusClosed {
+				w.Status = StatusWaiting
+				w.UpdatedAt = time.Now()
+
+				modified := map[string]bool{id: true}
+				if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
+					return false, err
+				}
+				return false, nil
+			}
+		}
+
+		w.Status = StatusClosed
+		w.UpdatedAt = time.Now()
+
+		modified := map[string]bool{id: true}
+		if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
 
-	// More steps remaining: advance to next step
-	prev := s.snapshotWorks()
+	if totalSteps <= 0 || w.CurrentStep >= totalSteps-1 {
+		w.Status = StatusClosed
+		w.UpdatedAt = time.Now()
+
+		modified := map[string]bool{id: true}
+		if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
 
 	w.CurrentStep++
 	w.UpdatedAt = time.Now()

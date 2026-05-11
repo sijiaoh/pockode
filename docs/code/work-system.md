@@ -77,7 +77,7 @@ The API exposes intent methods rather than raw status updates. Each method encap
 |--------|------------|---------|
 | `Start(id, sessionID)` | open/stopped/needs_input → in_progress | Launch AI session |
 | `Stop(id)` | in_progress/needs_input/waiting → stopped | Terminate session |
-| `MarkDone(id)` | in_progress → closed | Complete work |
+| `StepDone(id, totalSteps)` | in_progress → in_progress/waiting/closed | Advance task step, wait for pending story children, or complete work |
 | `MarkNeedsInput(id)` | in_progress → needs_input | Pause for user input |
 | `MarkWaiting(id)` | in_progress → waiting | Pause for child work completion |
 | `Resume(id)` | needs_input → in_progress | Continue after user input |
@@ -99,9 +99,9 @@ Both `waiting` and `needs_input` pause the agent's work, but serve different pur
 
 Both states can be resumed by user messages, allowing users to interrupt the wait if needed.
 
-### Direct Closure
+### Step Completion
 
-Work items transition directly from `in_progress` to `closed` via `MarkDone`. When a child task closes, the system automatically resumes its parent story only if the parent is `waiting`. Already closed parents are not reopened, preserving the intentional completion of coordinated work.
+Work items transition through `StepDone`; there is no intermediate `done` state. Tasks advance to the next step or close when no steps remain. Stories close when they have no pending children, and move to `waiting` when they still have open child work. When a child task closes, the system automatically resumes its parent story only if the parent is `waiting`. Already closed parents are not reopened, preserving the intentional completion of coordinated work.
 
 ## File-Based Storage
 
@@ -195,11 +195,10 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_update` | Modify title/body/role | `id`, fields to update |
 | `work_delete` | Delete (cascades to children) | `id` |
 | `work_start` | Begin execution | `id` |
-| `work_done` | Mark complete | `id` |
 | `work_needs_input` | Pause for user input | `id`, `reason` |
 | `work_wait` | Pause for child work completion | `id` |
 | `work_reopen` | Reopen a closed work item | `id` |
-| `step_done` | Complete current step, advance to next | `id` |
+| `step_done` | Advance task step, wait for pending story children, or close work | `id` |
 | `work_comment_add` | Add progress note | `work_id`, `body` |
 | `work_comment_list` | List comments | `work_id` |
 | `work_comment_update` | Update comment text | `id`, `body` |
@@ -315,7 +314,7 @@ MCP: step_done ──► store.StepDone()
                  yes       no
                    │        │
                    ▼        ▼
-            CurrentStep++   Return "use work_done"
+            CurrentStep++   Close work
                    │
                    ▼
             fsnotify ──► AutoResumer
@@ -346,7 +345,7 @@ MCP: work_reopen ──► fsnotify ──► AutoResumer
                       Send reopen message
 ```
 
-The reopen message instructs the agent to review its previous work and determine what additional changes are needed, then call `work_done` when complete.
+The reopen message instructs the agent to review its previous work and determine what additional changes are needed, then call `step_done` when complete.
 
 ### Retry and Settle Delay
 
@@ -355,7 +354,7 @@ maxRetries = 3        // Stop work after 3 auto-continuation failures
 settleDelay = 2s      // Wait for MCP writes to propagate via fsnotify
 ```
 
-The settle delay ensures that when checking retry counts, any pending `work_done` calls have propagated through fsnotify and reset the counter.
+The settle delay ensures that when checking retry counts, any pending `step_done` calls have propagated through fsnotify and reset the counter.
 
 ## Frontend Integration
 
@@ -407,7 +406,7 @@ Start (step 0)
     no       yes
      │        │
      ▼        ▼
- step_done   work_done
+ step_done   step_done
      │        │
      ▼        ▼
  CurrentStep++ Normal completion
@@ -421,8 +420,7 @@ Start (step 0)
 ```
 
 **Key distinction**:
-- `step_done`: Complete current step and advance to next (agent stays in_progress)
-- `work_done`: Complete the entire task (triggers closure; if parent is waiting, it resumes)
+- `step_done`: Tasks advance to the next step or close when no steps remain. Stories wait while they have pending child work, or close when none remain.
 
 ### Prompt Format
 
@@ -466,7 +464,7 @@ Step 3 of 3
 <step 3 instructions>
 
 When you finish this step:
-- Call work_done with ID xxx to complete the task.
+- Call step_done with ID xxx to complete the task.
 ```
 
 **Auto-continuation with steps:**
@@ -482,7 +480,7 @@ Your session was interrupted while working on step 2 of 3.
 
 Check if you have completed the current step:
 - If YES and this is NOT the last step: Call step_done with ID xxx to proceed to the next step.
-- If YES and this IS the last step: Call work_done with ID xxx to complete the task.
+- If YES and this IS the last step: Call step_done with ID xxx to complete the task.
 - If NO: Continue working on this step.
 ```
 
@@ -492,9 +490,10 @@ Check if you have completed the current step:
 - **Step state persists**: `CurrentStep` is preserved through `stopped`/`needs_input` transitions.
 - **Retry counter resets per step**: Each new step gets a fresh retry budget.
 - **Explicit step control**: Agents call `step_done` to advance steps, giving them control over when steps complete.
-- **step_done vs work_done**:
-  - `step_done`: Increments `CurrentStep` while keeping status as `in_progress`. Use for all steps except the last.
-  - `work_done`: Marks the task as `closed`. Use only for the final step or tasks without steps.
+- **step_done completion flow**:
+  - Tasks: increments `CurrentStep` while more steps remain.
+  - Tasks: marks the work as `closed` on the final step or when the role has no steps.
+  - Stories: transitions to `waiting` while pending child work exists, or `closed` when no pending children remain.
 
 ## Prompt Configuration
 

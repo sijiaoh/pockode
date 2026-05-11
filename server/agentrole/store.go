@@ -95,7 +95,7 @@ var defaultRoles = []struct {
 			"- Use agent_role_list to discover available roles; assign the best fit for each task\n" +
 			"- Always include a final review & refactoring task\n" +
 			"## Completion\n" +
-			"When all tasks are done, commit changes before calling work_done.",
+			"When all tasks are done, commit changes before calling step_done.",
 	},
 	{
 		Name: "PM (Autopilot)",
@@ -107,7 +107,7 @@ var defaultRoles = []struct {
 			"## Execution\n" +
 			"- Start tasks using work_start; run independent tasks in parallel\n" +
 			"## Completion\n" +
-			"When all tasks are done, commit changes before calling work_done.",
+			"When all tasks are done, commit changes before calling step_done.",
 	},
 	{
 		Name: "Designer",
