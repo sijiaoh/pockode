@@ -54,8 +54,7 @@ type Store interface {
 	Reactivate(ctx context.Context, id string) error
 
 	// StepDone marks current work progress as complete.
-	// - Tasks advance CurrentStep while more steps remain; otherwise they close.
-	// - Stories wait while pending child work exists; otherwise they close.
+	// Work advances CurrentStep while more steps remain; otherwise it closes.
 	// Returns hasMoreSteps=true if there are remaining steps after advancement.
 	StepDone(ctx context.Context, id string, totalSteps int) (hasMoreSteps bool, err error)
 
@@ -491,50 +490,25 @@ func (s *FileStore) StepDone(_ context.Context, id string, totalSteps int) (bool
 
 	prev := s.snapshotWorks()
 
-	if w.Type == WorkTypeStory {
-		for i := range s.works {
-			child := &s.works[i]
-			if child.ParentID == w.ID && child.Status != StatusClosed {
-				w.Status = StatusWaiting
-				w.UpdatedAt = time.Now()
-
-				modified := map[string]bool{id: true}
-				if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
-					return false, err
-				}
-				return false, nil
-			}
-		}
-
-		w.Status = StatusClosed
+	if totalSteps > 0 && w.CurrentStep < totalSteps-1 {
+		w.CurrentStep++
 		w.UpdatedAt = time.Now()
 
 		modified := map[string]bool{id: true}
 		if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
 			return false, err
 		}
-		return false, nil
+		return true, nil
 	}
 
-	if totalSteps <= 0 || w.CurrentStep >= totalSteps-1 {
-		w.Status = StatusClosed
-		w.UpdatedAt = time.Now()
-
-		modified := map[string]bool{id: true}
-		if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
-			return false, err
-		}
-		return false, nil
-	}
-
-	w.CurrentStep++
+	w.Status = StatusClosed
 	w.UpdatedAt = time.Now()
 
 	modified := map[string]bool{id: true}
 	if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
 		return false, err
 	}
-	return true, nil
+	return false, nil
 }
 
 func (s *FileStore) RollbackStart(_ context.Context, id string, wasRestart bool) error {

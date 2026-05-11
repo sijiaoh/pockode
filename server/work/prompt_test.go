@@ -27,6 +27,8 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 	assertContains(t, msg, "Fix the bug", "task title")
 	assertContains(t, msg, "task-1", "work ID")
 	assertContains(t, msg, "agent role instructions", "agent-role-driven lifecycle instruction")
+	assertContains(t, msg, "when a step is complete", "step completion instruction")
+	assertContains(t, msg, "when the task work is done if this task has no steps", "completion without steps instruction")
 
 	if strings.Contains(msg, "coordinate") {
 		t.Error("task message should not contain story coordination rules")
@@ -46,6 +48,8 @@ func TestBuildKickoffMessage_Story(t *testing.T) {
 	assertContains(t, msg, "Big feature", "story title")
 	assertContains(t, msg, storyBehaviorRules, "story behavior rules")
 	assertContains(t, msg, "work_wait", "work_wait instruction")
+	assertContains(t, msg, "when a step is complete", "step completion instruction")
+	assertContains(t, msg, "when the story work is done if this story has no steps", "completion without steps instruction")
 }
 
 func TestBuildKickoffMessage_RoleRefComesFirst(t *testing.T) {
@@ -104,6 +108,8 @@ func TestBuildKickoffMessage_TaskWithParent_ReportViaComment(t *testing.T) {
 	assertContains(t, msg, "work_comment_add", "work_comment_add instruction")
 	assertContains(t, msg, "story-1", "parent work ID")
 	assertContains(t, msg, "agent role instructions", "agent-role-driven lifecycle instruction")
+	assertContains(t, msg, "when a step is complete", "step completion instruction")
+	assertContains(t, msg, "when the task work is done if this task has no steps", "completion without steps instruction")
 }
 
 func TestBuildKickoffMessage_TaskWithoutParent_NoCommentInstruction(t *testing.T) {
@@ -299,13 +305,11 @@ func TestBuildAutoContinuationMessageWithSteps_Story(t *testing.T) {
 	w := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
 	steps := []string{"Step 1", "Step 2"}
 
-	// Stories should fall back to standard message (steps don't apply)
-	msgWithSteps := BuildAutoContinuationMessageWithSteps(w, steps, 0)
-	msgWithoutSteps := BuildAutoContinuationMessage(w)
+	msg := BuildAutoContinuationMessageWithSteps(w, steps, 0)
 
-	if msgWithSteps != msgWithoutSteps {
-		t.Error("story should fall back to standard message regardless of steps")
-	}
+	assertContains(t, msg, "## Current Step", "step header")
+	assertContains(t, msg, "Step 1 of 2", "step number")
+	assertContains(t, msg, "interrupted while working on step 1 of 2", "interrupt context")
 }
 
 func TestBuildAutoContinuationMessageWithSteps_InvalidIndex(t *testing.T) {

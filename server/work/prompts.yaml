@@ -22,65 +22,65 @@ story_behavior_rules: |
   1. Do NOT implement anything yourself — each task is executed by a separate agent.
   2. Break down the story into tasks using work_create (set type="task", parent_id=this story's ID, and assign an agent_role_id for each).
   3. After starting child tasks, call work_wait with ID {{.ID}} to wait for their completion reports.
-  4. Follow your agent role instructions to decide when the story's current step is complete.
+  4. Follow your agent role instructions to decide when the story's current step is complete: call step_done with ID {{.ID}} when a step is complete, or when the story work is done if this story has no steps.
   5. Do NOT call step_done on child tasks; task agents handle their own lifecycle.
 
 # Story rules suffix (appended to story_behavior_rules)
 # Placeholders: {{.ID}}
 story_rules_suffix: |
-  After starting child tasks, call work_wait with ID {{.ID}} to wait for task completion reports. If your agent role says the current story step is complete, call step_done with ID {{.ID}}. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
+  After starting child tasks, call work_wait with ID {{.ID}} to wait for task completion reports. Call step_done with ID {{.ID}} when a step is complete, or when the story work is done if this story has no steps. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
 
 # Task rules when there is a parent story
 # Placeholders: {{.ParentID}}, {{.ID}}
 task_rules_with_parent: |
   Before starting, use work_comment_list with work_id {{.ParentID}} to check for any instructions or feedback on the parent story.
 
-  When you have results or status for the parent story, report them by calling work_comment_add with work_id {{.ParentID}} (the parent). Follow your agent role instructions to decide whether the current step is complete and should be advanced with step_done for ID {{.ID}}. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
+  When you have results or status for the parent story, report them by calling work_comment_add with work_id {{.ParentID}} (the parent). Follow your agent role instructions to decide when the current step is complete. Call step_done with ID {{.ID}} when a step is complete, or when the task work is done if this task has no steps. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
 
 # Task rules when there is no parent
 # Placeholders: {{.ID}}
 task_rules_without_parent: |
-  Follow your agent role instructions to decide whether the current step is complete and should be advanced with step_done for ID {{.ID}}. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
+  Follow your agent role instructions to decide when the current step is complete. Call step_done with ID {{.ID}} when a step is complete, or when the task work is done if this task has no steps. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
 
 # Story restart nudge
 # Placeholders: {{.ID}}
 story_restart_nudge: |
-  Your story was stopped and is now being restarted. Review your tasks, then continue according to your agent role instructions.
+  Your story was stopped and is now being restarted. Review your tasks, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the story work is done if this story has no steps.
 
 # Task restart nudge
 # Placeholders: {{.ID}}
 task_restart_nudge: |
-  Your task was stopped and is now being restarted. Review what you've done so far, then continue according to your agent role instructions.
+  Your task was stopped and is now being restarted. Review what you've done so far, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the task work is done if this task has no steps.
 
 # Story auto-continuation nudge
 # Placeholders: {{.ID}}
 story_auto_continue_nudge: |
-  Your story is still in_progress but your session was interrupted. Review your tasks, then continue according to your agent role instructions.
+  Your story is still in_progress but your session was interrupted. Review your tasks, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the story work is done if this story has no steps.
 
 # Task auto-continuation nudge
 # Placeholders: {{.ID}}
 task_auto_continue_nudge: |
-  Your task is still in_progress but your session was interrupted. Review what you've done so far, then continue according to your agent role instructions.
+  Your task is still in_progress but your session was interrupted. Review what you've done so far, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the task work is done if this task has no steps.
 
-# Task step auto-continuation nudge (for tasks with steps)
+# Step auto-continuation nudge (for work items with steps)
 # Placeholders: {{.CurrentStep}}, {{.TotalSteps}}, {{.ID}}
-task_step_auto_continue_nudge: |
+step_auto_continue_nudge: |
   Your session was interrupted while working on step {{.CurrentStep}} of {{.TotalSteps}}.
 
   Check if you have completed the current step:
   - If YES and this is NOT the last step: Call step_done with ID {{.ID}} to proceed to the next step.
-  - If YES and this IS the last step: Call step_done with ID {{.ID}} to complete the task.
+  - If YES and this IS the last step: Call step_done with ID {{.ID}} to close the work item.
   - If NO: Continue working on this step.
 
 # Story reopen nudge (when a closed story is reopened)
 # Placeholders: {{.ID}}
 story_reopen_nudge: |
-  This story has been reopened. Review the current tasks and determine what additional work is needed. Create new tasks as necessary, then continue according to your agent role instructions.
+  This story has been reopened. Review the current tasks and determine what additional work is needed. Create new tasks as necessary, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the story work is done if this story has no steps.
 
 # Task reopen nudge (when a closed task is reopened)
 # Placeholders: {{.ID}}
 task_reopen_nudge: |
-  This task has been reopened. Review your previous work and determine what additional changes are needed, then continue according to your agent role instructions.
+  This task has been reopened. Review your previous work and determine what additional changes are needed, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the task work is done if this task has no steps.
 
 # Child completion nudge for waiting parent (when a child task completes and parent was waiting)
 # Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ID}}
@@ -99,7 +99,7 @@ step_advance_section: |
 
   When you finish this step:
   {{- if eq .CurrentStep .TotalSteps}}
-  - Call step_done with ID {{.ID}} to complete the task.
+  - Call step_done with ID {{.ID}} to close the work item.
   {{- else}}
   - Call step_done with ID {{.ID}} to proceed to the next step.
   {{- end}}
@@ -114,7 +114,7 @@ current_step_section: |
 
   When you finish this step:
   {{- if eq .CurrentStep .TotalSteps}}
-  - Call step_done with ID {{.ID}} to complete the task.
+  - Call step_done with ID {{.ID}} to close the work item.
   {{- else}}
   - Call step_done with ID {{.ID}} to proceed to the next step.
   {{- end}}

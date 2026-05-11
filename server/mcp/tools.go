@@ -137,7 +137,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "step_done",
-		Description: "Mark current work progress as complete. The work item must be in_progress status. Tasks advance CurrentStep when more steps remain, otherwise close. Stories wait when they have pending child work, otherwise close.",
+		Description: "Mark current work progress as complete. The work item must be in_progress status. Work items advance CurrentStep when more steps remain, otherwise close. Use work_wait, not step_done, to wait for child work.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
@@ -564,18 +564,8 @@ func (s *Server) handleStepDone(ctx context.Context, args json.RawMessage) (stri
 	if hasMoreSteps {
 		return fmt.Sprintf("Step %d completed for work %s, advancing to step %d of %d", w.CurrentStep+1, params.ID, w.CurrentStep+2, totalSteps), nil
 	}
-	updated, found, err := s.store.Get(params.ID)
-	if err != nil {
-		return "", err
-	}
-	if !found {
-		return "", work.ErrWorkNotFound
-	}
-	if updated.Status == work.StatusWaiting {
-		return fmt.Sprintf("Work %s is waiting for child work to complete", params.ID), nil
-	}
 	if totalSteps == 0 {
-		return fmt.Sprintf("Work %s completed", params.ID), nil
+		return fmt.Sprintf("Work %s closed", params.ID), nil
 	}
 	return fmt.Sprintf("Step %d (final step) completed for work %s. Work is now closed.", w.CurrentStep+1, params.ID), nil
 }

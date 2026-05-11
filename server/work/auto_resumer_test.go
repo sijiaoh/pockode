@@ -358,7 +358,7 @@ func TestAutoResumer_ClosedParentStaysClosedOnChildClose(t *testing.T) {
 	}
 }
 
-func TestAutoResumer_WakesStoryAfterStepDoneAndChildClose(t *testing.T) {
+func TestAutoResumer_WakesStoryAfterWorkWaitAndChildClose(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
 	story := createStory(t, store, "Story")
@@ -367,11 +367,11 @@ func TestAutoResumer_WakesStoryAfterStepDoneAndChildClose(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, parentSid)
 	startWork(t, store, task.ID)
 
-	if _, err := store.StepDone(context.Background(), story.ID, 0); err != nil {
-		t.Fatalf("StepDone story: %v", err)
+	if err := store.MarkWaiting(context.Background(), story.ID); err != nil {
+		t.Fatalf("MarkWaiting story: %v", err)
 	}
 	if got := getWork(t, store, story.ID); got.Status != StatusWaiting {
-		t.Fatalf("story status after step_done = %q, want %q", got.Status, StatusWaiting)
+		t.Fatalf("story status after work_wait = %q, want %q", got.Status, StatusWaiting)
 	}
 
 	doneWork(t, store, task.ID)
@@ -1316,7 +1316,7 @@ func TestAutoResumer_AutoContinuation_WithoutSteps(t *testing.T) {
 	}
 }
 
-func TestAutoResumer_AutoContinuation_StoryIgnoresSteps(t *testing.T) {
+func TestAutoResumer_AutoContinuation_StoryWithSteps(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
 	sp := &mockStepProvider{
@@ -1339,13 +1339,12 @@ func TestAutoResumer_AutoContinuation_StoryIgnoresSteps(t *testing.T) {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
 
-	// Stories should use standard message (steps don't apply)
 	msg := msgs[0].Content
-	if containsAll(msg, "## Current Step") {
-		t.Error("story message should NOT contain step context")
+	if !containsAll(msg, "## Current Step", "Step 1 of 2", "Step 1") {
+		t.Error("story message should contain step context")
 	}
-	if !containsAll(msg, "Your story is still in_progress") {
-		t.Error("story message should contain standard auto-continuation nudge")
+	if !containsAll(msg, "interrupted while working on step", "Call step_done", "If NO: Continue working") {
+		t.Error("story message should contain step completion check prompt")
 	}
 }
 

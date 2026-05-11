@@ -77,7 +77,7 @@ The API exposes intent methods rather than raw status updates. Each method encap
 |--------|------------|---------|
 | `Start(id, sessionID)` | open/stopped/needs_input → in_progress | Launch AI session |
 | `Stop(id)` | in_progress/needs_input/waiting → stopped | Terminate session |
-| `StepDone(id, totalSteps)` | in_progress → in_progress/waiting/closed | Advance task step, wait for pending story children, or complete work |
+| `StepDone(id, totalSteps)` | in_progress → in_progress/closed | Advance work step or close work |
 | `MarkNeedsInput(id)` | in_progress → needs_input | Pause for user input |
 | `MarkWaiting(id)` | in_progress → waiting | Pause for child work completion |
 | `Resume(id)` | needs_input → in_progress | Continue after user input |
@@ -101,7 +101,7 @@ Both states can be resumed by user messages, allowing users to interrupt the wai
 
 ### Step Completion
 
-Work items transition through `StepDone`; there is no intermediate `done` state. Tasks advance to the next step or close when no steps remain. Stories close when they have no pending children, and move to `waiting` when they still have open child work. When a child task closes, the system automatically resumes its parent story only if the parent is `waiting`. Already closed parents are not reopened, preserving the intentional completion of coordinated work.
+Work items transition through `StepDone`; there is no intermediate `done` state. Any work item with remaining steps advances to the next step and stays `in_progress`. When no steps remain, the work item closes. Waiting for child work is handled explicitly through `work_wait` / `MarkWaiting`, not `StepDone`. When a child task closes, the system automatically resumes its parent story only if the parent is `waiting`. Already closed parents are not reopened, preserving the intentional completion of coordinated work.
 
 ## File-Based Storage
 
@@ -198,7 +198,7 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_needs_input` | Pause for user input | `id`, `reason` |
 | `work_wait` | Pause for child work completion | `id` |
 | `work_reopen` | Reopen a closed work item | `id` |
-| `step_done` | Advance task step, wait for pending story children, or close work | `id` |
+| `step_done` | Advance work step or close work | `id` |
 | `work_comment_add` | Add progress note | `work_id`, `body` |
 | `work_comment_list` | List comments | `work_id` |
 | `work_comment_update` | Update comment text | `id`, `body` |
@@ -420,11 +420,11 @@ Start (step 0)
 ```
 
 **Key distinction**:
-- `step_done`: Tasks advance to the next step or close when no steps remain. Stories wait while they have pending child work, or close when none remain.
+- `step_done`: Work items advance to the next step while more steps remain, or close when no steps remain.
 
 ### Prompt Format
 
-Base task prompts do not force tasks to close themselves. They tell the agent to fetch its agent role and use that role's instructions to decide when the current step is complete and whether to call `step_done`. Parent tasks still report results to the parent story with `work_comment_add`. Story prompts tell coordinators to call `work_wait` after starting child tasks so the story waits for task completion reports.
+Base prompts tell the agent to fetch its agent role and use that role's instructions. They also state the lifecycle rule in one place: call `step_done` when a step is complete, or when the work is done if the work item has no steps. Tasks with a parent story report results to that parent with `work_comment_add`. Story prompts tell coordinators to call `work_wait` after starting child tasks so the story waits for task completion reports.
 
 **Initial kickoff with steps:**
 ```
@@ -466,7 +466,7 @@ Step 3 of 3
 <step 3 instructions>
 
 When you finish this step:
-- Call step_done with ID xxx to complete the task.
+- Call step_done with ID xxx to close the work item.
 ```
 
 **Auto-continuation with steps:**
@@ -482,7 +482,7 @@ Your session was interrupted while working on step 2 of 3.
 
 Check if you have completed the current step:
 - If YES and this is NOT the last step: Call step_done with ID xxx to proceed to the next step.
-- If YES and this IS the last step: Call step_done with ID xxx to complete the task.
+- If YES and this IS the last step: Call step_done with ID xxx to close the work item.
 - If NO: Continue working on this step.
 ```
 
@@ -493,9 +493,8 @@ Check if you have completed the current step:
 - **Retry counter resets per step**: Each new step gets a fresh retry budget.
 - **Explicit step control**: Agents call `step_done` to advance steps, giving them control over when steps complete.
 - **step_done completion flow**:
-  - Tasks: increments `CurrentStep` while more steps remain.
-  - Tasks: marks the work as `closed` on the final step or when the role has no steps.
-  - Stories: transitions to `waiting` while pending child work exists, or `closed` when no pending children remain.
+  - All work items: increments `CurrentStep` while more steps remain.
+  - All work items: marks the work as `closed` on the final step or when the role has no steps.
 
 ## Prompt Configuration
 
@@ -537,7 +536,7 @@ work_context: |
 | `task_restart_nudge` | Task restart | `ID` |
 | `story_auto_continue_nudge` | Story auto-continuation | `ID` |
 | `task_auto_continue_nudge` | Task auto-continuation | `ID` |
-| `task_step_auto_continue_nudge` | Task step auto-continuation | `CurrentStep`, `TotalSteps`, `ID` |
+| `step_auto_continue_nudge` | Step auto-continuation | `CurrentStep`, `TotalSteps`, `ID` |
 | `child_completion_nudge` | Waiting parent resume | `ChildTitle`, `ChildID`, `ID` |
 | `story_reopen_nudge` | Story reopen | `ID` |
 | `task_reopen_nudge` | Task reopen | `ID` |

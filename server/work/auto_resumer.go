@@ -303,13 +303,11 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSen
 	r.retries[sessionID] = count + 1
 	r.retryMu.Unlock()
 
-	// Build message with step context if available (for tasks only)
+	// Build message with step context if available.
 	var msg string
-	if w.Type == WorkTypeTask {
-		if sp := r.getStepProvider(); sp != nil {
-			if steps, err := sp.GetSteps(w.AgentRoleID); err == nil && len(steps) > 0 {
-				msg = BuildAutoContinuationMessageWithSteps(*w, steps, w.CurrentStep)
-			}
+	if sp := r.getStepProvider(); sp != nil {
+		if steps, err := sp.GetSteps(w.AgentRoleID); err == nil && len(steps) > 0 {
+			msg = BuildAutoContinuationMessageWithSteps(*w, steps, w.CurrentStep)
 		}
 	}
 	if msg == "" {

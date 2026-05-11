@@ -844,8 +844,8 @@ func TestStepDone_NoSteps(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", toolText(result))
 	}
-	if !strings.Contains(toolText(result), "completed") {
-		t.Errorf("expected completed message, got %q", toolText(result))
+	if !strings.Contains(toolText(result), "closed") {
+		t.Errorf("expected closed message, got %q", toolText(result))
 	}
 
 	w, _, _ := ts.store.Get(id)
@@ -854,7 +854,37 @@ func TestStepDone_NoSteps(t *testing.T) {
 	}
 }
 
-func TestStepDone_StoryWithPendingChildWaits(t *testing.T) {
+func TestWorkWait_StoryWithPendingChildWaits(t *testing.T) {
+	ts := newTestServer(t)
+
+	result := callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "story", "title": "Test Story", "agent_role_id": ts.roleID,
+	})
+	storyID := extractID(t, toolText(result))
+
+	result = callTool(t, ts.Server, "work_create", map[string]string{
+		"type": "task", "title": "Test Task", "agent_role_id": ts.roleID, "parent_id": storyID,
+	})
+	taskID := extractID(t, toolText(result))
+
+	callTool(t, ts.Server, "work_start", map[string]string{"id": storyID})
+	callTool(t, ts.Server, "work_start", map[string]string{"id": taskID})
+
+	result = callTool(t, ts.Server, "work_wait", map[string]string{"id": storyID})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	if !strings.Contains(toolText(result), "waiting for child work") {
+		t.Errorf("expected waiting message, got %q", toolText(result))
+	}
+
+	w, _, _ := ts.store.Get(storyID)
+	if w.Status != work.StatusWaiting {
+		t.Errorf("Status = %s, want waiting", w.Status)
+	}
+}
+
+func TestStepDone_StoryWithPendingChildCloses(t *testing.T) {
 	ts := newTestServer(t)
 
 	result := callTool(t, ts.Server, "work_create", map[string]string{
@@ -874,13 +904,13 @@ func TestStepDone_StoryWithPendingChildWaits(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", toolText(result))
 	}
-	if !strings.Contains(toolText(result), "waiting for child work") {
-		t.Errorf("expected waiting message, got %q", toolText(result))
+	if !strings.Contains(toolText(result), "closed") {
+		t.Errorf("expected closed message, got %q", toolText(result))
 	}
 
 	w, _, _ := ts.store.Get(storyID)
-	if w.Status != work.StatusWaiting {
-		t.Errorf("Status = %s, want waiting", w.Status)
+	if w.Status != work.StatusClosed {
+		t.Errorf("Status = %s, want closed", w.Status)
 	}
 }
 

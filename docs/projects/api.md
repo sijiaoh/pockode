@@ -41,7 +41,7 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 
 - **`work_create`**: Requires `agent_role_id` (validated to exist). Stories are top-level; tasks require `parent_id`.
 - **`work_start`**: Requires the work item to have an `agent_role_id`. Generates a UUIDv7 session ID, transitions to `in_progress` and attaches the session ID via `Store.Start`. The main server detects this state change via fsnotify (`AutoResumer` Trigger C) and handles session creation.
-- **`step_done`**: Calls `Store.StepDone()`. Tasks advance to the next configured step, or transition `in_progress → closed` when no steps remain. Stories transition `in_progress → waiting` while they have pending child work, or `in_progress → closed` when no pending children remain.
+- **`step_done`**: Calls `Store.StepDone()`. Work items advance to the next configured step, or transition `in_progress → closed` when no steps remain. Use `work_wait` to transition `in_progress → waiting` while child work is still open.
 - **`work_needs_input`**: Calls `Store.MarkNeedsInput()`. Transitions `in_progress → needs_input`.
 - **`work_reopen`**: Calls `Store.Reopen()`. Transitions `closed → in_progress`. Use when you need to add more child work items or continue working on a completed item.
 - **`work_update`**: Uses pointer fields (`*string`) to distinguish "not provided" from "set to empty". Only updates data fields (title, body, agent_role_id).

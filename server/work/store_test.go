@@ -1519,6 +1519,85 @@ func TestStepDone_LastStepClosesWork(t *testing.T) {
 	}
 }
 
+func TestStepDone_StoryAdvancesToNextStep(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+
+	hasMore, err := s.StepDone(context.Background(), story.ID, 3)
+	if err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	if !hasMore {
+		t.Error("expected hasMoreSteps=true")
+	}
+
+	got := getWork(t, s, story.ID)
+	if got.CurrentStep != 1 {
+		t.Errorf("CurrentStep = %d, want 1", got.CurrentStep)
+	}
+	if got.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
+	}
+}
+
+func TestStepDone_StoryLastStepClosesWithPendingChildren(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWork(t, s, story.ID)
+	startWork(t, s, task.ID)
+
+	if _, err := s.StepDone(context.Background(), story.ID, 2); err != nil {
+		t.Fatalf("StepDone first step: %v", err)
+	}
+
+	hasMore, err := s.StepDone(context.Background(), story.ID, 2)
+	if err != nil {
+		t.Fatalf("StepDone last step: %v", err)
+	}
+	if hasMore {
+		t.Error("expected hasMoreSteps=false for story completion")
+	}
+
+	got := getWork(t, s, story.ID)
+	if got.CurrentStep != 1 {
+		t.Errorf("CurrentStep = %d, want 1", got.CurrentStep)
+	}
+	if got.Status != StatusClosed {
+		t.Errorf("status = %q, want %q", got.Status, StatusClosed)
+	}
+}
+
+func TestStepDone_StoryLastStepClosesWhenChildrenClosed(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+	startWork(t, s, story.ID)
+	startWork(t, s, task.ID)
+	doneWork(t, s, task.ID)
+
+	if _, err := s.StepDone(context.Background(), story.ID, 2); err != nil {
+		t.Fatalf("StepDone first step: %v", err)
+	}
+
+	hasMore, err := s.StepDone(context.Background(), story.ID, 2)
+	if err != nil {
+		t.Fatalf("StepDone last step: %v", err)
+	}
+	if hasMore {
+		t.Error("expected hasMoreSteps=false for story completion")
+	}
+
+	got := getWork(t, s, story.ID)
+	if got.CurrentStep != 1 {
+		t.Errorf("CurrentStep = %d, want 1", got.CurrentStep)
+	}
+	if got.Status != StatusClosed {
+		t.Errorf("status = %q, want %q", got.Status, StatusClosed)
+	}
+}
+
 func TestStepDone_NoStepsClosesWork(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
@@ -1538,7 +1617,7 @@ func TestStepDone_NoStepsClosesWork(t *testing.T) {
 	}
 }
 
-func TestStepDone_StoryWithPendingChildrenWaits(t *testing.T) {
+func TestStepDone_StoryWithPendingChildrenClosesWhenNoSteps(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
@@ -1550,12 +1629,12 @@ func TestStepDone_StoryWithPendingChildrenWaits(t *testing.T) {
 		t.Fatalf("StepDone: %v", err)
 	}
 	if hasMore {
-		t.Error("expected hasMoreSteps=false for story waiting on children")
+		t.Error("expected hasMoreSteps=false for story completion")
 	}
 
 	got := getWork(t, s, story.ID)
-	if got.Status != StatusWaiting {
-		t.Errorf("status = %q, want %q", got.Status, StatusWaiting)
+	if got.Status != StatusClosed {
+		t.Errorf("status = %q, want %q", got.Status, StatusClosed)
 	}
 }
 

@@ -137,7 +137,7 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | ------------- | -------------------------------------- | ---------------------------------------------------------------- |
 | Start         | `(ctx, id, sessionID) → (Work, error)` | Transitions to `in_progress`, sets sessionID                    |
 | Stop          | `(ctx, id) → error`                    | Transitions `in_progress`/`needs_input` → `stopped`             |
-| StepDone      | `(ctx, id, totalSteps) → (bool, error)` | Tasks advance to the next step or close; stories wait for pending children or close when none remain |
+| StepDone      | `(ctx, id, totalSteps) → (bool, error)` | Work items advance to the next step or close when no steps remain |
 | MarkNeedsInput| `(ctx, id) → error`                    | Transitions `in_progress` → `needs_input`                       |
 | MarkWaiting   | `(ctx, id) → error`                    | Transitions `in_progress` → `waiting`                           |
 | Resume        | `(ctx, id) → error`                    | Transitions `needs_input` → `in_progress`                       |

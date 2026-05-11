@@ -27,7 +27,7 @@ type promptTemplates struct {
 	TaskReopenNudge        string `yaml:"task_reopen_nudge"`
 	StoryAutoContinueNudge string `yaml:"story_auto_continue_nudge"`
 	TaskAutoContinueNudge  string `yaml:"task_auto_continue_nudge"`
-	TaskStepAutoContinue   string `yaml:"task_step_auto_continue_nudge"`
+	StepAutoContinueNudge  string `yaml:"step_auto_continue_nudge"`
 	ChildCompletionNudge   string `yaml:"child_completion_nudge"`
 	StepAdvanceSection     string `yaml:"step_advance_section"`
 	CurrentStepSection     string `yaml:"current_step_section"`
@@ -174,14 +174,9 @@ func BuildAutoContinuationMessageWithSteps(w Work, steps []string, currentStep i
 		return BuildAutoContinuationMessage(w)
 	}
 
-	// For stories, steps don't apply (stories coordinate, don't execute steps)
-	if w.Type == WorkTypeStory {
-		return BuildAutoContinuationMessage(w)
-	}
-
 	stepSection := formatStepSection(w.ID, steps, currentStep)
 
-	nudge := render(prompts.TaskStepAutoContinue, map[string]any{
+	nudge := render(prompts.StepAutoContinueNudge, map[string]any{
 		"CurrentStep": currentStep + 1,
 		"TotalSteps":  len(steps),
 		"ID":          w.ID,

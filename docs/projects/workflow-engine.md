@@ -38,7 +38,7 @@ The workflow engine manages work item lifecycles through status transitions, aut
 | `open`         | `in_progress`  | `Store.Start` (fresh start)                |
 | `in_progress`  | `open`         | `Store.RollbackStart` (fresh start failed) |
 | `in_progress`  | `needs_input`  | `Store.MarkNeedsInput`                     |
-| `in_progress`  | `waiting`      | `Store.MarkWaiting`; `Store.StepDone` for stories with pending children |
+| `in_progress`  | `waiting`      | `Store.MarkWaiting`                         |
 | `in_progress`  | `stopped`      | `Store.Stop` (process ended/interrupted)   |
 | `in_progress`  | `closed`       | `Store.StepDone`                           |
 | `needs_input`  | `in_progress`  | `Store.Resume` (user confirms)             |
@@ -63,7 +63,7 @@ SessionID changes are encapsulated in intent-based Store methods:
 
 ## Step Completion
 
-Work items transition through `StepDone`; there is no intermediate `done` state. Tasks advance to the next step or close when no steps remain. Stories close when they have no pending children, and move to `waiting` when they still have open child work.
+Work items transition through `StepDone`; there is no intermediate `done` state. Any work item with remaining steps advances to the next step and stays `in_progress`. When no steps remain, the work item closes. Waiting for child work is handled explicitly through `work_wait` / `Store.MarkWaiting`, not `StepDone`.
 
 When a child work closes, its parent story is automatically resumed (if the parent is `waiting`), allowing the coordinator agent to review results and continue orchestration.
 
@@ -120,20 +120,19 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 
 ### Trigger E: Explicit Step Done
 
-**When:** A task's `CurrentStep` is advanced externally via MCP `step_done` tool.
+**When:** A work item's `CurrentStep` is advanced externally via MCP `step_done` tool.
 
 **Flow:**
-1. Task agent calls `step_done` MCP tool when it completes the current step.
-2. `Store.StepDone` advances `CurrentStep` if more steps remain; otherwise it closes the work.
+1. Agent calls `step_done` MCP tool when it completes the current step.
+2. `Store.StepDone` advances `CurrentStep` if more steps remain; otherwise it closes the work item.
 3. AutoResumer detects the step change via `knownSteps` tracking (External event).
 4. If there are more steps:
    - Send `BuildStepAdvanceMessage` with the next step's instructions.
-5. If this is the last step, `step_done` closes the work and no next-step prompt is sent.
+5. If this is the last step, `step_done` closes the work item and no next-step prompt is sent.
 
 **Constraints:**
-- Only applies to Tasks (not Stories).
 - Work must be `in_progress` to call `step_done`.
-- On the last step, agent should call `step_done` to complete the task.
+- On the last step, agent should call `step_done` to close the work item.
 
 **Purpose:** Enable explicit step-by-step execution where the agent controls when to advance. This gives the agent full control over step completion timing, avoiding race conditions from automatic detection.
 
@@ -176,9 +175,9 @@ Six prompt builders generate messages for different lifecycle events. All share 
 - Agent role reference (instructs agent to fetch its role via `agent_role_get`)
 - Work context (title, ID, instruction to read full details via `work_get`)
 - Behavior rules (vary by work type):
-  - **Story:** Coordinator rules — break work into tasks, call `work_wait` after starting child tasks to wait for completion reports, do not implement anything, do not call `step_done` on children, and follow the agent role to decide when the story step is complete.
-  - **Task with parent:** Check parent comments and report results via `work_comment_add`; the agent role decides when to call `step_done`.
-  - **Task without parent:** Follow the agent role to decide when to call `step_done`.
+  - **Story:** Coordinator rules — break work into tasks, call `work_wait` after starting child tasks to wait for completion reports, do not implement anything, do not call `step_done` on children, and call `step_done` when a step is complete or when story work with no steps is complete.
+  - **Task with parent:** Check parent comments and report results via `work_comment_add`; call `step_done` when a step is complete or when task work with no steps is complete.
+  - **Task without parent:** Call `step_done` when a step is complete or when task work with no steps is complete.
 
 ### BuildKickoffMessage
 
@@ -196,7 +195,7 @@ Step 1 of N
 <step instructions>
 ```
 
-Used when a task's agent role has `steps` defined. Falls back to `BuildKickoffMessage` if no steps.
+Used when a work item's agent role has `steps` defined. Falls back to `BuildKickoffMessage` if no steps.
 
 ### BuildRestartMessage
 
@@ -212,7 +211,7 @@ Base + a nudge appropriate to the work type:
 
 ### BuildAutoContinuationMessageWithSteps
 
-For tasks with steps, base + current step section + step completion check:
+For work items with steps, base + current step section + step completion check:
 ```
 [Base message]
 
