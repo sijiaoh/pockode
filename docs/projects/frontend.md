@@ -112,8 +112,8 @@ Shows the detail view for a single work item (story or task). Sections:
 - **Title** — Inline-editable (tap pencil icon to enter edit mode)
 - **Status** — Read-only badge
 - **Role** — Inline-editable select (tap to switch role)
-- **Steps** — Step progress indicator showing current step position (if agent role has steps defined)
 - **Description** — Inline-editable textarea with Markdown rendering
+- **Steps** — Step progress indicator showing current step position (if agent role has steps defined)
 - **Tasks** (story only) — List of child tasks with status icons, "Chat" shortcut, and inline task creation
 - **Comments** — Loaded via `work.detail.subscribe` (real-time)
 
