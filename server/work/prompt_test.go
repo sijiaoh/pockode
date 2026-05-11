@@ -26,7 +26,7 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 	assertContains(t, msg, "agent_role_get", "agent_role_get instruction")
 	assertContains(t, msg, "Fix the bug", "task title")
 	assertContains(t, msg, "task-1", "work ID")
-	assertContains(t, msg, "step_done", "step_done instruction")
+	assertContains(t, msg, "agent role instructions", "agent-role-driven lifecycle instruction")
 
 	if strings.Contains(msg, "coordinate") {
 		t.Error("task message should not contain story coordination rules")
@@ -45,6 +45,7 @@ func TestBuildKickoffMessage_Story(t *testing.T) {
 
 	assertContains(t, msg, "Big feature", "story title")
 	assertContains(t, msg, storyBehaviorRules, "story behavior rules")
+	assertContains(t, msg, "work_wait", "work_wait instruction")
 }
 
 func TestBuildKickoffMessage_RoleRefComesFirst(t *testing.T) {
@@ -102,7 +103,7 @@ func TestBuildKickoffMessage_TaskWithParent_ReportViaComment(t *testing.T) {
 	assertContains(t, msg, "work_comment_list", "work_comment_list instruction for parent comments")
 	assertContains(t, msg, "work_comment_add", "work_comment_add instruction")
 	assertContains(t, msg, "story-1", "parent work ID")
-	assertContains(t, msg, "step_done", "step_done instruction")
+	assertContains(t, msg, "agent role instructions", "agent-role-driven lifecycle instruction")
 }
 
 func TestBuildKickoffMessage_TaskWithoutParent_NoCommentInstruction(t *testing.T) {

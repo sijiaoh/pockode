@@ -176,9 +176,9 @@ Six prompt builders generate messages for different lifecycle events. All share 
 - Agent role reference (instructs agent to fetch its role via `agent_role_get`)
 - Work context (title, ID, instruction to read full details via `work_get`)
 - Behavior rules (vary by work type):
-  - **Story:** Coordinator rules — break work into tasks, call `step_done` immediately to wait for pending children, do not implement anything, do not call `step_done` on children.
-  - **Task with parent:** Must report results via `work_comment_add` on parent, then call `step_done`.
-  - **Task without parent:** Must call `step_done` when finished.
+  - **Story:** Coordinator rules — break work into tasks, call `work_wait` after starting child tasks to wait for completion reports, do not implement anything, do not call `step_done` on children, and follow the agent role to decide when the story step is complete.
+  - **Task with parent:** Check parent comments and report results via `work_comment_add`; the agent role decides when to call `step_done`.
+  - **Task without parent:** Follow the agent role to decide when to call `step_done`.
 
 ### BuildKickoffMessage
 

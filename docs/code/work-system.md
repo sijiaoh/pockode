@@ -424,6 +424,8 @@ Start (step 0)
 
 ### Prompt Format
 
+Base task prompts do not force tasks to close themselves. They tell the agent to fetch its agent role and use that role's instructions to decide when the current step is complete and whether to call `step_done`. Parent tasks still report results to the parent story with `work_comment_add`. Story prompts tell coordinators to call `work_wait` after starting child tasks so the story waits for task completion reports.
+
 **Initial kickoff with steps:**
 ```
 [Base message]
