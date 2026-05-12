@@ -64,7 +64,7 @@ export default function WorkListOverlay({
 				stories:
 					status === "closed"
 						? [...(byStatus.get(status) as Work[])].sort((a, b) =>
-								b.created_at.localeCompare(a.created_at),
+								b.updated_at.localeCompare(a.updated_at),
 							)
 						: (byStatus.get(status) as Work[]),
 			}));

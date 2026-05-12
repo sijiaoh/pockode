@@ -79,6 +79,52 @@ describe("WorkListOverlay", () => {
 		).not.toBeInTheDocument();
 	});
 
+	it("sorts closed stories by updated_at in descending order", async () => {
+		const user = userEvent.setup();
+
+		useWorkStore.setState({
+			works: [
+				createWork({
+					id: "older-updated",
+					type: "story",
+					title: "Older Updated Story",
+					status: "closed",
+					created_at: "2026-03-05T00:00:00Z",
+					updated_at: "2026-03-01T00:00:00Z",
+				}),
+				createWork({
+					id: "newer-updated",
+					type: "story",
+					title: "Newer Updated Story",
+					status: "closed",
+					created_at: "2026-03-01T00:00:00Z",
+					updated_at: "2026-03-05T00:00:00Z",
+				}),
+			],
+			isLoading: false,
+			error: null,
+		});
+
+		render(
+			<WorkListOverlay
+				onBack={vi.fn()}
+				onOpenWorkDetail={vi.fn()}
+				onNavigateToSession={vi.fn()}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: /Closed/i }));
+
+		const newerStory = screen.getByText("Newer Updated Story");
+		const olderStory = screen.getByText("Older Updated Story");
+
+		// Verify newer updated story appears before older updated story in DOM order
+		expect(
+			newerStory.compareDocumentPosition(olderStory) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
 	it("keeps tasks collapsed by default for closed stories and allows expanding", async () => {
 		const user = userEvent.setup();
 
