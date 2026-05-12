@@ -93,13 +93,15 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}
 	}
 
-	// Add MCP config for work management tools
-	mcpConfigPath, err := ensureMCPConfig(opts.DataDir)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create MCP config: %w", err)
+	// Add MCP config for work management tools (unless disabled for testing)
+	if !opts.DisableMCP {
+		mcpConfigPath, err := ensureMCPConfig(opts.DataDir)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to create MCP config: %w", err)
+		}
+		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfigPath)
 	}
-	claudeArgs = append(claudeArgs, "--mcp-config", mcpConfigPath)
 
 	cmd := exec.CommandContext(procCtx, Binary, claudeArgs...)
 	cmd.Dir = opts.WorkDir

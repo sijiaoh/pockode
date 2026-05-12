@@ -13,42 +13,28 @@ import (
 
 const integrationTimeout = 60 * time.Second
 
-// Each integration test spawns a Claude CLI subprocess. Running too many
-// in parallel can overload the CPU, so we limit concurrency.
-const maxConcurrentAgents = 3
-
-var agentSemaphore = make(chan struct{}, maxConcurrentAgents)
-
-func acquireAgentSlot() { agentSemaphore <- struct{}{} }
-func releaseAgentSlot() { <-agentSemaphore }
-
 // RunIntegrationTests runs the full integration test suite for any Agent implementation.
+// Tests run sequentially to avoid overloading the system with too many Claude CLI processes.
 func RunIntegrationTests(t *testing.T, newAgent func() Agent) {
 	t.Run("Chat", func(t *testing.T) {
 		runChatTests(t, newAgent)
 	})
 	t.Run("PermissionAllow", func(t *testing.T) {
-		t.Parallel()
 		testPermissionAllow(t, newAgent())
 	})
 	t.Run("PermissionDeny", func(t *testing.T) {
-		t.Parallel()
 		testPermissionDeny(t, newAgent())
 	})
 	t.Run("PermissionAlwaysAllow", func(t *testing.T) {
-		t.Parallel()
 		testPermissionAlwaysAllow(t, newAgent())
 	})
 	t.Run("AskUserQuestionFlow", func(t *testing.T) {
-		t.Parallel()
 		testAskUserQuestionFlow(t, newAgent())
 	})
 	t.Run("YoloNoPermission", func(t *testing.T) {
-		t.Parallel()
 		testYoloNoPermission(t, newAgent())
 	})
 	t.Run("Interrupt", func(t *testing.T) {
-		t.Parallel()
 		testInterrupt(t, newAgent())
 	})
 }
@@ -109,20 +95,16 @@ func runChatTests(t *testing.T, newAgent func() Agent) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			runChatScenario(t, newAgent(), tc)
 		})
 	}
 }
 
 func runChatScenario(t *testing.T, a Agent, tc chatCase) {
-	acquireAgentSlot()
-	defer releaseAgentSlot()
-
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), Mode: tc.mode})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), Mode: tc.mode, DisableMCP: true})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -187,13 +169,10 @@ func runChatScenario(t *testing.T, a Agent, tc chatCase) {
 // testPermissionAllow verifies the full permission allow flow:
 // PermissionRequest → Allow → ToolResult → Done
 func testPermissionAllow(t *testing.T, a Agent) {
-	acquireAgentSlot()
-	defer releaseAgentSlot()
-
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir()})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -252,13 +231,10 @@ eventLoop:
 // testPermissionDeny verifies the permission deny flow:
 // PermissionRequest → Deny → Done/Interrupted
 func testPermissionDeny(t *testing.T, a Agent) {
-	acquireAgentSlot()
-	defer releaseAgentSlot()
-
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir()})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -316,13 +292,10 @@ eventLoop:
 
 // testPermissionAlwaysAllow verifies the always-allow flow with permission suggestions.
 func testPermissionAlwaysAllow(t *testing.T, a Agent) {
-	acquireAgentSlot()
-	defer releaseAgentSlot()
-
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir()})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -387,13 +360,10 @@ eventLoop:
 // testAskUserQuestionFlow verifies the complete AskUserQuestion flow:
 // Question → Answer → Text response mentioning the answer → Done
 func testAskUserQuestionFlow(t *testing.T, a Agent) {
-	acquireAgentSlot()
-	defer releaseAgentSlot()
-
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir()})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -497,13 +467,10 @@ eventLoop:
 
 // testYoloNoPermission verifies that yolo mode skips permission prompts.
 func testYoloNoPermission(t *testing.T, a Agent) {
-	acquireAgentSlot()
-	defer releaseAgentSlot()
-
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), Mode: session.ModeYolo})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), Mode: session.ModeYolo, DisableMCP: true})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -538,13 +505,10 @@ func testYoloNoPermission(t *testing.T, a Agent) {
 
 // testInterrupt verifies that SendInterrupt stops the current task.
 func testInterrupt(t *testing.T, a Agent) {
-	acquireAgentSlot()
-	defer releaseAgentSlot()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir()})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}

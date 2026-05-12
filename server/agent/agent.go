@@ -37,6 +37,7 @@ type StartOptions struct {
 	SessionID string
 	Resume    bool
 	Mode      session.Mode
+	DisableMCP bool // skip MCP config (for testing)
 }
 
 // Agent defines the interface for an AI agent.
