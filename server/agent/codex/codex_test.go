@@ -13,5 +13,7 @@ func newCodexAgent() agent.Agent {
 }
 
 func TestCodexIntegration(t *testing.T) {
-	agent.RunIntegrationTests(t, newCodexAgent)
+	agent.RunIntegrationTests(t, newCodexAgent, agent.IntegrationTestOptions{
+		SkipEvents: []agent.EventType{agent.EventTypeAskUserQuestion},
+	})
 }

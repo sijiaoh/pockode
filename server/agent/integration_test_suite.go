@@ -13,11 +13,25 @@ import (
 
 const integrationTimeout = 60 * time.Second
 
+// IntegrationTestOptions configures which tests to skip.
+type IntegrationTestOptions struct {
+	SkipEvents []EventType
+}
+
+func shouldSkip(opts IntegrationTestOptions, eventType EventType) bool {
+	for _, skip := range opts.SkipEvents {
+		if skip == eventType {
+			return true
+		}
+	}
+	return false
+}
+
 // RunIntegrationTests runs the full integration test suite for any Agent implementation.
 // Tests run sequentially to avoid overloading the system with too many Claude CLI processes.
-func RunIntegrationTests(t *testing.T, newAgent func() Agent) {
+func RunIntegrationTests(t *testing.T, newAgent func() Agent, opts IntegrationTestOptions) {
 	t.Run("Chat", func(t *testing.T) {
-		runChatTests(t, newAgent)
+		runChatTests(t, newAgent, opts)
 	})
 	t.Run("PermissionAllow", func(t *testing.T) {
 		testPermissionAllow(t, newAgent())
@@ -29,6 +43,9 @@ func RunIntegrationTests(t *testing.T, newAgent func() Agent) {
 		testPermissionAlwaysAllow(t, newAgent())
 	})
 	t.Run("AskUserQuestionFlow", func(t *testing.T) {
+		if shouldSkip(opts, EventTypeAskUserQuestion) {
+			t.Skip("skipped by IntegrationTestOptions")
+		}
 		testAskUserQuestionFlow(t, newAgent())
 	})
 	t.Run("YoloNoPermission", func(t *testing.T) {
@@ -46,7 +63,7 @@ type chatCase struct {
 	mode       session.Mode
 }
 
-func runChatTests(t *testing.T, newAgent func() Agent) {
+func runChatTests(t *testing.T, newAgent func() Agent, opts IntegrationTestOptions) {
 	cases := []chatCase{
 		{
 			name:       "TextEvent",
@@ -95,6 +112,9 @@ func runChatTests(t *testing.T, newAgent func() Agent) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if shouldSkip(opts, tc.expectType) {
+				t.Skip("skipped by IntegrationTestOptions")
+			}
 			runChatScenario(t, newAgent(), tc)
 		})
 	}

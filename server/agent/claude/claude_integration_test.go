@@ -17,5 +17,5 @@ func TestIntegration_ClaudeCliAvailable(t *testing.T) {
 }
 
 func TestIntegration(t *testing.T) {
-	agent.RunIntegrationTests(t, func() agent.Agent { return New() })
+	agent.RunIntegrationTests(t, func() agent.Agent { return New() }, agent.IntegrationTestOptions{})
 }
