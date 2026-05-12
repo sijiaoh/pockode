@@ -32,11 +32,11 @@ type QuestionRequestData struct {
 
 // StartOptions contains options for starting an agent session.
 type StartOptions struct {
-	WorkDir   string
-	DataDir   string // data directory for MCP config
-	SessionID string
-	Resume    bool
-	Mode      session.Mode
+	WorkDir    string
+	DataDir    string // data directory for MCP config
+	SessionID  string
+	Resume     bool
+	Mode       session.Mode
 	DisableMCP bool // skip MCP config (for testing)
 }
 
