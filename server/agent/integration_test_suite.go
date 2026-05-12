@@ -13,6 +13,15 @@ import (
 
 const integrationTimeout = 60 * time.Second
 
+// Each integration test spawns a Claude CLI subprocess. Running too many
+// in parallel can overload the CPU, so we limit concurrency.
+const maxConcurrentAgents = 3
+
+var agentSemaphore = make(chan struct{}, maxConcurrentAgents)
+
+func acquireAgentSlot() { agentSemaphore <- struct{}{} }
+func releaseAgentSlot() { <-agentSemaphore }
+
 // RunIntegrationTests runs the full integration test suite for any Agent implementation.
 func RunIntegrationTests(t *testing.T, newAgent func() Agent) {
 	t.Run("Chat", func(t *testing.T) {
@@ -107,6 +116,9 @@ func runChatTests(t *testing.T, newAgent func() Agent) {
 }
 
 func runChatScenario(t *testing.T, a Agent, tc chatCase) {
+	acquireAgentSlot()
+	defer releaseAgentSlot()
+
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
@@ -175,6 +187,9 @@ func runChatScenario(t *testing.T, a Agent, tc chatCase) {
 // testPermissionAllow verifies the full permission allow flow:
 // PermissionRequest → Allow → ToolResult → Done
 func testPermissionAllow(t *testing.T, a Agent) {
+	acquireAgentSlot()
+	defer releaseAgentSlot()
+
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
@@ -237,6 +252,9 @@ eventLoop:
 // testPermissionDeny verifies the permission deny flow:
 // PermissionRequest → Deny → Done/Interrupted
 func testPermissionDeny(t *testing.T, a Agent) {
+	acquireAgentSlot()
+	defer releaseAgentSlot()
+
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
@@ -298,6 +316,9 @@ eventLoop:
 
 // testPermissionAlwaysAllow verifies the always-allow flow with permission suggestions.
 func testPermissionAlwaysAllow(t *testing.T, a Agent) {
+	acquireAgentSlot()
+	defer releaseAgentSlot()
+
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
@@ -366,6 +387,9 @@ eventLoop:
 // testAskUserQuestionFlow verifies the complete AskUserQuestion flow:
 // Question → Answer → Text response mentioning the answer → Done
 func testAskUserQuestionFlow(t *testing.T, a Agent) {
+	acquireAgentSlot()
+	defer releaseAgentSlot()
+
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
@@ -473,6 +497,9 @@ eventLoop:
 
 // testYoloNoPermission verifies that yolo mode skips permission prompts.
 func testYoloNoPermission(t *testing.T, a Agent) {
+	acquireAgentSlot()
+	defer releaseAgentSlot()
+
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
@@ -511,6 +538,9 @@ func testYoloNoPermission(t *testing.T, a Agent) {
 
 // testInterrupt verifies that SendInterrupt stops the current task.
 func testInterrupt(t *testing.T, a Agent) {
+	acquireAgentSlot()
+	defer releaseAgentSlot()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
