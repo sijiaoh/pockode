@@ -180,7 +180,7 @@ function MessageList({
 		<div className="relative min-h-0 flex-1 overflow-hidden">
 			<div
 				ref={scrollRef}
-				className="h-full overflow-x-hidden overflow-y-auto overscroll-contain"
+				className="h-full overflow-x-hidden overflow-y-auto overscroll-y-contain"
 			>
 				<div
 					ref={contentRef}
