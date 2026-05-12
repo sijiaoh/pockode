@@ -269,21 +269,32 @@ When an AI session's state changes, sync the work status:
 
 **Trigger B: Child Closure**
 
-When a task closes, the system checks its parent status:
+When a child work closes, the system notifies its parent based on the parent's status. The logic separates two concerns: *state transition* and *message sending*.
 
-- **Waiting parent**: Resumed via `ResumeFromWaiting` with a `child_completion_nudge` message
-- **Closed parent**: Not reopened (intentional completion is preserved)
+| Parent Status | State Transition | Message Sent | Rationale |
+|---------------|------------------|--------------|-----------|
+| `open` | — | No | No agent session started yet |
+| `in_progress` | — | Yes | Agent is running; notify it of child completion |
+| `needs_input` | — | Yes | Agent is paused but active; deliver notification |
+| `waiting` | → `in_progress` | Yes | Resume the waiting coordinator |
+| `stopped` | — | Yes | Session can be restarted; preserve notification |
+| `closed` | — | No | Parent was explicitly closed; stay closed |
 
 ```
-Task: closed ──► Parent Story (waiting) → in_progress
+Task: closed ──► Parent (waiting) → in_progress
                        │
                        ▼
             Send "Child completed" message
 
-Task: closed ──► Parent Story (closed) → (no change)
+Task: closed ──► Parent (in_progress/needs_input/stopped)
+                       │
+                       ▼
+            Send "Child completed" message (no state change)
+
+Task: closed ──► Parent (open/closed) → (no message)
 ```
 
-This design ensures that completed coordination work remains closed even if child tasks are created and completed afterward (e.g., via manual intervention or reopen workflows).
+**Key distinction**: Only `waiting` parents undergo a state transition. Other active parents (`in_progress`, `needs_input`, `stopped`) receive the notification without changing status. This enables coordinators to receive multiple child completion messages when running with parallel subtasks.
 
 **Trigger C: External Work Start**
 

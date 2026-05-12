@@ -36,8 +36,10 @@ type WorkStartHandler interface {
 //   - running → transition stopped work back to in_progress.
 //   - ended → transition in_progress/needs_input work to stopped.
 //
-// Trigger B: When a child Work closes, wake the parent if it's waiting.
-// The parent transitions from waiting to in_progress to continue its work.
+// Trigger B: When a child Work closes, notify its parent.
+// Waiting parents transition to in_progress; other active parents
+// (in_progress, needs_input, stopped) receive the message without state change.
+// Open and closed parents are skipped.
 //
 // Trigger C: When a work item is started externally (e.g. via MCP),
 // create the session and send the kickoff message.
@@ -485,7 +487,14 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 		return
 	}
 
-	// Handle waiting parent: wake up when child closes
+	// StatusOpen and StatusClosed parents don't receive child completion messages.
+	// Open: no agent session started yet.
+	// Closed: parent was explicitly closed and should stay closed.
+	if parent.Status == StatusOpen || parent.Status == StatusClosed {
+		return
+	}
+
+	// Handle waiting parent: transition to in_progress
 	if parent.Status == StatusWaiting {
 		if err := r.workStore.ResumeFromWaiting(r.ctx, parent.ID); err != nil {
 			if r.ctx.Err() != nil {
@@ -499,21 +508,18 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 		r.retryMu.Lock()
 		delete(r.retries, parent.SessionID)
 		r.retryMu.Unlock()
-
-		msg := BuildChildCompletionMessage(parent, child.Title, child.ID)
-		if err := sender.SendMessage(r.ctx, parent.SessionID, msg); err != nil {
-			if r.ctx.Err() != nil {
-				return
-			}
-			slog.Warn("failed to send child completion message to waiting parent", "parentId", parent.ID, "error", err)
-		} else {
-			slog.Info("waiting parent resumed on child close", "parentId", parent.ID, "childId", child.ID)
-		}
-		return
 	}
 
-	// StatusClosed parents are not reactivated when children close.
-	// If a parent was explicitly closed, it stays closed.
+	// Send child completion message to parent (StatusInProgress, StatusNeedsInput, StatusWaiting->InProgress, StatusStopped)
+	msg := BuildChildCompletionMessage(parent, child.Title, child.ID)
+	if err := sender.SendMessage(r.ctx, parent.SessionID, msg); err != nil {
+		if r.ctx.Err() != nil {
+			return
+		}
+		slog.Warn("failed to send child completion message to parent", "parentId", parent.ID, "childId", child.ID, "error", err)
+	} else {
+		slog.Info("child completion message sent to parent", "parentId", parent.ID, "childId", child.ID, "parentStatus", parent.Status)
+	}
 }
 
 func (r *AutoResumer) stopWork(workID string) error {

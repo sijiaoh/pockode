@@ -563,7 +563,7 @@ func TestAutoResumer_SendsMessageWhenSiblingsStillRunning(t *testing.T) {
 	}
 }
 
-func TestAutoResumer_NoReactivateWhenParentInProgress(t *testing.T) {
+func TestAutoResumer_InProgressParentReceivesChildCompletionMessage(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
 	story := createStory(t, store, "Story")
@@ -572,15 +572,187 @@ func TestAutoResumer_NoReactivateWhenParentInProgress(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, parentSid)
 	startWork(t, store, task.ID)
 
-	// Parent is still in_progress (not done)
+	// Parent is in_progress, child completes
 	resumer.OnWorkChange(ChangeEvent{
 		Op:   OperationUpdate,
-		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID},
+		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	// Verify parent status remains in_progress (not changed)
+	parent := getWork(t, store, story.ID)
+	if parent.Status != StatusInProgress {
+		t.Errorf("parent status = %q, want %q (should remain in_progress)", parent.Status, StatusInProgress)
+	}
+
+	// Verify message was sent
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].SessionID != parentSid {
+		t.Errorf("sessionID = %q, want %q", msgs[0].SessionID, parentSid)
+	}
+	if !strings.Contains(msgs[0].Content, "has been completed") {
+		t.Errorf("expected child completion message, got: %s", msgs[0].Content[:min(100, len(msgs[0].Content))])
+	}
+}
+
+func TestAutoResumer_NeedsInputParentReceivesChildCompletionMessage(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	parentSid := "parent-session"
+	startWorkWithSession(t, store, story.ID, parentSid)
+	startWork(t, store, task.ID)
+
+	// Parent transitions to needs_input (agent waiting for user)
+	store.MarkNeedsInput(context.Background(), story.ID)
+	if getWork(t, store, story.ID).Status != StatusNeedsInput {
+		t.Fatal("precondition: parent should be needs_input")
+	}
+
+	// Child completes while parent is needs_input
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	// Verify parent status remains needs_input (not changed by child close)
+	parent := getWork(t, store, story.ID)
+	if parent.Status != StatusNeedsInput {
+		t.Errorf("parent status = %q, want %q (should remain needs_input)", parent.Status, StatusNeedsInput)
+	}
+
+	// Verify message was sent
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].SessionID != parentSid {
+		t.Errorf("sessionID = %q, want %q", msgs[0].SessionID, parentSid)
+	}
+	if !strings.Contains(msgs[0].Content, "has been completed") {
+		t.Errorf("expected child completion message, got: %s", msgs[0].Content[:min(100, len(msgs[0].Content))])
+	}
+}
+
+func TestAutoResumer_StoppedParentReceivesChildCompletionMessage(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	parentSid := "parent-session"
+	startWorkWithSession(t, store, story.ID, parentSid)
+	startWork(t, store, task.ID)
+
+	// Stop the parent (simulates agent stopped working)
+	store.Stop(context.Background(), story.ID)
+	if getWork(t, store, story.ID).Status != StatusStopped {
+		t.Fatal("precondition: parent should be stopped")
+	}
+
+	// Child completes while parent is stopped
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	// Verify message was sent
+	msgs := sender.getMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].SessionID != parentSid {
+		t.Errorf("sessionID = %q, want %q", msgs[0].SessionID, parentSid)
+	}
+	if !strings.Contains(msgs[0].Content, "has been completed") {
+		t.Errorf("expected child completion message, got: %s", msgs[0].Content[:min(100, len(msgs[0].Content))])
+	}
+}
+
+func TestAutoResumer_OpenParentNoMessage(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	task := createTask(t, store, story.ID, "Task")
+	// Do NOT start the parent story - parent remains in StatusOpen
+	startWork(t, store, task.ID)
+
+	// Child completes while parent is open
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
 	})
 
 	time.Sleep(50 * time.Millisecond) // negative assertion: verify nothing fires
+
+	// Verify parent status remains open
+	parent := getWork(t, store, story.ID)
+	if parent.Status != StatusOpen {
+		t.Errorf("parent status = %q, want %q", parent.Status, StatusOpen)
+	}
+
+	// Verify no message was sent
 	if len(sender.getMessages()) != 0 {
-		t.Error("should not reactivate parent that is still in_progress")
+		t.Error("should not send message when parent is open")
+	}
+}
+
+func TestAutoResumer_MultipleChildrenCloseSequentially(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	task1 := createTask(t, store, story.ID, "Task 1")
+	task2 := createTask(t, store, story.ID, "Task 2")
+	parentSid := "parent-session"
+	startWorkWithSession(t, store, story.ID, parentSid)
+	startWork(t, store, task1.ID)
+	startWork(t, store, task2.ID)
+
+	// Parent enters waiting for children
+	store.MarkWaiting(context.Background(), story.ID)
+
+	// First child completes
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task1.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task 1"},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+
+	// Parent should now be in_progress (woken from waiting)
+	parent := getWork(t, store, story.ID)
+	if parent.Status != StatusInProgress {
+		t.Errorf("parent status after first child = %q, want %q", parent.Status, StatusInProgress)
+	}
+
+	// Second child completes
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task2.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task 2"},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 2 })
+
+	// Verify parent received two messages
+	msgs := sender.getMessages()
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	for i, msg := range msgs {
+		if msg.SessionID != parentSid {
+			t.Errorf("message %d: sessionID = %q, want %q", i, msg.SessionID, parentSid)
+		}
+		if !strings.Contains(msg.Content, "has been completed") {
+			t.Errorf("message %d: expected child completion message, got: %s", i, msg.Content[:min(100, len(msg.Content))])
+		}
 	}
 }
 
