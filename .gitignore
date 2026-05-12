@@ -17,6 +17,10 @@ Thumbs.db
 # Claude Code (local settings only)
 .claude/settings.local.json
 
+# Agent runtime files (created when DataDir is empty due to test bugs)
+server/agent/claude/mcp-config.json
+server/agent/codex/sessions/
+
 # Logs
 *.log
 

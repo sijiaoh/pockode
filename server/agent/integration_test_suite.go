@@ -110,7 +110,7 @@ func runChatScenario(t *testing.T, a Agent, tc chatCase) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), Mode: tc.mode})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), Mode: tc.mode})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -178,7 +178,7 @@ func testPermissionAllow(t *testing.T, a Agent) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir()})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -240,7 +240,7 @@ func testPermissionDeny(t *testing.T, a Agent) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir()})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -301,7 +301,7 @@ func testPermissionAlwaysAllow(t *testing.T, a Agent) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir()})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -369,7 +369,7 @@ func testAskUserQuestionFlow(t *testing.T, a Agent) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir()})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -476,7 +476,7 @@ func testYoloNoPermission(t *testing.T, a Agent) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), Mode: session.ModeYolo})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), Mode: session.ModeYolo})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -514,7 +514,7 @@ func testInterrupt(t *testing.T, a Agent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir()})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
