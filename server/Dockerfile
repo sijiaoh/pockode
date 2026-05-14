@@ -2,7 +2,7 @@
 FROM node:22.13.0-alpine AS frontend-builder
 
 WORKDIR /app/web
-RUN npm install -g pnpm
+RUN npm install -g pnpm@10
 COPY web/package.json web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
