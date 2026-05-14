@@ -6,6 +6,9 @@ RUN npm install -g pnpm
 COPY web/package.json web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
+# The local favicon is a symlink outside web/, so copy the target into the image.
+RUN rm -f public/favicon.svg
+COPY site/static/images/logo.svg ./public/favicon.svg
 RUN pnpm run build
 
 # Stage 2: Build backend

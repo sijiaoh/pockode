@@ -59,5 +59,10 @@
 		"vite": "^7.2.4",
 		"vite-plugin-compression": "^0.5.1",
 		"vitest": "^4.0.16"
+	},
+	"pnpm": {
+		"onlyBuiltDependencies": [
+			"esbuild"
+		]
 	}
 }

@@ -1,0 +1,14 @@
+.git/
+.pnpm-store/
+node_modules/
+dist/
+tmp/
+
+server/tmp/
+server/static/
+
+web/node_modules/
+web/dist/
+
+refs/
+.DS_Store

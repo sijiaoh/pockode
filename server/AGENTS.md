@@ -17,6 +17,9 @@ go vet ./...                            # 静态检查
 cd ../web && pnpm run build && cp -r dist ../server/static
 go build -o server .
 
+# Docker 镜像（从仓库根目录执行，build context 需要包含 web/ 和 site/static/images/logo.svg）
+docker build -f server/Dockerfile -t pockode:local .
+
 # 集成测试（消耗 token）
 go test -tags=integration ./agent/claude -v
 ```
