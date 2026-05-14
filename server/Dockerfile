@@ -1,5 +1,5 @@
 # Stage 1: Build frontend
-FROM node:22.13.0-alpine AS frontend-builder
+FROM node:22.22.3-alpine AS frontend-builder
 
 WORKDIR /app/web
 RUN npm install -g pnpm@10
