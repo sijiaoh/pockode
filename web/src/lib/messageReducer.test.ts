@@ -154,6 +154,51 @@ describe("messageReducer", () => {
 			});
 		});
 
+		it("defaults missing questions to [] to keep renderers safe", () => {
+			const event = normalizeEvent({
+				type: "ask_user_question",
+				request_id: "q-1",
+				tool_use_id: "toolu_q_1",
+			});
+			expect(event).toEqual({
+				type: "ask_user_question",
+				requestId: "q-1",
+				toolUseId: "toolu_q_1",
+				questions: [],
+			});
+		});
+
+		it("normalizes null question options to [] to keep renderers safe", () => {
+			// Simulates the wire shape when Go marshals a nil `Options` slice.
+			const payload: Record<string, unknown> = {
+				type: "ask_user_question",
+				request_id: "q-1",
+				tool_use_id: "toolu_q_1",
+				questions: [
+					{
+						question: "Pick one?",
+						header: "Pick",
+						options: null,
+						multiSelect: false,
+					},
+				],
+			};
+			const event = normalizeEvent(payload);
+			expect(event).toEqual({
+				type: "ask_user_question",
+				requestId: "q-1",
+				toolUseId: "toolu_q_1",
+				questions: [
+					{
+						question: "Pick one?",
+						header: "Pick",
+						options: [],
+						multiSelect: false,
+					},
+				],
+			});
+		});
+
 		it("normalizes question_response event with answers", () => {
 			const event = normalizeEvent({
 				type: "question_response",

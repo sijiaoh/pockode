@@ -239,7 +239,16 @@ func (s *cliSession) SendPermissionResponse(data agent.PermissionRequestData, ch
 
 // SendQuestionResponse sends answers to user questions.
 // If answers is nil, sends a cancel (deny) response.
+//
+// The Claude SDK's AskUserQuestion tool expects the updatedInput to retain
+// the original input fields (notably `questions`) and add `answers`. Sending
+// just `{"answers": ...}` causes the SDK to crash internally with
+// "Cannot destructure property 'answers' from null or undefined value" and
+// then retry the tool call — re-asking the same question.
 func (s *cliSession) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
+	// Always consume the stored input — even on cancel — so the map doesn't leak.
+	originalInput := s.takePendingQuestionInput(data.RequestID)
+
 	var content controlResponseContent
 
 	if answers == nil {
@@ -250,9 +259,9 @@ func (s *cliSession) SendQuestionResponse(data agent.QuestionRequestData, answer
 			ToolUseID: data.ToolUseID,
 		}
 	} else {
-		updatedInput, err := json.Marshal(questionAnswerInput{Answers: answers})
+		updatedInput, err := buildQuestionUpdatedInput(originalInput, answers)
 		if err != nil {
-			return fmt.Errorf("failed to marshal updated input: %w", err)
+			return err
 		}
 		content = controlResponseContent{
 			Behavior:     "allow",
@@ -262,6 +271,41 @@ func (s *cliSession) SendQuestionResponse(data agent.QuestionRequestData, answer
 	}
 
 	return s.sendControlResponse(data.RequestID, content)
+}
+
+// takePendingQuestionInput removes and returns the original input stored for
+// the given question request. Returns nil if no input was stored (e.g. after a
+// control_cancel_request raced ahead of the user's response).
+func (s *cliSession) takePendingQuestionInput(requestID string) json.RawMessage {
+	v, ok := s.pendingRequests.LoadAndDelete(requestID)
+	if !ok {
+		return nil
+	}
+	return v.(pendingQuestionMarker).Input
+}
+
+// buildQuestionUpdatedInput merges user-provided answers into the original
+// AskUserQuestion tool input. The SDK requires the full original input
+// (including `questions`) plus the `answers` field; missing fields cause the
+// tool to fail and re-ask.
+func buildQuestionUpdatedInput(originalInput json.RawMessage, answers map[string]string) (json.RawMessage, error) {
+	var merged map[string]interface{}
+	if len(originalInput) > 0 {
+		if err := json.Unmarshal(originalInput, &merged); err != nil {
+			return nil, fmt.Errorf("failed to parse pending question input: %w", err)
+		}
+	}
+	// Unmarshaling a JSON `null` (or missing input) leaves merged nil; ensure
+	// we have a writable map before assigning the answers field.
+	if merged == nil {
+		merged = map[string]interface{}{}
+	}
+	merged["answers"] = answers
+	data, err := json.Marshal(merged)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal updated input: %w", err)
+	}
+	return data, nil
 }
 
 func (s *cliSession) sendControlResponse(requestID string, content controlResponseContent) error {
@@ -286,6 +330,13 @@ func (s *cliSession) sendControlResponse(requestID string, content controlRespon
 // interruptMarker is stored in pendingRequests to identify interrupt responses.
 // Needed because control_response only contains request_id, not the request type.
 type interruptMarker struct{}
+
+// pendingQuestionMarker is stored in pendingRequests so we can echo the
+// original AskUserQuestion tool input back when responding. The SDK requires
+// the full original input plus an `answers` field.
+type pendingQuestionMarker struct {
+	Input json.RawMessage
+}
 
 // SendInterrupt sends an interrupt signal to stop the current task.
 func (s *cliSession) SendInterrupt() error {
@@ -578,11 +629,6 @@ type interruptRequestData struct {
 	Subtype string `json:"subtype"`
 }
 
-// questionAnswerInput is the UpdatedInput format for question responses.
-type questionAnswerInput struct {
-	Answers map[string]string `json:"answers"`
-}
-
 // --- Parsing ---
 
 type cliEvent struct {
@@ -636,11 +682,11 @@ func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent
 		}
 		return []agent.AgentEvent{agent.SystemEvent{Content: string(line)}}
 	case "control_request":
-		return parseControlRequest(log, line)
+		return parseControlRequest(log, line, pendingRequests)
 	case "control_response":
 		return parseControlResponse(log, line, pendingRequests)
 	case "control_cancel_request":
-		return parseControlCancelRequest(log, line)
+		return parseControlCancelRequest(log, line, pendingRequests)
 	case "progress":
 		// Undocumented event (e.g., bash_progress) not in official SDK docs.
 		// Other CLI wrappers also ignore it.
@@ -651,7 +697,7 @@ func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent
 	}
 }
 
-func parseControlRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
+func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
 	var req controlRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		log.Warn("failed to parse control request from CLI", "error", err)
@@ -674,6 +720,11 @@ func parseControlRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
 				log.Warn("failed to parse AskUserQuestion input from CLI", "error", err)
 				return nil
 			}
+
+			// Remember the original input so SendQuestionResponse can echo it
+			// back merged with user answers — the SDK rejects a response that
+			// drops the original `questions` field.
+			pendingRequests.Store(req.RequestID, pendingQuestionMarker{Input: req.Request.Input})
 
 			log.Info("AskUserQuestion received", "requestId", req.RequestID)
 			return []agent.AgentEvent{agent.AskUserQuestionEvent{
@@ -733,12 +784,17 @@ type controlCancelRequest struct {
 	RequestID string `json:"request_id"`
 }
 
-func parseControlCancelRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
+func parseControlCancelRequest(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
 	var req controlCancelRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		log.Warn("failed to parse control cancel request from CLI", "error", err)
 		return nil
 	}
+
+	// Drop any stored question input — the SDK no longer expects a response.
+	// Cancel only matches request IDs the CLI sent us; interrupt IDs are
+	// generated on our side and live in a disjoint namespace.
+	pendingRequests.Delete(req.RequestID)
 
 	log.Debug("control cancel request received", "requestId", req.RequestID)
 	return []agent.AgentEvent{agent.RequestCancelledEvent{RequestID: req.RequestID}}

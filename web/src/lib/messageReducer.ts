@@ -126,7 +126,13 @@ export function normalizeEvent(
 				type: "ask_user_question",
 				requestId: record.request_id as string,
 				toolUseId: record.tool_use_id as string,
-				questions: record.questions as AskUserQuestion[],
+				// Boundary defense for shape drift across the WS contract: the
+				// Go encoder omits empty `questions` and emits `null` for a nil
+				// `options` slice. Coerce to the non-nullable TS shape here so
+				// downstream code can trust the types.
+				questions: (
+					(record.questions as AskUserQuestion[] | undefined) ?? []
+				).map((q) => ({ ...q, options: q.options ?? [] })),
 			};
 		case "question_response":
 			return {

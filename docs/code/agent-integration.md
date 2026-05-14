@@ -270,7 +270,7 @@ type interruptRequest struct {
 }
 ```
 
-Interrupt requests are tracked via `pendingRequests *sync.Map`. When a response is received, it checks if the ID came from an interrupt we sent—only in this case is an `InterruptedEvent` sent, avoiding mishandling of Claude's other responses.
+Pending control requests we need to correlate later are tracked via `pendingRequests *sync.Map`. The map holds interrupt markers (matched against incoming `control_response` to emit `InterruptedEvent`) and AskUserQuestion markers (remembering the original tool input so `SendQuestionResponse` can echo it back as the SDK requires). The two marker kinds live in disjoint ID namespaces — interrupt IDs are crypto-random hex strings we generate, while AskUserQuestion IDs are assigned by the CLI — so handlers can type-assert without coordinating.
 
 ## Codex Implementation
 

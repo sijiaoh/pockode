@@ -317,6 +317,54 @@ func agentEventEqual(a, b agent.AgentEvent) bool {
 	}
 }
 
+func TestParseLine_AskUserQuestionStoresPendingInput(t *testing.T) {
+	pendingRequests := &sync.Map{}
+	input := `{"type":"control_request","request_id":"req-q-store","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","input":{"questions":[{"question":"q?","header":"H","options":[{"label":"a","description":"d"}],"multiSelect":false}]}}}`
+
+	results := parseLine(testLogger(), []byte(input), pendingRequests)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(results))
+	}
+	if _, ok := results[0].(agent.AskUserQuestionEvent); !ok {
+		t.Fatalf("expected AskUserQuestionEvent, got %T", results[0])
+	}
+
+	stored, ok := pendingRequests.Load("req-q-store")
+	if !ok {
+		t.Fatal("expected pending input to be stored")
+	}
+	marker, ok := stored.(pendingQuestionMarker)
+	if !ok {
+		t.Fatalf("expected pendingQuestionMarker, got %T", stored)
+	}
+	var parsed struct {
+		Questions []agent.AskUserQuestion `json:"questions"`
+	}
+	if err := json.Unmarshal(marker.Input, &parsed); err != nil {
+		t.Fatalf("stored input is not valid JSON: %v", err)
+	}
+	if len(parsed.Questions) != 1 || parsed.Questions[0].Question != "q?" {
+		t.Errorf("stored input does not preserve questions: %+v", parsed.Questions)
+	}
+}
+
+func TestParseLine_ControlCancelRemovesPendingQuestion(t *testing.T) {
+	pendingRequests := &sync.Map{}
+	pendingRequests.Store("req-cancel", pendingQuestionMarker{Input: json.RawMessage(`{"questions":[]}`)})
+
+	results := parseLine(testLogger(), []byte(`{"type":"control_cancel_request","request_id":"req-cancel"}`), pendingRequests)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(results))
+	}
+	if _, ok := results[0].(agent.RequestCancelledEvent); !ok {
+		t.Fatalf("expected RequestCancelledEvent, got %T", results[0])
+	}
+
+	if _, ok := pendingRequests.Load("req-cancel"); ok {
+		t.Error("expected pending question entry to be deleted after cancel")
+	}
+}
+
 func TestParseLine_ControlResponseWithPendingInterrupt(t *testing.T) {
 	pendingRequests := &sync.Map{}
 	requestID := "interrupt-123"
@@ -671,10 +719,14 @@ func TestSession_SendMessage(t *testing.T) {
 
 func TestSession_SendQuestionResponse(t *testing.T) {
 	var buf bytes.Buffer
+	pending := &sync.Map{}
+	originalInput := json.RawMessage(`{"questions":[{"question":"Which library?","header":"Library","options":[{"label":"date-fns","description":"d"}],"multiSelect":false}]}`)
+	pending.Store("req-q-456", pendingQuestionMarker{Input: originalInput})
+
 	sess := &cliSession{
 		log:             testLogger(),
 		stdin:           nopWriteCloser{&buf},
-		pendingRequests: &sync.Map{},
+		pendingRequests: pending,
 	}
 
 	data := agent.QuestionRequestData{
@@ -701,14 +753,94 @@ func TestSession_SendQuestionResponse(t *testing.T) {
 	if response.Response.Response.Behavior != "allow" {
 		t.Errorf("expected behavior 'allow', got %q", response.Response.Response.Behavior)
 	}
+
 	var updatedInput struct {
-		Answers map[string]string `json:"answers"`
+		Questions []agent.AskUserQuestion `json:"questions"`
+		Answers   map[string]string       `json:"answers"`
 	}
 	if err := json.Unmarshal(response.Response.Response.UpdatedInput, &updatedInput); err != nil {
 		t.Fatalf("failed to unmarshal updatedInput: %v", err)
 	}
 	if updatedInput.Answers["Which library?"] != "date-fns" {
 		t.Errorf("expected answer 'date-fns', got %q", updatedInput.Answers["Which library?"])
+	}
+	// The SDK requires the original `questions` field to remain in updatedInput.
+	if len(updatedInput.Questions) != 1 || updatedInput.Questions[0].Question != "Which library?" {
+		t.Errorf("expected questions to be preserved, got %+v", updatedInput.Questions)
+	}
+
+	// Pending entry should be consumed so a duplicate response doesn't echo it again.
+	if _, ok := pending.Load("req-q-456"); ok {
+		t.Error("expected pending question entry to be removed after response")
+	}
+}
+
+// Claude may send `"input": null` (Unmarshal into our struct succeeds with
+// nil Questions). The raw `null` bytes get stored in the marker and must not
+// panic the merge step.
+func TestSession_SendQuestionResponse_NullInput(t *testing.T) {
+	var buf bytes.Buffer
+	pending := &sync.Map{}
+	pending.Store("req-q-null", pendingQuestionMarker{Input: json.RawMessage(`null`)})
+
+	sess := &cliSession{
+		log:             testLogger(),
+		stdin:           nopWriteCloser{&buf},
+		pendingRequests: pending,
+	}
+
+	err := sess.SendQuestionResponse(agent.QuestionRequestData{
+		RequestID: "req-q-null",
+		ToolUseID: "toolu_q",
+	}, map[string]string{"q": "a"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var response controlResponse
+	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	var updatedInput map[string]any
+	if err := json.Unmarshal(response.Response.Response.UpdatedInput, &updatedInput); err != nil {
+		t.Fatalf("failed to unmarshal updatedInput: %v", err)
+	}
+	if _, ok := updatedInput["answers"]; !ok {
+		t.Error("expected answers field present after JSON null input")
+	}
+}
+
+func TestSession_SendQuestionResponse_NoPendingInput(t *testing.T) {
+	var buf bytes.Buffer
+	sess := &cliSession{
+		log:             testLogger(),
+		stdin:           nopWriteCloser{&buf},
+		pendingRequests: &sync.Map{},
+	}
+
+	data := agent.QuestionRequestData{
+		RequestID: "req-q-orphan",
+		ToolUseID: "toolu_q",
+	}
+	answers := map[string]string{"q": "a"}
+
+	if err := sess.SendQuestionResponse(data, answers); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var response controlResponse
+	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if response.Response.Response.Behavior != "allow" {
+		t.Errorf("expected behavior 'allow', got %q", response.Response.Response.Behavior)
+	}
+	var updatedInput map[string]any
+	if err := json.Unmarshal(response.Response.Response.UpdatedInput, &updatedInput); err != nil {
+		t.Fatalf("failed to unmarshal updatedInput: %v", err)
+	}
+	if _, ok := updatedInput["answers"]; !ok {
+		t.Error("expected answers field present even without pending input")
 	}
 }
 
