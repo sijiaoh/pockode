@@ -38,3 +38,4 @@ dist/
 
 # Dependencies
 node_modules/
+.pnpm-store/
