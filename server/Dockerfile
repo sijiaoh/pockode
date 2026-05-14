@@ -2,10 +2,11 @@
 FROM node:22.13.0-alpine AS frontend-builder
 
 WORKDIR /app/web
-COPY web/package*.json ./
-RUN npm ci
+RUN npm install -g pnpm
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY web/ ./
-RUN npm run build
+RUN pnpm run build
 
 # Stage 2: Build backend
 FROM golang:1.25.4-alpine AS backend-builder
