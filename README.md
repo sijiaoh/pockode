@@ -42,6 +42,28 @@ pockode -auth-token YOUR_PASSWORD
 
 Scan the QR code with your phone. Done.
 
+### Running Modes
+
+Pockode supports two modes:
+
+**Single Workspace** (default) — Run in the current directory:
+```bash
+cd /path/to/project
+pockode -auth-token YOUR_PASSWORD
+```
+
+**Multi-Workspace Manager** — Manage multiple projects from one server:
+```bash
+# Register workspaces
+pockode workspace add /path/to/project1 --name "Project 1"
+pockode workspace add /path/to/project2
+
+# Start manager
+pockode manager start --auth-token YOUR_PASSWORD
+```
+
+See `pockode --help` for all options.
+
 ## Status
 
 Early-stage. Actively developed. APIs may change.

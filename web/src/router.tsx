@@ -5,7 +5,13 @@ import {
 } from "@tanstack/react-router";
 import { z } from "zod";
 import AppShell from "./components/AppShell";
-import { ROUTES, WT_CHILD_ROUTES, WT_ROUTES } from "./lib/routes";
+import {
+	ROUTES,
+	WS_CHILD_ROUTES,
+	WS_ROUTES,
+	WT_CHILD_ROUTES,
+	WT_ROUTES,
+} from "./lib/routes";
 
 const overlaySearchSchema = z.object({
 	session: z.string().optional(),
@@ -165,6 +171,158 @@ const wtAgentRoleDetailRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+// Workspace-prefixed routes (for manager mode)
+const workspaceLayoutRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: WS_ROUTES.layout,
+});
+
+const wsIndexRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.index,
+});
+
+const wsSessionRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.session,
+});
+
+const wsStagedDiffRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.staged,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsUnstagedDiffRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.unstaged,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsFileViewRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.files,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsCommitRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.commit,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsCommitDiffRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.commitDiff,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsSettingsRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.settings,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsWorksRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.works,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsWorkDetailRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.workDetail,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsAgentRolesRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.agentRoles,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsAgentRoleDetailRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WS_CHILD_ROUTES.agentRoleDetail,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+// Workspace + Worktree nested routes
+const wsWorktreeLayoutRoute = createRoute({
+	getParentRoute: () => workspaceLayoutRoute,
+	path: WT_ROUTES.layout,
+});
+
+const wsWtIndexRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.index,
+});
+
+const wsWtSessionRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.session,
+});
+
+const wsWtStagedDiffRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.staged,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsWtUnstagedDiffRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.unstaged,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsWtFileViewRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.files,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsWtCommitRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.commit,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsWtCommitDiffRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.commitDiff,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsWtSettingsRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.settings,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsWtWorksRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.works,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsWtWorkDetailRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.workDetail,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsWtAgentRolesRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.agentRoles,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wsWtAgentRoleDetailRoute = createRoute({
+	getParentRoute: () => wsWorktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.agentRoleDetail,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 const routeTree = rootRoute.addChildren([
 	indexRoute,
 	sessionRoute,
@@ -191,6 +349,36 @@ const routeTree = rootRoute.addChildren([
 		wtWorksRoute,
 		wtAgentRoleDetailRoute, // Must be before wtAgentRolesRoute (more specific path)
 		wtAgentRolesRoute,
+	]),
+	// Workspace routes (for manager mode)
+	workspaceLayoutRoute.addChildren([
+		wsIndexRoute,
+		wsSessionRoute,
+		wsStagedDiffRoute,
+		wsUnstagedDiffRoute,
+		wsFileViewRoute,
+		wsCommitDiffRoute,
+		wsCommitRoute,
+		wsSettingsRoute,
+		wsWorkDetailRoute,
+		wsWorksRoute,
+		wsAgentRoleDetailRoute,
+		wsAgentRolesRoute,
+		// Workspace + Worktree nested routes
+		wsWorktreeLayoutRoute.addChildren([
+			wsWtIndexRoute,
+			wsWtSessionRoute,
+			wsWtStagedDiffRoute,
+			wsWtUnstagedDiffRoute,
+			wsWtFileViewRoute,
+			wsWtCommitDiffRoute,
+			wsWtCommitRoute,
+			wsWtSettingsRoute,
+			wsWtWorkDetailRoute,
+			wsWtWorksRoute,
+			wsWtAgentRoleDetailRoute,
+			wsWtAgentRolesRoute,
+		]),
 	]),
 ]);
 

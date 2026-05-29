@@ -12,6 +12,7 @@ Index of Pockode code explanation documents. These documents focus on "why it's 
 | [Real-time Subscription System](subscription-system.md) | Watcher architecture and backpressure handling | `server/watch/`, `web/src/hooks/useSubscription.ts` |
 | [Frontend State Management](frontend-state.md) | Zustand stores and extension system | `web/src/lib/` |
 | [Relay NAT Traversal](relay-system.md) | Mobile access to local PC | `server/relay/` |
+| [Multi-Workspace System](multi-workspace.md) | Manager/Worker architecture, URL routing | `server/manager/`, `server/globalconfig/`, `server/cli/` |
 
 ## Reading Guide
 
@@ -30,6 +31,7 @@ Choose based on the module you're working with:
 - **Frontend Development** → [Frontend State Management](frontend-state.md)
 - **Real-time Features** → [Real-time Subscription System](subscription-system.md)
 - **Mobile Deployment** → [Relay NAT Traversal](relay-system.md)
+- **Multi-Project Setup** → [Multi-Workspace System](multi-workspace.md)
 
 ## Documentation Conventions
 

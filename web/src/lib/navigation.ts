@@ -1,17 +1,19 @@
 import type { OverlayState } from "../types/overlay";
-import { ROUTES, WT_ROUTES } from "./routes";
+import { ROUTES, WS_ROUTES, WS_WT_ROUTES, WT_ROUTES } from "./routes";
 
 export const SETUP_HOOK_PATH = ".pockode/worktree-setup.sh";
 
 interface NavToSession {
 	type: "session";
 	worktree: string;
+	workspace?: string | null;
 	sessionId: string;
 }
 
 interface NavToOverlayBase {
 	type: "overlay";
 	worktree: string;
+	workspace?: string | null;
 	sessionId: string | null;
 }
 
@@ -40,6 +42,7 @@ type NavToFileOverlay =
 interface NavToSettingsOverlay {
 	type: "overlay";
 	worktree: string;
+	workspace?: string | null;
 	overlayType: "settings";
 	sessionId: string | null;
 }
@@ -47,6 +50,7 @@ interface NavToSettingsOverlay {
 interface NavToWorkListOverlay {
 	type: "overlay";
 	worktree: string;
+	workspace?: string | null;
 	overlayType: "work-list";
 	sessionId: string | null;
 }
@@ -54,6 +58,7 @@ interface NavToWorkListOverlay {
 interface NavToWorkDetailOverlay {
 	type: "overlay";
 	worktree: string;
+	workspace?: string | null;
 	overlayType: "work-detail";
 	workId: string;
 	sessionId: string | null;
@@ -62,6 +67,7 @@ interface NavToWorkDetailOverlay {
 interface NavToAgentRoleListOverlay {
 	type: "overlay";
 	worktree: string;
+	workspace?: string | null;
 	overlayType: "agent-role-list";
 	sessionId: string | null;
 }
@@ -69,6 +75,7 @@ interface NavToAgentRoleListOverlay {
 interface NavToAgentRoleDetailOverlay {
 	type: "overlay";
 	worktree: string;
+	workspace?: string | null;
 	overlayType: "agent-role-detail";
 	roleId: string;
 	sessionId: string | null;
@@ -85,9 +92,18 @@ type NavToOverlay =
 interface NavToHome {
 	type: "home";
 	worktree: string;
+	workspace?: string | null;
 }
 
-export type NavTarget = NavToSession | NavToOverlay | NavToHome;
+interface NavToWorkspaceSelect {
+	type: "workspace-select";
+}
+
+export type NavTarget =
+	| NavToSession
+	| NavToOverlay
+	| NavToHome
+	| NavToWorkspaceSelect;
 
 interface NavigationResult {
 	to: string;
@@ -103,6 +119,7 @@ export function overlayToNavigation(
 	overlay: NonNullable<OverlayState>,
 	worktree: string,
 	sessionId: string | null,
+	workspace?: string | null,
 ): NavigationResult {
 	const target: NavToOverlay = (() => {
 		switch (overlay.type) {
@@ -110,6 +127,7 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
+					workspace,
 					overlayType: overlay.staged
 						? ("staged" as const)
 						: ("unstaged" as const),
@@ -120,6 +138,7 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
+					workspace,
 					overlayType: "file" as const,
 					path: overlay.path,
 					sessionId,
@@ -129,6 +148,7 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
+					workspace,
 					overlayType: "commit" as const,
 					hash: overlay.hash,
 					sessionId,
@@ -137,6 +157,7 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
+					workspace,
 					overlayType: "commit-diff" as const,
 					path: overlay.path,
 					hash: overlay.hash,
@@ -146,6 +167,7 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
+					workspace,
 					overlayType: "settings" as const,
 					sessionId,
 				};
@@ -153,6 +175,7 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
+					workspace,
 					overlayType: "work-list" as const,
 					sessionId,
 				};
@@ -160,6 +183,7 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
+					workspace,
 					overlayType: "work-detail" as const,
 					workId: overlay.workId,
 					sessionId,
@@ -168,6 +192,7 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
+					workspace,
 					overlayType: "agent-role-list" as const,
 					sessionId,
 				};
@@ -175,6 +200,7 @@ export function overlayToNavigation(
 				return {
 					type: "overlay" as const,
 					worktree,
+					workspace,
 					overlayType: "agent-role-detail" as const,
 					roleId: overlay.roleId,
 					sessionId,
@@ -185,49 +211,82 @@ export function overlayToNavigation(
 }
 
 /**
+ * Get the appropriate route set based on workspace and worktree context.
+ */
+function getRoutes(workspace: string | null | undefined, worktree: string) {
+	const hasWorkspace = !!workspace;
+	const hasWorktree = !!worktree;
+
+	if (hasWorkspace && hasWorktree) {
+		return { routes: WS_WT_ROUTES, prefix: "ws-wt" as const };
+	}
+	if (hasWorkspace) {
+		return { routes: WS_ROUTES, prefix: "ws" as const };
+	}
+	if (hasWorktree) {
+		return { routes: WT_ROUTES, prefix: "wt" as const };
+	}
+	return { routes: ROUTES, prefix: "main" as const };
+}
+
+/**
  * Build navigation options for TanStack Router.
  */
 export function buildNavigation(
 	target: NavTarget,
 	options?: { replace?: boolean },
 ): NavigationResult {
-	const isMain = !target.worktree;
 	const result: NavigationResult = { to: "" };
 
 	if (options?.replace) {
 		result.replace = true;
 	}
 
+	if (target.type === "workspace-select") {
+		result.to = ROUTES.index;
+		return result;
+	}
+
+	const workspace = "workspace" in target ? target.workspace : null;
+	const worktree = "worktree" in target ? target.worktree : "";
+	const { routes, prefix } = getRoutes(workspace, worktree);
+	const hasWorkspace = prefix === "ws" || prefix === "ws-wt";
+	const hasWorktree = prefix === "wt" || prefix === "ws-wt";
+
 	switch (target.type) {
 		case "session": {
-			if (isMain) {
-				result.to = ROUTES.session;
-				result.params = { sessionId: target.sessionId };
-			} else {
-				result.to = WT_ROUTES.session;
-				result.params = {
-					worktree: target.worktree,
-					sessionId: target.sessionId,
-				};
+			result.to = routes.session;
+			result.params = { sessionId: target.sessionId };
+			if (hasWorkspace && workspace) {
+				result.params.workspace = workspace;
+			}
+			if (hasWorktree) {
+				result.params.worktree = worktree;
 			}
 			break;
 		}
 
 		case "overlay": {
 			if (target.overlayType === "agent-role-detail") {
-				result.to = isMain ? ROUTES.agentRoleDetail : WT_ROUTES.agentRoleDetail;
+				result.to = routes.agentRoleDetail;
 				result.params = { roleId: target.roleId };
-				if (!isMain) {
-					result.params.worktree = target.worktree;
+				if (hasWorkspace && workspace) {
+					result.params.workspace = workspace;
+				}
+				if (hasWorktree) {
+					result.params.worktree = worktree;
 				}
 				if (target.sessionId) {
 					result.search = { session: target.sessionId };
 				}
 			} else if (target.overlayType === "work-detail") {
-				result.to = isMain ? ROUTES.workDetail : WT_ROUTES.workDetail;
+				result.to = routes.workDetail;
 				result.params = { workId: target.workId };
-				if (!isMain) {
-					result.params.worktree = target.worktree;
+				if (hasWorkspace && workspace) {
+					result.params.workspace = workspace;
+				}
+				if (hasWorktree) {
+					result.params.worktree = worktree;
 				}
 				if (target.sessionId) {
 					result.search = { session: target.sessionId };
@@ -243,42 +302,55 @@ export function buildNavigation(
 					"agent-role-list": "agentRoles",
 				} as const;
 				const routeKey = routeKeyMap[target.overlayType];
-				result.to = isMain ? ROUTES[routeKey] : WT_ROUTES[routeKey];
-				if (!isMain) {
-					result.params = { worktree: target.worktree };
+				result.to = routes[routeKey];
+				result.params = {};
+				if (hasWorkspace && workspace) {
+					result.params.workspace = workspace;
+				}
+				if (hasWorktree) {
+					result.params.worktree = worktree;
 				}
 				if (target.sessionId) {
 					result.search = { session: target.sessionId };
 				}
 			} else if (target.overlayType === "commit") {
-				result.to = isMain ? ROUTES.commit : WT_ROUTES.commit;
+				result.to = routes.commit;
 				result.params = { _splat: target.hash };
-				if (!isMain) {
-					result.params.worktree = target.worktree;
+				if (hasWorkspace && workspace) {
+					result.params.workspace = workspace;
+				}
+				if (hasWorktree) {
+					result.params.worktree = worktree;
 				}
 				if (target.sessionId) {
 					result.search = { session: target.sessionId };
 				}
 			} else if (target.overlayType === "commit-diff") {
-				result.to = isMain ? ROUTES.commitDiff : WT_ROUTES.commitDiff;
+				result.to = routes.commitDiff;
 				result.params = { hash: target.hash, _splat: target.path };
-				if (!isMain) {
-					result.params.worktree = target.worktree;
+				if (hasWorkspace && workspace) {
+					result.params.workspace = workspace;
+				}
+				if (hasWorktree) {
+					result.params.worktree = worktree;
 				}
 				if (target.sessionId) {
 					result.search = { session: target.sessionId };
 				}
 			} else {
-				const routeMap = {
-					staged: isMain ? ROUTES.staged : WT_ROUTES.staged,
-					unstaged: isMain ? ROUTES.unstaged : WT_ROUTES.unstaged,
-					file: isMain ? ROUTES.files : WT_ROUTES.files,
+				const routeKeyMap = {
+					staged: "staged",
+					unstaged: "unstaged",
+					file: "files",
 				} as const;
-
-				result.to = routeMap[target.overlayType];
+				const routeKey = routeKeyMap[target.overlayType];
+				result.to = routes[routeKey];
 				result.params = { _splat: target.path };
-				if (!isMain) {
-					result.params.worktree = target.worktree;
+				if (hasWorkspace && workspace) {
+					result.params.workspace = workspace;
+				}
+				if (hasWorktree) {
+					result.params.worktree = worktree;
 				}
 				if (target.sessionId || target.edit) {
 					result.search = {};
@@ -294,11 +366,13 @@ export function buildNavigation(
 		}
 
 		case "home": {
-			if (isMain) {
-				result.to = ROUTES.index;
-			} else {
-				result.to = WT_ROUTES.index;
-				result.params = { worktree: target.worktree };
+			result.to = routes.index;
+			result.params = {};
+			if (hasWorkspace && workspace) {
+				result.params.workspace = workspace;
+			}
+			if (hasWorktree) {
+				result.params.worktree = worktree;
 			}
 			break;
 		}

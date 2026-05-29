@@ -3,11 +3,18 @@ import { fetchWithAuth, HttpError } from "./api";
 
 vi.mock("../utils/config", () => ({
 	getApiBaseUrl: vi.fn(() => "http://localhost:8080"),
+	getWorkspaceBasePath: vi.fn(() => ""),
 }));
 
 vi.mock("./authStore", () => ({
 	authActions: {
 		getToken: vi.fn(() => "test-token"),
+	},
+}));
+
+vi.mock("./workspaceStore", () => ({
+	workspaceActions: {
+		getCurrentWorkspaceId: vi.fn(() => null),
 	},
 }));
 

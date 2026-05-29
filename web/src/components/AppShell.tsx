@@ -13,6 +13,7 @@ import {
 	useAuthStore,
 } from "../lib/authStore";
 import { buildNavigation, overlayToNavigation } from "../lib/navigation";
+import { workspaceActions } from "../lib/workspaceStore";
 import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
 import TokenInput from "./Auth/TokenInput";
@@ -31,10 +32,16 @@ function AppShell() {
 		overlay,
 		sessionId: routeSessionId,
 		worktree: urlWorktree,
+		workspace: urlWorkspace,
 	} = useRouteState();
 	const storeWorktree = useWorktreeStore((state) => state.current);
 
 	const token = useAuthStore((state) => state.token);
+
+	// Sync workspace ID to store for API/WebSocket calls
+	useEffect(() => {
+		workspaceActions.setCurrentWorkspaceId(urlWorkspace);
+	}, [urlWorkspace]);
 
 	// Sync URL worktree to store, redirect if sessionId becomes invalid
 	const prevWorktreeRef = useRef(urlWorktree);
@@ -50,19 +57,19 @@ function AppShell() {
 		if (prevWorktree !== urlWorktree && routeSessionId) {
 			navigate(
 				buildNavigation(
-					{ type: "home", worktree: urlWorktree },
+					{ type: "home", worktree: urlWorktree, workspace: urlWorkspace },
 					{ replace: true },
 				),
 			);
 		}
-	}, [urlWorktree, storeWorktree, routeSessionId, navigate]);
+	}, [urlWorktree, storeWorktree, routeSessionId, navigate, urlWorkspace]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally exclude wsStatus to avoid bypassing retry delay
 	useEffect(() => {
 		if (token && wsStatus === "disconnected") {
-			wsActions.connect(token);
+			wsActions.connect(token, urlWorkspace);
 		}
-	}, [token]);
+	}, [token, urlWorkspace]);
 
 	useEffect(() => {
 		if (wsStatus === "auth_failed") {
@@ -91,10 +98,20 @@ function AppShell() {
 		if (!exists) {
 			console.warn(`Worktree "${urlWorktree}" not found, redirecting to main`);
 			navigate(
-				buildNavigation({ type: "home", worktree: "" }, { replace: true }),
+				buildNavigation(
+					{ type: "home", worktree: "", workspace: urlWorkspace },
+					{ replace: true },
+				),
 			);
 		}
-	}, [isWorktreesLoaded, isGitRepo, worktrees, urlWorktree, navigate]);
+	}, [
+		isWorktreesLoaded,
+		isGitRepo,
+		worktrees,
+		urlWorktree,
+		urlWorkspace,
+		navigate,
+	]);
 
 	const activeDiffFile =
 		overlay?.type === "diff"
@@ -119,15 +136,21 @@ function AppShell() {
 		if (redirectSessionId) {
 			// When overlay is active, preserve it and only update session query param
 			const navResult = overlay
-				? overlayToNavigation(overlay, urlWorktree, redirectSessionId)
+				? overlayToNavigation(
+						overlay,
+						urlWorktree,
+						redirectSessionId,
+						urlWorkspace,
+					)
 				: buildNavigation({
 						type: "session",
 						worktree: urlWorktree,
+						workspace: urlWorkspace,
 						sessionId: redirectSessionId,
 					});
 			navigate({ ...navResult, replace: true });
 		}
-	}, [redirectSessionId, navigate, urlWorktree, overlay]);
+	}, [redirectSessionId, navigate, urlWorktree, urlWorkspace, overlay]);
 
 	useEffect(() => {
 		if (needsNewSession && !isCreatingSession.current) {
@@ -139,6 +162,7 @@ function AppShell() {
 							{
 								type: "session",
 								worktree: urlWorktree,
+								workspace: urlWorkspace,
 								sessionId: newSession.id,
 							},
 							{ replace: true },
@@ -149,7 +173,7 @@ function AppShell() {
 					isCreatingSession.current = false;
 				});
 		}
-	}, [needsNewSession, createSession, navigate, urlWorktree]);
+	}, [needsNewSession, createSession, navigate, urlWorktree, urlWorkspace]);
 
 	const handleTokenSubmit = (token: string) => {
 		authActions.login(token);
@@ -165,12 +189,13 @@ function AppShell() {
 				buildNavigation({
 					type: "session",
 					worktree: urlWorktree,
+					workspace: urlWorkspace,
 					sessionId: id,
 				}),
 			);
 			setSidebarOpen(false);
 		},
-		[navigate, urlWorktree],
+		[navigate, urlWorktree, urlWorkspace],
 	);
 
 	const handleCreateSession = useCallback(async () => {
@@ -180,10 +205,11 @@ function AppShell() {
 			buildNavigation({
 				type: "session",
 				worktree: urlWorktree,
+				workspace: urlWorkspace,
 				sessionId: newSession.id,
 			}),
 		);
-	}, [createSession, navigate, urlWorktree]);
+	}, [createSession, navigate, urlWorktree, urlWorkspace]);
 
 	const handleDeleteSession = useCallback(
 		async (id: string) => {
@@ -198,6 +224,7 @@ function AppShell() {
 						{
 							type: "session",
 							worktree: urlWorktree,
+							workspace: urlWorkspace,
 							sessionId: remaining[0].id,
 						},
 						{ replace: true },
@@ -205,7 +232,14 @@ function AppShell() {
 				);
 			}
 		},
-		[currentSessionId, filteredSessions, deleteSession, navigate, urlWorktree],
+		[
+			currentSessionId,
+			filteredSessions,
+			deleteSession,
+			navigate,
+			urlWorktree,
+			urlWorkspace,
+		],
 	);
 
 	const handleSelectDiffFile = useCallback(
@@ -215,10 +249,11 @@ function AppShell() {
 					{ type: "diff", path, staged },
 					urlWorktree,
 					currentSessionId,
+					urlWorkspace,
 				),
 			);
 		},
-		[navigate, urlWorktree, currentSessionId],
+		[navigate, urlWorktree, currentSessionId, urlWorkspace],
 	);
 
 	const handleSelectFile = useCallback(
@@ -228,10 +263,11 @@ function AppShell() {
 					{ type: "file", path },
 					urlWorktree,
 					currentSessionId,
+					urlWorkspace,
 				),
 			);
 		},
-		[navigate, urlWorktree, currentSessionId],
+		[navigate, urlWorktree, currentSessionId, urlWorkspace],
 	);
 
 	const handleSelectCommit = useCallback(
@@ -241,10 +277,11 @@ function AppShell() {
 					{ type: "commit", hash },
 					urlWorktree,
 					currentSessionId,
+					urlWorkspace,
 				),
 			);
 		},
-		[navigate, urlWorktree, currentSessionId],
+		[navigate, urlWorktree, currentSessionId, urlWorkspace],
 	);
 
 	const handleCloseOverlay = useCallback(() => {
@@ -253,26 +290,43 @@ function AppShell() {
 				buildNavigation({
 					type: "session",
 					worktree: urlWorktree,
+					workspace: urlWorkspace,
 					sessionId: currentSessionId,
 				}),
 			);
 		} else {
-			navigate(buildNavigation({ type: "home", worktree: urlWorktree }));
+			navigate(
+				buildNavigation({
+					type: "home",
+					worktree: urlWorktree,
+					workspace: urlWorkspace,
+				}),
+			);
 		}
-	}, [navigate, urlWorktree, currentSessionId]);
+	}, [navigate, urlWorktree, urlWorkspace, currentSessionId]);
 
 	const handleOpenSettings = useCallback(() => {
 		navigate(
-			overlayToNavigation({ type: "settings" }, urlWorktree, currentSessionId),
+			overlayToNavigation(
+				{ type: "settings" },
+				urlWorktree,
+				currentSessionId,
+				urlWorkspace,
+			),
 		);
-	}, [navigate, urlWorktree, currentSessionId]);
+	}, [navigate, urlWorktree, currentSessionId, urlWorkspace]);
 
 	const handleOpenWorkList = useCallback(() => {
 		setSidebarOpen(false);
 		navigate(
-			overlayToNavigation({ type: "work-list" }, urlWorktree, currentSessionId),
+			overlayToNavigation(
+				{ type: "work-list" },
+				urlWorktree,
+				currentSessionId,
+				urlWorkspace,
+			),
 		);
-	}, [navigate, urlWorktree, currentSessionId]);
+	}, [navigate, urlWorktree, currentSessionId, urlWorkspace]);
 
 	const handleOpenWorkDetail = useCallback(
 		(workId: string) => {
@@ -281,10 +335,11 @@ function AppShell() {
 					{ type: "work-detail", workId },
 					urlWorktree,
 					currentSessionId,
+					urlWorkspace,
 				),
 			);
 		},
-		[navigate, urlWorktree, currentSessionId],
+		[navigate, urlWorktree, currentSessionId, urlWorkspace],
 	);
 
 	const handleOpenAgentRoleList = useCallback(() => {
@@ -294,9 +349,10 @@ function AppShell() {
 				{ type: "agent-role-list" },
 				urlWorktree,
 				currentSessionId,
+				urlWorkspace,
 			),
 		);
-	}, [navigate, urlWorktree, currentSessionId]);
+	}, [navigate, urlWorktree, currentSessionId, urlWorkspace]);
 
 	const handleOpenAgentRoleDetail = useCallback(
 		(roleId: string) => {
@@ -305,10 +361,11 @@ function AppShell() {
 					{ type: "agent-role-detail", roleId },
 					urlWorktree,
 					currentSessionId,
+					urlWorkspace,
 				),
 			);
 		},
-		[navigate, urlWorktree, currentSessionId],
+		[navigate, urlWorktree, currentSessionId, urlWorkspace],
 	);
 
 	const handleNavigateToSession = useCallback(
@@ -317,11 +374,12 @@ function AppShell() {
 				buildNavigation({
 					type: "session",
 					worktree: urlWorktree,
+					workspace: urlWorkspace,
 					sessionId,
 				}),
 			);
 		},
-		[navigate, urlWorktree],
+		[navigate, urlWorktree, urlWorkspace],
 	);
 
 	if (!hasAuthToken) {

@@ -23,9 +23,12 @@ import (
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/cli"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/globalconfig"
+	"github.com/pockode/server/manager"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/relay"
@@ -163,7 +166,22 @@ func findAvailablePort(startPort int) int {
 
 func main() {
 	// Handle subcommands before flag.Parse()
-	if len(os.Args) > 1 && os.Args[0] != "-" {
+	cliApp := cli.New()
+	cliApp.Register(cli.ManagerCommand())
+	cliApp.Register(cli.WorkspaceCommand())
+	result := cliApp.RunAndGetResult(os.Args)
+
+	// If a subcommand was handled, check if we need to start a server
+	if result.Handled {
+		switch result.Mode {
+		case cli.ModeManager:
+			runManagerMode(result.ManagerConfig)
+		}
+		return
+	}
+
+	// Handle legacy subcommands
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
 		switch os.Args[1] {
 		case "mcp":
 			runMCP()
@@ -171,6 +189,11 @@ func main() {
 		}
 	}
 
+	// Run single workspace mode (backward compatible)
+	runSingleMode()
+}
+
+func runSingleMode() {
 	portFlag := flag.Int("port", 0, fmt.Sprintf("server port (default %d)", defaultPort))
 	tokenFlag := flag.String("auth-token", "", "authentication token (required)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
@@ -409,6 +432,8 @@ func main() {
 		LocalURL:     "http://localhost:" + portStr,
 		RemoteURL:    remoteURL,
 		Announcement: announcement,
+		Mode:         cli.ModeDescription(cli.ModeSingle),
+		ModeTip:      cli.ModeTip(cli.ModeSingle),
 	})
 
 	// Print QR code if relay is enabled
@@ -503,4 +528,139 @@ func runMCP() {
 		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runManagerMode(cfg *cli.ManagerConfig) {
+	port := cfg.Port
+	if port == 0 {
+		port = defaultPort
+	}
+	port = findAvailablePort(port)
+
+	token := cfg.AuthToken
+	devMode := os.Getenv("DEV_MODE") == "true"
+
+	// Initialize process manager with idle timeout
+	idleTimeout := 8 * time.Hour
+	if env := os.Getenv("IDLE_TIMEOUT"); env != "" {
+		if d, err := time.ParseDuration(env); err == nil {
+			idleTimeout = d
+		} else {
+			slog.Warn("invalid IDLE_TIMEOUT, using default", "value", env, "default", idleTimeout)
+		}
+	}
+
+	// Initialize logger (use global config dir for manager mode)
+	globalConfigDir, err := globalconfig.Dir()
+	if err != nil {
+		slog.Error("failed to get global config directory", "error", err)
+		os.Exit(1)
+	}
+	logger.Init(logger.Config{
+		DataDir: globalConfigDir,
+		DevMode: devMode,
+	})
+
+	// Initialize manager
+	mgr, err := manager.NewManager(manager.ManagerConfig{
+		IdleTimeout: idleTimeout,
+		Token:       token,
+		Version:     version,
+		DevMode:     devMode,
+	})
+	if err != nil {
+		slog.Error("failed to initialize manager", "error", err)
+		os.Exit(1)
+	}
+
+	router := manager.NewRouter(manager.RouterConfig{
+		Manager:  mgr,
+		NotFound: newManagerSPAHandler(devMode),
+	})
+
+	portStr := strconv.Itoa(port)
+	srv := &http.Server{
+		Addr:    ":" + portStr,
+		Handler: middleware.Auth(token)(router),
+	}
+
+	cloudURL := cfg.CloudURL
+	if cloudURL == "" {
+		cloudURL = "https://cloud.pockode.com"
+	}
+
+	// Graceful shutdown
+	shutdownDone := make(chan struct{})
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+
+		slog.Info("shutting down manager")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			slog.Error("server shutdown error", "error", err)
+		}
+		mgr.Shutdown()
+		close(shutdownDone)
+	}()
+
+	// Fetch announcement from cloud
+	announcement := relay.NewClient(cloudURL).GetAnnouncement(context.Background())
+
+	// Display startup banner
+	startup.PrintBanner(startup.BannerOptions{
+		Version:      version,
+		LocalURL:     "http://localhost:" + portStr,
+		Announcement: announcement,
+		Mode:         cli.ModeDescription(cli.ModeManager),
+		ModeTip:      cli.ModeTip(cli.ModeManager),
+	})
+
+	startup.PrintFooter()
+
+	slog.Info("manager starting", "port", port, "devMode", devMode, "idleTimeout", idleTimeout)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Error("server error", "error", err)
+		os.Exit(1)
+	}
+	<-shutdownDone
+	slog.Info("manager stopped")
+}
+
+// newManagerSPAHandler creates an SPA handler for manager mode that serves
+// workspace selection page and handles SPA routing.
+func newManagerSPAHandler(devMode bool) http.Handler {
+	if devMode {
+		return http.NotFoundHandler()
+	}
+
+	subFS, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		slog.Error("failed to create sub filesystem", "error", err)
+		return http.NotFoundHandler()
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// API and health endpoints should not reach here
+		if strings.HasPrefix(path, "/api") || path == "/health" {
+			http.NotFound(w, r)
+			return
+		}
+
+		cleanPath := strings.TrimPrefix(path, "/")
+		if cleanPath == "" {
+			cleanPath = "index.html"
+		}
+
+		// Check if file exists, otherwise fall back to index.html for SPA routing
+		if !fileExists(subFS, cleanPath) && !fileExists(subFS, cleanPath+".br") {
+			cleanPath = "index.html"
+		}
+
+		serveFileWithBrotli(w, r, subFS, cleanPath)
+	})
 }

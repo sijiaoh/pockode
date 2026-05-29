@@ -27,9 +27,40 @@ Phone (React SPA) ──► Relay Server ──► User's PC (Go server) ──�
 
 The Go server spawns AI CLI processes (Claude Code, Codex) as subprocesses, streaming their JSON output back to the frontend over WebSocket JSON-RPC 2.0. No SDK bindings — just process management and stream parsing. This keeps AI integration loosely coupled: adding a new AI backend means implementing a process adapter, not integrating an SDK.
 
+### Running Modes
+
+Pockode supports two server modes:
+
+**Single Workspace Mode** (default): Server runs in the current directory with `.pockode/` as the data directory. This is the traditional mode — one project, one server.
+
+**Multi-Workspace Manager Mode**: A central server manages multiple workspaces from `~/.pockode/workspaces.json`. Each workspace gets its own Worker process with isolated resources.
+
+```
+Manager Mode:
+
+                                    ┌─── Worker (project-a)
+Phone ──► Relay ──► Manager ───────┼─── Worker (project-b)
+                    (router)        └─── Worker (project-c)
+```
+
+The Manager routes requests by URL path (`/w/:workspace-id/...`) to the appropriate Worker. Workers start lazily on first request and can be stopped when idle.
+
+URL structure in manager mode:
+- `/w/:id/ws` → WebSocket connection
+- `/w/:id/api/...` → API endpoints
+- `/w/:id/health` → Health check
+- `/` → Workspace selection page
+
+Global configuration lives in `~/.pockode/`:
+- `config.json` — Default port, auth token, cloud URL
+- `workspaces.json` — Registered workspace list
+- `relay.json` — Relay credentials
+
 Infrastructure docs: [websocket-rpc-design.md](websocket-rpc-design.md) (RPC layer), [relay.md](relay.md) (NAT traversal), [agent-event.md](agent-event.md) (event stream), [watcher.md](watcher.md) (real-time subscriptions).
 
 Feature docs: [agent-chat.md](agent-chat.md) (chat), [file.md](file.md) (file ops), [git.md](git.md) (git ops).
+
+Code explanation: [multi-workspace.md](code/multi-workspace.md) (Manager/Worker architecture).
 
 ## Agent-Centric Workflow
 

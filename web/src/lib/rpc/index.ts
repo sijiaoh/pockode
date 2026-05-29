@@ -13,4 +13,5 @@ export { createGitActions, type GitActions } from "./git";
 export { createSessionActions, type SessionActions } from "./session";
 export { createSettingsActions, type SettingsActions } from "./settings";
 export { createWorkActions, type WorkActions } from "./work";
+export { createWorkspaceActions, type WorkspaceActions } from "./workspace";
 export { createWorktreeActions, type WorktreeActions } from "./worktree";

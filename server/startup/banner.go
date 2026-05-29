@@ -28,6 +28,8 @@ type BannerOptions struct {
 	LocalURL     string
 	RemoteURL    string // Empty if relay is disabled
 	Announcement string // Message from cloud
+	Mode         string // Running mode (e.g., "Single Workspace", "Multi-Workspace Manager")
+	ModeTip      string // Helpful tip about the current mode
 }
 
 // colorsEnabled returns true if ANSI colors should be used.
@@ -66,6 +68,13 @@ func PrintBanner(opts BannerOptions) {
 	fmt.Printf("%s%s  %s\n", indent, color(dim, "▸ Local"), color(green, opts.LocalURL))
 	if opts.RemoteURL != "" {
 		fmt.Printf("%s%s %s\n", indent, color(dim, "▸ Remote"), color(green, opts.RemoteURL))
+	}
+
+	if opts.Mode != "" {
+		fmt.Printf("%s%s   %s\n", indent, color(dim, "▸ Mode"), opts.Mode)
+	}
+	if opts.ModeTip != "" {
+		fmt.Printf("%s%s   %s\n", indent, color(dim, "▸ Tip"), color(dim, opts.ModeTip))
 	}
 
 	fmt.Println()

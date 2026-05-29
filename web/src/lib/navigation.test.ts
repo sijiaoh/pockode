@@ -173,6 +173,7 @@ describe("buildNavigation", () => {
 
 			expect(result).toEqual({
 				to: "/settings",
+				params: {},
 			});
 		});
 
@@ -199,7 +200,7 @@ describe("buildNavigation", () => {
 				worktree: "",
 			});
 
-			expect(result).toEqual({ to: "/" });
+			expect(result).toEqual({ to: "/", params: {} });
 		});
 
 		it("builds named worktree home route", () => {
@@ -222,13 +223,98 @@ describe("buildNavigation", () => {
 				{ replace: true },
 			);
 
-			expect(result).toEqual({ to: "/", replace: true });
+			expect(result).toEqual({ to: "/", replace: true, params: {} });
 		});
 
 		it("does not add replace when not specified", () => {
 			const result = buildNavigation({ type: "home", worktree: "" });
 
 			expect(result.replace).toBeUndefined();
+		});
+	});
+
+	describe("workspace routes", () => {
+		it("builds workspace-only session route", () => {
+			const result = buildNavigation({
+				type: "session",
+				worktree: "",
+				workspace: "ws-123",
+				sessionId: "abc123",
+			});
+
+			expect(result).toEqual({
+				to: "/w/$workspace/s/$sessionId",
+				params: { workspace: "ws-123", sessionId: "abc123" },
+			});
+		});
+
+		it("builds workspace + worktree session route", () => {
+			const result = buildNavigation({
+				type: "session",
+				worktree: "feature-x",
+				workspace: "ws-123",
+				sessionId: "abc123",
+			});
+
+			expect(result).toEqual({
+				to: "/w/$workspace/w/$worktree/s/$sessionId",
+				params: {
+					workspace: "ws-123",
+					worktree: "feature-x",
+					sessionId: "abc123",
+				},
+			});
+		});
+
+		it("builds workspace home route", () => {
+			const result = buildNavigation({
+				type: "home",
+				worktree: "",
+				workspace: "ws-123",
+			});
+
+			expect(result).toEqual({
+				to: "/w/$workspace/",
+				params: { workspace: "ws-123" },
+			});
+		});
+
+		it("builds workspace + worktree home route", () => {
+			const result = buildNavigation({
+				type: "home",
+				worktree: "feature-x",
+				workspace: "ws-123",
+			});
+
+			expect(result).toEqual({
+				to: "/w/$workspace/w/$worktree/",
+				params: { workspace: "ws-123", worktree: "feature-x" },
+			});
+		});
+
+		it("builds workspace settings route", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "",
+				workspace: "ws-123",
+				overlayType: "settings",
+				sessionId: null,
+			});
+
+			expect(result).toEqual({
+				to: "/w/$workspace/settings",
+				params: { workspace: "ws-123" },
+			});
+		});
+
+		it("builds workspace-select route", () => {
+			const result = buildNavigation({
+				type: "workspace-select",
+			});
+
+			expect(result).toEqual({
+				to: "/",
+			});
 		});
 	});
 });
