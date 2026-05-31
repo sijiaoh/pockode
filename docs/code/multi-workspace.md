@@ -218,6 +218,43 @@ pockode manager start --auth-token XXX
 
 Each workspace continues using its existing `.pockode/` directory for project-specific data.
 
+## Development Environment
+
+The `scripts/dev.sh` script supports both single and manager modes:
+
+```bash
+# Single workspace mode (default)
+./scripts/dev.sh
+
+# Manager mode (argument)
+./scripts/dev.sh manager
+
+# Manager mode (environment variable)
+MODE=manager ./scripts/dev.sh
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MODE` | `single` | Startup mode (`single` or `manager`) |
+| `AUTH_TOKEN` | `dev-token` | Authentication token |
+| `WORK_DIR` | Project root | Working directory (single mode) |
+| `SERVER_PORT` | `8080` | Backend server port |
+| `WEB_PORT` | `5173` | Frontend dev server port |
+| `DEV_MODE` | `true` | Enable development mode |
+| `DEBUG` | `true` | Enable debug output |
+| `LOG_LEVEL` | `debug` | Log verbosity |
+| `RELAY_ENABLED` | `false` | Enable relay connection |
+| `CLOUD_URL` | `http://local.pockode.com` | Cloud relay URL |
+| `RELAY_FRONTEND_PORT` | `$WEB_PORT` | Frontend port for relay |
+
+### Mode Differences
+
+**Single mode**: Runs `pnpm run dev` which starts both backend and frontend with hot reload.
+
+**Manager mode**: Builds and runs the Go server as `pockode manager start`, then starts the frontend separately with `pnpm run dev:web`. Use this mode when developing or testing multi-workspace features.
+
 ## Code Paths
 
 | Component | Path |
