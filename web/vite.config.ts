@@ -36,6 +36,11 @@ export default defineConfig({
 				target: `ws://localhost:${serverPort}`,
 				ws: true,
 			},
+			"/w/": {
+				target: `http://localhost:${serverPort}`,
+				changeOrigin: true,
+				ws: true,
+			},
 		},
 	},
 });

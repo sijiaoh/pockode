@@ -249,6 +249,20 @@ MODE=manager ./scripts/dev.sh
 | `CLOUD_URL` | `http://local.pockode.com` | Cloud relay URL |
 | `RELAY_FRONTEND_PORT` | `$WEB_PORT` | Frontend port for relay |
 
+### Custom Port Configuration
+
+When running single and manager modes simultaneously, or to avoid port conflicts:
+
+```bash
+SERVER_PORT=1214 WEB_PORT=9870 AUTH_TOKEN=your-token ./scripts/dev.sh manager
+```
+
+With relay enabled for remote access testing:
+
+```bash
+SERVER_PORT=1214 WEB_PORT=9870 AUTH_TOKEN=your-token RELAY_ENABLED=true ./scripts/dev.sh manager
+```
+
 ### Mode Differences
 
 **Single mode**: Runs `pnpm run dev` which starts both backend and frontend with hot reload.
