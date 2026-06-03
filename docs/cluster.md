@@ -78,6 +78,15 @@ The relay uses the same infrastructure as the main server mode—see [relay.md](
 
 ## Development
 
+### Running Locally
+
+```bash
+# Start cluster dev environment (backend port 9871, frontend port 5174)
+./scripts/dev.sh --cluster
+```
+
+This runs both the Go backend (`go run . cluster`) and the React frontend (`web-cluster`) with hot reload.
+
 ### Frontend
 
 The cluster frontend lives in `web-cluster/`. To build:

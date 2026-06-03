@@ -20,6 +20,7 @@ Pockode is a mobile programming platform with the core philosophy of "AI editing
 ```
 pockode/
 ├── web/            # React frontend (see web/AGENTS.md)
+├── web-cluster/    # Cluster mode frontend (lightweight, see docs/cluster.md)
 ├── server/         # Go backend (see server/AGENTS.md)
 ├── site/           # pockode.com website (Hugo)
 └── docs/           # Design documents (entry: docs/concept.md)
