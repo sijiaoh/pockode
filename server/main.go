@@ -523,16 +523,16 @@ func runCluster() {
 		}
 	}
 
-	dataDir := os.Getenv("DATA_DIR")
-	if dataDir == "" {
-		dataDir = ".pockode"
-	}
-	absDataDir, err := filepath.Abs(dataDir)
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to resolve data directory: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: failed to get home directory: %v\n", err)
 		os.Exit(1)
 	}
-	dataDir = absDataDir
+	dataDir := filepath.Join(homeDir, ".pockode-cluster")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to create data directory: %v\n", err)
+		os.Exit(1)
+	}
 
 	relayEnabled := os.Getenv("RELAY_ENABLED") != "false"
 	devMode := os.Getenv("DEV_MODE") == "true"

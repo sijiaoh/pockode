@@ -30,9 +30,10 @@ AUTH_TOKEN=your-secret-token ./pockode cluster
 | `AUTH_TOKEN` | (required) | Authentication token for WebSocket connections |
 | `SERVER_PORT` | `9871` | HTTP server port |
 | `RELAY_ENABLED` | `true` | Enable relay for remote access |
-| `DATA_DIR` | `.pockode` | Data directory for relay config persistence |
 | `CLOUD_URL` | `https://cloud.pockode.com` | Relay server URL |
 | `DEV_MODE` | `false` | Development mode (disables embedded SPA) |
+
+Data is stored in `~/.pockode-cluster/` (created automatically if it doesn't exist).
 
 ## Endpoints
 
