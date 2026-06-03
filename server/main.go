@@ -23,6 +23,7 @@ import (
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/logger"
@@ -167,6 +168,9 @@ func main() {
 		switch os.Args[1] {
 		case "mcp":
 			runMCP()
+			return
+		case "cluster":
+			runCluster()
 			return
 		}
 	}
@@ -501,6 +505,55 @@ func runMCP() {
 	server := mcp.NewServer(s.work, s.agentRole)
 	if err := server.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runCluster() {
+	token := os.Getenv("AUTH_TOKEN")
+	if token == "" {
+		fmt.Fprintln(os.Stderr, "Error: AUTH_TOKEN environment variable is required")
+		os.Exit(1)
+	}
+
+	port := cluster.DefaultPort
+	if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
+		if p, err := strconv.Atoi(envPort); err == nil {
+			port = p
+		}
+	}
+
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = ".pockode"
+	}
+	absDataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to resolve data directory: %v\n", err)
+		os.Exit(1)
+	}
+	dataDir = absDataDir
+
+	relayEnabled := os.Getenv("RELAY_ENABLED") != "false"
+	devMode := os.Getenv("DEV_MODE") == "true"
+
+	cloudURL := os.Getenv("CLOUD_URL")
+	if cloudURL == "" {
+		cloudURL = "https://cloud.pockode.com"
+	}
+
+	cfg := cluster.Config{
+		Port:         port,
+		AuthToken:    token,
+		DataDir:      dataDir,
+		RelayEnabled: relayEnabled,
+		CloudURL:     cloudURL,
+		Version:      version,
+		DevMode:      devMode,
+	}
+
+	if err := cluster.Run(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: cluster mode failed: %v\n", err)
 		os.Exit(1)
 	}
 }

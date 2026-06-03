@@ -1,0 +1,34 @@
+{
+	"name": "pockode-cluster",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc && vite build",
+		"build:release": "tsc && vite build --outDir ../server/cluster/static --emptyOutDir",
+		"preview": "vite preview",
+		"lint": "biome check src",
+		"format": "biome format --write src"
+	},
+	"dependencies": {
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@types/react": "^19.0.0",
+		"@types/react-dom": "^19.0.0",
+		"@vitejs/plugin-react": "^4.4.1",
+		"autoprefixer": "^10.4.20",
+		"postcss": "^8.5.3",
+		"tailwindcss": "^4.1.4",
+		"@tailwindcss/vite": "^4.1.4",
+		"typescript": "^5.8.3",
+		"vite": "^6.2.5",
+		"vite-plugin-compression": "^0.5.1"
+	},
+	"engines": {
+		"node": ">=22"
+	}
+}
