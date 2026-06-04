@@ -71,7 +71,12 @@ func Run(cfg Config) error {
 			DataDir:       cfg.DataDir,
 			ClientVersion: cfg.Version,
 		}
-		relayManager = relay.NewManager(relayCfg, port, port, log)
+
+		frontendPort := port
+		if envFrontendPort := os.Getenv("RELAY_FRONTEND_PORT"); envFrontendPort != "" {
+			frontendPort, _ = strconv.Atoi(envFrontendPort)
+		}
+		relayManager = relay.NewManager(relayCfg, port, frontendPort, log)
 
 		remoteURL, err := relayManager.Start(context.Background())
 		if err != nil {

@@ -86,7 +86,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `SERVER_PORT` | | `8080` | 服务端口 |
 | `WORK_DIR` | | `/workspace` | 工作目录 |
 | `DEV_MODE` | | `false` | 开发模式（true 时不 serve 静态文件） |
-| `RELAY_PORT` | | `SERVER_PORT` | Relay 转发目标端口（开发时可设为前端端口） |
+| `RELAY_FRONTEND_PORT` | | `SERVER_PORT` | Relay 转发前端请求的目标端口（开发时可设为前端端口） |
 | `LOG_FORMAT` | | `text` | `json` / `text` |
 | `LOG_LEVEL` | | `info` | `debug`/`info`/`warn`/`error` |
 | `LOG_FILE` | | `dataDir/server.log`(生产) | 日志文件路径（开发模式默认输出到 stdout） |

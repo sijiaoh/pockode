@@ -31,6 +31,7 @@ AUTH_TOKEN=your-secret-token ./pockode cluster
 | `SERVER_PORT` | `9871` | HTTP server port |
 | `WEB_PORT` | `5174` | Frontend dev server port (development only) |
 | `RELAY_ENABLED` | `true` | Enable relay for remote access |
+| `RELAY_FRONTEND_PORT` | (same as SERVER_PORT) | Target port for relay HTTP proxy frontend requests |
 | `CLOUD_URL` | `https://cloud.pockode.com` | Relay server URL |
 | `DEV_MODE` | `false` | Development mode (disables embedded SPA) |
 
