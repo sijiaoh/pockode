@@ -14,6 +14,7 @@ import (
 
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/relay"
+	"github.com/pockode/server/startup"
 )
 
 const DefaultPort = 9871
@@ -65,6 +66,7 @@ func Run(cfg Config) error {
 
 	var relayManager *relay.Manager
 	var cancelRelayStreams context.CancelFunc
+	var remoteURL string
 	if cfg.RelayEnabled {
 		relayCfg := relay.Config{
 			CloudURL:      cfg.CloudURL,
@@ -82,7 +84,8 @@ func Run(cfg Config) error {
 		}
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, log)
 
-		remoteURL, err := relayManager.Start(context.Background())
+		var err error
+		remoteURL, err = relayManager.Start(context.Background())
 		if err != nil {
 			return fmt.Errorf("failed to start relay: %w", err)
 		}
@@ -96,6 +99,26 @@ func Run(cfg Config) error {
 			}
 		}()
 	}
+
+	// Fetch announcement from cloud
+	announcement := relay.NewClient(cfg.CloudURL).GetAnnouncement(context.Background())
+
+	// Display startup banner
+	localURL := fmt.Sprintf("http://localhost:%d", port)
+	startup.PrintBanner(startup.BannerOptions{
+		Version:      cfg.Version,
+		LocalURL:     localURL,
+		RemoteURL:    remoteURL,
+		Announcement: announcement,
+	})
+
+	// Print QR code if relay is enabled
+	if remoteURL != "" {
+		startup.PrintQRCode(remoteURL)
+		fmt.Println()
+	}
+
+	startup.PrintFooter()
 
 	shutdownDone := make(chan struct{})
 	go func() {

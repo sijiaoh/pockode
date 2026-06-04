@@ -72,6 +72,16 @@ After authentication:
 |--------|-------------|
 | `ping` | Returns `"pong"` |
 
+## Startup Output
+
+When cluster mode starts, it displays the same CLI startup interface as normal mode:
+
+- **Banner**: Logo, version, local URL, remote URL (if relay enabled), and cloud announcements
+- **QR Code**: Scannable QR code for the remote URL (when relay is enabled)
+- **Footer**: "Press Ctrl+C to stop" instruction
+
+This provides a consistent user experience across both deployment modes.
+
 ## Relay Integration
 
 When `RELAY_ENABLED=true` (default), cluster mode registers with the cloud relay server and accepts connections through it. This allows mobile devices to connect without direct network access to the server.
