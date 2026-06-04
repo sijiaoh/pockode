@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,6 +23,7 @@ import (
 	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
@@ -98,18 +98,6 @@ func newSPAHandler(apiHandler http.Handler) http.Handler {
 
 const defaultPort = 9870
 
-func findAvailablePort(startPort int) int {
-	const maxAttempts = 100
-	for port := startPort; port < startPort+maxAttempts; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-		if err == nil {
-			ln.Close()
-			return port
-		}
-	}
-	return startPort
-}
-
 func main() {
 	// Handle subcommands before flag.Parse()
 	if len(os.Args) > 1 && os.Args[0] != "-" {
@@ -145,7 +133,7 @@ func main() {
 			slog.Warn("invalid SERVER_PORT, using default", "value", envPort, "default", defaultPort)
 		}
 	}
-	port = findAvailablePort(port)
+	port = netutil.FindAvailablePort(port)
 
 	token := *tokenFlag
 	if token == "" {

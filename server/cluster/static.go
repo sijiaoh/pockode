@@ -9,6 +9,7 @@ import (
 	"github.com/pockode/server/spa"
 )
 
+// newSPAHandler wraps an API handler with embedded SPA static file serving for cluster mode.
 func newSPAHandler(apiHandler http.Handler) http.Handler {
 	subFS, err := fs.Sub(staticFS, "static")
 	if err != nil {

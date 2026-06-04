@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,24 +11,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/startup"
 )
 
 const DefaultPort = 9871
-
-func findAvailablePort(startPort int) int {
-	const maxAttempts = 100
-	for port := startPort; port < startPort+maxAttempts; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-		if err == nil {
-			ln.Close()
-			return port
-		}
-	}
-	return startPort
-}
 
 type Config struct {
 	Port         int
@@ -51,7 +39,7 @@ func Run(cfg Config) error {
 		DevMode: cfg.DevMode,
 	})
 
-	port := findAvailablePort(cfg.Port)
+	port := netutil.FindAvailablePort(cfg.Port)
 
 	log := slog.Default().With("mode", "cluster")
 	log.Info("starting cluster mode", "port", port, "dataDir", cfg.DataDir, "relayEnabled", cfg.RelayEnabled, "devMode", cfg.DevMode)

@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/ws"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
@@ -55,7 +55,7 @@ func (h *wsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *wsHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
-	stream := newWebSocketStream(wsConn)
+	stream := ws.NewWebSocketStream(wsConn)
 	connID := uuid.Must(uuid.NewV7()).String()
 	h.handleStream(ctx, stream, connID)
 }
@@ -161,44 +161,3 @@ func unmarshalParams(req *jsonrpc2.Request, v interface{}) error {
 	}
 	return json.Unmarshal(*req.Params, v)
 }
-
-// webSocketStream wraps a websocket.Conn as a jsonrpc2.ObjectStream.
-type webSocketStream struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
-}
-
-func newWebSocketStream(conn *websocket.Conn) *webSocketStream {
-	return &webSocketStream{conn: conn}
-}
-
-func (s *webSocketStream) ReadObject(v interface{}) error {
-	_, data, err := s.conn.Read(context.Background())
-	if err != nil {
-		// Treat normal close frames as EOF so jsonrpc2 shuts down gracefully
-		switch websocket.CloseStatus(err) {
-		case websocket.StatusNormalClosure, websocket.StatusGoingAway:
-			return io.EOF
-		}
-		return err
-	}
-	return json.Unmarshal(data, v)
-}
-
-func (s *webSocketStream) WriteObject(v interface{}) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	return s.conn.Write(context.Background(), websocket.MessageText, data)
-}
-
-func (s *webSocketStream) Close() error {
-	return s.conn.Close(websocket.StatusNormalClosure, "")
-}
-
-var _ jsonrpc2.ObjectStream = (*webSocketStream)(nil)
-var _ io.Closer = (*webSocketStream)(nil)
