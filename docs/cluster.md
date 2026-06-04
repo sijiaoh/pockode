@@ -78,6 +78,14 @@ The relay uses the same infrastructure as the main server mode—see [relay.md](
 
 ## Development
 
+### Prerequisites
+
+Install dependencies before running development commands:
+
+```bash
+pnpm install
+```
+
 ### Running Locally
 
 ```bash
@@ -92,7 +100,7 @@ This runs both the Go backend (`go run . cluster`) and the React frontend (`web-
 The cluster frontend lives in `web-cluster/`. To build:
 
 ```bash
-cd web-cluster && pnpm build:release
+cd web-cluster && pnpm install && pnpm build:release
 ```
 
 Built files are embedded into the binary via `server/cluster/embed.go`.
