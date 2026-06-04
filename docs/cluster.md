@@ -29,6 +29,7 @@ AUTH_TOKEN=your-secret-token ./pockode cluster
 |----------|---------|-------------|
 | `AUTH_TOKEN` | (required) | Authentication token for WebSocket connections |
 | `SERVER_PORT` | `9871` | HTTP server port |
+| `WEB_PORT` | `5174` | Frontend dev server port (development only) |
 | `RELAY_ENABLED` | `true` | Enable relay for remote access |
 | `CLOUD_URL` | `https://cloud.pockode.com` | Relay server URL |
 | `DEV_MODE` | `false` | Development mode (disables embedded SPA) |
@@ -91,6 +92,9 @@ pnpm install
 ```bash
 # Start cluster dev environment (backend port 9871, frontend port 5174)
 ./scripts/dev.sh --cluster
+
+# Or with custom ports:
+SERVER_PORT=9900 WEB_PORT=5200 ./scripts/dev.sh --cluster
 ```
 
 This runs both the Go backend (`go run . cluster`) and the React frontend (`web-cluster`) with hot reload.

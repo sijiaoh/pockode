@@ -1,7 +1,10 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 import compression from "vite-plugin-compression";
+
+const serverPort = process.env.SERVER_PORT || "9871";
+const webPort = Number(process.env.WEB_PORT) || 5174;
 
 export default defineConfig({
 	plugins: [
@@ -15,14 +18,14 @@ export default defineConfig({
 		}),
 	],
 	server: {
-		port: 5174,
+		port: webPort,
 		proxy: {
 			"/ws": {
-				target: "ws://localhost:9871",
+				target: `ws://localhost:${serverPort}`,
 				ws: true,
 			},
 			"/health": {
-				target: "http://localhost:9871",
+				target: `http://localhost:${serverPort}`,
 			},
 		},
 	},
