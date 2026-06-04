@@ -7,6 +7,10 @@ const serverPort = process.env.SERVER_PORT || "9871";
 const webPort = Number(process.env.WEB_PORT) || 5174;
 
 export default defineConfig({
+	clearScreen: false,
+	define: {
+		__APP_VERSION__: JSON.stringify(process.env.VERSION || "dev"),
+	},
 	plugins: [
 		react(),
 		tailwindcss(),
@@ -19,6 +23,7 @@ export default defineConfig({
 	],
 	server: {
 		port: webPort,
+		allowedHosts: [".local.pockode.com", ".cloud.pockode.com"],
 		proxy: {
 			"/ws": {
 				target: `ws://localhost:${serverPort}`,
@@ -32,6 +37,7 @@ export default defineConfig({
 	build: {
 		rollupOptions: {
 			output: {
+				// Single bundle for embedded binary simplicity
 				manualChunks: undefined,
 			},
 		},

@@ -41,8 +41,8 @@ Data is stored in `~/.pockode-cluster/` (created automatically if it doesn't exi
 
 | Path | Auth | Description |
 |------|------|-------------|
-| `/health` | ✓ | Health check (returns "ok") |
-| `/ws` | ✓ | WebSocket JSON-RPC endpoint |
+| `/health` | — | Health check (returns "ok") |
+| `/ws` | — | WebSocket JSON-RPC endpoint (handles own auth) |
 | `/*` | ✓ | Static SPA files (production mode only) |
 
 ## WebSocket Protocol
@@ -118,3 +118,4 @@ Cluster mode implementation:
 - `server/cluster/ws.go` — WebSocket handler and JSON-RPC methods
 - `server/cluster/static.go` — SPA file serving
 - `server/cluster/embed.go` — Static file embedding
+- `server/spa/` — Shared SPA utilities (used by both normal and cluster mode)

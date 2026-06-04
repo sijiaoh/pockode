@@ -5,10 +5,8 @@ import (
 	"embed"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
-	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -32,6 +30,7 @@ import (
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/spa"
 	"github.com/pockode/server/startup"
 	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
@@ -89,63 +88,12 @@ func newSPAHandler(apiHandler http.Handler) http.Handler {
 		}
 
 		// Check if file exists (including .br version), otherwise fall back to index.html for SPA routing
-		if !fileExists(subFS, cleanPath) && !fileExists(subFS, cleanPath+".br") {
+		if !spa.FileExists(subFS, cleanPath) && !spa.FileExists(subFS, cleanPath+".br") {
 			cleanPath = "index.html"
 		}
 
-		serveFileWithBrotli(w, r, subFS, cleanPath)
+		spa.ServeFileWithBrotli(w, r, subFS, cleanPath)
 	})
-}
-
-func fileExists(fsys fs.FS, path string) bool {
-	f, err := fsys.Open(path)
-	if err != nil {
-		return false
-	}
-	f.Close()
-	return true
-}
-
-// serveFileWithBrotli serves a file, using pre-compressed .br version if available and client accepts brotli.
-func serveFileWithBrotli(w http.ResponseWriter, r *http.Request, fsys fs.FS, filePath string) {
-	// Hashed assets (in /assets/) can be cached indefinitely
-	if strings.HasPrefix(filePath, "assets/") {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	}
-
-	w.Header().Set("Vary", "Accept-Encoding")
-
-	acceptsBr := strings.Contains(r.Header.Get("Accept-Encoding"), "br")
-	if acceptsBr {
-		brPath := filePath + ".br"
-		if brFile, err := fsys.Open(brPath); err == nil {
-			defer brFile.Close()
-
-			w.Header().Set("Content-Encoding", "br")
-			w.Header().Set("Content-Type", getContentType(filePath))
-			http.ServeContent(w, r, filePath, time.Time{}, brFile.(io.ReadSeeker))
-			return
-		}
-	}
-
-	// Serve uncompressed file
-	file, err := fsys.Open(filePath)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	defer file.Close()
-
-	w.Header().Set("Content-Type", getContentType(filePath))
-	http.ServeContent(w, r, filePath, time.Time{}, file.(io.ReadSeeker))
-}
-
-func getContentType(filePath string) string {
-	ext := filepath.Ext(filePath)
-	if mimeType := mime.TypeByExtension(ext); mimeType != "" {
-		return mimeType
-	}
-	return "application/octet-stream"
 }
 
 const defaultPort = 9870
@@ -193,6 +141,8 @@ func main() {
 	} else if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
 		if p, err := strconv.Atoi(envPort); err == nil {
 			port = p
+		} else {
+			slog.Warn("invalid SERVER_PORT, using default", "value", envPort, "default", defaultPort)
 		}
 	}
 	port = findAvailablePort(port)
@@ -356,7 +306,11 @@ func main() {
 
 		frontendPort := port
 		if envFrontendPort := os.Getenv("RELAY_FRONTEND_PORT"); envFrontendPort != "" {
-			frontendPort, _ = strconv.Atoi(envFrontendPort)
+			if p, err := strconv.Atoi(envFrontendPort); err == nil {
+				frontendPort = p
+			} else {
+				slog.Warn("invalid RELAY_FRONTEND_PORT, using server port", "value", envFrontendPort, "default", port)
+			}
 		}
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, slog.Default())
 
@@ -385,6 +339,7 @@ func main() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
+		signal.Stop(sigCh)
 
 		slog.Info("shutting down server")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -520,6 +475,8 @@ func runCluster() {
 	if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
 		if p, err := strconv.Atoi(envPort); err == nil {
 			port = p
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: invalid SERVER_PORT %q, using default %d\n", envPort, cluster.DefaultPort)
 		}
 	}
 

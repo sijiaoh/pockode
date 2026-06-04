@@ -55,7 +55,7 @@ func Run(cfg Config) error {
 	log := slog.Default().With("mode", "cluster")
 	log.Info("starting cluster mode", "port", port, "dataDir", cfg.DataDir, "relayEnabled", cfg.RelayEnabled, "devMode", cfg.DevMode)
 
-	wsHandler := newWSHandler(cfg.AuthToken, cfg.Version, log)
+	wsHandler := newWSHandler(cfg.AuthToken, cfg.Version, cfg.DevMode, log)
 	handler := newHandler(cfg.AuthToken, cfg.DevMode, wsHandler)
 
 	srv := &http.Server{
@@ -74,7 +74,11 @@ func Run(cfg Config) error {
 
 		frontendPort := port
 		if envFrontendPort := os.Getenv("RELAY_FRONTEND_PORT"); envFrontendPort != "" {
-			frontendPort, _ = strconv.Atoi(envFrontendPort)
+			if p, err := strconv.Atoi(envFrontendPort); err == nil {
+				frontendPort = p
+			} else {
+				log.Warn("invalid RELAY_FRONTEND_PORT, using server port", "value", envFrontendPort, "default", port)
+			}
 		}
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, log)
 

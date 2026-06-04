@@ -29,19 +29,23 @@ type AuthResult struct {
 type wsHandler struct {
 	token   string
 	version string
+	devMode bool
 	log     *slog.Logger
 }
 
-func newWSHandler(token, version string, log *slog.Logger) *wsHandler {
+func newWSHandler(token, version string, devMode bool, log *slog.Logger) *wsHandler {
 	return &wsHandler{
 		token:   token,
 		version: version,
+		devMode: devMode,
 		log:     log.With("component", "ws"),
 	}
 }
 
 func (h *wsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, nil)
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		InsecureSkipVerify: h.devMode,
+	})
 	if err != nil {
 		h.log.Error("failed to accept websocket", "error", err)
 		return
