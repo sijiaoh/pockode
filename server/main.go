@@ -5,11 +5,8 @@ import (
 	"embed"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
-	"mime"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,14 +20,17 @@ import (
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/spa"
 	"github.com/pockode/server/startup"
 	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
@@ -88,78 +88,15 @@ func newSPAHandler(apiHandler http.Handler) http.Handler {
 		}
 
 		// Check if file exists (including .br version), otherwise fall back to index.html for SPA routing
-		if !fileExists(subFS, cleanPath) && !fileExists(subFS, cleanPath+".br") {
+		if !spa.FileExists(subFS, cleanPath) && !spa.FileExists(subFS, cleanPath+".br") {
 			cleanPath = "index.html"
 		}
 
-		serveFileWithBrotli(w, r, subFS, cleanPath)
+		spa.ServeFileWithBrotli(w, r, subFS, cleanPath)
 	})
 }
 
-func fileExists(fsys fs.FS, path string) bool {
-	f, err := fsys.Open(path)
-	if err != nil {
-		return false
-	}
-	f.Close()
-	return true
-}
-
-// serveFileWithBrotli serves a file, using pre-compressed .br version if available and client accepts brotli.
-func serveFileWithBrotli(w http.ResponseWriter, r *http.Request, fsys fs.FS, filePath string) {
-	// Hashed assets (in /assets/) can be cached indefinitely
-	if strings.HasPrefix(filePath, "assets/") {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	}
-
-	w.Header().Set("Vary", "Accept-Encoding")
-
-	acceptsBr := strings.Contains(r.Header.Get("Accept-Encoding"), "br")
-	if acceptsBr {
-		brPath := filePath + ".br"
-		if brFile, err := fsys.Open(brPath); err == nil {
-			defer brFile.Close()
-
-			w.Header().Set("Content-Encoding", "br")
-			w.Header().Set("Content-Type", getContentType(filePath))
-			http.ServeContent(w, r, filePath, time.Time{}, brFile.(io.ReadSeeker))
-			return
-		}
-	}
-
-	// Serve uncompressed file
-	file, err := fsys.Open(filePath)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	defer file.Close()
-
-	w.Header().Set("Content-Type", getContentType(filePath))
-	http.ServeContent(w, r, filePath, time.Time{}, file.(io.ReadSeeker))
-}
-
-func getContentType(filePath string) string {
-	ext := filepath.Ext(filePath)
-	if mimeType := mime.TypeByExtension(ext); mimeType != "" {
-		return mimeType
-	}
-	return "application/octet-stream"
-}
-
 const defaultPort = 9870
-
-func findAvailablePort(startPort int) int {
-	const maxAttempts = 100
-	for port := startPort; port < startPort+maxAttempts; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-		if err == nil {
-			ln.Close()
-			return port
-		}
-	}
-	return startPort
-}
 
 func main() {
 	// Handle subcommands before flag.Parse()
@@ -167,6 +104,9 @@ func main() {
 		switch os.Args[1] {
 		case "mcp":
 			runMCP()
+			return
+		case "cluster":
+			runCluster()
 			return
 		}
 	}
@@ -189,9 +129,11 @@ func main() {
 	} else if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
 		if p, err := strconv.Atoi(envPort); err == nil {
 			port = p
+		} else {
+			slog.Warn("invalid SERVER_PORT, using default", "value", envPort, "default", defaultPort)
 		}
 	}
-	port = findAvailablePort(port)
+	port = netutil.FindAvailablePort(port)
 
 	token := *tokenFlag
 	if token == "" {
@@ -352,7 +294,11 @@ func main() {
 
 		frontendPort := port
 		if envFrontendPort := os.Getenv("RELAY_FRONTEND_PORT"); envFrontendPort != "" {
-			frontendPort, _ = strconv.Atoi(envFrontendPort)
+			if p, err := strconv.Atoi(envFrontendPort); err == nil {
+				frontendPort = p
+			} else {
+				slog.Warn("invalid RELAY_FRONTEND_PORT, using server port", "value", envFrontendPort, "default", port)
+			}
 		}
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, slog.Default())
 
@@ -381,6 +327,7 @@ func main() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
+		signal.Stop(sigCh)
 
 		slog.Info("shutting down server")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -501,6 +448,57 @@ func runMCP() {
 	server := mcp.NewServer(s.work, s.agentRole)
 	if err := server.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runCluster() {
+	token := os.Getenv("AUTH_TOKEN")
+	if token == "" {
+		fmt.Fprintln(os.Stderr, "Error: AUTH_TOKEN environment variable is required")
+		os.Exit(1)
+	}
+
+	port := cluster.DefaultPort
+	if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
+		if p, err := strconv.Atoi(envPort); err == nil {
+			port = p
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: invalid SERVER_PORT %q, using default %d\n", envPort, cluster.DefaultPort)
+		}
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to get home directory: %v\n", err)
+		os.Exit(1)
+	}
+	dataDir := filepath.Join(homeDir, ".pockode-cluster")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to create data directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	relayEnabled := os.Getenv("RELAY_ENABLED") != "false"
+	devMode := os.Getenv("DEV_MODE") == "true"
+
+	cloudURL := os.Getenv("CLOUD_URL")
+	if cloudURL == "" {
+		cloudURL = "https://cloud.pockode.com"
+	}
+
+	cfg := cluster.Config{
+		Port:         port,
+		AuthToken:    token,
+		DataDir:      dataDir,
+		RelayEnabled: relayEnabled,
+		CloudURL:     cloudURL,
+		Version:      version,
+		DevMode:      devMode,
+	}
+
+	if err := cluster.Run(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: cluster mode failed: %v\n", err)
 		os.Exit(1)
 	}
 }

@@ -9,13 +9,21 @@ OUTPUT_DIR=${OUTPUT_DIR:-dist}
 
 echo "Building Pockode $VERSION"
 
-# Build frontend directly to server/static
-echo "Building frontend..."
+# Build main frontend directly to server/static
+echo "Building main frontend..."
 cd web
 pnpm install --frozen-lockfile
 pnpm run build:release
 cd ..
 touch server/static/.keep
+
+# Build cluster frontend directly to server/cluster/static
+echo "Building cluster frontend..."
+cd web-cluster
+pnpm install --frozen-lockfile
+pnpm run build:release
+cd ..
+touch server/cluster/static/.keep
 
 # Cross-compile for multiple platforms
 platforms=(

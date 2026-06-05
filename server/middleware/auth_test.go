@@ -27,6 +27,12 @@ func TestAuth(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
+			name:       "ws bypasses auth",
+			path:       "/ws",
+			authHeader: "",
+			wantStatus: http.StatusOK,
+		},
+		{
 			name:       "missing auth header",
 			path:       "/api/ping",
 			authHeader: "",
