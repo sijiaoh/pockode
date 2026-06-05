@@ -14,7 +14,24 @@ Cluster mode strips away development environment features (worktrees, agents, fi
 - WebSocket JSON-RPC endpoint
 - Token-based authentication
 - Relay connectivity for NAT traversal
+- Node management (project directories)
 - Embedded SPA frontend
+
+## Nodes
+
+A **Node** represents a project directory that can run Pockode. Cluster mode provides a registry of nodes, allowing users to manage multiple projects from a single cluster instance.
+
+```go
+type Node struct {
+    ID        string    `json:"id"`         // UUID
+    Path      string    `json:"path"`       // Absolute path to project directory
+    Name      string    `json:"name"`       // Display name (inferred from path if not provided)
+    CreatedAt time.Time `json:"created_at"`
+    UpdatedAt time.Time `json:"updated_at"`
+}
+```
+
+The path must point to an existing directory. Duplicate paths are rejected.
 
 ## Usage
 
@@ -35,7 +52,11 @@ AUTH_TOKEN=your-secret-token ./pockode cluster
 | `CLOUD_URL` | `https://cloud.pockode.com` | Relay server URL |
 | `DEV_MODE` | `false` | Development mode (disables embedded SPA) |
 
-Data is stored in `~/.pockode-cluster/` (created automatically if it doesn't exist).
+Data is stored in `~/.pockode-cluster/` (created automatically if it doesn't exist):
+
+| File | Content |
+|------|---------|
+| `nodes/index.json` | Node registry |
 
 ## Endpoints
 
@@ -71,6 +92,11 @@ After authentication:
 | Method | Description |
 |--------|-------------|
 | `ping` | Returns `"pong"` |
+| `node.list` | Returns all registered nodes |
+| `node.get` | Returns a node by ID (params: `{id}`) |
+| `node.create` | Creates a new node (params: `{path, name?}`) |
+| `node.update` | Updates a node (params: `{id, path?, name?}`) |
+| `node.delete` | Deletes a node (params: `{id}`) |
 
 ## Startup Output
 
@@ -128,4 +154,5 @@ Cluster mode implementation:
 - `server/cluster/ws.go` — WebSocket handler and JSON-RPC methods
 - `server/cluster/static.go` — SPA file serving
 - `server/cluster/embed.go` — Static file embedding
+- `server/cluster/node/` — Node store implementation
 - `server/spa/` — Shared SPA utilities (used by both normal and cluster mode)

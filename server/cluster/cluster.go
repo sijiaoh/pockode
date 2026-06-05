@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/relay"
@@ -44,7 +45,12 @@ func Run(cfg Config) error {
 	log := slog.Default().With("mode", "cluster")
 	log.Info("starting cluster mode", "port", port, "dataDir", cfg.DataDir, "relayEnabled", cfg.RelayEnabled, "devMode", cfg.DevMode)
 
-	wsHandler := newWSHandler(cfg.AuthToken, cfg.Version, cfg.DevMode, log)
+	nodeStore, err := node.NewFileStore(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("failed to create node store: %w", err)
+	}
+
+	wsHandler := newWSHandler(cfg.AuthToken, cfg.Version, cfg.DevMode, nodeStore, log)
 	handler := newHandler(cfg.AuthToken, cfg.DevMode, wsHandler)
 
 	srv := &http.Server{
