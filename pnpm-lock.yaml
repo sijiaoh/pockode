@@ -12,7 +12,7 @@ importers:
         specifier: ^9.2.1
         version: 9.2.1
 
-  packages/shared-ui:
+  packages/shared:
     dependencies:
       react:
         specifier: ^19.0.0
@@ -39,9 +39,9 @@ importers:
       '@git-diff-view/shiki':
         specifier: ^0.0.35
         version: 0.0.35
-      '@pockode/shared-ui':
+      '@pockode/shared':
         specifier: workspace:*
-        version: link:../packages/shared-ui
+        version: link:../packages/shared
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.1.18(vite@7.3.1(@types/node@24.10.11)(jiti@2.6.1)(lightningcss@1.30.2))
@@ -160,9 +160,9 @@ importers:
 
   web-cluster:
     dependencies:
-      '@pockode/shared-ui':
+      '@pockode/shared':
         specifier: workspace:*
-        version: link:../packages/shared-ui
+        version: link:../packages/shared
       json-rpc-2.0:
         specifier: ^1.7.1
         version: 1.7.1

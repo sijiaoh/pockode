@@ -1,4 +1,4 @@
-import { ConfirmDialog } from "@pockode/shared-ui";
+import { ConfirmDialog } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Loader2, Pencil, Trash2 } from "lucide-react";

@@ -20,7 +20,7 @@ Pockode is a mobile programming platform with the core philosophy of "AI editing
 ```
 pockode/
 ├── packages/       # Shared frontend packages (pnpm workspace)
-│   └── shared-ui/  # Shared UI components and hooks
+│   └── shared/     # Shared components, hooks, stores, and utilities
 ├── web/            # React frontend (see web/AGENTS.md)
 ├── web-cluster/    # Cluster mode frontend (lightweight, see docs/cluster.md)
 ├── server/         # Go backend (see server/AGENTS.md)
@@ -48,11 +48,11 @@ React SPA (Frontend)
 - **Locate before you code** — Determine where code belongs before writing it; especially for reusable logic, proper placement enables discovery and reuse
 - **Everything in its place** — Utility functions go in utility modules, business logic goes in business modules, follow the existing project structure
 
-### Shared Code (`@pockode/shared-ui`)
+### Shared Code (`@pockode/shared`)
 
-The `packages/shared-ui` package contains UI components and hooks shared between `web` and `web-cluster` projects via pnpm workspace.
+The `packages/shared` package contains UI components, hooks, stores, and utilities shared between `web` and `web-cluster` projects via pnpm workspace.
 
-**When to add code to shared-ui**:
+**When to add code to shared**:
 - Component or hook is **identical or near-identical** in both projects
 - Code is **stable** (not under active experimentation)
 - Code has **no project-specific dependencies** (peer dependencies: React, ReactDOM, Zustand)
@@ -70,11 +70,11 @@ The `packages/shared-ui` package contains UI components and hooks shared between
 
 **Usage**:
 ```typescript
-import { Spinner, ConfirmDialog, useIsDesktop, createAuthStore, getWebSocketUrl } from "@pockode/shared-ui";
+import { Spinner, ConfirmDialog, useIsDesktop, createAuthStore, getWebSocketUrl } from "@pockode/shared";
 ```
 
 **Workflow**:
-1. Add shared code to `packages/shared-ui/src/`
+1. Add shared code to `packages/shared/src/`
 2. Export from appropriate index file
 3. Run `pnpm install` to link workspace
 4. Import in consumer projects

@@ -1,4 +1,4 @@
-import { createAuthStore } from "@pockode/shared-ui";
+import { createAuthStore } from "@pockode/shared";
 
 const { useAuthStore, selectHasAuthToken, authActions } = createAuthStore({
 	tokenKey: "cluster_auth_token",

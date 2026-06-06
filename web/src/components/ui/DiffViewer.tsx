@@ -1,7 +1,7 @@
 import { DiffModeEnum, DiffView } from "@git-diff-view/react";
 import "@git-diff-view/react/styles/diff-view-pure.css";
 import type { getDiffViewHighlighter } from "@git-diff-view/shiki";
-import { useIsDesktop } from "@pockode/shared-ui";
+import { useIsDesktop } from "@pockode/shared";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import {
 	CODE_FONT_SIZE_DESKTOP,

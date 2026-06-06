@@ -1,4 +1,4 @@
-import { getWebSocketUrl } from "@pockode/shared-ui";
+import { getWebSocketUrl } from "@pockode/shared";
 import { JSONRPCClient } from "json-rpc-2.0";
 import { create } from "zustand";
 import { createNodeActions, type NodeActions } from "./rpc";

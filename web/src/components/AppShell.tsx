@@ -1,4 +1,4 @@
-import { useIsDesktop } from "@pockode/shared-ui";
+import { useIsDesktop } from "@pockode/shared";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
