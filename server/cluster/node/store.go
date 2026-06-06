@@ -269,10 +269,22 @@ func (s *FileStore) findIndex(id string) int {
 	return -1
 }
 
-// expandTilde expands the tilde (~) prefix in a path to the user's home directory.
-// Returns the original path unchanged if it doesn't start with ~ or if the home
+// expandTilde expands special path prefixes to the user's home directory:
+//   - "~" or "~/" prefix: standard tilde expansion
+//   - "." (exactly): treated as home directory in cluster mode (global context)
+//
+// Returns the original path unchanged if no expansion applies or if the home
 // directory cannot be determined.
 func expandTilde(path string) string {
+	// Handle "." as home directory in cluster mode
+	if path == "." {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return home
+	}
+
 	if path != "~" && !strings.HasPrefix(path, "~/") {
 		return path
 	}

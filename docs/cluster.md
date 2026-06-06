@@ -31,7 +31,11 @@ type Node struct {
 }
 ```
 
-The path must point to an existing directory. Duplicate paths are rejected. Paths starting with `~` or `~/` are automatically expanded to the user's home directory (e.g., `~/projects/my-app` → `/home/user/projects/my-app`).
+The path must point to an existing directory. Duplicate paths are rejected.
+
+**Path expansion:**
+- `~` or `~/...` → expanded to user's home directory (e.g., `~/projects/my-app` → `/home/user/projects/my-app`)
+- `.` (exactly) → expanded to user's home directory (useful when `cwd` is not a project directory)
 
 ## Usage
 

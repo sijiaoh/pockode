@@ -403,6 +403,9 @@ func TestExpandTilde(t *testing.T) {
 		{"tilde in middle", "/some/~path", "/some/~path"},
 		{"double tilde", "~~", "~~"},
 		{"tilde without slash", "~foo", "~foo"},
+		{"dot only", ".", home},
+		{"dot with slash", "./subdir", "./subdir"},
+		{"dot dot", "..", ".."},
 	}
 
 	for _, tc := range tests {
@@ -465,6 +468,54 @@ func TestCreate_TildeOnly(t *testing.T) {
 	}
 	if node.Name != "Home" {
 		t.Errorf("name = %q, want %q", node.Name, "Home")
+	}
+}
+
+func TestCreate_DotPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("cannot get home dir: %v", err)
+	}
+
+	s := newTestStore(t)
+
+	node, err := s.Create(".", "Home")
+	if err != nil {
+		t.Fatalf("Create with . path: %v", err)
+	}
+
+	if node.Path != home {
+		t.Errorf("path = %q, want %q", node.Path, home)
+	}
+	if node.Name != "Home" {
+		t.Errorf("name = %q, want %q", node.Name, "Home")
+	}
+}
+
+func TestUpdate_DotPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("cannot get home dir: %v", err)
+	}
+
+	testDirName := fmt.Sprintf(".pockode_test_%d", os.Getpid())
+	testDir := filepath.Join(home, testDirName)
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Skipf("cannot create test dir: %v", err)
+	}
+	defer os.RemoveAll(testDir)
+
+	s := newTestStore(t)
+	node := createNode(t, s, testDir, "Test")
+
+	dotPath := "."
+	updated, err := s.Update(node.ID, UpdateFields{Path: &dotPath})
+	if err != nil {
+		t.Fatalf("Update with . path: %v", err)
+	}
+
+	if updated.Path != home {
+		t.Errorf("path = %q, want %q", updated.Path, home)
 	}
 }
 
