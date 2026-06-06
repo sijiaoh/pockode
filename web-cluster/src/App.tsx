@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NodeList } from "./components";
 import { Spinner } from "./components/ui";
+import { authActions, useAuthStore } from "./lib/authStore";
 import { useWSStore } from "./lib/wsStore";
 
 function getTokenFromUrl(): string | null {
@@ -10,7 +11,7 @@ function getTokenFromUrl(): string | null {
 
 export default function App() {
 	const { status, errorMessage, actions, version } = useWSStore();
-	const [token, setToken] = useState<string | null>(null);
+	const token = useAuthStore((state) => state.token);
 	const [tokenInput, setTokenInput] = useState("");
 	const [inputError, setInputError] = useState<string | null>(null);
 
@@ -18,7 +19,7 @@ export default function App() {
 	useEffect(() => {
 		const urlToken = getTokenFromUrl();
 		if (urlToken) {
-			setToken(urlToken);
+			authActions.login(urlToken);
 			// Remove token from URL for security
 			window.history.replaceState({}, "", window.location.pathname);
 		}
@@ -39,7 +40,7 @@ export default function App() {
 			return;
 		}
 		setInputError(null);
-		setToken(trimmed);
+		authActions.login(trimmed);
 	};
 
 	// Show token input if no token
@@ -125,7 +126,8 @@ export default function App() {
 				<button
 					type="button"
 					onClick={() => {
-						setToken(null);
+						actions.disconnect();
+						authActions.logout();
 						setTokenInput("");
 					}}
 					className="mt-4 min-h-[44px] rounded-lg bg-th-accent px-4 py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover"
