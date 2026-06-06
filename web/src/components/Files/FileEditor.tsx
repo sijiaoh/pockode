@@ -1,10 +1,10 @@
+import { useIsDesktop } from "@pockode/shared-ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Check, Eye, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import Editor from "react-simple-code-editor";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
-import { useIsDesktop } from "../../hooks/useIsDesktop";
 import { useCurrentWorktree, useRouteState } from "../../hooks/useRouteState";
 import { overlayToNavigation } from "../../lib/navigation";
 import {

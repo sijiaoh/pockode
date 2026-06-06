@@ -55,16 +55,22 @@ The `packages/shared-ui` package contains UI components and hooks shared between
 **When to add code to shared-ui**:
 - Component or hook is **identical or near-identical** in both projects
 - Code is **stable** (not under active experimentation)
-- Code has **no project-specific dependencies** (only React as peer dependency)
+- Code has **no project-specific dependencies** (peer dependencies: React, ReactDOM, Zustand)
 
 **When NOT to share**:
 - Code has **significant behavioral differences** between projects
 - Code is **tightly coupled** to project-specific features
 - Code is **experimental** or likely to diverge
 
+**Available exports**:
+- Components: `Spinner`, `ConfirmDialog`
+- Hooks: `useIsDesktop`
+- Stores: `createAuthStore` (factory function for auth store with configurable token key)
+- Utils: `getWebSocketUrl`
+
 **Usage**:
 ```typescript
-import { Spinner, useIsDesktop } from "@pockode/shared-ui";
+import { Spinner, ConfirmDialog, useIsDesktop, createAuthStore, getWebSocketUrl } from "@pockode/shared-ui";
 ```
 
 **Workflow**:

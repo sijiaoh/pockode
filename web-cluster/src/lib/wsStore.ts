@@ -1,3 +1,4 @@
+import { getWebSocketUrl } from "@pockode/shared-ui";
 import { JSONRPCClient } from "json-rpc-2.0";
 import { create } from "zustand";
 import { createNodeActions, type NodeActions } from "./rpc";
@@ -45,11 +46,6 @@ const internal: InternalState = {
 	reconnectAttempts: 0,
 	reconnectTimeout: null,
 };
-
-function getWSUrl(): string {
-	const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-	return `${protocol}//${window.location.host}/ws`;
-}
 
 function createRPCClient(socket: WebSocket): JSONRPCClient {
 	const client = new JSONRPCClient((request) => {
@@ -102,7 +98,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 		set({ status: "connecting", errorMessage: null });
 		internal.token = token;
 
-		const socket = new WebSocket(getWSUrl());
+		const socket = new WebSocket(getWebSocketUrl());
 		internal.socket = socket;
 
 		socket.onopen = async () => {

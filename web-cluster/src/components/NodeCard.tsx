@@ -1,7 +1,8 @@
+import { ConfirmDialog } from "@pockode/shared-ui";
 import { useState } from "react";
 import { useIsDesktop } from "../hooks";
 import type { Node } from "../types/node";
-import { ConfirmDialog, ResponsivePanel } from "./ui";
+import { ResponsivePanel } from "./ui";
 
 interface Props {
 	node: Node;
@@ -137,6 +138,7 @@ export function NodeCard({ node, onEdit, onDelete }: Props) {
 					confirmLabel="Delete"
 					cancelLabel="Cancel"
 					variant="danger"
+					zIndex={50}
 					onConfirm={confirmDelete}
 					onCancel={() => setDeleteConfirmOpen(false)}
 				/>

@@ -128,7 +128,7 @@ function DiffTab({
 			<PullToRefresh onRefresh={refreshAll}>
 				{isLoading ? (
 					<div className="flex items-center justify-center p-8">
-						<Spinner className="text-th-text-muted" />
+						<Spinner variant="current" className="text-th-text-muted" />
 					</div>
 				) : error ? (
 					<div className="p-4 text-center text-th-error">

@@ -1,3 +1,4 @@
+import { ConfirmDialog } from "@pockode/shared-ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
@@ -8,7 +9,6 @@ import { useCurrentWorktree, useRouteState } from "../../hooks/useRouteState";
 import { overlayToNavigation } from "../../lib/navigation";
 import { useWSStore } from "../../lib/wsStore";
 import { isFileContent } from "../../types/contents";
-import ConfirmDialog from "../common/ConfirmDialog";
 import {
 	BottomActionBar,
 	ContentView,
