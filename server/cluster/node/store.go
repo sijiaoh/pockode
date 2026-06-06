@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,6 +87,8 @@ func (s *FileStore) Create(path, name string) (Node, error) {
 		return Node{}, fmt.Errorf("%w: path is required", ErrInvalidNode)
 	}
 
+	path = expandTilde(path)
+
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -148,7 +151,7 @@ func (s *FileStore) Update(id string, fields UpdateFields) (Node, error) {
 	changed := false
 
 	if fields.Path != nil {
-		newPath := *fields.Path
+		newPath := expandTilde(*fields.Path)
 
 		info, err := os.Stat(newPath)
 		if err != nil {
@@ -264,4 +267,23 @@ func (s *FileStore) findIndex(id string) int {
 		}
 	}
 	return -1
+}
+
+// expandTilde expands the tilde (~) prefix in a path to the user's home directory.
+// Returns the original path unchanged if it doesn't start with ~ or if the home
+// directory cannot be determined.
+func expandTilde(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, path[2:])
 }
