@@ -28,6 +28,7 @@ import (
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/relay"
+	"github.com/pockode/server/serverinfo"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/spa"
@@ -167,6 +168,12 @@ func main() {
 		os.Exit(1)
 	}
 	dataDir = absDataDir
+
+	// Write server.json for orchestration programs to discover the running server
+	if err := serverinfo.Write(dataDir, port); err != nil {
+		slog.Error("failed to write server.json", "error", err)
+		os.Exit(1)
+	}
 
 	logger.Init(logger.Config{
 		DataDir: dataDir,
@@ -344,6 +351,9 @@ func main() {
 		worktreeManager.Shutdown()
 		settingsStore.StopWatching()
 		s.StopWatching()
+		if err := serverinfo.Delete(dataDir); err != nil {
+			slog.Error("failed to delete server.json", "error", err)
+		}
 		close(shutdownDone)
 	}()
 
