@@ -1,12 +1,12 @@
 // TODO: Overlay structure is duplicated across FileView, DiffView, SettingsPage.
 // When a 4th overlay is needed, extract a shared Overlay component.
 
+import { Spinner } from "@pockode/shared-ui";
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { isNotFoundError } from "../../hooks/useContents";
 import { splitPath } from "../../utils/path";
 import BackToChatButton from "./BackToChatButton";
-import Spinner from "./Spinner";
 
 interface Props {
 	path: string;
@@ -83,7 +83,7 @@ export default function ContentView({
 			<div className="min-h-0 flex-1 overflow-auto">
 				{isLoading ? (
 					<div className="flex items-center justify-center p-8">
-						<Spinner className="text-th-text-muted" />
+						<Spinner variant="current" className="text-th-text-muted" />
 					</div>
 				) : error ? (
 					<div className="p-4 text-center text-th-text-muted">

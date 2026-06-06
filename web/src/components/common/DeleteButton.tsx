@@ -1,6 +1,6 @@
+import { ConfirmDialog } from "@pockode/shared-ui";
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
-import ConfirmDialog from "./ConfirmDialog";
 
 interface Props {
 	itemName: string;

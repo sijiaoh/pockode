@@ -1,7 +1,7 @@
+import { useIsDesktop } from "@pockode/shared-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
-import { useIsDesktop } from "../hooks/useIsDesktop";
 import { useRouteState } from "../hooks/useRouteState";
 import { useSession } from "../hooks/useSession";
 import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
