@@ -89,6 +89,15 @@ Uses JSON-RPC 2.0 over WebSocket. All connections must authenticate before calli
 
 Unauthenticated requests receive `"not authenticated"` error and the connection is closed.
 
+### Token Persistence (Frontend)
+
+The cluster frontend persists the auth token to `localStorage` under `cluster_auth_token`. This enables:
+
+- Automatic reconnection on page reload
+- Session continuity without re-entering token
+
+The key differs from main mode (`auth_token`) to avoid conflicts when both modes share the same browser origin.
+
 ### Available Methods
 
 After authentication:
