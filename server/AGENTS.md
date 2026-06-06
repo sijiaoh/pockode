@@ -84,7 +84,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | 变量 | 必需 | 默认 | 说明 |
 |------|:----:|------|------|
 | `AUTH_TOKEN` | ✓ | — | API 认证令牌 |
-| `SERVER_PORT` | | `8080` | 服务端口 |
+| `SERVER_PORT` | | `9870` | 服务端口 |
 | `WORK_DIR` | | `/workspace` | 工作目录 |
 | `DEV_MODE` | | `false` | 开发模式（true 时不 serve 静态文件） |
 | `RELAY_FRONTEND_PORT` | | `SERVER_PORT` | Relay 转发前端请求的目标端口（开发时可设为前端端口） |
@@ -106,7 +106,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 ```json
 {
   "pid": 12345,
-  "port": 8080,
+  "port": 9870,
   "started_at": "2025-05-31T10:00:00Z"
 }
 ```

@@ -1,1 +1,113 @@
 @import "tailwindcss";
+
+/* Enable class-based dark mode */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* =============================================================================
+ * BASE RESETS
+ * ============================================================================= */
+
+button,
+[role="button"] {
+	cursor: pointer;
+}
+
+/* Prevent accidental page reload from pull-to-refresh gesture on mobile */
+html,
+body {
+	overscroll-behavior-y: contain;
+}
+
+/* CJK text wrapping: use phrase-based breaking where supported (Chrome 119+),
+   fall back to anywhere for older browsers to prevent overflow */
+:root {
+	overflow-wrap: anywhere;
+	word-break: auto-phrase;
+}
+
+/* =============================================================================
+ * SEMANTIC THEME TOKENS
+ *
+ * All UI components use these tokens. Never hardcode colors.
+ * Prefix: th- (theme)
+ * ============================================================================= */
+
+@theme inline {
+	/* Font families */
+	--font-sans: "Geist", system-ui, sans-serif;
+	--font-mono: "Geist Mono", ui-monospace, monospace;
+
+	/* Backgrounds */
+	--color-th-bg-primary: var(--th-bg-primary);
+	--color-th-bg-secondary: var(--th-bg-secondary);
+	--color-th-bg-tertiary: var(--th-bg-tertiary);
+	--color-th-bg-overlay: var(--th-bg-overlay);
+	--color-th-overlay-hover: var(--th-overlay-hover);
+
+	/* Text */
+	--color-th-text-primary: var(--th-text-primary);
+	--color-th-text-secondary: var(--th-text-secondary);
+	--color-th-text-muted: var(--th-text-muted);
+	--color-th-text-inverse: var(--th-text-inverse);
+
+	/* Borders */
+	--color-th-border: var(--th-border);
+	--color-th-border-focus: var(--th-border-focus);
+
+	/* Interactive / Accent */
+	--color-th-accent: var(--th-accent);
+	--color-th-accent-hover: var(--th-accent-hover);
+	--color-th-accent-text: var(--th-accent-text);
+
+	/* Semantic */
+	--color-th-success: var(--th-success);
+	--color-th-error: var(--th-error);
+	--color-th-warning: var(--th-warning);
+}
+
+/* =============================================================================
+ * BASE FONT SETTINGS
+ * ============================================================================= */
+
+html {
+	font-family: var(--font-sans);
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+/* =============================================================================
+ * THEME: ABYSS (Default for Cluster Mode)
+ *
+ * Cluster mode uses dark theme by default.
+ * ============================================================================= */
+
+:root {
+	/* Dark mode - deep sea blue-black */
+	--th-bg-primary: #0c1220;
+	--th-bg-secondary: #111b2c;
+	--th-bg-tertiary: #1a2840;
+	--th-bg-overlay: rgba(0, 0, 0, 0.8);
+
+	/* Overlays */
+	--th-overlay-hover: rgba(255, 255, 255, 0.1);
+
+	/* Text - cool white tones */
+	--th-text-primary: #e8f0f5;
+	--th-text-secondary: #a0b8c8;
+	--th-text-muted: #5a7a8f;
+	--th-text-inverse: #0c1220;
+
+	/* Borders */
+	--th-border: #1e3348;
+	--th-border-focus: #2dd4bf;
+
+	/* Interactive - glowing teal */
+	--th-accent: #2dd4bf;
+	--th-accent-hover: #5eead4;
+	--th-accent-text: #042f2e;
+
+	/* Semantic */
+	--th-success: #34d399;
+	--th-error: #f87171;
+	--th-warning: #fbbf24;
+}
