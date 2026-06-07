@@ -1,5 +1,5 @@
 import { getDiffViewHighlighter } from "@git-diff-view/shiki";
-import { useIsDesktop } from "@pockode/shared-ui";
+import { useIsDesktop } from "@pockode/shared";
 import { Check, Copy } from "lucide-react";
 import * as React from "react";
 import { useShikiHighlighter } from "react-shiki";

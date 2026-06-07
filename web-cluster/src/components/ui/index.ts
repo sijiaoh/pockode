@@ -1,2 +1,2 @@
-export { ConfirmDialog, Spinner } from "@pockode/shared-ui";
+export { ConfirmDialog, Spinner } from "@pockode/shared";
 export { ResponsivePanel } from "./ResponsivePanel";

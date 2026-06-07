@@ -1,4 +1,4 @@
-import { ConfirmDialog } from "@pockode/shared-ui";
+import { ConfirmDialog } from "@pockode/shared";
 import { useState } from "react";
 import { useIsDesktop } from "../hooks";
 import type { Node } from "../types/node";

@@ -1,4 +1,4 @@
-import { useIsDesktop } from "@pockode/shared-ui";
+import { useIsDesktop } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Check, Eye, Loader2 } from "lucide-react";

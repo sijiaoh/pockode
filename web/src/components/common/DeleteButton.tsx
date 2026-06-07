@@ -1,4 +1,4 @@
-import { ConfirmDialog } from "@pockode/shared-ui";
+import { ConfirmDialog } from "@pockode/shared";
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
 

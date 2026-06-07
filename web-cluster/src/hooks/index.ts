@@ -1,1 +1,1 @@
-export { useIsDesktop } from "@pockode/shared-ui";
+export { useIsDesktop } from "@pockode/shared";

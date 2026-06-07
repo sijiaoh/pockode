@@ -1,7 +1,7 @@
 // TODO: Overlay structure is duplicated across FileView, DiffView, SettingsPage.
 // When a 4th overlay is needed, extract a shared Overlay component.
 
-import { Spinner } from "@pockode/shared-ui";
+import { Spinner } from "@pockode/shared";
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { isNotFoundError } from "../../hooks/useContents";

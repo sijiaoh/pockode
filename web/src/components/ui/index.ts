@@ -1,4 +1,4 @@
-export { Spinner } from "@pockode/shared-ui";
+export { Spinner } from "@pockode/shared";
 export { default as BackToChatButton } from "./BackToChatButton";
 export { default as BadgeDot } from "./BadgeDot";
 export { default as BottomActionBar } from "./BottomActionBar";

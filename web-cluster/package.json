@@ -12,7 +12,7 @@
 		"format": "biome format --write src"
 	},
 	"dependencies": {
-		"@pockode/shared-ui": "workspace:*",
+		"@pockode/shared": "workspace:*",
 		"json-rpc-2.0": "^1.7.1",
 		"react": "^19.2.0",
 		"react-dom": "^19.2.0",

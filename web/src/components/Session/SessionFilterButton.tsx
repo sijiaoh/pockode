@@ -1,4 +1,4 @@
-import { useIsDesktop } from "@pockode/shared-ui";
+import { useIsDesktop } from "@pockode/shared";
 import { ListFilter } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useSessionStore } from "../../lib/sessionStore";

@@ -1,4 +1,4 @@
-import { createAuthStore } from "@pockode/shared-ui";
+import { createAuthStore } from "@pockode/shared";
 import { wsActions } from "./wsStore";
 
 const { useAuthStore, selectHasAuthToken, authActions } = createAuthStore({
