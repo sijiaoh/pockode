@@ -257,6 +257,32 @@ Client                              Server
   │   (Ready - can send other requests)
 ```
 
+### Startup Auth Check
+
+On app startup, the frontend checks if the existing Cookie is still valid before showing the login screen:
+
+```
+Client                              Server
+  │                                    │
+  │   GET /api/me (Cookie header)      │
+  ├───────────────────────────────────▶│   Validate Cookie
+  │   200 OK / 401 Unauthorized        │
+  │◀───────────────────────────────────┤
+  │                                    │
+  │   (If 200: proceed to WebSocket)
+  │   (If 401: show login screen)
+```
+
+This avoids forcing users to re-login when cookies are still valid.
+
+### HTTP Auth Endpoints
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `POST` | `/api/login` | No | Validate token, set auth Cookie |
+| `POST` | `/api/logout` | Yes | Clear auth Cookie |
+| `GET` | `/api/me` | Yes | Check Cookie validity (200 or 401) |
+
 **Cookie security**:
 - HttpOnly — JavaScript cannot access the token (XSS protection)
 - Secure — Cookie is only sent over HTTPS (except localhost for development)

@@ -4,8 +4,9 @@ function getApiBaseUrl(): string {
 	return window.location.origin;
 }
 
-const { useAuthStore, selectIsAuthenticated, authActions } = createAuthStore({
-	apiBaseUrl: getApiBaseUrl(),
-});
+const { useAuthStore, selectIsAuthenticated, selectIsLoading, authActions } =
+	createAuthStore({
+		apiBaseUrl: getApiBaseUrl(),
+	});
 
-export { authActions, selectIsAuthenticated, useAuthStore };
+export { authActions, selectIsAuthenticated, selectIsLoading, useAuthStore };

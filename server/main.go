@@ -56,6 +56,11 @@ func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler) http.Handl
 		w.Write([]byte(`{"message":"pong"}`))
 	})
 
+	// Returns 200 if authenticated (cookie valid), 401 otherwise (handled by Auth middleware)
+	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
 	// Auth endpoints (no auth required)
 	mux.HandleFunc("POST /api/login", middleware.LoginHandler(token, devMode))
 	mux.HandleFunc("POST /api/logout", middleware.LogoutHandler(devMode))

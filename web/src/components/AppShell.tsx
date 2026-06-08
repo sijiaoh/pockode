@@ -10,6 +10,7 @@ import { useWorktree } from "../hooks/useWorktree";
 import {
 	authActions,
 	selectIsAuthenticated,
+	selectIsLoading,
 	useAuthStore,
 } from "../lib/authStore";
 import { buildNavigation, overlayToNavigation } from "../lib/navigation";
@@ -21,11 +22,16 @@ import { SessionSidebar } from "./Session";
 
 function AppShell() {
 	const isAuthenticated = useAuthStore(selectIsAuthenticated);
+	const isAuthLoading = useAuthStore(selectIsLoading);
 	const wsStatus = useWSStore((state) => state.status);
 	const navigate = useNavigate();
 	const isDesktop = useIsDesktop();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 	const isCreatingSession = useRef(false);
+
+	useEffect(() => {
+		authActions.checkAuth();
+	}, []);
 
 	const {
 		overlay,
@@ -324,6 +330,19 @@ function AppShell() {
 		},
 		[navigate, urlWorktree],
 	);
+
+	if (isAuthLoading) {
+		return (
+			// biome-ignore lint/a11y/useSemanticElements: loading indicator is not a form output
+			<div
+				className="flex h-dvh items-center justify-center bg-th-bg-primary"
+				role="status"
+				aria-label="Checking authentication"
+			>
+				<div className="text-th-text-muted">Loading...</div>
+			</div>
+		);
+	}
 
 	if (!isAuthenticated) {
 		return <TokenInput onSubmit={handleTokenSubmit} />;

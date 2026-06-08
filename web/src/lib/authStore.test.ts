@@ -24,6 +24,11 @@ describe("authStore", () => {
 			const { useAuthStore } = await import("./authStore");
 			expect(useAuthStore.getState().isAuthenticated).toBe(false);
 		});
+
+		it("isLoading is true initially", async () => {
+			const { useAuthStore } = await import("./authStore");
+			expect(useAuthStore.getState().isLoading).toBe(true);
+		});
 	});
 
 	describe("authActions", () => {
@@ -120,6 +125,43 @@ describe("authStore", () => {
 
 			authActions.setAuthenticated(false);
 			expect(useAuthStore.getState().isAuthenticated).toBe(false);
+		});
+
+		it("checkAuth sets isAuthenticated to true on 200 response", async () => {
+			mockFetch.mockResolvedValueOnce({ ok: true });
+
+			const { useAuthStore, authActions } = await import("./authStore");
+
+			await authActions.checkAuth();
+
+			expect(useAuthStore.getState().isAuthenticated).toBe(true);
+			expect(useAuthStore.getState().isLoading).toBe(false);
+			expect(mockFetch).toHaveBeenCalledWith(
+				expect.stringContaining("/api/me"),
+				expect.objectContaining({ credentials: "include" }),
+			);
+		});
+
+		it("checkAuth sets isAuthenticated to false on 401 response", async () => {
+			mockFetch.mockResolvedValueOnce({ ok: false, status: 401 });
+
+			const { useAuthStore, authActions } = await import("./authStore");
+
+			await authActions.checkAuth();
+
+			expect(useAuthStore.getState().isAuthenticated).toBe(false);
+			expect(useAuthStore.getState().isLoading).toBe(false);
+		});
+
+		it("checkAuth sets isAuthenticated to false on network error", async () => {
+			mockFetch.mockRejectedValueOnce(new Error("Network error"));
+
+			const { useAuthStore, authActions } = await import("./authStore");
+
+			await authActions.checkAuth();
+
+			expect(useAuthStore.getState().isAuthenticated).toBe(false);
+			expect(useAuthStore.getState().isLoading).toBe(false);
 		});
 	});
 });

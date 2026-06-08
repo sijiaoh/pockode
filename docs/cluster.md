@@ -67,7 +67,10 @@ Data is stored in `~/.pockode-cluster/` (created automatically if it doesn't exi
 | Path | Auth | Description |
 |------|------|-------------|
 | `/health` | — | Health check (returns "ok") |
-| `/ws` | — | WebSocket JSON-RPC endpoint (handles own auth) |
+| `POST /api/login` | — | Validate token, set auth Cookie |
+| `POST /api/logout` | ✓ | Clear auth Cookie |
+| `GET /api/me` | ✓ | Check Cookie validity (200 or 401) |
+| `/ws` | ✓ | WebSocket JSON-RPC endpoint |
 | `/*` | ✓ | Static SPA files (production mode only) |
 
 ## WebSocket Protocol
@@ -78,11 +81,12 @@ Uses JSON-RPC 2.0 over WebSocket. All connections must authenticate before calli
 
 Cluster mode uses Cookie-based authentication. The login flow is:
 
-1. User enters token via the frontend
-2. Frontend sends `POST /api/login { token }`
-3. Server validates and sets an HttpOnly Cookie
-4. WebSocket handshake includes the Cookie automatically
-5. `auth` method binds to a worktree (if needed)
+1. On startup, frontend calls `GET /api/me` to check existing Cookie validity
+2. If Cookie invalid, user enters token via the frontend
+3. Frontend sends `POST /api/login { token }`
+4. Server validates and sets an HttpOnly Cookie
+5. WebSocket handshake includes the Cookie automatically
+6. `auth` method binds to a worktree (if needed)
 
 ```json
 // Request (worktree binding only, auth is done via Cookie)

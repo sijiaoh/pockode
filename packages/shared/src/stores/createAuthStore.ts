@@ -2,6 +2,7 @@ import { create, type StoreApi, type UseBoundStore } from "zustand";
 
 export interface AuthState {
 	isAuthenticated: boolean;
+	isLoading: boolean;
 }
 
 export interface AuthStoreConfig {
@@ -14,10 +15,12 @@ export interface AuthStoreConfig {
 export interface AuthStore {
 	useAuthStore: UseBoundStore<StoreApi<AuthState>>;
 	selectIsAuthenticated: (state: AuthState) => boolean;
+	selectIsLoading: (state: AuthState) => boolean;
 	authActions: {
 		login: (token: string) => Promise<boolean>;
 		logout: () => Promise<void>;
 		setAuthenticated: (value: boolean) => void;
+		checkAuth: () => Promise<void>;
 	};
 }
 
@@ -30,9 +33,11 @@ export function createAuthStore(config: AuthStoreConfig): AuthStore {
 
 	const useAuthStore = create<AuthState>(() => ({
 		isAuthenticated: false,
+		isLoading: true,
 	}));
 
 	const selectIsAuthenticated = (state: AuthState) => state.isAuthenticated;
+	const selectIsLoading = (state: AuthState) => state.isLoading;
 
 	const authActions = {
 		login: async (token: string): Promise<boolean> => {
@@ -67,11 +72,25 @@ export function createAuthStore(config: AuthStoreConfig): AuthStore {
 		setAuthenticated: (value: boolean) => {
 			useAuthStore.setState({ isAuthenticated: value });
 		},
+		checkAuth: async (): Promise<void> => {
+			try {
+				const response = await fetch(`${apiBaseUrl}/api/me`, {
+					credentials: "include",
+				});
+				useAuthStore.setState({
+					isAuthenticated: response.ok,
+					isLoading: false,
+				});
+			} catch {
+				useAuthStore.setState({ isAuthenticated: false, isLoading: false });
+			}
+		},
 	};
 
 	return {
 		useAuthStore,
 		selectIsAuthenticated,
+		selectIsLoading,
 		authActions,
 	};
 }
