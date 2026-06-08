@@ -182,3 +182,6 @@ export const useWSStore = create<WSState>()((set, get) => {
 		},
 	};
 });
+
+// Expose actions for non-React contexts (e.g., authStore logout)
+export const wsActions = useWSStore.getState().actions;

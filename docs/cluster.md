@@ -12,7 +12,7 @@ Mobile App  ──►  Relay Server (cloud)  ◀──  Remote Server (cluster m
 
 Cluster mode strips away development environment features (worktrees, agents, file watching) and focuses on:
 - WebSocket JSON-RPC endpoint
-- Token-based authentication
+- Cookie-based authentication
 - Relay connectivity for NAT traversal
 - Node management (project directories)
 - Embedded SPA frontend

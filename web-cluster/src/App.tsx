@@ -4,6 +4,7 @@ import { Spinner } from "./components/ui";
 import {
 	authActions,
 	selectIsAuthenticated,
+	selectIsLoading,
 	useAuthStore,
 } from "./lib/authStore";
 import { useWSStore } from "./lib/wsStore";
@@ -16,29 +17,39 @@ function getTokenFromUrl(): string | null {
 export default function App() {
 	const { status, errorMessage, actions, version } = useWSStore();
 	const isAuthenticated = useAuthStore(selectIsAuthenticated);
+	const isAuthLoading = useAuthStore(selectIsLoading);
 	const [tokenInput, setTokenInput] = useState("");
 	const [inputError, setInputError] = useState<string | null>(null);
 	const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-	// Try to get token from URL on mount
 	useEffect(() => {
+		authActions.checkAuth();
+	}, []);
+
+	// URL token is a fallback when cookie auth fails
+	useEffect(() => {
+		if (isAuthLoading) return;
+
 		const urlToken = getTokenFromUrl();
-		if (urlToken) {
-			setIsLoggingIn(true);
-			authActions
-				.login(urlToken)
-				.then((success) => {
-					if (success) {
-						actions.connect();
-					}
-				})
-				.finally(() => {
-					setIsLoggingIn(false);
-				});
-			// Remove token from URL for security
-			window.history.replaceState({}, "", window.location.pathname);
-		}
-	}, [actions]);
+		if (!urlToken) return;
+
+		// Remove token from URL to prevent leaking via referrer or history
+		window.history.replaceState({}, "", window.location.pathname);
+
+		if (isAuthenticated) return;
+
+		setIsLoggingIn(true);
+		authActions
+			.login(urlToken)
+			.then((success) => {
+				if (success) {
+					actions.connect();
+				}
+			})
+			.finally(() => {
+				setIsLoggingIn(false);
+			});
+	}, [isAuthLoading, isAuthenticated, actions]);
 
 	// Connect when authenticated
 	useEffect(() => {
@@ -64,6 +75,15 @@ export default function App() {
 			setInputError("Invalid token");
 		}
 	};
+
+	// Show loading while checking auth
+	if (isAuthLoading) {
+		return (
+			<div className="flex min-h-dvh items-center justify-center bg-th-bg-primary">
+				<Spinner size="h-8 w-8" />
+			</div>
+		);
+	}
 
 	// Show token input if not authenticated
 	if (!isAuthenticated) {
@@ -150,7 +170,6 @@ export default function App() {
 				<button
 					type="button"
 					onClick={() => {
-						actions.disconnect();
 						void authActions.logout();
 						setTokenInput("");
 					}}
