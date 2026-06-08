@@ -133,7 +133,7 @@ export function NodeForm({ isOpen, onClose, onSubmit, editingNode }: Props) {
 						disabled={saving || !path.trim()}
 						className="flex min-h-[44px] items-center gap-2 rounded-lg bg-th-accent px-4 py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover disabled:opacity-50"
 					>
-						{saving && <Spinner className="h-4 w-4" />}
+						{saving && <Spinner />}
 						{isEditing ? "Save" : "Add Node"}
 					</button>
 				</div>

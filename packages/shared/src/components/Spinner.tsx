@@ -1,4 +1,7 @@
 export interface SpinnerProps {
+	/** Tailwind size classes, e.g. "h-4 w-4". */
+	size?: string;
+	/** Extra classes (margin, color, etc.); appended, does not override `size`. */
 	className?: string;
 	/** "accent" uses theme accent color, "current" inherits text color */
 	variant?: "accent" | "current";
@@ -7,21 +10,27 @@ export interface SpinnerProps {
 }
 
 export function Spinner({
-	className = "h-4 w-4",
+	size = "h-4 w-4",
+	className,
 	variant = "accent",
 	srText = "Loading",
 }: SpinnerProps) {
 	const borderClass =
 		variant === "current"
-			? "border-current border-r-transparent"
+			? "border-current border-t-transparent"
 			: "border-th-accent border-t-transparent";
+
+	const classes = [
+		"inline-block animate-spin rounded-full border-2",
+		borderClass,
+		size,
+		className,
+	]
+		.filter(Boolean)
+		.join(" ");
 
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: spinner is not a form output, role="status" is for screen readers
-		<span
-			role="status"
-			aria-label={srText ?? undefined}
-			className={`inline-block animate-spin rounded-full border-2 ${borderClass} ${className}`}
-		/>
+		<span role="status" aria-label={srText ?? undefined} className={classes} />
 	);
 }

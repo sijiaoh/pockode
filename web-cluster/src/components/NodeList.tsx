@@ -82,7 +82,7 @@ export function NodeList() {
 	if (loading && status === "connected") {
 		return (
 			<div className="flex flex-1 items-center justify-center">
-				<Spinner className="h-8 w-8" />
+				<Spinner size="h-8 w-8" />
 			</div>
 		);
 	}
