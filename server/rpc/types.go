@@ -18,7 +18,6 @@ import (
 // Client → Server
 
 type AuthParams struct {
-	Token    string `json:"token"`
 	Worktree string `json:"worktree,omitempty"` // empty = main worktree
 }
 
