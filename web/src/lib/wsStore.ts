@@ -10,8 +10,8 @@ import type {
 	GitDiffSubscribeResult,
 } from "../types/git";
 import type {
-	AuthResult,
 	ChatMessagesSubscribeResult,
+	InitResult,
 	ServerNotification,
 	SessionListChangedNotification,
 	SessionListItem,
@@ -336,7 +336,7 @@ export function setWorktreeDeletedListener(
 	worktreeDeletedListener = listener;
 }
 
-// Listener called when auth fails due to non-existent worktree
+// Listener called when init fails due to non-existent worktree
 type WorktreeNotFoundListener = () => void;
 let worktreeNotFoundListener: WorktreeNotFoundListener | null = null;
 
@@ -369,55 +369,15 @@ export const useWSStore = create<WSState>((set, get) => ({
 				set({ status: "connecting" });
 			}
 
-			const url = getWebSocketUrl();
+			const currentWorktree = worktreeActions.getCurrent();
+			const url = getWebSocketUrl(currentWorktree || undefined);
 			const socket = new WebSocket(url);
 
-			socket.onopen = async () => {
+			socket.onopen = () => {
 				const clients = createRPCClient(socket);
 				rpcReceiver = clients.base;
 				rpcRequester = clients.withTimeout;
-
-				try {
-					const currentWorktree = worktreeActions.getCurrent();
-					const result = (await rpcRequester.request("auth", {
-						worktree: currentWorktree || undefined,
-					})) as AuthResult;
-
-					if (result.version !== APP_VERSION) {
-						console.info(
-							`Version mismatch: client=${APP_VERSION}, server=${result.version}. Reloading...`,
-						);
-						window.location.reload();
-						return;
-					}
-
-					document.title = `${result.title} | Pockode`;
-
-					set({
-						status: "connected",
-						projectTitle: result.title,
-						workDir: result.work_dir,
-					});
-					reconnectAttempts = 0;
-				} catch (error) {
-					const currentWorktree = worktreeActions.getCurrent();
-					// If auth failed with a specific worktree, reset to main and retry
-					if (currentWorktree) {
-						console.warn(
-							"Auth failed with worktree, retrying with main:",
-							currentWorktree,
-						);
-						worktreeActions.setCurrent("");
-						worktreeNotFoundListener?.();
-						socket.close(1000, "auth_retry");
-						// Retry connection with main worktree
-						setTimeout(() => get().actions.connect(), 100);
-						return;
-					}
-					console.error("WebSocket auth failed:", error);
-					set({ status: "auth_failed" });
-					socket.close(1000, "auth_failed");
-				}
+				// Wait for init notification in onmessage
 			};
 
 			socket.onmessage = (event) => {
@@ -432,6 +392,49 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 					// JSON-RPC 2.0 notification (no id, has method)
 					if ("method" in data) {
+						// Handle init notification (sent on connection)
+						if (data.method === "init") {
+							const result = data.params as InitResult;
+
+							// Handle worktree not found error
+							if (result.error) {
+								const currentWorktree = worktreeActions.getCurrent();
+								if (currentWorktree) {
+									console.warn(
+										"Init failed with worktree, retrying with main:",
+										currentWorktree,
+									);
+									worktreeActions.setCurrent("");
+									worktreeNotFoundListener?.();
+									socket.close(1000, "init_retry");
+									setTimeout(() => get().actions.connect(), 100);
+									return;
+								}
+								console.error("WebSocket init failed:", result.error);
+								set({ status: "auth_failed" });
+								socket.close(1000, "init_failed");
+								return;
+							}
+
+							if (result.version !== APP_VERSION) {
+								console.info(
+									`Version mismatch: client=${APP_VERSION}, server=${result.version}. Reloading...`,
+								);
+								window.location.reload();
+								return;
+							}
+
+							document.title = `${result.title} | Pockode`;
+
+							set({
+								status: "connected",
+								projectTitle: result.title,
+								workDir: result.work_dir,
+							});
+							reconnectAttempts = 0;
+							return;
+						}
+
 						handleNotification(data.method, data.params);
 					}
 				} catch (e) {
@@ -814,7 +817,7 @@ worktreeActions.onWorktreeChange((_prev, next) => {
 			// RPC failed while connected - reconnect to recover
 			reconnectWebSocket();
 		}
-		// "not_connected": auth will bind to correct worktree on connect
+		// "not_connected": init will bind to correct worktree on connect
 		// "success": done
 	});
 });

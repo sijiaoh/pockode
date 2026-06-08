@@ -117,10 +117,10 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 		reqID:           0,
 	}
 
-	// Bind worktree (auth is done via cookie at connection time)
-	resp := env.call("auth", rpc.AuthParams{})
-	if resp.Error != nil {
-		t.Fatalf("auth failed: %s", resp.Error.Message)
+	// Wait for init notification (worktree is bound at connection time)
+	initNotif := env.readNotification()
+	if initNotif.Method != "init" {
+		t.Fatalf("expected init notification, got %s", initNotif.Method)
 	}
 
 	t.Cleanup(func() {
@@ -279,7 +279,7 @@ func TestHandler_Auth_InvalidCookie(t *testing.T) {
 	}
 }
 
-func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
+func TestHandler_InitNotification(t *testing.T) {
 	dataDir := t.TempDir()
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
@@ -288,11 +288,11 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, 10*time.Minute)
 	defer worktreeManager.Shutdown()
-	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 
+	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
+	h := NewRPCHandler("test-token", "v1.0.0", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -300,7 +300,6 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	defer cancel()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	// Connect with valid cookie, but send non-auth message first
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{
 			"Cookie": {middleware.CookieName + "=test-token"},
@@ -311,27 +310,180 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "chat.messages.subscribe", Params: rpc.ChatMessagesSubscribeParams{SessionID: "sess"}}
-	data, _ := json.Marshal(req)
-	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
-		t.Fatalf("failed to send: %v", err)
-	}
-
-	_, respData, err := conn.Read(ctx)
+	// Read init notification
+	_, data, err := conn.Read(ctx)
 	if err != nil {
-		t.Fatalf("failed to read: %v", err)
+		t.Fatalf("failed to read init notification: %v", err)
 	}
 
-	var resp rpcResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
+	var notif rpcNotification
+	if err := json.Unmarshal(data, &notif); err != nil {
+		t.Fatalf("failed to unmarshal notification: %v", err)
 	}
 
-	if resp.Error == nil {
-		t.Error("expected auth to fail")
+	if notif.Method != "init" {
+		t.Errorf("expected method 'init', got %q", notif.Method)
 	}
-	if !strings.Contains(resp.Error.Message, "first request must be auth") {
-		t.Errorf("expected 'first request must be auth' error, got %q", resp.Error.Message)
+
+	var result rpc.InitResult
+	if err := json.Unmarshal(notif.Params, &result); err != nil {
+		t.Fatalf("failed to unmarshal init result: %v", err)
+	}
+
+	if result.Version != "v1.0.0" {
+		t.Errorf("expected version 'v1.0.0', got %q", result.Version)
+	}
+	if result.WorkDir != workDir {
+		t.Errorf("expected work_dir %q, got %q", workDir, result.WorkDir)
+	}
+	if result.WorktreeName != "" {
+		t.Errorf("expected empty worktree_name for main, got %q", result.WorktreeName)
+	}
+}
+
+func TestHandler_InitNotification_WorktreeNotFound(t *testing.T) {
+	dataDir := t.TempDir()
+	workDir := t.TempDir()
+	cmdStore, _ := command.NewStore(dataDir)
+	settingsStore, _ := settings.NewStore(dataDir)
+	workStore, _ := work.NewFileStore(dataDir)
+	registry := worktree.NewRegistry(workDir, dataDir)
+	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, 10*time.Minute)
+	defer worktreeManager.Shutdown()
+
+	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
+	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
+	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
+	server := httptest.NewServer(h)
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Try to connect with non-existent worktree
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?worktree=nonexistent"
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Cookie": {middleware.CookieName + "=test-token"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	// Read init notification with error
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("failed to read init notification: %v", err)
+	}
+
+	var notif rpcNotification
+	if err := json.Unmarshal(data, &notif); err != nil {
+		t.Fatalf("failed to unmarshal notification: %v", err)
+	}
+
+	if notif.Method != "init" {
+		t.Errorf("expected method 'init', got %q", notif.Method)
+	}
+
+	var params map[string]interface{}
+	if err := json.Unmarshal(notif.Params, &params); err != nil {
+		t.Fatalf("failed to unmarshal params: %v", err)
+	}
+
+	errorMsg, ok := params["error"].(string)
+	if !ok || errorMsg != "worktree not found" {
+		t.Errorf("expected error 'worktree not found', got %v", params["error"])
+	}
+}
+
+func TestHandler_InitNotification_WithWorktreeQueryParam(t *testing.T) {
+	// Setup git repo with a commit (required for worktree creation)
+	dir := setupGitRepo(t)
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0644)
+	runGitIn(t, dir, "add", ".")
+	runGitIn(t, dir, "commit", "-m", "initial")
+
+	dataDir := t.TempDir()
+	cmdStore, _ := command.NewStore(dataDir)
+	settingsStore, _ := settings.NewStore(dataDir)
+	workStore, _ := work.NewFileStore(dataDir)
+	registry := worktree.NewRegistry(dir, dataDir)
+	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, 10*time.Minute)
+	defer worktreeManager.Shutdown()
+
+	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
+	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
+	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
+	h := NewRPCHandler("test-token", "v1.0.0", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
+	server := httptest.NewServer(h)
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// First create a worktree via RPC
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn1, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Cookie": {middleware.CookieName + "=test-token"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	// Read and discard init notification
+	conn1.Read(ctx)
+
+	// Create worktree
+	createReq := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "worktree.create", Params: rpc.WorktreeCreateParams{
+		Name:   "feature",
+		Branch: "feature-branch",
+	}}
+	data, _ := json.Marshal(createReq)
+	conn1.Write(ctx, websocket.MessageText, data)
+	conn1.Read(ctx) // Read response
+	conn1.Close(websocket.StatusNormalClosure, "")
+
+	// Now connect with worktree query parameter
+	wsURLWithWorktree := wsURL + "?worktree=feature"
+	conn2, _, err := websocket.Dial(ctx, wsURLWithWorktree, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Cookie": {middleware.CookieName + "=test-token"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to connect with worktree param: %v", err)
+	}
+	defer conn2.Close(websocket.StatusNormalClosure, "")
+
+	// Read init notification
+	_, initData, err := conn2.Read(ctx)
+	if err != nil {
+		t.Fatalf("failed to read init notification: %v", err)
+	}
+
+	var notif rpcNotification
+	if err := json.Unmarshal(initData, &notif); err != nil {
+		t.Fatalf("failed to unmarshal notification: %v", err)
+	}
+
+	if notif.Method != "init" {
+		t.Errorf("expected method 'init', got %q", notif.Method)
+	}
+
+	var result rpc.InitResult
+	if err := json.Unmarshal(notif.Params, &result); err != nil {
+		t.Fatalf("failed to unmarshal init result: %v", err)
+	}
+
+	if result.WorktreeName != "feature" {
+		t.Errorf("expected worktree_name 'feature', got %q", result.WorktreeName)
+	}
+	if !strings.Contains(result.WorkDir, "feature") {
+		t.Errorf("expected work_dir to contain 'feature', got %q", result.WorkDir)
 	}
 }
 

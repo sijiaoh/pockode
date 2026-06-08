@@ -245,17 +245,21 @@ Client                              Server
   │   Set-Cookie: auth_token=xxx       │   HttpOnly, Secure, SameSite=Strict
   │◀───────────────────────────────────┤
   │                                    │
-  │   ws://host/ws (Cookie header)     │
+  │   ws://host/ws?worktree=xxx        │
   ├───────────────────────────────────▶│   WebSocket handshake
   │◀───────────────────────────────────┤   Authenticate via Cookie
-  │                                    │
-  │   auth { worktree? }               │
-  ├───────────────────────────────────▶│   Bind to worktree
-  │   { version, title, work_dir }     │
+  │                                    │   Initialize worktree from query param
+  │   init { version, title,           │
+  │          work_dir, worktree_name } │   Server sends init notification
   │◀───────────────────────────────────┤
   │                                    │
   │   (Ready - can send other requests)
 ```
+
+Authentication and worktree initialization happen at connection time:
+1. Cookie is validated during WebSocket handshake
+2. Worktree name is passed via URL query parameter (`?worktree=xxx`, empty = main worktree)
+3. Server sends `init` notification with connection info (no RPC call needed)
 
 ### Startup Auth Check
 

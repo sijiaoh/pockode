@@ -17,12 +17,13 @@ import (
 	"github.com/sourcegraph/jsonrpc2"
 )
 
-// AuthParams mirrors rpc.AuthParams but without worktree (cluster mode doesn't use worktrees).
+// AuthParams contains cluster-mode authentication parameters.
+// Unlike the main WebSocket handler, cluster mode requires explicit token in params.
 type AuthParams struct {
 	Token string `json:"token"`
 }
 
-// AuthResult mirrors rpc.AuthResult but with cluster-specific fields.
+// AuthResult mirrors rpc.InitResult but with cluster-specific fields (no worktree info).
 type AuthResult struct {
 	Version string `json:"version"`
 }

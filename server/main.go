@@ -332,7 +332,7 @@ func main() {
 		relayStreamCtx, cancelRelayStreams = context.WithCancel(context.Background())
 		go func() {
 			for stream := range relayManager.NewStreams() {
-				go wsHandler.HandleStream(relayStreamCtx, stream, stream.ConnectionID())
+				go wsHandler.HandleStream(relayStreamCtx, stream, stream.ConnectionID(), "")
 			}
 		}()
 	}

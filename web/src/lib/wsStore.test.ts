@@ -30,9 +30,7 @@ class MockWebSocket {
 			// It's a request, send a response synchronously via queueMicrotask
 			queueMicrotask(() => {
 				let result: Record<string, unknown> = {};
-				if (parsed.method === "auth") {
-					result = { version: "test" };
-				} else if (parsed.method === "chat.messages.subscribe") {
+				if (parsed.method === "chat.messages.subscribe") {
 					result = { id: "sub-1", history: [], state: "ended" };
 				}
 				this.simulateMessage({
@@ -69,18 +67,17 @@ class MockWebSocket {
 		this.readyState = MockWebSocket.CLOSED;
 		this.onclose?.();
 	}
-	mockAuthFailure() {
-		this.send = vi.fn((data: string) => {
-			const parsed = JSON.parse(data);
-			if (parsed.id !== undefined && parsed.method === "auth") {
-				queueMicrotask(() => {
-					this.simulateMessage({
-						jsonrpc: "2.0",
-						id: parsed.id,
-						error: { code: -32600, message: "Invalid token" },
-					});
-				});
-			}
+	simulateInitSuccess(params?: { version?: string; title?: string }) {
+		this.simulateNotification("init", {
+			version: params?.version ?? "test",
+			title: params?.title ?? "Test Project",
+			work_dir: "/test/dir",
+			worktree_name: "",
+		});
+	}
+	simulateInitFailure(error: string) {
+		this.simulateNotification("init", {
+			error,
 		});
 	}
 	simulateNotification(method: string, params: unknown) {
@@ -123,19 +120,20 @@ function getMockWs() {
 	return currentMockWs;
 }
 
-async function connectAndAuth() {
+async function connectAndInit() {
 	const wsActions = await getWsActions();
 	const useWSStore = await getUseWSStore();
 
 	wsActions.connect();
 	getMockWs()?.simulateOpen();
+	getMockWs()?.simulateInitSuccess();
 	await vi.runAllTimersAsync();
 	expect(useWSStore.getState().status).toBe("connected");
 }
 
 describe("wsStore", () => {
 	describe("connect", () => {
-		it("sets status to connecting then connected after auth", async () => {
+		it("sets status to connecting then connected after init notification", async () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 			const statusChanges: string[] = [];
@@ -148,33 +146,36 @@ describe("wsStore", () => {
 			expect(statusChanges).toContain("connecting");
 
 			getMockWs()?.simulateOpen();
-			// After open, auth is sent and should auto-respond
+			getMockWs()?.simulateInitSuccess();
 			await vi.runAllTimersAsync();
 			expect(useWSStore.getState().status).toBe("connected");
 		});
 
-		it("sends auth RPC request on open", async () => {
-			const wsActions = await getWsActions();
-
-			wsActions.connect();
-			getMockWs()?.simulateOpen();
-
-			expect(getMockWs()?.send).toHaveBeenCalled();
-			const ws = getMockWs();
-			const sentData = JSON.parse(ws?.send.mock.calls[0][0] ?? "{}");
-			expect(sentData.jsonrpc).toBe("2.0");
-			expect(sentData.method).toBe("auth");
-			expect(sentData.params).toEqual({});
-		});
-
-		it("sets status to auth_failed on auth failure", async () => {
+		it("waits for init notification after open (no auth RPC)", async () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
 			wsActions.connect();
-			const ws = getMockWs();
-			ws?.mockAuthFailure();
-			ws?.simulateOpen();
+			getMockWs()?.simulateOpen();
+
+			// No RPC should be sent on open (no auth call)
+			expect(getMockWs()?.send).not.toHaveBeenCalled();
+			// Still in connecting state until init notification arrives
+			expect(useWSStore.getState().status).toBe("connecting");
+
+			// Init notification arrives
+			getMockWs()?.simulateInitSuccess();
+			await vi.runAllTimersAsync();
+			expect(useWSStore.getState().status).toBe("connected");
+		});
+
+		it("sets status to auth_failed on init failure", async () => {
+			const wsActions = await getWsActions();
+			const useWSStore = await getUseWSStore();
+
+			wsActions.connect();
+			getMockWs()?.simulateOpen();
+			getMockWs()?.simulateInitFailure("worktree not found");
 
 			await vi.runAllTimersAsync();
 			expect(useWSStore.getState().status).toBe("auth_failed");
@@ -193,7 +194,7 @@ describe("wsStore", () => {
 		});
 
 		it("ignores connect() when already connected", async () => {
-			await connectAndAuth();
+			await connectAndInit();
 			const connectedWs = getMockWs();
 
 			const wsActions = await getWsActions();
@@ -210,12 +211,14 @@ describe("wsStore", () => {
 			// First connection closes
 			wsActions.connect();
 			getMockWs()?.simulateOpen();
+			getMockWs()?.simulateInitSuccess();
 			await vi.runAllTimersAsync();
 			getMockWs()?.simulateClose();
 
-			// Auto-reconnect triggers (uses stored token)
+			// Auto-reconnect triggers
 			vi.advanceTimersByTime(3000);
 			getMockWs()?.simulateOpen();
+			getMockWs()?.simulateInitSuccess();
 			await vi.runAllTimersAsync();
 
 			// Should have reset attempts - can reconnect again if needed
@@ -230,7 +233,7 @@ describe("wsStore", () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
-			await connectAndAuth();
+			await connectAndInit();
 			const ws = getMockWs();
 
 			wsActions.disconnect();
@@ -242,7 +245,7 @@ describe("wsStore", () => {
 		it("cancels pending reconnect", async () => {
 			const wsActions = await getWsActions();
 
-			await connectAndAuth();
+			await connectAndInit();
 			getMockWs()?.simulateClose();
 
 			// Reconnect scheduled but not yet executed
@@ -258,7 +261,7 @@ describe("wsStore", () => {
 		it("sendMessage sends RPC request", async () => {
 			const wsActions = await getWsActions();
 
-			await connectAndAuth();
+			await connectAndInit();
 			getMockWs()?.send.mockClear();
 
 			await wsActions.sendMessage("test-session", "hello");
@@ -284,7 +287,7 @@ describe("wsStore", () => {
 
 	describe("notification handling", () => {
 		it("handles invalid JSON gracefully", async () => {
-			await connectAndAuth();
+			await connectAndInit();
 
 			// Send raw invalid JSON - should not throw
 			getMockWs()?.onmessage?.({ data: "not json" });
@@ -330,7 +333,7 @@ describe("wsStore", () => {
 			const wsActions = await getWsActions();
 			const callback = vi.fn();
 
-			await connectAndAuth();
+			await connectAndInit();
 			const ws = getMockWs();
 			if (!ws) throw new Error("WebSocket not found");
 
@@ -363,7 +366,7 @@ describe("wsStore", () => {
 			const wsActions = await getWsActions();
 			const callback = vi.fn();
 
-			await connectAndAuth();
+			await connectAndInit();
 			const ws = getMockWs();
 			if (!ws) throw new Error("WebSocket not found");
 
@@ -396,7 +399,7 @@ describe("wsStore", () => {
 			const wsActions = await getWsActions();
 			const callback = vi.fn();
 
-			await connectAndAuth();
+			await connectAndInit();
 			const ws = getMockWs();
 			if (!ws) throw new Error("WebSocket not found");
 
@@ -436,7 +439,7 @@ describe("wsStore", () => {
 	describe("auto-reconnect", () => {
 		it("reconnects up to 5 times on close, then sets error", async () => {
 			const useWSStore = await getUseWSStore();
-			await connectAndAuth();
+			await connectAndInit();
 
 			for (let i = 0; i < 5; i++) {
 				getMockWs()?.simulateClose();
@@ -467,13 +470,13 @@ describe("wsStore", () => {
 			expect(useWSStore.getState().status).toBe("reconnecting");
 		});
 
-		it("does not reconnect on auth failure", async () => {
+		it("does not reconnect on init failure", async () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
 			wsActions.connect();
-			getMockWs()?.mockAuthFailure();
 			getMockWs()?.simulateOpen();
+			getMockWs()?.simulateInitFailure("worktree not found");
 
 			await vi.runAllTimersAsync();
 			expect(useWSStore.getState().status).toBe("auth_failed");

@@ -27,4 +27,24 @@ describe("getWebSocketUrl", () => {
 		vi.stubEnv("VITE_API_BASE_URL", "http://localhost:3000");
 		expect(getWebSocketUrl()).toBe("ws://localhost:3000/ws");
 	});
+
+	it("appends worktree query parameter when provided", () => {
+		const url = getWebSocketUrl("my-feature");
+		const expectedOrigin = window.location.origin.replace(/^http/, "ws");
+		expect(url).toBe(`${expectedOrigin}/ws?worktree=my-feature`);
+	});
+
+	it("URL-encodes worktree parameter with special characters", () => {
+		const url = getWebSocketUrl("feature/test branch");
+		const expectedOrigin = window.location.origin.replace(/^http/, "ws");
+		expect(url).toBe(
+			`${expectedOrigin}/ws?worktree=feature%2Ftest%20branch`,
+		);
+	});
+
+	it("returns base URL without query when worktree is empty string", () => {
+		const url = getWebSocketUrl("");
+		const expectedOrigin = window.location.origin.replace(/^http/, "ws");
+		expect(url).toBe(`${expectedOrigin}/ws`);
+	});
 });
