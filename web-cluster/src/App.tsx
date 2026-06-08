@@ -90,7 +90,7 @@ export default function App() {
 	if (status === "connecting" || status === "reconnecting") {
 		return (
 			<div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary">
-				<Spinner className="h-8 w-8" />
+				<Spinner size="h-8 w-8" />
 				<p className="text-sm text-th-text-secondary">
 					{status === "reconnecting" ? "Reconnecting..." : "Connecting..."}
 				</p>
