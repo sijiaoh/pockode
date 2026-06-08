@@ -20,7 +20,7 @@ interface AuthResult {
 }
 
 interface RPCActions extends NodeActions {
-	connect: (token: string) => void;
+	connect: () => void;
 	disconnect: () => void;
 }
 
@@ -34,7 +34,6 @@ interface WSState {
 interface InternalState {
 	socket: WebSocket | null;
 	client: JSONRPCClient | null;
-	token: string | null;
 	reconnectAttempts: number;
 	reconnectTimeout: ReturnType<typeof setTimeout> | null;
 }
@@ -42,7 +41,6 @@ interface InternalState {
 const internal: InternalState = {
 	socket: null,
 	client: null,
-	token: null,
 	reconnectAttempts: 0,
 	reconnectTimeout: null,
 };
@@ -82,13 +80,11 @@ export const useWSStore = create<WSState>()((set, get) => {
 		set({ status: "reconnecting" });
 
 		internal.reconnectTimeout = setTimeout(() => {
-			if (internal.token) {
-				connectInternal(internal.token);
-			}
+			connectInternal();
 		}, RECONNECT_INTERVAL_MS);
 	};
 
-	const connectInternal = (token: string) => {
+	const connectInternal = () => {
 		clearReconnectTimeout();
 
 		if (internal.socket) {
@@ -96,7 +92,6 @@ export const useWSStore = create<WSState>()((set, get) => {
 		}
 
 		set({ status: "connecting", errorMessage: null });
-		internal.token = token;
 
 		const socket = new WebSocket(getWebSocketUrl());
 		internal.socket = socket;
@@ -108,7 +103,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 			try {
 				const result: AuthResult = await client
 					.timeout(RPC_TIMEOUT_MS)
-					.request("auth", { token });
+					.request("auth", {});
 
 				internal.reconnectAttempts = 0;
 				set({
@@ -170,13 +165,12 @@ export const useWSStore = create<WSState>()((set, get) => {
 		errorMessage: null,
 		actions: {
 			...nodeActions,
-			connect: (token: string) => {
+			connect: () => {
 				internal.reconnectAttempts = 0;
-				connectInternal(token);
+				connectInternal();
 			},
 			disconnect: () => {
 				clearReconnectTimeout();
-				internal.token = null;
 				internal.reconnectAttempts = 0;
 				if (internal.socket) {
 					internal.socket.close();

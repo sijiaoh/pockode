@@ -15,6 +15,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/watch"
@@ -81,6 +82,13 @@ func (h *RPCHandler) Stop() {
 }
 
 func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	cookieToken := middleware.GetTokenFromCookie(r)
+	if subtle.ConstantTimeCompare([]byte(cookieToken), []byte(h.token)) != 1 {
+		slog.Warn("websocket auth failed: invalid or missing cookie")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: h.devMode,
 	})
@@ -429,16 +437,11 @@ func (h *rpcMethodHandler) setAuthenticated() {
 }
 
 func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	// Token validation is done at WebSocket handshake via cookie.
+	// This method now only handles worktree binding.
 	var params rpc.AuthParams
 	if err := unmarshalParams(req, &params); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
-		conn.Close()
-		return
-	}
-
-	if subtle.ConstantTimeCompare([]byte(params.Token), []byte(h.token)) != 1 {
-		h.log.Warn("invalid auth token")
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "invalid token")
 		conn.Close()
 		return
 	}
@@ -458,7 +461,7 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 	wt.Subscribe(h.state.getNotifier())
 
 	h.setAuthenticated()
-	h.log.Info("authenticated", "worktree", wt.Name, "workDir", wt.WorkDir)
+	h.log.Info("worktree bound", "worktree", wt.Name, "workDir", wt.WorkDir)
 
 	title := filepath.Base(h.worktreeManager.Registry().MainDir())
 	result := rpc.AuthResult{

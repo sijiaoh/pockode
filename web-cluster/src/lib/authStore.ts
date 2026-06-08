@@ -1,7 +1,11 @@
 import { createAuthStore } from "@pockode/shared";
 
-const { useAuthStore, selectHasAuthToken, authActions } = createAuthStore({
-	tokenKey: "cluster_auth_token",
+function getApiBaseUrl(): string {
+	return window.location.origin;
+}
+
+const { useAuthStore, selectIsAuthenticated, authActions } = createAuthStore({
+	apiBaseUrl: getApiBaseUrl(),
 });
 
-export { authActions, selectHasAuthToken, useAuthStore };
+export { authActions, selectIsAuthenticated, useAuthStore };

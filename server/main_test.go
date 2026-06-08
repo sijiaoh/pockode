@@ -10,6 +10,7 @@ import (
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
@@ -68,9 +69,9 @@ func TestPingEndpoint(t *testing.T) {
 	wsHandler := ws.NewRPCHandler(token, "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	handler := newHandler(token, true, wsHandler)
 
-	t.Run("returns pong with valid token", func(t *testing.T) {
+	t.Run("returns pong with valid cookie", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/ping", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
+		req.AddCookie(&http.Cookie{Name: middleware.CookieName, Value: token})
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, req)
@@ -87,7 +88,7 @@ func TestPingEndpoint(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects without token", func(t *testing.T) {
+	t.Run("rejects without cookie", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/ping", nil)
 		rec := httptest.NewRecorder()
 

@@ -56,6 +56,10 @@ func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler) http.Handl
 		w.Write([]byte(`{"message":"pong"}`))
 	})
 
+	// Auth endpoints (no auth required)
+	mux.HandleFunc("POST /api/login", middleware.LoginHandler(token, devMode))
+	mux.HandleFunc("POST /api/logout", middleware.LogoutHandler(devMode))
+
 	mux.Handle("GET /ws", wsHandler)
 
 	authedMux := middleware.Auth(token)(mux)

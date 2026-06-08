@@ -76,27 +76,31 @@ Uses JSON-RPC 2.0 over WebSocket. All connections must authenticate before calli
 
 ### Authentication
 
+Cluster mode uses Cookie-based authentication. The login flow is:
+
+1. User enters token via the frontend
+2. Frontend sends `POST /api/login { token }`
+3. Server validates and sets an HttpOnly Cookie
+4. WebSocket handshake includes the Cookie automatically
+5. `auth` method binds to a worktree (if needed)
+
 ```json
-// Request
-{"jsonrpc": "2.0", "method": "auth", "params": {"token": "your-secret-token"}, "id": 1}
+// Request (worktree binding only, auth is done via Cookie)
+{"jsonrpc": "2.0", "method": "auth", "params": {}, "id": 1}
 
 // Success response
 {"jsonrpc": "2.0", "result": {"version": "1.0.0"}, "id": 1}
-
-// Failure response
-{"jsonrpc": "2.0", "error": {"code": -32600, "message": "invalid token"}, "id": 1}
 ```
 
-Unauthenticated requests receive `"not authenticated"` error and the connection is closed.
+Unauthenticated WebSocket connections are rejected at handshake.
 
-### Token Persistence (Frontend)
+### Session Persistence
 
-The cluster frontend persists the auth token to `localStorage` under `cluster_auth_token`. This enables:
+Authentication state is maintained via HttpOnly Cookie:
 
-- Automatic reconnection on page reload
-- Session continuity without re-entering token
-
-The key differs from main mode (`auth_token`) to avoid conflicts when both modes share the same browser origin.
+- Automatic session continuity across page reloads
+- Cookie security: HttpOnly, Secure (HTTPS), SameSite=Strict
+- Tokens are not exposed to JavaScript (XSS protection)
 
 ### Available Methods
 

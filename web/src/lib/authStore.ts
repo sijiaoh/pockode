@@ -1,9 +1,10 @@
 import { createAuthStore } from "@pockode/shared";
+import { getApiBaseUrl } from "../utils/config";
 import { wsActions } from "./wsStore";
 
-const { useAuthStore, selectHasAuthToken, authActions } = createAuthStore({
-	tokenKey: "auth_token",
+const { useAuthStore, selectIsAuthenticated, authActions } = createAuthStore({
+	apiBaseUrl: getApiBaseUrl(),
 	onLogout: () => wsActions.disconnect(),
 });
 
-export { authActions, selectHasAuthToken, useAuthStore };
+export { authActions, selectIsAuthenticated, useAuthStore };

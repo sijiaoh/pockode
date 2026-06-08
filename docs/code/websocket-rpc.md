@@ -235,27 +235,38 @@ For subscriptions that don't return initial data, hooks pass their refresh callb
 
 ## Authentication Flow
 
-The first request after WebSocket connection must be `auth`:
+Pockode uses Cookie-based authentication. The login flow is:
 
 ```
 Client                              Server
   │                                    │
-  │   ws://host/ws                     │
-  ├───────────────────────────────────▶│   WebSocket handshake
+  │   POST /api/login { token }        │
+  ├───────────────────────────────────▶│   Validate token
+  │   Set-Cookie: auth_token=xxx       │   HttpOnly, Secure, SameSite=Strict
   │◀───────────────────────────────────┤
   │                                    │
-  │   auth { token, worktree? }        │
-  ├───────────────────────────────────▶│   Validate token
-  │                                    │   Bind to worktree
+  │   ws://host/ws (Cookie header)     │
+  ├───────────────────────────────────▶│   WebSocket handshake
+  │◀───────────────────────────────────┤   Authenticate via Cookie
+  │                                    │
+  │   auth { worktree? }               │
+  ├───────────────────────────────────▶│   Bind to worktree
   │   { version, title, work_dir }     │
   │◀───────────────────────────────────┤
   │                                    │
-  │   (Authenticated - can send other requests)
+  │   (Ready - can send other requests)
 ```
 
-- Token uses constant-time comparison to prevent timing attacks
-- Optionally specify worktree; uses main worktree if not specified
-- Authentication response includes version number for detecting client/server version mismatch
+**Cookie security**:
+- HttpOnly — JavaScript cannot access the token (XSS protection)
+- Secure — Cookie is only sent over HTTPS (except localhost for development)
+- SameSite=Strict — Cookie is not sent with cross-site requests (CSRF protection)
+- Constant-time comparison — Prevents timing attacks
+
+**Why Cookie-based**:
+- Tokens are not exposed to JavaScript, reducing XSS attack surface
+- Automatic inclusion in WebSocket handshake without client-side code
+- Standard browser security mechanisms apply
 
 ## Connection Management
 

@@ -149,7 +149,6 @@ export interface AskUserQuestionRequest {
 // JSON-RPC 2.0 Request Params (Client → Server)
 
 export interface AuthParams {
-	token: string;
 	worktree?: string;
 }
 

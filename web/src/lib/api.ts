@@ -1,5 +1,4 @@
 import { getApiBaseUrl } from "../utils/config";
-import { authActions } from "./authStore";
 
 export class HttpError extends Error {
 	readonly status: number;
@@ -17,14 +16,13 @@ export async function fetchWithAuth(
 	path: string,
 	options: RequestInit = {},
 ): Promise<Response> {
-	const token = authActions.getToken();
 	const response = await fetch(`${getApiBaseUrl()}${path}`, {
 		...options,
 		headers: {
 			...options.headers,
-			Authorization: `Bearer ${token}`,
 			"Content-Type": "application/json",
 		},
+		credentials: "include",
 	});
 
 	if (!response.ok) {

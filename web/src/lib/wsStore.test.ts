@@ -5,8 +5,6 @@ vi.mock("../utils/config", () => ({
 	getWebSocketUrl: vi.fn(() => "ws://localhost/ws"),
 }));
 
-const TEST_TOKEN = "test-token";
-
 // Track created WebSocket instances
 let mockWsInstances: MockWebSocket[] = [];
 let currentMockWs: MockWebSocket | null = null;
@@ -125,11 +123,11 @@ function getMockWs() {
 	return currentMockWs;
 }
 
-async function connectAndAuth(token = TEST_TOKEN) {
+async function connectAndAuth() {
 	const wsActions = await getWsActions();
 	const useWSStore = await getUseWSStore();
 
-	wsActions.connect(token);
+	wsActions.connect();
 	getMockWs()?.simulateOpen();
 	await vi.runAllTimersAsync();
 	expect(useWSStore.getState().status).toBe("connected");
@@ -146,7 +144,7 @@ describe("wsStore", () => {
 				statusChanges.push(state.status);
 			});
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect();
 			expect(statusChanges).toContain("connecting");
 
 			getMockWs()?.simulateOpen();
@@ -158,7 +156,7 @@ describe("wsStore", () => {
 		it("sends auth RPC request on open", async () => {
 			const wsActions = await getWsActions();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect();
 			getMockWs()?.simulateOpen();
 
 			expect(getMockWs()?.send).toHaveBeenCalled();
@@ -166,14 +164,14 @@ describe("wsStore", () => {
 			const sentData = JSON.parse(ws?.send.mock.calls[0][0] ?? "{}");
 			expect(sentData.jsonrpc).toBe("2.0");
 			expect(sentData.method).toBe("auth");
-			expect(sentData.params).toEqual({ token: TEST_TOKEN });
+			expect(sentData.params).toEqual({});
 		});
 
 		it("sets status to auth_failed on auth failure", async () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect();
 			const ws = getMockWs();
 			ws?.mockAuthFailure();
 			ws?.simulateOpen();
@@ -182,22 +180,13 @@ describe("wsStore", () => {
 			expect(useWSStore.getState().status).toBe("auth_failed");
 		});
 
-		it("sets status to error when no token", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
-
-			wsActions.connect("");
-
-			expect(useWSStore.getState().status).toBe("error");
-		});
-
 		it("ignores connect() when already connecting", async () => {
 			const wsActions = await getWsActions();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect();
 			const firstWs = getMockWs();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect();
 			// Should not create a new WebSocket
 			expect(mockWsInstances.length).toBe(1);
 			expect(firstWs?.close).not.toHaveBeenCalled();
@@ -208,32 +197,18 @@ describe("wsStore", () => {
 			const connectedWs = getMockWs();
 
 			const wsActions = await getWsActions();
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect();
 
 			// Should not create a new WebSocket
 			expect(mockWsInstances.length).toBe(1);
 			expect(connectedWs?.close).not.toHaveBeenCalled();
 		});
 
-		it("ignores connect() when in error state", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
-
-			// Force error state by calling connect with empty token
-			wsActions.connect("");
-			expect(useWSStore.getState().status).toBe("error");
-
-			// Attempting to connect should be ignored
-			wsActions.connect(TEST_TOKEN);
-			expect(useWSStore.getState().status).toBe("error");
-			expect(mockWsInstances.length).toBe(0);
-		});
-
 		it("resets reconnect attempts on successful connection", async () => {
 			const wsActions = await getWsActions();
 
 			// First connection closes
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect();
 			getMockWs()?.simulateOpen();
 			await vi.runAllTimersAsync();
 			getMockWs()?.simulateClose();
@@ -323,7 +298,7 @@ describe("wsStore", () => {
 			const listener = vi.fn();
 
 			const unsubscribe = useWSStore.subscribe(listener);
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect();
 			expect(listener).toHaveBeenCalled();
 
 			listener.mockClear();
@@ -343,7 +318,7 @@ describe("wsStore", () => {
 			useWSStore.subscribe(listener1);
 			useWSStore.subscribe(listener2);
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect();
 
 			expect(listener1).toHaveBeenCalled();
 			expect(listener2).toHaveBeenCalled();
@@ -482,7 +457,7 @@ describe("wsStore", () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect();
 			// onerror is always followed by onclose; onerror does not change status
 			getMockWs()?.simulateError();
 			expect(useWSStore.getState().status).toBe("connecting");
@@ -496,7 +471,7 @@ describe("wsStore", () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect();
 			getMockWs()?.mockAuthFailure();
 			getMockWs()?.simulateOpen();
 

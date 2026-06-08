@@ -5,12 +5,6 @@ vi.mock("../utils/config", () => ({
 	getApiBaseUrl: vi.fn(() => "http://localhost:8080"),
 }));
 
-vi.mock("./authStore", () => ({
-	authActions: {
-		getToken: vi.fn(() => "test-token"),
-	},
-}));
-
 describe("api", () => {
 	beforeEach(() => {
 		vi.stubGlobal(
@@ -29,7 +23,7 @@ describe("api", () => {
 	});
 
 	describe("fetchWithAuth", () => {
-		it("adds authorization header", async () => {
+		it("uses credentials include for cookie auth", async () => {
 			vi.mocked(fetch).mockResolvedValueOnce({
 				ok: true,
 			} as Response);
@@ -39,8 +33,8 @@ describe("api", () => {
 			expect(fetch).toHaveBeenCalledWith(
 				"http://localhost:8080/api/test",
 				expect.objectContaining({
+					credentials: "include",
 					headers: expect.objectContaining({
-						Authorization: "Bearer test-token",
 						"Content-Type": "application/json",
 					}),
 				}),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -90,7 +92,12 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	// Add auth cookie to WebSocket connection
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Cookie": {middleware.CookieName + "=test-token"},
+		},
+	})
 	if err != nil {
 		cancel()
 		server.Close()
@@ -110,8 +117,8 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 		reqID:           0,
 	}
 
-	// Authenticate
-	resp := env.call("auth", rpc.AuthParams{Token: "test-token"})
+	// Bind worktree (auth is done via cookie at connection time)
+	resp := env.call("auth", rpc.AuthParams{})
 	if resp.Error != nil {
 		t.Fatalf("auth failed: %s", resp.Error.Message)
 	}
@@ -233,7 +240,7 @@ func (e *testEnv) skipN(n int) {
 	}
 }
 
-func TestHandler_Auth_InvalidToken(t *testing.T) {
+func TestHandler_Auth_InvalidCookie(t *testing.T) {
 	dataDir := t.TempDir()
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
@@ -254,33 +261,21 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	defer cancel()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "auth", Params: rpc.AuthParams{Token: "wrong-token"}}
-	data, _ := json.Marshal(req)
-	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
-		t.Fatalf("failed to send: %v", err)
-	}
-
-	_, respData, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("failed to read: %v", err)
+	// Test with wrong cookie - should fail to connect
+	_, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Cookie": {middleware.CookieName + "=wrong-token"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected connection to fail with invalid cookie")
 	}
 
-	var resp rpcResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-
-	if resp.Error == nil {
-		t.Error("expected auth to fail")
-	}
-	if !strings.Contains(resp.Error.Message, "invalid token") {
-		t.Errorf("expected 'invalid token' error, got %q", resp.Error.Message)
+	// Test with no cookie - should fail to connect
+	_, _, err = websocket.Dial(ctx, wsURL, nil)
+	if err == nil {
+		t.Fatal("expected connection to fail without cookie")
 	}
 }
 
@@ -305,7 +300,12 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	defer cancel()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	// Connect with valid cookie, but send non-auth message first
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Cookie": {middleware.CookieName + "=test-token"},
+		},
+	})
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}

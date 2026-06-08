@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { NodeList } from "./components";
 import { Spinner } from "./components/ui";
-import { authActions, useAuthStore } from "./lib/authStore";
+import {
+	authActions,
+	selectIsAuthenticated,
+	useAuthStore,
+} from "./lib/authStore";
 import { useWSStore } from "./lib/wsStore";
 
 function getTokenFromUrl(): string | null {
@@ -11,28 +15,39 @@ function getTokenFromUrl(): string | null {
 
 export default function App() {
 	const { status, errorMessage, actions, version } = useWSStore();
-	const token = useAuthStore((state) => state.token);
+	const isAuthenticated = useAuthStore(selectIsAuthenticated);
 	const [tokenInput, setTokenInput] = useState("");
 	const [inputError, setInputError] = useState<string | null>(null);
+	const [isLoggingIn, setIsLoggingIn] = useState(false);
 
 	// Try to get token from URL on mount
 	useEffect(() => {
 		const urlToken = getTokenFromUrl();
 		if (urlToken) {
-			authActions.login(urlToken);
+			setIsLoggingIn(true);
+			authActions
+				.login(urlToken)
+				.then((success) => {
+					if (success) {
+						actions.connect();
+					}
+				})
+				.finally(() => {
+					setIsLoggingIn(false);
+				});
 			// Remove token from URL for security
 			window.history.replaceState({}, "", window.location.pathname);
 		}
-	}, []);
+	}, [actions]);
 
-	// Connect when token is available
+	// Connect when authenticated
 	useEffect(() => {
-		if (token && status === "disconnected") {
-			actions.connect(token);
+		if (isAuthenticated && status === "disconnected") {
+			actions.connect();
 		}
-	}, [token, status, actions]);
+	}, [isAuthenticated, status, actions]);
 
-	const handleSubmitToken = (e: React.FormEvent) => {
+	const handleSubmitToken = async (e: React.FormEvent) => {
 		e.preventDefault();
 		const trimmed = tokenInput.trim();
 		if (!trimmed) {
@@ -40,11 +55,18 @@ export default function App() {
 			return;
 		}
 		setInputError(null);
-		authActions.login(trimmed);
+		setIsLoggingIn(true);
+		const success = await authActions.login(trimmed);
+		setIsLoggingIn(false);
+		if (success) {
+			actions.connect();
+		} else {
+			setInputError("Invalid token");
+		}
 	};
 
-	// Show token input if no token
-	if (!token) {
+	// Show token input if not authenticated
+	if (!isAuthenticated) {
 		return (
 			<div className="flex min-h-dvh items-center justify-center bg-th-bg-primary p-4">
 				<div className="w-full max-w-sm">
@@ -70,15 +92,17 @@ export default function App() {
 							placeholder="Enter your token"
 							className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-secondary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none"
 							autoFocus
+							disabled={isLoggingIn}
 						/>
 						{inputError && (
 							<p className="mt-2 text-sm text-th-error">{inputError}</p>
 						)}
 						<button
 							type="submit"
-							className="mt-4 min-h-[44px] w-full rounded-lg bg-th-accent py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover"
+							disabled={isLoggingIn}
+							className="mt-4 min-h-[44px] w-full rounded-lg bg-th-accent py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover disabled:opacity-50"
 						>
-							Connect
+							{isLoggingIn ? "Connecting..." : "Connect"}
 						</button>
 					</form>
 				</div>
@@ -127,7 +151,7 @@ export default function App() {
 					type="button"
 					onClick={() => {
 						actions.disconnect();
-						authActions.logout();
+						void authActions.logout();
 						setTokenInput("");
 					}}
 					className="mt-4 min-h-[44px] rounded-lg bg-th-accent px-4 py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover"
@@ -165,7 +189,7 @@ export default function App() {
 				</p>
 				<button
 					type="button"
-					onClick={() => actions.connect(token)}
+					onClick={() => actions.connect()}
 					className="mt-4 min-h-[44px] rounded-lg bg-th-accent px-4 py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover"
 				>
 					Retry

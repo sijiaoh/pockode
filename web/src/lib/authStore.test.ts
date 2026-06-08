@@ -6,10 +6,13 @@ vi.mock("./wsStore", () => ({
 	},
 }));
 
+const mockFetch = vi.fn();
+globalThis.fetch = mockFetch;
+
 describe("authStore", () => {
 	beforeEach(() => {
 		vi.resetModules();
-		localStorage.clear();
+		mockFetch.mockReset();
 	});
 
 	afterEach(() => {
@@ -17,49 +20,106 @@ describe("authStore", () => {
 	});
 
 	describe("initial state", () => {
-		it("token is set when it exists in storage", async () => {
-			localStorage.setItem("auth_token", "test-token");
-
+		it("isAuthenticated is false initially", async () => {
 			const { useAuthStore } = await import("./authStore");
-			expect(useAuthStore.getState().token).toBe("test-token");
-		});
-
-		it("token is null when no token in storage", async () => {
-			const { useAuthStore } = await import("./authStore");
-			expect(useAuthStore.getState().token).toBeNull();
+			expect(useAuthStore.getState().isAuthenticated).toBe(false);
 		});
 	});
 
 	describe("authActions", () => {
-		it("login saves token to storage and state", async () => {
+		it("login sets isAuthenticated to true on success", async () => {
+			mockFetch.mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({ success: true }),
+			});
+
 			const { useAuthStore, authActions } = await import("./authStore");
 
-			authActions.login("new-token");
+			const result = await authActions.login("new-token");
 
-			expect(localStorage.getItem("auth_token")).toBe("new-token");
-			expect(useAuthStore.getState().token).toBe("new-token");
+			expect(result).toBe(true);
+			expect(useAuthStore.getState().isAuthenticated).toBe(true);
+			expect(mockFetch).toHaveBeenCalledWith(
+				expect.stringContaining("/api/login"),
+				expect.objectContaining({
+					method: "POST",
+					credentials: "include",
+					body: JSON.stringify({ token: "new-token" }),
+				}),
+			);
 		});
 
-		it("logout disconnects WebSocket, clears token from storage and state", async () => {
+		it("login returns false on failure", async () => {
+			mockFetch.mockResolvedValueOnce({
+				ok: false,
+				status: 401,
+			});
+
+			const { useAuthStore, authActions } = await import("./authStore");
+
+			const result = await authActions.login("invalid-token");
+
+			expect(result).toBe(false);
+			expect(useAuthStore.getState().isAuthenticated).toBe(false);
+		});
+
+		it("login returns false on network error", async () => {
+			mockFetch.mockRejectedValueOnce(new Error("Network error"));
+
+			const { useAuthStore, authActions } = await import("./authStore");
+
+			const result = await authActions.login("token");
+
+			expect(result).toBe(false);
+			expect(useAuthStore.getState().isAuthenticated).toBe(false);
+		});
+
+		it("logout disconnects WebSocket and clears auth state", async () => {
+			mockFetch.mockResolvedValue({ ok: true });
+
 			const { wsActions } = await import("./wsStore");
 			const { useAuthStore, authActions } = await import("./authStore");
 
-			authActions.login("token");
-			authActions.logout();
+			// First login
+			await authActions.login("token");
+
+			// Then logout
+			await authActions.logout();
 
 			expect(wsActions.disconnect).toHaveBeenCalled();
-			expect(localStorage.getItem("auth_token")).toBeNull();
-			expect(useAuthStore.getState().token).toBeNull();
+			expect(useAuthStore.getState().isAuthenticated).toBe(false);
+			expect(mockFetch).toHaveBeenCalledWith(
+				expect.stringContaining("/api/logout"),
+				expect.objectContaining({
+					method: "POST",
+					credentials: "include",
+				}),
+			);
 		});
 
-		it("getToken returns current token", async () => {
-			const { authActions } = await import("./authStore");
+		it("logout clears auth state even on network error", async () => {
+			mockFetch
+				.mockResolvedValueOnce({ ok: true }) // login succeeds
+				.mockRejectedValueOnce(new Error("Network error")); // logout fails
 
-			authActions.login("my-token");
-			expect(authActions.getToken()).toBe("my-token");
+			const { wsActions } = await import("./wsStore");
+			const { useAuthStore, authActions } = await import("./authStore");
 
-			authActions.logout();
-			expect(authActions.getToken()).toBe("");
+			await authActions.login("token");
+			await authActions.logout();
+
+			expect(wsActions.disconnect).toHaveBeenCalled();
+			expect(useAuthStore.getState().isAuthenticated).toBe(false);
+		});
+
+		it("setAuthenticated updates state directly", async () => {
+			const { useAuthStore, authActions } = await import("./authStore");
+
+			authActions.setAuthenticated(true);
+			expect(useAuthStore.getState().isAuthenticated).toBe(true);
+
+			authActions.setAuthenticated(false);
+			expect(useAuthStore.getState().isAuthenticated).toBe(false);
 		});
 	});
 });
