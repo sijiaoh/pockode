@@ -307,6 +307,7 @@ const RPC_TIMEOUT_MS = 30000;
 |-----------|------|
 | Server RPC handler | `server/ws/rpc.go` |
 | Server method handlers | `server/ws/rpc_*.go` |
+| Server WebSocket adapter | `server/ws/stream.go` |
 | Server watchers | `server/watch/*.go` |
 | Client store | `web/src/lib/wsStore.ts` |
 | Client actions | `web/src/lib/rpc/*.ts` |

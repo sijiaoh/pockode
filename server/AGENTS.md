@@ -42,6 +42,7 @@ mcp/                    # MCP 服务器（stdio JSON-RPC，供 AI CLI 使用）
 middleware/             # Token 认证中间件
 process/                # 进程管理器
 relay/                  # HTTP 中继 / 多路复用（NAT 穿透）
+serverinfo/             # 服务器运行时信息（server.json）
 rpc/                    # RPC 消息类型定义
 session/                # Session 存储 + 清理
 settings/               # 设置存储
@@ -83,10 +84,10 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | 变量 | 必需 | 默认 | 说明 |
 |------|:----:|------|------|
 | `AUTH_TOKEN` | ✓ | — | API 认证令牌 |
-| `SERVER_PORT` | | `8080` | 服务端口 |
+| `SERVER_PORT` | | `9870` | 服务端口 |
 | `WORK_DIR` | | `/workspace` | 工作目录 |
 | `DEV_MODE` | | `false` | 开发模式（true 时不 serve 静态文件） |
-| `RELAY_PORT` | | `SERVER_PORT` | Relay 转发目标端口（开发时可设为前端端口） |
+| `RELAY_FRONTEND_PORT` | | `SERVER_PORT` | Relay 转发前端请求的目标端口（开发时可设为前端端口） |
 | `LOG_FORMAT` | | `text` | `json` / `text` |
 | `LOG_LEVEL` | | `info` | `debug`/`info`/`warn`/`error` |
 | `LOG_FILE` | | `dataDir/server.log`(生产) | 日志文件路径（开发模式默认输出到 stdout） |
@@ -95,6 +96,28 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `REPOSITORY_TOKEN` | git时 | — | PAT |
 | `GIT_USER_NAME` | git时 | — | commit 用户名 |
 | `GIT_USER_EMAIL` | git时 | — | commit 邮箱 |
+
+## 运行时文件
+
+### server.json
+
+服务器启动时在 `{dataDir}/server.json` 创建，优雅关闭时删除。供编排程序发现运行中的服务器。
+
+```json
+{
+  "pid": 12345,
+  "port": 9870,
+  "started_at": "2025-05-31T10:00:00Z"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `pid` | int | 服务器进程 ID |
+| `port` | int | 服务器监听端口 |
+| `started_at` | string | 启动时间（RFC3339 格式） |
+
+生命周期：启动时写入 → 运行期间保持 → 优雅关闭时删除
 
 ## 边界
 

@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -94,7 +93,7 @@ func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RPCHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
-	stream := newWebSocketStream(wsConn)
+	stream := NewWebSocketStream(wsConn)
 	connID := uuid.Must(uuid.NewV7()).String()
 	h.HandleStream(ctx, stream, connID)
 }
@@ -519,43 +518,3 @@ func (h *rpcMethodHandler) handleWatcherUnsubscribe(
 		h.log.Error("failed to send "+logName+" unsubscribe response", "error", err)
 	}
 }
-
-// webSocketStream adapts coder/websocket to jsonrpc2.ObjectStream.
-type webSocketStream struct {
-	conn *websocket.Conn
-	mu   sync.Mutex // protects writes
-}
-
-func newWebSocketStream(conn *websocket.Conn) *webSocketStream {
-	return &webSocketStream{conn: conn}
-}
-
-func (s *webSocketStream) ReadObject(v interface{}) error {
-	_, data, err := s.conn.Read(context.Background())
-	if err != nil {
-		// Treat normal close frames as EOF so jsonrpc2 shuts down gracefully
-		switch websocket.CloseStatus(err) {
-		case websocket.StatusNormalClosure, websocket.StatusGoingAway:
-			return io.EOF
-		}
-		return err
-	}
-	return json.Unmarshal(data, v)
-}
-
-func (s *webSocketStream) WriteObject(v interface{}) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.conn.Write(context.Background(), websocket.MessageText, data)
-}
-
-func (s *webSocketStream) Close() error {
-	return s.conn.Close(websocket.StatusNormalClosure, "")
-}
-
-// Ensure webSocketStream implements ObjectStream
-var _ jsonrpc2.ObjectStream = (*webSocketStream)(nil)

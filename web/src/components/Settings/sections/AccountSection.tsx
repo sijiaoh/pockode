@@ -1,6 +1,6 @@
+import { ConfirmDialog } from "@pockode/shared";
 import { useState } from "react";
 import { authActions } from "../../../lib/authStore";
-import ConfirmDialog from "../../common/ConfirmDialog";
 
 export default function AccountSection() {
 	const [showConfirm, setShowConfirm] = useState(false);

@@ -1,3 +1,4 @@
+import { ConfirmDialog } from "@pockode/shared";
 import {
 	AlertCircle,
 	Check,
@@ -17,7 +18,6 @@ import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import { MarkdownContent } from "../Chat/MarkdownContent";
-import ConfirmDialog from "../common/ConfirmDialog";
 import BackButton from "../ui/BackButton";
 
 interface Props {

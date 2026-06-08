@@ -1,6 +1,8 @@
 # Go binary
-server
+/server
 
 # Static files (frontend build output, except .keep)
 static/*
 !static/.keep
+cluster/static/assets/*
+!cluster/static/assets/.keep

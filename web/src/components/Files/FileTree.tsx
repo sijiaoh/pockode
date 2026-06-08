@@ -32,7 +32,7 @@ function FileTree({
 	if (isLoading) {
 		return (
 			<div className="flex items-center justify-center p-8">
-				<Spinner className="text-th-text-muted" />
+				<Spinner variant="current" className="text-th-text-muted" />
 			</div>
 		);
 	}

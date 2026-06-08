@@ -17,6 +17,7 @@
 		"test:watch": "vitest"
 	},
 	"dependencies": {
+		"@pockode/shared": "workspace:*",
 		"@git-diff-view/react": "^0.0.35",
 		"@git-diff-view/shiki": "^0.0.35",
 		"@tailwindcss/vite": "^4.1.18",

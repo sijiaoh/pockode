@@ -1,3 +1,4 @@
+import { ConfirmDialog } from "@pockode/shared";
 import {
 	AlertCircle,
 	Check,
@@ -24,7 +25,6 @@ import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import type { Comment, Work, WorkStatus, WorkType } from "../../types/work";
 import { MarkdownContent } from "../Chat/MarkdownContent";
-import ConfirmDialog from "../common/ConfirmDialog";
 import BackButton from "../ui/BackButton";
 import BottomActionBar from "../ui/BottomActionBar";
 import StatusBadge from "../ui/StatusBadge";

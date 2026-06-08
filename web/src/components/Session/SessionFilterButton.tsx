@@ -1,6 +1,6 @@
+import { useIsDesktop } from "@pockode/shared";
 import { ListFilter } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
-import { useIsDesktop } from "../../hooks/useIsDesktop";
 import { useSessionStore } from "../../lib/sessionStore";
 import ResponsivePanel from "../ui/ResponsivePanel";
 import FilterOption from "./FilterOption";

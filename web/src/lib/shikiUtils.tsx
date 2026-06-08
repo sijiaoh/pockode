@@ -1,4 +1,5 @@
 import { getDiffViewHighlighter } from "@git-diff-view/shiki";
+import { useIsDesktop } from "@pockode/shared";
 import { Check, Copy } from "lucide-react";
 import * as React from "react";
 import { useShikiHighlighter } from "react-shiki";
@@ -9,7 +10,6 @@ import {
 	createHighlighter,
 	type Highlighter,
 } from "shiki";
-import { useIsDesktop } from "../hooks/useIsDesktop";
 
 export const CODE_FONT_SIZE_MOBILE = 12;
 export const CODE_FONT_SIZE_DESKTOP = 13;
