@@ -12,7 +12,7 @@ COPY site/static/images/logo.svg ./public/favicon.svg
 RUN pnpm run build
 
 # Stage 2: Build backend
-FROM golang:1.25.4-alpine AS backend-builder
+FROM golang:1.26.4-alpine AS backend-builder
 
 WORKDIR /app
 RUN apk add --no-cache git ca-certificates
