@@ -50,7 +50,7 @@ func Run(cfg Config) error {
 		return fmt.Errorf("failed to create node store: %w", err)
 	}
 
-	wsHandler := newWSHandler(cfg.AuthToken, cfg.Version, cfg.DevMode, nodeStore, log)
+	wsHandler := newWSHandler(cfg.AuthToken, cfg.DevMode, nodeStore, log)
 	handler := newHandler(cfg.AuthToken, cfg.DevMode, wsHandler)
 
 	srv := &http.Server{

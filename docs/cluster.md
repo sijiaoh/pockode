@@ -75,28 +75,43 @@ Data is stored in `~/.pockode-cluster/` (created automatically if it doesn't exi
 
 ## WebSocket Protocol
 
-Uses JSON-RPC 2.0 over WebSocket. All connections must authenticate before calling other methods.
+Uses JSON-RPC 2.0 over WebSocket. Authentication is handled via Cookie during WebSocket handshake—no separate auth RPC is needed.
 
 ### Authentication
 
-Cluster mode uses Cookie-based authentication. The login flow is:
+Cluster mode uses Cookie-based authentication:
 
 1. On startup, frontend calls `GET /api/me` to check existing Cookie validity
 2. If Cookie invalid, user enters token via the frontend
 3. Frontend sends `POST /api/login { token }`
 4. Server validates and sets an HttpOnly Cookie
 5. WebSocket handshake includes the Cookie automatically
-6. `auth` method binds to a worktree (if needed)
+6. Server validates Cookie during handshake; invalid Cookie results in 401 rejection
+7. Connection success = authentication success; ready for RPC immediately
 
-```json
-// Request (worktree binding only, auth is done via Cookie)
-{"jsonrpc": "2.0", "method": "auth", "params": {}, "id": 1}
-
-// Success response
-{"jsonrpc": "2.0", "result": {"version": "1.0.0"}, "id": 1}
+```
+Client                              Server
+  │                                    │
+  │   GET /api/me (Cookie header)      │
+  ├───────────────────────────────────▶│   Validate Cookie
+  │   200 OK / 401 Unauthorized        │
+  │◀───────────────────────────────────┤
+  │                                    │
+  │   (If 401: show login screen)      │
+  │                                    │
+  │   POST /api/login { token }        │
+  ├───────────────────────────────────▶│   Validate token
+  │   Set-Cookie: auth_token=xxx       │   HttpOnly, Secure, SameSite=Strict
+  │◀───────────────────────────────────┤
+  │                                    │
+  │   ws://host/ws                     │
+  ├───────────────────────────────────▶│   WebSocket handshake
+  │◀───────────────────────────────────┤   Authenticate via Cookie
+  │                                    │
+  │   (Ready - can send RPC requests)
 ```
 
-Unauthenticated WebSocket connections are rejected at handshake.
+Unlike the main server mode, Cluster mode does not require worktree initialization or version negotiation—connection success means ready to use.
 
 ### Session Persistence
 
@@ -107,8 +122,6 @@ Authentication state is maintained via HttpOnly Cookie:
 - Tokens are not exposed to JavaScript (XSS protection)
 
 ### Available Methods
-
-After authentication:
 
 | Method | Description |
 |--------|-------------|

@@ -15,7 +15,7 @@ function getTokenFromUrl(): string | null {
 }
 
 export default function App() {
-	const { status, errorMessage, actions, version } = useWSStore();
+	const { status, errorMessage, actions } = useWSStore();
 	const isAuthenticated = useAuthStore(selectIsAuthenticated);
 	const isAuthLoading = useAuthStore(selectIsLoading);
 	const [tokenInput, setTokenInput] = useState("");
@@ -142,45 +142,6 @@ export default function App() {
 		);
 	}
 
-	// Auth failed state
-	if (status === "auth_failed") {
-		return (
-			<div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary p-4 text-center">
-				<div className="flex h-16 w-16 items-center justify-center rounded-full bg-th-error/10 text-th-error">
-					<svg
-						className="h-8 w-8"
-						fill="none"
-						stroke="currentColor"
-						viewBox="0 0 24 24"
-					>
-						<path
-							strokeLinecap="round"
-							strokeLinejoin="round"
-							strokeWidth={2}
-							d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-						/>
-					</svg>
-				</div>
-				<h2 className="text-lg font-semibold text-th-text-primary">
-					Authentication Failed
-				</h2>
-				<p className="text-sm text-th-text-secondary">
-					{errorMessage || "Invalid token"}
-				</p>
-				<button
-					type="button"
-					onClick={() => {
-						void authActions.logout();
-						setTokenInput("");
-					}}
-					className="mt-4 min-h-[44px] rounded-lg bg-th-accent px-4 py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover"
-				>
-					Try Again
-				</button>
-			</div>
-		);
-	}
-
 	// Error state
 	if (status === "error") {
 		return (
@@ -220,12 +181,6 @@ export default function App() {
 	// Connected - show node list
 	return (
 		<div className="flex min-h-dvh flex-col bg-th-bg-primary">
-			{/* Version indicator (development only) */}
-			{version && (
-				<div className="fixed bottom-2 right-2 text-xs text-th-text-muted">
-					v{version}
-				</div>
-			)}
 			<NodeList />
 		</div>
 	);
