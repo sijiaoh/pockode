@@ -6,6 +6,7 @@ export {
 } from "./components/index.ts";
 export { useIsDesktop } from "./hooks/index.ts";
 export {
+	type AuthState,
 	type AuthStore,
 	type AuthStoreConfig,
 	createAuthStore,

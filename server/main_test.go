@@ -10,6 +10,7 @@ import (
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
@@ -68,9 +69,9 @@ func TestPingEndpoint(t *testing.T) {
 	wsHandler := ws.NewRPCHandler(token, "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
 	handler := newHandler(token, true, wsHandler)
 
-	t.Run("returns pong with valid token", func(t *testing.T) {
+	t.Run("returns pong with valid cookie", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/ping", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
+		req.AddCookie(&http.Cookie{Name: middleware.CookieName, Value: token})
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, req)
@@ -87,8 +88,61 @@ func TestPingEndpoint(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects without token", func(t *testing.T) {
+	t.Run("rejects without cookie", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/ping", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("got status %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+	})
+}
+
+func TestMeEndpoint(t *testing.T) {
+	const token = "test-token"
+	dataDir := t.TempDir()
+	workDir := t.TempDir()
+	cmdStore, _ := command.NewStore(dataDir)
+	settingsStore, _ := settings.NewStore(dataDir)
+	workStore, _ := work.NewFileStore(dataDir)
+	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
+	registry := worktree.NewRegistry(workDir, dataDir)
+	scopeManager := worktree.NewManager(registry, newAgentRegistry(), dataDir, 10*time.Minute)
+	defer scopeManager.Shutdown()
+
+	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)
+	workStopper := worktree.NewWorkStopper(scopeManager, workStore)
+	wsHandler := ws.NewRPCHandler(token, "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
+	handler := newHandler(token, true, wsHandler)
+
+	t.Run("returns 200 with valid cookie", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.AddCookie(&http.Cookie{Name: middleware.CookieName, Value: token})
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("got status %d, want %d", rec.Code, http.StatusOK)
+		}
+	})
+
+	t.Run("returns 401 without cookie", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("got status %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+	})
+
+	t.Run("returns 401 with invalid cookie", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.AddCookie(&http.Cookie{Name: middleware.CookieName, Value: "invalid-token"})
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, req)

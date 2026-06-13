@@ -7,38 +7,26 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"sync"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/ws"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
-// AuthParams mirrors rpc.AuthParams but without worktree (cluster mode doesn't use worktrees).
-type AuthParams struct {
-	Token string `json:"token"`
-}
-
-// AuthResult mirrors rpc.AuthResult but with cluster-specific fields.
-type AuthResult struct {
-	Version string `json:"version"`
-}
-
 type wsHandler struct {
 	token     string
-	version   string
 	devMode   bool
 	nodeStore node.Store
 	log       *slog.Logger
 }
 
-func newWSHandler(token, version string, devMode bool, nodeStore node.Store, log *slog.Logger) *wsHandler {
+func newWSHandler(token string, devMode bool, nodeStore node.Store, log *slog.Logger) *wsHandler {
 	return &wsHandler{
 		token:     token,
-		version:   version,
 		devMode:   devMode,
 		nodeStore: nodeStore,
 		log:       log.With("component", "ws"),
@@ -46,6 +34,13 @@ func newWSHandler(token, version string, devMode bool, nodeStore node.Store, log
 }
 
 func (h *wsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	cookieToken := middleware.GetTokenFromCookie(r)
+	if subtle.ConstantTimeCompare([]byte(cookieToken), []byte(h.token)) != 1 {
+		h.log.Warn("websocket auth failed: invalid or missing cookie")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: h.devMode,
 	})
@@ -74,11 +69,8 @@ func (h *wsHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStre
 	log.Info("new connection")
 
 	handler := &clusterRPCHandler{
-		token:         h.token,
-		version:       h.version,
-		nodeStore:     h.nodeStore,
-		log:           log,
-		authenticated: false,
+		nodeStore: h.nodeStore,
+		log:       log,
 	}
 
 	rpcConn := jsonrpc2.NewConn(ctx, stream, jsonrpc2.AsyncHandler(handler))
@@ -87,30 +79,11 @@ func (h *wsHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStre
 }
 
 type clusterRPCHandler struct {
-	token         string
-	version       string
-	nodeStore     node.Store
-	log           *slog.Logger
-	authenticated bool
-	mu            sync.Mutex
+	nodeStore node.Store
+	log       *slog.Logger
 }
 
 func (h *clusterRPCHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	h.mu.Lock()
-	authenticated := h.authenticated
-	h.mu.Unlock()
-
-	if !authenticated {
-		if req.Method != "auth" {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "not authenticated")
-			conn.Close()
-			return
-		}
-		h.handleAuth(ctx, conn, req)
-		return
-	}
-
-	// After authentication, cluster mode supports node management and basic methods
 	switch req.Method {
 	case "ping":
 		if err := conn.Reply(ctx, req.ID, "pong"); err != nil {
@@ -128,35 +101,6 @@ func (h *clusterRPCHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req
 		h.handleNodeDelete(ctx, conn, req)
 	default:
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeMethodNotFound, "method not found")
-	}
-}
-
-func (h *clusterRPCHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	var params AuthParams
-	if err := unmarshalParams(req, &params); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
-		conn.Close()
-		return
-	}
-
-	if subtle.ConstantTimeCompare([]byte(params.Token), []byte(h.token)) != 1 {
-		h.log.Warn("invalid auth token")
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "invalid token")
-		conn.Close()
-		return
-	}
-
-	h.mu.Lock()
-	h.authenticated = true
-	h.mu.Unlock()
-
-	h.log.Info("authenticated")
-
-	result := AuthResult{
-		Version: h.version,
-	}
-	if err := conn.Reply(ctx, req.ID, result); err != nil {
-		h.log.Error("failed to send auth response", "error", err)
 	}
 }
 

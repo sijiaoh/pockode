@@ -15,19 +15,22 @@ import (
 	"github.com/pockode/server/work"
 )
 
-// Client → Server
+// Server → Client (sent on connection)
 
-type AuthParams struct {
-	Token    string `json:"token"`
-	Worktree string `json:"worktree,omitempty"` // empty = main worktree
-}
-
-type AuthResult struct {
+// InitResult is sent as notification when WebSocket connection is established.
+// Worktree is determined from URL query parameter (?worktree=xxx).
+type InitResult struct {
 	Version      string `json:"version"`
 	Title        string `json:"title"`
 	WorkDir      string `json:"work_dir"`
 	WorktreeName string `json:"worktree_name"`
 }
+
+// AuthResult is an alias for InitResult for backward compatibility.
+// Deprecated: Use InitResult instead.
+type AuthResult = InitResult
+
+// Client → Server
 
 type MessageParams struct {
 	SessionID string `json:"session_id"`

@@ -10,9 +10,8 @@ import type {
 	GitDiffSubscribeResult,
 } from "../types/git";
 import type {
-	AuthParams,
-	AuthResult,
 	ChatMessagesSubscribeResult,
+	InitResult,
 	ServerNotification,
 	SessionListChangedNotification,
 	SessionListItem,
@@ -63,7 +62,7 @@ export type ConnectionStatus =
 	| "error";
 
 interface ConnectionActions {
-	connect: (token: string) => void;
+	connect: () => void;
 	disconnect: () => void;
 }
 
@@ -144,7 +143,6 @@ interface WSState {
 let ws: WebSocket | null = null;
 let rpcReceiver: JSONRPCClient | null = null;
 let rpcRequester: JSONRPCRequester<void> | null = null;
-let currentToken: string | null = null;
 let reconnectAttempts = 0;
 let reconnectTimeout: number | undefined;
 const fsWatchCallbacks = new Map<string, () => void>();
@@ -338,7 +336,7 @@ export function setWorktreeDeletedListener(
 	worktreeDeletedListener = listener;
 }
 
-// Listener called when auth fails due to non-existent worktree
+// Listener called when init fails due to non-existent worktree
 type WorktreeNotFoundListener = () => void;
 let worktreeNotFoundListener: WorktreeNotFoundListener | null = null;
 
@@ -354,7 +352,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 	workDir: "",
 
 	actions: {
-		connect: (token: string) => {
+		connect: () => {
 			const currentStatus = get().status;
 			// "error" is a terminal state requiring user intervention (page refresh)
 			if (
@@ -365,68 +363,21 @@ export const useWSStore = create<WSState>((set, get) => ({
 				return;
 			}
 
-			if (!token) {
-				set({ status: "error" });
-				return;
-			}
-
 			const isReconnecting = currentStatus === "reconnecting";
-			currentToken = token;
 			// Keep "reconnecting" status to preserve UI state during reconnection
 			if (!isReconnecting) {
 				set({ status: "connecting" });
 			}
 
-			const url = getWebSocketUrl();
+			const currentWorktree = worktreeActions.getCurrent();
+			const url = getWebSocketUrl(currentWorktree || undefined);
 			const socket = new WebSocket(url);
 
-			socket.onopen = async () => {
+			socket.onopen = () => {
 				const clients = createRPCClient(socket);
 				rpcReceiver = clients.base;
 				rpcRequester = clients.withTimeout;
-
-				try {
-					const currentWorktree = worktreeActions.getCurrent();
-					const result = (await rpcRequester.request("auth", {
-						token,
-						worktree: currentWorktree || undefined,
-					} as AuthParams)) as AuthResult;
-
-					if (result.version !== APP_VERSION) {
-						console.info(
-							`Version mismatch: client=${APP_VERSION}, server=${result.version}. Reloading...`,
-						);
-						window.location.reload();
-						return;
-					}
-
-					document.title = `${result.title} | Pockode`;
-
-					set({
-						status: "connected",
-						projectTitle: result.title,
-						workDir: result.work_dir,
-					});
-					reconnectAttempts = 0;
-				} catch (error) {
-					const currentWorktree = worktreeActions.getCurrent();
-					// If auth failed with a specific worktree, reset to main and retry
-					if (currentWorktree) {
-						console.warn(
-							"Auth failed with worktree, retrying with main:",
-							currentWorktree,
-						);
-						worktreeActions.setCurrent("");
-						worktreeNotFoundListener?.();
-						socket.close(1000, "auth_retry");
-						// Retry connection with main worktree
-						setTimeout(() => get().actions.connect(token), 100);
-						return;
-					}
-					console.error("WebSocket auth failed:", error);
-					set({ status: "auth_failed" });
-					socket.close(1000, "auth_failed");
-				}
+				// Wait for init notification in onmessage
 			};
 
 			socket.onmessage = (event) => {
@@ -441,6 +392,49 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 					// JSON-RPC 2.0 notification (no id, has method)
 					if ("method" in data) {
+						// Handle init notification (sent on connection)
+						if (data.method === "init") {
+							const result = data.params as InitResult;
+
+							// Handle worktree not found error
+							if (result.error) {
+								const currentWorktree = worktreeActions.getCurrent();
+								if (currentWorktree) {
+									console.warn(
+										"Init failed with worktree, retrying with main:",
+										currentWorktree,
+									);
+									worktreeActions.setCurrent("");
+									worktreeNotFoundListener?.();
+									socket.close(1000, "init_retry");
+									setTimeout(() => get().actions.connect(), 100);
+									return;
+								}
+								console.error("WebSocket init failed:", result.error);
+								set({ status: "auth_failed" });
+								socket.close(1000, "init_failed");
+								return;
+							}
+
+							if (result.version !== APP_VERSION) {
+								console.info(
+									`Version mismatch: client=${APP_VERSION}, server=${result.version}. Reloading...`,
+								);
+								window.location.reload();
+								return;
+							}
+
+							document.title = `${result.title} | Pockode`;
+
+							set({
+								status: "connected",
+								projectTitle: result.title,
+								workDir: result.work_dir,
+							});
+							reconnectAttempts = 0;
+							return;
+						}
+
 						handleNotification(data.method, data.params);
 					}
 				} catch (e) {
@@ -467,15 +461,13 @@ export const useWSStore = create<WSState>((set, get) => ({
 					return;
 				}
 
-				// Retry if we have attempts left and a token
-				if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && currentToken) {
+				// Retry if we have attempts left
+				if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
 					// Use "reconnecting" to preserve UI state; "disconnected" is for intentional disconnect
 					set({ status: "reconnecting" });
 					reconnectAttempts += 1;
 					reconnectTimeout = window.setTimeout(() => {
-						if (currentToken) {
-							get().actions.connect(currentToken);
-						}
+						get().actions.connect();
 					}, RECONNECT_INTERVAL);
 				} else {
 					set({ status: "error" });
@@ -490,7 +482,6 @@ export const useWSStore = create<WSState>((set, get) => ({
 				clearTimeout(reconnectTimeout);
 				reconnectTimeout = undefined;
 			}
-			currentToken = null;
 			reconnectAttempts = MAX_RECONNECT_ATTEMPTS; // Prevent auto-reconnect
 			// Set status BEFORE closing so onclose sees correct state
 			set({ status: "disconnected" });
@@ -781,16 +772,14 @@ export const useWSStore = create<WSState>((set, get) => ({
 }));
 
 /**
- * Reconnect WebSocket with current token.
+ * Reconnect WebSocket.
  * Used as a fallback when worktree.switch RPC fails.
  */
 export function reconnectWebSocket(): void {
-	if (!currentToken) return;
-	const token = currentToken;
 	wsActions.disconnect();
 	// Small delay to ensure clean disconnect before reconnecting
 	setTimeout(() => {
-		useWSStore.getState().actions.connect(token);
+		useWSStore.getState().actions.connect();
 	}, 100);
 }
 
@@ -828,7 +817,7 @@ worktreeActions.onWorktreeChange((_prev, next) => {
 			// RPC failed while connected - reconnect to recover
 			reconnectWebSocket();
 		}
-		// "not_connected": auth will bind to correct worktree on connect
+		// "not_connected": init will bind to correct worktree on connect
 		// "success": done
 	});
 });
@@ -841,7 +830,6 @@ export function resetWSStore() {
 	}
 	rpcReceiver = null;
 	rpcRequester = null;
-	currentToken = null;
 	if (reconnectTimeout) {
 		clearTimeout(reconnectTimeout);
 		reconnectTimeout = undefined;

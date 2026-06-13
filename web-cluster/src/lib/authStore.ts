@@ -1,7 +1,14 @@
 import { createAuthStore } from "@pockode/shared";
+import { wsActions } from "./wsStore";
 
-const { useAuthStore, selectHasAuthToken, authActions } = createAuthStore({
-	tokenKey: "cluster_auth_token",
-});
+function getApiBaseUrl(): string {
+	return window.location.origin;
+}
 
-export { authActions, selectHasAuthToken, useAuthStore };
+const { useAuthStore, selectIsAuthenticated, selectIsLoading, authActions } =
+	createAuthStore({
+		apiBaseUrl: getApiBaseUrl(),
+		onLogout: () => wsActions.disconnect(),
+	});
+
+export { authActions, selectIsAuthenticated, selectIsLoading, useAuthStore };

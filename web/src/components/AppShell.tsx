@@ -9,7 +9,8 @@ import { useWorkSubscription } from "../hooks/useWorkSubscription";
 import { useWorktree } from "../hooks/useWorktree";
 import {
 	authActions,
-	selectHasAuthToken,
+	selectIsAuthenticated,
+	selectIsLoading,
 	useAuthStore,
 } from "../lib/authStore";
 import { buildNavigation, overlayToNavigation } from "../lib/navigation";
@@ -20,12 +21,17 @@ import { ChatPanel } from "./Chat";
 import { SessionSidebar } from "./Session";
 
 function AppShell() {
-	const hasAuthToken = useAuthStore(selectHasAuthToken);
+	const isAuthenticated = useAuthStore(selectIsAuthenticated);
+	const isAuthLoading = useAuthStore(selectIsLoading);
 	const wsStatus = useWSStore((state) => state.status);
 	const navigate = useNavigate();
 	const isDesktop = useIsDesktop();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 	const isCreatingSession = useRef(false);
+
+	useEffect(() => {
+		authActions.checkAuth();
+	}, []);
 
 	const {
 		overlay,
@@ -33,8 +39,6 @@ function AppShell() {
 		worktree: urlWorktree,
 	} = useRouteState();
 	const storeWorktree = useWorktreeStore((state) => state.current);
-
-	const token = useAuthStore((state) => state.token);
 
 	// Sync URL worktree to store, redirect if sessionId becomes invalid
 	const prevWorktreeRef = useRef(urlWorktree);
@@ -59,14 +63,14 @@ function AppShell() {
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally exclude wsStatus to avoid bypassing retry delay
 	useEffect(() => {
-		if (token && wsStatus === "disconnected") {
-			wsActions.connect(token);
+		if (isAuthenticated && wsStatus === "disconnected") {
+			wsActions.connect();
 		}
-	}, [token]);
+	}, [isAuthenticated]);
 
 	useEffect(() => {
 		if (wsStatus === "auth_failed") {
-			authActions.logout();
+			void authActions.logout();
 		}
 	}, [wsStatus]);
 
@@ -74,11 +78,11 @@ function AppShell() {
 		worktrees,
 		isSuccess: isWorktreesLoaded,
 		isGitRepo,
-	} = useWorktree({ enabled: hasAuthToken });
+	} = useWorktree({ enabled: isAuthenticated });
 
-	useSettingsSubscription(hasAuthToken);
-	useWorkSubscription(hasAuthToken);
-	useAgentRoleSubscription(hasAuthToken);
+	useSettingsSubscription(isAuthenticated);
+	useWorkSubscription(isAuthenticated);
+	useAgentRoleSubscription(isAuthenticated);
 
 	// Redirect to main when URL worktree doesn't exist in worktree list
 	useEffect(() => {
@@ -113,7 +117,7 @@ function AppShell() {
 		createSession,
 		deleteSession,
 		updateTitle,
-	} = useSession({ enabled: hasAuthToken, routeSessionId });
+	} = useSession({ enabled: isAuthenticated, routeSessionId });
 
 	useEffect(() => {
 		if (redirectSessionId) {
@@ -151,8 +155,11 @@ function AppShell() {
 		}
 	}, [needsNewSession, createSession, navigate, urlWorktree]);
 
-	const handleTokenSubmit = (token: string) => {
-		authActions.login(token);
+	const handleTokenSubmit = async (token: string) => {
+		const success = await authActions.login(token);
+		if (success) {
+			wsActions.connect();
+		}
 	};
 
 	const handleOpenSidebar = useCallback(() => {
@@ -324,7 +331,20 @@ function AppShell() {
 		[navigate, urlWorktree],
 	);
 
-	if (!hasAuthToken) {
+	if (isAuthLoading) {
+		return (
+			// biome-ignore lint/a11y/useSemanticElements: loading indicator is not a form output
+			<div
+				className="flex h-dvh items-center justify-center bg-th-bg-primary"
+				role="status"
+				aria-label="Checking authentication"
+			>
+				<div className="text-th-text-muted">Loading...</div>
+			</div>
+		);
+	}
+
+	if (!isAuthenticated) {
 		return <TokenInput onSubmit={handleTokenSubmit} />;
 	}
 

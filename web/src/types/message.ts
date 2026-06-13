@@ -146,12 +146,26 @@ export interface AskUserQuestionRequest {
 	questions: AskUserQuestion[];
 }
 
-// JSON-RPC 2.0 Request Params (Client → Server)
+// Server → Client (sent on connection)
 
-export interface AuthParams {
-	token: string;
-	worktree?: string;
+/**
+ * InitResult is sent as notification when WebSocket connection is established.
+ * Worktree is determined from URL query parameter (?worktree=xxx).
+ */
+export interface InitResult {
+	version: string;
+	title: string;
+	work_dir: string;
+	worktree_name: string;
+	error?: string;
 }
+
+/**
+ * @deprecated Use InitResult instead.
+ */
+export type AuthResult = InitResult;
+
+// JSON-RPC 2.0 Request Params (Client → Server)
 
 export interface WorktreeInfo {
 	name: string;
@@ -176,12 +190,6 @@ export interface WorktreeDeleteParams {
 
 export interface WorktreeDeletedNotification {
 	name: string;
-}
-
-export interface AuthResult {
-	version: string;
-	title: string;
-	work_dir: string;
 }
 
 export interface MessageParams {

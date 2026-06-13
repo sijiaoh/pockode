@@ -17,43 +17,49 @@ func TestAuth(t *testing.T) {
 	tests := []struct {
 		name       string
 		path       string
-		authHeader string
+		cookie     *http.Cookie
 		wantStatus int
 	}{
 		{
 			name:       "health bypasses auth",
 			path:       "/health",
-			authHeader: "",
+			cookie:     nil,
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "ws bypasses auth",
 			path:       "/ws",
-			authHeader: "",
+			cookie:     nil,
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "missing auth header",
+			name:       "login bypasses auth",
+			path:       "/api/login",
+			cookie:     nil,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "logout bypasses auth",
+			path:       "/api/logout",
+			cookie:     nil,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "missing cookie",
 			path:       "/api/ping",
-			authHeader: "",
+			cookie:     nil,
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name:       "invalid auth format",
+			name:       "invalid token in cookie",
 			path:       "/api/ping",
-			authHeader: "Basic token",
+			cookie:     &http.Cookie{Name: CookieName, Value: "wrong-token"},
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name:       "invalid token",
+			name:       "valid token in cookie",
 			path:       "/api/ping",
-			authHeader: "Bearer wrong-token",
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			name:       "valid token",
-			path:       "/api/ping",
-			authHeader: "Bearer " + validToken,
+			cookie:     &http.Cookie{Name: CookieName, Value: validToken},
 			wantStatus: http.StatusOK,
 		},
 	}
@@ -61,8 +67,8 @@ func TestAuth(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
-			if tt.authHeader != "" {
-				req.Header.Set("Authorization", tt.authHeader)
+			if tt.cookie != nil {
+				req.AddCookie(tt.cookie)
 			}
 
 			rec := httptest.NewRecorder()

@@ -44,7 +44,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | workStore | Work items | State/Actions interface split |
 | agentRoleStore | AI roles | State/Actions interface split |
 | settingsStore | App settings | State/Actions interface split |
-| authStore | Auth token | localStorage init |
+| authStore | Auth state | Cookie-based with startup check |
 | inputStore | Draft text | persist middleware |
 | worktreeStore | Current worktree | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |

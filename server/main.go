@@ -56,6 +56,15 @@ func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler) http.Handl
 		w.Write([]byte(`{"message":"pong"}`))
 	})
 
+	// Returns 200 if authenticated (cookie valid), 401 otherwise (handled by Auth middleware)
+	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Auth endpoints (no auth required)
+	mux.HandleFunc("POST /api/login", middleware.LoginHandler(token, devMode))
+	mux.HandleFunc("POST /api/logout", middleware.LogoutHandler(devMode))
+
 	mux.Handle("GET /ws", wsHandler)
 
 	authedMux := middleware.Auth(token)(mux)
@@ -323,7 +332,7 @@ func main() {
 		relayStreamCtx, cancelRelayStreams = context.WithCancel(context.Background())
 		go func() {
 			for stream := range relayManager.NewStreams() {
-				go wsHandler.HandleStream(relayStreamCtx, stream, stream.ConnectionID())
+				go wsHandler.HandleStream(relayStreamCtx, stream, stream.ConnectionID(), "")
 			}
 		}()
 	}

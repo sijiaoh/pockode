@@ -18,7 +18,6 @@ Method names use the `namespace.method` format with namespaces.
 
 | Namespace | Scope | Handler |
 |-----------|-------|---------|
-| `auth` | — | `ws/rpc.go` |
 | `chat.*` | worktree | `ws/rpc_chat.go` |
 | `session.*` | worktree | `ws/rpc_session.go` |
 | `file.*` | worktree | `ws/rpc_file.go` |

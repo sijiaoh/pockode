@@ -15,6 +15,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/watch"
@@ -81,6 +82,16 @@ func (h *RPCHandler) Stop() {
 }
 
 func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	cookieToken := middleware.GetTokenFromCookie(r)
+	if subtle.ConstantTimeCompare([]byte(cookieToken), []byte(h.token)) != 1 {
+		slog.Warn("websocket auth failed: invalid or missing cookie")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get worktree from query parameter (empty = main worktree)
+	worktreeName := r.URL.Query().Get("worktree")
+
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: h.devMode,
 	})
@@ -89,16 +100,16 @@ func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.handleConnection(r.Context(), conn)
+	h.handleConnection(r.Context(), conn, worktreeName)
 }
 
-func (h *RPCHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
+func (h *RPCHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn, worktreeName string) {
 	stream := NewWebSocketStream(wsConn)
 	connID := uuid.Must(uuid.NewV7()).String()
-	h.HandleStream(ctx, stream, connID)
+	h.HandleStream(ctx, stream, connID, worktreeName)
 }
 
-func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStream, connID string) {
+func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStream, connID string, worktreeName string) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.LogPanic(r, "websocket connection crashed", "connId", connID)
@@ -106,23 +117,58 @@ func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 	}()
 
 	log := slog.With("connId", connID)
-	log.Info("new connection")
+	log.Info("new connection", "worktree", worktreeName)
+
+	// Initialize worktree at connection start
+	wt, err := h.worktreeManager.Get(worktreeName)
+	if err != nil {
+		log.Warn("worktree not found", "worktree", worktreeName, "error", err)
+		// Send error and close - use raw JSON since we don't have jsonrpc2.Conn yet
+		errMsg := map[string]interface{}{
+			"jsonrpc": "2.0",
+			"method":  "init",
+			"params": map[string]interface{}{
+				"error": "worktree not found",
+			},
+		}
+		if data, e := json.Marshal(errMsg); e == nil {
+			_ = stream.WriteObject(json.RawMessage(data))
+		}
+		stream.Close()
+		return
+	}
 
 	state := &rpcConnState{
-		connID: connID,
-		log:    log,
-		// worktree is set after auth
+		connID:   connID,
+		log:      log,
+		worktree: wt,
 	}
 
 	handler := &rpcMethodHandler{
-		RPCHandler:    h,
-		state:         state,
-		log:           log,
-		authenticated: false,
+		RPCHandler: h,
+		state:      state,
+		log:        log,
 	}
 
 	rpcConn := jsonrpc2.NewConn(ctx, stream, jsonrpc2.AsyncHandler(handler))
 	state.setConn(rpcConn)
+
+	// Subscribe worktree to this connection's notifier
+	wt.Subscribe(state.getNotifier())
+
+	// Send init notification with connection info
+	title := filepath.Base(h.worktreeManager.Registry().MainDir())
+	initResult := rpc.InitResult{
+		Version:      h.version,
+		Title:        title,
+		WorkDir:      wt.WorkDir,
+		WorktreeName: wt.Name,
+	}
+	if err := rpcConn.Notify(ctx, "init", initResult); err != nil {
+		log.Error("failed to send init notification", "error", err)
+	}
+
+	log.Info("worktree bound", "worktree", wt.Name, "workDir", wt.WorkDir)
 
 	<-rpcConn.DisconnectNotify()
 
@@ -137,7 +183,7 @@ type rpcConnState struct {
 	conn          *jsonrpc2.Conn
 	notifier      *JSONRPCNotifier
 	log           *slog.Logger
-	worktree      *worktree.Worktree       // set after auth
+	worktree      *worktree.Worktree       // set at connection start
 	subscriptions map[string]watch.Watcher // subID → watcher for cleanup
 }
 
@@ -211,7 +257,7 @@ func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
 	s.subscriptions = nil
 
 	if s.worktree == nil {
-		return // Not authenticated yet (e.g., connection closed before auth)
+		return // Worktree init failed (e.g., worktree not found at connection start)
 	}
 
 	s.worktree.Unsubscribe(s.notifier)
@@ -223,10 +269,8 @@ func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
 
 type rpcMethodHandler struct {
 	*RPCHandler
-	state         *rpcConnState
-	log           *slog.Logger
-	authenticated bool
-	authMu        sync.Mutex
+	state *rpcConnState
+	log   *slog.Logger
 }
 
 func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
@@ -237,17 +281,6 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	}()
 
 	h.log.Debug("received request", "method", req.Method, "id", req.ID)
-
-	// Auth must be the first request
-	if !h.isAuthenticated() {
-		if req.Method != "auth" {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "first request must be auth")
-			conn.Close()
-			return
-		}
-		h.handleAuth(ctx, conn, req)
-		return
-	}
 
 	// Methods that don't require worktree (manager-level operations)
 	switch req.Method {
@@ -413,62 +446,6 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleWatcherUnsubscribe(ctx, conn, req, wt.FSWatcher, "fs")
 	default:
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeMethodNotFound, "method not found: "+req.Method)
-	}
-}
-
-func (h *rpcMethodHandler) isAuthenticated() bool {
-	h.authMu.Lock()
-	defer h.authMu.Unlock()
-	return h.authenticated
-}
-
-func (h *rpcMethodHandler) setAuthenticated() {
-	h.authMu.Lock()
-	h.authenticated = true
-	h.authMu.Unlock()
-}
-
-func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	var params rpc.AuthParams
-	if err := unmarshalParams(req, &params); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
-		conn.Close()
-		return
-	}
-
-	if subtle.ConstantTimeCompare([]byte(params.Token), []byte(h.token)) != 1 {
-		h.log.Warn("invalid auth token")
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "invalid token")
-		conn.Close()
-		return
-	}
-
-	wt, err := h.worktreeManager.Get(params.Worktree)
-	if err != nil {
-		h.log.Warn("worktree not found", "worktree", params.Worktree, "error", err)
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "worktree not found")
-		conn.Close()
-		return
-	}
-
-	h.state.mu.Lock()
-	h.state.worktree = wt
-	h.state.mu.Unlock()
-
-	wt.Subscribe(h.state.getNotifier())
-
-	h.setAuthenticated()
-	h.log.Info("authenticated", "worktree", wt.Name, "workDir", wt.WorkDir)
-
-	title := filepath.Base(h.worktreeManager.Registry().MainDir())
-	result := rpc.AuthResult{
-		Version:      h.version,
-		Title:        title,
-		WorkDir:      wt.WorkDir,
-		WorktreeName: wt.Name,
-	}
-	if err := conn.Reply(ctx, req.ID, result); err != nil {
-		h.log.Error("failed to send auth response", "error", err)
 	}
 }
 

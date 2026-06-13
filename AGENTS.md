@@ -65,7 +65,7 @@ The `packages/shared` package contains UI components, hooks, stores, and utiliti
 **Available exports**:
 - Components: `Spinner`, `ConfirmDialog`
 - Hooks: `useIsDesktop`
-- Stores: `createAuthStore` (factory function for auth store with configurable token key)
+- Stores: `createAuthStore` (factory function for Cookie-based auth store)
 - Utils: `getWebSocketUrl`
 
 **Usage**:

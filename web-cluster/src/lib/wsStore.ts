@@ -3,7 +3,6 @@ import { JSONRPCClient } from "json-rpc-2.0";
 import { create } from "zustand";
 import { createNodeActions, type NodeActions } from "./rpc";
 
-const RPC_TIMEOUT_MS = 30000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_INTERVAL_MS = 3000;
 
@@ -12,21 +11,15 @@ type ConnectionStatus =
 	| "connected"
 	| "disconnected"
 	| "reconnecting"
-	| "auth_failed"
 	| "error";
 
-interface AuthResult {
-	version: string;
-}
-
 interface RPCActions extends NodeActions {
-	connect: (token: string) => void;
+	connect: () => void;
 	disconnect: () => void;
 }
 
 interface WSState {
 	status: ConnectionStatus;
-	version: string | null;
 	errorMessage: string | null;
 	actions: RPCActions;
 }
@@ -34,7 +27,6 @@ interface WSState {
 interface InternalState {
 	socket: WebSocket | null;
 	client: JSONRPCClient | null;
-	token: string | null;
 	reconnectAttempts: number;
 	reconnectTimeout: ReturnType<typeof setTimeout> | null;
 }
@@ -42,7 +34,6 @@ interface InternalState {
 const internal: InternalState = {
 	socket: null,
 	client: null,
-	token: null,
 	reconnectAttempts: 0,
 	reconnectTimeout: null,
 };
@@ -82,13 +73,11 @@ export const useWSStore = create<WSState>()((set, get) => {
 		set({ status: "reconnecting" });
 
 		internal.reconnectTimeout = setTimeout(() => {
-			if (internal.token) {
-				connectInternal(internal.token);
-			}
+			connectInternal();
 		}, RECONNECT_INTERVAL_MS);
 	};
 
-	const connectInternal = (token: string) => {
+	const connectInternal = () => {
 		clearReconnectTimeout();
 
 		if (internal.socket) {
@@ -96,34 +85,18 @@ export const useWSStore = create<WSState>()((set, get) => {
 		}
 
 		set({ status: "connecting", errorMessage: null });
-		internal.token = token;
 
 		const socket = new WebSocket(getWebSocketUrl());
 		internal.socket = socket;
 
-		socket.onopen = async () => {
+		socket.onopen = () => {
 			const client = createRPCClient(socket);
 			internal.client = client;
-
-			try {
-				const result: AuthResult = await client
-					.timeout(RPC_TIMEOUT_MS)
-					.request("auth", { token });
-
-				internal.reconnectAttempts = 0;
-				set({
-					status: "connected",
-					version: result.version,
-					errorMessage: null,
-				});
-			} catch (err) {
-				internal.socket?.close();
-				set({
-					status: "auth_failed",
-					errorMessage:
-						err instanceof Error ? err.message : "Authentication failed",
-				});
-			}
+			internal.reconnectAttempts = 0;
+			set({
+				status: "connected",
+				errorMessage: null,
+			});
 		};
 
 		socket.onmessage = (event) => {
@@ -144,8 +117,8 @@ export const useWSStore = create<WSState>()((set, get) => {
 
 			const currentStatus = get().status;
 
-			// Don't reconnect if auth failed or manually disconnected
-			if (currentStatus === "auth_failed" || currentStatus === "disconnected") {
+			// Don't reconnect if manually disconnected
+			if (currentStatus === "disconnected") {
 				return;
 			}
 
@@ -166,25 +139,26 @@ export const useWSStore = create<WSState>()((set, get) => {
 
 	return {
 		status: "disconnected",
-		version: null,
 		errorMessage: null,
 		actions: {
 			...nodeActions,
-			connect: (token: string) => {
+			connect: () => {
 				internal.reconnectAttempts = 0;
-				connectInternal(token);
+				connectInternal();
 			},
 			disconnect: () => {
 				clearReconnectTimeout();
-				internal.token = null;
 				internal.reconnectAttempts = 0;
 				if (internal.socket) {
 					internal.socket.close();
 					internal.socket = null;
 				}
 				internal.client = null;
-				set({ status: "disconnected", version: null, errorMessage: null });
+				set({ status: "disconnected", errorMessage: null });
 			},
 		},
 	};
 });
+
+// Expose actions for non-React contexts (e.g., authStore logout)
+export const wsActions = useWSStore.getState().actions;

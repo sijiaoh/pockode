@@ -235,27 +235,68 @@ For subscriptions that don't return initial data, hooks pass their refresh callb
 
 ## Authentication Flow
 
-The first request after WebSocket connection must be `auth`:
+Pockode uses Cookie-based authentication. The login flow is:
 
 ```
 Client                              Server
   │                                    │
-  │   ws://host/ws                     │
-  ├───────────────────────────────────▶│   WebSocket handshake
-  │◀───────────────────────────────────┤
-  │                                    │
-  │   auth { token, worktree? }        │
+  │   POST /api/login { token }        │
   ├───────────────────────────────────▶│   Validate token
-  │                                    │   Bind to worktree
-  │   { version, title, work_dir }     │
+  │   Set-Cookie: auth_token=xxx       │   HttpOnly, Secure, SameSite=Strict
   │◀───────────────────────────────────┤
   │                                    │
-  │   (Authenticated - can send other requests)
+  │   ws://host/ws?worktree=xxx        │
+  ├───────────────────────────────────▶│   WebSocket handshake
+  │◀───────────────────────────────────┤   Authenticate via Cookie
+  │                                    │   Initialize worktree from query param
+  │   init { version, title,           │
+  │          work_dir, worktree_name } │   Server sends init notification
+  │◀───────────────────────────────────┤
+  │                                    │
+  │   (Ready - can send other requests)
 ```
 
-- Token uses constant-time comparison to prevent timing attacks
-- Optionally specify worktree; uses main worktree if not specified
-- Authentication response includes version number for detecting client/server version mismatch
+Authentication and worktree initialization happen at connection time:
+1. Cookie is validated during WebSocket handshake
+2. Worktree name is passed via URL query parameter (`?worktree=xxx`, empty = main worktree)
+3. Server sends `init` notification with connection info (no RPC call needed)
+
+### Startup Auth Check
+
+On app startup, the frontend checks if the existing Cookie is still valid before showing the login screen:
+
+```
+Client                              Server
+  │                                    │
+  │   GET /api/me (Cookie header)      │
+  ├───────────────────────────────────▶│   Validate Cookie
+  │   200 OK / 401 Unauthorized        │
+  │◀───────────────────────────────────┤
+  │                                    │
+  │   (If 200: proceed to WebSocket)
+  │   (If 401: show login screen)
+```
+
+This avoids forcing users to re-login when cookies are still valid.
+
+### HTTP Auth Endpoints
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `POST` | `/api/login` | No | Validate token, set auth Cookie |
+| `POST` | `/api/logout` | Yes | Clear auth Cookie |
+| `GET` | `/api/me` | Yes | Check Cookie validity (200 or 401) |
+
+**Cookie security**:
+- HttpOnly — JavaScript cannot access the token (XSS protection)
+- Secure — Cookie is only sent over HTTPS (except localhost for development)
+- SameSite=Strict — Cookie is not sent with cross-site requests (CSRF protection)
+- Constant-time comparison — Prevents timing attacks
+
+**Why Cookie-based**:
+- Tokens are not exposed to JavaScript, reducing XSS attack surface
+- Automatic inclusion in WebSocket handshake without client-side code
+- Standard browser security mechanisms apply
 
 ## Connection Management
 

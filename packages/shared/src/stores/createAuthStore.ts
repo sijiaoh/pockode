@@ -1,54 +1,96 @@
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 
 export interface AuthState {
-	token: string | null;
+	isAuthenticated: boolean;
+	isLoading: boolean;
 }
 
 export interface AuthStoreConfig {
-	/** Key used in localStorage, e.g. "auth_token" or "cluster_auth_token" */
-	tokenKey: string;
+	/** API base URL for login/logout requests (e.g., window.location.origin) */
+	apiBaseUrl: string;
 	/** Callback invoked during logout (e.g. disconnect WebSocket) */
 	onLogout?: () => void;
 }
 
 export interface AuthStore {
 	useAuthStore: UseBoundStore<StoreApi<AuthState>>;
-	selectHasAuthToken: (state: AuthState) => boolean;
+	selectIsAuthenticated: (state: AuthState) => boolean;
+	selectIsLoading: (state: AuthState) => boolean;
 	authActions: {
-		login: (token: string) => void;
-		logout: () => void;
-		getToken: () => string;
+		login: (token: string) => Promise<boolean>;
+		logout: () => Promise<void>;
+		setAuthenticated: (value: boolean) => void;
+		checkAuth: () => Promise<void>;
 	};
 }
 
 /**
- * Factory function to create an auth store with configurable token key and logout behavior.
+ * Factory function to create an auth store with configurable API base URL and logout behavior.
+ * The store only tracks authentication state; actual auth is handled via HttpOnly cookies.
  */
 export function createAuthStore(config: AuthStoreConfig): AuthStore {
-	const { tokenKey, onLogout } = config;
+	const { apiBaseUrl, onLogout } = config;
 
 	const useAuthStore = create<AuthState>(() => ({
-		token: localStorage.getItem(tokenKey),
+		isAuthenticated: false,
+		isLoading: true,
 	}));
 
-	const selectHasAuthToken = (state: AuthState) => !!state.token;
+	const selectIsAuthenticated = (state: AuthState) => state.isAuthenticated;
+	const selectIsLoading = (state: AuthState) => state.isLoading;
 
 	const authActions = {
-		login: (token: string) => {
-			localStorage.setItem(tokenKey, token);
-			useAuthStore.setState({ token });
+		login: async (token: string): Promise<boolean> => {
+			try {
+				const response = await fetch(`${apiBaseUrl}/api/login`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ token }),
+					credentials: "include",
+				});
+				if (response.ok) {
+					useAuthStore.setState({ isAuthenticated: true });
+					return true;
+				}
+				return false;
+			} catch {
+				return false;
+			}
 		},
-		logout: () => {
-			localStorage.removeItem(tokenKey);
-			useAuthStore.setState({ token: null });
+		logout: async (): Promise<void> => {
+			try {
+				await fetch(`${apiBaseUrl}/api/logout`, {
+					method: "POST",
+					credentials: "include",
+				});
+			} catch {
+				// Ignore errors - we'll clear state anyway
+			}
+			useAuthStore.setState({ isAuthenticated: false });
 			onLogout?.();
 		},
-		getToken: () => useAuthStore.getState().token ?? "",
+		setAuthenticated: (value: boolean) => {
+			useAuthStore.setState({ isAuthenticated: value });
+		},
+		checkAuth: async (): Promise<void> => {
+			try {
+				const response = await fetch(`${apiBaseUrl}/api/me`, {
+					credentials: "include",
+				});
+				useAuthStore.setState({
+					isAuthenticated: response.ok,
+					isLoading: false,
+				});
+			} catch {
+				useAuthStore.setState({ isAuthenticated: false, isLoading: false });
+			}
+		},
 	};
 
 	return {
 		useAuthStore,
-		selectHasAuthToken,
+		selectIsAuthenticated,
+		selectIsLoading,
 		authActions,
 	};
 }

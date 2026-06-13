@@ -12,7 +12,7 @@ Mobile App  ──►  Relay Server (cloud)  ◀──  Remote Server (cluster m
 
 Cluster mode strips away development environment features (worktrees, agents, file watching) and focuses on:
 - WebSocket JSON-RPC endpoint
-- Token-based authentication
+- Cookie-based authentication
 - Relay connectivity for NAT traversal
 - Node management (project directories)
 - Embedded SPA frontend
@@ -67,40 +67,61 @@ Data is stored in `~/.pockode-cluster/` (created automatically if it doesn't exi
 | Path | Auth | Description |
 |------|------|-------------|
 | `/health` | — | Health check (returns "ok") |
-| `/ws` | — | WebSocket JSON-RPC endpoint (handles own auth) |
+| `POST /api/login` | — | Validate token, set auth Cookie |
+| `POST /api/logout` | ✓ | Clear auth Cookie |
+| `GET /api/me` | ✓ | Check Cookie validity (200 or 401) |
+| `/ws` | ✓ | WebSocket JSON-RPC endpoint |
 | `/*` | ✓ | Static SPA files (production mode only) |
 
 ## WebSocket Protocol
 
-Uses JSON-RPC 2.0 over WebSocket. All connections must authenticate before calling other methods.
+Uses JSON-RPC 2.0 over WebSocket. Authentication is handled via Cookie during WebSocket handshake—no separate auth RPC is needed.
 
 ### Authentication
 
-```json
-// Request
-{"jsonrpc": "2.0", "method": "auth", "params": {"token": "your-secret-token"}, "id": 1}
+Cluster mode uses Cookie-based authentication:
 
-// Success response
-{"jsonrpc": "2.0", "result": {"version": "1.0.0"}, "id": 1}
+1. On startup, frontend calls `GET /api/me` to check existing Cookie validity
+2. If Cookie invalid, user enters token via the frontend
+3. Frontend sends `POST /api/login { token }`
+4. Server validates and sets an HttpOnly Cookie
+5. WebSocket handshake includes the Cookie automatically
+6. Server validates Cookie during handshake; invalid Cookie results in 401 rejection
+7. Connection success = authentication success; ready for RPC immediately
 
-// Failure response
-{"jsonrpc": "2.0", "error": {"code": -32600, "message": "invalid token"}, "id": 1}
+```
+Client                              Server
+  │                                    │
+  │   GET /api/me (Cookie header)      │
+  ├───────────────────────────────────▶│   Validate Cookie
+  │   200 OK / 401 Unauthorized        │
+  │◀───────────────────────────────────┤
+  │                                    │
+  │   (If 401: show login screen)      │
+  │                                    │
+  │   POST /api/login { token }        │
+  ├───────────────────────────────────▶│   Validate token
+  │   Set-Cookie: auth_token=xxx       │   HttpOnly, Secure, SameSite=Strict
+  │◀───────────────────────────────────┤
+  │                                    │
+  │   ws://host/ws                     │
+  ├───────────────────────────────────▶│   WebSocket handshake
+  │◀───────────────────────────────────┤   Authenticate via Cookie
+  │                                    │
+  │   (Ready - can send RPC requests)
 ```
 
-Unauthenticated requests receive `"not authenticated"` error and the connection is closed.
+Unlike the main server mode, Cluster mode does not require worktree initialization or version negotiation—connection success means ready to use.
 
-### Token Persistence (Frontend)
+### Session Persistence
 
-The cluster frontend persists the auth token to `localStorage` under `cluster_auth_token`. This enables:
+Authentication state is maintained via HttpOnly Cookie:
 
-- Automatic reconnection on page reload
-- Session continuity without re-entering token
-
-The key differs from main mode (`auth_token`) to avoid conflicts when both modes share the same browser origin.
+- Automatic session continuity across page reloads
+- Cookie security: HttpOnly, Secure (HTTPS), SameSite=Strict
+- Tokens are not exposed to JavaScript (XSS protection)
 
 ### Available Methods
-
-After authentication:
 
 | Method | Description |
 |--------|-------------|
