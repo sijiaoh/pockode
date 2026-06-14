@@ -39,6 +39,24 @@ func Write(dataDir string, port int) error {
 	return os.WriteFile(filepath.Join(dataDir, filename), data, 0644)
 }
 
+// Read reads the server.json file from the given data directory.
+// Returns (nil, nil) if the file doesn't exist.
+func Read(dataDir string) (*Info, error) {
+	data, err := os.ReadFile(filepath.Join(dataDir, filename))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var info Info
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
 // Delete removes the server.json file from the given data directory.
 // Returns nil if the file doesn't exist.
 func Delete(dataDir string) error {

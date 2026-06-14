@@ -37,6 +37,43 @@ The path must point to an existing directory. Duplicate paths are rejected.
 - `~` or `~/...` → expanded to user's home directory (e.g., `~/projects/my-app` → `/home/user/projects/my-app`)
 - `.` (exactly) → expanded to user's home directory (useful when `cwd` is not a project directory)
 
+### Node Lifecycle
+
+Each node has a lifecycle status indicating whether a Pockode server is running in that directory.
+
+**Status values:**
+
+| Status | Description |
+|--------|-------------|
+| `running` | Server is active (server.json exists and process is alive) |
+| `stopped` | Server is not running (no server.json file) |
+| `stale` | Server.json exists but the process is dead (needs cleanup) |
+
+**server.json file:**
+
+When a node starts, Pockode writes runtime information to `{node.path}/.pockode/server.json`:
+
+```json
+{
+  "pid": 12345,
+  "port": 9870,
+  "started_at": "2025-01-15T10:30:00Z"
+}
+```
+
+This file is used to:
+- Track which process is running for a node
+- Detect stale state (file exists but process is dead)
+- Provide port and start time information
+
+The file is deleted when the server shuts down gracefully.
+
+**Operations:**
+
+- **Start**: Spawns a new Pockode process for the node (requires auth token)
+- **Stop**: Sends SIGTERM to the process, then SIGKILL after 5 seconds if needed
+- **Clean Up**: For stale nodes, removes the orphaned server.json file
+
 ## Usage
 
 ```bash
@@ -105,11 +142,14 @@ After authentication:
 | Method | Description |
 |--------|-------------|
 | `ping` | Returns `"pong"` |
-| `node.list` | Returns all registered nodes |
-| `node.get` | Returns a node by ID (params: `{id}`) |
+| `node.list` | Returns all registered nodes (includes `status` field) |
+| `node.get` | Returns a node by ID (params: `{id}`), includes `status` field |
 | `node.create` | Creates a new node (params: `{path, name?}`) |
 | `node.update` | Updates a node (params: `{id, path?, name?}`) |
 | `node.delete` | Deletes a node (params: `{id}`) |
+| `node.status` | Returns node status (params: `{id}`) |
+| `node.start` | Starts a node's server (params: `{id, token}`) |
+| `node.stop` | Stops a node's server (params: `{id}`) |
 
 ## Startup Output
 
@@ -167,5 +207,6 @@ Cluster mode implementation:
 - `server/cluster/ws.go` — WebSocket handler and JSON-RPC methods
 - `server/cluster/static.go` — SPA file serving
 - `server/cluster/embed.go` — Static file embedding
-- `server/cluster/node/` — Node store implementation
+- `server/cluster/node/` — Node store and process management
+- `server/serverinfo/` — Runtime info (server.json) handling
 - `server/spa/` — Shared SPA utilities (used by both normal and cluster mode)

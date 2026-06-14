@@ -21,3 +21,23 @@ var (
 	ErrInvalidNode   = errors.New("invalid node")
 	ErrDuplicatePath = errors.New("duplicate path")
 )
+
+// Status represents the running state of a node's server.
+type Status string
+
+const (
+	// StatusRunning indicates server.json exists and the PID process is alive.
+	StatusRunning Status = "running"
+	// StatusStopped indicates server.json does not exist.
+	StatusStopped Status = "stopped"
+	// StatusStale indicates server.json exists but the PID process is not running.
+	StatusStale Status = "stale"
+)
+
+// NodeStatus contains the status information of a node.
+type NodeStatus struct {
+	ID        string  `json:"id"`
+	Status    Status  `json:"status"`
+	Port      *int    `json:"port,omitempty"`       // Only set when running
+	StartedAt *string `json:"started_at,omitempty"` // Only set when running
+}

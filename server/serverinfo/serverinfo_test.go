@@ -66,3 +66,56 @@ func TestWriteCreatesDirectory(t *testing.T) {
 		t.Errorf("server.json not created: %v", err)
 	}
 }
+
+func TestRead(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write first
+	if err := Write(dir, 9870); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Read it back
+	info, err := Read(dir)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if info == nil {
+		t.Fatal("Read returned nil info")
+	}
+	if info.Port != 9870 {
+		t.Errorf("Port = %d, want 9870", info.Port)
+	}
+	if info.PID != os.Getpid() {
+		t.Errorf("PID = %d, want %d", info.PID, os.Getpid())
+	}
+}
+
+func TestReadNonExistent(t *testing.T) {
+	dir := t.TempDir()
+
+	info, err := Read(dir)
+	if err != nil {
+		t.Errorf("Read on non-existent file should return nil error, got: %v", err)
+	}
+	if info != nil {
+		t.Errorf("Read on non-existent file should return nil info, got: %+v", info)
+	}
+}
+
+func TestReadInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write invalid JSON
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte("not json"), 0644); err != nil {
+		t.Fatalf("failed to write invalid JSON: %v", err)
+	}
+
+	info, err := Read(dir)
+	if err == nil {
+		t.Error("Read on invalid JSON should return error")
+	}
+	if info != nil {
+		t.Errorf("Read on invalid JSON should return nil info, got: %+v", info)
+	}
+}
