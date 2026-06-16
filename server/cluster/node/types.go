@@ -40,4 +40,6 @@ type NodeStatus struct {
 	Status    Status  `json:"status"`
 	Port      *int    `json:"port,omitempty"`       // Only set when running
 	StartedAt *string `json:"started_at,omitempty"` // Only set when running
+	LocalURL  *string `json:"local_url,omitempty"`  // Only set when running
+	RemoteURL *string `json:"remote_url,omitempty"` // Only set when running
 }

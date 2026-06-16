@@ -167,6 +167,8 @@ func (pm *ProcessManager) GetNodeStatus(n Node) NodeStatus {
 		Status:    StatusRunning,
 		Port:      &info.Port,
 		StartedAt: &info.StartedAt,
+		LocalURL:  ptrOrNil(info.LocalURL),
+		RemoteURL: ptrOrNil(info.RemoteURL),
 	}
 }
 
@@ -176,4 +178,12 @@ func (pm *ProcessManager) getExecutablePath() (string, error) {
 		return pm.executablePath, nil
 	}
 	return os.Executable()
+}
+
+// ptrOrNil returns a pointer to s if non-empty, otherwise nil.
+func ptrOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

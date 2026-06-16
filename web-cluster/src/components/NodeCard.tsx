@@ -120,6 +120,28 @@ export function NodeCard({ node, onEdit, onDelete, onStart, onStop }: Props) {
 					<p className="truncate text-sm text-th-text-secondary">
 						{displayPath}
 					</p>
+					{status === "running" && node.status.local_url && (
+						<div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
+							<a
+								href={node.status.local_url}
+								target="_blank"
+								rel="noopener noreferrer"
+								className="text-th-accent hover:underline"
+							>
+								Local
+							</a>
+							{node.status.remote_url && (
+								<a
+									href={node.status.remote_url}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="text-th-accent hover:underline"
+								>
+									Remote
+								</a>
+							)}
+						</div>
+					)}
 				</div>
 
 				{/* Menu button */}

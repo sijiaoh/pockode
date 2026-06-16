@@ -13,6 +13,8 @@ export interface NodeStatusInfo {
 	status: NodeStatus;
 	port?: number;
 	started_at?: string;
+	local_url?: string;
+	remote_url?: string;
 }
 
 export interface NodeWithStatus extends Node {

@@ -82,10 +82,14 @@ func TestGetNodeStatus_Running(t *testing.T) {
 		PID       int    `json:"pid"`
 		Port      int    `json:"port"`
 		StartedAt string `json:"started_at"`
+		LocalURL  string `json:"local_url,omitempty"`
+		RemoteURL string `json:"remote_url,omitempty"`
 	}{
 		PID:       os.Getpid(),
 		Port:      9870,
 		StartedAt: "2025-06-14T10:00:00Z",
+		LocalURL:  "http://localhost:9870",
+		RemoteURL: "https://example.com",
 	}
 	data, _ := json.Marshal(serverInfo)
 	if err := os.WriteFile(filepath.Join(dataDir, "server.json"), data, 0644); err != nil {
@@ -110,6 +114,53 @@ func TestGetNodeStatus_Running(t *testing.T) {
 	}
 	if status.StartedAt == nil || *status.StartedAt != "2025-06-14T10:00:00Z" {
 		t.Errorf("status.StartedAt = %v, want 2025-06-14T10:00:00Z", status.StartedAt)
+	}
+	if status.LocalURL == nil || *status.LocalURL != "http://localhost:9870" {
+		t.Errorf("status.LocalURL = %v, want http://localhost:9870", status.LocalURL)
+	}
+	if status.RemoteURL == nil || *status.RemoteURL != "https://example.com" {
+		t.Errorf("status.RemoteURL = %v, want https://example.com", status.RemoteURL)
+	}
+}
+
+func TestGetNodeStatus_Running_EmptyURLs(t *testing.T) {
+	pm := NewProcessManager()
+	nodeDir := t.TempDir()
+	dataDir := filepath.Join(nodeDir, ".pockode")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create server.json without URL fields
+	serverInfo := struct {
+		PID       int    `json:"pid"`
+		Port      int    `json:"port"`
+		StartedAt string `json:"started_at"`
+	}{
+		PID:       os.Getpid(),
+		Port:      9870,
+		StartedAt: "2025-06-14T10:00:00Z",
+	}
+	data, _ := json.Marshal(serverInfo)
+	if err := os.WriteFile(filepath.Join(dataDir, "server.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	node := Node{
+		ID:   "test-id",
+		Path: nodeDir,
+	}
+
+	status := pm.GetNodeStatus(node)
+
+	if status.Status != StatusRunning {
+		t.Errorf("status.Status = %q, want %q", status.Status, StatusRunning)
+	}
+	if status.LocalURL != nil {
+		t.Errorf("status.LocalURL = %v, want nil for empty URL", status.LocalURL)
+	}
+	if status.RemoteURL != nil {
+		t.Errorf("status.RemoteURL = %v, want nil for empty URL", status.RemoteURL)
 	}
 }
 
