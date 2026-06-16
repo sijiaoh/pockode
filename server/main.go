@@ -169,12 +169,6 @@ func main() {
 	}
 	dataDir = absDataDir
 
-	// Write server.json for orchestration programs to discover the running server
-	if err := serverinfo.Write(dataDir, port); err != nil {
-		slog.Error("failed to write server.json", "error", err)
-		os.Exit(1)
-	}
-
 	logger.Init(logger.Config{
 		DataDir: dataDir,
 		DevMode: devMode,
@@ -326,6 +320,13 @@ func main() {
 				go wsHandler.HandleStream(relayStreamCtx, stream, stream.ConnectionID())
 			}
 		}()
+	}
+
+	// Write server.json for orchestration programs to discover the running server
+	localURL := "http://localhost:" + portStr
+	if err := serverinfo.Write(dataDir, port, localURL, remoteURL); err != nil {
+		slog.Error("failed to write server.json", "error", err)
+		os.Exit(1)
 	}
 
 	// Graceful shutdown

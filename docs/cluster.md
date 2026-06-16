@@ -57,14 +57,24 @@ When a node starts, Pockode writes runtime information to `{node.path}/.pockode/
 {
   "pid": 12345,
   "port": 9870,
-  "started_at": "2025-01-15T10:30:00Z"
+  "started_at": "2025-01-15T10:30:00Z",
+  "local_url": "http://localhost:9870",
+  "remote_url": "https://abc123.cloud.pockode.com"
 }
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `pid` | int | Yes | Process ID of the running server |
+| `port` | int | Yes | Server port number |
+| `started_at` | string | Yes | ISO 8601 timestamp of server start |
+| `local_url` | string | Yes | URL for local access |
+| `remote_url` | string | No | URL for remote access via relay (only present when relay is enabled) |
 
 This file is used to:
 - Track which process is running for a node
 - Detect stale state (file exists but process is dead)
-- Provide port and start time information
+- Provide port, URL, and start time information
 
 The file is deleted when the server shuts down gracefully.
 
