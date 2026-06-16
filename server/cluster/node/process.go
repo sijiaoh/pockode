@@ -4,6 +4,7 @@ package node
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,24 +75,46 @@ func (pm *ProcessManager) Start(n Node, token string) error {
 	// The child process is detached and will continue running independently.
 	go cmd.Wait()
 
-	// Wait briefly for the process to initialize and write server.json
-	time.Sleep(500 * time.Millisecond)
-
-	// Verify the process started successfully by checking for server.json
-	info, err := serverinfo.Read(dataDir)
-	if err != nil {
-		return fmt.Errorf("process may have started but failed to read server info: %w", err)
-	}
-	if info == nil {
-		// Process might still be starting up, wait a bit more
-		time.Sleep(500 * time.Millisecond)
-		info, _ = serverinfo.Read(dataDir)
-		if info == nil {
-			return errors.New("process started but server.json not created")
-		}
+	if err := pm.waitForServerInfo(dataDir); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+func (pm *ProcessManager) waitForServerInfo(dataDir string) error {
+	const (
+		initialWait  = 100 * time.Millisecond
+		maxWait      = 2 * time.Second
+		maxRetries   = 10
+		backoffFactor = 2
+	)
+
+	wait := initialWait
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		time.Sleep(wait)
+
+		info, err := serverinfo.Read(dataDir)
+		if err != nil {
+			// Read error (e.g., JSON parse error) - fail immediately
+			return fmt.Errorf("failed to read server.json: %w", err)
+		}
+		if info != nil {
+			if attempt > 1 {
+				slog.Info("server.json found", "attempts", attempt)
+			}
+			return nil
+		}
+
+		slog.Debug("server.json not found, retrying", "attempt", attempt, "maxRetries", maxRetries)
+
+		wait *= backoffFactor
+		if wait > maxWait {
+			wait = maxWait
+		}
+	}
+
+	return errors.New("process started but server.json not created within timeout")
 }
 
 // Stop stops the pockode process for the given node.
