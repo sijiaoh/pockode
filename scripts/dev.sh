@@ -13,23 +13,19 @@ for arg in "$@"; do
     esac
 done
 
-# Configuration
-export AUTH_TOKEN="${AUTH_TOKEN:-dev-token}"
+# Configuration (can be overridden via environment variables for convenience)
+AUTH_TOKEN="${AUTH_TOKEN:-dev-token}"
 # Resolve to absolute path (relative paths break when subprocesses cd)
-export WORK_DIR="$(cd "${WORK_DIR:-$PROJECT_DIR}" && pwd)"
-export DEV_MODE="${DEV_MODE:-true}"
-export DEBUG="${DEBUG:-true}"
-export LOG_LEVEL="${LOG_LEVEL:-debug}"
-
-# Relay configuration (for local development)
-export RELAY_ENABLED="${RELAY_ENABLED:-false}"
-export CLOUD_URL="${CLOUD_URL:-http://local.pockode.com}"
+WORK_DIR="$(cd "${WORK_DIR:-$PROJECT_DIR}" && pwd)"
+LOG_LEVEL="${LOG_LEVEL:-debug}"
+CLOUD_URL="${CLOUD_URL:-http://local.pockode.com}"
 
 if [ "$CLUSTER_MODE" = true ]; then
     # Cluster mode configuration
-    export SERVER_PORT="${SERVER_PORT:-9871}"
-    export WEB_PORT="${WEB_PORT:-5174}"
-    export RELAY_FRONTEND_PORT="${RELAY_FRONTEND_PORT:-$WEB_PORT}"
+    SERVER_PORT="${SERVER_PORT:-9871}"
+    WEB_PORT="${WEB_PORT:-5174}"
+    RELAY_FRONTEND_PORT="${RELAY_FRONTEND_PORT:-$WEB_PORT}"
+    RELAY_ENABLED="${RELAY_ENABLED:-false}"
 
     echo "Starting cluster dev environment..."
     echo "  Backend:  http://localhost:$SERVER_PORT"
@@ -37,12 +33,19 @@ if [ "$CLUSTER_MODE" = true ]; then
     echo "  Token:    $AUTH_TOKEN"
     echo ""
 
-    cd "$PROJECT_DIR" && pnpm run dev:cluster
+    # Export port for web dev server
+    export WEB_PORT
+
+    cd "$PROJECT_DIR"
+    concurrently --kill-others -n server,web -c blue,green \
+        "cd server && go run . cluster --auth-token \"$AUTH_TOKEN\" --port $SERVER_PORT --relay=$RELAY_ENABLED --relay-frontend-port $RELAY_FRONTEND_PORT --cloud-url \"$CLOUD_URL\" --dev" \
+        "cd web-cluster && pnpm run dev"
 else
     # Normal mode configuration
-    export SERVER_PORT="${SERVER_PORT:-8080}"
-    export WEB_PORT="${WEB_PORT:-5173}"
-    export RELAY_FRONTEND_PORT="${RELAY_FRONTEND_PORT:-$WEB_PORT}"
+    SERVER_PORT="${SERVER_PORT:-8080}"
+    WEB_PORT="${WEB_PORT:-5173}"
+    RELAY_FRONTEND_PORT="${RELAY_FRONTEND_PORT:-$WEB_PORT}"
+    RELAY_ENABLED="${RELAY_ENABLED:-false}"
 
     echo "Starting dev environment..."
     echo "  Backend:  http://localhost:$SERVER_PORT"
@@ -50,5 +53,11 @@ else
     echo "  Token:    $AUTH_TOKEN"
     echo ""
 
-    cd "$PROJECT_DIR" && pnpm run dev
+    # Export port for web dev server
+    export WEB_PORT
+
+    cd "$PROJECT_DIR"
+    concurrently --kill-others -n server,web -c blue,green \
+        "cd server && go run . --auth-token \"$AUTH_TOKEN\" --port $SERVER_PORT --work \"$WORK_DIR\" --relay=$RELAY_ENABLED --relay-frontend-port $RELAY_FRONTEND_PORT --cloud-url \"$CLOUD_URL\" --log-level $LOG_LEVEL --dev" \
+        "cd web && pnpm run dev"
 fi

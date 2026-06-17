@@ -28,4 +28,4 @@ Two watchers deliver live updates via the subscription system:
 
 ## Configuration
 
-Git is opt-in via `GIT_ENABLED=true`. When enabled, the server initializes the repo with remote config from environment variables (`REPOSITORY_URL`, `REPOSITORY_TOKEN`, `GIT_USER_NAME`, `GIT_USER_EMAIL`). See `server/AGENTS.md` for the full env var list.
+Git is opt-in via `--git` flag. When enabled, the server initializes the repo with remote config from command line arguments (`--git-repo-url`, `--git-repo-token`, `--git-user-name`, `--git-user-email`). See `server/AGENTS.md` for the full argument list.

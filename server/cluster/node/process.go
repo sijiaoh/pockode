@@ -32,7 +32,7 @@ func NewProcessManager() *ProcessManager {
 }
 
 // Start starts a pockode process for the given node.
-// Token is required and passed as AUTH_TOKEN environment variable.
+// Token is required and passed as --auth-token command line argument.
 // Returns an error if token is empty or if the node is already running.
 func (pm *ProcessManager) Start(n Node, token string) error {
 	if token == "" {
@@ -52,12 +52,9 @@ func (pm *ProcessManager) Start(n Node, token string) error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Build command
-	cmd := exec.Command(exePath)
+	// Build command with auth-token as command line argument
+	cmd := exec.Command(exePath, "--auth-token", token)
 	cmd.Dir = n.Path
-
-	// Set environment
-	cmd.Env = append(os.Environ(), "AUTH_TOKEN="+token)
 
 	// Set platform-specific process attributes
 	setProcessDetached(cmd)
@@ -84,9 +81,9 @@ func (pm *ProcessManager) Start(n Node, token string) error {
 
 func (pm *ProcessManager) waitForServerInfo(dataDir string) error {
 	const (
-		initialWait  = 100 * time.Millisecond
-		maxWait      = 2 * time.Second
-		maxRetries   = 10
+		initialWait   = 100 * time.Millisecond
+		maxWait       = 2 * time.Second
+		maxRetries    = 10
 		backoffFactor = 2
 	)
 

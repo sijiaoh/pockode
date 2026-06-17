@@ -88,20 +88,20 @@ The file is deleted when the server shuts down gracefully.
 
 ```bash
 # Required: authentication token
-AUTH_TOKEN=your-secret-token ./pockode cluster
+./pockode cluster --auth-token=your-secret-token
 ```
 
-## Environment Variables
+## Command Line Arguments
 
-| Variable | Default | Description |
+| Argument | Default | Description |
 |----------|---------|-------------|
-| `AUTH_TOKEN` | (required) | Authentication token for WebSocket connections |
-| `SERVER_PORT` | `9871` | HTTP server port |
-| `WEB_PORT` | `5174` | Frontend dev server port (development only) |
-| `RELAY_ENABLED` | `true` | Enable relay for remote access |
-| `RELAY_FRONTEND_PORT` | (same as SERVER_PORT) | Target port for relay HTTP proxy frontend requests |
-| `CLOUD_URL` | `https://cloud.pockode.com` | Relay server URL |
-| `DEV_MODE` | `false` | Development mode (disables embedded SPA) |
+| `--auth-token` | (required) | Authentication token for WebSocket connections |
+| `--port` | `9871` | HTTP server port |
+| `--data` | `~/.pockode-cluster` | Data directory |
+| `--relay` | `true` | Enable relay for remote access (`-relay=false` to disable) |
+| `--relay-frontend-port` | (same as server port) | Target port for relay HTTP proxy frontend requests |
+| `--cloud-url` | `https://cloud.pockode.com` | Relay server URL |
+| `--dev` | `false` | Development mode (disables embedded SPA) |
 
 Data is stored in `~/.pockode-cluster/` (created automatically if it doesn't exist):
 
@@ -173,7 +173,7 @@ This provides a consistent user experience across both deployment modes.
 
 ## Relay Integration
 
-When `RELAY_ENABLED=true` (default), cluster mode registers with the cloud relay server and accepts connections through it. This allows mobile devices to connect without direct network access to the server.
+When `--relay` is enabled (default), cluster mode registers with the cloud relay server and accepts connections through it. This allows mobile devices to connect without direct network access to the server.
 
 The relay uses the same infrastructure as the main server mode—see [relay.md](relay.md) for details.
 
@@ -192,9 +192,6 @@ pnpm install
 ```bash
 # Start cluster dev environment (backend port 9871, frontend port 5174)
 ./scripts/dev.sh --cluster
-
-# Or with custom ports:
-SERVER_PORT=9900 WEB_PORT=5200 ./scripts/dev.sh --cluster
 ```
 
 This runs both the Go backend (`go run . cluster`) and the React frontend (`web-cluster`) with hot reload.
