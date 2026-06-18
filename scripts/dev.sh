@@ -37,7 +37,7 @@ if [ "$CLUSTER_MODE" = true ]; then
     export WEB_PORT
 
     cd "$PROJECT_DIR"
-    concurrently --kill-others -n server,web -c blue,green \
+    pnpm exec concurrently --kill-others -n server,web -c blue,green \
         "cd server && go run . cluster --auth-token \"$AUTH_TOKEN\" --port $SERVER_PORT --relay=$RELAY_ENABLED --relay-frontend-port $RELAY_FRONTEND_PORT --cloud-url \"$CLOUD_URL\" --dev" \
         "cd web-cluster && pnpm run dev"
 else
@@ -57,7 +57,7 @@ else
     export WEB_PORT
 
     cd "$PROJECT_DIR"
-    concurrently --kill-others -n server,web -c blue,green \
+    pnpm exec concurrently --kill-others -n server,web -c blue,green \
         "cd server && go run . --auth-token \"$AUTH_TOKEN\" --port $SERVER_PORT --work \"$WORK_DIR\" --relay=$RELAY_ENABLED --relay-frontend-port $RELAY_FRONTEND_PORT --cloud-url \"$CLOUD_URL\" --log-level $LOG_LEVEL --dev" \
         "cd web && pnpm run dev"
 fi
