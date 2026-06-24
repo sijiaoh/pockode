@@ -27,7 +27,7 @@ Phone (React SPA) ──► Relay Server ──► User's PC (Go server) ──�
 
 The Go server spawns AI CLI processes (Claude Code, Codex) as subprocesses, streaming their JSON output back to the frontend over WebSocket JSON-RPC 2.0. No SDK bindings — just process management and stream parsing. This keeps AI integration loosely coupled: adding a new AI backend means implementing a process adapter, not integrating an SDK.
 
-Infrastructure docs: [websocket-rpc-design.md](websocket-rpc-design.md) (RPC layer), [relay.md](relay.md) (NAT traversal), [agent-event.md](agent-event.md) (event stream), [watcher.md](watcher.md) (real-time subscriptions).
+Infrastructure docs: [websocket-rpc-design.md](websocket-rpc-design.md) (RPC layer), [relay.md](relay.md) (NAT traversal), [cluster.md](cluster.md) (remote server deployment), [agent-event.md](agent-event.md) (event stream), [watcher.md](watcher.md) (real-time subscriptions).
 
 Feature docs: [agent-chat.md](agent-chat.md) (chat), [file.md](file.md) (file ops), [git.md](git.md) (git ops).
 

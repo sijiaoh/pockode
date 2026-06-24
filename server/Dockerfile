@@ -46,13 +46,12 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 WORKDIR /workspace
 COPY --from=backend-builder --chown=pockode:pockode /app/server /usr/local/bin/server
 
-ENV SERVER_PORT=8080
-ENV WORK_DIR=/workspace
-ENV DEV_MODE=false
 ENV PATH="/home/pockode/.local/bin:${PATH}"
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-CMD ["/usr/local/bin/server"]
+# Default command with required --auth-token to be overridden at runtime
+ENTRYPOINT ["/usr/local/bin/server"]
+CMD ["--port=8080", "--work=/workspace"]

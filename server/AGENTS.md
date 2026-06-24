@@ -8,10 +8,10 @@ Go 1.25 + net/http + github.com/coder/websocket
 
 ```bash
 # 开发
-AUTH_TOKEN=xxx DEV_MODE=true go run .   # 运行（开发模式，不 serve 静态文件）
-go test ./...                           # 测试
-gofmt -w .                              # 格式化
-go vet ./...                            # 静态检查
+go run . --auth-token=xxx --dev          # 运行（开发模式，不 serve 静态文件）
+go test ./...                            # 测试
+gofmt -w .                               # 格式化
+go vet ./...                             # 静态检查
 
 # 构建（含前端）
 cd ../web && pnpm run build && cp -r dist ../server/static
@@ -42,6 +42,7 @@ mcp/                    # MCP 服务器（stdio JSON-RPC，供 AI CLI 使用）
 middleware/             # Token 认证中间件
 process/                # 进程管理器
 relay/                  # HTTP 中继 / 多路复用（NAT 穿透）
+serverinfo/             # 服务器运行时信息（server.json）
 rpc/                    # RPC 消息类型定义
 session/                # Session 存储 + 清理
 settings/               # 设置存储
@@ -78,23 +79,50 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 
 **Trace ID**: `requestId`(HTTP) → `connId`(WS) → `sessionId`(会话)
 
-## 环境变量
+## 命令行参数
 
-| 变量 | 必需 | 默认 | 说明 |
+| 参数 | 必需 | 默认 | 说明 |
 |------|:----:|------|------|
-| `AUTH_TOKEN` | ✓ | — | API 认证令牌 |
-| `SERVER_PORT` | | `8080` | 服务端口 |
-| `WORK_DIR` | | `/workspace` | 工作目录 |
-| `DEV_MODE` | | `false` | 开发模式（true 时不 serve 静态文件） |
-| `RELAY_PORT` | | `SERVER_PORT` | Relay 转发目标端口（开发时可设为前端端口） |
-| `LOG_FORMAT` | | `text` | `json` / `text` |
-| `LOG_LEVEL` | | `info` | `debug`/`info`/`warn`/`error` |
-| `LOG_FILE` | | `dataDir/server.log`(生产) | 日志文件路径（开发模式默认输出到 stdout） |
-| `GIT_ENABLED` | | `false` | 启用 git |
-| `REPOSITORY_URL` | git时 | — | 仓库 URL |
-| `REPOSITORY_TOKEN` | git时 | — | PAT |
-| `GIT_USER_NAME` | git时 | — | commit 用户名 |
-| `GIT_USER_EMAIL` | git时 | — | commit 邮箱 |
+| `--auth-token` | ✓ | — | API 认证令牌 |
+| `--port` | | `9870` | 服务端口 |
+| `--work` | | `.` | 工作目录 |
+| `--data` | | `<work>/.pockode` | 数据目录 |
+| `--dev` | | `false` | 开发模式（启用时不 serve 静态文件） |
+| `--idle-timeout` | | `8h` | 空闲超时时间 |
+| `--relay` | | `true` | 启用 relay 远程访问（`-relay=false` 禁用） |
+| `--relay-frontend-port` | | 同 server port | Relay 转发前端请求的目标端口 |
+| `--cloud-url` | | `https://cloud.pockode.com` | 云服务器 URL |
+| `--log-level` | | `info` | 日志级别：`debug`/`info`/`warn`/`error` |
+| `--log-format` | | `text` | 日志格式：`text`/`json` |
+| `--log-file` | | `dataDir/server.log`(生产) | 日志文件路径（开发模式默认输出到 stdout） |
+| `--git` | | `false` | 启用 git 集成 |
+| `--git-repo-url` | git时 | — | 仓库 URL |
+| `--git-repo-token` | git时 | — | PAT |
+| `--git-user-name` | git时 | — | commit 用户名 |
+| `--git-user-email` | git时 | — | commit 邮箱 |
+| `--version` | | — | 输出版本号并退出 |
+
+## 运行时文件
+
+### server.json
+
+服务器启动时在 `{dataDir}/server.json` 创建，优雅关闭时删除。供编排程序发现运行中的服务器。
+
+```json
+{
+  "pid": 12345,
+  "port": 9870,
+  "started_at": "2025-05-31T10:00:00Z"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `pid` | int | 服务器进程 ID |
+| `port` | int | 服务器监听端口 |
+| `started_at` | string | 启动时间（RFC3339 格式） |
+
+生命周期：启动时写入 → 运行期间保持 → 优雅关闭时删除
 
 ## 边界
 

@@ -1,25 +1,32 @@
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 
-interface Props {
+export interface ConfirmDialogProps {
 	title: string;
 	message: string;
 	confirmLabel?: string;
 	cancelLabel?: string;
 	variant?: "danger" | "default";
+	/** z-index for the dialog overlay. Default: 70 */
+	zIndex?: number;
 	onConfirm: () => void;
 	onCancel: () => void;
 }
 
-function ConfirmDialog({
+/**
+ * Modal confirmation dialog with backdrop, keyboard handling, and accessibility support.
+ * Uses createPortal to render at document.body level.
+ */
+export function ConfirmDialog({
 	title,
 	message,
 	confirmLabel = "Confirm",
 	cancelLabel = "Cancel",
 	variant = "default",
+	zIndex = 70,
 	onConfirm,
 	onCancel,
-}: Props) {
+}: ConfirmDialogProps) {
 	const cancelButtonRef = useRef<HTMLButtonElement>(null);
 	const titleId = useId();
 
@@ -55,7 +62,8 @@ function ConfirmDialog({
 	return createPortal(
 		/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard handled in useEffect */
 		<div
-			className="fixed inset-0 z-[70] flex items-center justify-center bg-th-bg-overlay"
+			className="fixed inset-0 flex items-center justify-center bg-th-bg-overlay"
+			style={{ zIndex }}
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby={titleId}
@@ -92,5 +100,3 @@ function ConfirmDialog({
 		document.body,
 	);
 }
-
-export default ConfirmDialog;

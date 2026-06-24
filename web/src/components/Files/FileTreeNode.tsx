@@ -103,7 +103,7 @@ const FileTreeNode = memo(function FileTreeNode({
 							className="flex items-center py-2"
 							style={{ paddingLeft: paddingLeft + 20 }}
 						>
-							<Spinner className="h-4 w-4 text-th-text-muted" />
+							<Spinner variant="current" className="text-th-text-muted" />
 						</div>
 					) : error ? (
 						<div

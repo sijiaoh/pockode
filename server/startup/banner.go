@@ -28,11 +28,15 @@ type BannerOptions struct {
 	LocalURL     string
 	RemoteURL    string // Empty if relay is disabled
 	Announcement string // Message from cloud
+	NoColor      bool   // Disable ANSI color output
 }
+
+// noColorSet is set by PrintBanner and used by subsequent Print* calls.
+var noColorSet bool
 
 // colorsEnabled returns true if ANSI colors should be used.
 func colorsEnabled() bool {
-	if os.Getenv("NO_COLOR") != "" {
+	if noColorSet {
 		return false
 	}
 	return term.IsTerminal(int(os.Stdout.Fd()))
@@ -48,6 +52,7 @@ func color(code, text string) string {
 
 // PrintBanner displays the startup banner with the given options.
 func PrintBanner(opts BannerOptions) {
+	noColorSet = opts.NoColor
 	fmt.Println()
 
 	logo := color(cyan, "◆") + "  " + color(bold+white, "P O C K O D E")
