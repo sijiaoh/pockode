@@ -21,18 +21,19 @@ import (
 const DefaultPort = 9871
 
 type Config struct {
-	Port         int
-	AuthToken    string
-	DataDir      string
-	RelayEnabled bool
-	CloudURL     string
-	Version      string
-	DevMode      bool
+	Port              int
+	AuthToken         string
+	DataDir           string
+	RelayEnabled      bool
+	RelayFrontendPort int
+	CloudURL          string
+	Version           string
+	DevMode           bool
 }
 
 func Run(cfg Config) error {
 	if cfg.AuthToken == "" {
-		return fmt.Errorf("AUTH_TOKEN is required")
+		return fmt.Errorf("AuthToken is required")
 	}
 
 	logger.Init(logger.Config{
@@ -50,7 +51,9 @@ func Run(cfg Config) error {
 		return fmt.Errorf("failed to create node store: %w", err)
 	}
 
-	wsHandler := newWSHandler(cfg.AuthToken, cfg.Version, cfg.DevMode, nodeStore, log)
+	processManager := node.NewProcessManager()
+
+	wsHandler := newWSHandler(cfg.AuthToken, cfg.Version, cfg.DevMode, nodeStore, processManager, log)
 	handler := newHandler(cfg.AuthToken, cfg.DevMode, wsHandler)
 
 	srv := &http.Server{
@@ -69,12 +72,8 @@ func Run(cfg Config) error {
 		}
 
 		frontendPort := port
-		if envFrontendPort := os.Getenv("RELAY_FRONTEND_PORT"); envFrontendPort != "" {
-			if p, err := strconv.Atoi(envFrontendPort); err == nil {
-				frontendPort = p
-			} else {
-				log.Warn("invalid RELAY_FRONTEND_PORT, using server port", "value", envFrontendPort, "default", port)
-			}
+		if cfg.RelayFrontendPort != 0 {
+			frontendPort = cfg.RelayFrontendPort
 		}
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, log)
 

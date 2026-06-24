@@ -112,10 +112,23 @@ func main() {
 		}
 	}
 
-	portFlag := flag.Int("port", 0, fmt.Sprintf("server port (default %d)", defaultPort))
+	portFlag := flag.Int("port", defaultPort, "server port")
 	tokenFlag := flag.String("auth-token", "", "authentication token (required)")
+	workDirFlag := flag.String("work", ".", "working directory")
+	dataDirFlag := flag.String("data", "", "data directory (default: <work>/.pockode)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
+	idleTimeoutFlag := flag.Duration("idle-timeout", 8*time.Hour, "idle timeout before stopping")
 	relayFlag := flag.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
+	relayFrontendPortFlag := flag.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
+	cloudURLFlag := flag.String("cloud-url", "https://cloud.pockode.com", "cloud server URL")
+	gitEnabledFlag := flag.Bool("git", false, "enable git integration")
+	gitRepoURLFlag := flag.String("git-repo-url", "", "git repository URL")
+	gitRepoTokenFlag := flag.String("git-repo-token", "", "git repository token")
+	gitUserNameFlag := flag.String("git-user-name", "", "git user name")
+	gitUserEmailFlag := flag.String("git-user-email", "", "git user email")
+	logLevelFlag := flag.String("log-level", "", "log level: debug, info, warn, error (default info)")
+	logFormatFlag := flag.String("log-format", "", "log format: text, json (default text)")
+	logFileFlag := flag.String("log-file", "", "log file path (default: dataDir/server.log in production)")
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -124,72 +137,52 @@ func main() {
 		os.Exit(0)
 	}
 
-	port := defaultPort
-	if *portFlag != 0 {
-		port = *portFlag
-	} else if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
-		if p, err := strconv.Atoi(envPort); err == nil {
-			port = p
-		} else {
-			slog.Warn("invalid SERVER_PORT, using default", "value", envPort, "default", defaultPort)
-		}
-	}
-	port = netutil.FindAvailablePort(port)
+	port := netutil.FindAvailablePort(*portFlag)
 
 	token := *tokenFlag
 	if token == "" {
-		token = os.Getenv("AUTH_TOKEN")
-	}
-	if token == "" {
-		slog.Error("AUTH_TOKEN is required (use --auth-token flag or AUTH_TOKEN env)")
+		slog.Error("--auth-token flag is required")
 		os.Exit(1)
 	}
 
-	workDir := "."
-	if envWorkDir := os.Getenv("WORK_DIR"); envWorkDir != "" {
-		workDir = envWorkDir
-	}
-	absWorkDir, err := filepath.Abs(workDir)
+	absWorkDir, err := filepath.Abs(*workDirFlag)
 	if err != nil {
 		slog.Error("failed to resolve work directory", "error", err)
 		os.Exit(1)
 	}
-	workDir = absWorkDir
+	workDir := absWorkDir
 
-	devMode := *devModeFlag || os.Getenv("DEV_MODE") == "true"
+	devMode := *devModeFlag
 
-	dataDir := filepath.Join(workDir, ".pockode")
-	if envDataDir := os.Getenv("DATA_DIR"); envDataDir != "" {
-		dataDir = envDataDir
+	dataDirStr := *dataDirFlag
+	if dataDirStr == "" {
+		dataDirStr = filepath.Join(workDir, ".pockode")
 	}
-	absDataDir, err := filepath.Abs(dataDir)
+	absDataDir, err := filepath.Abs(dataDirStr)
 	if err != nil {
 		slog.Error("failed to resolve data directory", "error", err)
 		os.Exit(1)
 	}
-	dataDir = absDataDir
-
-	// Write server.json for orchestration programs to discover the running server
-	if err := serverinfo.Write(dataDir, port); err != nil {
-		slog.Error("failed to write server.json", "error", err)
-		os.Exit(1)
-	}
+	dataDir := absDataDir
 
 	logger.Init(logger.Config{
-		DataDir: dataDir,
-		DevMode: devMode,
+		DataDir:   dataDir,
+		DevMode:   devMode,
+		LogLevel:  *logLevelFlag,
+		LogFormat: *logFormatFlag,
+		LogFile:   *logFileFlag,
 	})
 
-	if os.Getenv("GIT_ENABLED") == "true" {
+	if *gitEnabledFlag {
 		gitCfg := git.Config{
-			RepoURL:   os.Getenv("REPOSITORY_URL"),
-			RepoToken: os.Getenv("REPOSITORY_TOKEN"),
-			UserName:  os.Getenv("GIT_USER_NAME"),
-			UserEmail: os.Getenv("GIT_USER_EMAIL"),
+			RepoURL:   *gitRepoURLFlag,
+			RepoToken: *gitRepoTokenFlag,
+			UserName:  *gitUserNameFlag,
+			UserEmail: *gitUserEmailFlag,
 			WorkDir:   workDir,
 		}
 		if gitCfg.RepoURL == "" || gitCfg.RepoToken == "" || gitCfg.UserName == "" || gitCfg.UserEmail == "" {
-			slog.Error("GIT_ENABLED=true requires REPOSITORY_URL, REPOSITORY_TOKEN, GIT_USER_NAME, GIT_USER_EMAIL")
+			slog.Error("-git flag requires -git-repo-url, -git-repo-token, -git-user-name, -git-user-email")
 			os.Exit(1)
 		}
 		if err := git.Init(gitCfg); err != nil {
@@ -205,15 +198,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize process manager with idle timeout
-	idleTimeout := 8 * time.Hour
-	if env := os.Getenv("IDLE_TIMEOUT"); env != "" {
-		if d, err := time.ParseDuration(env); err == nil {
-			idleTimeout = d
-		} else {
-			slog.Warn("invalid IDLE_TIMEOUT, using default", "value", env, "default", idleTimeout)
-		}
-	}
+	idleTimeout := *idleTimeoutFlag
 
 	// Initialize settings store
 	settingsStore, err := settings.NewStore(dataDir)
@@ -282,16 +267,13 @@ func main() {
 		Handler: handler,
 	}
 
-	cloudURL := os.Getenv("CLOUD_URL")
-	if cloudURL == "" {
-		cloudURL = "https://cloud.pockode.com"
-	}
+	cloudURL := *cloudURLFlag
 
 	// Initialize relay if enabled
 	var relayManager *relay.Manager
 	var cancelRelayStreams context.CancelFunc
 	var remoteURL string
-	relayEnabled := *relayFlag && os.Getenv("RELAY_ENABLED") != "false"
+	relayEnabled := *relayFlag
 	if relayEnabled {
 		relayCfg := relay.Config{
 			CloudURL:      cloudURL,
@@ -299,13 +281,9 @@ func main() {
 			ClientVersion: version,
 		}
 
-		frontendPort := port
-		if envFrontendPort := os.Getenv("RELAY_FRONTEND_PORT"); envFrontendPort != "" {
-			if p, err := strconv.Atoi(envFrontendPort); err == nil {
-				frontendPort = p
-			} else {
-				slog.Warn("invalid RELAY_FRONTEND_PORT, using server port", "value", envFrontendPort, "default", port)
-			}
+		frontendPort := *relayFrontendPortFlag
+		if frontendPort == 0 {
+			frontendPort = port
 		}
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, slog.Default())
 
@@ -326,6 +304,13 @@ func main() {
 				go wsHandler.HandleStream(relayStreamCtx, stream, stream.ConnectionID())
 			}
 		}()
+	}
+
+	// Write server.json for orchestration programs to discover the running server
+	localURL := "http://localhost:" + portStr
+	if err := serverinfo.Write(dataDir, port, localURL, remoteURL); err != nil {
+		slog.Error("failed to write server.json", "error", err)
+		os.Exit(1)
 	}
 
 	// Graceful shutdown
@@ -463,48 +448,45 @@ func runMCP() {
 }
 
 func runCluster() {
-	token := os.Getenv("AUTH_TOKEN")
+	clusterFlags := flag.NewFlagSet("cluster", flag.ExitOnError)
+	portFlag := clusterFlags.Int("port", cluster.DefaultPort, "server port")
+	tokenFlag := clusterFlags.String("auth-token", "", "authentication token (required)")
+	dataDirFlag := clusterFlags.String("data", "", "data directory (default: ~/.pockode-cluster)")
+	relayFlag := clusterFlags.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
+	relayFrontendPortFlag := clusterFlags.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
+	cloudURLFlag := clusterFlags.String("cloud-url", "https://cloud.pockode.com", "cloud server URL")
+	devModeFlag := clusterFlags.Bool("dev", false, "enable development mode")
+	clusterFlags.Parse(os.Args[2:])
+
+	token := *tokenFlag
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "Error: AUTH_TOKEN environment variable is required")
+		fmt.Fprintln(os.Stderr, "Error: --auth-token flag is required")
 		os.Exit(1)
 	}
 
-	port := cluster.DefaultPort
-	if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
-		if p, err := strconv.Atoi(envPort); err == nil {
-			port = p
-		} else {
-			fmt.Fprintf(os.Stderr, "Warning: invalid SERVER_PORT %q, using default %d\n", envPort, cluster.DefaultPort)
+	dataDir := *dataDirFlag
+	if dataDir == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: failed to get home directory: %v\n", err)
+			os.Exit(1)
 		}
+		dataDir = filepath.Join(homeDir, ".pockode-cluster")
 	}
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to get home directory: %v\n", err)
-		os.Exit(1)
-	}
-	dataDir := filepath.Join(homeDir, ".pockode-cluster")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to create data directory: %v\n", err)
 		os.Exit(1)
 	}
 
-	relayEnabled := os.Getenv("RELAY_ENABLED") != "false"
-	devMode := os.Getenv("DEV_MODE") == "true"
-
-	cloudURL := os.Getenv("CLOUD_URL")
-	if cloudURL == "" {
-		cloudURL = "https://cloud.pockode.com"
-	}
-
 	cfg := cluster.Config{
-		Port:         port,
-		AuthToken:    token,
-		DataDir:      dataDir,
-		RelayEnabled: relayEnabled,
-		CloudURL:     cloudURL,
-		Version:      version,
-		DevMode:      devMode,
+		Port:              *portFlag,
+		AuthToken:         token,
+		DataDir:           dataDir,
+		RelayEnabled:      *relayFlag,
+		RelayFrontendPort: *relayFrontendPortFlag,
+		CloudURL:          *cloudURLFlag,
+		Version:           version,
+		DevMode:           *devModeFlag,
 	}
 
 	if err := cluster.Run(cfg); err != nil {

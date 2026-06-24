@@ -16,11 +16,13 @@ type Info struct {
 	PID       int    `json:"pid"`
 	Port      int    `json:"port"`
 	StartedAt string `json:"started_at"`
+	LocalURL  string `json:"local_url,omitempty"`
+	RemoteURL string `json:"remote_url,omitempty"`
 }
 
 // Write creates the server.json file in the given data directory.
 // Creates the data directory if it doesn't exist.
-func Write(dataDir string, port int) error {
+func Write(dataDir string, port int, localURL, remoteURL string) error {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return err
 	}
@@ -29,6 +31,8 @@ func Write(dataDir string, port int) error {
 		PID:       os.Getpid(),
 		Port:      port,
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		LocalURL:  localURL,
+		RemoteURL: remoteURL,
 	}
 
 	data, err := json.MarshalIndent(info, "", "  ")
@@ -37,6 +41,24 @@ func Write(dataDir string, port int) error {
 	}
 
 	return os.WriteFile(filepath.Join(dataDir, filename), data, 0644)
+}
+
+// Read reads the server.json file from the given data directory.
+// Returns (nil, nil) if the file doesn't exist.
+func Read(dataDir string) (*Info, error) {
+	data, err := os.ReadFile(filepath.Join(dataDir, filename))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var info Info
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
 }
 
 // Delete removes the server.json file from the given data directory.

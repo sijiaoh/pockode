@@ -1,18 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useWSStore } from "../lib/wsStore";
-import type { Node } from "../types/node";
+import type { NodeWithStatus } from "../types/node";
 import { NodeCard } from "./NodeCard";
 import { NodeForm } from "./NodeForm";
 import { Spinner } from "./ui";
 
+const POLL_INTERVAL_MS = 5000;
+
 export function NodeList() {
 	const { status, actions } = useWSStore();
-	const [nodes, setNodes] = useState<Node[]>([]);
+	const [nodes, setNodes] = useState<NodeWithStatus[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [formOpen, setFormOpen] = useState(false);
-	const [editingNode, setEditingNode] = useState<Node | null>(null);
+	const [editingNode, setEditingNode] = useState<NodeWithStatus | null>(null);
+	const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const fetchNodes = useCallback(async () => {
 		if (status !== "connected") return;
@@ -34,6 +37,32 @@ export function NodeList() {
 		}
 	}, [status, fetchNodes]);
 
+	// Polling for status updates
+	useEffect(() => {
+		if (status !== "connected" || loading) return;
+
+		let isMounted = true;
+
+		const poll = () => {
+			pollTimerRef.current = setTimeout(async () => {
+				if (!isMounted) return;
+				await fetchNodes();
+				if (isMounted) {
+					poll();
+				}
+			}, POLL_INTERVAL_MS);
+		};
+		poll();
+
+		return () => {
+			isMounted = false;
+			if (pollTimerRef.current) {
+				clearTimeout(pollTimerRef.current);
+				pollTimerRef.current = null;
+			}
+		};
+	}, [status, loading, fetchNodes]);
+
 	// Auto-dismiss action errors after 5 seconds
 	useEffect(() => {
 		if (actionError) {
@@ -47,7 +76,7 @@ export function NodeList() {
 		setFormOpen(true);
 	};
 
-	const handleEdit = (node: Node) => {
+	const handleEdit = (node: NodeWithStatus) => {
 		setEditingNode(node);
 		setFormOpen(true);
 	};
@@ -65,16 +94,47 @@ export function NodeList() {
 	};
 
 	const handleSubmit = async (path: string, name?: string) => {
-		if (editingNode) {
-			const updated = await actions.updateNode({
-				id: editingNode.id,
-				path,
-				name,
-			});
-			setNodes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
-		} else {
-			const created = await actions.createNode({ path, name });
-			setNodes((prev) => [...prev, created]);
+		try {
+			if (editingNode) {
+				await actions.updateNode({
+					id: editingNode.id,
+					path,
+					name,
+				});
+			} else {
+				await actions.createNode({ path, name });
+			}
+			await fetchNodes();
+			setActionError(null);
+		} catch (err) {
+			setActionError(
+				err instanceof Error ? err.message : "Failed to save node",
+			);
+			throw err;
+		}
+	};
+
+	const handleStart = async (id: string, token: string) => {
+		try {
+			await actions.startNode({ id, token });
+			await fetchNodes();
+			setActionError(null);
+		} catch (err) {
+			setActionError(
+				err instanceof Error ? err.message : "Failed to start node",
+			);
+		}
+	};
+
+	const handleStop = async (id: string) => {
+		try {
+			await actions.stopNode({ id });
+			await fetchNodes();
+			setActionError(null);
+		} catch (err) {
+			setActionError(
+				err instanceof Error ? err.message : "Failed to stop node",
+			);
 		}
 	};
 
@@ -193,6 +253,8 @@ export function NodeList() {
 								node={node}
 								onEdit={handleEdit}
 								onDelete={handleDelete}
+								onStart={handleStart}
+								onStop={handleStop}
 							/>
 						))}
 					</div>

@@ -2,15 +2,22 @@ import type { JSONRPCClient } from "json-rpc-2.0";
 import type {
 	Node,
 	NodeCreateParams,
+	NodeStartParams,
+	NodeStatusInfo,
+	NodeStopParams,
 	NodeUpdateParams,
+	NodeWithStatus,
 } from "../../types/node";
 
 export interface NodeActions {
-	listNodes: () => Promise<Node[]>;
-	getNode: (id: string) => Promise<Node>;
+	listNodes: () => Promise<NodeWithStatus[]>;
+	getNode: (id: string) => Promise<NodeWithStatus>;
 	createNode: (params: NodeCreateParams) => Promise<Node>;
 	updateNode: (params: NodeUpdateParams) => Promise<Node>;
 	deleteNode: (id: string) => Promise<void>;
+	getNodeStatus: (id: string) => Promise<NodeStatusInfo>;
+	startNode: (params: NodeStartParams) => Promise<NodeStatusInfo>;
+	stopNode: (params: NodeStopParams) => Promise<NodeStatusInfo>;
 }
 
 export function createNodeActions(
@@ -25,11 +32,11 @@ export function createNodeActions(
 	};
 
 	return {
-		listNodes: async (): Promise<Node[]> => {
+		listNodes: async (): Promise<NodeWithStatus[]> => {
 			return requireClient().request("node.list", {});
 		},
 
-		getNode: async (id: string): Promise<Node> => {
+		getNode: async (id: string): Promise<NodeWithStatus> => {
 			return requireClient().request("node.get", { id });
 		},
 
@@ -43,6 +50,18 @@ export function createNodeActions(
 
 		deleteNode: async (id: string): Promise<void> => {
 			await requireClient().request("node.delete", { id });
+		},
+
+		getNodeStatus: async (id: string): Promise<NodeStatusInfo> => {
+			return requireClient().request("node.status", { id });
+		},
+
+		startNode: async (params: NodeStartParams): Promise<NodeStatusInfo> => {
+			return requireClient().request("node.start", params);
+		},
+
+		stopNode: async (params: NodeStopParams): Promise<NodeStatusInfo> => {
+			return requireClient().request("node.stop", params);
 		},
 	};
 }

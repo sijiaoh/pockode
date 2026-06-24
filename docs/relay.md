@@ -37,7 +37,7 @@ Relay Server (cloud)    ◀── outbound WebSocket ──  User PC
 3. Mobile sends HTTPS request to `<subdomain>.relay.example.com`
 4. Relay wraps request in an **envelope** `{ connection_id, type, http_request }` and forwards over WebSocket
 5. PC's **Multiplexer** routes envelope to correct **VirtualStream** by `connection_id`
-6. **HTTPHandler** proxies to local backend (port 8080) or frontend (port 5173, configurable via `RELAY_FRONTEND_PORT`)
+6. **HTTPHandler** proxies to local backend (port 8080) or frontend (port 5173, configurable via `--relay-frontend-port`)
 7. Response follows the reverse path back to mobile
 
 ## Envelope Types

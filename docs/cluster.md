@@ -37,24 +37,71 @@ The path must point to an existing directory. Duplicate paths are rejected.
 - `~` or `~/...` → expanded to user's home directory (e.g., `~/projects/my-app` → `/home/user/projects/my-app`)
 - `.` (exactly) → expanded to user's home directory (useful when `cwd` is not a project directory)
 
+### Node Lifecycle
+
+Each node has a lifecycle status indicating whether a Pockode server is running in that directory.
+
+**Status values:**
+
+| Status | Description |
+|--------|-------------|
+| `running` | Server is active (server.json exists and process is alive) |
+| `stopped` | Server is not running (no server.json file) |
+| `stale` | Server.json exists but the process is dead (needs cleanup) |
+
+**server.json file:**
+
+When a node starts, Pockode writes runtime information to `{node.path}/.pockode/server.json`:
+
+```json
+{
+  "pid": 12345,
+  "port": 9870,
+  "started_at": "2025-01-15T10:30:00Z",
+  "local_url": "http://localhost:9870",
+  "remote_url": "https://abc123.cloud.pockode.com"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `pid` | int | Yes | Process ID of the running server |
+| `port` | int | Yes | Server port number |
+| `started_at` | string | Yes | ISO 8601 timestamp of server start |
+| `local_url` | string | Yes | URL for local access |
+| `remote_url` | string | No | URL for remote access via relay (only present when relay is enabled) |
+
+This file is used to:
+- Track which process is running for a node
+- Detect stale state (file exists but process is dead)
+- Provide port, URL, and start time information
+
+The file is deleted when the server shuts down gracefully.
+
+**Operations:**
+
+- **Start**: Spawns a new Pockode process for the node (requires auth token)
+- **Stop**: Sends SIGTERM to the process, then SIGKILL after 5 seconds if needed
+- **Clean Up**: For stale nodes, removes the orphaned server.json file
+
 ## Usage
 
 ```bash
 # Required: authentication token
-AUTH_TOKEN=your-secret-token ./pockode cluster
+./pockode cluster --auth-token=your-secret-token
 ```
 
-## Environment Variables
+## Command Line Arguments
 
-| Variable | Default | Description |
+| Argument | Default | Description |
 |----------|---------|-------------|
-| `AUTH_TOKEN` | (required) | Authentication token for WebSocket connections |
-| `SERVER_PORT` | `9871` | HTTP server port |
-| `WEB_PORT` | `5174` | Frontend dev server port (development only) |
-| `RELAY_ENABLED` | `true` | Enable relay for remote access |
-| `RELAY_FRONTEND_PORT` | (same as SERVER_PORT) | Target port for relay HTTP proxy frontend requests |
-| `CLOUD_URL` | `https://cloud.pockode.com` | Relay server URL |
-| `DEV_MODE` | `false` | Development mode (disables embedded SPA) |
+| `--auth-token` | (required) | Authentication token for WebSocket connections |
+| `--port` | `9871` | HTTP server port |
+| `--data` | `~/.pockode-cluster` | Data directory |
+| `--relay` | `true` | Enable relay for remote access (`-relay=false` to disable) |
+| `--relay-frontend-port` | (same as server port) | Target port for relay HTTP proxy frontend requests |
+| `--cloud-url` | `https://cloud.pockode.com` | Relay server URL |
+| `--dev` | `false` | Development mode (disables embedded SPA) |
 
 Data is stored in `~/.pockode-cluster/` (created automatically if it doesn't exist):
 
@@ -105,11 +152,14 @@ After authentication:
 | Method | Description |
 |--------|-------------|
 | `ping` | Returns `"pong"` |
-| `node.list` | Returns all registered nodes |
-| `node.get` | Returns a node by ID (params: `{id}`) |
+| `node.list` | Returns all registered nodes (includes `status` field) |
+| `node.get` | Returns a node by ID (params: `{id}`), includes `status` field |
 | `node.create` | Creates a new node (params: `{path, name?}`) |
 | `node.update` | Updates a node (params: `{id, path?, name?}`) |
 | `node.delete` | Deletes a node (params: `{id}`) |
+| `node.status` | Returns node status (params: `{id}`) |
+| `node.start` | Starts a node's server (params: `{id, token}`) |
+| `node.stop` | Stops a node's server (params: `{id}`) |
 
 ## Startup Output
 
@@ -123,7 +173,7 @@ This provides a consistent user experience across both deployment modes.
 
 ## Relay Integration
 
-When `RELAY_ENABLED=true` (default), cluster mode registers with the cloud relay server and accepts connections through it. This allows mobile devices to connect without direct network access to the server.
+When `--relay` is enabled (default), cluster mode registers with the cloud relay server and accepts connections through it. This allows mobile devices to connect without direct network access to the server.
 
 The relay uses the same infrastructure as the main server mode—see [relay.md](relay.md) for details.
 
@@ -142,9 +192,6 @@ pnpm install
 ```bash
 # Start cluster dev environment (backend port 9871, frontend port 5174)
 ./scripts/dev.sh --cluster
-
-# Or with custom ports:
-SERVER_PORT=9900 WEB_PORT=5200 ./scripts/dev.sh --cluster
 ```
 
 This runs both the Go backend (`go run . cluster`) and the React frontend (`web-cluster`) with hot reload.
@@ -167,5 +214,6 @@ Cluster mode implementation:
 - `server/cluster/ws.go` — WebSocket handler and JSON-RPC methods
 - `server/cluster/static.go` — SPA file serving
 - `server/cluster/embed.go` — Static file embedding
-- `server/cluster/node/` — Node store implementation
+- `server/cluster/node/` — Node store and process management
+- `server/serverinfo/` — Runtime info (server.json) handling
 - `server/spa/` — Shared SPA utilities (used by both normal and cluster mode)
