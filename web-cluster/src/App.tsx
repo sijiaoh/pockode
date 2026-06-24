@@ -15,7 +15,6 @@ export default function App() {
 	const [tokenInput, setTokenInput] = useState("");
 	const [inputError, setInputError] = useState<string | null>(null);
 
-	// Try to get token from URL on mount
 	useEffect(() => {
 		const urlToken = getTokenFromUrl();
 		if (urlToken) {
@@ -25,7 +24,6 @@ export default function App() {
 		}
 	}, []);
 
-	// Connect when token is available
 	useEffect(() => {
 		if (token && status === "disconnected") {
 			actions.connect(token);
@@ -36,14 +34,13 @@ export default function App() {
 		e.preventDefault();
 		const trimmed = tokenInput.trim();
 		if (!trimmed) {
-			setInputError("Token is required");
+			setInputError("Auth token is required.");
 			return;
 		}
 		setInputError(null);
 		authActions.login(trimmed);
 	};
 
-	// Show token input if no token
 	if (!token) {
 		return (
 			<div className="flex min-h-dvh items-center justify-center bg-th-bg-primary p-4">
@@ -52,7 +49,7 @@ export default function App() {
 						Pockode Cluster
 					</h1>
 					<p className="mt-2 text-center text-sm text-th-text-secondary">
-						Enter your authentication token to continue
+						Connect to your cluster instance.
 					</p>
 
 					<form onSubmit={handleSubmitToken} className="mt-8">
@@ -60,7 +57,7 @@ export default function App() {
 							htmlFor="token"
 							className="mb-1 block text-sm text-th-text-secondary"
 						>
-							Token
+							Auth Token
 						</label>
 						<input
 							id="token"
@@ -86,19 +83,17 @@ export default function App() {
 		);
 	}
 
-	// Connecting state
-	if (status === "connecting" || status === "reconnecting") {
+	if (status === "connecting") {
 		return (
 			<div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary">
 				<Spinner size="h-8 w-8" />
 				<p className="text-sm text-th-text-secondary">
-					{status === "reconnecting" ? "Reconnecting..." : "Connecting..."}
+					Connecting to cluster...
 				</p>
 			</div>
 		);
 	}
 
-	// Auth failed state
 	if (status === "auth_failed") {
 		return (
 			<div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary p-4 text-center">
@@ -118,10 +113,10 @@ export default function App() {
 					</svg>
 				</div>
 				<h2 className="text-lg font-semibold text-th-text-primary">
-					Authentication Failed
+					Authentication failed
 				</h2>
 				<p className="text-sm text-th-text-secondary">
-					{errorMessage || "Invalid token"}
+					{errorMessage || "Check the cluster token and try again."}
 				</p>
 				<button
 					type="button"
@@ -138,7 +133,6 @@ export default function App() {
 		);
 	}
 
-	// Error state
 	if (status === "error") {
 		return (
 			<div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary p-4 text-center">
@@ -158,10 +152,10 @@ export default function App() {
 					</svg>
 				</div>
 				<h2 className="text-lg font-semibold text-th-text-primary">
-					Connection Error
+					Cluster unreachable
 				</h2>
 				<p className="text-sm text-th-text-secondary">
-					{errorMessage || "Failed to connect to server"}
+					{errorMessage || "Failed to connect to the cluster server."}
 				</p>
 				<button
 					type="button"
@@ -174,10 +168,8 @@ export default function App() {
 		);
 	}
 
-	// Connected - show node list
 	return (
 		<div className="flex min-h-dvh flex-col bg-th-bg-primary">
-			{/* Version indicator (development only) */}
 			{version && (
 				<div className="fixed bottom-2 right-2 text-xs text-th-text-muted">
 					v{version}

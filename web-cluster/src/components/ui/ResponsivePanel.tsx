@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 
 interface Props {
@@ -17,6 +17,7 @@ export function ResponsivePanel({
 	children,
 }: Props) {
 	const panelRef = useRef<HTMLDivElement>(null);
+	const titleId = useId();
 
 	useEffect(() => {
 		if (!isOpen) return;
@@ -62,6 +63,9 @@ export function ResponsivePanel({
 				{/* Panel */}
 				<div
 					ref={panelRef}
+					role="dialog"
+					aria-modal="true"
+					aria-labelledby={titleId}
 					className="absolute inset-x-0 bottom-0 max-h-[80vh] overflow-y-auto rounded-t-2xl border-t border-th-border bg-th-bg-secondary pb-[env(safe-area-inset-bottom)]"
 				>
 					{/* Handle */}
@@ -71,7 +75,10 @@ export function ResponsivePanel({
 
 					{/* Title */}
 					<div className="border-b border-th-border px-4 pb-3">
-						<h3 className="text-center text-base font-semibold text-th-text-primary">
+						<h3
+							id={titleId}
+							className="text-center text-base font-semibold text-th-text-primary"
+						>
 							{title}
 						</h3>
 					</div>
@@ -93,11 +100,17 @@ export function ResponsivePanel({
 			{/* Panel positioned from top-right */}
 			<div
 				ref={panelRef}
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby={titleId}
 				className="absolute right-4 top-4 w-80 max-h-[80vh] overflow-y-auto rounded-lg border border-th-border bg-th-bg-secondary shadow-xl"
 			>
 				{/* Header */}
 				<div className="flex items-center justify-between border-b border-th-border p-4">
-					<h3 className="text-base font-semibold text-th-text-primary">
+					<h3
+						id={titleId}
+						className="text-base font-semibold text-th-text-primary"
+					>
 						{title}
 					</h3>
 					<button

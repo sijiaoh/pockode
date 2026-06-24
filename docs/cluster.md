@@ -84,6 +84,11 @@ The file is deleted when the server shuts down gracefully.
 - **Stop**: Sends SIGTERM to the process, then SIGKILL after 5 seconds if needed
 - **Clean Up**: For stale nodes, removes the orphaned server.json file
 
+If `node.stop` cannot find the saved process, the backend removes any stale
+`server.json` state it can clean up and returns `"node not running"`. The
+frontend treats this as a warning, refreshes `node.list`, and continues to show
+cleanup guidance if stale state remains.
+
 ## Usage
 
 ```bash
@@ -144,6 +149,23 @@ The cluster frontend persists the auth token to `localStorage` under `cluster_au
 - Session continuity without re-entering token
 
 The key differs from main mode (`auth_token`) to avoid conflicts when both modes share the same browser origin.
+
+### Frontend UX
+
+The cluster frontend is a mobile-first operations dashboard. Its primary job is
+to show which project nodes are running and expose the next useful action:
+
+- Initial connection uses a full-screen loading state.
+- Reconnection keeps the last known node list visible and shows an inline
+  warning that the status may be stale.
+- Node cards show status, shortened path, runtime metadata, and the primary
+  action for the current state: Start, Stop, or Clean Up.
+- Stale nodes are treated as a recoverable state. The UI explains that the
+  process is gone but server info remains, then offers Clean Up.
+- Stop requests that return `"node not running"` are shown as warnings, not
+  fatal action errors, because the saved process was already gone.
+- Action warnings and errors are shown inline above the node list so they do
+  not cover mobile controls.
 
 ### Available Methods
 

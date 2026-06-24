@@ -7,15 +7,43 @@ import { Spinner } from "./ui";
 
 const POLL_INTERVAL_MS = 5000;
 
+type ActionNotice = {
+	variant: "warning" | "error";
+	title: string;
+	message: string;
+	nodeId?: string;
+};
+
+function getErrorMessage(err: unknown, fallback: string) {
+	return err instanceof Error ? err.message : fallback;
+}
+
+function isAlreadyStoppedError(message: string) {
+	const normalized = message.toLowerCase();
+	return (
+		normalized.includes("node not running") ||
+		normalized.includes("process not found")
+	);
+}
+
 export function NodeList() {
 	const { status, actions } = useWSStore();
 	const [nodes, setNodes] = useState<NodeWithStatus[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [loadError, setLoadError] = useState<string | null>(null);
-	const [actionError, setActionError] = useState<string | null>(null);
+	const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null);
 	const [formOpen, setFormOpen] = useState(false);
 	const [editingNode, setEditingNode] = useState<NodeWithStatus | null>(null);
 	const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const counts = nodes.reduce(
+		(acc, node) => {
+			acc.total += 1;
+			acc[node.status.status] += 1;
+			return acc;
+		},
+		{ running: 0, stale: 0, stopped: 0, total: 0 },
+	);
 
 	const fetchNodes = useCallback(async () => {
 		if (status !== "connected") return;
@@ -37,7 +65,6 @@ export function NodeList() {
 		}
 	}, [status, fetchNodes]);
 
-	// Polling for status updates
 	useEffect(() => {
 		if (status !== "connected" || loading) return;
 
@@ -63,13 +90,13 @@ export function NodeList() {
 		};
 	}, [status, loading, fetchNodes]);
 
-	// Auto-dismiss action errors after 5 seconds
+	// Keep warnings visible until the user closes them.
 	useEffect(() => {
-		if (actionError) {
-			const timer = setTimeout(() => setActionError(null), 5000);
+		if (actionNotice?.variant === "error") {
+			const timer = setTimeout(() => setActionNotice(null), 5000);
 			return () => clearTimeout(timer);
 		}
-	}, [actionError]);
+	}, [actionNotice]);
 
 	const handleAdd = () => {
 		setEditingNode(null);
@@ -85,60 +112,76 @@ export function NodeList() {
 		try {
 			await actions.deleteNode(id);
 			setNodes((prev) => prev.filter((n) => n.id !== id));
-			setActionError(null);
+			setActionNotice(null);
 		} catch (err) {
-			setActionError(
-				err instanceof Error ? err.message : "Failed to delete node",
-			);
+			setActionNotice({
+				variant: "error",
+				title: "Could not delete node",
+				message: getErrorMessage(err, "Failed to delete node"),
+				nodeId: id,
+			});
 		}
 	};
 
 	const handleSubmit = async (path: string, name?: string) => {
-		try {
-			if (editingNode) {
-				await actions.updateNode({
-					id: editingNode.id,
-					path,
-					name,
-				});
-			} else {
-				await actions.createNode({ path, name });
-			}
-			await fetchNodes();
-			setActionError(null);
-		} catch (err) {
-			setActionError(
-				err instanceof Error ? err.message : "Failed to save node",
-			);
-			throw err;
+		if (editingNode) {
+			await actions.updateNode({
+				id: editingNode.id,
+				path,
+				name,
+			});
+		} else {
+			await actions.createNode({ path, name });
 		}
+		await fetchNodes();
+		setActionNotice(null);
 	};
 
 	const handleStart = async (id: string, token: string) => {
+		const node = nodes.find((n) => n.id === id);
 		try {
 			await actions.startNode({ id, token });
 			await fetchNodes();
-			setActionError(null);
+			setActionNotice(null);
 		} catch (err) {
-			setActionError(
-				err instanceof Error ? err.message : "Failed to start node",
-			);
+			const message = getErrorMessage(err, "Failed to start node");
+			setActionNotice({
+				variant: "error",
+				title: "Could not start node",
+				message: `Could not start ${node?.name ?? "node"}: ${message}`,
+				nodeId: id,
+			});
 		}
 	};
 
 	const handleStop = async (id: string) => {
+		const node = nodes.find((n) => n.id === id);
 		try {
 			await actions.stopNode({ id });
 			await fetchNodes();
-			setActionError(null);
+			setActionNotice(null);
 		} catch (err) {
-			setActionError(
-				err instanceof Error ? err.message : "Failed to stop node",
-			);
+			const message = getErrorMessage(err, "Failed to stop node");
+			await fetchNodes();
+			if (isAlreadyStoppedError(message)) {
+				setActionNotice({
+					variant: "warning",
+					title: "Node was already stopped",
+					message:
+						"Process was already gone. Stale server info was cleaned up.",
+					nodeId: id,
+				});
+				return;
+			}
+			setActionNotice({
+				variant: "error",
+				title: "Could not stop node",
+				message: `Could not stop ${node?.name ?? "node"}: ${message}`,
+				nodeId: id,
+			});
 		}
 	};
 
-	// Loading state
 	if (loading && status === "connected") {
 		return (
 			<div className="flex flex-1 items-center justify-center">
@@ -147,7 +190,6 @@ export function NodeList() {
 		);
 	}
 
-	// Load error state
 	if (loadError) {
 		return (
 			<div className="flex flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
@@ -165,20 +207,24 @@ export function NodeList() {
 
 	return (
 		<div className="flex flex-1 flex-col">
-			{/* Action error toast */}
-			{actionError && (
-				<div className="absolute left-4 right-4 top-16 z-40 rounded-lg border border-th-error/30 bg-th-error/10 px-4 py-3 text-sm text-th-error">
-					{actionError}
+			<header className="flex min-h-14 shrink-0 items-center justify-between border-b border-th-border px-4 py-2">
+				<div>
+					<h1 className="text-lg font-semibold text-th-text-primary">
+						Cluster
+					</h1>
+					<p
+						className={`text-xs ${
+							status === "reconnecting" ? "text-th-warning" : "text-th-success"
+						}`}
+					>
+						{status === "reconnecting" ? "Reconnecting..." : "Connected"}
+					</p>
 				</div>
-			)}
-
-			{/* Header */}
-			<header className="flex h-14 shrink-0 items-center justify-between border-b border-th-border px-4">
-				<h1 className="text-lg font-semibold text-th-text-primary">Nodes</h1>
 				<button
 					type="button"
 					onClick={handleAdd}
-					className="flex min-h-[44px] items-center gap-2 rounded-lg bg-th-accent px-3 py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover"
+					className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-lg bg-th-accent px-3 py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover"
+					aria-label="Add node"
 				>
 					<svg
 						className="h-4 w-4"
@@ -193,14 +239,57 @@ export function NodeList() {
 							d="M12 4v16m8-8H4"
 						/>
 					</svg>
-					Add
+					<span className="hidden sm:inline">Add node</span>
 				</button>
 			</header>
 
-			{/* Content */}
 			<div className="flex-1 overflow-y-auto p-4">
+				{status === "reconnecting" && (
+					<div className="mb-3 rounded-lg border border-th-warning/30 bg-th-warning/10 px-3 py-2 text-sm text-th-warning">
+						Reconnecting. Showing the last known state.
+					</div>
+				)}
+
+				<div className="mb-3 flex flex-wrap gap-2">
+					<SummaryChip label={`${counts.running} running`} />
+					<SummaryChip label={`${counts.stopped} stopped`} />
+					<SummaryChip
+						label={
+							counts.stale > 0
+								? `${counts.stale} needs cleanup`
+								: `${counts.stale} stale`
+						}
+						variant={counts.stale > 0 ? "warning" : "default"}
+					/>
+					<SummaryChip label={`${counts.total} nodes`} />
+				</div>
+
+				{actionNotice && (
+					<div
+						className={`mb-3 rounded-lg border px-4 py-3 text-sm ${
+							actionNotice.variant === "warning"
+								? "border-th-warning/30 bg-th-warning/10 text-th-warning"
+								: "border-th-error/30 bg-th-error/10 text-th-error"
+						}`}
+						role="alert"
+					>
+						<div className="flex items-start justify-between gap-3">
+							<div className="min-w-0">
+								<p className="font-medium">{actionNotice.title}</p>
+								<p className="mt-1 break-words">{actionNotice.message}</p>
+							</div>
+							<button
+								type="button"
+								onClick={() => setActionNotice(null)}
+								className="min-h-[32px] shrink-0 rounded px-2 text-xs hover:bg-th-overlay-hover"
+							>
+								Close
+							</button>
+						</div>
+					</div>
+				)}
+
 				{nodes.length === 0 ? (
-					// Empty state
 					<div className="flex flex-col items-center justify-center py-16 text-center">
 						<div className="flex h-16 w-16 items-center justify-center rounded-full bg-th-bg-tertiary text-th-text-muted">
 							<svg
@@ -218,10 +307,10 @@ export function NodeList() {
 							</svg>
 						</div>
 						<h2 className="mt-4 text-lg font-medium text-th-text-primary">
-							No nodes yet
+							No nodes
 						</h2>
 						<p className="mt-1 text-sm text-th-text-secondary">
-							Add a project to get started
+							Add a project directory to run Pockode from this cluster.
 						</p>
 						<button
 							type="button"
@@ -241,11 +330,10 @@ export function NodeList() {
 									d="M12 4v16m8-8H4"
 								/>
 							</svg>
-							Add Node
+							Add node
 						</button>
 					</div>
 				) : (
-					// Node list
 					<div className="flex flex-col gap-3">
 						{nodes.map((node) => (
 							<NodeCard
@@ -261,7 +349,6 @@ export function NodeList() {
 				)}
 			</div>
 
-			{/* Form panel */}
 			<NodeForm
 				isOpen={formOpen}
 				onClose={() => setFormOpen(false)}
@@ -269,5 +356,25 @@ export function NodeList() {
 				editingNode={editingNode}
 			/>
 		</div>
+	);
+}
+
+function SummaryChip({
+	label,
+	variant = "default",
+}: {
+	label: string;
+	variant?: "default" | "warning";
+}) {
+	return (
+		<span
+			className={`rounded-full border px-2.5 py-1 text-xs ${
+				variant === "warning"
+					? "border-th-warning/30 bg-th-warning/10 text-th-warning"
+					: "border-th-border bg-th-bg-secondary text-th-text-secondary"
+			}`}
+		>
+			{label}
+		</span>
 	);
 }
