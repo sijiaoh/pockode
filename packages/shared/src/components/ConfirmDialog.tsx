@@ -71,8 +71,8 @@ export function ConfirmDialog({
 			onMouseDown={stopEvent}
 		>
 			{/* biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: backdrop */}
-			<div className="absolute inset-0" onClick={onCancel} />
-			<div className="relative mx-4 w-full max-w-sm rounded-lg bg-th-bg-secondary p-4 shadow-xl">
+			<div className="absolute inset-0 z-0" onClick={onCancel} />
+			<div className="relative z-10 mx-4 w-full max-w-sm rounded-lg bg-th-bg-secondary p-4 shadow-xl">
 				<h2 id={titleId} className="text-lg font-bold text-th-text-primary">
 					{title}
 				</h2>
