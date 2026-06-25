@@ -4,5 +4,5 @@
 # Static files (frontend build output, except .keep)
 static/*
 !static/.keep
-cluster/static/assets/*
-!cluster/static/assets/.keep
+cluster/static/*
+!cluster/static/.keep
