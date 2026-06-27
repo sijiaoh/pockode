@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -43,7 +45,7 @@ var version = "dev"
 //go:embed static/*
 var staticFS embed.FS
 
-func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler) http.Handler {
+func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +59,11 @@ func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler) http.Handl
 	})
 
 	mux.Handle("GET /ws", wsHandler)
+
+	// Local MCP API. middleware.Auth bypasses this exact route; mcpHandler
+	// self-auths with the locally-generated MCP token instead of the user
+	// --auth-token. The relay also refuses to forward it (loopback-only).
+	mux.Handle("POST "+mcp.APIPath, mcpHandler)
 
 	authedMux := middleware.Auth(token)(mux)
 
@@ -98,6 +105,15 @@ func newSPAHandler(apiHandler http.Handler) http.Handler {
 }
 
 const defaultPort = 9870
+
+// generateToken returns a random 256-bit token as a hex string.
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
 
 func main() {
 	// Handle subcommands before flag.Parse()
@@ -258,8 +274,18 @@ func main() {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
 
+	// Local API token for the MCP subprocess. Randomly generated per startup and
+	// published to server.json, so it never outlives the process and is distinct
+	// from the user-facing --auth-token.
+	mcpToken, err := generateToken()
+	if err != nil {
+		slog.Error("failed to generate MCP token", "error", err)
+		os.Exit(1)
+	}
+	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workStarter, workAutoResumer, settingsStore), mcpToken)
+
 	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
-	handler := newHandler(token, devMode, wsHandler)
+	handler := newHandler(token, devMode, wsHandler, mcpHandler)
 
 	portStr := strconv.Itoa(port)
 	srv := &http.Server{
@@ -308,7 +334,7 @@ func main() {
 
 	// Write server.json for orchestration programs to discover the running server
 	localURL := "http://localhost:" + portStr
-	if err := serverinfo.Write(dataDir, port, localURL, remoteURL); err != nil {
+	if err := serverinfo.Write(dataDir, port, localURL, remoteURL, mcpToken); err != nil {
 		slog.Error("failed to write server.json", "error", err)
 		os.Exit(1)
 	}
@@ -432,15 +458,15 @@ func runMCP() {
 		os.Exit(1)
 	}
 
-	s, err := initStores(dataDir)
+	// Client mode: discover the running server from server.json and forward tool
+	// calls over its local API. The MCP process owns no stores and no watcher.
+	client, err := mcp.NewClientFromServerInfo(dataDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	s.StartWatching()
-	defer s.StopWatching()
 
-	server := mcp.NewServer(s.work, s.agentRole)
+	server := mcp.NewServer(client)
 	if err := server.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
 		os.Exit(1)

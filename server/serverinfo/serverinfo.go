@@ -18,11 +18,15 @@ type Info struct {
 	StartedAt string `json:"started_at"`
 	LocalURL  string `json:"local_url,omitempty"`
 	RemoteURL string `json:"remote_url,omitempty"`
+	// Token authenticates local clients (e.g. the MCP subprocess) against the
+	// server's local API. It is randomly generated at each startup, so it never
+	// outlives the process and is not the user-facing --auth-token.
+	Token string `json:"token,omitempty"`
 }
 
 // Write creates the server.json file in the given data directory.
 // Creates the data directory if it doesn't exist.
-func Write(dataDir string, port int, localURL, remoteURL string) error {
+func Write(dataDir string, port int, localURL, remoteURL, token string) error {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return err
 	}
@@ -33,6 +37,7 @@ func Write(dataDir string, port int, localURL, remoteURL string) error {
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
 		LocalURL:  localURL,
 		RemoteURL: remoteURL,
+		Token:     token,
 	}
 
 	data, err := json.MarshalIndent(info, "", "  ")
@@ -40,7 +45,14 @@ func Write(dataDir string, port int, localURL, remoteURL string) error {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(dataDir, filename), data, 0644)
+	// 0600: server.json holds the local API token (a credential), so restrict it
+	// to the owner. Chmod as well, since WriteFile does not alter the mode of an
+	// already-existing file (e.g. a stale file left by a previous crash).
+	path := filepath.Join(dataDir, filename)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0600)
 }
 
 // Read reads the server.json file from the given data directory.

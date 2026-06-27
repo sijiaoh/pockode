@@ -109,9 +109,14 @@ Work items transition through `StepDone`; there is no intermediate `done` state.
 
 The Work system uses atomic file I/O instead of a database:
 
-1. **Multi-process support** — MCP servers (spawned by AI CLI) and the main server both need access
-2. **No single point of failure** — No database process to manage
-3. **Simple deployment** — Just files in a directory
+1. **No single point of failure** — No database process to manage
+2. **Simple deployment** — Just files in a directory
+3. **Out-of-band edits** — Files can be inspected or edited directly; the main server picks up changes via fsnotify
+
+> The flock + fsnotify machinery below was originally also required because the
+> MCP subprocess wrote the work files directly. The MCP path is now an in-process
+> API client (see *MCP Server Architecture*), so the main server is the sole
+> writer; the file infrastructure remains for persistence and out-of-band edits.
 
 ### Concurrency Control
 
@@ -214,40 +219,49 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 ### MCP Server Architecture
 
 ```
-server/mcp/server.go
+server/mcp/server.go    — stdio proxy (Server) + Client
+server/mcp/executor.go  — server-side tool logic (Executor)
+server/mcp/handler.go   — local HTTP API (APIHandler)
 ```
 
-The MCP server runs as a stdio subprocess spawned by the AI CLI:
+The MCP subprocess is a **thin client**. It no longer opens the FileStore or
+starts a watcher; instead it forwards every tool call over HTTP to the running
+main server, which executes it in-process against the same stores the WebSocket
+layer uses:
 
 ```
-AI CLI (claude)
-    │ spawn
+AI CLI (claude / codex)
+    │ spawn: `pockode mcp --data-dir <dir>`
     ▼
-MCP Server (pockode mcp)
-    │ stdio JSON-RPC 2.0
+MCP stdio proxy (Server)
+    │ reads <dir>/server.json → { local_url, token }
+    │ tools/call ──HTTP POST /api/mcp/tools/call (Bearer token)──►
     ▼
-FileStore (shared with main server)
+Main server: APIHandler → Executor → work.Store / WorkStarter
 ```
 
-All tool results are JSON (not formatted text) to prevent prompt injection and ensure stable parsing:
+**Why client mode** (instead of the previous file-writing subprocess):
 
-```go
-func handleToolCall(ctx, w, req) {
-    result, err := tool.Execute(ctx, params)
-    if err != nil {
-        writeJSONRPCResult(w, req.ID, toolCallResult{
-            Content: []content{{Type: "text", Text: err.Error()}},
-            IsError: true,
-        })
-        return
-    }
+- **Single writer** — only the main server mutates work data, eliminating the
+  two-writer flock/fsnotify coordination the subprocess used to need.
+- **Direct side effects** — `work_start` calls `WorkStartHandler` directly and
+  `step_done`/`work_reopen` send their follow-up messages via the AutoResumer,
+  rather than depending on the main server noticing a file change. See the
+  Triggers section: the external (fsnotify) variants now fire only for genuine
+  out-of-band file edits.
 
-    jsonResult, _ := json.Marshal(result)
-    writeJSONRPCResult(w, req.ID, toolCallResult{
-        Content: []content{{Type: "text", Text: string(jsonResult)}},
-    })
-}
-```
+**Authentication**: the server generates a random token at startup and writes
+it to `server.json` (mode `0600`, since it is a credential) alongside the port.
+It is distinct from the user-facing `--auth-token` (which is never written to
+disk) and lives only for the lifetime of the process. `middleware.Auth` bypasses
+the exact `/api/mcp/tools/call` route; the `APIHandler` verifies the local token
+itself. The endpoint is loopback-only in practice — the relay explicitly refuses
+to forward `/api/mcp/*`, so it is never reachable remotely.
+
+All tool results are JSON (not formatted text) where structured data is
+returned, to prevent prompt injection and ensure stable parsing. A tool whose
+handler fails comes back as an `isError` result (the AI sees it); transport or
+auth failures are surfaced to the AI rather than failing silently.
 
 ## AutoResumer
 
@@ -298,23 +312,30 @@ Task: closed ──► Parent (open/closed) → (no message)
 
 **Trigger C: External Work Start**
 
-When MCP `work_start` is called from an external process:
+The MCP `work_start` tool now runs in-process: the `Executor` claims the work
+and calls `WorkStartHandler` directly (same path as the WebSocket `work.start`).
+This fsnotify trigger remains only for genuine out-of-band starts (an external
+process editing the work file directly):
 
 ```
-MCP: work_start ──► fsnotify ──► AutoResumer
-                                     │
-                    handleExternalWorkStart()
-                                     │
-                    Call WorkStartHandler
+external file edit ──► fsnotify ──► AutoResumer
+                                        │
+                       handleExternalWorkStart()
+                                        │
+                       Call WorkStartHandler
 ```
 
 **Trigger D: Reserved**
 
 (Removed — step advance is now handled by Trigger E)
 
-**Trigger E: External Step Done**
+**Trigger E: Step Done**
 
-When MCP `step_done` is called from an external process and the step advances:
+The MCP `step_done` tool runs in-process: after `store.StepDone` advances the
+step, the `Executor` calls `AutoResumer.NotifyStepDone`, which delivers the
+next-step prompt. The fsnotify path below is the equivalent for out-of-band file
+edits; both converge on `handleExternalStepDone`. When `step_done` is detected
+via fsnotify and the step advances:
 
 ```
 MCP: step_done ──► store.StepDone()
@@ -342,12 +363,14 @@ MCP: step_done ──► store.StepDone()
 
 Unlike Trigger B (child closure waking a waiting parent), step advancement is agent-initiated via `step_done` rather than automatic upon completion.
 
-**Trigger F: External Work Reopen**
+**Trigger F: Work Reopen**
 
-When MCP `work_reopen` is called from an external process:
+The MCP `work_reopen` tool runs in-process: after `store.Reopen`, the `Executor`
+calls `AutoResumer.NotifyReopen` to send the reopen message. The fsnotify path
+below is the equivalent for out-of-band file edits:
 
 ```
-MCP: work_reopen ──► fsnotify ──► AutoResumer
+work_reopen (API or external edit) ──► AutoResumer
                                        │
                       detect closed → in_progress
                                        │
@@ -362,10 +385,10 @@ The reopen message instructs the agent to review its previous work and determine
 
 ```go
 maxRetries = 3        // Stop work after 3 auto-continuation failures
-settleDelay = 2s      // Wait for MCP writes to propagate via fsnotify
+settleDelay = 2s      // Wait for out-of-band writes to propagate via fsnotify
 ```
 
-The settle delay ensures that when checking retry counts, any pending `step_done` calls have propagated through fsnotify and reset the counter.
+The settle delay ensures that when checking retry counts, any pending out-of-band `step_done` writes have propagated through fsnotify and reset the counter. In-process `step_done` (via the MCP API) resets the counter through `NotifyStepDone` without waiting on fsnotify propagation.
 
 ## Frontend Integration
 

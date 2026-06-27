@@ -422,6 +422,33 @@ func (r *AutoResumer) handleExternalWorkStart(w Work, h WorkStartHandler) {
 	slog.Info("external work start completed", "workId", w.ID, "sessionId", w.SessionID)
 }
 
+// NotifyStepDone sends the next-step prompt after an in-process step advance
+// (the MCP step_done tool now mutates the store via the local API instead of
+// the filesystem). Triggers E/F only fire for external/fsnotify changes, so the
+// API path requests these follow-up messages explicitly. Safe to call when the
+// work has closed: handleExternalStepDone bounds-checks the step index.
+func (r *AutoResumer) NotifyStepDone(w Work) {
+	sender := r.getSender()
+	sp := r.getStepProvider()
+	// Status guard mirrors Trigger E: a concurrent transition (e.g. process-ended
+	// → stopped, or work_needs_input) may land between the caller's StepDone and
+	// its re-read, so only prompt the next step when the work is still running.
+	if sender == nil || sp == nil || w.SessionID == "" || w.Status != StatusInProgress {
+		return
+	}
+	go r.handleExternalStepDone(w, sender, sp)
+}
+
+// NotifyReopen sends the reopen message after an in-process work_reopen.
+// Counterpart to Trigger F for the API-driven path.
+func (r *AutoResumer) NotifyReopen(w Work) {
+	sender := r.getSender()
+	if sender == nil || w.SessionID == "" {
+		return
+	}
+	go r.handleExternalReopen(w, sender)
+}
+
 // handleExternalStepDone handles step advancement triggered by MCP step_done tool.
 // It sends the next step prompt to the agent session.
 func (r *AutoResumer) handleExternalStepDone(w Work, sender MessageSender, sp StepProvider) {

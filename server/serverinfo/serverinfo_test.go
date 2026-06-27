@@ -11,7 +11,7 @@ import (
 func TestWriteAndDelete(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := Write(dir, 9870, "http://localhost:9870", "https://test.cloud.pockode.com"); err != nil {
+	if err := Write(dir, 9870, "http://localhost:9870", "https://test.cloud.pockode.com", "test-token"); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
@@ -43,6 +43,9 @@ func TestWriteAndDelete(t *testing.T) {
 	if info.RemoteURL != "https://test.cloud.pockode.com" {
 		t.Errorf("RemoteURL = %q, want %q", info.RemoteURL, "https://test.cloud.pockode.com")
 	}
+	if info.Token != "test-token" {
+		t.Errorf("Token = %q, want %q", info.Token, "test-token")
+	}
 
 	if err := Delete(dir); err != nil {
 		t.Fatalf("Delete failed: %v", err)
@@ -64,7 +67,7 @@ func TestDeleteNonExistent(t *testing.T) {
 func TestWriteCreatesDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "dir")
 
-	if err := Write(dir, 8080, "http://localhost:8080", ""); err != nil {
+	if err := Write(dir, 8080, "http://localhost:8080", "", ""); err != nil {
 		t.Fatalf("Write failed to create directory: %v", err)
 	}
 
@@ -77,7 +80,7 @@ func TestRead(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write first
-	if err := Write(dir, 9870, "http://localhost:9870", ""); err != nil {
+	if err := Write(dir, 9870, "http://localhost:9870", "", ""); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
@@ -135,7 +138,7 @@ func TestReadInvalidJSON(t *testing.T) {
 func TestWriteOmitsEmptyURLs(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := Write(dir, 9870, "", ""); err != nil {
+	if err := Write(dir, 9870, "", "", ""); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 

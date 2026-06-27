@@ -44,6 +44,13 @@ func NewHTTPHandler(backendPort, frontendPort int, log *slog.Logger) *HTTPHandle
 }
 
 func (h *HTTPHandler) Handle(ctx context.Context, req *HTTPRequest) *HTTPResponse {
+	// The MCP local API is for the in-process subprocess only and must never be
+	// reachable over the relay. Reject before any port selection, since in the
+	// default single-port setup frontendPort == backendPort.
+	if strings.HasPrefix(req.Path, "/api/mcp/") {
+		return errorResponse(http.StatusNotFound, "not found")
+	}
+
 	port := h.frontendPort
 	if h.isBackendPath(req.Path) {
 		port = h.backendPort
