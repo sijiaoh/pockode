@@ -2,6 +2,7 @@ package work
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -44,8 +45,8 @@ func startWork(t *testing.T, s *FileStore, id string) {
 	}
 }
 
-// startWorkWithSession transitions to in_progress and links a session atomically,
-// matching the real handleWorkStart pattern.
+// startWorkWithSession transitions to in_progress with a known sessionID, for
+// tests that need a deterministic session to assert against.
 func startWorkWithSession(t *testing.T, s *FileStore, id, sessionID string) {
 	t.Helper()
 	if _, err := s.Start(context.Background(), id, sessionID); err != nil {
@@ -231,6 +232,68 @@ func TestStart_SetsSessionID(t *testing.T) {
 	}
 	if w.Status != StatusInProgress {
 		t.Errorf("status = %q, want %q", w.Status, StatusInProgress)
+	}
+}
+
+func TestClaim_FreshStartGeneratesSession(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+
+	w, restart, err := s.Claim(context.Background(), story.ID)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if restart {
+		t.Error("restart = true, want false for open → in_progress")
+	}
+	if w.Status != StatusInProgress {
+		t.Errorf("status = %q, want in_progress", w.Status)
+	}
+	if w.SessionID == "" {
+		t.Error("want a fresh sessionID")
+	}
+}
+
+func TestClaim_RestartReusesSession(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+
+	first, _, err := s.Claim(context.Background(), story.ID)
+	if err != nil {
+		t.Fatalf("first Claim: %v", err)
+	}
+	if err := s.Stop(context.Background(), story.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	again, restart, err := s.Claim(context.Background(), story.ID)
+	if err != nil {
+		t.Fatalf("restart Claim: %v", err)
+	}
+	if !restart {
+		t.Error("restart = false, want true for stopped → in_progress")
+	}
+	if again.SessionID != first.SessionID {
+		t.Errorf("session = %q, want reuse of %q", again.SessionID, first.SessionID)
+	}
+}
+
+func TestClaim_RejectsAlreadyInProgress(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	if _, _, err := s.Claim(context.Background(), story.ID); err != nil {
+		t.Fatalf("first Claim: %v", err)
+	}
+
+	if _, _, err := s.Claim(context.Background(), story.ID); !errors.Is(err, ErrInvalidWork) {
+		t.Errorf("err = %v, want ErrInvalidWork", err)
+	}
+}
+
+func TestClaim_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	if _, _, err := s.Claim(context.Background(), "missing"); !errors.Is(err, ErrWorkNotFound) {
+		t.Errorf("err = %v, want ErrWorkNotFound", err)
 	}
 }
 
@@ -1109,6 +1172,46 @@ func TestConcurrent_StartSameWork(t *testing.T) {
 	// Exactly one should succeed (open → in_progress), rest fail (in_progress → in_progress is invalid)
 	if successes != 1 {
 		t.Errorf("expected exactly 1 success, got %d successes and %d failures", successes, failures)
+	}
+}
+
+// Claim is the production claim path: the restart/session decision happens under
+// the store lock, so concurrent claims on the same work must yield exactly one
+// winner (no double-claim, no clobbered session).
+func TestConcurrent_ClaimSameWork(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "Race")
+	const n = 10
+
+	type outcome struct {
+		w   Work
+		err error
+	}
+	results := make(chan outcome, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			w, _, err := s.Claim(context.Background(), story.ID)
+			results <- outcome{w: w, err: err}
+		}()
+	}
+
+	var successes int
+	var winningSession string
+	for i := 0; i < n; i++ {
+		o := <-results
+		if o.err != nil {
+			continue
+		}
+		successes++
+		winningSession = o.w.SessionID
+	}
+
+	if successes != 1 {
+		t.Errorf("expected exactly 1 successful claim, got %d", successes)
+	}
+	final := getWork(t, s, story.ID)
+	if final.SessionID != winningSession {
+		t.Errorf("final session = %q, want the winning claim's %q (no clobber)", final.SessionID, winningSession)
 	}
 }
 

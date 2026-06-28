@@ -75,7 +75,7 @@ func newStoresWithRole(t *testing.T, role agentrole.AgentRole) (work.Store, agen
 func newExecWithRole(t *testing.T, role agentrole.AgentRole) (*Executor, work.Store, string) {
 	t.Helper()
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, role)
-	return NewExecutor(store, arStore, stubWorkStarter{}, stubNotifier{}, settingsStore), store, roleID
+	return NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}), stubNotifier{}, settingsStore), store, roleID
 }
 
 func newTestExec(t *testing.T) testExec {
@@ -800,7 +800,7 @@ func TestExecute_UnknownTool(t *testing.T) {
 // not get stuck in_progress with a dangling session.
 func TestWorkStart_RollbackOnHandlerFailure(t *testing.T) {
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
-	exec := NewExecutor(store, arStore, failingWorkStarter{err: errStartFailed}, stubNotifier{}, settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, failingWorkStarter{err: errStartFailed}, stubNotifier{}), stubNotifier{}, settingsStore)
 
 	created := callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "Story", "agent_role_id": roleID,
@@ -828,7 +828,7 @@ func TestStepDone_NotifiesNextStep(t *testing.T) {
 		Name: "Eng", RolePrompt: "x", Steps: []string{"Plan", "Build"},
 	})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, stubWorkStarter{}, spy, settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy), spy, settingsStore)
 
 	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -855,7 +855,7 @@ func TestStepDone_NoNotifyOnClose(t *testing.T) {
 		Name: "Eng", RolePrompt: "x", Steps: []string{"Only"},
 	})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, stubWorkStarter{}, spy, settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy), spy, settingsStore)
 
 	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -875,7 +875,7 @@ func TestStepDone_NoNotifyOnClose(t *testing.T) {
 func TestWorkReopen_NotifiesReopen(t *testing.T) {
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, stubWorkStarter{}, spy, settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy), spy, settingsStore)
 
 	id := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -901,7 +901,7 @@ func TestAgentRoleResetDefaults_UpdatesDefaultRole(t *testing.T) {
 	if err := settingsStore.Update(settings.Settings{DefaultAgentRoleID: "stale-role-id"}); err != nil {
 		t.Fatal(err)
 	}
-	exec := NewExecutor(store, arStore, stubWorkStarter{}, stubNotifier{}, settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}), stubNotifier{}, settingsStore)
 
 	if res := callTool(t, exec, "agent_role_reset_defaults", map[string]string{}); res.IsError {
 		t.Fatalf("unexpected error: %s", toolText(res))

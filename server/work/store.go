@@ -26,10 +26,19 @@ type Store interface {
 	// These are the preferred way to change work status. Each method
 	// encapsulates validation, sessionID management, and side effects.
 
-	// Start transitions a work item to in_progress and assigns a sessionID.
-	// Allowed from: open, stopped, needs_input. Use Reactivate for
-	// process-running detection.
+	// Start transitions a work item to in_progress and assigns an explicit
+	// sessionID. Allowed from: open, stopped, needs_input. Use Reactivate for
+	// process-running detection. To start an agent session use Claim, which
+	// decides the sessionID atomically; Start is the lower-level primitive.
 	Start(ctx context.Context, id string, sessionID string) (Work, error)
+
+	// Claim atomically transitions a work item to in_progress for starting an
+	// agent session. The restart decision and sessionID assignment happen under
+	// the store lock so concurrent claims cannot race: on restart (current status
+	// stopped/needs_input) the existing sessionID is reused to preserve chat
+	// history; otherwise a fresh sessionID is generated. The returned restart
+	// flag tells the caller how to RollbackStart if the kickoff later fails.
+	Claim(ctx context.Context, id string) (w Work, restart bool, err error)
 
 	// Stop transitions in_progress/needs_input → stopped.
 	Stop(ctx context.Context, id string) error
@@ -321,6 +330,45 @@ func (s *FileStore) Start(_ context.Context, id string, sessionID string) (Work,
 	}
 
 	return result, nil
+}
+
+func (s *FileStore) Claim(_ context.Context, id string) (Work, bool, error) {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return Work{}, false, ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if !ValidateTransition(w.Status, StatusInProgress) {
+		s.worksMu.Unlock()
+		return Work{}, false, fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusInProgress)
+	}
+
+	// Decide restart and sessionID under the lock from the current status, so a
+	// concurrent transition cannot make us reuse a stale snapshot's decision.
+	restart := w.Status == StatusStopped || w.Status == StatusNeedsInput
+	sessionID := w.SessionID
+	if !restart || sessionID == "" {
+		sessionID = uuid.Must(uuid.NewV7()).String()
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Status = StatusInProgress
+	w.SessionID = sessionID
+	w.UpdatedAt = time.Now()
+
+	result := *w // copy before persistAndNotifyUpdates releases the lock
+
+	modified := map[string]bool{id: true}
+	if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
+		return Work{}, false, err
+	}
+
+	return result, restart, nil
 }
 
 func (s *FileStore) Stop(_ context.Context, id string) error {

@@ -131,7 +131,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 
 ### MCP 本地 API
 
-MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir>` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。子进程不再直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token；relay 拒绝转发 `/api/mcp/*`，因此该接口实际仅 loopback 可达。
+MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir>` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。子进程不直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token；relay 拒绝转发 `/api/mcp/*`，因此该接口实际仅 loopback 可达。
 
 ## 边界
 

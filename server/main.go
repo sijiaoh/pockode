@@ -268,6 +268,9 @@ func main() {
 	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
+	// Single implementation of the start/reopen transitions, shared by both the
+	// WebSocket handler (user actions) and the MCP Executor (AI actions).
+	workOps := work.NewOperations(workStore, workStarter, workAutoResumer)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
@@ -280,9 +283,9 @@ func main() {
 		slog.Error("failed to generate MCP token", "error", err)
 		os.Exit(1)
 	}
-	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workStarter, workAutoResumer, settingsStore), mcpToken)
+	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, workAutoResumer, settingsStore), mcpToken)
 
-	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
+	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
 	handler := newHandler(token, devMode, wsHandler, mcpHandler)
 
 	portStr := strconv.Itoa(port)

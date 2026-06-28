@@ -35,7 +35,7 @@ The workflow engine manages work item lifecycles through status transitions and 
 
 | From           | To             | Trigger                                    |
 | -------------- | -------------- | ------------------------------------------ |
-| `open`         | `in_progress`  | `Store.Start` (fresh start)                |
+| `open`         | `in_progress`  | `Store.Claim` (fresh start)                |
 | `in_progress`  | `open`         | `Store.RollbackStart` (fresh start failed) |
 | `in_progress`  | `needs_input`  | `Store.MarkNeedsInput`                     |
 | `in_progress`  | `waiting`      | `Store.MarkWaiting`                         |
@@ -45,7 +45,7 @@ The workflow engine manages work item lifecycles through status transitions and 
 | `needs_input`  | `stopped`      | `Store.Stop` (process ended while paused)  |
 | `waiting`      | `in_progress`  | `Store.ResumeFromWaiting` (child completes or user message) |
 | `waiting`      | `stopped`      | `Store.Stop` (process ended while waiting) |
-| `stopped`      | `in_progress`  | `Store.Start` (restart) or `Store.Reactivate` |
+| `stopped`      | `in_progress`  | `Store.Claim` (restart) or `Store.Reactivate` |
 | `closed`       | `in_progress`  | `Store.Reopen` (reopen closed item) |
 
 > Source: `server/work/validation.go` — `validTransitions` map.
@@ -106,27 +106,34 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 
 ### Work Start, Step Advance, and Reopen (in-process)
 
-`work_start`, `step_done`, and `work_reopen` are driven in-process by the MCP
-`Executor` (and, for `work_start`, the WebSocket handler) — not by reacting to
-file changes:
+`work_start`, `step_done`, and `work_reopen` are driven in-process rather than by
+reacting to file changes. `work_start` and `work_reopen` go through a single
+shared implementation, `work.Operations`, called by **both** the WebSocket
+handler (user actions) and the MCP `Executor` (AI actions) — so a user-triggered
+action and an AI-triggered action have identical effects:
 
-- **work_start** — the caller claims the work (`Store.Start`: `in_progress` +
-  `sessionID`) and invokes `WorkStartHandler.HandleWorkStart` directly to create
-  the session and send the kickoff. On failure the claim is rolled back to
-  `open` with an empty `sessionID`.
-- **step_done** — `Store.StepDone` advances `CurrentStep` if more steps remain,
-  otherwise it closes the work item. While the work stays `in_progress`, the
-  caller calls `AutoResumer.NotifyStepDone`, which sends the next step's
+- **work_start** (`Operations.StartWork`) — atomically claims the work
+  (`Store.Claim`: `in_progress` + `sessionID`, deciding restart/session reuse
+  under the store lock) and invokes `WorkStartHandler.HandleWorkStart` to
+  create the session and send the kickoff. On failure the claim is rolled back to
+  `open` with an empty `sessionID`. Runs on a detached context so a caller
+  timeout/disconnect cannot orphan a half-created session.
+- **work_reopen** (`Operations.ReopenWork`) — after `Store.Reopen`
+  (`closed → in_progress`), calls `AutoResumer.NotifyReopen` to send the reopen
+  nudge.
+- **step_done** (MCP-only) — `Store.StepDone` advances `CurrentStep` if more steps
+  remain, otherwise it closes the work item. While the work stays `in_progress`,
+  the `Executor` calls `AutoResumer.NotifyStepDone`, which sends the next step's
   instructions via `BuildStepAdvanceMessage`. On the last step no prompt is sent.
   Work must be `in_progress` to call `step_done`.
-- **work_reopen** — after `Store.Reopen` (`closed → in_progress`), the caller
-  calls `AutoResumer.NotifyReopen` to send the reopen nudge.
 
 **Purpose:** Give the agent explicit control over step timing while keeping the
-main server the single writer; the follow-up messages are requested directly
-rather than detected from a file change.
+main server the single writer; the follow-up messages are requested directly by
+the in-process caller instead of being detected from a file change. Routing
+start/reopen through one `Operations` type keeps the two transports behaviorally
+identical.
 
-> Source: `server/mcp/executor.go`, `server/ws/rpc_work.go`,
+> Source: `server/work/operations.go` — `StartWork`, `ReopenWork`;
 > `server/work/auto_resumer.go` — `NotifyStepDone`, `NotifyReopen`.
 
 ## WorkStarter

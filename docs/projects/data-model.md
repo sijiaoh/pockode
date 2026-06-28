@@ -108,16 +108,16 @@ The main server is the **sole writer** of the work and agent-role indexes (the
 MCP path goes through the in-process API, not the filesystem), so there is no
 cross-process write coordination to manage.
 
-**flock:** A dedicated lock file (`index.json.lock`) still guards each read/write
-so a reader never observes a half-written file. Reads acquire a shared lock
+**flock:** A dedicated lock file (`index.json.lock`) guards each read/write so a
+reader never observes a half-written file. Reads acquire a shared lock
 (`LOCK_SH`); writes acquire an exclusive lock (`LOCK_EX`). A separate lock file
 is used because atomic rename changes the data file's inode, which would break
 flock on the data file itself.
 
 > The underlying `filestore` primitive also supports fsnotify-based reload for
 > cross-process change detection (the settings store uses it), but the work and
-> agent-role stores no longer watch their files — change events are fired
-> directly from in-process mutations.
+> agent-role stores do not watch their files — change events are fired directly
+> from in-process mutations.
 
 ### Rollback on persist failure
 

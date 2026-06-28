@@ -38,8 +38,9 @@ func TestHealthEndpoint(t *testing.T) {
 
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(scopeManager, workStore)
-	wsHandler := ws.NewRPCHandler("test-token", "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
-	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workStarter, nil, settingsStore), "mcp-token")
+	workOps := work.NewOperations(workStore, workStarter, nil)
+	wsHandler := ws.NewRPCHandler("test-token", "test", true, cmdStore, scopeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
+	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, nil, settingsStore), "mcp-token")
 	handler := newHandler("test-token", true, wsHandler, mcpHandler)
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -68,8 +69,9 @@ func TestPingEndpoint(t *testing.T) {
 
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(scopeManager, workStore)
-	wsHandler := ws.NewRPCHandler(token, "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
-	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workStarter, nil, settingsStore), "mcp-token")
+	workOps := work.NewOperations(workStore, workStarter, nil)
+	wsHandler := ws.NewRPCHandler(token, "test", true, cmdStore, scopeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
+	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, nil, settingsStore), "mcp-token")
 	handler := newHandler(token, true, wsHandler, mcpHandler)
 
 	t.Run("returns pong with valid token", func(t *testing.T) {
@@ -121,8 +123,9 @@ func TestMCPEndpoint(t *testing.T) {
 
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(scopeManager, workStore)
-	wsHandler := ws.NewRPCHandler(userToken, "test", true, cmdStore, scopeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
-	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workStarter, nil, settingsStore), mcpToken)
+	workOps := work.NewOperations(workStore, workStarter, nil)
+	wsHandler := ws.NewRPCHandler(userToken, "test", true, cmdStore, scopeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
+	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, nil, settingsStore), mcpToken)
 	handler := newHandler(userToken, true, wsHandler, mcpHandler)
 
 	const path = "/api/mcp/tools/call"

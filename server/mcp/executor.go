@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
@@ -17,12 +16,12 @@ import (
 // ErrUnknownTool indicates a tools/call referenced a tool that does not exist.
 var ErrUnknownTool = errors.New("unknown tool")
 
-// WorkNotifier delivers the follow-up agent messages (next-step prompt, reopen
-// nudge) that accompany a work transition. The AutoResumer sends them only on
-// request, so the MCP path must call these after mutating the store in-process.
+// WorkNotifier delivers the next-step prompt that follows an in-process
+// step_done. The AutoResumer sends it only on request, so the Executor calls it
+// after advancing the step in-process. (The reopen nudge lives in
+// work.Operations, which owns the reopen transition for both transports.)
 type WorkNotifier interface {
 	NotifyStepDone(w work.Work)
-	NotifyReopen(w work.Work)
 }
 
 // SettingsStore is the slice of the settings store the executor needs to keep
@@ -36,25 +35,25 @@ type SettingsStore interface {
 // Executor runs MCP tool calls against the live server stores. It is the
 // in-process counterpart to the stdio proxy: the proxy (running inside the AI
 // CLI subprocess) forwards each tool call over HTTP, and the Executor performs
-// the actual work using the same stores and WorkStarter as the WebSocket
+// the actual work using the same stores and work.Operations as the WebSocket
 // handlers. This keeps the server as the single writer of work data.
 type Executor struct {
 	store          work.Store
 	agentRoleStore agentrole.Store
-	workStarter    work.WorkStartHandler
+	ops            *work.Operations
 	notifier       WorkNotifier
 	settingsStore  SettingsStore
 }
 
-// NewExecutor creates an Executor. workStarter drives session creation and the
-// kickoff/restart message on work_start (same handler the WebSocket layer uses);
-// it is required whenever work_start is reachable. notifier delivers the
-// step-advance and reopen messages for in-process transitions; a nil notifier
-// skips those follow-ups. settingsStore keeps the default agent role in sync on
-// reset; a nil settingsStore skips that update. Nils are tolerated only where
-// the corresponding tools are unreachable (e.g. narrow tests).
-func NewExecutor(store work.Store, agentRoleStore agentrole.Store, workStarter work.WorkStartHandler, notifier WorkNotifier, settingsStore SettingsStore) *Executor {
-	return &Executor{store: store, agentRoleStore: agentRoleStore, workStarter: workStarter, notifier: notifier, settingsStore: settingsStore}
+// NewExecutor creates an Executor. ops performs the start/reopen transitions and
+// their side effects (the same operations the WebSocket layer calls); it is
+// required whenever work_start or work_reopen is reachable. notifier delivers
+// the step-advance message on step_done; a nil notifier skips that follow-up.
+// settingsStore keeps the default agent role in sync on reset; a nil
+// settingsStore skips that update. Nils are tolerated only where the
+// corresponding tools are unreachable (e.g. narrow tests).
+func NewExecutor(store work.Store, agentRoleStore agentrole.Store, ops *work.Operations, notifier WorkNotifier, settingsStore SettingsStore) *Executor {
+	return &Executor{store: store, agentRoleStore: agentRoleStore, ops: ops, notifier: notifier, settingsStore: settingsStore}
 }
 
 // Execute runs the named tool and returns its text result. It returns a
@@ -295,50 +294,12 @@ func (e *Executor) workStart(ctx context.Context, args json.RawMessage) (string,
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	// Validate work exists and has an agent role before claiming.
-	current, found, err := e.store.Get(params.ID)
+	w, err := e.ops.StartWork(ctx, params.ID)
 	if err != nil {
 		return "", err
 	}
-	if !found {
-		return "", fmt.Errorf("work %s not found", params.ID)
-	}
-	if current.AgentRoleID == "" {
-		return "", fmt.Errorf("work %s has no agent_role_id", params.ID)
-	}
-	if _, roleFound, err := e.agentRoleStore.Get(current.AgentRoleID); err != nil {
-		return "", fmt.Errorf("failed to validate agent role: %w", err)
-	} else if !roleFound {
-		return "", fmt.Errorf("agent role %q not found", current.AgentRoleID)
-	}
 
-	// Reuse the existing sessionID on restart (stopped/needs_input → in_progress)
-	// to preserve chat history; generate a fresh one otherwise.
-	restart := current.Status == work.StatusStopped || current.Status == work.StatusNeedsInput
-	sessionID := current.SessionID
-	if !restart || sessionID == "" {
-		sessionID = uuid.Must(uuid.NewV7()).String()
-	}
-
-	// Claim atomically (in_progress + sessionID), then create the session and
-	// send the kickoff/restart message via WorkStarter. Mirrors ws.handleWorkStart.
-	//
-	// Detach from the HTTP request context: the client has a request timeout and
-	// the AI CLI may disconnect, but session creation must run to completion so a
-	// caller timeout cannot orphan a half-created session.
-	startCtx := context.WithoutCancel(ctx)
-	w, err := e.store.Start(startCtx, params.ID, sessionID)
-	if err != nil {
-		return "", err
-	}
-	if err := e.workStarter.HandleWorkStart(startCtx, w); err != nil {
-		if rbErr := e.store.RollbackStart(startCtx, params.ID, restart); rbErr != nil {
-			slog.Error("failed to rollback work start", "workId", params.ID, "restart", restart, "error", rbErr)
-		}
-		return "", err
-	}
-
-	return fmt.Sprintf("Started work %s (session: %s)", params.ID, sessionID), nil
+	return fmt.Sprintf("Started work %s (session: %s)", w.ID, w.SessionID), nil
 }
 
 func (e *Executor) workNeedsInput(ctx context.Context, args json.RawMessage) (string, error) {
@@ -365,15 +326,8 @@ func (e *Executor) workReopen(ctx context.Context, args json.RawMessage) (string
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if err := e.store.Reopen(ctx, params.ID); err != nil {
+	if err := e.ops.ReopenWork(ctx, params.ID); err != nil {
 		return "", err
-	}
-
-	// Deliver the reopen message to the agent session.
-	if e.notifier != nil {
-		if w, found, err := e.store.Get(params.ID); err == nil && found {
-			e.notifier.NotifyReopen(w)
-		}
 	}
 
 	return fmt.Sprintf("Reopened work %s", params.ID), nil

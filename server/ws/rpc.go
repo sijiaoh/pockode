@@ -35,13 +35,13 @@ type RPCHandler struct {
 	workStore            work.Store
 	workListWatcher      *watch.WorkListWatcher
 	workDetailWatcher    *watch.WorkDetailWatcher
-	workStarter          *worktree.WorkStarter
+	workOps              *work.Operations
 	workStopper          *worktree.WorkStopper
 	agentRoleStore       agentrole.Store
 	agentRoleListWatcher *watch.AgentRoleListWatcher
 }
 
-func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workStarter *worktree.WorkStarter, workStopper *worktree.WorkStopper, agentRoleStore agentrole.Store) *RPCHandler {
+func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workStopper *worktree.WorkStopper, agentRoleStore agentrole.Store) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -65,7 +65,7 @@ func NewRPCHandler(token, version string, devMode bool, commandStore *command.St
 		workStore:            workStore,
 		workListWatcher:      workListWatcher,
 		workDetailWatcher:    workDetailWatcher,
-		workStarter:          workStarter,
+		workOps:              workOps,
 		workStopper:          workStopper,
 		agentRoleStore:       agentRoleStore,
 		agentRoleListWatcher: agentRoleListWatcher,

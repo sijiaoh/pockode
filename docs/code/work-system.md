@@ -118,11 +118,9 @@ the WebSocket layer and the AI goes through the MCP API (see *MCP Server
 Architecture*), and both mutate the in-memory store directly. Mutations are
 serialized by a mutex and persisted atomically.
 
-> Historically the MCP subprocess wrote these files directly, so the stores ran
-> an fsnotify watcher to sync cross-process changes (and the AutoResumer had
-> "external" triggers to react to them). Now that MCP is an in-process API
-> client, that watcher and those triggers are gone — the work and agent-role
-> stores no longer watch their files.
+> Because the server is the sole writer, the work and agent-role stores do not
+> run a file watcher: their change events are emitted directly from in-process
+> mutations rather than reloaded after a cross-process write.
 
 ### Atomic Persistence
 
@@ -144,9 +142,9 @@ tmpFile.Sync()        // fsync ensures durability
 Rename(tmpFile, path) // POSIX atomic operation
 ```
 
-The filestore primitive still offers fsnotify-based reload for callers that need
-cross-process change detection (the settings store uses it), but the work and
-agent-role stores do not.
+The filestore primitive also offers fsnotify-based reload for callers that need
+cross-process change detection (the settings store uses it); the work and
+agent-role stores do not enable it, since the server is their only writer.
 
 ## MCP Tools
 
@@ -186,9 +184,9 @@ server/mcp/executor.go  — server-side tool logic (Executor)
 server/mcp/handler.go   — local HTTP API (APIHandler)
 ```
 
-The MCP subprocess is a **thin client**. It no longer opens the FileStore or
-starts a watcher; instead it forwards every tool call over HTTP to the running
-main server, which executes it in-process against the same stores the WebSocket
+The MCP subprocess is a **thin client**. It opens no store and starts no
+watcher; instead it forwards every tool call over HTTP to the running main
+server, which executes it in-process against the same stores the WebSocket
 layer uses:
 
 ```
@@ -202,14 +200,18 @@ MCP stdio proxy (Server)
 Main server: APIHandler → Executor → work.Store / WorkStarter
 ```
 
-**Why client mode** (instead of the previous file-writing subprocess):
+**Why client mode** (rather than letting the subprocess write the store files
+itself):
 
-- **Single writer** — only the main server mutates work data, eliminating the
-  two-writer fsnotify sync the subprocess used to need.
-- **Direct side effects** — `work_start` calls `WorkStartHandler` directly and
-  `step_done`/`work_reopen` send their follow-up messages via the AutoResumer
-  (`NotifyStepDone`/`NotifyReopen`), rather than depending on the main server
-  noticing a file change.
+- **Single writer** — only the main server mutates work data, so there is no
+  two-writer fsnotify sync to coordinate.
+- **Direct side effects** — `work_start`/`work_reopen` run through the shared
+  `work.Operations` (claim + kickoff, or reopen + nudge) and `step_done` sends its
+  follow-up via the AutoResumer (`NotifyStepDone`), so a transition takes effect
+  immediately instead of waiting for the main server to notice a file change.
+- **One implementation per transport** — the WebSocket handler (user actions) and
+  the MCP Executor (AI actions) call the same `work.Operations`, so a user start/
+  reopen and an AI start/reopen behave identically.
 
 **Authentication**: the server generates a random token at startup and writes
 it to `server.json` (mode `0600`, since it is a credential) alongside the port.
@@ -273,17 +275,20 @@ Task: closed ──► Parent (open/closed) → (no message)
 
 ### Step-Advance and Reopen Follow-ups
 
-`work_start`, `step_done`, and `work_reopen` are no longer handled by the
-AutoResumer reacting to file changes — they are driven in-process by the MCP
-`Executor` (and, for `work_start`, the WebSocket handler):
+`work_start`, `step_done`, and `work_reopen` are driven in-process rather than by
+the AutoResumer reacting to a file change. `work_start` and `work_reopen` live in
+the shared `work.Operations`, called by both the WebSocket handler and the MCP
+`Executor`:
 
-- **work_start** — the `Executor` claims the work (`store.Start`) and calls
-  `WorkStartHandler` directly to create the session and send the kickoff.
-- **step_done** — after `store.StepDone` advances the step, the `Executor` calls
-  `AutoResumer.NotifyStepDone`, which sends the next-step prompt (only while the
-  work is still `in_progress`).
-- **work_reopen** — after `store.Reopen`, the `Executor` calls
-  `AutoResumer.NotifyReopen`, which sends the reopen nudge.
+- **work_start** — `Operations.StartWork` claims the work (`store.Claim`, which
+  decides restart/session reuse atomically under the store lock) and calls
+  `WorkStartHandler` to create the session and send the kickoff, rolling back the
+  claim on failure. Runs detached from the caller's context.
+- **work_reopen** — `Operations.ReopenWork` calls `store.Reopen`, then
+  `AutoResumer.NotifyReopen` to send the reopen nudge.
+- **step_done** (MCP-only) — after `store.StepDone` advances the step, the
+  `Executor` calls `AutoResumer.NotifyStepDone`, which sends the next-step prompt
+  (only while the work is still `in_progress`).
 
 ```
 step_done ──► store.StepDone()
