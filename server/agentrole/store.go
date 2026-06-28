@@ -25,10 +25,6 @@ type Store interface {
 	ResetDefaults(ctx context.Context) (string, error)
 
 	AddOnChangeListener(listener OnChangeListener)
-
-	// StartWatching begins monitoring the index file for external changes (e.g. from MCP).
-	StartWatching() error
-	StopWatching()
 }
 
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
@@ -57,9 +53,8 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	store := &FileStore{}
 
 	f, err := filestore.New(filestore.Config{
-		Path:     filepath.Join(dataDir, "agent-roles", "index.json"),
-		Label:    "agent-role",
-		OnReload: store.reloadFromDisk,
+		Path:  filepath.Join(dataDir, "agent-roles", "index.json"),
+		Label: "agent-role",
 	})
 	if err != nil {
 		return nil, err
@@ -359,38 +354,6 @@ func (s *FileStore) persistIndex() error {
 		return err
 	}
 	return s.file.Write(data)
-}
-
-// --- fsnotify ---
-
-func (s *FileStore) StartWatching() error { return s.file.StartWatching() }
-func (s *FileStore) StopWatching()        { s.file.StopWatching() }
-
-func (s *FileStore) reloadFromDisk() {
-	genBefore := s.file.SnapshotGen()
-
-	idx, err := s.readIndexFromDisk()
-	if err != nil {
-		slog.Error("failed to reload agent role index", "error", err)
-		return
-	}
-
-	s.rolesMu.Lock()
-
-	if s.file.IsStale(genBefore) {
-		s.rolesMu.Unlock()
-		return
-	}
-
-	old := s.roles
-	s.roles = idx.Roles
-	listeners := s.copyListeners()
-	s.rolesMu.Unlock()
-
-	events := diffRoles(old, idx.Roles)
-	for _, e := range events {
-		notify(listeners, e)
-	}
 }
 
 func diffRoles(old, updated []AgentRole) []ChangeEvent {

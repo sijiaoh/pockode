@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"sync"
 	"time"
@@ -72,10 +71,6 @@ type Store interface {
 
 	AddOnChangeListener(listener OnChangeListener)
 	AddOnCommentChangeListener(listener OnCommentChangeListener)
-
-	// StartWatching begins monitoring the index file for external changes (e.g. from MCP).
-	StartWatching() error
-	StopWatching()
 }
 
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
@@ -106,9 +101,8 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	store := &FileStore{}
 
 	f, err := filestore.New(filestore.Config{
-		Path:     filepath.Join(dataDir, "works", "index.json"),
-		Label:    "work",
-		OnReload: store.reloadFromDisk,
+		Path:  filepath.Join(dataDir, "works", "index.json"),
+		Label: "work",
 	})
 	if err != nil {
 		return nil, err
@@ -754,87 +748,6 @@ func (s *FileStore) persistIndex() error {
 		return err
 	}
 	return s.file.Write(data)
-}
-
-// --- fsnotify ---
-
-func (s *FileStore) StartWatching() error { return s.file.StartWatching() }
-func (s *FileStore) StopWatching()        { s.file.StopWatching() }
-
-func (s *FileStore) reloadFromDisk() {
-	genBefore := s.file.SnapshotGen()
-
-	idx, err := s.readIndexFromDisk()
-	if err != nil {
-		slog.Error("failed to reload work index", "error", err)
-		return
-	}
-
-	s.worksMu.Lock()
-
-	if s.file.IsStale(genBefore) {
-		s.worksMu.Unlock()
-		return
-	}
-
-	old := s.works
-	oldComments := s.comments
-	s.works = idx.Works
-	s.comments = idx.Comments
-	listeners := s.copyListeners()
-	commentListeners := s.copyCommentListeners()
-	s.worksMu.Unlock()
-
-	events := diffWorks(old, idx.Works)
-	for i := range events {
-		events[i].External = true
-	}
-	for _, e := range events {
-		notify(listeners, e)
-	}
-
-	commentEvents := diffComments(oldComments, idx.Comments)
-	for _, e := range commentEvents {
-		notifyComment(commentListeners, e)
-	}
-}
-
-func diffWorks(old, updated []Work) []ChangeEvent {
-	return filestore.Diff(old, updated,
-		func(w Work) string { return w.ID },
-		workChanged,
-		func(op filestore.Operation, w Work) ChangeEvent {
-			return ChangeEvent{Op: Operation(op), Work: w}
-		},
-	)
-}
-
-// diffComments detects newly added comments.
-// Comments are append-only, so only creates need to be detected.
-func diffComments(old, updated []Comment) []CommentEvent {
-	oldIDs := make(map[string]struct{}, len(old))
-	for _, c := range old {
-		oldIDs[c.ID] = struct{}{}
-	}
-
-	var events []CommentEvent
-	for _, c := range updated {
-		if _, exists := oldIDs[c.ID]; !exists {
-			events = append(events, CommentEvent{Comment: c})
-		}
-	}
-	return events
-}
-
-func workChanged(a, b Work) bool {
-	return a.Title != b.Title ||
-		a.Body != b.Body ||
-		a.AgentRoleID != b.AgentRoleID ||
-		a.Status != b.Status ||
-		a.SessionID != b.SessionID ||
-		a.ParentID != b.ParentID ||
-		a.CurrentStep != b.CurrentStep ||
-		!a.UpdatedAt.Equal(b.UpdatedAt)
 }
 
 // --- Helpers ---

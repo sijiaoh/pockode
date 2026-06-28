@@ -17,10 +17,9 @@ import (
 // ErrUnknownTool indicates a tools/call referenced a tool that does not exist.
 var ErrUnknownTool = errors.New("unknown tool")
 
-// WorkNotifier delivers the follow-up agent messages that an in-process work
-// transition would otherwise miss. The AutoResumer only auto-sends these for
-// external/fsnotify changes (Triggers E/F); the API-driven MCP path mutates the
-// store in-process, so it must request them explicitly.
+// WorkNotifier delivers the follow-up agent messages (next-step prompt, reopen
+// nudge) that accompany a work transition. The AutoResumer sends them only on
+// request, so the MCP path must call these after mutating the store in-process.
 type WorkNotifier interface {
 	NotifyStepDone(w work.Work)
 	NotifyReopen(w work.Work)
@@ -322,9 +321,7 @@ func (e *Executor) workStart(ctx context.Context, args json.RawMessage) (string,
 	}
 
 	// Claim atomically (in_progress + sessionID), then create the session and
-	// send the kickoff/restart message. Mirrors ws.handleWorkStart: going
-	// through WorkStarter directly is more reliable than relying on the
-	// filesystem-watch AutoResumer trigger that the old file-based MCP used.
+	// send the kickoff/restart message via WorkStarter. Mirrors ws.handleWorkStart.
 	//
 	// Detach from the HTTP request context: the client has a request timeout and
 	// the AI CLI may disconnect, but session creation must run to completion so a
@@ -372,8 +369,7 @@ func (e *Executor) workReopen(ctx context.Context, args json.RawMessage) (string
 		return "", err
 	}
 
-	// Deliver the reopen message to the agent session (in-process equivalent of
-	// the fsnotify-driven Trigger F).
+	// Deliver the reopen message to the agent session.
 	if e.notifier != nil {
 		if w, found, err := e.store.Get(params.ID); err == nil && found {
 			e.notifier.NotifyReopen(w)
@@ -432,8 +428,7 @@ func (e *Executor) stepDone(ctx context.Context, args json.RawMessage) (string, 
 	}
 
 	if hasMoreSteps {
-		// Deliver the next-step prompt to the agent session (in-process
-		// equivalent of the fsnotify-driven Trigger E). Re-read to get the
+		// Deliver the next-step prompt to the agent session. Re-read to get the
 		// advanced CurrentStep.
 		if e.notifier != nil {
 			if advanced, found, getErr := e.store.Get(params.ID); getErr == nil && found {

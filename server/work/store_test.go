@@ -3,7 +3,6 @@ package work
 import (
 	"context"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 )
@@ -1113,88 +1112,6 @@ func TestConcurrent_StartSameWork(t *testing.T) {
 	}
 }
 
-// --- diffWorks ---
-
-func TestDiffWorks_NoChanges(t *testing.T) {
-	works := []Work{
-		{ID: "1", Title: "A", Status: StatusOpen},
-		{ID: "2", Title: "B", Status: StatusOpen},
-	}
-	events := diffWorks(works, works)
-	if len(events) != 0 {
-		t.Errorf("expected 0 events, got %d", len(events))
-	}
-}
-
-func TestDiffWorks_Create(t *testing.T) {
-	old := []Work{{ID: "1", Title: "A", Status: StatusOpen}}
-	updated := []Work{
-		{ID: "1", Title: "A", Status: StatusOpen},
-		{ID: "2", Title: "B", Status: StatusOpen},
-	}
-	events := diffWorks(old, updated)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Op != OperationCreate || events[0].Work.ID != "2" {
-		t.Errorf("expected create event for ID 2, got %+v", events[0])
-	}
-}
-
-func TestDiffWorks_Delete(t *testing.T) {
-	old := []Work{
-		{ID: "1", Title: "A", Status: StatusOpen},
-		{ID: "2", Title: "B", Status: StatusOpen},
-	}
-	updated := []Work{{ID: "1", Title: "A", Status: StatusOpen}}
-	events := diffWorks(old, updated)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Op != OperationDelete || events[0].Work.ID != "2" {
-		t.Errorf("expected delete event for ID 2, got %+v", events[0])
-	}
-}
-
-func TestDiffWorks_Update(t *testing.T) {
-	old := []Work{{ID: "1", Title: "A", Status: StatusOpen}}
-	updated := []Work{{ID: "1", Title: "A Updated", Status: StatusOpen}}
-	events := diffWorks(old, updated)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Op != OperationUpdate || events[0].Work.Title != "A Updated" {
-		t.Errorf("expected update event with new title, got %+v", events[0])
-	}
-}
-
-func TestDiffWorks_Mixed(t *testing.T) {
-	old := []Work{
-		{ID: "1", Title: "Keep", Status: StatusOpen},
-		{ID: "2", Title: "Delete", Status: StatusOpen},
-		{ID: "3", Title: "Update Me", Status: StatusOpen},
-	}
-	updated := []Work{
-		{ID: "1", Title: "Keep", Status: StatusOpen},
-		{ID: "3", Title: "Updated", Status: StatusInProgress},
-		{ID: "4", Title: "New", Status: StatusOpen},
-	}
-	events := diffWorks(old, updated)
-
-	// Should have: 1 delete (ID 2), 1 update (ID 3), 1 create (ID 4)
-	if len(events) != 3 {
-		t.Fatalf("expected 3 events, got %d", len(events))
-	}
-
-	ops := make(map[Operation]int)
-	for _, e := range events {
-		ops[e.Op]++
-	}
-	if ops[OperationDelete] != 1 || ops[OperationUpdate] != 1 || ops[OperationCreate] != 1 {
-		t.Errorf("expected 1 of each op type, got %v", ops)
-	}
-}
-
 // --- Comments ---
 
 func TestAddComment(t *testing.T) {
@@ -1330,74 +1247,6 @@ func TestUpdateComment_Persistence(t *testing.T) {
 	}
 }
 
-// --- diffComments ---
-
-func TestDiffComments_NoChanges(t *testing.T) {
-	comments := []Comment{
-		{ID: "c1", WorkID: "w1", Body: "hello"},
-	}
-	events := diffComments(comments, comments)
-	if len(events) != 0 {
-		t.Errorf("expected 0 events, got %d", len(events))
-	}
-}
-
-func TestDiffComments_NewComment(t *testing.T) {
-	old := []Comment{{ID: "c1", WorkID: "w1", Body: "first"}}
-	updated := []Comment{
-		{ID: "c1", WorkID: "w1", Body: "first"},
-		{ID: "c2", WorkID: "w1", Body: "second"},
-	}
-	events := diffComments(old, updated)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Comment.ID != "c2" {
-		t.Errorf("expected comment c2, got %s", events[0].Comment.ID)
-	}
-}
-
-func TestDiffComments_Empty(t *testing.T) {
-	events := diffComments(nil, nil)
-	if len(events) != 0 {
-		t.Errorf("expected 0 events, got %d", len(events))
-	}
-}
-
-// --- Reload notifies comment listeners ---
-
-func TestReload_NotifiesCommentListeners(t *testing.T) {
-	dir := t.TempDir()
-
-	// s1: main server store with listeners
-	s1, _ := NewFileStore(dir)
-	story := createStory(t, s1, "S")
-
-	var mu sync.Mutex
-	var received []CommentEvent
-	s1.AddOnCommentChangeListener(commentListenerFunc(func(e CommentEvent) {
-		mu.Lock()
-		received = append(received, e)
-		mu.Unlock()
-	}))
-
-	// s2: simulates MCP process writing a comment
-	s2, _ := NewFileStore(dir)
-	s2.AddComment(context.Background(), story.ID, "from MCP")
-
-	// Trigger reload on s1 (simulates fsnotify)
-	s1.reloadFromDisk()
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(received) != 1 {
-		t.Fatalf("expected 1 comment event, got %d", len(received))
-	}
-	if received[0].Comment.Body != "from MCP" {
-		t.Errorf("expected body 'from MCP', got %q", received[0].Comment.Body)
-	}
-}
-
 // --- FindBySessionID ---
 
 func TestFindBySessionID_Found(t *testing.T) {
@@ -1436,10 +1285,6 @@ func TestFindBySessionID_NotFound(t *testing.T) {
 type listenerFunc func(ChangeEvent)
 
 func (f listenerFunc) OnWorkChange(e ChangeEvent) { f(e) }
-
-type commentListenerFunc func(CommentEvent)
-
-func (f commentListenerFunc) OnCommentChange(e CommentEvent) { f(e) }
 
 func findEvent(events []ChangeEvent, workID string) *ChangeEvent {
 	for i := range events {

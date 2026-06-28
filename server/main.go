@@ -246,7 +246,6 @@ func main() {
 	workAutoResumer.SetStepProvider(&agentRoleStepAdapter{store: agentRoleStore})
 	session.ClearOrphanedNeedsInput(dataDir)
 	workStore.AddOnChangeListener(workAutoResumer)
-	s.StartWatching()
 
 	// Set PM as default agent role on first launch
 	if pmID := agentRoleStore.SeededPMRoleID(); pmID != "" {
@@ -269,7 +268,6 @@ func main() {
 	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
-	workAutoResumer.SetStartHandler(workStarter)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
@@ -361,7 +359,6 @@ func main() {
 		workAutoResumer.Stop()
 		worktreeManager.Shutdown()
 		settingsStore.StopWatching()
-		s.StopWatching()
 		if err := serverinfo.Delete(dataDir); err != nil {
 			slog.Error("failed to delete server.json", "error", err)
 		}
@@ -415,20 +412,6 @@ func initStores(dataDir string) (*stores, error) {
 	}
 
 	return &stores{work: workStore, agentRole: agentRoleStore}, nil
-}
-
-func (s *stores) StartWatching() {
-	if err := s.work.StartWatching(); err != nil {
-		slog.Warn("failed to start work store file watcher", "error", err)
-	}
-	if err := s.agentRole.StartWatching(); err != nil {
-		slog.Warn("failed to start agent role store file watcher", "error", err)
-	}
-}
-
-func (s *stores) StopWatching() {
-	s.work.StopWatching()
-	s.agentRole.StopWatching()
 }
 
 // agentRoleStepAdapter adapts agentrole.Store to work.StepProvider.

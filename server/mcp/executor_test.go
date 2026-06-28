@@ -33,8 +33,7 @@ func (stubNotifier) NotifyStepDone(work.Work) {}
 func (stubNotifier) NotifyReopen(work.Work)   {}
 
 // spyNotifier records the works passed to each notification so tests can assert
-// the in-process MCP path requests the follow-up messages (the AutoResumer only
-// auto-sends these for external/fsnotify changes).
+// the in-process MCP path requests the follow-up messages.
 type spyNotifier struct {
 	stepDone []work.Work
 	reopen   []work.Work
@@ -822,8 +821,8 @@ func TestWorkStart_RollbackOnHandlerFailure(t *testing.T) {
 	}
 }
 
-// step_done must request the next-step prompt for the agent. The fsnotify-driven
-// Trigger E does not fire for in-process changes, so the executor must notify.
+// step_done must request the next-step prompt for the agent: in-process
+// mutations don't auto-trigger a follow-up, so the executor must notify.
 func TestStepDone_NotifiesNextStep(t *testing.T) {
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{
 		Name: "Eng", RolePrompt: "x", Steps: []string{"Plan", "Build"},

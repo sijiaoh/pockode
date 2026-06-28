@@ -111,80 +111,42 @@ The Work system uses atomic file I/O instead of a database:
 
 1. **No single point of failure** — No database process to manage
 2. **Simple deployment** — Just files in a directory
-3. **Out-of-band edits** — Files can be inspected or edited directly; the main server picks up changes via fsnotify
+3. **Inspectable** — Plain JSON on disk
 
-> The flock + fsnotify machinery below was originally also required because the
-> MCP subprocess wrote the work files directly. The MCP path is now an in-process
-> API client (see *MCP Server Architecture*), so the main server is the sole
-> writer; the file infrastructure remains for persistence and out-of-band edits.
+The main server is the **sole writer** of work data: the frontend goes through
+the WebSocket layer and the AI goes through the MCP API (see *MCP Server
+Architecture*), and both mutate the in-memory store directly. Mutations are
+serialized by a mutex and persisted atomically.
 
-### Concurrency Control
+> Historically the MCP subprocess wrote these files directly, so the stores ran
+> an fsnotify watcher to sync cross-process changes (and the AutoResumer had
+> "external" triggers to react to them). Now that MCP is an in-process API
+> client, that watcher and those triggers are gone — the work and agent-role
+> stores no longer watch their files.
+
+### Atomic Persistence
 
 ```
 server/filestore/filestore.go
 ```
 
-**Read path** (shared lock):
-```go
-lockFile := OpenFile(".lock", CREATE|RDWR)
-Flock(lockFile, LOCK_SH)  // Allows concurrent reads
-defer Flock(lockFile, LOCK_UN)
-return ReadFile(path)
-```
+Writes take an exclusive flock and do write-temp → fsync → rename, so a crash or
+a concurrent reader never sees a torn file; reads take a shared flock:
 
-**Write path** (exclusive lock + atomic rename):
 ```go
 lockFile := OpenFile(".lock", CREATE|RDWR)
-Flock(lockFile, LOCK_EX)  // Blocks other writers and readers
+Flock(lockFile, LOCK_EX)
 defer Flock(lockFile, LOCK_UN)
 
 tmpFile := CreateTemp(path + ".tmp")
 tmpFile.Write(data)
-tmpFile.Sync()  // fsync ensures durability
-Rename(tmpFile, path)  // POSIX atomic operation
-
-writeGen.Add(1)  // Increment version for stale detection
+tmpFile.Sync()        // fsync ensures durability
+Rename(tmpFile, path) // POSIX atomic operation
 ```
 
-### Cross-Process Notification
-
-When one process writes, others detect changes via fsnotify:
-
-```
-Process A (MCP)              Process B (Main Server)
-     │                              │
-     │ Write to works.json          │
-     │ ─────────────────────────►   │
-     │                              │ fsnotify: WRITE event
-     │                              │ ─────────────────────►
-     │                              │ debounce 100ms
-     │                              │ reloadFromDisk()
-     │                              │ notify listeners
-```
-
-### Stale Reload Prevention
-
-A write-generation counter prevents TOCTOU races:
-
-```go
-// Before reload
-genBefore := file.SnapshotGen()
-
-// Read from disk (potentially slow)
-data := readFromDisk()
-
-// Before applying to memory
-file.mu.Lock()
-if file.IsStale(genBefore) {
-    // Another write happened between our read and now
-    // Discard this reload, wait for next fsnotify event
-    file.mu.Unlock()
-    return
-}
-// Safe to update in-memory state
-applyData(data)
-file.mu.Unlock()
-```
+The filestore primitive still offers fsnotify-based reload for callers that need
+cross-process change detection (the settings store uses it), but the work and
+agent-role stores do not.
 
 ## MCP Tools
 
@@ -243,12 +205,11 @@ Main server: APIHandler → Executor → work.Store / WorkStarter
 **Why client mode** (instead of the previous file-writing subprocess):
 
 - **Single writer** — only the main server mutates work data, eliminating the
-  two-writer flock/fsnotify coordination the subprocess used to need.
+  two-writer fsnotify sync the subprocess used to need.
 - **Direct side effects** — `work_start` calls `WorkStartHandler` directly and
-  `step_done`/`work_reopen` send their follow-up messages via the AutoResumer,
-  rather than depending on the main server noticing a file change. See the
-  Triggers section: the external (fsnotify) variants now fire only for genuine
-  out-of-band file edits.
+  `step_done`/`work_reopen` send their follow-up messages via the AutoResumer
+  (`NotifyStepDone`/`NotifyReopen`), rather than depending on the main server
+  noticing a file change.
 
 **Authentication**: the server generates a random token at startup and writes
 it to `server.json` (mode `0600`, since it is a credential) alongside the port.
@@ -267,7 +228,7 @@ auth failures are surfaced to the AI rather than failing silently.
 
 The AutoResumer watches for state changes and automatically manages work lifecycle.
 
-### Five Triggers
+### Triggers
 
 **Trigger A: Process State Changes**
 
@@ -310,73 +271,33 @@ Task: closed ──► Parent (open/closed) → (no message)
 
 **Key distinction**: Only `waiting` parents undergo a state transition. Other active parents (`in_progress`, `needs_input`, `stopped`) receive the notification without changing status. This enables coordinators to receive multiple child completion messages when running with parallel subtasks.
 
-**Trigger C: External Work Start**
+### Step-Advance and Reopen Follow-ups
 
-The MCP `work_start` tool now runs in-process: the `Executor` claims the work
-and calls `WorkStartHandler` directly (same path as the WebSocket `work.start`).
-This fsnotify trigger remains only for genuine out-of-band starts (an external
-process editing the work file directly):
+`work_start`, `step_done`, and `work_reopen` are no longer handled by the
+AutoResumer reacting to file changes — they are driven in-process by the MCP
+`Executor` (and, for `work_start`, the WebSocket handler):
 
-```
-external file edit ──► fsnotify ──► AutoResumer
-                                        │
-                       handleExternalWorkStart()
-                                        │
-                       Call WorkStartHandler
-```
-
-**Trigger D: Reserved**
-
-(Removed — step advance is now handled by Trigger E)
-
-**Trigger E: Step Done**
-
-The MCP `step_done` tool runs in-process: after `store.StepDone` advances the
-step, the `Executor` calls `AutoResumer.NotifyStepDone`, which delivers the
-next-step prompt. The fsnotify path below is the equivalent for out-of-band file
-edits; both converge on `handleExternalStepDone`. When `step_done` is detected
-via fsnotify and the step advances:
+- **work_start** — the `Executor` claims the work (`store.Start`) and calls
+  `WorkStartHandler` directly to create the session and send the kickoff.
+- **step_done** — after `store.StepDone` advances the step, the `Executor` calls
+  `AutoResumer.NotifyStepDone`, which sends the next-step prompt (only while the
+  work is still `in_progress`).
+- **work_reopen** — after `store.Reopen`, the `Executor` calls
+  `AutoResumer.NotifyReopen`, which sends the reopen nudge.
 
 ```
-MCP: step_done ──► store.StepDone()
-                        │
-                        ▼
-                 hasMoreSteps?
-                   │        │
-                 yes       no
-                   │        │
-                   ▼        ▼
-            CurrentStep++   Close work
+step_done ──► store.StepDone()
                    │
                    ▼
-            fsnotify ──► AutoResumer
-                              │
-                              ▼
-                  Detect CurrentStep change
-                              │
-                              ▼
-                  handleExternalStepDone()
-                              │
-                              ▼
-                  Send next step prompt
-```
-
-Unlike Trigger B (child closure waking a waiting parent), step advancement is agent-initiated via `step_done` rather than automatic upon completion.
-
-**Trigger F: Work Reopen**
-
-The MCP `work_reopen` tool runs in-process: after `store.Reopen`, the `Executor`
-calls `AutoResumer.NotifyReopen` to send the reopen message. The fsnotify path
-below is the equivalent for out-of-band file edits:
-
-```
-work_reopen (API or external edit) ──► AutoResumer
-                                       │
-                      detect closed → in_progress
-                                       │
-                      handleExternalReopen()
-                                       │
-                      Send reopen message
+            hasMoreSteps?
+              │        │
+            yes        no
+              │        │
+              ▼        ▼
+       CurrentStep++   Close work ──► Trigger B (parent reactivation, if any)
+              │
+              ▼
+       Executor.NotifyStepDone() ──► send next-step prompt
 ```
 
 The reopen message instructs the agent to review its previous work and determine what additional changes are needed, then call `step_done` when complete.
@@ -385,10 +306,14 @@ The reopen message instructs the agent to review its previous work and determine
 
 ```go
 maxRetries = 3        // Stop work after 3 auto-continuation failures
-settleDelay = 2s      // Wait for out-of-band writes to propagate via fsnotify
+settleDelay = 2s      // Let an in-flight step_done's retry reset land first
 ```
 
-The settle delay ensures that when checking retry counts, any pending out-of-band `step_done` writes have propagated through fsnotify and reset the counter. In-process `step_done` (via the MCP API) resets the counter through `NotifyStepDone` without waiting on fsnotify propagation.
+An agent typically calls `step_done` right before its turn ends. The settle
+delay gives that in-process transition's retry reset time to land before
+`handleAutoContinuation` reads the retry count, so the stop-after-N accounting
+stays correct (it does not by itself suppress a redundant continuation message —
+that remains a rare worst case).
 
 ## Frontend Integration
 
@@ -603,7 +528,8 @@ func render(tmplStr string, data any) string {
 | Auto resumer | `server/work/auto_resumer.go` |
 | Prompt builder | `server/work/prompt.go` |
 | Prompt templates | `server/work/prompts.yaml` |
-| MCP server | `server/mcp/server.go` |
-| MCP tools | `server/mcp/tools.go` |
+| MCP stdio proxy + client | `server/mcp/server.go`, `server/mcp/client.go` |
+| MCP tool definitions | `server/mcp/tools.go` |
+| MCP tool executor + HTTP API | `server/mcp/executor.go`, `server/mcp/handler.go` |
 | File I/O | `server/filestore/filestore.go` |
 | Frontend store | `web/src/lib/workStore.ts` |
