@@ -62,7 +62,12 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		slog.Error("mcp tool call failed", "tool", req.Name, "error", err)
+		// A tool error reaches the AI as an is_error result either way. Only log
+		// genuine server faults at Error level; caller mistakes (bad input,
+		// not-found) are expected and would just be log noise.
+		if !isUserError(err) {
+			slog.Error("mcp tool call failed", "tool", req.Name, "error", err)
+		}
 		writeJSON(w, http.StatusOK, toolCallResponse{Text: "Error: " + err.Error(), IsError: true})
 		return
 	}

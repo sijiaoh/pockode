@@ -16,6 +16,34 @@ import (
 // ErrUnknownTool indicates a tools/call referenced a tool that does not exist.
 var ErrUnknownTool = errors.New("unknown tool")
 
+// userError marks an error as caused by the caller's input — a malformed
+// argument, a missing/invalid ID, a not-found lookup — rather than a server
+// fault. Both kinds are still returned to the AI as an is_error tool result
+// (MCP reports tool errors to the model, not the transport); the distinction
+// only governs logging, so a routine "the AI asked for something that doesn't
+// exist" is not logged as a server fault. See APIHandler and isUserError.
+type userError struct{ err error }
+
+func (e *userError) Error() string { return e.err.Error() }
+func (e *userError) Unwrap() error { return e.err }
+
+func userErrorf(format string, a ...any) error {
+	return &userError{err: fmt.Errorf(format, a...)}
+}
+
+// isUserError reports whether err was caused by the caller's input rather than a
+// server fault. Work store sentinels (not-found / invalid transition) are
+// caller errors too, so they count even when they reach here unwrapped.
+func isUserError(err error) bool {
+	var ue *userError
+	if errors.As(err, &ue) {
+		return true
+	}
+	return errors.Is(err, work.ErrWorkNotFound) ||
+		errors.Is(err, work.ErrInvalidWork) ||
+		errors.Is(err, work.ErrCommentNotFound)
+}
+
 // WorkNotifier delivers the next-step prompt that follows an in-process
 // step_done. The AutoResumer sends it only on request, so the Executor calls it
 // after advancing the step in-process. (The reopen nudge lives in
@@ -103,7 +131,7 @@ func (e *Executor) workList(args json.RawMessage) (string, error) {
 	}
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &params); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
+			return "", userErrorf("invalid arguments: %w", err)
 		}
 	}
 
@@ -159,17 +187,17 @@ func (e *Executor) workCreate(ctx context.Context, args json.RawMessage) (string
 		AgentRoleID string        `json:"agent_role_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	// Validate agent_role_id is provided and exists
 	if params.AgentRoleID == "" {
-		return "", fmt.Errorf("agent_role_id is required")
+		return "", userErrorf("agent_role_id is required")
 	}
 	if _, found, err := e.agentRoleStore.Get(params.AgentRoleID); err != nil {
 		return "", fmt.Errorf("failed to validate agent role: %w", err)
 	} else if !found {
-		return "", fmt.Errorf("agent role %q not found", params.AgentRoleID)
+		return "", userErrorf("agent role %q not found", params.AgentRoleID)
 	}
 
 	created, err := e.store.Create(ctx, work.Work{
@@ -194,7 +222,7 @@ func (e *Executor) workUpdate(ctx context.Context, args json.RawMessage) (string
 		AgentRoleID *string `json:"agent_role_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	// Validate agent_role_id exists if specified
@@ -202,7 +230,7 @@ func (e *Executor) workUpdate(ctx context.Context, args json.RawMessage) (string
 		if _, found, err := e.agentRoleStore.Get(*params.AgentRoleID); err != nil {
 			return "", fmt.Errorf("failed to validate agent role: %w", err)
 		} else if !found {
-			return "", fmt.Errorf("agent role %q not found", *params.AgentRoleID)
+			return "", userErrorf("agent role %q not found", *params.AgentRoleID)
 		}
 	}
 
@@ -236,7 +264,7 @@ func (e *Executor) workGet(args json.RawMessage) (string, error) {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	w, found, err := e.store.Get(params.ID)
@@ -244,7 +272,7 @@ func (e *Executor) workGet(args json.RawMessage) (string, error) {
 		return "", err
 	}
 	if !found {
-		return "", fmt.Errorf("work %s not found", params.ID)
+		return "", userErrorf("work %s not found", params.ID)
 	}
 
 	type workDetail struct {
@@ -276,7 +304,7 @@ func (e *Executor) workDelete(ctx context.Context, args json.RawMessage) (string
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	if err := e.store.Delete(ctx, params.ID); err != nil {
@@ -291,7 +319,7 @@ func (e *Executor) workStart(ctx context.Context, args json.RawMessage) (string,
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	w, err := e.ops.StartWork(ctx, params.ID)
@@ -308,7 +336,7 @@ func (e *Executor) workNeedsInput(ctx context.Context, args json.RawMessage) (st
 		Reason string `json:"reason"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	if err := e.store.MarkNeedsInput(ctx, params.ID); err != nil {
@@ -323,7 +351,7 @@ func (e *Executor) workReopen(ctx context.Context, args json.RawMessage) (string
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	if err := e.ops.ReopenWork(ctx, params.ID); err != nil {
@@ -338,7 +366,7 @@ func (e *Executor) workWait(ctx context.Context, args json.RawMessage) (string, 
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	if err := e.store.MarkWaiting(ctx, params.ID); err != nil {
@@ -353,7 +381,7 @@ func (e *Executor) stepDone(ctx context.Context, args json.RawMessage) (string, 
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	// Get the work item to find its agent role
@@ -371,7 +399,7 @@ func (e *Executor) stepDone(ctx context.Context, args json.RawMessage) (string, 
 		return "", fmt.Errorf("failed to get agent role: %w", err)
 	}
 	if !found {
-		return "", fmt.Errorf("agent role %s not found", w.AgentRoleID)
+		return "", userErrorf("agent role %s not found", w.AgentRoleID)
 	}
 
 	totalSteps := len(role.Steps)
@@ -403,7 +431,7 @@ func (e *Executor) workCommentAdd(ctx context.Context, args json.RawMessage) (st
 		Body   string `json:"body"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	comment, err := e.store.AddComment(ctx, params.WorkID, params.Body)
@@ -419,7 +447,7 @@ func (e *Executor) workCommentList(args json.RawMessage) (string, error) {
 		WorkID string `json:"work_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	comments, err := e.store.ListComments(params.WorkID)
@@ -455,7 +483,7 @@ func (e *Executor) workCommentUpdate(ctx context.Context, args json.RawMessage) 
 		Body string `json:"body"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	comment, err := e.store.UpdateComment(ctx, params.ID, params.Body)
@@ -510,7 +538,7 @@ func (e *Executor) agentRoleGet(args json.RawMessage) (string, error) {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		return "", userErrorf("invalid arguments: %w", err)
 	}
 
 	role, found, err := e.agentRoleStore.Get(params.ID)
@@ -518,7 +546,7 @@ func (e *Executor) agentRoleGet(args json.RawMessage) (string, error) {
 		return "", err
 	}
 	if !found {
-		return "", fmt.Errorf("agent role %q not found", params.ID)
+		return "", userErrorf("agent role %q not found", params.ID)
 	}
 
 	type roleDetail struct {

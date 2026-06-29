@@ -26,14 +26,20 @@ import (
 // Server is the stdio MCP proxy. It answers protocol handshakes locally and
 // forwards tool calls to the main server via client.
 type Server struct {
-	client *Client
+	client  *Client
+	version string
 }
 
-func NewServer(client *Client) *Server {
-	return &Server{client: client}
+func NewServer(client *Client, version string) *Server {
+	return &Server{client: client, version: version}
 }
 
 // Run starts the stdio JSON-RPC 2.0 loop.
+//
+// Requests are handled one at a time. Each tool call is a single forwarded HTTP
+// round-trip to the local server, so head-of-line blocking is negligible;
+// processing concurrently would buy little and require serializing stdout
+// writes. Revisit only if a genuinely slow tool is added.
 func (s *Server) Run(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
 	// 1MB buffer: the default 64KB is sufficient for current payloads, but MCP
@@ -75,7 +81,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, req *jsonRPCReq
 			},
 			ServerInfo: serverInfo{
 				Name:    "pockode",
-				Version: "1.0.0",
+				Version: s.version,
 			},
 		})
 	case "tools/list":

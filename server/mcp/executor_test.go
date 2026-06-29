@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -932,6 +933,50 @@ func extractID(t *testing.T, text string) string {
 		t.Fatalf("cannot find closing paren in %q", text)
 	}
 	return rest[:end]
+}
+
+// TestEveryAdvertisedToolIsDispatchable guards the two independent tool lists —
+// the toolDefinitions advertised via tools/list and the Execute dispatch switch
+// — against drift. A tool the AI can see but the server cannot run is a silent
+// dead end, so assert every advertised name resolves to a handler.
+func TestEveryAdvertisedToolIsDispatchable(t *testing.T) {
+	ts := newTestExec(t)
+	for _, td := range toolDefinitions {
+		// Empty args: a handler may reject them as a user error, but it must not
+		// report the tool itself as unknown.
+		_, err := ts.exec.Execute(context.Background(), td.Name, json.RawMessage("{}"))
+		if errors.Is(err, ErrUnknownTool) {
+			t.Errorf("tool %q is advertised via tools/list but not dispatched by Execute", td.Name)
+		}
+	}
+	// Negative control: an unadvertised name must be reported as unknown, so the
+	// assertion above can actually fail.
+	if _, err := ts.exec.Execute(context.Background(), "definitely_not_a_tool", json.RawMessage("{}")); !errors.Is(err, ErrUnknownTool) {
+		t.Errorf("unknown tool: got %v, want ErrUnknownTool", err)
+	}
+}
+
+// TestIsUserError verifies the classification that keeps caller mistakes out of
+// the server's Error logs (see APIHandler). The wrapped-sentinel case is the
+// load-bearing one: store errors reach the classifier wrapped, so it must match
+// by errors.Is, not by identity.
+func TestIsUserError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"userErrorf", userErrorf("bad input"), true},
+		{"wrapped work-not-found", fmt.Errorf("context: %w", work.ErrWorkNotFound), true},
+		{"invalid transition", work.ErrInvalidWork, true},
+		{"comment not found", work.ErrCommentNotFound, true},
+		{"server fault", errors.New("disk write failed"), false},
+	}
+	for _, tt := range tests {
+		if got := isUserError(tt.err); got != tt.want {
+			t.Errorf("%s: isUserError = %v, want %v", tt.name, got, tt.want)
+		}
+	}
 }
 
 // extractCommentID parses "Comment added (ID: xxx)" to get xxx.

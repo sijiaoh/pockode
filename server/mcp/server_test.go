@@ -42,7 +42,7 @@ func callMethod(t *testing.T, s *Server, method string, params interface{}) json
 // --- Protocol tests (handled locally, no server round-trip) ---
 
 func TestInitialize(t *testing.T) {
-	resp := callMethod(t, NewServer(nil), "initialize", nil)
+	resp := callMethod(t, NewServer(nil, "test"), "initialize", nil)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -60,7 +60,7 @@ func TestInitialize(t *testing.T) {
 }
 
 func TestToolsList(t *testing.T) {
-	resp := callMethod(t, NewServer(nil), "tools/list", nil)
+	resp := callMethod(t, NewServer(nil, "test"), "tools/list", nil)
 
 	b, _ := json.Marshal(resp.Result)
 	var result toolsListResult
@@ -82,7 +82,7 @@ func TestToolsList(t *testing.T) {
 }
 
 func TestUnknownMethod(t *testing.T) {
-	resp := callMethod(t, NewServer(nil), "nonexistent", nil)
+	resp := callMethod(t, NewServer(nil, "test"), "nonexistent", nil)
 	if resp.Error == nil {
 		t.Fatal("expected error for unknown method")
 	}
@@ -102,7 +102,7 @@ func newProxyToAPI(t *testing.T, serverToken, clientToken string) (*Server, stri
 	t.Cleanup(httpSrv.Close)
 
 	client := &Client{baseURL: httpSrv.URL, token: clientToken, http: httpSrv.Client()}
-	return NewServer(client), ts.roleID
+	return NewServer(client, "test"), ts.roleID
 }
 
 func callToolViaProxy(t *testing.T, s *Server, name string, args interface{}) jsonRPCResponse {

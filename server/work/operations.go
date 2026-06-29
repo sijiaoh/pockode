@@ -47,7 +47,7 @@ func (o *Operations) StartWork(ctx context.Context, id string) (Work, error) {
 		return Work{}, ErrWorkNotFound
 	}
 	if current.AgentRoleID == "" {
-		return Work{}, fmt.Errorf("work %s has no agent_role_id", id)
+		return Work{}, fmt.Errorf("%w: work %s has no agent_role_id", ErrInvalidWork, id)
 	}
 
 	// Detach from the caller's context: an HTTP request timeout or a disconnected

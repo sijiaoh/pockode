@@ -452,7 +452,7 @@ func runMCP() {
 		os.Exit(1)
 	}
 
-	server := mcp.NewServer(client)
+	server := mcp.NewServer(client, version)
 	if err := server.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
 		os.Exit(1)
