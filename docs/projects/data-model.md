@@ -104,9 +104,11 @@ A crash at any point leaves either the old file intact or the new file fully wri
 
 ### Atomic persistence
 
-The main server is the **sole writer** of the work and agent-role indexes (the
-MCP path goes through the in-process API, not the filesystem), so there is no
-cross-process write coordination to manage.
+The main server is the **sole writer** of the work index (the MCP path goes
+through the in-process API, not the filesystem), so there is no cross-process
+write coordination to manage. The agent-role index has one additional writer:
+the user editing it directly on disk (same as `settings.json`), which the
+server picks up via the fsnotify reload described below.
 
 **flock:** A dedicated lock file (`index.json.lock`) guards each read/write so a
 reader never observes a half-written file. Reads acquire a shared lock
@@ -114,10 +116,11 @@ reader never observes a half-written file. Reads acquire a shared lock
 is used because atomic rename changes the data file's inode, which would break
 flock on the data file itself.
 
-> The underlying `filestore` primitive also supports fsnotify-based reload for
-> cross-process change detection (the settings store uses it), but the work and
-> agent-role stores do not watch their files — change events are fired directly
-> from in-process mutations.
+> To surface those external edits, the settings and agent-role stores watch
+> their files via the `filestore` fsnotify primitive: a disk change is reloaded
+> and diffed against in-memory state, then fired as change events to subscribers.
+> The work store has no external writer, so it does not watch — its events come
+> directly from in-process mutations.
 
 ### Rollback on persist failure
 

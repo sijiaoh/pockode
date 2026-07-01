@@ -118,9 +118,10 @@ the WebSocket layer and the AI goes through the MCP API (see *MCP Server
 Architecture*), and both mutate the in-memory store directly. Mutations are
 serialized by a mutex and persisted atomically.
 
-> Because the server is the sole writer, the work and agent-role stores do not
-> run a file watcher: their change events are emitted directly from in-process
-> mutations rather than reloaded after a cross-process write.
+> Because the server is the sole writer of work data, the work store does not
+> run a file watcher: its change events are emitted directly from in-process
+> mutations rather than reloaded after a cross-process write. (The agent-role
+> store does watch its file, since users may edit it directly on disk.)
 
 ### Atomic Persistence
 
@@ -143,8 +144,9 @@ Rename(tmpFile, path) // POSIX atomic operation
 ```
 
 The filestore primitive also offers fsnotify-based reload for callers that need
-cross-process change detection (the settings store uses it); the work and
-agent-role stores do not enable it, since the server is their only writer.
+cross-process change detection (the settings and agent-role stores use it, as
+both are user-editable on disk); the work store does not enable it, since the
+server is its only writer.
 
 ## MCP Tools
 

@@ -240,6 +240,9 @@ func main() {
 	}
 	workStore := s.work
 	agentRoleStore := s.agentRole
+	if err := agentRoleStore.StartWatching(); err != nil {
+		slog.Warn("failed to start agent role store file watcher", "error", err)
+	}
 
 	workAutoResumer := work.NewAutoResumer(workStore, 3)
 	workAutoResumer.StopOrphanedWork()
@@ -362,6 +365,7 @@ func main() {
 		workAutoResumer.Stop()
 		worktreeManager.Shutdown()
 		settingsStore.StopWatching()
+		agentRoleStore.StopWatching()
 		if err := serverinfo.Delete(dataDir); err != nil {
 			slog.Error("failed to delete server.json", "error", err)
 		}
