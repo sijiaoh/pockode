@@ -784,109 +784,6 @@ func TestAutoResumer_IgnoresTopLevelClosed(t *testing.T) {
 	}
 }
 
-// --- Trigger C: external work start ---
-
-// mockStartHandler records HandleWorkStart calls.
-type mockStartHandler struct {
-	mu    sync.Mutex
-	calls []Work
-	err   error // if non-nil, HandleWorkStart returns this error
-}
-
-func (m *mockStartHandler) HandleWorkStart(_ context.Context, w Work) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls = append(m.calls, w)
-	return m.err
-}
-
-func (m *mockStartHandler) getCalls() []Work {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]Work, len(m.calls))
-	copy(out, m.calls)
-	return out
-}
-
-func TestAutoResumer_ExternalWorkStart(t *testing.T) {
-	store, resumer, _ := setupResumerTest(t)
-	handler := &mockStartHandler{}
-	resumer.SetStartHandler(handler)
-
-	story := createStory(t, store, "Story")
-	sid := "session-1"
-	startWorkWithSession(t, store, story.ID, sid)
-
-	// External event: work started via MCP
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: true,
-		Work:     Work{ID: story.ID, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
-	})
-
-	waitFor(t, func() bool { return len(handler.getCalls()) >= 1 })
-
-	calls := handler.getCalls()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 start call, got %d", len(calls))
-	}
-	if calls[0].ID != story.ID {
-		t.Errorf("work ID = %q, want %q", calls[0].ID, story.ID)
-	}
-}
-
-func TestAutoResumer_InternalInProgressDoesNotTriggerC(t *testing.T) {
-	store, resumer, _ := setupResumerTest(t)
-	handler := &mockStartHandler{}
-	resumer.SetStartHandler(handler)
-
-	story := createStory(t, store, "Story")
-	sid := "session-1"
-	startWorkWithSession(t, store, story.ID, sid)
-
-	// Internal event (External=false): e.g. parent reactivation
-	resumer.OnWorkChange(ChangeEvent{
-		Op:   OperationUpdate,
-		Work: Work{ID: story.ID, Status: StatusInProgress, SessionID: sid},
-	})
-
-	time.Sleep(50 * time.Millisecond)
-	if len(handler.getCalls()) != 0 {
-		t.Error("should not trigger work start for internal events")
-	}
-}
-
-func TestAutoResumer_ExternalWorkStartRollbackOnFailure(t *testing.T) {
-	store, resumer, _ := setupResumerTest(t)
-	handler := &mockStartHandler{err: fmt.Errorf("session create failed")}
-	resumer.SetStartHandler(handler)
-
-	story := createStory(t, store, "Story")
-	sid := "session-1"
-	startWorkWithSession(t, store, story.ID, sid)
-
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: true,
-		Work:     Work{ID: story.ID, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
-	})
-
-	waitFor(t, func() bool { return len(handler.getCalls()) >= 1 })
-	// Give rollback time to execute
-	time.Sleep(50 * time.Millisecond)
-
-	// Work should be rolled back to open
-	w := getWork(t, store, story.ID)
-	if w.Status != StatusOpen {
-		t.Errorf("status = %q, want %q (rollback)", w.Status, StatusOpen)
-	}
-	if w.SessionID != "" {
-		t.Errorf("sessionID = %q, want empty (rollback)", w.SessionID)
-	}
-}
-
-// --- Process ended → stopped ---
-
 func TestAutoResumer_ProcessEndedStopsWork(t *testing.T) {
 	store, resumer, _ := setupResumerTest(t)
 
@@ -1227,7 +1124,7 @@ func (s *errSender) SendMessage(_ context.Context, _, _ string) error {
 	return s.err
 }
 
-// --- Trigger E: External step_done (MCP step_done tool) ---
+// --- Step provider mock (shared by step/continuation tests) ---
 
 // mockStepProvider provides step information for tests.
 type mockStepProvider struct {
@@ -1236,191 +1133,6 @@ type mockStepProvider struct {
 
 func (m *mockStepProvider) GetSteps(agentRoleID string) ([]string, error) {
 	return m.steps[agentRoleID], nil
-}
-
-func TestAutoResumer_ExternalStepDone_SendsMessage(t *testing.T) {
-	store, resumer, sender := setupResumerTest(t)
-
-	sp := &mockStepProvider{
-		steps: map[string][]string{
-			testRoleID: {"Step 1: Do something", "Step 2: Do another thing", "Step 3: Finish up"},
-		},
-	}
-	resumer.SetStepProvider(sp)
-
-	story := createStory(t, store, "Story")
-	task := createTask(t, store, story.ID, "Task")
-	sid := "session-1"
-	startWorkWithSession(t, store, task.ID, sid)
-
-	// First, fire an event to establish the known step state (step 0)
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: false,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 0},
-	})
-
-	// Now simulate external step_done (MCP advances step from 0 to 1)
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: true,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 1},
-	})
-
-	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
-
-	msgs := sender.getMessages()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
-	}
-	if msgs[0].SessionID != sid {
-		t.Errorf("sessionID = %q, want %q", msgs[0].SessionID, sid)
-	}
-}
-
-func TestAutoResumer_ExternalStepDone_NoSteps(t *testing.T) {
-	store, resumer, sender := setupResumerTest(t)
-
-	sp := &mockStepProvider{
-		steps: map[string][]string{
-			testRoleID: {}, // No steps
-		},
-	}
-	resumer.SetStepProvider(sp)
-
-	story := createStory(t, store, "Story")
-	task := createTask(t, store, story.ID, "Task")
-	sid := "session-1"
-	startWorkWithSession(t, store, task.ID, sid)
-
-	// Establish known step state
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: false,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 0},
-	})
-
-	// External step advance (even though no steps configured)
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: true,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 1},
-	})
-
-	// Should not send message when no steps defined
-	time.Sleep(50 * time.Millisecond)
-	if len(sender.getMessages()) != 0 {
-		t.Error("should not send message when no steps defined")
-	}
-}
-
-func TestAutoResumer_ExternalStepDone_LastStep(t *testing.T) {
-	store, resumer, sender := setupResumerTest(t)
-
-	sp := &mockStepProvider{
-		steps: map[string][]string{
-			testRoleID: {"Step 1", "Step 2"},
-		},
-	}
-	resumer.SetStepProvider(sp)
-
-	story := createStory(t, store, "Story")
-	task := createTask(t, store, story.ID, "Task")
-	sid := "session-1"
-	startWorkWithSession(t, store, task.ID, sid)
-
-	// Establish known step state at step 0
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: false,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 0},
-	})
-
-	// Advance to last step (index 1 of 2 steps)
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: true,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 1},
-	})
-
-	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
-
-	msgs := sender.getMessages()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message for last step, got %d", len(msgs))
-	}
-}
-
-func TestAutoResumer_ExternalStepDone_NoChangeNoMessage(t *testing.T) {
-	store, resumer, sender := setupResumerTest(t)
-
-	sp := &mockStepProvider{
-		steps: map[string][]string{
-			testRoleID: {"Step 1", "Step 2"},
-		},
-	}
-	resumer.SetStepProvider(sp)
-
-	story := createStory(t, store, "Story")
-	task := createTask(t, store, story.ID, "Task")
-	sid := "session-1"
-	startWorkWithSession(t, store, task.ID, sid)
-
-	// Establish known step state
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: false,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 0},
-	})
-
-	// External event with same step (no change)
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: true,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 0},
-	})
-
-	// Should not send message when step hasn't changed
-	time.Sleep(50 * time.Millisecond)
-	if len(sender.getMessages()) != 0 {
-		t.Error("should not send message when step hasn't changed")
-	}
-}
-
-func TestAutoResumer_InternalStepChange_NoMessage(t *testing.T) {
-	store, resumer, sender := setupResumerTest(t)
-
-	sp := &mockStepProvider{
-		steps: map[string][]string{
-			testRoleID: {"Step 1", "Step 2"},
-		},
-	}
-	resumer.SetStepProvider(sp)
-
-	story := createStory(t, store, "Story")
-	task := createTask(t, store, story.ID, "Task")
-	sid := "session-1"
-	startWorkWithSession(t, store, task.ID, sid)
-
-	// Establish known step state
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: false,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 0},
-	})
-
-	// Internal step advance (not external) — should not trigger Trigger E
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: false,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID, CurrentStep: 1},
-	})
-
-	// Should not send message for internal step changes
-	time.Sleep(50 * time.Millisecond)
-	if len(sender.getMessages()) != 0 {
-		t.Error("should not send message for internal step changes")
-	}
 }
 
 // --- Auto-continuation with step context ---
@@ -1530,171 +1242,72 @@ func containsAll(s string, substrs ...string) bool {
 	return true
 }
 
-// --- Trigger F: external work reopen ---
+// --- Step advance / reopen follow-ups (in-process MCP API path) ---
 
-func TestAutoResumer_ExternalReopen_SendsMessage(t *testing.T) {
-	store, resumer, sender := setupResumerTest(t)
+func TestAutoResumer_NotifyStepDone_SendsMessage(t *testing.T) {
+	_, resumer, sender := setupResumerTest(t)
+	resumer.SetStepProvider(&mockStepProvider{steps: map[string][]string{
+		testRoleID: {"Plan the work", "Build the thing", "Verify it"},
+	}})
 
-	story := createStory(t, store, "Story")
-	sid := "session-1"
-	startWorkWithSession(t, store, story.ID, sid)
-
-	doneWork(t, store, story.ID)
-	w := getWork(t, store, story.ID)
-	if w.Status != StatusClosed {
-		t.Fatalf("expected closed status, got %s", w.Status)
-	}
-
-	// Establish known status state (closed)
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: false,
-		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusClosed, SessionID: sid, AgentRoleID: testRoleID},
-	})
-
-	// Simulate external reopen (MCP work_reopen transitions closed → in_progress)
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: true,
-		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
-	})
+	// Work already advanced to step index 1 and still in_progress.
+	resumer.NotifyStepDone(Work{ID: "w1", Status: StatusInProgress, SessionID: "s1", AgentRoleID: testRoleID, CurrentStep: 1})
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
-
 	msgs := sender.getMessages()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if len(msgs) != 1 || msgs[0].SessionID != "s1" {
+		t.Fatalf("expected 1 message to s1, got %+v", msgs)
 	}
-	if msgs[0].SessionID != sid {
-		t.Errorf("sessionID = %q, want %q", msgs[0].SessionID, sid)
-	}
-	if !strings.Contains(msgs[0].Content, "reopened") {
-		t.Error("message should contain 'reopened' nudge")
+	// Must prompt the newly-current step (index 1), not any other.
+	if !strings.Contains(msgs[0].Content, "Build the thing") {
+		t.Errorf("message should prompt step index 1, got %q", msgs[0].Content)
 	}
 }
 
-func TestAutoResumer_ExternalReopen_TaskSendsMessage(t *testing.T) {
-	store, resumer, sender := setupResumerTest(t)
+func TestAutoResumer_NotifyStepDone_NoStepsNoMessage(t *testing.T) {
+	_, resumer, sender := setupResumerTest(t)
+	resumer.SetStepProvider(&mockStepProvider{steps: map[string][]string{testRoleID: {}}})
 
-	story := createStory(t, store, "Story")
-	task := createTask(t, store, story.ID, "Task")
-	sid := "session-1"
-	startWorkWithSession(t, store, task.ID, sid)
-
-	doneWork(t, store, task.ID)
-	w := getWork(t, store, task.ID)
-	if w.Status != StatusClosed {
-		t.Fatalf("expected closed status, got %s", w.Status)
-	}
-
-	// Establish known status
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: false,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusClosed, SessionID: sid, AgentRoleID: testRoleID},
-	})
-
-	// Simulate external reopen
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: true,
-		Work:     Work{ID: task.ID, Type: WorkTypeTask, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
-	})
-
-	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
-
-	msgs := sender.getMessages()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
-	}
-	if !strings.Contains(msgs[0].Content, "reopened") {
-		t.Error("task message should contain 'reopened' nudge")
-	}
-}
-
-func TestAutoResumer_ExternalReopen_NoSessionNoMessage(t *testing.T) {
-	store, resumer, sender := setupResumerTest(t)
-
-	story := createStory(t, store, "Story")
-
-	// Establish known status (closed, no session)
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: false,
-		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusClosed, SessionID: "", AgentRoleID: testRoleID},
-	})
-
-	// External reopen with no session
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: true,
-		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusInProgress, SessionID: "", AgentRoleID: testRoleID},
-	})
+	resumer.NotifyStepDone(Work{ID: "w1", Status: StatusInProgress, SessionID: "s1", AgentRoleID: testRoleID, CurrentStep: 1})
 
 	time.Sleep(50 * time.Millisecond)
-	if len(sender.getMessages()) != 0 {
-		t.Error("should not send message when no session")
+	if n := len(sender.getMessages()); n != 0 {
+		t.Errorf("expected no message when no steps defined, got %d", n)
 	}
 }
 
-func TestAutoResumer_InternalReopen_NoMessage(t *testing.T) {
-	store, resumer, sender := setupResumerTest(t)
+func TestAutoResumer_NotifyStepDone_NotInProgressNoMessage(t *testing.T) {
+	_, resumer, sender := setupResumerTest(t)
+	resumer.SetStepProvider(&mockStepProvider{steps: map[string][]string{testRoleID: {"Step 1", "Step 2"}}})
 
-	story := createStory(t, store, "Story")
-	sid := "session-1"
-	startWorkWithSession(t, store, story.ID, sid)
-	doneWork(t, store, story.ID)
-
-	// Establish known status (closed)
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: false,
-		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusClosed, SessionID: sid, AgentRoleID: testRoleID},
-	})
-
-	// Internal reopen (not from MCP/fsnotify)
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: false,
-		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
-	})
+	// A concurrent transition left the work stopped; no next-step prompt.
+	resumer.NotifyStepDone(Work{ID: "w1", Status: StatusStopped, SessionID: "s1", AgentRoleID: testRoleID, CurrentStep: 1})
 
 	time.Sleep(50 * time.Millisecond)
-	if len(sender.getMessages()) != 0 {
-		t.Error("should not send message for internal reopen")
+	if n := len(sender.getMessages()); n != 0 {
+		t.Errorf("expected no message for non-in_progress work, got %d", n)
 	}
 }
 
-func TestAutoResumer_ExternalReopenAfterStartup_SendsMessage(t *testing.T) {
-	store, resumer, sender := setupResumerTest(t)
+func TestAutoResumer_NotifyReopen_SendsMessage(t *testing.T) {
+	_, resumer, sender := setupResumerTest(t)
 
-	story := createStory(t, store, "Story")
-	sid := "session-1"
-	startWorkWithSession(t, store, story.ID, sid)
-
-	doneWork(t, store, story.ID)
-	w := getWork(t, store, story.ID)
-	if w.Status != StatusClosed {
-		t.Fatalf("expected closed status, got %s", w.Status)
-	}
-
-	// Simulate server startup: StopOrphanedWork initializes knownStatuses
-	resumer.StopOrphanedWork()
-
-	// Now simulate external reopen (MCP via fsnotify after server startup)
-	resumer.OnWorkChange(ChangeEvent{
-		Op:       OperationUpdate,
-		External: true,
-		Work:     Work{ID: story.ID, Type: WorkTypeStory, Status: StatusInProgress, SessionID: sid, AgentRoleID: testRoleID},
-	})
+	resumer.NotifyReopen(Work{ID: "w1", Status: StatusInProgress, SessionID: "s1", AgentRoleID: testRoleID})
 
 	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
-
 	msgs := sender.getMessages()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if len(msgs) != 1 || !strings.Contains(msgs[0].Content, "reopened") {
+		t.Fatalf("expected reopen message, got %+v", msgs)
 	}
-	if !strings.Contains(msgs[0].Content, "reopened") {
-		t.Errorf("message should contain 'reopened' nudge, got %q", msgs[0].Content)
+}
+
+func TestAutoResumer_NotifyReopen_NoSessionNoMessage(t *testing.T) {
+	_, resumer, sender := setupResumerTest(t)
+
+	resumer.NotifyReopen(Work{ID: "w1", Status: StatusInProgress, SessionID: "", AgentRoleID: testRoleID})
+
+	time.Sleep(50 * time.Millisecond)
+	if n := len(sender.getMessages()); n != 0 {
+		t.Errorf("expected no message when no session, got %d", n)
 	}
 }

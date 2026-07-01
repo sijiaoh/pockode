@@ -1,30 +1,45 @@
-// Package mcp implements a stdio MCP server for AI agent integration.
-// It provides work management tools accessible to Claude via --mcp-config.
+// Package mcp implements the pockode MCP integration for AI agents.
+//
+// It has two halves that live in the same binary:
+//   - The stdio proxy (Server, Client): runs inside the AI CLI subprocess,
+//     speaks MCP JSON-RPC 2.0 over stdio, and forwards every tool call over
+//     HTTP to the running server. It owns no state and starts no watchers.
+//   - The server side (Executor, APIHandler): runs inside the main server and
+//     executes tool calls against the live stores.
+//
+// The proxy discovers the server's address and auth token from server.json
+// (see Client), so the AI CLI only needs `pockode mcp --data-dir <dir>`.
 package mcp
 
 import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
-
-	"github.com/pockode/server/agentrole"
-	"github.com/pockode/server/work"
 )
 
+// Server is the stdio MCP proxy. It answers protocol handshakes locally and
+// forwards tool calls to the main server via client.
 type Server struct {
-	store          work.Store
-	agentRoleStore agentrole.Store
+	client  *Client
+	version string
 }
 
-func NewServer(store work.Store, agentRoleStore agentrole.Store) *Server {
-	return &Server{store: store, agentRoleStore: agentRoleStore}
+func NewServer(client *Client, version string) *Server {
+	return &Server{client: client, version: version}
 }
 
 // Run starts the stdio JSON-RPC 2.0 loop.
+//
+// Requests are handled one at a time. Each tool call is a single forwarded HTTP
+// round-trip to the local server, so head-of-line blocking is negligible;
+// processing concurrently would buy little and require serializing stdout
+// writes. Revisit only if a genuinely slow tool is added.
 func (s *Server) Run(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
 	// 1MB buffer: the default 64KB is sufficient for current payloads, but MCP
@@ -66,7 +81,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, req *jsonRPCReq
 			},
 			ServerInfo: serverInfo{
 				Name:    "pockode",
-				Version: "1.0.0",
+				Version: s.version,
 			},
 		})
 	case "tools/list":
@@ -85,15 +100,16 @@ func (s *Server) handleToolCall(ctx context.Context, w io.Writer, req *jsonRPCRe
 		return
 	}
 
-	handler, ok := s.getToolHandler(params.Name)
-	if !ok {
-		writeJSONRPCError(w, req.ID, -32602, fmt.Sprintf("Unknown tool: %s", params.Name))
-		return
-	}
-
-	result, err := handler(ctx, params.Arguments)
+	resp, err := s.client.CallTool(ctx, params.Name, params.Arguments)
 	if err != nil {
-		slog.Error("tool call failed", "tool", params.Name, "error", err)
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest {
+			// Unknown tool / malformed call: a client-side protocol error.
+			writeJSONRPCError(w, req.ID, -32602, apiErr.Message)
+			return
+		}
+		// Transport/server failure: surface it instead of failing silently.
+		slog.Error("tool call forwarding failed", "tool", params.Name, "error", err)
 		writeJSONRPCResult(w, req.ID, toolCallResult{
 			Content: []contentBlock{{Type: "text", Text: fmt.Sprintf("Error: %s", err)}},
 			IsError: true,
@@ -102,7 +118,8 @@ func (s *Server) handleToolCall(ctx context.Context, w io.Writer, req *jsonRPCRe
 	}
 
 	writeJSONRPCResult(w, req.ID, toolCallResult{
-		Content: []contentBlock{{Type: "text", Text: result}},
+		Content: []contentBlock{{Type: "text", Text: resp.Text}},
+		IsError: resp.IsError,
 	})
 }
 

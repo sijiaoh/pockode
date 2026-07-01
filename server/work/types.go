@@ -1,6 +1,7 @@
 package work
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -59,9 +60,8 @@ const (
 )
 
 type ChangeEvent struct {
-	Op       Operation
-	Work     Work
-	External bool // true when the change originated from another process (fsnotify)
+	Op   Operation
+	Work Work
 }
 
 // OnChangeListener receives notifications when Work items change.
@@ -82,4 +82,13 @@ type CommentEvent struct {
 // Same mutex contract as OnChangeListener applies.
 type OnCommentChangeListener interface {
 	OnCommentChange(event CommentEvent)
+}
+
+// WorkStartHandler handles the full lifecycle of starting a work session
+// (create session, set title, send kickoff message).
+// For restarts (reused sessionID), the implementation should detect the
+// existing session and send a restart message instead.
+// Satisfied by worktree integration code in the main server.
+type WorkStartHandler interface {
+	HandleWorkStart(ctx context.Context, w Work) error
 }

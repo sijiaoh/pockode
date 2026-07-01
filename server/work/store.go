@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"sync"
 	"time"
@@ -27,10 +26,19 @@ type Store interface {
 	// These are the preferred way to change work status. Each method
 	// encapsulates validation, sessionID management, and side effects.
 
-	// Start transitions a work item to in_progress and assigns a sessionID.
-	// Allowed from: open, stopped, needs_input. Use Reactivate for
-	// process-running detection.
+	// Start transitions a work item to in_progress and assigns an explicit
+	// sessionID. Allowed from: open, stopped, needs_input. Use Reactivate for
+	// process-running detection. To start an agent session use Claim, which
+	// decides the sessionID atomically; Start is the lower-level primitive.
 	Start(ctx context.Context, id string, sessionID string) (Work, error)
+
+	// Claim atomically transitions a work item to in_progress for starting an
+	// agent session. The restart decision and sessionID assignment happen under
+	// the store lock so concurrent claims cannot race: on restart (current status
+	// stopped/needs_input) the existing sessionID is reused to preserve chat
+	// history; otherwise a fresh sessionID is generated. The returned restart
+	// flag tells the caller how to RollbackStart if the kickoff later fails.
+	Claim(ctx context.Context, id string) (w Work, restart bool, err error)
 
 	// Stop transitions in_progress/needs_input → stopped.
 	Stop(ctx context.Context, id string) error
@@ -72,10 +80,6 @@ type Store interface {
 
 	AddOnChangeListener(listener OnChangeListener)
 	AddOnCommentChangeListener(listener OnCommentChangeListener)
-
-	// StartWatching begins monitoring the index file for external changes (e.g. from MCP).
-	StartWatching() error
-	StopWatching()
 }
 
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
@@ -106,9 +110,8 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	store := &FileStore{}
 
 	f, err := filestore.New(filestore.Config{
-		Path:     filepath.Join(dataDir, "works", "index.json"),
-		Label:    "work",
-		OnReload: store.reloadFromDisk,
+		Path:  filepath.Join(dataDir, "works", "index.json"),
+		Label: "work",
 	})
 	if err != nil {
 		return nil, err
@@ -327,6 +330,45 @@ func (s *FileStore) Start(_ context.Context, id string, sessionID string) (Work,
 	}
 
 	return result, nil
+}
+
+func (s *FileStore) Claim(_ context.Context, id string) (Work, bool, error) {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return Work{}, false, ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if !ValidateTransition(w.Status, StatusInProgress) {
+		s.worksMu.Unlock()
+		return Work{}, false, fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusInProgress)
+	}
+
+	// Decide restart and sessionID under the lock from the current status, so a
+	// concurrent transition cannot make us reuse a stale snapshot's decision.
+	restart := w.Status == StatusStopped || w.Status == StatusNeedsInput
+	sessionID := w.SessionID
+	if !restart || sessionID == "" {
+		sessionID = uuid.Must(uuid.NewV7()).String()
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Status = StatusInProgress
+	w.SessionID = sessionID
+	w.UpdatedAt = time.Now()
+
+	result := *w // copy before persistAndNotifyUpdates releases the lock
+
+	modified := map[string]bool{id: true}
+	if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
+		return Work{}, false, err
+	}
+
+	return result, restart, nil
 }
 
 func (s *FileStore) Stop(_ context.Context, id string) error {
@@ -754,87 +796,6 @@ func (s *FileStore) persistIndex() error {
 		return err
 	}
 	return s.file.Write(data)
-}
-
-// --- fsnotify ---
-
-func (s *FileStore) StartWatching() error { return s.file.StartWatching() }
-func (s *FileStore) StopWatching()        { s.file.StopWatching() }
-
-func (s *FileStore) reloadFromDisk() {
-	genBefore := s.file.SnapshotGen()
-
-	idx, err := s.readIndexFromDisk()
-	if err != nil {
-		slog.Error("failed to reload work index", "error", err)
-		return
-	}
-
-	s.worksMu.Lock()
-
-	if s.file.IsStale(genBefore) {
-		s.worksMu.Unlock()
-		return
-	}
-
-	old := s.works
-	oldComments := s.comments
-	s.works = idx.Works
-	s.comments = idx.Comments
-	listeners := s.copyListeners()
-	commentListeners := s.copyCommentListeners()
-	s.worksMu.Unlock()
-
-	events := diffWorks(old, idx.Works)
-	for i := range events {
-		events[i].External = true
-	}
-	for _, e := range events {
-		notify(listeners, e)
-	}
-
-	commentEvents := diffComments(oldComments, idx.Comments)
-	for _, e := range commentEvents {
-		notifyComment(commentListeners, e)
-	}
-}
-
-func diffWorks(old, updated []Work) []ChangeEvent {
-	return filestore.Diff(old, updated,
-		func(w Work) string { return w.ID },
-		workChanged,
-		func(op filestore.Operation, w Work) ChangeEvent {
-			return ChangeEvent{Op: Operation(op), Work: w}
-		},
-	)
-}
-
-// diffComments detects newly added comments.
-// Comments are append-only, so only creates need to be detected.
-func diffComments(old, updated []Comment) []CommentEvent {
-	oldIDs := make(map[string]struct{}, len(old))
-	for _, c := range old {
-		oldIDs[c.ID] = struct{}{}
-	}
-
-	var events []CommentEvent
-	for _, c := range updated {
-		if _, exists := oldIDs[c.ID]; !exists {
-			events = append(events, CommentEvent{Comment: c})
-		}
-	}
-	return events
-}
-
-func workChanged(a, b Work) bool {
-	return a.Title != b.Title ||
-		a.Body != b.Body ||
-		a.AgentRoleID != b.AgentRoleID ||
-		a.Status != b.Status ||
-		a.SessionID != b.SessionID ||
-		a.ParentID != b.ParentID ||
-		a.CurrentStep != b.CurrentStep ||
-		!a.UpdatedAt.Equal(b.UpdatedAt)
 }
 
 // --- Helpers ---

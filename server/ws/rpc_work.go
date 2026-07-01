@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/google/uuid"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/work"
 	"github.com/sourcegraph/jsonrpc2"
@@ -167,55 +166,23 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 		return
 	}
 
-	// Read current status before transition (to detect restart from stopped)
-	current, found, err := h.workStore.Get(params.ID)
+	w, err := h.workOps.StartWork(ctx, params.ID)
 	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to start work")
-		return
-	}
-	if !found {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "work not found")
-		return
-	}
-	restart := current.Status == work.StatusStopped || current.Status == work.StatusNeedsInput
-
-	// 1. Claim the work atomically: transition to in_progress + link session.
-	//    This must happen before creating the session to prevent orphan
-	//    sessions when concurrent requests race on the same work item.
-	//    The Store's mutex ensures only one request wins the transition.
-	//    Reuse existing sessionID on restart to preserve chat history.
-	sessionID := current.SessionID
-	if !restart || sessionID == "" {
-		sessionID = uuid.Must(uuid.NewV7()).String()
-	}
-	w, err := h.workStore.Start(ctx, params.ID, sessionID)
-	if err != nil {
-		h.replyWorkError(ctx, conn, req.ID, err, "failed to start work")
+		// ErrWorkNotFound / ErrInvalidWork map to client errors; a kickoff failure
+		// (e.g. "send kickoff message: ...") is surfaced verbatim so the user sees
+		// why the agent did not start.
+		if errors.Is(err, work.ErrWorkNotFound) || errors.Is(err, work.ErrInvalidWork) {
+			h.replyWorkError(ctx, conn, req.ID, err, "failed to start work")
+		} else {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		}
 		return
 	}
 
-	// 2. Create session and send kickoff/restart message via WorkStarter.
-	//    HandleWorkStart detects restart by checking if the session already exists.
-	if err := h.workStarter.HandleWorkStart(ctx, w); err != nil {
-		h.rollbackWorkStart(ctx, params.ID, restart)
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
-		return
-	}
-
-	h.log.Info("work started", "workId", params.ID, "sessionId", sessionID, "restart", restart)
+	h.log.Info("work started", "workId", w.ID, "sessionId", w.SessionID)
 
 	if err := conn.Reply(ctx, req.ID, w); err != nil {
 		h.log.Error("failed to send work start response", "error", err)
-	}
-}
-
-// rollbackWorkStart reverts a claimed work item to its previous status.
-// Fresh starts roll back to open (clearing sessionID); restarts roll back to stopped.
-func (h *rpcMethodHandler) rollbackWorkStart(ctx context.Context, workID string, restart bool) {
-	if err := h.workStore.RollbackStart(ctx, workID, restart); err != nil {
-		h.log.Error("failed to rollback work start", "workId", workID, "restart", restart, "error", err)
-	} else {
-		h.log.Info("rolled back work start", "workId", workID, "restart", restart)
 	}
 }
 
@@ -245,7 +212,7 @@ func (h *rpcMethodHandler) handleWorkReopen(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
-	if err := h.workStore.Reopen(ctx, params.ID); err != nil {
+	if err := h.workOps.ReopenWork(ctx, params.ID); err != nil {
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to reopen work")
 		return
 	}

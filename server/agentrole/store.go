@@ -25,10 +25,6 @@ type Store interface {
 	ResetDefaults(ctx context.Context) (string, error)
 
 	AddOnChangeListener(listener OnChangeListener)
-
-	// StartWatching begins monitoring the index file for external changes (e.g. from MCP).
-	StartWatching() error
-	StopWatching()
 }
 
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
@@ -363,6 +359,9 @@ func (s *FileStore) persistIndex() error {
 
 // --- fsnotify ---
 
+// StartWatching begins monitoring the index file for external changes.
+// The agent-role file is user-editable (like settings.json), so direct edits
+// on disk must reflect immediately without a server restart.
 func (s *FileStore) StartWatching() error { return s.file.StartWatching() }
 func (s *FileStore) StopWatching()        { s.file.StopWatching() }
 

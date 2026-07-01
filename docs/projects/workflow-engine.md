@@ -1,6 +1,6 @@
 # Workflow Engine
 
-The workflow engine manages work item lifecycles through status transitions, automatic session management, and inter-process coordination.
+The workflow engine manages work item lifecycles through status transitions and automatic session management.
 
 ## Statuses
 
@@ -35,7 +35,7 @@ The workflow engine manages work item lifecycles through status transitions, aut
 
 | From           | To             | Trigger                                    |
 | -------------- | -------------- | ------------------------------------------ |
-| `open`         | `in_progress`  | `Store.Start` (fresh start)                |
+| `open`         | `in_progress`  | `Store.Claim` (fresh start)                |
 | `in_progress`  | `open`         | `Store.RollbackStart` (fresh start failed) |
 | `in_progress`  | `needs_input`  | `Store.MarkNeedsInput`                     |
 | `in_progress`  | `waiting`      | `Store.MarkWaiting`                         |
@@ -45,7 +45,7 @@ The workflow engine manages work item lifecycles through status transitions, aut
 | `needs_input`  | `stopped`      | `Store.Stop` (process ended while paused)  |
 | `waiting`      | `in_progress`  | `Store.ResumeFromWaiting` (child completes or user message) |
 | `waiting`      | `stopped`      | `Store.Stop` (process ended while waiting) |
-| `stopped`      | `in_progress`  | `Store.Start` (restart) or `Store.Reactivate` |
+| `stopped`      | `in_progress`  | `Store.Claim` (restart) or `Store.Reactivate` |
 | `closed`       | `in_progress`  | `Store.Reopen` (reopen closed item) |
 
 > Source: `server/work/validation.go` — `validTransitions` map.
@@ -71,7 +71,7 @@ When a child work closes, its parent story is automatically resumed (if the pare
 
 ## AutoResumer
 
-The `AutoResumer` listens to work change events and process state changes. It handles process lifecycle sync and two event-driven triggers.
+The `AutoResumer` listens to work change events and process state changes. It handles process lifecycle sync, parent-resume on child completion, and the step-advance / reopen follow-up messages the in-process MCP and WebSocket paths request.
 
 ### Process Lifecycle Sync
 
@@ -85,7 +85,7 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 | `ended` | After settle delay, stop `in_progress`/`needs_input` work → `stopped` |
 
 **Auto-continuation details:**
-1. Wait **2 seconds** (settle delay) — allows `step_done` writes from MCP to propagate via fsnotify.
+1. Wait **2 seconds** (settle delay) — lets an in-flight `step_done`'s in-process retry reset land first.
 2. Look up the work item by `sessionID`. If still `in_progress`, send a continuation message.
 3. Retry counter per session (configurable `maxRetries`). On limit, work transitions to `stopped`. Counter resets on `closed`/`stopped` transitions or deletion.
 
@@ -102,41 +102,39 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 
 **Purpose:** Stories (coordinators) are automatically woken up when a child task completes, so they can review results and continue orchestration.
 
-> Source: `server/work/auto_resumer.go` — `handleParentResume`.
+> Source: `server/work/auto_resumer.go` — `handleParentReactivation`.
 
-### Trigger C: External Work Start
+### Work Start, Step Advance, and Reopen (in-process)
 
-**When:** A work item transitions to `in_progress` with a `sessionID` via an **external** write (fsnotify, e.g. MCP `work_start`).
+`work_start`, `step_done`, and `work_reopen` are driven in-process rather than by
+reacting to file changes. `work_start` and `work_reopen` go through a single
+shared implementation, `work.Operations`, called by **both** the WebSocket
+handler (user actions) and the MCP `Executor` (AI actions) — so a user-triggered
+action and an AI-triggered action have identical effects:
 
-**Flow:**
-1. External process writes `status=in_progress` + `sessionID` to the index file.
-2. fsnotify detects the change, store reloads, fires a `ChangeEvent` with `External=true`.
-3. AutoResumer delegates to `WorkStartHandler.HandleWorkStart`.
-4. On failure, the work item is rolled back to `open` with an empty `sessionID`.
+- **work_start** (`Operations.StartWork`) — atomically claims the work
+  (`Store.Claim`: `in_progress` + `sessionID`, deciding restart/session reuse
+  under the store lock) and invokes `WorkStartHandler.HandleWorkStart` to
+  create the session and send the kickoff. On failure the claim is rolled back to
+  `open` with an empty `sessionID`. Runs on a detached context so a caller
+  timeout/disconnect cannot orphan a half-created session.
+- **work_reopen** (`Operations.ReopenWork`) — after `Store.Reopen`
+  (`closed → in_progress`), calls `AutoResumer.NotifyReopen` to send the reopen
+  nudge.
+- **step_done** (MCP-only) — `Store.StepDone` advances `CurrentStep` if more steps
+  remain, otherwise it closes the work item. While the work stays `in_progress`,
+  the `Executor` calls `AutoResumer.NotifyStepDone`, which sends the next step's
+  instructions via `BuildStepAdvanceMessage`. On the last step no prompt is sent.
+  Work must be `in_progress` to call `step_done`.
 
-**Purpose:** Allow MCP tools (or other external processes) to start work items. The session creation and kickoff happen in-process even though the trigger was external.
+**Purpose:** Give the agent explicit control over step timing while keeping the
+main server the single writer; the follow-up messages are requested directly by
+the in-process caller instead of being detected from a file change. Routing
+start/reopen through one `Operations` type keeps the two transports behaviorally
+identical.
 
-> Source: `server/work/auto_resumer.go` — `handleExternalWorkStart`.
-
-### Trigger E: Explicit Step Done
-
-**When:** A work item's `CurrentStep` is advanced externally via MCP `step_done` tool.
-
-**Flow:**
-1. Agent calls `step_done` MCP tool when it completes the current step.
-2. `Store.StepDone` advances `CurrentStep` if more steps remain; otherwise it closes the work item.
-3. AutoResumer detects the step change via `knownSteps` tracking (External event).
-4. If there are more steps:
-   - Send `BuildStepAdvanceMessage` with the next step's instructions.
-5. If this is the last step, `step_done` closes the work item and no next-step prompt is sent.
-
-**Constraints:**
-- Work must be `in_progress` to call `step_done`.
-- On the last step, agent should call `step_done` to close the work item.
-
-**Purpose:** Enable explicit step-by-step execution where the agent controls when to advance. This gives the agent full control over step completion timing, avoiding race conditions from automatic detection.
-
-> Source: `server/work/auto_resumer.go` — `handleExternalStepDone`, `server/mcp/tools.go` — `handleStepDone`.
+> Source: `server/work/operations.go` — `StartWork`, `ReopenWork`;
+> `server/work/auto_resumer.go` — `NotifyStepDone`, `NotifyReopen`.
 
 ## WorkStarter
 
@@ -230,7 +228,7 @@ Falls back to `BuildAutoContinuationMessage` for stories or when no steps are de
 
 ### BuildStepAdvanceMessage
 
-Used when Trigger E advances to the next step. Format:
+Used when a step advance is sent (`NotifyStepDone`). Format:
 ```
 [Base message]
 

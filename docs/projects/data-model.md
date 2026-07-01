@@ -102,15 +102,25 @@ Writes use the **write → fsync → rename** pattern to prevent corruption:
 
 A crash at any point leaves either the old file intact or the new file fully written — never a partial file.
 
-### Cross-process safety
+### Atomic persistence
 
-**flock:** A dedicated lock file (`index.json.lock`) coordinates access across processes. Reads acquire a shared lock (`LOCK_SH`); writes acquire an exclusive lock (`LOCK_EX`). A separate lock file is used because atomic rename changes the data file's inode, which would break flock on the data file itself.
+The main server is the **sole writer** of the work index (the MCP path goes
+through the in-process API, not the filesystem), so there is no cross-process
+write coordination to manage. The agent-role index has one additional writer:
+the user editing it directly on disk (same as `settings.json`), which the
+server picks up via the fsnotify reload described below.
 
-**fsnotify:** The store watches the index file's directory for changes. When an external process (e.g. MCP server) modifies the file, the store detects it and reloads. Events are debounced (100ms) to coalesce rapid writes.
+**flock:** A dedicated lock file (`index.json.lock`) guards each read/write so a
+reader never observes a half-written file. Reads acquire a shared lock
+(`LOCK_SH`); writes acquire an exclusive lock (`LOCK_EX`). A separate lock file
+is used because atomic rename changes the data file's inode, which would break
+flock on the data file itself.
 
-**writeGen (stale reload prevention):** An atomic counter incremented on every in-process write. Before reloading from disk, the store snapshots this value. After the disk read, the store acquires the write lock and rechecks — if the value changed, the reload is skipped because the in-process write already updated in-memory state.
-
-**Change diffing:** On reload, the store diffs old and new data to produce change events. Self-inflicted reloads produce no diff and fire no events. External changes fire events with `External: true`.
+> To surface those external edits, the settings and agent-role stores watch
+> their files via the `filestore` fsnotify primitive: a disk change is reloaded
+> and diffed against in-memory state, then fired as change events to subscribers.
+> The work store has no external writer, so it does not watch — its events come
+> directly from in-process mutations.
 
 ### Rollback on persist failure
 
@@ -154,8 +164,6 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | ListComments              | `(workID) → ([]Comment, error)`          | Returns comments for a work item              |
 | AddOnChangeListener       | `(OnChangeListener)`                     | Registers a listener for work change events   |
 | AddOnCommentChangeListener| `(OnCommentChangeListener)`              | Registers a listener for comment events       |
-| StartWatching             | `() → error`                             | Starts fsnotify monitoring for external changes |
-| StopWatching              | `()`                                     | Stops the watcher                             |
 
 ### agentrole.Store
 
@@ -168,5 +176,3 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | Delete             | `(ctx, id) → error`                                    | Removes the role                                                      |
 | ResetDefaults      | `(ctx) → error`                                        | Deletes all roles and recreates built-in defaults                     |
 | AddOnChangeListener| `(OnChangeListener)`                                   | Registers a listener for create/update/delete events                  |
-| StartWatching      | `() → error`                                           | Starts fsnotify monitoring for external changes                       |
-| StopWatching       | `()`                                                   | Stops the watcher                                                     |

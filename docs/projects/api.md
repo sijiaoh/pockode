@@ -40,7 +40,7 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 ### Behavior Notes
 
 - **`work_create`**: Requires `agent_role_id` (validated to exist). Stories are top-level; tasks require `parent_id`.
-- **`work_start`**: Requires the work item to have an `agent_role_id`. Generates a UUIDv7 session ID, transitions to `in_progress` and attaches the session ID via `Store.Start`. The main server detects this state change via fsnotify (`AutoResumer` Trigger C) and handles session creation.
+- **`work_start`**: Requires the work item to have an `agent_role_id`. Atomically transitions to `in_progress` and attaches a session ID via `Store.Claim` (a fresh UUIDv7, or the existing session on restart), then creates the session and sends the kickoff via `WorkStartHandler` (in-process).
 - **`step_done`**: Calls `Store.StepDone()`. Work items advance to the next configured step, or transition `in_progress → closed` when no steps remain. Use `work_wait` to transition `in_progress → waiting` while child work is still open.
 - **`work_needs_input`**: Calls `Store.MarkNeedsInput()`. Transitions `in_progress → needs_input`.
 - **`work_reopen`**: Calls `Store.Reopen()`. Transitions `closed → in_progress`. Use when you need to add more child work items or continue working on a completed item.
@@ -104,7 +104,7 @@ Defined in `server/rpc/types.go`.
 
 `work.start` performs a two-phase operation:
 
-1. **Claim**: Atomically transitions to `in_progress` and attaches a new UUIDv7 session ID via `Store.Start`. The store's mutex prevents concurrent claims.
+1. **Claim**: `Store.Claim` atomically transitions to `in_progress` and attaches a session ID under the store mutex — a fresh UUIDv7 for a fresh start, or the existing session ID on restart (`stopped`/`needs_input`). Deciding restart and session under the lock prevents concurrent claims from racing.
 2. **Session creation**: Calls `WorkStarter.HandleWorkStart()` to create the Claude session and send the kickoff (or restart) message.
 
 If step 2 fails, the handler calls `Store.RollbackStart` — fresh starts revert to `open` (clears sessionID); restarts revert to `stopped` (preserves sessionID).
