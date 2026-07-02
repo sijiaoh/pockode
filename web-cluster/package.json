@@ -9,7 +9,9 @@
 		"build:release": "tsc && vite build --outDir ../server/cluster/static --emptyOutDir",
 		"preview": "vite preview",
 		"lint": "biome check src",
-		"format": "biome format --write src"
+		"format": "biome format --write src",
+		"test": "vitest run",
+		"test:watch": "vitest"
 	},
 	"dependencies": {
 		"@pockode/shared": "workspace:*",
@@ -28,7 +30,8 @@
 		"tailwindcss": "^4.1.18",
 		"typescript": "~5.9.3",
 		"vite": "^7.2.4",
-		"vite-plugin-compression": "^0.5.1"
+		"vite-plugin-compression": "^0.5.1",
+		"vitest": "^4.0.16"
 	},
 	"engines": {
 		"node": ">=22"

@@ -95,7 +95,12 @@ export const useWSStore = create<WSState>()((set, get) => {
 			internal.socket.close();
 		}
 
-		set({ status: "connecting", errorMessage: null });
+		// During an automatic reconnect keep the "reconnecting" status: flipping
+		// to "connecting" would show the full-screen spinner and remount NodeList,
+		// flashing its loading state even though nothing changed.
+		if (get().status !== "reconnecting") {
+			set({ status: "connecting", errorMessage: null });
+		}
 		internal.token = token;
 
 		const socket = new WebSocket(getWebSocketUrl());
@@ -138,7 +143,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 			}
 		};
 
-		socket.onclose = (event) => {
+		socket.onclose = () => {
 			internal.client = null;
 			internal.socket = null;
 
@@ -149,14 +154,11 @@ export const useWSStore = create<WSState>()((set, get) => {
 				return;
 			}
 
-			// Handle abnormal close - try to reconnect
-			if (!event.wasClean) {
-				scheduleReconnect();
-				return;
-			}
-
-			// Clean close from server side - set disconnected
-			set({ status: "disconnected" });
+			// Treat every unexpected close as a reconnect so the last-known UI stays
+			// mounted. "disconnected" would trigger App's auto-reconnect via
+			// connect() (flashing the spinner) and is reserved for intentional
+			// disconnect(), mirroring the web client.
+			scheduleReconnect();
 		};
 
 		socket.onerror = () => {
@@ -177,13 +179,17 @@ export const useWSStore = create<WSState>()((set, get) => {
 			disconnect: () => {
 				clearReconnectTimeout();
 				internal.token = null;
-				internal.reconnectAttempts = 0;
+				// Prevent onclose from auto-reconnecting, mirroring the web client.
+				internal.reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
+				// Set status BEFORE closing so onclose sees "disconnected" and skips
+				// scheduleReconnect(); otherwise closing a connected socket would flip
+				// through "reconnecting" and leave a stray no-op timer.
+				set({ status: "disconnected", version: null, errorMessage: null });
 				if (internal.socket) {
 					internal.socket.close();
 					internal.socket = null;
 				}
 				internal.client = null;
-				set({ status: "disconnected", version: null, errorMessage: null });
 			},
 		},
 	};
