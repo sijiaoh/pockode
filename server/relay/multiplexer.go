@@ -6,10 +6,21 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/pockode/server/logger"
 	"github.com/sourcegraph/jsonrpc2"
+)
+
+// Keepalive detects half-open connections (e.g. after the host machine wakes
+// from sleep) so runWithReconnect can re-establish the relay tunnel. Without an
+// active ping, m.conn.Read blocks forever on a silently-dead connection and the
+// reconnect logic never fires. Worst-case detection latency is roughly
+// pingInterval + pingTimeout.
+const (
+	pingInterval = 15 * time.Second
+	pingTimeout  = 10 * time.Second
 )
 
 type EnvelopeType string
@@ -37,19 +48,29 @@ type Multiplexer struct {
 	newStreamCh chan<- *VirtualStream
 	httpHandler *HTTPHandler
 	log         *slog.Logger
+
+	pingInterval time.Duration
+	pingTimeout  time.Duration
 }
 
 func NewMultiplexer(conn *websocket.Conn, newStreamCh chan<- *VirtualStream, httpHandler *HTTPHandler, log *slog.Logger) *Multiplexer {
 	return &Multiplexer{
-		conn:        conn,
-		streams:     make(map[string]*VirtualStream),
-		newStreamCh: newStreamCh,
-		httpHandler: httpHandler,
-		log:         log,
+		conn:         conn,
+		streams:      make(map[string]*VirtualStream),
+		newStreamCh:  newStreamCh,
+		httpHandler:  httpHandler,
+		log:          log,
+		pingInterval: pingInterval,
+		pingTimeout:  pingTimeout,
 	}
 }
 
 func (m *Multiplexer) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go m.keepAlive(ctx, cancel)
+
 	for {
 		_, data, err := m.conn.Read(ctx)
 		if err != nil {
@@ -81,6 +102,36 @@ func (m *Multiplexer) Run(ctx context.Context) error {
 			go m.handleHTTPRequest(ctx, env.ConnectionID, env.HTTPRequest)
 		default:
 			m.log.Warn("unknown envelope type", "type", env.Type)
+		}
+	}
+}
+
+// keepAlive pings the relay server on m.pingInterval and, on failure, cancels
+// the read context so Run's blocked Read returns. Ping must run concurrently
+// with that reader, which is what reads the pong. Canceling the context (which
+// closes the underlying conn) is used instead of a graceful Close because a
+// dead peer never completes the close handshake, leaving Read blocked.
+func (m *Multiplexer) keepAlive(ctx context.Context, cancel context.CancelFunc) {
+	ticker := time.NewTicker(m.pingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, pingCancel := context.WithTimeout(ctx, m.pingTimeout)
+			err := m.conn.Ping(pingCtx)
+			pingCancel()
+			if err == nil {
+				continue
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			m.log.Warn("relay keepalive ping failed, closing connection", "error", err)
+			cancel()
+			return
 		}
 	}
 }

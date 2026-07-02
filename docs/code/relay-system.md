@@ -88,6 +88,23 @@ func (m *Manager) runWithReconnect(ctx context.Context, cfg *StoredConfig) {
 
 **Exponential Backoff**: After connection failure, wait 1s, 2s, 4s... up to 10s max. However, if the connection was stable for more than 1 minute before disconnecting, treat it as network jitter—retry immediately and reset the backoff time. This distinguishes between "network unreachable" and "temporary interruption" scenarios.
 
+### Liveness Detection (Keepalive)
+
+`runWithReconnect` only retries after `connectAndRun` returns, which depends on `Multiplexer.Run` unblocking. But when the host machine sleeps and wakes, the connection is often left **half-open**: the peer is gone, yet `m.conn.Read` never errors and blocks forever. Without active probing, the reconnect loop would never fire and the tunnel would stay silently dead.
+
+```go
+// multiplexer.go:114 — keepAlive
+func (m *Multiplexer) keepAlive(ctx context.Context, cancel context.CancelFunc) {
+    // ping every pingInterval; on failure, cancel the read context
+}
+```
+
+**Why application-layer ping, not TCP keepalive**: OS TCP keepalive defaults to interval on the order of hours, and its half-open detection across sleep/wake is unreliable. An explicit WebSocket ping (`conn.Ping`) is controllable and predictable. Ping must run concurrently with `Run`'s read loop, because that loop is what reads the returning pong.
+
+**Why cancel the context, not `Close`**: a dead peer never completes the WebSocket close handshake, so a graceful `Close` cannot unblock `Read`. Canceling the read context closes the underlying connection, forcing `Read` to return so `Run` exits and `runWithReconnect` re-establishes the tunnel.
+
+**Parameter choice**: `pingInterval = 15s`, `pingTimeout = 10s`. Worst-case detection latency is roughly their sum (~25s), keeping post-wake recovery within tens of seconds. Both are `Multiplexer` fields so tests can inject small values.
+
 ### WebSocket Authentication
 
 After the connection is established, the PC needs to prove its identity to the cloud:
@@ -142,7 +159,7 @@ Four signal types:
 ### Message Routing
 
 ```go
-// multiplexer.go:52-86
+// multiplexer.go:68 — Run (keepAlive goroutine started at entry)
 func (m *Multiplexer) Run(ctx context.Context) error {
     for {
         _, data, err := m.conn.Read(ctx)
