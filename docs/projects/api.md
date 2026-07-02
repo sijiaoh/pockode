@@ -7,7 +7,7 @@ The Project system exposes two API layers:
 
 ## MCP Tools
 
-The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude session via `--mcp-config`. Each process gets its own `Server` instance with access to `work.Store` and `agentrole.Store`.
+The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude session via `--mcp-config`. The subprocess is a **thin proxy**: it owns no state and forwards every tool call over HTTP to the running main server, which executes it in-process against the shared `work.Store` and `agentrole.Store` (the same stores the WebSocket layer uses). See [work-system](../code/work-system.md#mcp-server-architecture) for why.
 
 **Process model**: The main Pockode binary has an `mcp` subcommand (`pockode mcp --data-dir <dir>`) that starts the stdio loop. Claude spawns it as a child process.
 

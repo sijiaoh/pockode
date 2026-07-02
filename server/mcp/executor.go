@@ -66,22 +66,22 @@ type SettingsStore interface {
 // the actual work using the same stores and work.Operations as the WebSocket
 // handlers. This keeps the server as the single writer of work data.
 type Executor struct {
-	store          work.Store
+	workStore      work.Store
 	agentRoleStore agentrole.Store
-	ops            *work.Operations
-	notifier       WorkNotifier
+	workOps        *work.Operations
+	workNotifier   WorkNotifier
 	settingsStore  SettingsStore
 }
 
-// NewExecutor creates an Executor. ops performs the start/reopen transitions and
-// their side effects (the same operations the WebSocket layer calls); it is
-// required whenever work_start or work_reopen is reachable. notifier delivers
-// the step-advance message on step_done; a nil notifier skips that follow-up.
+// NewExecutor creates an Executor. workOps performs the start/reopen transitions
+// and their side effects (the same operations the WebSocket layer calls); it is
+// required whenever work_start or work_reopen is reachable. workNotifier delivers
+// the step-advance message on step_done; a nil workNotifier skips that follow-up.
 // settingsStore keeps the default agent role in sync on reset; a nil
 // settingsStore skips that update. Nils are tolerated only where the
 // corresponding tools are unreachable (e.g. narrow tests).
-func NewExecutor(store work.Store, agentRoleStore agentrole.Store, ops *work.Operations, notifier WorkNotifier, settingsStore SettingsStore) *Executor {
-	return &Executor{store: store, agentRoleStore: agentRoleStore, ops: ops, notifier: notifier, settingsStore: settingsStore}
+func NewExecutor(workStore work.Store, agentRoleStore agentrole.Store, workOps *work.Operations, workNotifier WorkNotifier, settingsStore SettingsStore) *Executor {
+	return &Executor{workStore: workStore, agentRoleStore: agentRoleStore, workOps: workOps, workNotifier: workNotifier, settingsStore: settingsStore}
 }
 
 // Execute runs the named tool and returns its text result. It returns a
@@ -135,7 +135,7 @@ func (e *Executor) workList(args json.RawMessage) (string, error) {
 		}
 	}
 
-	works, err := e.store.List()
+	works, err := e.workStore.List()
 	if err != nil {
 		return "", err
 	}
@@ -200,7 +200,7 @@ func (e *Executor) workCreate(ctx context.Context, args json.RawMessage) (string
 		return "", userErrorf("agent role %q not found", params.AgentRoleID)
 	}
 
-	created, err := e.store.Create(ctx, work.Work{
+	created, err := e.workStore.Create(ctx, work.Work{
 		Type:        params.Type,
 		ParentID:    params.ParentID,
 		Title:       params.Title,
@@ -239,7 +239,7 @@ func (e *Executor) workUpdate(ctx context.Context, args json.RawMessage) (string
 		Body:        params.Body,
 		AgentRoleID: params.AgentRoleID,
 	}
-	if err := e.store.Update(ctx, params.ID, fields); err != nil {
+	if err := e.workStore.Update(ctx, params.ID, fields); err != nil {
 		return "", err
 	}
 
@@ -267,7 +267,7 @@ func (e *Executor) workGet(args json.RawMessage) (string, error) {
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	w, found, err := e.store.Get(params.ID)
+	w, found, err := e.workStore.Get(params.ID)
 	if err != nil {
 		return "", err
 	}
@@ -307,7 +307,7 @@ func (e *Executor) workDelete(ctx context.Context, args json.RawMessage) (string
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	if err := e.store.Delete(ctx, params.ID); err != nil {
+	if err := e.workStore.Delete(ctx, params.ID); err != nil {
 		return "", err
 	}
 
@@ -322,7 +322,7 @@ func (e *Executor) workStart(ctx context.Context, args json.RawMessage) (string,
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	w, err := e.ops.StartWork(ctx, params.ID)
+	w, err := e.workOps.StartWork(ctx, params.ID)
 	if err != nil {
 		return "", err
 	}
@@ -339,7 +339,7 @@ func (e *Executor) workNeedsInput(ctx context.Context, args json.RawMessage) (st
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	if err := e.store.MarkNeedsInput(ctx, params.ID); err != nil {
+	if err := e.workStore.MarkNeedsInput(ctx, params.ID); err != nil {
 		return "", err
 	}
 
@@ -354,7 +354,7 @@ func (e *Executor) workReopen(ctx context.Context, args json.RawMessage) (string
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	if err := e.ops.ReopenWork(ctx, params.ID); err != nil {
+	if err := e.workOps.ReopenWork(ctx, params.ID); err != nil {
 		return "", err
 	}
 
@@ -369,7 +369,7 @@ func (e *Executor) workWait(ctx context.Context, args json.RawMessage) (string, 
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	if err := e.store.MarkWaiting(ctx, params.ID); err != nil {
+	if err := e.workStore.MarkWaiting(ctx, params.ID); err != nil {
 		return "", err
 	}
 
@@ -385,7 +385,7 @@ func (e *Executor) stepDone(ctx context.Context, args json.RawMessage) (string, 
 	}
 
 	// Get the work item to find its agent role
-	w, found, err := e.store.Get(params.ID)
+	w, found, err := e.workStore.Get(params.ID)
 	if err != nil {
 		return "", err
 	}
@@ -404,7 +404,7 @@ func (e *Executor) stepDone(ctx context.Context, args json.RawMessage) (string, 
 
 	totalSteps := len(role.Steps)
 
-	hasMoreSteps, err := e.store.StepDone(ctx, params.ID, totalSteps)
+	hasMoreSteps, err := e.workStore.StepDone(ctx, params.ID, totalSteps)
 	if err != nil {
 		return "", err
 	}
@@ -412,9 +412,9 @@ func (e *Executor) stepDone(ctx context.Context, args json.RawMessage) (string, 
 	if hasMoreSteps {
 		// Deliver the next-step prompt to the agent session. Re-read to get the
 		// advanced CurrentStep.
-		if e.notifier != nil {
-			if advanced, found, getErr := e.store.Get(params.ID); getErr == nil && found {
-				e.notifier.NotifyStepDone(advanced)
+		if e.workNotifier != nil {
+			if advanced, found, getErr := e.workStore.Get(params.ID); getErr == nil && found {
+				e.workNotifier.NotifyStepDone(advanced)
 			}
 		}
 		return fmt.Sprintf("Step %d completed for work %s, advancing to step %d of %d", w.CurrentStep+1, params.ID, w.CurrentStep+2, totalSteps), nil
@@ -434,7 +434,7 @@ func (e *Executor) workCommentAdd(ctx context.Context, args json.RawMessage) (st
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	comment, err := e.store.AddComment(ctx, params.WorkID, params.Body)
+	comment, err := e.workStore.AddComment(ctx, params.WorkID, params.Body)
 	if err != nil {
 		return "", err
 	}
@@ -450,7 +450,7 @@ func (e *Executor) workCommentList(args json.RawMessage) (string, error) {
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	comments, err := e.store.ListComments(params.WorkID)
+	comments, err := e.workStore.ListComments(params.WorkID)
 	if err != nil {
 		return "", err
 	}
@@ -486,7 +486,7 @@ func (e *Executor) workCommentUpdate(ctx context.Context, args json.RawMessage) 
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	comment, err := e.store.UpdateComment(ctx, params.ID, params.Body)
+	comment, err := e.workStore.UpdateComment(ctx, params.ID, params.Body)
 	if err != nil {
 		return "", err
 	}
