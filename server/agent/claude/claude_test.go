@@ -35,6 +35,16 @@ func TestParseLine(t *testing.T) {
 			expected: nil,
 		},
 		{
+			name:     "system thinking_tokens event is filtered",
+			input:    `{"type":"system","subtype":"thinking_tokens","estimated_tokens":50,"estimated_tokens_delta":50}`,
+			expected: nil,
+		},
+		{
+			name:     "system non-init event is forwarded",
+			input:    `{"type":"system","subtype":"compact_boundary"}`,
+			expected: []agent.AgentEvent{agent.SystemEvent{Content: `{"type":"system","subtype":"compact_boundary"}`}},
+		},
+		{
 			name:     "result event success",
 			input:    `{"type":"result","subtype":"success","result":"Hello"}`,
 			expected: []agent.AgentEvent{agent.DoneEvent{}},

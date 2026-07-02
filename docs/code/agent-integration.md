@@ -198,8 +198,14 @@ no resume file are migrated by using the Pockode session ID once.
 | `control_request` | `can_use_tool` | `PermissionRequestEvent` or `AskUserQuestionEvent` |
 | `control_response` | — | `InterruptedEvent` (only for interrupts we sent) |
 | `control_cancel_request` | — | `RequestCancelledEvent` |
-| `system` | `init` | (filtered, not sent) |
+| `system` | `init`, `thinking_tokens` | (filtered, not sent — session metadata / token-estimate noise) |
 | `system` | other | `SystemEvent` |
+
+Filtering is deliberately scoped to these two subtypes. The CLI also emits
+other high-frequency telemetry (`task_progress`, `status`, `api_retry`,
+`task_notification`, …) which is currently forwarded verbatim as `SystemEvent`;
+these are potential future noise sources but are left untouched for now to keep
+the filter minimal.
 
 ### Stream Parsing Implementation
 

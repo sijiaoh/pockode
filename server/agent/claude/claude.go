@@ -676,8 +676,10 @@ func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent
 	case "result":
 		return []agent.AgentEvent{parseResultEvent(line)}
 	case "system":
-		// Skip init event (noise at session start)
-		if event.Subtype == "init" {
+		// Skip noise events that carry no meaning for users:
+		// - init: session-start metadata
+		// - thinking_tokens: high-frequency streaming thinking-token estimates
+		if event.Subtype == "init" || event.Subtype == "thinking_tokens" {
 			return nil
 		}
 		return []agent.AgentEvent{agent.SystemEvent{Content: string(line)}}
