@@ -173,6 +173,17 @@ export const useWSStore = create<WSState>()((set, get) => {
 		actions: {
 			...nodeActions,
 			connect: (token: string) => {
+				// A socket is already active or being established; don't open a
+				// second one. Without this guard a re-entrant connect (e.g. React
+				// StrictMode double-invoking App's connect effect, which captures a
+				// stale "disconnected" status) opens a duplicate socket. Closing the
+				// first then makes its onclose schedule a phantom reconnect, flashing
+				// the UI a few seconds later. Mirrors the web client. "error" is left
+				// retryable on purpose (the error screen's Retry button calls this).
+				const status = get().status;
+				if (status === "connecting" || status === "connected") {
+					return;
+				}
 				internal.reconnectAttempts = 0;
 				connectInternal(token);
 			},
