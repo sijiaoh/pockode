@@ -1,16 +1,16 @@
 # Cluster Mode
 
-A lightweight deployment mode for running Pockode on remote servers (VPS, Kubernetes, etc.). Unlike the full server which runs a complete development environment, cluster mode provides minimal infrastructure for remote access via relay.
+An orchestration mode that manages multiple Pockode project nodes from a single instance. It registers project directories and starts/stops their servers on demand.
 
 ## Architecture
 
 ```
-Mobile App  ──►  Relay Server (cloud)  ◀──  Remote Server (cluster mode)
+Mobile App  ──►  Relay Server (cloud)  ◀──  Host (cluster mode)
                                                  │
                                             WebSocket + Auth
 ```
 
-Cluster mode strips away development environment features (worktrees, agents, file watching) and focuses on:
+Cluster mode focuses on:
 - WebSocket JSON-RPC endpoint
 - Token-based authentication
 - Relay connectivity for NAT traversal

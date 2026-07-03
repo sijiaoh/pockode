@@ -102,6 +102,11 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `--git-user-email` | git时 | — | commit 邮箱 |
 | `--version` | | — | 输出版本号并退出 |
 
+上表为默认（server）模式。此外还有两个子命令（`flag.Parse()` 前分发，见 `main.go`）：
+
+- `pockode cluster` — 多项目节点编排模式，注册并按需启停多个项目，参数与实现见 [docs/cluster.md](../docs/cluster.md)
+- `pockode mcp` — MCP stdio 代理，由 AI CLI 内部启动，见下方「MCP 本地 API」
+
 ## 运行时文件
 
 ### server.json

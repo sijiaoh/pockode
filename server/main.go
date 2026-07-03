@@ -146,6 +146,21 @@ func main() {
 	logFormatFlag := flag.String("log-format", "", "log format: text, json (default text)")
 	logFileFlag := flag.String("log-file", "", "log file path (default: dataDir/server.log in production)")
 	versionFlag := flag.Bool("version", false, "print version and exit")
+	flag.Usage = func() {
+		out := flag.CommandLine.Output()
+		fmt.Fprint(out, `Pockode — your dev machine in your pocket.
+
+Usage:
+  pockode [flags]           Start the server (default)
+  pockode cluster [flags]   Orchestrator for multiple project nodes (see docs/cluster.md)
+  pockode mcp [flags]       MCP stdio proxy (spawned internally by AI CLIs)
+
+Run "pockode cluster -help" for cluster-mode flags.
+
+Flags:
+`)
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	if *versionFlag {
