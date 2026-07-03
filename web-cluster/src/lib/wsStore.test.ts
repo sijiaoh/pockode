@@ -125,8 +125,8 @@ describe("wsStore reconnect", () => {
 		const useWSStore = await getStore();
 
 		// Simulates React StrictMode double-invoking App's connect effect: the
-		// second call must be a no-op, not open a duplicate socket whose stale
-		// close would later schedule a phantom reconnect and flash the UI.
+		// second call must be a no-op, not open a second socket that orphans and
+		// leaks the first while flashing the UI.
 		useWSStore.getState().actions.connect(TEST_TOKEN);
 		useWSStore.getState().actions.connect(TEST_TOKEN);
 		expect(mockWsInstances.length).toBe(1);
