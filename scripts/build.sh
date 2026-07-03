@@ -7,6 +7,21 @@ VERSION=${VERSION:-dev}
 VERSION=${VERSION#v}
 OUTPUT_DIR=${OUTPUT_DIR:-dist}
 
+# --local builds only the current machine's platform to speed up local dev
+LOCAL_ONLY=false
+for arg in "$@"; do
+    case "$arg" in
+        --local)
+            LOCAL_ONLY=true
+            ;;
+        *)
+            echo "Unknown option: $arg" >&2
+            echo "Usage: $0 [--local]" >&2
+            exit 1
+            ;;
+    esac
+done
+
 echo "Building Pockode $VERSION"
 
 # Build main frontend directly to server/static
@@ -25,13 +40,17 @@ pnpm run build:release
 cd ..
 touch server/cluster/static/.keep
 
-# Cross-compile for multiple platforms
-platforms=(
-    "darwin/amd64"
-    "darwin/arm64"
-    "linux/amd64"
-    "linux/arm64"
-)
+# Cross-compile for multiple platforms, or only the local one with --local
+if [ "$LOCAL_ONLY" = true ]; then
+    platforms=("$(go env GOOS)/$(go env GOARCH)")
+else
+    platforms=(
+        "darwin/amd64"
+        "darwin/arm64"
+        "linux/amd64"
+        "linux/arm64"
+    )
+fi
 
 mkdir -p "$OUTPUT_DIR"
 
