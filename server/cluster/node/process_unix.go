@@ -26,9 +26,18 @@ func processExists(pid int) bool {
 }
 
 // setProcessDetached sets process attributes to run detached from parent on Unix.
+//
+// Setsid (not just Setpgid) is required: it puts the node in a brand-new session
+// with NO controlling terminal. When cluster mode is launched from a terminal,
+// Setpgid alone would leave the node in a background process group that still
+// shares the cluster's controlling terminal. The AI CLI the node spawns (and the
+// external commands it runs) would then touch that terminal, and the kernel would
+// deliver SIGTTOU/SIGTTIN to the node's process group, suspending/killing the
+// node. Detaching into its own session is the correct daemon behavior and avoids
+// terminal job-control signals entirely.
 func setProcessDetached(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
+		Setsid: true,
 	}
 }
 
