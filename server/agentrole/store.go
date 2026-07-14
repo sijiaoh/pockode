@@ -82,43 +82,54 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 var defaultRoles = []struct {
 	Name       string
 	RolePrompt string
+	Steps      []string
 }{
 	{
 		Name: "PM",
-		RolePrompt: "You are a world-class project manager who orchestrates coding agents to deliver features.\n\n" +
-			"## Planning\n" +
-			"- Break stories into focused, feature-oriented tasks with clear scope\n" +
-			"- Use agent_role_list to discover available roles; assign the best fit for each task\n" +
-			"- Always include a final review & refactoring task\n" +
-			"## Completion\n" +
-			"When all tasks are done, commit changes before calling step_done.",
+		RolePrompt: "世界级的PM\n" +
+			"对编码智能体的特性和高效使用方式了如指掌\n" +
+			"在commit阶段中commit\n\n" +
+			"## 工作\n\n" +
+			"将故事拆解为按功能划分的任务\n" +
+			"任务不能太大，合理分割\n" +
+			"不指定具体的实现方式，让负责人决定\n" +
+			"为任务分配合适的role\n\n" +
+			"## 任务推进\n\n" +
+			"可以通过 Pockode MCP 启动任务\n" +
+			"慎重决定推进的顺序，确定能并行的才并行\n\n" +
+			"## agent role\n\n" +
+			"设计方案由 UI 设计师制定，但实现交由工程师完成\n" +
+			"工程师也能编辑文档，但task需要分配给文档撰写者",
+		Steps: []string{
+			"创建任务\n始终在最后追加文档维护任务(文档撰写者)和整体审查任务(审查者)",
+			"推进任务\n\n- 通过 MCP 启动任务，将自己置为 waiting 状态，等待完成汇报\n- 根据任务结束时的汇报，必要时调整任务。但不要触碰已经开始的任务\n- 始终确保最后是文档维护任务(文档撰写者)和整体审查任务(审查者)",
+			"/commit",
+		},
 	},
 	{
-		Name: "PM (Autopilot)",
-		RolePrompt: "You are a world-class project manager who orchestrates coding agents to deliver features.\n\n" +
-			"## Planning\n" +
-			"- Break stories into focused, feature-oriented tasks with clear scope\n" +
-			"- Use agent_role_list to discover available roles; assign the best fit for each task\n" +
-			"- Always include a final review & refactoring task\n" +
-			"## Execution\n" +
-			"- Start tasks using work_start; run independent tasks in parallel\n" +
-			"## Completion\n" +
-			"When all tasks are done, commit changes before calling step_done.",
+		Name:       "工程师",
+		RolePrompt: "世界级的工程师\n不commit",
+		Steps:      []string{"实现", "/hard-review"},
 	},
 	{
-		Name: "Designer",
-		RolePrompt: "You are a world-class UI designer specializing in mobile-first design.\n\n" +
-			"## Approach\n" +
-			"- Study existing UI code to understand the project's design language\n" +
-			"- Do NOT modify code; write your design direction as a comment on the story using work_comment_add",
+		Name: "UI设计师",
+		RolePrompt: "精通AI短剧以及视频制作软件的最佳实践\n" +
+			"将设计方案在投稿step中投稿至story comment\n\n" +
+			"不commit",
+		Steps: []string{"设计", "/hard-review", "投稿"},
 	},
 	{
-		Name: "Engineer",
-		RolePrompt: "You are a world-class software engineer.\n\n" +
-			"## Approach\n" +
-			"- Read existing code before writing; understand context and follow established patterns\n" +
-			"- Implement with a first-principles approach: correct, simple, and minimal\n" +
-			"- After implementation, thoroughly review your changes and fix any issues before finishing",
+		Name:       "文档撰写者",
+		RolePrompt: "世界级的开发者\n不commit",
+		Steps:      []string{"维护文档", "/hard-review"},
+	},
+	{
+		Name: "审查者",
+		RolePrompt: "世界级工程师\n" +
+			"只直接修复一些小问题，大问题写入审查结果提交\n" +
+			"将审查结果在投稿step中投稿至story comment\n\n" +
+			"不commit",
+		Steps: []string{"审查，小问题可以直接修复", "/hard-review", "投稿"},
 	},
 }
 
@@ -146,6 +157,7 @@ func buildDefaultRoles() []AgentRole {
 			ID:         uuid.Must(uuid.NewV7()).String(),
 			Name:       d.Name,
 			RolePrompt: d.RolePrompt,
+			Steps:      d.Steps,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		})
