@@ -451,6 +451,61 @@ func TestWorktreesDir(t *testing.T) {
 	}
 }
 
+func TestWorktreesDir_ConfiguredBase(t *testing.T) {
+	r := NewRegistry("/path/to/myproject", "")
+
+	base := "/custom/worktrees"
+	r.SetBaseDirProvider(func() string { return base })
+	if got := r.worktreesDir(); got != base {
+		t.Errorf("worktreesDir() with configured base = %q, want %q", got, base)
+	}
+
+	// Cleaned before use.
+	r.SetBaseDirProvider(func() string { return "/custom/worktrees/" })
+	if got := r.worktreesDir(); got != base {
+		t.Errorf("worktreesDir() should clean base, = %q, want %q", got, base)
+	}
+
+	// Empty provider value falls back to the default.
+	r.SetBaseDirProvider(func() string { return "" })
+	if got, want := r.worktreesDir(), "/path/to/myproject-worktrees"; got != want {
+		t.Errorf("worktreesDir() with empty base = %q, want default %q", got, want)
+	}
+}
+
+func TestCreate_ConfiguredBaseDir(t *testing.T) {
+	dir := initGitRepo(t)
+	// Intentionally use the raw (possibly symlinked, e.g. macOS /var) temp dir:
+	// the registry must resolve it so `git worktree list` matches and the
+	// worktree stays discoverable rather than being treated as external.
+	base := t.TempDir()
+	wantPath := filepath.Join(resolveSymlinks(t, base), "feature")
+
+	r := NewRegistry(dir, "")
+	r.SetBaseDirProvider(func() string { return base })
+
+	info, err := r.Create("feature", "feature-branch", "")
+	if err != nil {
+		t.Fatalf("Create() failed: %v", err)
+	}
+
+	if info.Path != wantPath {
+		t.Errorf("worktree created at %q, want %q", info.Path, wantPath)
+	}
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Errorf("worktree directory not found at configured base: %v", err)
+	}
+
+	// It must be discoverable through the configured base as well.
+	resolved, err := r.Resolve("feature")
+	if err != nil {
+		t.Fatalf("Resolve() failed: %v", err)
+	}
+	if resolved != wantPath {
+		t.Errorf("Resolve() = %q, want %q", resolved, wantPath)
+	}
+}
+
 // initGitRepo creates a temporary git repository with an initial commit.
 func initGitRepo(t *testing.T) string {
 	t.Helper()

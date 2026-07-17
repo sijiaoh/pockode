@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/settings"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
@@ -51,6 +52,12 @@ func (h *rpcMethodHandler) handleSettingsUpdate(ctx context.Context, conn *jsonr
 	// Validate default mode if set
 	if params.Settings.DefaultMode != "" && !params.Settings.DefaultMode.IsValid() {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid default mode")
+		return
+	}
+
+	// Validate worktree base directory if set
+	if err := settings.ValidateWorktreeBaseDir(params.Settings.WorktreeBaseDir); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 		return
 	}
 

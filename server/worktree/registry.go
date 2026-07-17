@@ -31,6 +31,11 @@ type Registry struct {
 	mainDir string
 	dataDir string
 
+	// baseDirProvider returns the configured worktree base directory, or "" to
+	// use the default alongside the repository. It is read on every worktree
+	// operation so runtime settings changes take effect without a restart.
+	baseDirProvider func() string
+
 	cacheMu   sync.RWMutex
 	cache     map[string]Info
 	isGitRepo bool
@@ -63,9 +68,40 @@ func (r *Registry) MainDir() string {
 	return r.mainDir
 }
 
+// SetBaseDirProvider wires a source for the configurable worktree base
+// directory. The provider must return an absolute, clean path or "" for the
+// default; validation happens at the settings boundary.
+func (r *Registry) SetBaseDirProvider(provider func() string) {
+	r.baseDirProvider = provider
+}
+
 func (r *Registry) worktreesDir() string {
+	if r.baseDirProvider != nil {
+		if base := r.baseDirProvider(); base != "" {
+			return resolveExistingPrefix(filepath.Clean(base))
+		}
+	}
 	dirname := filepath.Base(r.mainDir)
 	return filepath.Join(filepath.Dir(r.mainDir), dirname+"-worktrees")
+}
+
+// resolveExistingPrefix resolves symlinks in the longest existing prefix of
+// path and re-appends the not-yet-created remainder. The configured base dir
+// may not exist yet (git creates it on first worktree add), yet
+// `git worktree list` reports fully symlink-resolved paths — so discovery must
+// compare against a resolved base, otherwise managed worktrees created under a
+// symlinked base (e.g. macOS /var -> /private/var) are mistaken for external
+// ones and silently disappear.
+func resolveExistingPrefix(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		// Reached the filesystem root without finding an existing ancestor.
+		return path
+	}
+	return filepath.Join(resolveExistingPrefix(parent), filepath.Base(path))
 }
 
 // Resolve returns the full path for a worktree name (empty string = main worktree).

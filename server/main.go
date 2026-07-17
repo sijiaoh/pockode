@@ -281,6 +281,9 @@ Flags:
 
 	// Initialize worktree registry and manager
 	registry := worktree.NewRegistry(workDir, dataDir)
+	registry.SetBaseDirProvider(func() string {
+		return settingsStore.Get().WorktreeBaseDir
+	})
 	worktreeManager := worktree.NewManager(registry, agents, dataDir, idleTimeout)
 	worktreeManager.SetWorkAutoResumer(workAutoResumer)
 	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
