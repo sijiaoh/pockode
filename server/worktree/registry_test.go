@@ -473,6 +473,73 @@ func TestWorktreesDir_ConfiguredBase(t *testing.T) {
 	}
 }
 
+func TestWorktreesDir_RelativeBase(t *testing.T) {
+	r := NewRegistry("/path/to/myproject", "")
+
+	tests := []struct {
+		name string
+		base string
+		want string
+	}{
+		{"dot prefix resolves against repo root", "./worktrees", "/path/to/myproject/worktrees"},
+		{"parent prefix resolves against repo parent", "../worktrees", "/path/to/worktrees"},
+		{"deep parent prefix", "../../shared/wt", "/path/shared/wt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r.SetBaseDirProvider(func() string { return tt.base })
+			if got := r.worktreesDir(); got != tt.want {
+				t.Errorf("worktreesDir(%q) = %q, want %q", tt.base, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorktreesDir_HomeBase(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory: %v", err)
+	}
+
+	r := NewRegistry("/path/to/myproject", "")
+	r.SetBaseDirProvider(func() string { return "~/pockode-worktrees" })
+
+	// worktreesDir resolves symlinks in the longest existing prefix (the home
+	// directory exists) before appending the not-yet-created remainder.
+	want := filepath.Join(resolveSymlinks(t, home), "pockode-worktrees")
+	if got := r.worktreesDir(); got != want {
+		t.Errorf("worktreesDir(~/pockode-worktrees) = %q, want %q", got, want)
+	}
+}
+
+func TestCreate_RelativeBaseDir(t *testing.T) {
+	dir := initGitRepo(t)
+	wantPath := filepath.Join(filepath.Dir(dir), "custom-wt", "feature")
+
+	r := NewRegistry(dir, "")
+	r.SetBaseDirProvider(func() string { return "../custom-wt" })
+
+	info, err := r.Create("feature", "feature-branch", "")
+	if err != nil {
+		t.Fatalf("Create() failed: %v", err)
+	}
+	if info.Path != wantPath {
+		t.Errorf("worktree created at %q, want %q", info.Path, wantPath)
+	}
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Errorf("worktree directory not found at relative base: %v", err)
+	}
+
+	resolved, err := r.Resolve("feature")
+	if err != nil {
+		t.Fatalf("Resolve() failed: %v", err)
+	}
+	if resolved != wantPath {
+		t.Errorf("Resolve() = %q, want %q", resolved, wantPath)
+	}
+}
+
 func TestCreate_ConfiguredBaseDir(t *testing.T) {
 	dir := initGitRepo(t)
 	// Intentionally use the raw (possibly symlinked, e.g. macOS /var) temp dir:

@@ -74,7 +74,7 @@ export default function WorktreeSection() {
 							setValue(e.target.value);
 							setError(null);
 						}}
-						placeholder="/absolute/path/to/worktrees"
+						placeholder="../<repo>-worktrees"
 						autoComplete="off"
 						autoCapitalize="off"
 						autoCorrect="off"
@@ -113,11 +113,15 @@ export default function WorktreeSection() {
 					</p>
 				) : (
 					<p className="text-xs text-th-text-muted">
-						Where new worktrees are created. Leave empty to use the default (a{" "}
+						Where new worktrees are created. Use an absolute path, or{" "}
+						<code className="text-th-text-secondary">./</code> /{" "}
+						<code className="text-th-text-secondary">../</code> (relative to the
+						repository) / <code className="text-th-text-secondary">~/</code>{" "}
+						(home directory). Leave empty to use the default (
 						<code className="text-th-text-secondary">
-							&lt;repo&gt;-worktrees
-						</code>{" "}
-						directory next to the repository).
+							../&lt;repo&gt;-worktrees
+						</code>
+						).
 					</p>
 				)}
 			</div>

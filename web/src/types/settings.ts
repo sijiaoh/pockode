@@ -6,8 +6,9 @@ export interface Settings {
 	default_agent_role_id?: string;
 	default_agent_type?: AgentType;
 	default_mode?: SessionMode;
-	// Empty = default (a `<repo>-worktrees` directory next to the repository).
-	// Non-empty must be an absolute, clean path; the backend rejects invalid values.
+	// Empty = default (`../<repo>-worktrees`). Non-empty may be an absolute path,
+	// a repo-relative `./`/`../` path, or a home-relative `~/` path; the backend
+	// validates and rejects invalid values.
 	worktree_base_dir?: string;
 }
 

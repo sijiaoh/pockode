@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -69,8 +70,9 @@ func (r *Registry) MainDir() string {
 }
 
 // SetBaseDirProvider wires a source for the configurable worktree base
-// directory. The provider must return an absolute, clean path or "" for the
-// default; validation happens at the settings boundary.
+// directory. The provider returns a value validated at the settings boundary:
+// absolute, `./`/`../` (repo-relative), `~`/`~/...` (home-relative), or "" for
+// the default. expandBaseDir turns it into an absolute path.
 func (r *Registry) SetBaseDirProvider(provider func() string) {
 	r.baseDirProvider = provider
 }
@@ -78,11 +80,33 @@ func (r *Registry) SetBaseDirProvider(provider func() string) {
 func (r *Registry) worktreesDir() string {
 	if r.baseDirProvider != nil {
 		if base := r.baseDirProvider(); base != "" {
-			return resolveExistingPrefix(filepath.Clean(base))
+			return resolveExistingPrefix(r.expandBaseDir(base))
 		}
 	}
 	dirname := filepath.Base(r.mainDir)
 	return filepath.Join(filepath.Dir(r.mainDir), dirname+"-worktrees")
+}
+
+// expandBaseDir turns a configured base directory into an absolute path.
+// It mirrors the prefixes accepted by settings.ValidateWorktreeBaseDir:
+//   - `~`/`~/...`  → relative to the user's home directory
+//   - absolute     → used as-is
+//   - `./`/`../`   → relative to the repository root (main worktree)
+func (r *Registry) expandBaseDir(base string) string {
+	switch {
+	case base == "~" || strings.HasPrefix(base, "~/"):
+		home, err := os.UserHomeDir()
+		if err != nil {
+			// Home directory is unknown; fall back to a cleaned literal so the
+			// path stays deterministic rather than silently using the default.
+			return filepath.Clean(base)
+		}
+		return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(base, "~"), "/"))
+	case filepath.IsAbs(base):
+		return filepath.Clean(base)
+	default:
+		return filepath.Join(r.mainDir, base)
+	}
 }
 
 // resolveExistingPrefix resolves symlinks in the longest existing prefix of

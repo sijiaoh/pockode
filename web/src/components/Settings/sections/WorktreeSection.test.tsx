@@ -49,10 +49,21 @@ describe("WorktreeSection", () => {
 		});
 	});
 
+	it("shows the default base path as a placeholder when empty", () => {
+		render(<WorktreeSection />);
+
+		expect(screen.getByLabelText("Base Path")).toHaveAttribute(
+			"placeholder",
+			"../<repo>-worktrees",
+		);
+	});
+
 	it("surfaces the backend validation error and keeps the invalid input for correction", async () => {
 		const user = userEvent.setup();
 		mockUpdateSettings.mockRejectedValueOnce(
-			new Error("worktree_base_dir must be an absolute path"),
+			new Error(
+				"worktree base directory must be absolute or start with './', '../', or '~/'",
+			),
 		);
 		render(<WorktreeSection />);
 
@@ -61,7 +72,7 @@ describe("WorktreeSection", () => {
 		await user.click(screen.getByRole("button", { name: "Save" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(
-			"worktree_base_dir must be an absolute path",
+			"worktree base directory must be absolute or start with",
 		);
 		expect(input).toHaveValue("relative/path");
 	});
