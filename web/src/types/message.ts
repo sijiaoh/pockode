@@ -53,12 +53,32 @@ export type ContentPart =
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
 
+// Origin of a message: user-typed vs. Pockode's work automation.
+// Absent/"user" = a normal user message (backward compatible with old history).
+export type MessageOrigin = "user" | "work";
+
+export interface WorkMessageStep {
+	current: number;
+	total: number;
+}
+
+// Summary data for a work-origin message, used to render the collapsed bar
+// without parsing the prompt body.
+export interface WorkMessageMeta {
+	title?: string;
+	step?: WorkMessageStep;
+}
+
 export interface UserMessage {
 	id: string;
 	role: "user";
 	content: string;
 	status: MessageStatus;
 	createdAt: Date;
+	// Present only for work-driven messages; absent means a user-typed message.
+	source?: MessageOrigin;
+	subtype?: string;
+	meta?: WorkMessageMeta;
 }
 
 export interface AssistantMessage {
@@ -270,10 +290,18 @@ export type ServerMethod =
 	| "ask_user_question"
 	| "request_cancelled"
 	| "system"
+	| "message"
 	| "command_output";
 
 export type ServerNotification =
 	| { type: "text"; content: string }
+	| {
+			type: "message";
+			content: string;
+			origin?: MessageOrigin;
+			subtype?: string;
+			meta?: WorkMessageMeta;
+	  }
 	| {
 			type: "tool_call";
 			tool_name: string;

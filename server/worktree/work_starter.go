@@ -63,7 +63,8 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 
 func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work) error {
 	msg := work.BuildRestartMessage(w)
-	if err := wt.ChatClient.SendMessage(ctx, w.SessionID, msg); err != nil {
+	meta := work.NewMessageMeta(w.Title, 0, 0)
+	if err := wt.ChatClient.SendWorkMessage(ctx, w.SessionID, msg, work.MessageSubtypeRestart, meta); err != nil {
 		return fmt.Errorf("send restart message: %w", err)
 	}
 	return nil
@@ -81,7 +82,8 @@ func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w 
 
 	// Include first step in kickoff message if agent role has steps
 	msg := work.BuildKickoffMessageWithSteps(w, steps, w.CurrentStep)
-	if err := wt.ChatClient.SendMessage(ctx, w.SessionID, msg); err != nil {
+	meta := work.NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
+	if err := wt.ChatClient.SendWorkMessage(ctx, w.SessionID, msg, work.MessageSubtypeKickoff, meta); err != nil {
 		if delErr := wt.SessionStore.Delete(ctx, w.SessionID); delErr != nil {
 			slog.Error("failed to clean up session after kickoff failure", "sessionId", w.SessionID, "error", delErr)
 		}

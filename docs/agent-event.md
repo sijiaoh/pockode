@@ -42,15 +42,27 @@ type AgentEvent interface {
 | Terminal | `done`, `interrupted`, `error`, `process_ended` | Yes |
 | Permission | `permission_request`, `permission_response`, `request_cancelled` | No |
 | Question | `ask_user_question`, `question_response` | No |
-| Message | `message` (user broadcast for history) | No |
+| Message | `message` (user-typed or work-driven; persisted + broadcast) | No |
 
 Terminal events end the current message response. Non-terminal events are appended to the active assistant message.
+
+#### Message Origin (user vs. work)
+
+The `message` event covers both messages a user types and the automatic prompts the Work system sends to drive an agent (kickoff, restart, auto-continue, step-advance, reopen, child-completion). They travel the same persistence + broadcast path but must render differently, so the event carries an origin instead of introducing a separate event type:
+
+| Field | Meaning |
+|-------|---------|
+| `Origin` | `""`/`"user"` = user-typed; `"work"` = Work-system automation |
+| `Subtype` | For work messages, which prompt produced it (`kickoff`, `restart`, …) |
+| `Meta` | For work messages, a `{title, step?}` summary for the collapsed UI bar |
+
+**Why an origin field, not a new `EventType`**: user and work messages are the same kind of thing — text sent to the agent on stdin, replayed identically on resume. A distinct event type would fork the send/persist/replay path for no behavioral gain. All three fields are `omitempty`, so history written before they existed loads as a plain user message — backward compatible by omission. The Work-system side (subtype catalog, tagging call sites, frontend collapse rendering) is documented in [code/work-system.md](code/work-system.md#work-origin-message-tagging).
 
 ### EventRecord (Serialization)
 
 `server/agent/history.go` — Flat struct used for both persistence and wire format. Each event type populates only its relevant fields; the rest are zero-valued and omitted from JSON.
 
-Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`.
+Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, and (for work-driven `message` events) `Origin`, `Subtype`, `Meta`.
 
 ### Event Parsing (Claude)
 

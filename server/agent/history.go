@@ -19,6 +19,9 @@ type EventRecord struct {
 	Questions             []AskUserQuestion  `json:"questions,omitempty"`
 	Choice                string             `json:"choice,omitempty"`
 	Answers               map[string]string  `json:"answers,omitempty"`
+	Origin                MessageOrigin      `json:"origin,omitempty"`
+	Subtype               string             `json:"subtype,omitempty"`
+	Meta                  *MessageMeta       `json:"meta,omitempty"`
 }
 
 // NewEventRecord creates an EventRecord from an AgentEvent.

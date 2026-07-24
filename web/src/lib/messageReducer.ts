@@ -3,10 +3,12 @@ import type {
 	AssistantMessage,
 	ContentPart,
 	Message,
+	MessageOrigin,
 	PermissionUpdate,
 	QuestionStatus,
 	ServerNotification,
 	UserMessage,
+	WorkMessageMeta,
 } from "../types/message";
 import { generateUUID } from "../utils/uuid";
 
@@ -26,7 +28,14 @@ export type NormalizedEvent =
 	| { type: "interrupted" }
 	| { type: "process_ended" }
 	| { type: "system"; content: string }
-	| { type: "message"; content: string } // User message (history replay or broadcast)
+	| {
+			// User message or work-driven message (history replay or broadcast)
+			type: "message";
+			content: string;
+			origin?: MessageOrigin;
+			subtype?: string;
+			meta?: WorkMessageMeta;
+	  }
 	| {
 			type: "permission_request";
 			requestId: string;
@@ -98,7 +107,13 @@ export function normalizeEvent(
 		case "system":
 			return { type: "system", content: (record.content as string) ?? "" };
 		case "message":
-			return { type: "message", content: (record.content as string) ?? "" };
+			return {
+				type: "message",
+				content: (record.content as string) ?? "",
+				origin: record.origin as MessageOrigin | undefined,
+				subtype: record.subtype as string | undefined,
+				meta: record.meta as WorkMessageMeta | undefined,
+			};
 		case "permission_request":
 			return {
 				type: "permission_request",
@@ -241,9 +256,13 @@ export function applyServerEvent(
 	messages: Message[],
 	event: NormalizedEvent,
 ): Message[] {
-	// User message (history replay or broadcast from another client)
+	// User message or work-driven message (history replay or broadcast)
 	if (event.type === "message") {
-		return applyUserMessage(messages, event.content);
+		return applyUserMessage(messages, event.content, {
+			source: event.origin,
+			subtype: event.subtype,
+			meta: event.meta,
+		});
 	}
 
 	// Permission response updates existing permission_request across all messages
@@ -510,10 +529,17 @@ function updateToolResult(
 	return found ? updated : messages;
 }
 
+interface UserMessageOptions {
+	source?: MessageOrigin;
+	subtype?: string;
+	meta?: WorkMessageMeta;
+}
+
 // Finalizes any streaming assistant before adding new user message
 export function applyUserMessage(
 	messages: Message[],
 	content: string,
+	options?: UserMessageOptions,
 ): Message[] {
 	const finalized = messages.map((m): Message => {
 		if (
@@ -531,6 +557,10 @@ export function applyUserMessage(
 		content,
 		status: "complete",
 		createdAt: new Date(),
+		// Only tag work-driven messages; a plain user message stays source-less.
+		...(options?.source === "work"
+			? { source: options.source, subtype: options.subtype, meta: options.meta }
+			: {}),
 	};
 
 	return [...finalized, userMessage, createAssistantMessage()];

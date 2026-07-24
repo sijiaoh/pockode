@@ -3,6 +3,7 @@ import {
 	Check,
 	ChevronRight,
 	CircleHelp,
+	Workflow,
 	X,
 } from "lucide-react";
 import { memo, useMemo, useState } from "react";
@@ -18,6 +19,7 @@ import type {
 	PermissionUpdate,
 	PermissionUpdateDestination,
 	ToolCall,
+	WorkMessageMeta,
 } from "../../types/message";
 import { ScrollableContent, Spinner } from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
@@ -160,6 +162,67 @@ function SystemItem({ content }: SystemItemProps) {
 			{expanded && (
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					<pre className="text-th-text-muted">{content}</pre>
+				</ScrollableContent>
+			)}
+		</div>
+	);
+}
+
+// subtype → collapsed-bar action label. Where values come from: the backend
+// work message subtypes in server/work/prompt.go (kickoff, restart, ...).
+const WORK_MESSAGE_LABELS: Record<string, string> = {
+	kickoff: "Kickoff",
+	restart: "Restart",
+	auto_continue: "Auto-continue",
+	step_advance: "Next step",
+	reopen: "Reopen",
+	child_done: "Child task done",
+};
+
+function workActionLabel(subtype?: string, meta?: WorkMessageMeta): string {
+	const base = (subtype && WORK_MESSAGE_LABELS[subtype]) || "Work Message";
+	if (subtype === "step_advance" && meta?.step) {
+		return `${base} (Step ${meta.step.current}/${meta.step.total})`;
+	}
+	return base;
+}
+
+interface WorkMessageItemProps {
+	content: string;
+	subtype?: string;
+	meta?: WorkMessageMeta;
+}
+
+// WorkMessageItem renders a Pockode work-automation message as a collapsed,
+// low-contrast banner (not a chat bubble). It sits alongside the user/assistant
+// branches in MessageItem. Visual pattern mirrors SystemItem for consistency.
+function WorkMessageItem({ content, subtype, meta }: WorkMessageItemProps) {
+	const [expanded, setExpanded] = useState(false);
+	const actionLabel = workActionLabel(subtype, meta);
+	const summary = meta?.title;
+
+	return (
+		<div className="rounded bg-th-bg-secondary text-xs">
+			<button
+				type="button"
+				onClick={() => setExpanded(!expanded)}
+				aria-expanded={expanded}
+				className="flex w-full items-center gap-1.5 rounded p-2 text-left hover:bg-th-overlay-hover"
+			>
+				<ChevronRight
+					className={`size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
+				/>
+				<Workflow className="size-3 shrink-0 text-th-text-muted" />
+				<span className="shrink-0 text-th-text-muted">{`Pockode · ${actionLabel}`}</span>
+				{summary && (
+					<span className="min-w-0 truncate text-th-text-muted opacity-70">
+						{summary}
+					</span>
+				)}
+			</button>
+			{expanded && (
+				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+					<MarkdownContent content={content} />
 				</ScrollableContent>
 			)}
 		</div>
@@ -528,6 +591,16 @@ const MessageItem = memo(function MessageItem({
 	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
 
 	if (message.role === "user") {
+		// Work-driven messages render as a collapsed banner instead of a bubble.
+		if (message.source === "work") {
+			return (
+				<WorkMessageItem
+					content={message.content}
+					subtype={message.subtype}
+					meta={message.meta}
+				/>
+			);
+		}
 		return (
 			<div className="flex items-end justify-end gap-2">
 				<div

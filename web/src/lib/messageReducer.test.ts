@@ -1043,6 +1043,51 @@ describe("messageReducer", () => {
 				expect(messages[2].role).toBe("assistant");
 			});
 		});
+
+		describe("work message", () => {
+			it("normalizes message event with work origin, subtype and meta", () => {
+				const event = normalizeEvent({
+					type: "message",
+					content: "kickoff prompt",
+					origin: "work",
+					subtype: "kickoff",
+					meta: { title: "My work", step: { current: 1, total: 3 } },
+				});
+				expect(event).toEqual({
+					type: "message",
+					content: "kickoff prompt",
+					origin: "work",
+					subtype: "kickoff",
+					meta: { title: "My work", step: { current: 1, total: 3 } },
+				});
+			});
+
+			it("tags user message with work source and meta", () => {
+				const messages = applyServerEvent([], {
+					type: "message",
+					content: "kickoff prompt",
+					origin: "work",
+					subtype: "kickoff",
+					meta: { title: "My work" },
+				});
+				const user = messages[0] as UserMessage;
+				expect(user.role).toBe("user");
+				expect(user.source).toBe("work");
+				expect(user.subtype).toBe("kickoff");
+				expect(user.meta).toEqual({ title: "My work" });
+			});
+
+			it("leaves plain user messages without a work source (backward compat)", () => {
+				const messages = applyServerEvent([], {
+					type: "message",
+					content: "plain user message",
+				});
+				const user = messages[0] as UserMessage;
+				expect(user.source).toBeUndefined();
+				expect(user.subtype).toBeUndefined();
+				expect(user.meta).toBeUndefined();
+			});
+		});
 	});
 
 	describe("applyUserMessage", () => {

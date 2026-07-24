@@ -291,18 +291,53 @@ func (e ProcessEndedEvent) ToRecord() EventRecord {
 	return EventRecord{Type: e.EventType()}
 }
 
-// MessageEvent represents a user message. Used for:
+// MessageOrigin distinguishes who produced a message event.
+// An empty value (default) means a user-typed message, kept empty for
+// backward compatibility with history recorded before this field existed.
+type MessageOrigin string
+
+const (
+	MessageOriginUser MessageOrigin = "user"
+	MessageOriginWork MessageOrigin = "work"
+)
+
+// StepInfo is the step context shown in a work message's collapsed summary.
+type StepInfo struct {
+	Current int `json:"current"`
+	Total   int `json:"total"`
+}
+
+// MessageMeta carries summary data for a work-origin message so the frontend
+// can render the collapsed bar without parsing the prompt body.
+type MessageMeta struct {
+	Title string    `json:"title,omitempty"`
+	Step  *StepInfo `json:"step,omitempty"`
+}
+
+// MessageEvent represents a message sent to the agent. Used for:
 // - History replay: reconstructing past messages
-// - Broadcast: notifying other clients when a user sends a message
+// - Broadcast: notifying other clients when a message is sent
+//
+// Origin distinguishes user-typed messages (empty/"user") from work-driven
+// automatic messages ("work"); Subtype and Meta describe the latter.
 type MessageEvent struct {
 	Content string
+	Origin  MessageOrigin
+	Subtype string
+	Meta    *MessageMeta
 }
 
 func (MessageEvent) EventType() EventType { return EventTypeMessage }
 func (MessageEvent) isAgentEvent()        {}
 
 func (e MessageEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Content: e.Content}
+	return EventRecord{
+		Type:    e.EventType(),
+		Content: e.Content,
+		Origin:  e.Origin,
+		Subtype: e.Subtype,
+		Meta:    e.Meta,
+	}
 }
 
 // PermissionResponseEvent is for history replay only, not sent as RPC notification.

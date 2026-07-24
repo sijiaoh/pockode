@@ -7,9 +7,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/pockode/server/agent"
 )
 
-// mockSender records SendMessage calls.
+// mockSender records SendWorkMessage calls.
 type mockSender struct {
 	messagesMu sync.Mutex
 	messages   []sentMessage
@@ -18,12 +20,14 @@ type mockSender struct {
 type sentMessage struct {
 	SessionID string
 	Content   string
+	Subtype   string
+	Meta      *agent.MessageMeta
 }
 
-func (m *mockSender) SendMessage(_ context.Context, sessionID, content string) error {
+func (m *mockSender) SendWorkMessage(_ context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error {
 	m.messagesMu.Lock()
 	defer m.messagesMu.Unlock()
-	m.messages = append(m.messages, sentMessage{SessionID: sessionID, Content: content})
+	m.messages = append(m.messages, sentMessage{SessionID: sessionID, Content: content, Subtype: subtype, Meta: meta})
 	return nil
 }
 
@@ -1120,7 +1124,7 @@ type errSender struct {
 	err error
 }
 
-func (s *errSender) SendMessage(_ context.Context, _, _ string) error {
+func (s *errSender) SendWorkMessage(_ context.Context, _, _, _ string, _ *agent.MessageMeta) error {
 	return s.err
 }
 
@@ -1309,5 +1313,79 @@ func TestAutoResumer_NotifyReopen_NoSessionNoMessage(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if n := len(sender.getMessages()); n != 0 {
 		t.Errorf("expected no message when no session, got %d", n)
+	}
+}
+
+// --- Work-origin tagging: subtype + collapsed-bar meta ---
+
+func TestAutoResumer_StepAdvance_TagsSubtypeAndStepMeta(t *testing.T) {
+	_, resumer, sender := setupResumerTest(t)
+	resumer.SetStepProvider(&mockStepProvider{steps: map[string][]string{
+		testRoleID: {"Plan the work", "Build the thing", "Verify it"},
+	}})
+
+	resumer.NotifyStepDone(Work{ID: "w1", Status: StatusInProgress, SessionID: "s1", AgentRoleID: testRoleID, Title: "My work", CurrentStep: 1})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+	got := sender.getMessages()[0]
+	if got.Subtype != MessageSubtypeStepAdvance {
+		t.Errorf("subtype = %q, want %q", got.Subtype, MessageSubtypeStepAdvance)
+	}
+	if got.Meta == nil || got.Meta.Title != "My work" {
+		t.Fatalf("meta title = %+v, want title %q", got.Meta, "My work")
+	}
+	if got.Meta.Step == nil || got.Meta.Step.Current != 2 || got.Meta.Step.Total != 3 {
+		t.Errorf("meta step = %+v, want current 2 total 3", got.Meta.Step)
+	}
+}
+
+func TestAutoResumer_AutoContinuation_TagsSubtype(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+	got := sender.getMessages()[0]
+	if got.Subtype != MessageSubtypeAutoContinue {
+		t.Errorf("subtype = %q, want %q", got.Subtype, MessageSubtypeAutoContinue)
+	}
+	// Stepless work: no step info, but title is still carried for the summary.
+	if got.Meta == nil || got.Meta.Step != nil {
+		t.Errorf("meta = %+v, want title-only meta with no step", got.Meta)
+	}
+}
+
+func TestAutoResumer_ChildCompletion_TagsSubtype(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Parent story")
+	task := createTask(t, store, story.ID, "Task")
+	parentSid := "parent-session"
+	startWorkWithSession(t, store, story.ID, parentSid)
+	startWork(t, store, task.ID)
+
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+	got := sender.getMessages()[0]
+	if got.Subtype != MessageSubtypeChildDone {
+		t.Errorf("subtype = %q, want %q", got.Subtype, MessageSubtypeChildDone)
+	}
+	if got.Meta == nil || got.Meta.Title != "Parent story" {
+		t.Errorf("meta = %+v, want parent title as summary", got.Meta)
+	}
+}
+
+func TestNewMessageMeta_OmitsStepWhenNoSteps(t *testing.T) {
+	meta := NewMessageMeta("T", 1, 0)
+	if meta.Title != "T" || meta.Step != nil {
+		t.Errorf("meta = %+v, want title-only with no step", meta)
 	}
 }

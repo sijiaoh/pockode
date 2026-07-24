@@ -241,3 +241,7 @@ Step N of M
 ```
 
 > Source: `server/work/prompt.go`.
+
+### Work-Origin Tagging
+
+Every builder's output reaches the agent through `chat.Client.SendWorkMessage` (not the user path), tagging the `message` event with `origin: "work"`, a per-builder `subtype`, and a `{title, step?}` meta summary so the frontend renders it as a collapsed "Pockode · …" banner instead of a user bubble. See [code/work-system.md](../code/work-system.md#work-origin-message-tagging) for the subtype catalog and rendering flow.

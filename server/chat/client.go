@@ -48,19 +48,36 @@ func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content st
 	return c.sendMessage(ctx, sessionID, content, exclude)
 }
 
+// SendWorkMessage sends a work-driven automatic message (kickoff, restart,
+// auto-continue, etc.). It is tagged with origin "work" plus a subtype and
+// optional meta so the frontend can render it as a collapsed workflow message
+// rather than a user bubble.
+func (c *Client) SendWorkMessage(ctx context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error {
+	event := agent.MessageEvent{
+		Content: content,
+		Origin:  agent.MessageOriginWork,
+		Subtype: subtype,
+		Meta:    meta,
+	}
+	return c.sendEvent(ctx, sessionID, event, nil)
+}
+
 func (c *Client) sendMessage(ctx context.Context, sessionID, content string, exclude any) error {
+	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content}, exclude)
+}
+
+func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, exclude any) error {
 	proc, err := c.getOrCreateProcess(ctx, sessionID)
 	if err != nil {
 		return err
 	}
 
-	// Persist user message to history
-	event := agent.MessageEvent{Content: content}
+	// Persist message to history
 	if err := c.store.AppendToHistory(ctx, sessionID, agent.NewEventRecord(event)); err != nil {
-		slog.Error("failed to persist user message", "sessionId", sessionID, "error", err)
+		slog.Error("failed to persist message", "sessionId", sessionID, "error", err)
 	}
 
-	if err := proc.SendMessage(content); err != nil {
+	if err := proc.SendMessage(event.Content); err != nil {
 		return err
 	}
 

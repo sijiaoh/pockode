@@ -6,8 +6,30 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/pockode/server/agent"
 	"gopkg.in/yaml.v3"
 )
+
+// Message subtypes identify which work-driven prompt produced a message.
+// The frontend maps these to display labels (Kickoff, Restart, ...).
+const (
+	MessageSubtypeKickoff      = "kickoff"
+	MessageSubtypeRestart      = "restart"
+	MessageSubtypeAutoContinue = "auto_continue"
+	MessageSubtypeStepAdvance  = "step_advance"
+	MessageSubtypeReopen       = "reopen"
+	MessageSubtypeChildDone    = "child_done"
+)
+
+// NewMessageMeta builds the collapsed-bar summary metadata for a work message.
+// step is 1-indexed; pass total <= 0 to omit step info (e.g. stepless works).
+func NewMessageMeta(title string, step, total int) *agent.MessageMeta {
+	meta := &agent.MessageMeta{Title: title}
+	if total > 0 && step >= 1 && step <= total {
+		meta.Step = &agent.StepInfo{Current: step, Total: total}
+	}
+	return meta
+}
 
 //go:embed prompts.yaml
 var promptsYAML []byte

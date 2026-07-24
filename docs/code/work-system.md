@@ -452,6 +452,25 @@ Check if you have completed the current step:
 - If NO: Continue working on this step.
 ```
 
+### Work-Origin Message Tagging
+
+All of these work-driven prompts are byte-for-byte indistinguishable from a user-typed message once they reach the agent — same stdin, same `message` event. To let the frontend tell them apart, they are sent via `chat.Client.SendWorkMessage` (not the plain user path), which stamps the `MessageEvent` with `origin: "work"`, a `subtype`, and a `meta` summary. The user path leaves `origin` empty, so old history stays a normal user message — backward compatible by omission. (For why this reuses the `message` event rather than a new event type, see [agent-event.md](../agent-event.md#message-origin-user-vs-work).)
+
+**Subtypes** (`server/work/prompt.go`) — one per send site, so the frontend can pick a label without parsing the prompt:
+
+| Subtype | Sent from | Frontend label |
+|---------|-----------|----------------|
+| `kickoff` | `WorkStarter` fresh start | Kickoff |
+| `restart` | `WorkStarter` restart | Restart |
+| `auto_continue` | `AutoResumer` auto-continuation | Auto-continue |
+| `step_advance` | `AutoResumer.NotifyStepDone` | Next step (Step N/M) |
+| `reopen` | `AutoResumer.NotifyReopen` | Reopen |
+| `child_done` | `AutoResumer` parent reactivation | Child task done |
+
+**Meta summary** — `NewMessageMeta(title, step, total)` builds the collapsed-bar data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). `title` is the work title; `step` is included only when the send site has real step context (`total > 0` and `1 <= step <= total`), so a stepless work or an out-of-range auto-continuation omits it. This mirrors the prompt itself falling back to the stepless body in the same cases, keeping bar and body consistent.
+
+**Frontend collapse rendering** (`web/`) — the origin/subtype/meta ride through the reducer unchanged: `normalizeEvent` copies them onto the normalized `message` event, and `applyUserMessage` tags the resulting `UserMessage` with `source`/`subtype`/`meta` **only** when `origin === "work"` (plain user messages stay source-less, so optimistic local echoes and old history render as normal bubbles). `MessageItem` then branches on `message.source === "work"` to render `WorkMessageItem` — a low-contrast, default-collapsed banner (`Pockode · {label}` + truncated title) that expands to the full prompt via `MarkdownContent`, instead of a right-aligned user bubble. An unknown subtype degrades to the `Work Message` label but still expands.
+
 ### Design Notes
 
 - **Steps apply to both Stories and Tasks**: Any work item with an agent role that has steps defined will display step progress.

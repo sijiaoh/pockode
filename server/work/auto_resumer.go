@@ -6,12 +6,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pockode/server/agent"
 )
 
-// MessageSender sends messages to agent sessions.
+// MessageSender sends work-driven automatic messages to agent sessions.
 // Satisfied by *chat.Client.
 type MessageSender interface {
-	SendMessage(ctx context.Context, sessionID, content string) error
+	SendWorkMessage(ctx context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error
 }
 
 // StepProvider provides step information for agent roles.
@@ -260,16 +262,21 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSen
 
 	// Build message with step context if available.
 	var msg string
+	var meta *agent.MessageMeta
 	if sp := r.getStepProvider(); sp != nil {
 		if steps, err := sp.GetSteps(w.AgentRoleID); err == nil && len(steps) > 0 {
 			msg = BuildAutoContinuationMessageWithSteps(*w, steps, w.CurrentStep)
+			meta = NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
 		}
 	}
 	if msg == "" {
 		msg = BuildAutoContinuationMessage(*w)
 	}
+	if meta == nil {
+		meta = NewMessageMeta(w.Title, 0, 0)
+	}
 
-	if err := sender.SendMessage(r.ctx, sessionID, msg); err != nil {
+	if err := sender.SendWorkMessage(r.ctx, sessionID, msg, MessageSubtypeAutoContinue, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return // shutting down, don't log
 		}
@@ -363,7 +370,8 @@ func (r *AutoResumer) sendStepAdvance(w Work, sender MessageSender, sp StepProvi
 	r.retryMu.Unlock()
 
 	msg := BuildStepAdvanceMessage(w, steps[w.CurrentStep], w.CurrentStep+1, len(steps))
-	if err := sender.SendMessage(r.ctx, w.SessionID, msg); err != nil {
+	meta := NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
+	if err := sender.SendWorkMessage(r.ctx, w.SessionID, msg, MessageSubtypeStepAdvance, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
@@ -381,7 +389,7 @@ func (r *AutoResumer) sendReopen(w Work, sender MessageSender) {
 	r.retryMu.Unlock()
 
 	msg := BuildReopenMessage(w)
-	if err := sender.SendMessage(r.ctx, w.SessionID, msg); err != nil {
+	if err := sender.SendWorkMessage(r.ctx, w.SessionID, msg, MessageSubtypeReopen, NewMessageMeta(w.Title, 0, 0)); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
@@ -430,7 +438,7 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 
 	// Send child completion message to parent (StatusInProgress, StatusNeedsInput, StatusWaiting->InProgress, StatusStopped)
 	msg := BuildChildCompletionMessage(parent, child.Title, child.ID)
-	if err := sender.SendMessage(r.ctx, parent.SessionID, msg); err != nil {
+	if err := sender.SendWorkMessage(r.ctx, parent.SessionID, msg, MessageSubtypeChildDone, NewMessageMeta(parent.Title, 0, 0)); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
