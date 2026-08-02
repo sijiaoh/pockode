@@ -286,6 +286,8 @@ Flags:
 	})
 	worktreeManager := worktree.NewManager(registry, agents, dataDir, idleTimeout)
 	worktreeManager.SetWorkAutoResumer(workAutoResumer)
+	// Route AutoResumer follow-up messages to each work's own worktree.
+	workAutoResumer.SetSenderResolver(worktreeManager)
 	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)

@@ -30,10 +30,43 @@ type Work struct {
     Status      WorkStatus
     SessionID   string     // Active AI session, empty when not running
     CurrentStep int        // 0-indexed; used only when agent role has Steps
+    Worktree    string     // Worktree the session runs in; empty = main
     CreatedAt   time.Time
     UpdatedAt   time.Time
 }
 ```
+
+### Worktree Binding
+
+Every work runs its AI session inside exactly one worktree, recorded in
+`Worktree` (empty means the main worktree). The binding is decided once and then
+frozen:
+
+- **Top-level work** captures the frontend's *current* worktree the first time
+  it starts (`handleWorkStart` → `store.SetWorktree`). It is not captured at
+  create time, because a story may be created long before the user picks the
+  worktree they want it to run in.
+- **Child work** inherits its parent's worktree at create time (`store.Create`).
+  Children are usually created by the parent's already-running agent, so the
+  parent's worktree is fixed by then. A child pre-created under a still-open
+  story would inherit the empty default instead, so `SetWorktree` also propagates
+  the captured worktree down to any open descendant when the story starts. Either
+  way an entire story subtree shares one worktree — the coordinator and all its
+  tasks stay together.
+- **Immutable once started** — `SetWorktree` only mutates a work while its status
+  is still `open`; any later call is rejected. Assigning the *same* value is a
+  no-op, so a main-worktree story that goes open → start → stop → start does not
+  trip the immutability guard on restart.
+
+**Why immutable**: a session's process, cwd, and session files live in a
+specific worktree. Moving a work mid-flight would strand its running session and
+its history, so the worktree is pinned for the work's whole life. Restart and
+reopen therefore reuse the recorded worktree rather than re-reading the
+frontend's current one.
+
+This binding is what lets `WorkStarter`/`WorkStopper` and session cleanup act on
+`worktreeManager.Get(w.Worktree)` instead of always the main worktree, and it is
+the ownership signal behind worktree-deletion protection (below).
 
 ### Validation Rules
 
@@ -309,6 +342,32 @@ step_done ──► store.StepDone()
 
 The reopen message instructs the agent to review its previous work and determine what additional changes are needed, then call `step_done` when complete.
 
+### Per-Worktree Sender Routing
+
+Every follow-up the AutoResumer sends (auto-continuation, step-advance, reopen,
+child-done) must reach the worktree the target work runs in — not a single
+global sender. It therefore holds a `SenderResolver` rather than one
+`MessageSender`, and resolves per send from the work's `Worktree`:
+
+```
+resolver.ResolveSender(work.Worktree) → (sender, release, err)
+```
+
+Production wires the worktree `Manager` as the resolver (`main.go`), so each
+message goes to that worktree's chat client. Because worktrees are
+reference-counted, `ResolveSender` returns a `release` func the AutoResumer
+**must** call once the send completes (always via `defer`) to drop the reference.
+
+- **Child-done routes to the parent's worktree**, not the child's. The subtree
+  shares one worktree so they usually match, but the parent owns the session
+  being nudged, making it authoritative.
+- **Resolve before mutating state** in parent reactivation: a waiting parent is
+  only transitioned to `in_progress` after its sender resolves, so a resolve
+  failure can't leave the parent resumed but un-nudged (all-or-nothing).
+- `SetSender` remains for tests and callers that don't need routing — it installs
+  a static resolver that maps every worktree to one sender. When no resolver is
+  installed the AutoResumer stays inert, the same gate as before.
+
 ### Retry and Settle Delay
 
 ```go
@@ -321,6 +380,26 @@ delay gives that in-process transition's retry reset time to land before
 `handleAutoContinuation` reads the retry count, so the stop-after-N accounting
 stays correct (it does not by itself suppress a redundant continuation message —
 that remains a rare worst case).
+
+## Worktree Deletion Protection
+
+Deleting a worktree that still owns unclosed work would orphan sessions that are
+live or resumable, so `worktree.delete` refuses it. `handleWorktreeDelete`
+checks `work.UnclosedWorkByWorktree(works, name)` — every work whose `Worktree`
+matches and whose status is not `closed` — *before* touching git or runtime
+state, and returns a client error (`CodeInvalidRequest`) if any exist.
+
+**Why in the work layer**: ownership is a Work concept (the `Worktree` field),
+so the predicate lives in `server/work/store.go` as a pure, testable helper; the
+WS handler only wires it into the delete flow and formats the rejection.
+
+The error message names how many and *which* works block the delete (`<id>
+"<title>" (<status>)`), because the developer needs to know what to close or move
+before retrying — a bare refusal would not be actionable.
+
+**main is unaffected**: the main worktree's name is `""`, and the delete handler
+rejects an empty name earlier (and `registry.Delete("")` returns
+`ErrMainWorktree`), so this check never governs main.
 
 ## Frontend Integration
 
@@ -552,6 +631,9 @@ func render(tmplStr string, data any) string {
 | File store | `server/work/store.go` |
 | State validation | `server/work/validation.go` |
 | Auto resumer | `server/work/auto_resumer.go` |
+| Worktree start/stop handlers | `server/worktree/work_starter.go`, `server/worktree/work_stopper.go` |
+| Worktree manager (sender resolver) | `server/worktree/manager.go` |
+| Worktree delete protection | `server/ws/rpc_worktree.go` |
 | Prompt builder | `server/work/prompt.go` |
 | Prompt templates | `server/work/prompts.yaml` |
 | MCP stdio proxy + client | `server/mcp/server.go`, `server/mcp/client.go` |

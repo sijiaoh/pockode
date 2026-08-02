@@ -54,6 +54,18 @@ func (m *Manager) SetWorkAutoResumer(ar *work.AutoResumer) {
 	m.workAutoResumer = ar
 }
 
+// ResolveSender returns the named worktree's ChatClient as a message sender for
+// AutoResumer follow-ups, plus a release func that drops the worktree reference
+// once the send completes. Implements work.SenderResolver so each work's
+// automatic messages route to the worktree the work runs in.
+func (m *Manager) ResolveSender(name string) (work.MessageSender, func(), error) {
+	wt, err := m.Get(name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get worktree %q for message sender: %w", name, err)
+	}
+	return wt.ChatClient, func() { m.Release(wt) }, nil
+}
+
 func (m *Manager) SetWorkNeedsInputSyncer(s *work.NeedsInputSyncer) {
 	m.workNeedsInputSyncer = s
 }
@@ -198,11 +210,6 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		}
 		chatMessagesWatcher.NotifyMessage(sessionID, event, n)
 	})
-
-	// Set sender for auto-resumer when creating the main worktree
-	if name == "" && m.workAutoResumer != nil {
-		m.workAutoResumer.SetSender(chatClient)
-	}
 
 	wt := &Worktree{
 		Name:                name,

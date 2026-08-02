@@ -17,6 +17,7 @@ A unit of work — either a **story** (top-level, wire type `"story"`) or a **ta
 | status        | WorkStatus   | Current lifecycle state (see below)                    |
 | session_id    | string?      | Agent session ID (set on start, preserved through stop/closed) |
 | current_step  | int?         | 0-indexed step index (only when agent role has steps)  |
+| worktree      | string?      | Worktree the session runs in (empty = main); captured on a top-level work's first start, inherited by children, immutable once started |
 | created_at    | time         | Creation timestamp                                     |
 | updated_at    | time         | Last modification timestamp                            |
 

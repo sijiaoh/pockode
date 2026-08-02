@@ -47,8 +47,12 @@ type Work struct {
 	Status      WorkStatus `json:"status"`
 	SessionID   string     `json:"session_id,omitempty"`
 	CurrentStep int        `json:"current_step,omitempty"` // 0-indexed; used only when agent role has Steps
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	// Worktree the work's session runs in (empty = main). Captured from the
+	// frontend's current worktree when a top-level work first starts, or
+	// inherited from the parent at create time; immutable once the work starts.
+	Worktree  string    `json:"worktree,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Operation string

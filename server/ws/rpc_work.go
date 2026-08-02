@@ -102,7 +102,13 @@ func (h *rpcMethodHandler) handleWorkDelete(ctx context.Context, conn *jsonrpc2.
 	}
 
 	// Collect session IDs from the target and its children before deletion.
+	// The whole subtree shares the target's worktree (children inherit it), so
+	// its sessions all live in that one worktree.
 	sessionIDs := h.collectWorkSessionIDs(params.ID)
+	var worktree string
+	if target, found, err := h.workStore.Get(params.ID); err == nil && found {
+		worktree = target.Worktree
+	}
 
 	if err := h.workStore.Delete(ctx, params.ID); err != nil {
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to delete work")
@@ -110,7 +116,7 @@ func (h *rpcMethodHandler) handleWorkDelete(ctx context.Context, conn *jsonrpc2.
 	}
 
 	// Cascade delete: close processes and remove sessions (best-effort).
-	h.deleteWorkSessions(ctx, sessionIDs)
+	h.deleteWorkSessions(ctx, worktree, sessionIDs)
 
 	h.log.Info("work deleted", "workId", params.ID)
 
@@ -138,22 +144,23 @@ func (h *rpcMethodHandler) collectWorkSessionIDs(workID string) []string {
 	return sessionIDs
 }
 
-// deleteWorkSessions closes processes and deletes sessions for the given IDs.
-func (h *rpcMethodHandler) deleteWorkSessions(ctx context.Context, sessionIDs []string) {
+// deleteWorkSessions closes processes and deletes sessions for the given IDs in
+// the work's worktree.
+func (h *rpcMethodHandler) deleteWorkSessions(ctx context.Context, worktree string, sessionIDs []string) {
 	if len(sessionIDs) == 0 {
 		return
 	}
 
-	mainWt, err := h.worktreeManager.Get("")
+	wt, err := h.worktreeManager.Get(worktree)
 	if err != nil {
-		h.log.Warn("could not get worktree for session cleanup", "error", err)
+		h.log.Warn("could not get worktree for session cleanup", "worktree", worktree, "error", err)
 		return
 	}
-	defer h.worktreeManager.Release(mainWt)
+	defer h.worktreeManager.Release(wt)
 
 	for _, sid := range sessionIDs {
-		mainWt.ProcessManager.Close(sid)
-		if err := mainWt.SessionStore.Delete(ctx, sid); err != nil {
+		wt.ProcessManager.Close(sid)
+		if err := wt.SessionStore.Delete(ctx, sid); err != nil {
 			h.log.Warn("failed to delete session during work cleanup", "sessionId", sid, "error", err)
 		}
 	}
@@ -164,6 +171,22 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 	if err := unmarshalParams(req, &params); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
 		return
+	}
+
+	// Capture the frontend's current worktree onto a top-level work the first
+	// time it starts. Children inherit their worktree at create time, and a
+	// restart keeps the worktree it already has (SetWorktree only applies while
+	// the work is still open), so this only ever pins a brand-new story.
+	if current, found, err := h.workStore.Get(params.ID); err == nil && found &&
+		current.ParentID == "" && current.Status == work.StatusOpen {
+		name := ""
+		if wt := h.state.getWorktree(); wt != nil {
+			name = wt.Name
+		}
+		if err := h.workStore.SetWorktree(ctx, params.ID, name); err != nil {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to assign worktree: "+err.Error())
+			return
+		}
 	}
 
 	w, err := h.workOps.StartWork(ctx, params.ID)

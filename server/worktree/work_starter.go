@@ -43,22 +43,22 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 		return fmt.Errorf("agent role %q not found", w.AgentRoleID)
 	}
 
-	mainWt, err := s.worktreeManager.Get("")
+	wt, err := s.worktreeManager.Get(w.Worktree)
 	if err != nil {
-		return fmt.Errorf("get main worktree: %w", err)
+		return fmt.Errorf("get worktree %q: %w", w.Worktree, err)
 	}
-	defer s.worktreeManager.Release(mainWt)
+	defer s.worktreeManager.Release(wt)
 
 	// Check if session already exists to distinguish restart from fresh start.
-	_, sessionExists, err := mainWt.SessionStore.Get(w.SessionID)
+	_, sessionExists, err := wt.SessionStore.Get(w.SessionID)
 	if err != nil {
 		return fmt.Errorf("check session: %w", err)
 	}
 
 	if sessionExists {
-		return s.sendRestart(ctx, mainWt, w)
+		return s.sendRestart(ctx, wt, w)
 	}
-	return s.createAndSendKickoff(ctx, mainWt, w, role.Steps)
+	return s.createAndSendKickoff(ctx, wt, w, role.Steps)
 }
 
 func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work) error {

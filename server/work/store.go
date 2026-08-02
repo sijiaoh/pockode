@@ -74,6 +74,14 @@ type Store interface {
 	// This allows users to add more child work items or continue working.
 	Reopen(ctx context.Context, id string) error
 
+	// SetWorktree records the worktree a top-level work will run in and pins its
+	// whole subtree to that worktree. Only permitted before the work has started
+	// (status open); once started the worktree is immutable. Children normally
+	// inherit their worktree at create time, but any open descendant created
+	// before the parent started still holds the empty default, so this also
+	// propagates the worktree down to those descendants.
+	SetWorktree(ctx context.Context, id string, worktree string) error
+
 	AddComment(ctx context.Context, workID, body string) (Comment, error)
 	UpdateComment(ctx context.Context, commentID, body string) (Comment, error)
 	ListComments(workID string) ([]Comment, error)
@@ -202,6 +210,13 @@ func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
 		return Work{}, fmt.Errorf("%w: agent_role_id is required", ErrInvalidWork)
 	}
 
+	// Child work inherits its parent's worktree. Since children are created by
+	// the parent's running agent, the parent already has its worktree fixed.
+	worktree := w.Worktree
+	if parent != nil {
+		worktree = parent.Worktree
+	}
+
 	now := time.Now()
 	work := Work{
 		ID:          uuid.Must(uuid.NewV7()).String(),
@@ -211,6 +226,7 @@ func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
 		Title:       w.Title,
 		Body:        w.Body,
 		Status:      StatusOpen,
+		Worktree:    worktree,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -611,6 +627,52 @@ func (s *FileStore) Reopen(_ context.Context, id string) error {
 	return s.persistAndNotifyUpdates(prev, modified)
 }
 
+func (s *FileStore) SetWorktree(_ context.Context, id string, worktree string) error {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return ErrWorkNotFound
+	}
+
+	root := &s.works[idx]
+	// A work's worktree is fixed the moment it starts; only an unstarted (open)
+	// work may still change it. Re-assigning the same worktree is a harmless
+	// no-op even after start, which keeps a main story's open→start→stop→start
+	// cycle idempotent.
+	if root.Worktree != worktree && root.Status != StatusOpen {
+		s.worksMu.Unlock()
+		return fmt.Errorf("%w: worktree is immutable once work %s has started (status %s)", ErrInvalidWork, id, root.Status)
+	}
+
+	// Pin the whole subtree to one worktree. Children normally inherit at create
+	// time, but an open descendant created before this top-level work started
+	// still holds the empty default; bring those along so "a subtree shares one
+	// worktree" holds regardless of create ordering. Started descendants keep
+	// their fixed worktree and are left untouched.
+	descendants := CollectDescendantIDs(s.works, id)
+
+	prev := s.snapshotWorks()
+	now := time.Now()
+	modified := map[string]bool{}
+	for i := range s.works {
+		w := &s.works[i]
+		if !descendants[w.ID] || w.Worktree == worktree || w.Status != StatusOpen {
+			continue
+		}
+		w.Worktree = worktree
+		w.UpdatedAt = now
+		modified[w.ID] = true
+	}
+
+	if len(modified) == 0 {
+		s.worksMu.Unlock()
+		return nil
+	}
+	return s.persistAndNotifyUpdates(prev, modified)
+}
+
 // persistAndNotifyUpdates persists and fires update events for all modified
 // work IDs. prev is the pre-mutation snapshot used for rollback on persist
 // failure. Caller must hold s.worksMu write lock; it is released here.
@@ -799,6 +861,19 @@ func (s *FileStore) persistIndex() error {
 }
 
 // --- Helpers ---
+
+// UnclosedWorkByWorktree returns the works assigned to the given worktree whose
+// status is not closed, preserving list order. A worktree with any such work
+// must not be deleted, since its sessions are still live or resumable.
+func UnclosedWorkByWorktree(works []Work, worktree string) []Work {
+	var unclosed []Work
+	for _, w := range works {
+		if w.Worktree == worktree && w.Status != StatusClosed {
+			unclosed = append(unclosed, w)
+		}
+	}
+	return unclosed
+}
 
 // CollectDescendantIDs returns a set containing rootID and all transitive descendants.
 func CollectDescendantIDs(works []Work, rootID string) map[string]bool {

@@ -1128,6 +1128,127 @@ func (s *errSender) SendSystemMessage(_ context.Context, _, _, _ string, _ *agen
 	return s.err
 }
 
+// recordingResolver records the worktrees it was asked to resolve and how many
+// times the returned release was invoked, delegating the actual send to sender.
+type recordingResolver struct {
+	mu        sync.Mutex
+	requested []string
+	releases  int
+	sender    MessageSender
+}
+
+func (r *recordingResolver) ResolveSender(worktree string) (MessageSender, func(), error) {
+	r.mu.Lock()
+	r.requested = append(r.requested, worktree)
+	r.mu.Unlock()
+	return r.sender, func() {
+		r.mu.Lock()
+		r.releases++
+		r.mu.Unlock()
+	}, nil
+}
+
+func (r *recordingResolver) worktrees() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.requested))
+	copy(out, r.requested)
+	return out
+}
+
+func (r *recordingResolver) releaseCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.releases
+}
+
+func contains(ss []string, target string) bool {
+	for _, s := range ss {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAutoResumer_AutoContinuation_RoutesToWorkWorktree(t *testing.T) {
+	store := newTestStore(t)
+	resolver := &recordingResolver{sender: &mockSender{}}
+	resumer := NewAutoResumer(store, 3)
+	resumer.settleDelay = 10 * time.Millisecond
+	resumer.SetSenderResolver(resolver)
+
+	story := createStory(t, store, "Story")
+	if err := store.SetWorktree(context.Background(), story.ID, "feature-x"); err != nil {
+		t.Fatalf("SetWorktree: %v", err)
+	}
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
+
+	waitFor(t, func() bool { return len(resolver.worktrees()) >= 1 })
+
+	if got := resolver.worktrees(); !contains(got, "feature-x") {
+		t.Errorf("resolved worktrees = %v, want to include %q", got, "feature-x")
+	}
+	waitFor(t, func() bool { return resolver.releaseCount() >= 1 })
+}
+
+func TestAutoResumer_ChildCompletion_RoutesToParentWorktree(t *testing.T) {
+	store := newTestStore(t)
+	resolver := &recordingResolver{sender: &mockSender{}}
+	resumer := NewAutoResumer(store, 3)
+	resumer.settleDelay = 10 * time.Millisecond
+	resumer.SetSenderResolver(resolver)
+
+	story := createStory(t, store, "Story")
+	if err := store.SetWorktree(context.Background(), story.ID, "feature-x"); err != nil {
+		t.Fatalf("SetWorktree: %v", err)
+	}
+	task := createTask(t, store, story.ID, "Task")
+	if task.Worktree != "feature-x" {
+		t.Fatalf("child worktree = %q, want inherited feature-x", task.Worktree)
+	}
+	parentSid := "parent-session"
+	startWorkWithSession(t, store, story.ID, parentSid)
+	startWork(t, store, task.ID)
+
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Worktree: "feature-x", Title: "Task"},
+	})
+
+	waitFor(t, func() bool { return len(resolver.worktrees()) >= 1 })
+
+	if got := resolver.worktrees(); !contains(got, "feature-x") {
+		t.Errorf("resolved worktrees = %v, want parent worktree %q", got, "feature-x")
+	}
+	waitFor(t, func() bool { return resolver.releaseCount() >= 1 })
+}
+
+func TestAutoResumer_StepAdvance_RoutesToWorkWorktree(t *testing.T) {
+	store := newTestStore(t)
+	resolver := &recordingResolver{sender: &mockSender{}}
+	resumer := NewAutoResumer(store, 3)
+	resumer.settleDelay = 10 * time.Millisecond
+	resumer.SetSenderResolver(resolver)
+	resumer.SetStepProvider(&mockStepProvider{steps: map[string][]string{
+		testRoleID: {"Plan", "Build", "Verify"},
+	}})
+
+	resumer.NotifyStepDone(Work{
+		ID: "w1", Status: StatusInProgress, SessionID: "s1",
+		AgentRoleID: testRoleID, Worktree: "feature-y", CurrentStep: 1,
+	})
+
+	waitFor(t, func() bool { return len(resolver.worktrees()) >= 1 })
+	if got := resolver.worktrees(); !contains(got, "feature-y") {
+		t.Errorf("resolved worktrees = %v, want %q", got, "feature-y")
+	}
+	waitFor(t, func() bool { return resolver.releaseCount() >= 1 })
+}
+
 // --- Step provider mock (shared by step/continuation tests) ---
 
 // mockStepProvider provides step information for tests.

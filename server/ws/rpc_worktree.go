@@ -3,11 +3,25 @@ package ws
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
 )
+
+// formatWorktreeBlockedError builds a locatable error listing every work item
+// that blocks deleting the worktree, so the developer knows which and how many.
+func formatWorktreeBlockedError(name string, blocking []work.Work) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "cannot delete worktree %q: %d work item(s) not closed", name, len(blocking))
+	for _, w := range blocking {
+		fmt.Fprintf(&b, "; %s %q (%s)", w.ID, w.Title, w.Status)
+	}
+	return b.String()
+}
 
 func (h *rpcMethodHandler) handleWorktreeList(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	registry := h.worktreeManager.Registry()
@@ -84,6 +98,19 @@ func (h *rpcMethodHandler) handleWorktreeDelete(ctx context.Context, conn *jsonr
 
 	if params.Name == "" {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "name required")
+		return
+	}
+
+	// Refuse to delete a worktree that still owns work which has not closed;
+	// deleting it would orphan live or resumable sessions. main (name "") is
+	// rejected earlier by the empty-name guard, so its behavior is unchanged.
+	works, err := h.workStore.List()
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to list work: "+err.Error())
+		return
+	}
+	if blocking := work.UnclosedWorkByWorktree(works, params.Name); len(blocking) > 0 {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, formatWorktreeBlockedError(params.Name, blocking))
 		return
 	}
 

@@ -16,6 +16,22 @@ type MessageSender interface {
 	SendSystemMessage(ctx context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error
 }
 
+// SenderResolver resolves the MessageSender for a given worktree so that a
+// work's automatic follow-up messages reach the worktree the work actually runs
+// in. It returns a release func the caller MUST invoke once the send completes
+// (worktrees are reference-counted). Satisfied by the worktree Manager.
+type SenderResolver interface {
+	ResolveSender(worktree string) (sender MessageSender, release func(), err error)
+}
+
+// staticResolver routes every worktree to a single sender. Used by SetSender
+// for tests and callers that don't need per-worktree routing.
+type staticResolver struct{ sender MessageSender }
+
+func (s staticResolver) ResolveSender(string) (MessageSender, func(), error) {
+	return s.sender, func() {}, nil
+}
+
 // StepProvider provides step information for agent roles.
 // The work package uses this interface to avoid importing agentrole.
 type StepProvider interface {
@@ -38,7 +54,7 @@ type StepProvider interface {
 // next-step and reopen prompts after the MCP API mutates a work item in-process.
 type AutoResumer struct {
 	workStore    Store
-	sender       atomic.Pointer[MessageSender]
+	resolver     atomic.Pointer[SenderResolver]
 	stepProvider atomic.Pointer[StepProvider]
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -96,16 +112,51 @@ func (r *AutoResumer) StopOrphanedWork() {
 	}
 }
 
-// SetSender sets the message sender. Called when the main worktree is initialized.
-func (r *AutoResumer) SetSender(sender MessageSender) {
-	r.sender.Store(&sender)
+// SetSenderResolver installs the per-worktree sender resolver. Production wires
+// the worktree Manager here so each work's automatic messages route to its own
+// worktree's chat client.
+func (r *AutoResumer) SetSenderResolver(resolver SenderResolver) {
+	r.resolver.Store(&resolver)
 }
 
-func (r *AutoResumer) getSender() MessageSender {
-	if p := r.sender.Load(); p != nil {
+// SetSender installs a single sender used for every worktree. Convenience for
+// tests and callers that don't need per-worktree routing.
+func (r *AutoResumer) SetSender(sender MessageSender) {
+	r.SetSenderResolver(staticResolver{sender: sender})
+}
+
+func (r *AutoResumer) getResolver() SenderResolver {
+	if p := r.resolver.Load(); p != nil {
 		return *p
 	}
 	return nil
+}
+
+// resolveSender resolves the sender for the given worktree. Returns ok=false
+// when no resolver is installed or resolution fails. When ok is true the caller
+// MUST invoke the returned release once the send completes.
+func (r *AutoResumer) resolveSender(worktree string) (sender MessageSender, release func(), ok bool) {
+	resolver := r.getResolver()
+	if resolver == nil {
+		return nil, nil, false
+	}
+	sender, release, err := resolver.ResolveSender(worktree)
+	if err != nil {
+		if r.ctx.Err() == nil {
+			slog.Warn("failed to resolve message sender", "worktree", worktree, "error", err)
+		}
+		return nil, nil, false
+	}
+	if sender == nil {
+		if release != nil {
+			release()
+		}
+		return nil, nil, false
+	}
+	if release == nil {
+		release = func() {}
+	}
+	return sender, release, true
 }
 
 // SetStepProvider sets the provider for agent role step information.
@@ -154,8 +205,7 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 		return
 	}
 
-	sender := r.getSender()
-	if sender == nil {
+	if r.getResolver() == nil {
 		return
 	}
 
@@ -169,7 +219,7 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 	r.continuing[sessionID] = true
 	r.retryMu.Unlock()
 
-	go r.handleAutoContinuation(sessionID, sender)
+	go r.handleAutoContinuation(sessionID)
 }
 
 // handleProcessEnded transitions in_progress/needs_input/waiting work to stopped when its process terminates.
@@ -225,7 +275,7 @@ func (r *AutoResumer) handleProcessRunning(sessionID string) {
 	slog.Info("stopped work reactivated by process running", "workId", w.ID, "sessionId", sessionID)
 }
 
-func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSender) {
+func (r *AutoResumer) handleAutoContinuation(sessionID string) {
 	defer func() {
 		r.retryMu.Lock()
 		delete(r.continuing, sessionID)
@@ -259,6 +309,12 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSen
 	}
 	r.retries[sessionID] = count + 1
 	r.retryMu.Unlock()
+
+	sender, release, ok := r.resolveSender(w.Worktree)
+	if !ok {
+		return
+	}
+	defer release()
 
 	// Build message with step context if available.
 	var msg string
@@ -312,15 +368,14 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 	}
 
 	// Child closed → parent reactivation
-	sender := r.getSender()
-	if sender == nil {
+	if r.getResolver() == nil {
 		return
 	}
 	if event.Work.Status != StatusClosed || event.Work.ParentID == "" {
 		return
 	}
 
-	go r.handleParentReactivation(event.Work, sender)
+	go r.handleParentReactivation(event.Work)
 }
 
 // NotifyStepDone sends the next-step prompt after an in-process step advance.
@@ -328,29 +383,27 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 // requests this follow-up message explicitly. Safe to call when the work has
 // closed: sendStepAdvance bounds-checks the step index.
 func (r *AutoResumer) NotifyStepDone(w Work) {
-	sender := r.getSender()
 	sp := r.getStepProvider()
 	// Only prompt the next step when the work is still running: a concurrent
 	// transition (e.g. process-ended → stopped, or work_needs_input) may land
 	// between the caller's StepDone and its re-read.
-	if sender == nil || sp == nil || w.SessionID == "" || w.Status != StatusInProgress {
+	if r.getResolver() == nil || sp == nil || w.SessionID == "" || w.Status != StatusInProgress {
 		return
 	}
-	go r.sendStepAdvance(w, sender, sp)
+	go r.sendStepAdvance(w, sp)
 }
 
 // NotifyReopen sends the reopen message after an in-process work_reopen.
 func (r *AutoResumer) NotifyReopen(w Work) {
-	sender := r.getSender()
-	if sender == nil || w.SessionID == "" {
+	if r.getResolver() == nil || w.SessionID == "" {
 		return
 	}
-	go r.sendReopen(w, sender)
+	go r.sendReopen(w)
 }
 
 // sendStepAdvance sends the next-step prompt to the agent session after a step
 // advance.
-func (r *AutoResumer) sendStepAdvance(w Work, sender MessageSender, sp StepProvider) {
+func (r *AutoResumer) sendStepAdvance(w Work, sp StepProvider) {
 	steps, err := sp.GetSteps(w.AgentRoleID)
 	if err != nil {
 		if r.ctx.Err() == nil {
@@ -363,6 +416,12 @@ func (r *AutoResumer) sendStepAdvance(w Work, sender MessageSender, sp StepProvi
 	if len(steps) == 0 || w.CurrentStep >= len(steps) {
 		return
 	}
+
+	sender, release, ok := r.resolveSender(w.Worktree)
+	if !ok {
+		return
+	}
+	defer release()
 
 	// Reset retry count (new step context)
 	r.retryMu.Lock()
@@ -382,7 +441,13 @@ func (r *AutoResumer) sendStepAdvance(w Work, sender MessageSender, sp StepProvi
 }
 
 // sendReopen sends the reopen message to the agent session.
-func (r *AutoResumer) sendReopen(w Work, sender MessageSender) {
+func (r *AutoResumer) sendReopen(w Work) {
+	sender, release, ok := r.resolveSender(w.Worktree)
+	if !ok {
+		return
+	}
+	defer release()
+
 	// Reset retry count (new activity context)
 	r.retryMu.Lock()
 	delete(r.retries, w.SessionID)
@@ -399,7 +464,7 @@ func (r *AutoResumer) sendReopen(w Work, sender MessageSender) {
 	}
 }
 
-func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender) {
+func (r *AutoResumer) handleParentReactivation(child Work) {
 	parent, found, err := r.workStore.Get(child.ParentID)
 	if err != nil {
 		slog.Warn("failed to get parent work for reactivation", "parentId", child.ParentID, "error", err)
@@ -419,6 +484,15 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 	if parent.Status == StatusOpen || parent.Status == StatusClosed {
 		return
 	}
+
+	// Resolve the sender before mutating state so a resolve failure doesn't leave
+	// a waiting parent resumed but un-nudged. Route to the parent's own worktree
+	// (children share it, but the parent is authoritative for its session).
+	sender, release, ok := r.resolveSender(parent.Worktree)
+	if !ok {
+		return
+	}
+	defer release()
 
 	// Handle waiting parent: transition to in_progress
 	if parent.Status == StatusWaiting {

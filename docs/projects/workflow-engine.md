@@ -142,7 +142,8 @@ identical.
 
 **Fresh start sequence:**
 1. Validate `agent_role_id` exists.
-2. Acquire the main worktree.
+2. Acquire the work's worktree (`w.Worktree`; empty = main), so the session, its
+   process, and cwd live in the worktree the work is bound to.
 3. Check if a session with the `sessionID` already exists. If not (fresh start):
 4. Create a new chat session, set its title (best-effort).
 5. Send `BuildKickoffMessage`. On failure, the session is cleaned up (deleted).
