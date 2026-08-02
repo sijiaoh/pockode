@@ -21,7 +21,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Layer | Path | Role |
 |-------|------|------|
 | RPC handlers | `server/ws/rpc_chat.go` | `chat.message`, `chat.interrupt`, `chat.messages.subscribe`, permission/question responses |
-| Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessage` (user) and `SendWorkMessage` (work automation) share one persist+broadcast path |
+| Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessage` (user) and `SendSystemMessage` (system automation) share one persist+broadcast path |
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
 | Process manager | `server/process/manager.go` | Process lifecycle, state machine, idle reaper |
@@ -38,7 +38,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 5. Events are broadcast to all WebSocket subscribers and persisted to session history
 6. On `Done` event, process transitions to `idle`
 
-Besides user-typed messages, the Work system pushes automatic prompts to the same session via `Client.SendWorkMessage`; these are tagged `origin: "work"` so the frontend renders them as a collapsed banner rather than a user bubble. See [agent-event.md](agent-event.md#message-origin-user-vs-work) and [code/work-system.md](code/work-system.md#work-origin-message-tagging).
+Besides user-typed messages, the Work system pushes automatic prompts to the same session via `Client.SendSystemMessage`; these are tagged `origin: "system"` so the frontend renders them as a collapsed banner rather than a user bubble. See [agent-event.md](agent-event.md#message-origin-user-vs-system) and [code/work-system.md](code/work-system.md#system-origin-message-tagging).
 
 ## Agent Events
 

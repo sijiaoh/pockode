@@ -452,9 +452,9 @@ Check if you have completed the current step:
 - If NO: Continue working on this step.
 ```
 
-### Work-Origin Message Tagging
+### System-Origin Message Tagging
 
-All of these work-driven prompts are byte-for-byte indistinguishable from a user-typed message once they reach the agent — same stdin, same `message` event. To let the frontend tell them apart, they are sent via `chat.Client.SendWorkMessage` (not the plain user path), which stamps the `MessageEvent` with `origin: "work"`, a `subtype`, and a `meta` summary. The user path leaves `origin` empty, so old history stays a normal user message — backward compatible by omission. (For why this reuses the `message` event rather than a new event type, see [agent-event.md](../agent-event.md#message-origin-user-vs-work).)
+All of these work-driven prompts are byte-for-byte indistinguishable from a user-typed message once they reach the agent — same stdin, same `message` event. To let the frontend tell them apart, they are sent via `chat.Client.SendSystemMessage` (not the plain user path), which stamps the `MessageEvent` with `origin: "system"`, a `subtype`, and a `meta` summary. The origin is `"system"` rather than `"work"` because it marks a message produced by Pockode itself; the Work engine is today's only such producer, but the concept is source-agnostic. The user path leaves `origin` empty, so old history stays a normal user message — backward compatible by omission. (For why this reuses the `message` event rather than a new event type, see [agent-event.md](../agent-event.md#message-origin-user-vs-system).)
 
 **Subtypes** (`server/work/prompt.go`) — one per send site, so the frontend can pick a label without parsing the prompt:
 
@@ -469,7 +469,7 @@ All of these work-driven prompts are byte-for-byte indistinguishable from a user
 
 **Meta summary** — `NewMessageMeta(title, step, total)` builds the collapsed-bar data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). `title` is the work title; `step` is included only when the send site has real step context (`total > 0` and `1 <= step <= total`), so a stepless work or an out-of-range auto-continuation omits it. This mirrors the prompt itself falling back to the stepless body in the same cases, keeping bar and body consistent.
 
-**Frontend collapse rendering** (`web/`) — the origin/subtype/meta ride through the reducer unchanged: `normalizeEvent` copies them onto the normalized `message` event, and `applyUserMessage` tags the resulting `UserMessage` with `source`/`subtype`/`meta` **only** when `origin === "work"` (plain user messages stay source-less, so optimistic local echoes and old history render as normal bubbles). `MessageItem` then branches on `message.source === "work"` to render `WorkMessageItem` — a low-contrast, default-collapsed banner (`Pockode · {label}` + truncated title) that expands to the full prompt via `MarkdownContent`, instead of a right-aligned user bubble. An unknown subtype degrades to the `Work Message` label but still expands.
+**Frontend collapse rendering** (`web/`) — the origin/subtype/meta ride through the reducer: `normalizeEvent` runs the raw `origin` through `normalizeOrigin`, which folds both the current `"system"` and the legacy stored `"work"` to `"system"` (so old persisted history and live events converge on the new name at this single wire boundary), passes `"user"` through, and drops anything else to `undefined`; it then copies origin/subtype/meta onto the normalized `message` event. `applyUserMessage` tags the resulting `UserMessage` with `source`/`subtype`/`meta` **only** when `origin === "system"` (plain user messages stay source-less, so optimistic local echoes and old history render as normal bubbles). `MessageItem` then branches on `message.source === "system"` to render `SystemMessageItem` — a low-contrast, default-collapsed banner (`Pockode · {label}` + truncated title) that expands to the full prompt via `MarkdownContent`, instead of a right-aligned user bubble. An unknown subtype degrades to the `System Message` label but still expands.
 
 ### Design Notes
 

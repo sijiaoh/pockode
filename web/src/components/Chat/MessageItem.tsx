@@ -18,8 +18,8 @@ import type {
 	PermissionStatus,
 	PermissionUpdate,
 	PermissionUpdateDestination,
+	SystemMessageMeta,
 	ToolCall,
-	WorkMessageMeta,
 } from "../../types/message";
 import { ScrollableContent, Spinner } from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
@@ -169,8 +169,8 @@ function SystemItem({ content }: SystemItemProps) {
 }
 
 // subtype → collapsed-bar action label. Where values come from: the backend
-// work message subtypes in server/work/prompt.go (kickoff, restart, ...).
-const WORK_MESSAGE_LABELS: Record<string, string> = {
+// system message subtypes in server/work/prompt.go (kickoff, restart, ...).
+const SYSTEM_MESSAGE_LABELS: Record<string, string> = {
 	kickoff: "Kickoff",
 	restart: "Restart",
 	auto_continue: "Auto-continue",
@@ -179,26 +179,26 @@ const WORK_MESSAGE_LABELS: Record<string, string> = {
 	child_done: "Child task done",
 };
 
-function workActionLabel(subtype?: string, meta?: WorkMessageMeta): string {
-	const base = (subtype && WORK_MESSAGE_LABELS[subtype]) || "Work Message";
+function systemActionLabel(subtype?: string, meta?: SystemMessageMeta): string {
+	const base = (subtype && SYSTEM_MESSAGE_LABELS[subtype]) || "System Message";
 	if (subtype === "step_advance" && meta?.step) {
 		return `${base} (Step ${meta.step.current}/${meta.step.total})`;
 	}
 	return base;
 }
 
-interface WorkMessageItemProps {
+interface SystemMessageItemProps {
 	content: string;
 	subtype?: string;
-	meta?: WorkMessageMeta;
+	meta?: SystemMessageMeta;
 }
 
-// WorkMessageItem renders a Pockode work-automation message as a collapsed,
+// SystemMessageItem renders a Pockode system-automation message as a collapsed,
 // low-contrast banner (not a chat bubble). It sits alongside the user/assistant
 // branches in MessageItem. Visual pattern mirrors SystemItem for consistency.
-function WorkMessageItem({ content, subtype, meta }: WorkMessageItemProps) {
+function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
 	const [expanded, setExpanded] = useState(false);
-	const actionLabel = workActionLabel(subtype, meta);
+	const actionLabel = systemActionLabel(subtype, meta);
 	const summary = meta?.title;
 
 	return (
@@ -591,10 +591,10 @@ const MessageItem = memo(function MessageItem({
 	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
 
 	if (message.role === "user") {
-		// Work-driven messages render as a collapsed banner instead of a bubble.
-		if (message.source === "work") {
+		// System-driven messages render as a collapsed banner instead of a bubble.
+		if (message.source === "system") {
 			return (
-				<WorkMessageItem
+				<SystemMessageItem
 					content={message.content}
 					subtype={message.subtype}
 					meta={message.meta}

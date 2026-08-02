@@ -10,10 +10,10 @@ import (
 	"github.com/pockode/server/agent"
 )
 
-// MessageSender sends work-driven automatic messages to agent sessions.
+// MessageSender sends system-driven automatic messages to agent sessions.
 // Satisfied by *chat.Client.
 type MessageSender interface {
-	SendWorkMessage(ctx context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error
+	SendSystemMessage(ctx context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error
 }
 
 // StepProvider provides step information for agent roles.
@@ -276,7 +276,7 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, sender MessageSen
 		meta = NewMessageMeta(w.Title, 0, 0)
 	}
 
-	if err := sender.SendWorkMessage(r.ctx, sessionID, msg, MessageSubtypeAutoContinue, meta); err != nil {
+	if err := sender.SendSystemMessage(r.ctx, sessionID, msg, MessageSubtypeAutoContinue, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return // shutting down, don't log
 		}
@@ -371,7 +371,7 @@ func (r *AutoResumer) sendStepAdvance(w Work, sender MessageSender, sp StepProvi
 
 	msg := BuildStepAdvanceMessage(w, steps[w.CurrentStep], w.CurrentStep+1, len(steps))
 	meta := NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
-	if err := sender.SendWorkMessage(r.ctx, w.SessionID, msg, MessageSubtypeStepAdvance, meta); err != nil {
+	if err := sender.SendSystemMessage(r.ctx, w.SessionID, msg, MessageSubtypeStepAdvance, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
@@ -389,7 +389,7 @@ func (r *AutoResumer) sendReopen(w Work, sender MessageSender) {
 	r.retryMu.Unlock()
 
 	msg := BuildReopenMessage(w)
-	if err := sender.SendWorkMessage(r.ctx, w.SessionID, msg, MessageSubtypeReopen, NewMessageMeta(w.Title, 0, 0)); err != nil {
+	if err := sender.SendSystemMessage(r.ctx, w.SessionID, msg, MessageSubtypeReopen, NewMessageMeta(w.Title, 0, 0)); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
@@ -438,7 +438,7 @@ func (r *AutoResumer) handleParentReactivation(child Work, sender MessageSender)
 
 	// Send child completion message to parent (StatusInProgress, StatusNeedsInput, StatusWaiting->InProgress, StatusStopped)
 	msg := BuildChildCompletionMessage(parent, child.Title, child.ID)
-	if err := sender.SendWorkMessage(r.ctx, parent.SessionID, msg, MessageSubtypeChildDone, NewMessageMeta(parent.Title, 0, 0)); err != nil {
+	if err := sender.SendSystemMessage(r.ctx, parent.SessionID, msg, MessageSubtypeChildDone, NewMessageMeta(parent.Title, 0, 0)); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}

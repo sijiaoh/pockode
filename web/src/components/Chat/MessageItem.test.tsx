@@ -25,23 +25,23 @@ describe("MessageItem", () => {
 		expect(screen.getByText("Hello AI")).toBeInTheDocument();
 	});
 
-	describe("work message", () => {
-		const workMessage = (
+	describe("system message", () => {
+		const systemMessage = (
 			overrides: Partial<Extract<Message, { role: "user" }>> = {},
 		): Message => ({
-			id: "wm-1",
+			id: "sm-1",
 			role: "user",
 			content: "## Current Step\nStep 1 of 3\n\nDo the thing",
 			status: "complete",
 			createdAt: new Date(),
-			source: "work",
+			source: "system",
 			subtype: "kickoff",
 			meta: { title: "My work" },
 			...overrides,
 		});
 
 		it("renders a collapsed banner with label and title summary", () => {
-			render(<MessageItem message={workMessage()} />);
+			render(<MessageItem message={systemMessage()} />);
 			expect(screen.getByText("Pockode · Kickoff")).toBeInTheDocument();
 			expect(screen.getByText("My work")).toBeInTheDocument();
 			// Prompt body hidden while collapsed
@@ -54,7 +54,7 @@ describe("MessageItem", () => {
 
 		it("expands to reveal the full prompt on click", async () => {
 			const user = userEvent.setup();
-			render(<MessageItem message={workMessage()} />);
+			render(<MessageItem message={systemMessage()} />);
 			await user.click(screen.getByRole("button"));
 			expect(screen.getByText(/Do the thing/)).toBeInTheDocument();
 			expect(screen.getByRole("button")).toHaveAttribute(
@@ -66,7 +66,7 @@ describe("MessageItem", () => {
 		it("includes step context in the label for step_advance", () => {
 			render(
 				<MessageItem
-					message={workMessage({
+					message={systemMessage({
 						subtype: "step_advance",
 						meta: { title: "My work", step: { current: 2, total: 3 } },
 					})}
@@ -80,14 +80,19 @@ describe("MessageItem", () => {
 		it("falls back to a generic label for unknown subtypes", () => {
 			render(
 				<MessageItem
-					message={workMessage({ subtype: "future_subtype", meta: undefined })}
+					message={systemMessage({
+						subtype: "future_subtype",
+						meta: undefined,
+					})}
 				/>,
 			);
-			expect(screen.getByText("Pockode · Work Message")).toBeInTheDocument();
+			expect(screen.getByText("Pockode · System Message")).toBeInTheDocument();
 		});
 
-		it("does not render a work message as a plain user bubble", () => {
-			render(<MessageItem message={workMessage({ content: "raw prompt" })} />);
+		it("does not render a system message as a plain user bubble", () => {
+			render(
+				<MessageItem message={systemMessage({ content: "raw prompt" })} />,
+			);
 			// The collapsed banner keeps the prompt hidden; a user bubble would show it.
 			expect(screen.queryByText("raw prompt")).not.toBeInTheDocument();
 		});

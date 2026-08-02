@@ -11,7 +11,7 @@ import (
 	"github.com/pockode/server/agent"
 )
 
-// mockSender records SendWorkMessage calls.
+// mockSender records SendSystemMessage calls.
 type mockSender struct {
 	messagesMu sync.Mutex
 	messages   []sentMessage
@@ -24,7 +24,7 @@ type sentMessage struct {
 	Meta      *agent.MessageMeta
 }
 
-func (m *mockSender) SendWorkMessage(_ context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error {
+func (m *mockSender) SendSystemMessage(_ context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error {
 	m.messagesMu.Lock()
 	defer m.messagesMu.Unlock()
 	m.messages = append(m.messages, sentMessage{SessionID: sessionID, Content: content, Subtype: subtype, Meta: meta})
@@ -1124,7 +1124,7 @@ type errSender struct {
 	err error
 }
 
-func (s *errSender) SendWorkMessage(_ context.Context, _, _, _ string, _ *agent.MessageMeta) error {
+func (s *errSender) SendSystemMessage(_ context.Context, _, _, _ string, _ *agent.MessageMeta) error {
 	return s.err
 }
 

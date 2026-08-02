@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Message subtypes identify which work-driven prompt produced a message.
+// Message subtypes identify which system-driven prompt produced a message.
 // The frontend maps these to display labels (Kickoff, Restart, ...).
 const (
 	MessageSubtypeKickoff      = "kickoff"
@@ -21,7 +21,7 @@ const (
 	MessageSubtypeChildDone    = "child_done"
 )
 
-// NewMessageMeta builds the collapsed-bar summary metadata for a work message.
+// NewMessageMeta builds the collapsed-bar summary metadata for a system message.
 // step is 1-indexed; pass total <= 0 to omit step info (e.g. stepless works).
 func NewMessageMeta(title string, step, total int) *agent.MessageMeta {
 	meta := &agent.MessageMeta{Title: title}

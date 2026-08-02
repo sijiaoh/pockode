@@ -1044,40 +1044,51 @@ describe("messageReducer", () => {
 			});
 		});
 
-		describe("work message", () => {
-			it("normalizes message event with work origin, subtype and meta", () => {
+		describe("system message", () => {
+			it("normalizes message event with system origin, subtype and meta", () => {
 				const event = normalizeEvent({
 					type: "message",
 					content: "kickoff prompt",
-					origin: "work",
+					origin: "system",
 					subtype: "kickoff",
 					meta: { title: "My work", step: { current: 1, total: 3 } },
 				});
 				expect(event).toEqual({
 					type: "message",
 					content: "kickoff prompt",
-					origin: "work",
+					origin: "system",
 					subtype: "kickoff",
 					meta: { title: "My work", step: { current: 1, total: 3 } },
 				});
 			});
 
-			it("tags user message with work source and meta", () => {
-				const messages = applyServerEvent([], {
+			it("normalizes legacy 'work' origin to 'system' (backward compat)", () => {
+				// Legacy wire data predating the rename, so it is an untyped record.
+				const event = normalizeEvent({
 					type: "message",
 					content: "kickoff prompt",
 					origin: "work",
+					subtype: "kickoff",
+				} as Record<string, unknown>);
+				expect(event).toMatchObject({ type: "message", origin: "system" });
+			});
+
+			it("tags user message with system source and meta", () => {
+				const messages = applyServerEvent([], {
+					type: "message",
+					content: "kickoff prompt",
+					origin: "system",
 					subtype: "kickoff",
 					meta: { title: "My work" },
 				});
 				const user = messages[0] as UserMessage;
 				expect(user.role).toBe("user");
-				expect(user.source).toBe("work");
+				expect(user.source).toBe("system");
 				expect(user.subtype).toBe("kickoff");
 				expect(user.meta).toEqual({ title: "My work" });
 			});
 
-			it("leaves plain user messages without a work source (backward compat)", () => {
+			it("leaves plain user messages without a system source (backward compat)", () => {
 				const messages = applyServerEvent([], {
 					type: "message",
 					content: "plain user message",

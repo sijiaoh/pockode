@@ -7,10 +7,19 @@ import type {
 	PermissionUpdate,
 	QuestionStatus,
 	ServerNotification,
+	SystemMessageMeta,
 	UserMessage,
-	WorkMessageMeta,
 } from "../types/message";
 import { generateUUID } from "../utils/uuid";
+
+// Legacy history recorded system messages with origin "work" before the
+// concept was renamed to "system". Map the old value so old sessions still
+// render as collapsed system messages.
+function normalizeOrigin(raw: unknown): MessageOrigin | undefined {
+	if (raw === "system" || raw === "work") return "system";
+	if (raw === "user") return "user";
+	return undefined;
+}
 
 // Normalized event with camelCase (internal representation)
 export type NormalizedEvent =
@@ -29,12 +38,12 @@ export type NormalizedEvent =
 	| { type: "process_ended" }
 	| { type: "system"; content: string }
 	| {
-			// User message or work-driven message (history replay or broadcast)
+			// User message or system-driven message (history replay or broadcast)
 			type: "message";
 			content: string;
 			origin?: MessageOrigin;
 			subtype?: string;
-			meta?: WorkMessageMeta;
+			meta?: SystemMessageMeta;
 	  }
 	| {
 			type: "permission_request";
@@ -110,9 +119,9 @@ export function normalizeEvent(
 			return {
 				type: "message",
 				content: (record.content as string) ?? "",
-				origin: record.origin as MessageOrigin | undefined,
+				origin: normalizeOrigin(record.origin),
 				subtype: record.subtype as string | undefined,
-				meta: record.meta as WorkMessageMeta | undefined,
+				meta: record.meta as SystemMessageMeta | undefined,
 			};
 		case "permission_request":
 			return {
@@ -256,7 +265,7 @@ export function applyServerEvent(
 	messages: Message[],
 	event: NormalizedEvent,
 ): Message[] {
-	// User message or work-driven message (history replay or broadcast)
+	// User message or system-driven message (history replay or broadcast)
 	if (event.type === "message") {
 		return applyUserMessage(messages, event.content, {
 			source: event.origin,
@@ -532,7 +541,7 @@ function updateToolResult(
 interface UserMessageOptions {
 	source?: MessageOrigin;
 	subtype?: string;
-	meta?: WorkMessageMeta;
+	meta?: SystemMessageMeta;
 }
 
 // Finalizes any streaming assistant before adding new user message
@@ -557,8 +566,8 @@ export function applyUserMessage(
 		content,
 		status: "complete",
 		createdAt: new Date(),
-		// Only tag work-driven messages; a plain user message stays source-less.
-		...(options?.source === "work"
+		// Only tag system-driven messages; a plain user message stays source-less.
+		...(options?.source === "system"
 			? { source: options.source, subtype: options.subtype, meta: options.meta }
 			: {}),
 	};

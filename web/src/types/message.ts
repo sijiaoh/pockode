@@ -53,20 +53,20 @@ export type ContentPart =
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
 
-// Origin of a message: user-typed vs. Pockode's work automation.
+// Origin of a message: user-typed vs. Pockode's own system automation.
 // Absent/"user" = a normal user message (backward compatible with old history).
-export type MessageOrigin = "user" | "work";
+export type MessageOrigin = "user" | "system";
 
-export interface WorkMessageStep {
+export interface SystemMessageStep {
 	current: number;
 	total: number;
 }
 
-// Summary data for a work-origin message, used to render the collapsed bar
+// Summary data for a system-origin message, used to render the collapsed bar
 // without parsing the prompt body.
-export interface WorkMessageMeta {
+export interface SystemMessageMeta {
 	title?: string;
-	step?: WorkMessageStep;
+	step?: SystemMessageStep;
 }
 
 export interface UserMessage {
@@ -75,10 +75,10 @@ export interface UserMessage {
 	content: string;
 	status: MessageStatus;
 	createdAt: Date;
-	// Present only for work-driven messages; absent means a user-typed message.
+	// Present only for system-driven messages; absent means a user-typed message.
 	source?: MessageOrigin;
 	subtype?: string;
-	meta?: WorkMessageMeta;
+	meta?: SystemMessageMeta;
 }
 
 export interface AssistantMessage {
@@ -300,7 +300,7 @@ export type ServerNotification =
 			content: string;
 			origin?: MessageOrigin;
 			subtype?: string;
-			meta?: WorkMessageMeta;
+			meta?: SystemMessageMeta;
 	  }
 	| {
 			type: "tool_call";

@@ -298,16 +298,19 @@ type MessageOrigin string
 
 const (
 	MessageOriginUser MessageOrigin = "user"
-	MessageOriginWork MessageOrigin = "work"
+	// MessageOriginSystem marks a message produced by Pockode itself rather
+	// than typed by the user. The work engine is the current producer; other
+	// system sources may emit these in the future.
+	MessageOriginSystem MessageOrigin = "system"
 )
 
-// StepInfo is the step context shown in a work message's collapsed summary.
+// StepInfo is the step context shown in a system message's collapsed summary.
 type StepInfo struct {
 	Current int `json:"current"`
 	Total   int `json:"total"`
 }
 
-// MessageMeta carries summary data for a work-origin message so the frontend
+// MessageMeta carries summary data for a system-origin message so the frontend
 // can render the collapsed bar without parsing the prompt body.
 type MessageMeta struct {
 	Title string    `json:"title,omitempty"`
@@ -318,8 +321,8 @@ type MessageMeta struct {
 // - History replay: reconstructing past messages
 // - Broadcast: notifying other clients when a message is sent
 //
-// Origin distinguishes user-typed messages (empty/"user") from work-driven
-// automatic messages ("work"); Subtype and Meta describe the latter.
+// Origin distinguishes user-typed messages (empty/"user") from system-driven
+// automatic messages ("system"); Subtype and Meta describe the latter.
 type MessageEvent struct {
 	Content string
 	Origin  MessageOrigin
