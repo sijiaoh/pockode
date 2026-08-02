@@ -87,7 +87,7 @@ export const worktreeActions = {
 };
 ```
 
-wsStore subscribes to these listeners to clean up subscriptions before worktree switch completes — React's async rendering would be too late.
+wsStore subscribes to these listeners to clean up worktree-scoped subscriptions before worktree switch completes — React's async rendering would be too late. App-level subscriptions (work list/detail, agent role list, settings, worktree list) are preserved across switches because the server keeps pushing to them.
 
 **Pattern C: Registry Subscription** — themeStore subscribes to themeRegistry changes:
 

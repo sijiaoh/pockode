@@ -147,13 +147,15 @@ let rpcRequester: JSONRPCRequester<void> | null = null;
 let currentToken: string | null = null;
 let reconnectAttempts = 0;
 let reconnectTimeout: number | undefined;
+// Worktree-scoped watch callbacks.
+// Their server-side watchers live on the worktree and are torn down when the
+// connection switches worktree, so these must be cleared on switch.
 const fsWatchCallbacks = new Map<string, () => void>();
 const gitWatchCallbacks = new Map<string, () => void>();
 const gitDiffWatchCallbacks = new Map<
 	string,
 	(params: GitDiffChangedNotification) => void
 >();
-const worktreeWatchCallbacks = new Map<string, () => void>();
 const sessionListWatchCallbacks = new Map<
 	string,
 	(params: SessionListChangedNotification) => void
@@ -163,6 +165,12 @@ const chatMessagesCallbacks = new Map<
 	string,
 	(notification: ServerNotification) => void
 >();
+
+// App-level (global) watch callbacks.
+// Their server-side watchers are Manager/app-level and span all worktrees; the
+// server keeps pushing to them across worktree switches, so these must survive
+// a switch and are only cleared when the connection itself goes away.
+const worktreeWatchCallbacks = new Map<string, () => void>();
 const settingsWatchCallbacks = new Map<
 	string,
 	(params: SettingsChangedNotification) => void
@@ -181,23 +189,36 @@ const agentRoleListWatchCallbacks = new Map<
 >();
 
 /**
- * Clear all local watch subscriptions.
- * Called when switching worktrees or disconnecting.
+ * Clear worktree-scoped watch subscriptions. Called when switching worktrees.
  *
- * NOTE: When adding new watcher types, add cleanup here.
- * This mirrors server-side Worktree.UnsubscribeConnection().
+ * App-level subscriptions (work list/detail, agent role list, settings,
+ * worktree list) are intentionally preserved: their server watchers are global
+ * and keep pushing across worktrees, so clearing them here would silently drop
+ * notifications for hooks that don't resubscribe on switch.
+ *
+ * NOTE: When adding a new worktree-scoped watcher type, add cleanup here.
+ * This mirrors server-side Worktree teardown on switch.
  */
-function clearWatchSubscriptions(): void {
+function clearWorktreeWatchSubscriptions(): void {
 	fsWatchCallbacks.clear();
 	gitWatchCallbacks.clear();
 	gitDiffWatchCallbacks.clear();
 	sessionListWatchCallbacks.clear();
 	chatMessagesCallbacks.clear();
+}
+
+/**
+ * Clear all watch subscriptions, including app-level ones.
+ * Called on disconnect, when the connection and all its server-side
+ * subscriptions are gone.
+ */
+function clearAllWatchSubscriptions(): void {
+	clearWorktreeWatchSubscriptions();
+	worktreeWatchCallbacks.clear();
+	settingsWatchCallbacks.clear();
 	workListWatchCallbacks.clear();
 	workDetailWatchCallbacks.clear();
 	agentRoleListWatchCallbacks.clear();
-	// Note: worktreeWatchCallbacks and settingsWatchCallbacks are NOT cleared here
-	// because they are Manager-level, not worktree-specific.
 }
 
 // Callback to clear worktree-dependent caches (set by queryClient)
@@ -456,7 +477,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 				ws = null;
 				rpcReceiver = null;
 				rpcRequester = null;
-				clearWatchSubscriptions();
+				clearAllWatchSubscriptions();
 
 				const currentStatus = get().status;
 				// Don't reconnect on auth failure or intentional disconnect
@@ -811,7 +832,7 @@ async function switchWorktreeRPC(name: string): Promise<SwitchResult> {
 		})) as { work_dir: string; worktree_name: string };
 
 		useWSStore.setState({ workDir: result.work_dir });
-		clearWatchSubscriptions();
+		clearWorktreeWatchSubscriptions();
 		onWorktreeSwitched?.();
 		worktreeActions.notifyWorktreeSwitchEnd();
 		return "success";

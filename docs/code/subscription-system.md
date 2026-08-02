@@ -226,6 +226,12 @@ const cleanupSwitchEnd = resubscribeOnWorktreeChange
 1. **onSwitchStart**: Immediately invalidate to prevent processing stale notifications
 2. **onSwitchEnd**: Re-subscribe to the new worktree
 
+### Why App-Level Subscriptions Survive Worktree Switches
+
+Not every subscription is worktree-scoped. Work list/detail, agent role list, settings, and the worktree list are backed by Manager-level watchers that keep pushing across worktree switches. Their hooks set `resubscribeOnWorktreeChange: false`, so they never re-subscribe on switch — and they don't need to.
+
+This is why wsStore separates its callback maps into two groups and, on switch, clears only the worktree-scoped ones (`clearWorktreeWatchSubscriptions`), reserving the full clear (`clearAllWatchSubscriptions`) for disconnect. Clearing app-level callbacks on switch would leave the server pushing to a connection whose local handlers are gone, silently dropping `work.list.changed` and similar notifications. Keeping the local teardown aligned with the server's watcher lifetime is what keeps the global work list live after a worktree switch.
+
 ## Buffer Size Tuning
 
 | Watcher | Buffer | Reasoning |

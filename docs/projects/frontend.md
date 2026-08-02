@@ -46,9 +46,14 @@ Incoming notifications are routed by method name in `handleNotification()`:
 - `work.detail.changed` → same pattern
 - `agent_role.list.changed` → same pattern
 
-On WebSocket close, `clearWatchSubscriptions()` clears all callback maps (including Work and AgentRole). When the connection is re-established, `useSubscription` detects the `connected` status change and resubscribes automatically.
+wsStore splits its watch callbacks into two groups, mirroring where the server keeps the matching watchers:
 
-Work and AgentRole subscriptions set `resubscribeOnWorktreeChange: false`. Their callback maps are cleared by `clearWatchSubscriptions()` on worktree switch, but since the server preserves these subscriptions across switches, the hooks resubscribe only on reconnect.
+- **Worktree-scoped** (file, git, git-diff, session list, chat messages) — the server tears down these watchers when the connection switches worktree.
+- **App-level / global** (work list, work detail, agent role list, settings, worktree list) — these watchers are Manager-level and keep pushing across worktree switches.
+
+On worktree switch, `switchWorktreeRPC()` calls `clearWorktreeWatchSubscriptions()`, which clears only the worktree-scoped maps. App-level callbacks are deliberately preserved: Work and AgentRole subscriptions set `resubscribeOnWorktreeChange: false` (they never resubscribe on switch), so clearing their callbacks would leave the server pushing `work.list.changed` and similar notifications into a connection with no local handler — silently dropping updates.
+
+On WebSocket close, `clearAllWatchSubscriptions()` clears every callback map (including app-level), since the connection and all its server-side subscriptions are gone. When the connection is re-established, `useSubscription` detects the `connected` status change and resubscribes automatically.
 
 ## Real-Time Sync
 
@@ -79,7 +84,7 @@ Both `useWorkSubscription` and `useAgentRoleSubscription` follow the same update
 
 ```
 ProjectTab
-  ├── "Stories"         → WorkListOverlay
+  ├── "Project"         → WorkListOverlay
   │                         └── (tap task) → WorkDetailOverlay
   │                                            └── (tap task) → WorkDetailOverlay
   │                                            └── "Open Chat" → Chat session

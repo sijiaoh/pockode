@@ -107,7 +107,8 @@ These watchers implement store listener interfaces and use async buffered channe
 1. Component calls `actions.fsSubscribe(path, callback)` → sends RPC, stores callback by subscription ID
 2. WebSocket `onmessage` routes notifications by method name → looks up callback by subscription ID → invokes it
 3. On unmount or unsubscribe: callback removed, unsubscribe RPC sent
-4. On disconnect: `clearWatchSubscriptions()` clears all callback maps; `useSubscription` hook resubscribes on reconnect
+4. On worktree switch: `clearWorktreeWatchSubscriptions()` clears only the worktree-scoped maps (fs, git, git-diff, session list, chat). App-level maps (work list/detail, agent role list, settings, worktree) are kept, mirroring the Manager-level watchers the server preserves across switches (see Worktree Integration below)
+5. On disconnect: `clearAllWatchSubscriptions()` clears all callback maps; `useSubscription` hook resubscribes on reconnect
 
 ## Worktree Integration
 
