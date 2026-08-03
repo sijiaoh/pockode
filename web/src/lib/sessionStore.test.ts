@@ -78,6 +78,27 @@ describe("useSessionStore", () => {
 		});
 	});
 
+	describe("beginReload", () => {
+		it("keeps sessions and isLoading but marks the list as reloading", () => {
+			useSessionStore.setState({
+				sessions: [mockSession("1")],
+				isLoading: false,
+				isSuccess: true,
+				isReloading: false,
+			});
+
+			useSessionStore.getState().beginReload();
+
+			const state = useSessionStore.getState();
+			// Data is retained (shown as placeholder) and no spinner (isLoading stays
+			// false), but isSuccess is cleared so redirect logic waits for new data.
+			expect(state.sessions.length).toBe(1);
+			expect(state.isLoading).toBe(false);
+			expect(state.isSuccess).toBe(false);
+			expect(state.isReloading).toBe(true);
+		});
+	});
+
 	describe("reset", () => {
 		it("resets to initial state", () => {
 			useSessionStore.setState({

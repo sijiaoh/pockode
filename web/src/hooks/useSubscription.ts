@@ -15,9 +15,18 @@ interface SubscriptionOptions<TInitial> {
 	 */
 	onSubscribed?: (initial: TInitial) => void;
 	/**
-	 * Called when subscription is reset: on disable, disconnect, or worktree change.
+	 * Called when the subscription is torn down for good: on disable, disconnect,
+	 * or a failed (re)subscribe. Clears data because it is no longer trustworthy.
 	 */
 	onReset?: () => void;
+	/**
+	 * Called at the start of a worktree switch instead of `onReset`.
+	 * A switch is a soft refresh: the previous data is kept on screen and swapped
+	 * out by `onSubscribed` once the new worktree's data arrives, avoiding a blank.
+	 * Use this to mark the data as "reloading" without clearing it.
+	 * If omitted, the data is simply retained during the switch.
+	 */
+	onWorktreeSwitch?: () => void;
 	/**
 	 * Called when subscription fails with an error.
 	 * If not provided, falls back to onReset.
@@ -55,6 +64,7 @@ export function useSubscription<TNotification = void, TInitial = void>(
 		resubscribeOnWorktreeChange = true,
 		onSubscribed,
 		onReset,
+		onWorktreeSwitch,
 		onError,
 	} = options;
 	const status = useWSStore((s) => s.status);
@@ -69,6 +79,9 @@ export function useSubscription<TNotification = void, TInitial = void>(
 
 	const onResetRef = useRef(onReset);
 	onResetRef.current = onReset;
+
+	const onWorktreeSwitchRef = useRef(onWorktreeSwitch);
+	onWorktreeSwitchRef.current = onWorktreeSwitch;
 
 	const onErrorRef = useRef(onError);
 	onErrorRef.current = onError;
@@ -139,8 +152,10 @@ export function useSubscription<TNotification = void, TInitial = void>(
 
 		const cleanupSwitchStart = resubscribeOnWorktreeChange
 			? worktreeActions.onWorktreeSwitchStart(() => {
+					// Soft refresh: drop the old subscription but keep data on screen.
+					// onSubscribed replaces it once the new worktree's data arrives.
 					invalidate();
-					onResetRef.current?.();
+					onWorktreeSwitchRef.current?.();
 				})
 			: undefined;
 

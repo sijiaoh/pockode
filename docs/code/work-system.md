@@ -451,7 +451,7 @@ value — `/w/<worktree>/s/<sessionId>` (or `/s/<sessionId>` for the main
 worktree) — never from the current URL's worktree. Opening the work therefore
 switches into its worktree, which rebinds the WebSocket and resubscribes the
 worktree-scoped watchers (see
-[subscription-system.md](subscription-system.md#why-worktree-switch-handlers)).
+[subscription-system.md](subscription-system.md#why-worktree-switch-is-a-soft-refresh-not-a-reset)).
 
 `AppShell` deliberately does **not** redirect to home when the URL's worktree
 changes: a cross-worktree session URL is legitimate and must open.

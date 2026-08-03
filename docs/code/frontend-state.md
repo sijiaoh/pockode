@@ -64,7 +64,13 @@ The alternative (each store managing its own connection) would lead to duplicate
 **Pattern A: State/Actions Interface Split** — Most domain stores use this pattern for type safety:
 
 ```typescript
-interface SessionState { sessions: SessionListItem[]; isLoading: boolean; }
+interface SessionState {
+  sessions: SessionListItem[];
+  isLoading: boolean;
+  // Set during a worktree switch: sessions are retained but marked stale so the
+  // UI shows them as a placeholder while the new worktree's list loads.
+  isReloading: boolean;
+}
 interface SessionActions { setSessions(s: SessionListItem[]): void; }
 export type SessionStore = SessionState & SessionActions;
 ```
@@ -285,7 +291,7 @@ export function useSubscription<TNotification, TInitial>(
 Key features:
 
 1. **Generation counter** — prevents race conditions when multiple subscribes overlap
-2. **Worktree switch handling** — server resets worktree-scoped subscriptions on switch, hook resubscribes automatically
+2. **Worktree switch handling** — the server invalidates worktree-scoped subscriptions on switch, so the hook resubscribes. Rather than clearing data (`onReset`), a switch is a soft refresh: previous data stays on screen and is swapped out by `onSubscribed` when the new worktree's snapshot arrives (see [subscription-system.md](subscription-system.md#why-worktree-switch-is-a-soft-refresh-not-a-reset))
 3. **Connection state** — triggers reset on disconnect, resubscribes on reconnect
 
 ## Key Files

@@ -157,4 +157,42 @@ describe("AppShell cross-worktree navigation", () => {
 		});
 		expect(router.state.location.pathname).toBe("/w/B/s/x");
 	});
+
+	it("keeps the previous session shell mounted during a worktree switch", async () => {
+		const router = renderAppShell("/w/A/s/a1");
+
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1");
+		});
+
+		// Delay the new worktree's session list so the switch stays mid-flight and
+		// we can observe what the shell renders during the transition.
+		let releaseSubscribe: () => void = () => {};
+		mockSubscribe.mockImplementationOnce(async (_cb) => {
+			await new Promise<void>((resolve) => {
+				releaseSubscribe = resolve;
+			});
+			const wt = worktreeActions.getCurrent();
+			return { id: `watch-${wt}`, initial: worktreeSessions[wt] ?? [] };
+		});
+
+		await router.navigate({
+			to: "/w/$worktree/s/$sessionId",
+			params: { worktree: "B", sessionId: "x" },
+		});
+
+		// Mid-switch: no full-screen "Loading..." blank — the previous session (a1)
+		// stays on screen as a placeholder until B's list resolves.
+		await waitFor(() => {
+			expect(useWorktreeStore.getState().current).toBe("B");
+		});
+		expect(screen.queryByLabelText("Loading")).not.toBeInTheDocument();
+		expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1");
+
+		releaseSubscribe();
+
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("x");
+		});
+	});
 });

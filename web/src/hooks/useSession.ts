@@ -18,6 +18,7 @@ export function useSession({
 	const sessions = useSessionStore((s) => s.sessions);
 	const isLoading = useSessionStore((s) => s.isLoading);
 	const isSuccess = useSessionStore((s) => s.isSuccess);
+	const isReloading = useSessionStore((s) => s.isReloading);
 	const showTaskSessions = useSessionStore((s) => s.showTaskSessions);
 	const updateSessions = useSessionStore((s) => s.updateSessions);
 	const works = useWorkStore((s) => s.works);
@@ -76,6 +77,7 @@ export function useSession({
 		currentSession,
 		isLoading,
 		isSuccess,
+		isReloading,
 		redirectSessionId,
 		needsNewSession,
 		refresh,

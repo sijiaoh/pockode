@@ -113,12 +113,36 @@ function AppShell() {
 		filteredSessions,
 		currentSessionId,
 		currentSession,
+		isReloading,
 		redirectSessionId,
 		needsNewSession,
 		createSession,
 		deleteSession,
 		updateTitle,
 	} = useSession({ enabled: hasAuthToken, routeSessionId });
+
+	// Keep the last resolved session shell so a worktree switch (or the redirect
+	// to another session that follows it) can reuse it as a placeholder instead
+	// of dropping to a full-screen "Loading..." blank.
+	const lastRenderedSession = useRef<{
+		id: string;
+		session: (typeof filteredSessions)[number];
+	} | null>(null);
+	if (currentSessionId && currentSession) {
+		lastRenderedSession.current = {
+			id: currentSessionId,
+			session: currentSession,
+		};
+	}
+
+	// A switch resolves through several transient renders (worktree store sync →
+	// session list reload → redirect/create). Treat all of them as "in transition"
+	// so the shell stays mounted until the new session lands.
+	const inTransition =
+		isReloading ||
+		worktreeSwitchInFlight ||
+		redirectSessionId !== null ||
+		needsNewSession;
 
 	useEffect(() => {
 		if (worktreeSwitchInFlight) return;
@@ -349,7 +373,16 @@ function AppShell() {
 		return <TokenInput onSubmit={handleTokenSubmit} />;
 	}
 
-	if (!currentSessionId || !currentSession) {
+	// While a session is resolving (initial load or a worktree switch), reuse the
+	// previously rendered session as a placeholder so the shell doesn't blank.
+	const displaySession =
+		currentSessionId && currentSession
+			? { id: currentSessionId, session: currentSession }
+			: inTransition && wsStatus === "connected"
+				? lastRenderedSession.current
+				: null;
+
+	if (!displaySession) {
 		if (wsStatus === "error") {
 			return (
 				<div
@@ -396,7 +429,7 @@ function AppShell() {
 				<SessionSidebar
 					isOpen={sidebarOpen}
 					onClose={() => setSidebarOpen(false)}
-					currentSessionId={currentSessionId}
+					currentSessionId={displaySession.id}
 					onSelectSession={handleSelectSession}
 					onCreateSession={handleCreateSession}
 					onDeleteSession={handleDeleteSession}
@@ -411,9 +444,9 @@ function AppShell() {
 					isDesktop={isDesktop}
 				/>
 				<ChatPanel
-					sessionId={currentSessionId}
-					sessionTitle={currentSession.title}
-					onUpdateTitle={(title) => updateTitle(currentSessionId, title)}
+					sessionId={displaySession.id}
+					sessionTitle={displaySession.session.title}
+					onUpdateTitle={(title) => updateTitle(displaySession.id, title)}
 					onOpenSidebar={handleOpenSidebar}
 					onOpenSettings={handleOpenSettings}
 					overlay={overlay}

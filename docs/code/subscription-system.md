@@ -205,14 +205,16 @@ const doSubscribe = useCallback(async () => {
 
 The generation counter ensures only the latest subscription attempt succeeds. Stale subscriptions are immediately cleaned up.
 
-### Why Worktree Switch Handlers?
+### Why Worktree Switch Is a Soft Refresh, Not a Reset
 
 ```typescript
-// web/src/hooks/useSubscription.ts:133-142
+// web/src/hooks/useSubscription.ts:153-164
 const cleanupSwitchStart = resubscribeOnWorktreeChange
     ? worktreeActions.onWorktreeSwitchStart(() => {
+        // Soft refresh: drop the old subscription but keep data on screen.
+        // onSubscribed replaces it once the new worktree's data arrives.
         invalidate();
-        onResetRef.current?.();
+        onWorktreeSwitchRef.current?.();
     })
     : undefined;
 
@@ -221,10 +223,29 @@ const cleanupSwitchEnd = resubscribeOnWorktreeChange
     : undefined;
 ```
 
-**Rationale:** Server-side worktree-scoped subscriptions (file, git, session) are invalidated when the client switches worktrees. The hook listens to worktree events to:
+**Rationale:** Server-side worktree-scoped subscriptions (file, git, session) are invalidated when the client switches worktrees, so the hook must resubscribe. The naive teardown — `invalidate()` + `onReset` on switch start, resubscribe on switch end — made the switch feel heavy: clearing worktree-scoped data mid-switch dropped every affected view to a loading state until the new worktree's snapshot arrived.
 
-1. **onSwitchStart**: Immediately invalidate to prevent processing stale notifications
-2. **onSwitchEnd**: Re-subscribe to the new worktree
+The most damaging case was the session list. Clearing it made `currentSession` disappear, which sent the whole `AppShell` into its full-screen "Loading..." branch — so every switch flashed the app blank and re-rendered from scratch.
+
+So switch start no longer calls `onReset`. Instead:
+
+1. **onSwitchStart**: `invalidate()` cancels the stale subscription (bumps the generation counter so late notifications are ignored) but leaves the previous data on screen. The optional `onWorktreeSwitch` callback lets a consumer mark that data as "reloading" without clearing it.
+2. **onSwitchEnd**: `doSubscribe()` resubscribes; `onSubscribed` swaps in the new worktree's snapshot when it arrives.
+
+`onReset` is now reserved for teardown where the data is genuinely untrustworthy — disable, disconnect, or a failed (re)subscribe. Consumers that don't pass `onWorktreeSwitch` (git, git-diff, fs) simply keep their previous data until the new snapshot replaces it, turning the switch into a seamless refresh. This is a `keepPreviousData`-style trade-off: the placeholder briefly shows the old worktree's data, but it is data already on the client — no cross-worktree request is issued during the transition, so the security boundary (server-side `worktree.switch` validation) is untouched.
+
+### Why the Session List Keeps a Placeholder During a Switch
+
+The session list decides which chat `AppShell` renders, so "keep old data" is not enough on its own: the redirect / new-session recovery logic must also be prevented from acting on the stale list (which would hijack the URL toward a session that belongs to the old worktree). `useSessionSubscription` passes `onWorktreeSwitch: beginReload`:
+
+```typescript
+// web/src/lib/sessionStore.ts:49
+beginReload: () => set({ isSuccess: false, isReloading: true }),
+```
+
+`beginReload` keeps `sessions` and — deliberately — leaves `isLoading` false, so the sidebar keeps rendering the retained list instead of flashing a spinner. It only clears `isSuccess` (so redirect / new-session recovery waits for the new worktree's list) and raises `isReloading`.
+
+`AppShell` treats `isReloading` — together with `worktreeSwitchInFlight`, a pending `redirectSessionId`, or `needsNewSession` — as an "in transition" state and reuses the last resolved session as a placeholder (`displaySession`) instead of dropping to the loading blank. The same placeholder path smooths other transient renders, such as jumping to the next session after deleting the current one.
 
 ### Why App-Level Subscriptions Survive Worktree Switches
 

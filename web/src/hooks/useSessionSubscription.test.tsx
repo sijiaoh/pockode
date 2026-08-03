@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionStore } from "../lib/sessionStore";
+import { resetWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import type {
 	SessionListChangedNotification,
 	SessionListItem,
@@ -51,10 +52,12 @@ describe("useSessionSubscription", () => {
 		notificationCallback = null;
 		mockSessions = [];
 		mockStatus = "connected";
+		resetWorktreeStore();
 		useSessionStore.setState({
 			sessions: [],
 			isLoading: true,
 			isSuccess: false,
+			isReloading: false,
 		});
 	});
 
@@ -204,6 +207,41 @@ describe("useSessionSubscription", () => {
 			});
 
 			expect(useSessionStore.getState().sessions[0].state).toBe("running");
+		});
+	});
+
+	describe("worktree switch", () => {
+		it("keeps previous sessions during switch and swaps in the new list", async () => {
+			mockSessions = [mockSessionItem("old")];
+
+			renderHook(() => useSessionSubscription(true));
+
+			await waitFor(() => {
+				expect(useSessionStore.getState().sessions).toHaveLength(1);
+			});
+			expect(useSessionStore.getState().isSuccess).toBe(true);
+
+			// Switch start: sessions stay on screen, but the list is marked reloading
+			// so redirect/new-session logic waits for the new worktree's data.
+			mockSessions = [mockSessionItem("new")];
+			act(() => {
+				worktreeActions.setCurrent("feature");
+			});
+
+			expect(useSessionStore.getState().sessions[0].id).toBe("old");
+			expect(useSessionStore.getState().isReloading).toBe(true);
+			expect(useSessionStore.getState().isSuccess).toBe(false);
+
+			// Switch end: the new worktree's list swaps in.
+			await act(async () => {
+				worktreeActions.notifyWorktreeSwitchEnd();
+			});
+
+			await waitFor(() => {
+				expect(useSessionStore.getState().sessions[0].id).toBe("new");
+			});
+			expect(useSessionStore.getState().isReloading).toBe(false);
+			expect(useSessionStore.getState().isSuccess).toBe(true);
 		});
 	});
 
