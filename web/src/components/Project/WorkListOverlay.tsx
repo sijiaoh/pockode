@@ -13,6 +13,7 @@ import type { Work, WorkStatus } from "../../types/work";
 import BackToChatButton from "../ui/BackToChatButton";
 import { statusLabels } from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
+import { WorktreeBadge } from "../Worktree";
 import CreateWorkForm from "./CreateWorkForm";
 
 interface Props {
@@ -266,7 +267,11 @@ function StoryRow({
 
 			{/* Meta info row — always visible */}
 			<div className="flex items-center gap-2 px-3 pb-1 pl-[4.375rem] text-xs text-th-text-muted">
-				<span>{roleName ?? "—"}</span>
+				<WorktreeBadge
+					worktree={story.worktree}
+					className="max-w-[8rem] shrink"
+				/>
+				<span className="min-w-0 shrink truncate">{roleName ?? "—"}</span>
 				{totalTasks > 0 && (
 					<>
 						<span aria-hidden="true">&middot;</span>

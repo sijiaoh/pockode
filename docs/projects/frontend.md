@@ -104,7 +104,7 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 2. Stories are grouped by status in this order: **in_progress → waiting → needs_input → stopped → open → closed**
 3. Each group is a collapsible section (`StatusGroup`); `closed` group is collapsed by default
 4. Each group header shows: collapse toggle, status icon, status label, count badge
-5. Each story row shows: status icon, title, task progress (`closedTasks/totalTasks tasks`)
+5. Each story row shows: status icon, title, task progress (`closedTasks/totalTasks tasks`), and a `WorktreeBadge` marking which worktree the story (and its whole subtree) runs in — the list is global across worktrees, so the badge is what tells rows apart. Tasks inherit their story's worktree, so only story rows carry the badge.
 6. A "New Story" button at the top opens an inline creation form (title + role selector)
 
 **Task progress:** Tasks are indexed by `parent_id` into a `Map<string, Work[]>`. For each story, closed count is tasks with status `closed`.
@@ -115,7 +115,7 @@ Shows the detail view for a single work item (story or task). Sections:
 
 - **Parent link** — If the item is a task, shows a tappable link to the parent story
 - **Title** — Inline-editable (tap pencil icon to enter edit mode)
-- **Status** — Read-only badge
+- **Status** — Read-only badge, with a read-only `WorktreeBadge` alongside it (shown for both stories and tasks, since a task detail can be opened directly)
 - **Role** — Inline-editable select (tap to switch role)
 - **Description** — Inline-editable textarea with Markdown rendering
 - **Steps** — Step progress indicator showing current step position (if agent role has steps defined)

@@ -17,6 +17,10 @@ vi.mock("./CreateWorkForm", () => ({
 	default: () => <div data-testid="create-work-form" />,
 }));
 
+vi.mock("../Worktree", () => ({
+	WorktreeBadge: () => null,
+}));
+
 const createWork = (overrides: Partial<Work>): Work => ({
 	id: "work-1",
 	type: "story",

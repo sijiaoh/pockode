@@ -428,6 +428,19 @@ export function collectWorkSessionIds(works: Work[]): Set<string> {
 
 The frontend subscribes to work changes via WebSocket and updates the Zustand store. Session IDs are collected to route chat messages to the correct work context.
 
+### Displaying a Work's Worktree
+
+The work list is **global — it spans every worktree** (its subscription sets `resubscribeOnWorktreeChange: false` and survives switches, see [subscription-system.md](subscription-system.md#why-app-level-subscriptions-survive-worktree-switches)). So a single list mixes works from different worktrees, and the user cannot tell where each one runs without a per-work label. Both the list and the detail page therefore surface the work's `Worktree` (below) via a shared `WorktreeBadge` component and a `useWorktreeDisplay` hook.
+
+Design decisions specific to this display:
+
+- **Read-only, never editable.** The worktree binding is frozen once a work starts (see *Worktree Binding*), so the badge is pure display — unlike the editable role, it has no edit affordance.
+- **List page shows the badge on story rows only.** A story subtree shares one worktree (the same invariant that lets `SetWorktree` propagate to descendants), so a task's worktree always equals its story's. Labeling only the story row avoids repeating the same badge on every task and the prop-threading that would require.
+- **Detail page shows it on both stories and tasks**, because a task detail can be opened directly, without its story on screen.
+- **Feature name comes straight from the stored `Worktree` string**, so a work still shows its original worktree name even after that worktree is deleted — no lookup against the live worktree list is needed.
+- **Empty `Worktree` (main) resolves to the main branch name**, matching `WorktreeSwitcher`, and falls back to a neutral `Default` until the worktree list loads (never a guessed `main`/`master` literal). Only this main path reads the worktree list, and it reuses the existing `["worktrees"]` react-query cache read-only rather than opening a new subscription. On non-git projects the main badge renders nothing, since there is no worktree concept to show.
+- **Visual hierarchy encodes the exception.** A feature worktree is accented (it is the noteworthy case); the main worktree is muted, matching that it is the silent default.
+
 ## Multi-Step Execution
 
 Agent roles can define a `steps` array to break task execution into sequential phases. This is useful for complex workflows like:
