@@ -117,7 +117,7 @@ Shows the detail view for a single work item (story or task). Sections:
 
 - **Parent link** — If the item is a task, shows a tappable link to the parent story
 - **Title** — Inline-editable (tap pencil icon to enter edit mode)
-- **Status** — Read-only badge, with a read-only `WorktreeBadge` alongside it (shown for both stories and tasks, since a task detail can be opened directly)
+- **Status** — Read-only badge, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly)
 - **Role** — Inline-editable select (tap to switch role)
 - **Description** — Inline-editable textarea with Markdown rendering
 - **Steps** — Step progress indicator showing current step position (if agent role has steps defined)

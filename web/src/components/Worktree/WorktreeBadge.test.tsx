@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { worktreeActions } from "../../lib/worktreeStore";
 import type { WorktreeInfo } from "../../types/message";
@@ -13,6 +13,24 @@ vi.mock("../../lib/wsStore", () => ({
 	wsActions: {
 		listWorktrees: () => Promise.resolve(mockWorktrees),
 	},
+}));
+
+// TanStack's `<Link>` needs a router context; render a plain anchor that
+// surfaces its navigation target so tests can assert where the badge points.
+vi.mock("@tanstack/react-router", () => ({
+	Link: ({
+		to,
+		params,
+		children,
+		...rest
+	}: AnchorHTMLAttributes<HTMLAnchorElement> & {
+		to: string;
+		params?: Record<string, string>;
+	}) => (
+		<a href={to} data-params={JSON.stringify(params ?? null)} {...rest}>
+			{children}
+		</a>
+	),
 }));
 
 function renderBadge(worktree: string | undefined) {
@@ -31,28 +49,33 @@ afterEach(() => {
 });
 
 describe("WorktreeBadge", () => {
-	it("shows the stored name for a feature worktree", () => {
+	it("links a feature worktree to its root", () => {
 		renderBadge("feat-login");
-		expect(screen.getByLabelText("Worktree: feat-login")).toHaveTextContent(
-			"feat-login",
+		const link = screen.getByRole("link", { name: "Open worktree feat-login" });
+		expect(link).toHaveTextContent("feat-login");
+		expect(link).toHaveAttribute("href", "/w/$worktree/");
+		expect(link).toHaveAttribute(
+			"data-params",
+			JSON.stringify({ worktree: "feat-login" }),
 		);
 	});
 
-	it("shows the main branch name for the default worktree", async () => {
+	it("links the default worktree to the index route", async () => {
 		mockWorktrees = [
 			{ name: "", path: "/repo", branch: "main", is_main: true },
 		];
 		renderBadge("");
-		const badge = await screen.findByLabelText(
-			"Runs on default (main) worktree",
-		);
-		await waitFor(() => expect(badge).toHaveTextContent("main"));
+		const link = await screen.findByRole("link", {
+			name: "Open main worktree",
+		});
+		await waitFor(() => expect(link).toHaveTextContent("main"));
+		expect(link).toHaveAttribute("href", "/");
 	});
 
 	it("falls back to a neutral label before the list loads", () => {
 		renderBadge("");
 		expect(
-			screen.getByLabelText("Runs on default (main) worktree"),
+			screen.getByRole("link", { name: "Open main worktree" }),
 		).toHaveTextContent("Default");
 	});
 
