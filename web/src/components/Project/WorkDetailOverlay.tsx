@@ -36,7 +36,7 @@ import { StartButton } from "./WorkListOverlay";
 interface Props {
 	workId: string;
 	onBack: () => void;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 	onOpenWorkDetail: (workId: string) => void;
 }
 
@@ -182,7 +182,7 @@ function ActionBar({
 }: {
 	work: Work;
 	childCount: number;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 	onBack: () => void;
 }) {
 	const startWork = useWSStore((s) => s.actions.startWork);
@@ -323,7 +323,9 @@ function ActionBar({
 					{showChat && (
 						<button
 							type="button"
-							onClick={() => onNavigateToSession(work.session_id ?? "")}
+							onClick={() =>
+								onNavigateToSession(work.session_id ?? "", work.worktree ?? "")
+							}
 							className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg border border-th-border text-sm font-medium text-th-text-primary hover:bg-th-bg-tertiary"
 						>
 							<MessageSquare className="size-4" />
@@ -640,7 +642,7 @@ function ChildrenSection({
 	tasks: Work[];
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }) {
 	const closedTasks = tasks.filter((t) => t.status === "closed").length;
 
@@ -685,7 +687,7 @@ function ChildRow({
 	work: Work;
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }) {
 	const roleName = work.agent_role_id
 		? (roleNameMap.get(work.agent_role_id) ?? null)
@@ -711,7 +713,9 @@ function ChildRow({
 			{work.session_id && (
 				<button
 					type="button"
-					onClick={() => onNavigateToSession(work.session_id ?? "")}
+					onClick={() =>
+						onNavigateToSession(work.session_id ?? "", work.worktree ?? "")
+					}
 					className="flex min-h-[44px] shrink-0 items-center rounded-lg px-2 text-xs text-th-accent hover:bg-th-bg-tertiary"
 				>
 					Chat

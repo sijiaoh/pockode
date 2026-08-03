@@ -70,7 +70,7 @@ interface Props {
 	onOpenSettings?: () => void;
 	overlay?: OverlayState;
 	onCloseOverlay?: () => void;
-	onNavigateToSession?: (sessionId: string) => void;
+	onNavigateToSession?: (sessionId: string, worktree: string) => void;
 	onOpenWorkDetail?: (workId: string) => void;
 	onOpenWorkList?: () => void;
 	onOpenAgentRoleList?: () => void;

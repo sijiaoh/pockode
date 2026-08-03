@@ -94,6 +94,8 @@ ProjectTab
 
 `ProjectTab` is the sidebar entry point. It renders two buttons that open their respective overlay screens via callbacks (`onOpenWorkList`, `onOpenAgentRoleList`).
 
+Opening a work's chat (the `Chat` / `Open Chat` shortcuts) navigates to the session URL of **the work's own worktree** (`/w/<worktree>/s/<sessionId>`), not the currently active one — the list is global across worktrees, so a shortcut may switch worktrees. See [work-system.md](../code/work-system.md#cross-worktree-chat-navigation) for the rationale.
+
 ### WorkListOverlay
 
 Activates both `useWorkSubscription` and `useAgentRoleSubscription`.

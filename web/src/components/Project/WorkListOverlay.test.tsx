@@ -83,6 +83,41 @@ describe("WorkListOverlay", () => {
 		).not.toBeInTheDocument();
 	});
 
+	it("navigates to a story's chat using the story's own worktree", async () => {
+		const user = userEvent.setup();
+		const onNavigateToSession = vi.fn();
+
+		useWorkStore.setState({
+			works: [
+				createWork({
+					id: "story-other-worktree",
+					type: "story",
+					title: "Story In Feature Worktree",
+					status: "in_progress",
+					worktree: "feature-x",
+					session_id: "session-abc",
+				}),
+			],
+			isLoading: false,
+			error: null,
+		});
+
+		render(
+			<WorkListOverlay
+				onBack={vi.fn()}
+				onOpenWorkDetail={vi.fn()}
+				onNavigateToSession={onNavigateToSession}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Chat" }));
+
+		expect(onNavigateToSession).toHaveBeenCalledWith(
+			"session-abc",
+			"feature-x",
+		);
+	});
+
 	it("sorts closed stories by updated_at in descending order", async () => {
 		const user = userEvent.setup();
 

@@ -165,7 +165,7 @@ const wtAgentRoleDetailRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
-const routeTree = rootRoute.addChildren([
+export const routeTree = rootRoute.addChildren([
 	indexRoute,
 	sessionRoute,
 	stagedDiffRoute,

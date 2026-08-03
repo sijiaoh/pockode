@@ -441,6 +441,43 @@ Design decisions specific to this display:
 - **Empty `Worktree` (main) resolves to the main branch name**, matching `WorktreeSwitcher`, and falls back to a neutral `Default` until the worktree list loads (never a guessed `main`/`master` literal). Only this main path reads the worktree list, and it reuses the existing `["worktrees"]` react-query cache read-only rather than opening a new subscription. On non-git projects the main badge renders nothing, since there is no worktree concept to show.
 - **Visual hierarchy encodes the exception.** A feature worktree is accented (it is the noteworthy case); the main worktree is muted, matching that it is the silent default.
 
+### Cross-Worktree Chat Navigation
+
+Because the work list is global (above), a work's **Chat** shortcut can point at a
+session that lives in a *different* worktree than the one currently active.
+Sessions are worktree-scoped, so `onNavigateToSession` carries the work's own
+`Worktree` alongside the session id, and `AppShell` builds the URL from that
+value — `/w/<worktree>/s/<sessionId>` (or `/s/<sessionId>` for the main
+worktree) — never from the current URL's worktree. Opening the work therefore
+switches into its worktree, which rebinds the WebSocket and resubscribes the
+worktree-scoped watchers (see
+[subscription-system.md](subscription-system.md#why-worktree-switch-handlers)).
+
+`AppShell` deliberately does **not** redirect to home when the URL's worktree
+changes: a cross-worktree session URL is legitimate and must open.
+
+The subtle part is `useSession`'s recovery effects (`redirectSessionId` /
+`needsNewSession`). They are *not* a safe fallback during the switch itself.
+A worktree switch happens across renders: the URL's worktree updates first, but
+the store worktree and the session-list subscription only catch up afterward
+(the sync effect runs after the render, and the session list resubscribes only
+once the switch lands). In that in-flight window the session store still holds
+the *previous* worktree's list, so `redirectSessionId` / `needsNewSession` are
+computed against stale data — and the target session (which lives in the new
+worktree) looks absent. Left unguarded, the redirect effect would then
+`navigate(replace)` the URL to some *old*-worktree session, hijacking the URL
+away from the target before the new worktree's list ever loads.
+
+Both recovery effects are therefore gated on a worktree-transition guard —
+`worktreeSwitchInFlight = urlWorktree !== storeWorktree` — and skip while a
+switch is in flight. Recovery only runs once `urlWorktree === storeWorktree`,
+i.e. after the store caught up and the new worktree's session list is
+subscribed and loaded; by then the target session resolves and no redirect
+fires, so the cross-worktree jump lands stably on its intended session. (The
+`ChatPanel` mounts only once `currentSession` resolves, which prevents
+*attaching* to a stale session, but that alone does not stop the redirect
+effect from rewriting the URL — the guard is what closes that gap.)
+
 ## Multi-Step Execution
 
 Agent roles can define a `steps` array to break task execution into sequential phases. This is useful for complex workflows like:

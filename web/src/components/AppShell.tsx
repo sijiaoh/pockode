@@ -36,26 +36,31 @@ function AppShell() {
 
 	const token = useAuthStore((state) => state.token);
 
-	// Sync URL worktree to store, redirect if sessionId becomes invalid
-	const prevWorktreeRef = useRef(urlWorktree);
+	// Sync URL worktree to store (URL is source of truth). This drives the
+	// WebSocket rebind and session-list resubscribe via worktree switch listeners.
+	//
+	// We intentionally do NOT redirect to home on worktree change: a work's chat
+	// links to that work's own worktree, so cross-worktree session URLs are valid
+	// and must open. A genuinely stale session id (not in the new worktree) is
+	// still recovered by useSession (redirectSessionId / needsNewSession), guarded
+	// by worktreeSwitchInFlight so recovery only runs against the new worktree's
+	// session list (see below).
 	useEffect(() => {
-		const prevWorktree = prevWorktreeRef.current;
-		prevWorktreeRef.current = urlWorktree;
-
 		if (urlWorktree !== storeWorktree) {
 			worktreeActions.setCurrent(urlWorktree);
 		}
+	}, [urlWorktree, storeWorktree]);
 
-		// Redirect to home when worktree changes (sessionId is worktree-specific)
-		if (prevWorktree !== urlWorktree && routeSessionId) {
-			navigate(
-				buildNavigation(
-					{ type: "home", worktree: urlWorktree },
-					{ replace: true },
-				),
-			);
-		}
-	}, [urlWorktree, storeWorktree, routeSessionId, navigate]);
+	// A worktree switch is in flight when the URL already points at the new
+	// worktree but the store hasn't caught up (the effect above runs after this
+	// render, and the session list only resubscribes when the switch completes).
+	// During this transition the session store still holds the previous worktree's
+	// list, so redirectSessionId / needsNewSession are computed against stale data.
+	// Running the recovery effects here would hijack the URL away from the target
+	// session (e.g. a cross-worktree chat link). Skip recovery until the switch
+	// lands; once the new worktree's list is ready and the target session resolves,
+	// no redirect is needed.
+	const worktreeSwitchInFlight = urlWorktree !== storeWorktree;
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally exclude wsStatus to avoid bypassing retry delay
 	useEffect(() => {
@@ -116,6 +121,7 @@ function AppShell() {
 	} = useSession({ enabled: hasAuthToken, routeSessionId });
 
 	useEffect(() => {
+		if (worktreeSwitchInFlight) return;
 		if (redirectSessionId) {
 			// When overlay is active, preserve it and only update session query param
 			const navResult = overlay
@@ -127,9 +133,16 @@ function AppShell() {
 					});
 			navigate({ ...navResult, replace: true });
 		}
-	}, [redirectSessionId, navigate, urlWorktree, overlay]);
+	}, [
+		worktreeSwitchInFlight,
+		redirectSessionId,
+		navigate,
+		urlWorktree,
+		overlay,
+	]);
 
 	useEffect(() => {
+		if (worktreeSwitchInFlight) return;
 		if (needsNewSession && !isCreatingSession.current) {
 			isCreatingSession.current = true;
 			createSession()
@@ -149,7 +162,13 @@ function AppShell() {
 					isCreatingSession.current = false;
 				});
 		}
-	}, [needsNewSession, createSession, navigate, urlWorktree]);
+	}, [
+		worktreeSwitchInFlight,
+		needsNewSession,
+		createSession,
+		navigate,
+		urlWorktree,
+	]);
 
 	const handleTokenSubmit = (token: string) => {
 		authActions.login(token);
@@ -312,16 +331,18 @@ function AppShell() {
 	);
 
 	const handleNavigateToSession = useCallback(
-		(sessionId: string) => {
+		// Use the work's own worktree, not the current URL worktree: sessions are
+		// worktree-scoped, so opening a work in another worktree must switch to it.
+		(sessionId: string, worktree: string) => {
 			navigate(
 				buildNavigation({
 					type: "session",
-					worktree: urlWorktree,
+					worktree,
 					sessionId,
 				}),
 			);
 		},
-		[navigate, urlWorktree],
+		[navigate],
 	);
 
 	if (!hasAuthToken) {
