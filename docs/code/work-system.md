@@ -235,6 +235,13 @@ MCP stdio proxy (Server)
 Main server: APIHandler → Executor → work.Store / WorkStarter
 ```
 
+The `<dir>` passed to the proxy is always the **main** data dir, because that is
+the only place `server.json` is written — there is one server per process, even
+when a work runs in a named worktree. A worktree has its own data dir for session
+state, but pointing the proxy there would find no `server.json` and leave the
+agent unable to reach the `work_*` tools (see `StartOptions.MCPServerDir` in
+[agent-integration.md](agent-integration.md)).
+
 **Why client mode** (rather than letting the subprocess write the store files
 itself):
 

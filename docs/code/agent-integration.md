@@ -187,6 +187,16 @@ Claude session ID; otherwise it starts with `--session-id` and writes the resume
 file after the first assistant event. Legacy sessions with assistant history but
 no resume file are migrated by using the Pockode session ID once.
 
+`StartOptions` carries two directories because they answer different questions.
+`DataDir` is the session's own data dir (`claude_resume.json`, history) — for a
+named worktree this is the worktree's data dir, so session state stays with the
+session store that owns it and is removed when the session is deleted.
+`MCPServerDir` is where the running server publishes `server.json`; the MCP stdio
+proxy reads it to find the local API. There is one server per process, so this is
+always the main data dir — a worktree's `DataDir` has no `server.json`, and
+pointing the proxy there would leave the agent unable to reach `work_*` tools.
+`MCPDir()` falls back to `DataDir` when the two are not split.
+
 ### Message Type Mapping
 
 | CLI Message | Subtype | Converts To |

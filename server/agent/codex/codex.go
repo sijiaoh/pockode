@@ -436,7 +436,7 @@ func (s *mcpSession) buildStartConfig(prompt string) map[string]interface{} {
 			"mcp_servers": map[string]interface{}{
 				"pockode": map[string]interface{}{
 					"command": s.exe,
-					"args":    []string{"mcp", "--data-dir", s.opts.DataDir},
+					"args":    []string{"mcp", "--data-dir", s.opts.MCPDir()},
 				},
 			},
 		},

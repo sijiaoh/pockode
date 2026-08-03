@@ -30,9 +30,15 @@ type StateChangeEvent struct {
 
 // Manager manages agent processes.
 type Manager struct {
-	agents       *agent.Registry
-	workDir      string
-	dataDir      string
+	agents  *agent.Registry
+	workDir string
+	// dataDir is this worktree's own data dir; agent session-scoped state (resume
+	// mapping, history) lives here, alongside sessionStore.
+	dataDir string
+	// mcpServerDir is where the running server publishes server.json for the MCP
+	// proxy to discover. Single server per process, so this is always the main
+	// data dir, even for a named worktree whose dataDir differs.
+	mcpServerDir string
 	sessionStore session.Store
 	idleTimeout  time.Duration
 
@@ -68,13 +74,16 @@ type Process struct {
 	closed atomic.Bool
 }
 
-// NewManager creates a new manager with the given idle timeout.
-func NewManager(agents *agent.Registry, workDir, dataDir string, store session.Store, idleTimeout time.Duration) *Manager {
+// NewManager creates a new manager with the given idle timeout. dataDir is this
+// worktree's own data dir (session-scoped agent state); mcpServerDir is where the
+// server publishes server.json for the MCP proxy (the main data dir).
+func NewManager(agents *agent.Registry, workDir, dataDir, mcpServerDir string, store session.Store, idleTimeout time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		agents:       agents,
 		workDir:      workDir,
 		dataDir:      dataDir,
+		mcpServerDir: mcpServerDir,
 		sessionStore: store,
 		idleTimeout:  idleTimeout,
 		processes:    make(map[string]*Process),
@@ -134,11 +143,12 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 
 	// Use manager's context for process lifecycle, not request context
 	opts := agent.StartOptions{
-		WorkDir:   m.workDir,
-		DataDir:   m.dataDir,
-		SessionID: sessionID,
-		Resume:    resume,
-		Mode:      mode,
+		WorkDir:      m.workDir,
+		DataDir:      m.dataDir,
+		MCPServerDir: m.mcpServerDir,
+		SessionID:    sessionID,
+		Resume:       resume,
+		Mode:         mode,
 	}
 	sess, err := ag.Start(m.ctx, opts)
 	if err != nil {

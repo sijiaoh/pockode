@@ -93,9 +93,11 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}
 	}
 
-	// Add MCP config for work management tools (unless disabled for testing)
+	// Add MCP config for work management tools (unless disabled for testing).
+	// The proxy must reach the single running server, whose server.json lives in
+	// the main data dir — not this session's per-worktree DataDir.
 	if !opts.DisableMCP {
-		mcpConfigPath, err := ensureMCPConfig(opts.DataDir)
+		mcpConfigPath, err := ensureMCPConfig(opts.MCPDir())
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("failed to create MCP config: %w", err)

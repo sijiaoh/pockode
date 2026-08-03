@@ -188,7 +188,10 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	gitDiffWatcher := watch.NewGitDiffWatcher(workDir)
 	sessionListWatcher := watch.NewSessionListWatcher(sessionStore)
 	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore)
-	processManager := process.NewManager(m.agents, workDir, m.dataDir, sessionStore, m.idleTimeout)
+	// The process manager's data dir is this worktree's own (wtDataDir), so agent
+	// session state lands next to the session store. MCP discovery still points at
+	// the main data dir (m.dataDir), the only place server.json is written.
+	processManager := process.NewManager(m.agents, workDir, wtDataDir, m.dataDir, sessionStore, m.idleTimeout)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetProcessStateGetter(processManager)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)

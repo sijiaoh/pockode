@@ -40,11 +40,15 @@ func drainEvents(ch <-chan agent.AgentEvent) []agent.AgentEvent {
 }
 
 func TestBuildStartConfig_MCPServers(t *testing.T) {
+	// A named worktree splits DataDir (session state) from MCPServerDir (where
+	// server.json lives). The MCP proxy must point at the server dir; otherwise it
+	// would look for server.json in the worktree dir, which has none.
 	sess := &mcpSession{
 		opts: agent.StartOptions{
-			WorkDir: "/tmp/work",
-			DataDir: "/tmp/data",
-			Mode:    session.ModeDefault,
+			WorkDir:      "/tmp/work",
+			DataDir:      "/tmp/data/worktrees/feature-x",
+			MCPServerDir: "/tmp/data",
+			Mode:         session.ModeDefault,
 		},
 		exe: "/usr/local/bin/pockode",
 	}
@@ -75,6 +79,23 @@ func TestBuildStartConfig_MCPServers(t *testing.T) {
 	}
 	if len(args) != 3 || args[0] != "mcp" || args[1] != "--data-dir" || args[2] != "/tmp/data" {
 		t.Errorf("unexpected args: %v", args)
+	}
+}
+
+func TestBuildStartConfig_MCPDirFallsBackToDataDir(t *testing.T) {
+	// Without a split (single-dir setups), the MCP proxy uses DataDir.
+	sess := &mcpSession{
+		opts: agent.StartOptions{
+			WorkDir: "/tmp/work",
+			DataDir: "/tmp/data",
+			Mode:    session.ModeDefault,
+		},
+		exe: "/usr/local/bin/pockode",
+	}
+
+	args := sess.buildStartConfig("hello")["config"].(map[string]interface{})["mcp_servers"].(map[string]interface{})["pockode"].(map[string]interface{})["args"].([]string)
+	if len(args) != 3 || args[2] != "/tmp/data" {
+		t.Errorf("expected --data-dir to fall back to DataDir, got %v", args)
 	}
 }
 

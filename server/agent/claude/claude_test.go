@@ -2,6 +2,7 @@ package claude
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -996,5 +997,82 @@ func TestExtractEventsFromText(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// readMCPDataDir parses an mcp-config.json and returns the pockode server's
+// --data-dir argument.
+func readMCPDataDir(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read mcp-config: %v", err)
+	}
+	var cfg struct {
+		McpServers struct {
+			Pockode struct {
+				Args []string `json:"args"`
+			} `json:"pockode"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parse mcp-config: %v", err)
+	}
+	args := cfg.McpServers.Pockode.Args
+	for i, a := range args {
+		if a == "--data-dir" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	t.Fatalf("no --data-dir in mcp-config args %v", args)
+	return ""
+}
+
+func TestEnsureMCPConfig_PointsAtGivenDir(t *testing.T) {
+	dir := t.TempDir()
+	path, err := ensureMCPConfig(dir)
+	if err != nil {
+		t.Fatalf("ensureMCPConfig: %v", err)
+	}
+	if got := filepath.Dir(path); got != dir {
+		t.Errorf("mcp-config written to %s, want under %s", path, dir)
+	}
+	if got := readMCPDataDir(t, path); got != dir {
+		t.Errorf("--data-dir = %s, want %s", got, dir)
+	}
+}
+
+// TestStart_MCPConfigUsesServerDir locks the worktree fix: for a named worktree,
+// DataDir (session state) and MCPServerDir (server.json) differ, and the MCP
+// proxy must be pointed at the server dir — the worktree DataDir has no
+// server.json. ensureMCPConfig runs before the process spawns, so this holds
+// whether or not the claude binary is installed.
+func TestStart_MCPConfigUsesServerDir(t *testing.T) {
+	sessionDir := t.TempDir() // per-worktree data dir
+	serverDir := t.TempDir()  // main data dir holding server.json
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sess, _ := New().Start(ctx, agent.StartOptions{
+		WorkDir:      t.TempDir(),
+		DataDir:      sessionDir,
+		MCPServerDir: serverDir,
+		SessionID:    "s1",
+	})
+	if sess != nil {
+		sess.Close()
+	}
+
+	// The MCP config must land in the server dir, pointing at the server dir.
+	serverCfg := filepath.Join(serverDir, "mcp-config.json")
+	if _, err := os.Stat(serverCfg); err != nil {
+		t.Fatalf("mcp-config not written to server dir: %v", err)
+	}
+	if got := readMCPDataDir(t, serverCfg); got != serverDir {
+		t.Errorf("--data-dir = %s, want server dir %s", got, serverDir)
+	}
+	// It must NOT be written to the per-worktree session dir.
+	if _, err := os.Stat(filepath.Join(sessionDir, "mcp-config.json")); err == nil {
+		t.Errorf("mcp-config unexpectedly written to session dir %s", sessionDir)
 	}
 }

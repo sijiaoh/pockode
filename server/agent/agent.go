@@ -32,12 +32,32 @@ type QuestionRequestData struct {
 
 // StartOptions contains options for starting an agent session.
 type StartOptions struct {
-	WorkDir    string
-	DataDir    string // data directory for MCP config
-	SessionID  string
-	Resume     bool
-	Mode       session.Mode
-	DisableMCP bool // skip MCP config (for testing)
+	WorkDir string
+	// DataDir is this session's own data directory (per-worktree). Agent
+	// session-scoped state — resume mapping, history migration lookups — lives
+	// under DataDir/sessions/<id>, co-located with the session store that owns
+	// the session. For a named worktree this is the worktree's data dir, not the
+	// main one.
+	DataDir string
+	// MCPServerDir is the directory holding the running server's server.json, which
+	// the MCP stdio proxy reads to discover and forward to the local API. There is
+	// a single server per process, so this is always the main data dir regardless
+	// of worktree — a worktree's DataDir has no server.json. Empty falls back to
+	// DataDir (single-dir setups and tests that don't split the two).
+	MCPServerDir string
+	SessionID    string
+	Resume       bool
+	Mode         session.Mode
+	DisableMCP   bool // skip MCP config (for testing)
+}
+
+// MCPDir returns the directory to point the MCP proxy at (where server.json
+// lives), falling back to DataDir when MCPServerDir is unset.
+func (o StartOptions) MCPDir() string {
+	if o.MCPServerDir != "" {
+		return o.MCPServerDir
+	}
+	return o.DataDir
 }
 
 // Agent defines the interface for an AI agent.
