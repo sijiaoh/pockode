@@ -123,15 +123,24 @@ export function NodeList() {
 		}
 	};
 
-	const handleSubmit = async (path: string, name?: string) => {
+	const handleSubmit = async (
+		path: string,
+		name?: string,
+		createMissingDir?: boolean,
+	) => {
 		if (editingNode) {
 			await actions.updateNode({
 				id: editingNode.id,
 				path,
 				name,
+				create_missing_dir: createMissingDir,
 			});
 		} else {
-			await actions.createNode({ path, name });
+			await actions.createNode({
+				path,
+				name,
+				create_missing_dir: createMissingDir,
+			});
 		}
 		await fetchNodes();
 		setActionNotice(null);

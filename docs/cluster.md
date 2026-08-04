@@ -31,7 +31,7 @@ type Node struct {
 }
 ```
 
-The path must point to an existing directory. Duplicate paths are rejected.
+The path must point to a directory. If the directory does not exist, the request is rejected with `invalid node: path does not exist`; the frontend detects this and asks whether to create it, retrying with `create_missing_dir` set (see [Frontend UX](#frontend-ux)). A path that exists but is not a directory (or is otherwise inaccessible, e.g. permission denied) is always rejected and never offered for creation. Duplicate paths are rejected.
 
 **Path expansion:**
 - `~` or `~/...` → expanded to user's home directory (e.g., `~/projects/my-app` → `/home/user/projects/my-app`)
@@ -166,6 +166,14 @@ to show which project nodes are running and expose the next useful action:
   fatal action errors, because the saved process was already gone.
 - Action warnings and errors are shown inline above the node list so they do
   not cover mobile controls.
+- When adding or editing a node whose path does not exist yet, the form does not
+  reject it outright. Instead it asks "Create directory?" in a confirmation
+  dialog (confirm label "Create & Add" when adding, "Create & Save" when
+  editing). Confirming retries the request with `create_missing_dir` set so the
+  backend creates the directory (with parents) and completes the operation in a
+  single request; cancelling keeps the form and its entered path and returns
+  focus to the path input. Other path errors (not a directory, permission
+  denied, duplicate) stay as inline errors with no create option.
 
 ### Available Methods
 
@@ -176,8 +184,8 @@ After authentication:
 | `ping` | Returns `"pong"` |
 | `node.list` | Returns all registered nodes (includes `status` field) |
 | `node.get` | Returns a node by ID (params: `{id}`), includes `status` field |
-| `node.create` | Creates a new node (params: `{path, name?}`) |
-| `node.update` | Updates a node (params: `{id, path?, name?}`) |
+| `node.create` | Creates a new node (params: `{path, name?, create_missing_dir?}`) |
+| `node.update` | Updates a node (params: `{id, path?, name?, create_missing_dir?}`) |
 | `node.delete` | Deletes a node (params: `{id}`) |
 | `node.status` | Returns node status (params: `{id}`) |
 | `node.start` | Starts a node's server (params: `{id, token}`) |

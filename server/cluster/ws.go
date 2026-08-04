@@ -194,14 +194,16 @@ type NodeGetParams struct {
 }
 
 type NodeCreateParams struct {
-	Path string `json:"path"`
-	Name string `json:"name,omitempty"`
+	Path             string `json:"path"`
+	Name             string `json:"name,omitempty"`
+	CreateMissingDir bool   `json:"create_missing_dir,omitempty"`
 }
 
 type NodeUpdateParams struct {
-	ID   string  `json:"id"`
-	Path *string `json:"path,omitempty"`
-	Name *string `json:"name,omitempty"`
+	ID               string  `json:"id"`
+	Path             *string `json:"path,omitempty"`
+	Name             *string `json:"name,omitempty"`
+	CreateMissingDir bool    `json:"create_missing_dir,omitempty"`
 }
 
 type NodeDeleteParams struct {
@@ -295,7 +297,7 @@ func (h *clusterRPCHandler) handleNodeCreate(ctx context.Context, conn *jsonrpc2
 		return
 	}
 
-	n, err := h.nodeStore.Create(params.Path, params.Name)
+	n, err := h.nodeStore.Create(params.Path, params.Name, params.CreateMissingDir)
 	if err != nil {
 		if errors.Is(err, node.ErrInvalidNode) || errors.Is(err, node.ErrDuplicatePath) {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
@@ -328,7 +330,7 @@ func (h *clusterRPCHandler) handleNodeUpdate(ctx context.Context, conn *jsonrpc2
 		Name: params.Name,
 	}
 
-	n, err := h.nodeStore.Update(params.ID, fields)
+	n, err := h.nodeStore.Update(params.ID, fields, params.CreateMissingDir)
 	if err != nil {
 		if errors.Is(err, node.ErrNodeNotFound) {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "node not found")

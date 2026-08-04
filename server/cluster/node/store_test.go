@@ -27,7 +27,7 @@ func createTestDir(t *testing.T, name string) string {
 
 func createNode(t *testing.T, s *FileStore, path, name string) Node {
 	t.Helper()
-	n, err := s.Create(path, name)
+	n, err := s.Create(path, name, false)
 	if err != nil {
 		t.Fatalf("Create node: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestCreate_InferName(t *testing.T) {
 
 func TestCreate_EmptyPath(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.Create("", "name")
+	_, err := s.Create("", "name", false)
 	if err == nil {
 		t.Fatal("expected error for empty path")
 	}
@@ -89,7 +89,7 @@ func TestCreate_EmptyPath(t *testing.T) {
 
 func TestCreate_PathNotExist(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.Create("/nonexistent/path/12345", "name")
+	_, err := s.Create("/nonexistent/path/12345", "name", false)
 	if err == nil {
 		t.Fatal("expected error for nonexistent path")
 	}
@@ -102,9 +102,45 @@ func TestCreate_PathIsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := s.Create(file, "name")
+	_, err := s.Create(file, "name", false)
 	if err == nil {
 		t.Fatal("expected error for file path")
+	}
+}
+
+func TestCreate_CreateMissingDir(t *testing.T) {
+	s := newTestStore(t)
+	// Nested path with multiple missing levels to verify MkdirAll behavior.
+	dir := filepath.Join(t.TempDir(), "a", "b", "my-app")
+
+	node, err := s.Create(dir, "", true)
+	if err != nil {
+		t.Fatalf("Create with createMissingDir: %v", err)
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("expected directory to be created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("expected created path to be a directory")
+	}
+	if node.Name != "my-app" {
+		t.Errorf("name = %q, want %q (inferred from path)", node.Name, "my-app")
+	}
+}
+
+func TestCreate_CreateMissingDir_PathIsFile(t *testing.T) {
+	s := newTestStore(t)
+	file := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(file, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A path that exists as a file must be rejected even with createMissingDir.
+	_, err := s.Create(file, "name", true)
+	if err == nil {
+		t.Fatal("expected error for file path even with createMissingDir")
 	}
 }
 
@@ -114,7 +150,7 @@ func TestCreate_DuplicatePath(t *testing.T) {
 
 	createNode(t, s, dir, "First")
 
-	_, err := s.Create(dir, "Second")
+	_, err := s.Create(dir, "Second", false)
 	if err == nil {
 		t.Fatal("expected error for duplicate path")
 	}
@@ -156,7 +192,7 @@ func TestUpdate_Name(t *testing.T) {
 	node := createNode(t, s, dir, "Old")
 
 	newName := "New"
-	updated, err := s.Update(node.ID, UpdateFields{Name: &newName})
+	updated, err := s.Update(node.ID, UpdateFields{Name: &newName}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +211,7 @@ func TestUpdate_Path(t *testing.T) {
 	dir2 := createTestDir(t, "project2")
 	node := createNode(t, s, dir1, "Test")
 
-	updated, err := s.Update(node.ID, UpdateFields{Path: &dir2})
+	updated, err := s.Update(node.ID, UpdateFields{Path: &dir2}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +228,7 @@ func TestUpdate_NoChange(t *testing.T) {
 
 	// Update with same values
 	sameName := "Test"
-	updated, err := s.Update(node.ID, UpdateFields{Name: &sameName})
+	updated, err := s.Update(node.ID, UpdateFields{Name: &sameName}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,6 +236,30 @@ func TestUpdate_NoChange(t *testing.T) {
 	// UpdatedAt should not change when there's no actual change
 	if !updated.UpdatedAt.Equal(node.UpdatedAt) {
 		t.Error("expected updated_at to remain unchanged when no actual change")
+	}
+}
+
+func TestUpdate_CreateMissingDir(t *testing.T) {
+	s := newTestStore(t)
+	dir := createTestDir(t, "project")
+	node := createNode(t, s, dir, "Test")
+
+	newPath := filepath.Join(t.TempDir(), "moved", "here")
+
+	// Without the flag, a missing path is rejected.
+	if _, err := s.Update(node.ID, UpdateFields{Path: &newPath}, false); err == nil {
+		t.Fatal("expected error for missing path without createMissingDir")
+	}
+
+	updated, err := s.Update(node.ID, UpdateFields{Path: &newPath}, true)
+	if err != nil {
+		t.Fatalf("Update with createMissingDir: %v", err)
+	}
+	if updated.Path != newPath {
+		t.Errorf("path = %q, want %q", updated.Path, newPath)
+	}
+	if info, err := os.Stat(newPath); err != nil || !info.IsDir() {
+		t.Errorf("expected directory to be created at %q", newPath)
 	}
 }
 
@@ -211,7 +271,7 @@ func TestUpdate_DuplicatePath(t *testing.T) {
 	node2 := createNode(t, s, dir2, "Second")
 
 	// Try to update node2's path to dir1 (already used)
-	_, err := s.Update(node2.ID, UpdateFields{Path: &dir1})
+	_, err := s.Update(node2.ID, UpdateFields{Path: &dir1}, false)
 	if err == nil {
 		t.Fatal("expected error for duplicate path")
 	}
@@ -220,7 +280,7 @@ func TestUpdate_DuplicatePath(t *testing.T) {
 func TestUpdate_NotFound(t *testing.T) {
 	s := newTestStore(t)
 	name := "x"
-	_, err := s.Update("nonexistent", UpdateFields{Name: &name})
+	_, err := s.Update("nonexistent", UpdateFields{Name: &name}, false)
 	if err == nil {
 		t.Fatal("expected error for nonexistent ID")
 	}
@@ -285,7 +345,7 @@ func TestConcurrent_Creates(t *testing.T) {
 	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
 		go func(i int) {
-			_, err := s.Create(dirs[i], fmt.Sprintf("Node %d", i))
+			_, err := s.Create(dirs[i], fmt.Sprintf("Node %d", i), false)
 			errs <- err
 		}(i)
 	}
@@ -320,7 +380,7 @@ func TestConcurrent_UpdateSameNode(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func(i int) {
 			name := fmt.Sprintf("Name %d", i)
-			_, err := s.Update(node.ID, UpdateFields{Name: &name})
+			_, err := s.Update(node.ID, UpdateFields{Name: &name}, false)
 			errs <- err
 		}(i)
 	}
@@ -349,7 +409,7 @@ func TestConcurrent_MixedOperations(t *testing.T) {
 		dir := createTestDir(t, fmt.Sprintf("project%d", i))
 		go func(i int, dir string) {
 			defer func() { done <- struct{}{} }()
-			s.Create(dir, fmt.Sprintf("Node %d", i))
+			s.Create(dir, fmt.Sprintf("Node %d", i), false)
 		}(i, dir)
 	}
 
@@ -357,7 +417,7 @@ func TestConcurrent_MixedOperations(t *testing.T) {
 		go func(i int) {
 			defer func() { done <- struct{}{} }()
 			name := fmt.Sprintf("Name v%d", i)
-			s.Update(node.ID, UpdateFields{Name: &name})
+			s.Update(node.ID, UpdateFields{Name: &name}, false)
 		}(i)
 	}
 
@@ -435,7 +495,7 @@ func TestCreate_TildeExpansion(t *testing.T) {
 	s := newTestStore(t)
 	tildePath := "~/" + testDirName
 
-	node, err := s.Create(tildePath, "")
+	node, err := s.Create(tildePath, "", false)
 	if err != nil {
 		t.Fatalf("Create with tilde: %v", err)
 	}
@@ -458,7 +518,7 @@ func TestCreate_TildeOnly(t *testing.T) {
 
 	s := newTestStore(t)
 
-	node, err := s.Create("~", "Home")
+	node, err := s.Create("~", "Home", false)
 	if err != nil {
 		t.Fatalf("Create with ~ only: %v", err)
 	}
@@ -479,7 +539,7 @@ func TestCreate_DotPath(t *testing.T) {
 
 	s := newTestStore(t)
 
-	node, err := s.Create(".", "Home")
+	node, err := s.Create(".", "Home", false)
 	if err != nil {
 		t.Fatalf("Create with . path: %v", err)
 	}
@@ -509,7 +569,7 @@ func TestUpdate_DotPath(t *testing.T) {
 	node := createNode(t, s, testDir, "Test")
 
 	dotPath := "."
-	updated, err := s.Update(node.ID, UpdateFields{Path: &dotPath})
+	updated, err := s.Update(node.ID, UpdateFields{Path: &dotPath}, false)
 	if err != nil {
 		t.Fatalf("Update with . path: %v", err)
 	}
@@ -546,7 +606,7 @@ func TestUpdate_TildeExpansion(t *testing.T) {
 
 	// Update path using tilde
 	tildePath := "~/" + testDirName2
-	updated, err := s.Update(node.ID, UpdateFields{Path: &tildePath})
+	updated, err := s.Update(node.ID, UpdateFields{Path: &tildePath}, false)
 	if err != nil {
 		t.Fatalf("Update with tilde: %v", err)
 	}

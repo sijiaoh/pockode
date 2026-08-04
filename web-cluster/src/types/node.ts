@@ -24,12 +24,14 @@ export interface NodeWithStatus extends Node {
 export interface NodeCreateParams {
 	path: string;
 	name?: string;
+	create_missing_dir?: boolean;
 }
 
 export interface NodeUpdateParams {
 	id: string;
 	path?: string;
 	name?: string;
+	create_missing_dir?: boolean;
 }
 
 export interface NodeStartParams {

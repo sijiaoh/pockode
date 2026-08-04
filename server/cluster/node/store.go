@@ -17,8 +17,8 @@ import (
 type Store interface {
 	List() ([]Node, error)
 	Get(id string) (Node, bool, error)
-	Create(path, name string) (Node, error)
-	Update(id string, fields UpdateFields) (Node, error)
+	Create(path, name string, createMissingDir bool) (Node, error)
+	Update(id string, fields UpdateFields, createMissingDir bool) (Node, error)
 	Delete(id string) error
 }
 
@@ -82,27 +82,16 @@ func (s *FileStore) Get(id string) (Node, bool, error) {
 }
 
 // Create creates a new node. If name is empty, it's inferred from path.
-func (s *FileStore) Create(path, name string) (Node, error) {
+// When createMissingDir is true, a non-existent directory is created (with
+// parents) instead of being rejected.
+func (s *FileStore) Create(path, name string, createMissingDir bool) (Node, error) {
 	if path == "" {
 		return Node{}, fmt.Errorf("%w: path is required", ErrInvalidNode)
 	}
 
-	path = expandTilde(path)
-
-	info, err := os.Stat(path)
+	absPath, err := resolveDir(path, createMissingDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return Node{}, fmt.Errorf("%w: path does not exist", ErrInvalidNode)
-		}
-		return Node{}, fmt.Errorf("%w: %v", ErrInvalidNode, err)
-	}
-	if !info.IsDir() {
-		return Node{}, fmt.Errorf("%w: path is not a directory", ErrInvalidNode)
-	}
-
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return Node{}, fmt.Errorf("%w: invalid path", ErrInvalidNode)
+		return Node{}, err
 	}
 
 	if name == "" {
@@ -137,7 +126,9 @@ func (s *FileStore) Create(path, name string) (Node, error) {
 	return newNode, nil
 }
 
-func (s *FileStore) Update(id string, fields UpdateFields) (Node, error) {
+// Update modifies an existing node's fields. When createMissingDir is true and
+// a new path is given, a non-existent directory is created instead of rejected.
+func (s *FileStore) Update(id string, fields UpdateFields, createMissingDir bool) (Node, error) {
 	s.nodesMu.Lock()
 	defer s.nodesMu.Unlock()
 
@@ -151,22 +142,9 @@ func (s *FileStore) Update(id string, fields UpdateFields) (Node, error) {
 	changed := false
 
 	if fields.Path != nil {
-		newPath := expandTilde(*fields.Path)
-
-		info, err := os.Stat(newPath)
+		absPath, err := resolveDir(*fields.Path, createMissingDir)
 		if err != nil {
-			if os.IsNotExist(err) {
-				return Node{}, fmt.Errorf("%w: path does not exist", ErrInvalidNode)
-			}
-			return Node{}, fmt.Errorf("%w: %v", ErrInvalidNode, err)
-		}
-		if !info.IsDir() {
-			return Node{}, fmt.Errorf("%w: path is not a directory", ErrInvalidNode)
-		}
-
-		absPath, err := filepath.Abs(newPath)
-		if err != nil {
-			return Node{}, fmt.Errorf("%w: invalid path", ErrInvalidNode)
+			return Node{}, err
 		}
 
 		for _, other := range s.nodes {
@@ -267,6 +245,36 @@ func (s *FileStore) findIndex(id string) int {
 		}
 	}
 	return -1
+}
+
+// resolveDir expands the path and validates that it refers to a directory,
+// returning its absolute form. A missing directory is created (with parents)
+// when createMissingDir is true; otherwise it yields a "path does not exist"
+// error the frontend can detect to offer creation. Non-directory paths and
+// other stat errors (e.g. permission denied) are always rejected.
+func resolveDir(path string, createMissingDir bool) (string, error) {
+	expanded := expandTilde(path)
+
+	info, err := os.Stat(expanded)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("%w: %v", ErrInvalidNode, err)
+		}
+		if !createMissingDir {
+			return "", fmt.Errorf("%w: path does not exist", ErrInvalidNode)
+		}
+		if err := os.MkdirAll(expanded, 0o755); err != nil {
+			return "", fmt.Errorf("%w: could not create directory: %v", ErrInvalidNode, err)
+		}
+	} else if !info.IsDir() {
+		return "", fmt.Errorf("%w: path is not a directory", ErrInvalidNode)
+	}
+
+	absPath, err := filepath.Abs(expanded)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid path", ErrInvalidNode)
+	}
+	return absPath, nil
 }
 
 // expandTilde expands special path prefixes to the user's home directory:

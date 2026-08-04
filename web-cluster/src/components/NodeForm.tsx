@@ -1,13 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { useIsDesktop } from "../hooks";
 import type { Node } from "../types/node";
-import { ResponsivePanel, Spinner } from "./ui";
+import { ConfirmDialog, ResponsivePanel, Spinner } from "./ui";
 
 interface Props {
 	isOpen: boolean;
 	onClose: () => void;
-	onSubmit: (path: string, name?: string) => Promise<void>;
+	onSubmit: (
+		path: string,
+		name?: string,
+		createMissingDir?: boolean,
+	) => Promise<void>;
 	editingNode?: Node | null;
+}
+
+// The backend reports a non-existent directory with this exact substring
+// (message: "invalid node: path does not exist"). Other errors (path is a file,
+// permission denied, duplicate) do not offer creation.
+function isPathNotExistError(message: string) {
+	return message.toLowerCase().includes("path does not exist");
 }
 
 export function NodeForm({ isOpen, onClose, onSubmit, editingNode }: Props) {
@@ -15,6 +26,7 @@ export function NodeForm({ isOpen, onClose, onSubmit, editingNode }: Props) {
 	const [name, setName] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [saving, setSaving] = useState(false);
+	const [confirmCreateDir, setConfirmCreateDir] = useState(false);
 	const pathInputRef = useRef<HTMLInputElement>(null);
 	const isDesktop = useIsDesktop();
 
@@ -30,10 +42,33 @@ export function NodeForm({ isOpen, onClose, onSubmit, editingNode }: Props) {
 				setName("");
 			}
 			setError(null);
+			setConfirmCreateDir(false);
 			// Focus path input after panel opens
 			setTimeout(() => pathInputRef.current?.focus(), 100);
 		}
 	}, [isOpen, editingNode]);
+
+	const submit = async (createMissingDir: boolean) => {
+		setSaving(true);
+		setError(null);
+
+		try {
+			await onSubmit(path.trim(), name.trim() || undefined, createMissingDir);
+			onClose();
+		} catch (err) {
+			const message =
+				err instanceof Error ? err.message : "Failed to save node";
+			// Only offer to create on the first attempt; if creation itself failed
+			// (e.g. permission denied), surface the error inline instead of looping.
+			if (!createMissingDir && isPathNotExistError(message)) {
+				setConfirmCreateDir(true);
+				return;
+			}
+			setError(message);
+		} finally {
+			setSaving(false);
+		}
+	};
 
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
@@ -43,17 +78,18 @@ export function NodeForm({ isOpen, onClose, onSubmit, editingNode }: Props) {
 			return;
 		}
 
-		setSaving(true);
-		setError(null);
+		await submit(false);
+	};
 
-		try {
-			await onSubmit(path.trim(), name.trim() || undefined);
-			onClose();
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Failed to save node");
-		} finally {
-			setSaving(false);
-		}
+	const handleConfirmCreateDir = () => {
+		setConfirmCreateDir(false);
+		void submit(true);
+	};
+
+	const handleCancelCreateDir = () => {
+		setConfirmCreateDir(false);
+		setError(null);
+		pathInputRef.current?.focus();
 	};
 
 	// Derive name placeholder from path
@@ -138,6 +174,20 @@ export function NodeForm({ isOpen, onClose, onSubmit, editingNode }: Props) {
 					</button>
 				</div>
 			</form>
+
+			{confirmCreateDir && (
+				<ConfirmDialog
+					title="Create directory?"
+					message={`The directory "${path.trim()}" doesn't exist yet. Create it and ${
+						isEditing ? "save" : "add"
+					} this node?`}
+					confirmLabel={isEditing ? "Create & Save" : "Create & Add"}
+					cancelLabel="Cancel"
+					variant="default"
+					onConfirm={handleConfirmCreateDir}
+					onCancel={handleCancelCreateDir}
+				/>
+			)}
 		</ResponsivePanel>
 	);
 }
