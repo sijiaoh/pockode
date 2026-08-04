@@ -159,7 +159,7 @@ function DiffTab({
 											files={flatStatus?.staged ?? []}
 											staged={true}
 											onSelectFile={onSelectFile}
-											onToggleStage={(path) => handleToggleStage(path, true)}
+											onToggleStage={handleToggleStage}
 											onToggleAll={handleToggleAllStaged}
 											activeFile={activeFile}
 											togglingPaths={togglingPaths}
@@ -169,7 +169,7 @@ function DiffTab({
 											files={flatStatus?.unstaged ?? []}
 											staged={false}
 											onSelectFile={onSelectFile}
-											onToggleStage={(path) => handleToggleStage(path, false)}
+											onToggleStage={handleToggleStage}
 											onToggleAll={handleToggleAllUnstaged}
 											activeFile={activeFile}
 											togglingPaths={togglingPaths}

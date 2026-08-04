@@ -516,26 +516,33 @@ function updateToolResult(
 	toolUseId: string,
 	toolResult: string,
 ): Message[] {
-	let found = false;
-	const updated = messages.map((msg) => {
-		if (msg.role !== "assistant") return msg;
+	// A tool_result almost always targets a tool_call in the most recent
+	// assistant message, and tool IDs are unique — scan from the end and stop
+	// at the first match instead of re-walking the whole transcript per result.
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role !== "assistant") continue;
 
-		let changed = false;
-		const updatedParts = msg.parts.map((part) => {
-			if (part.type === "tool_call" && part.tool.id === toolUseId) {
-				changed = true;
-				found = true;
-				return { ...part, tool: { ...part.tool, result: toolResult } };
-			}
-			return part;
-		});
+		const partIndex = msg.parts.findIndex(
+			(part) => part.type === "tool_call" && part.tool.id === toolUseId,
+		);
+		if (partIndex === -1) continue;
 
-		if (!changed) return msg;
-		return { ...msg, parts: updatedParts };
-	});
+		const part = msg.parts[partIndex];
+		if (part.type !== "tool_call") continue;
+
+		const updatedParts = [...msg.parts];
+		updatedParts[partIndex] = {
+			...part,
+			tool: { ...part.tool, result: toolResult },
+		};
+		const updated = [...messages];
+		updated[i] = { ...msg, parts: updatedParts };
+		return updated;
+	}
 
 	// If no matching tool_call found, ignore the orphan result
-	return found ? updated : messages;
+	return messages;
 }
 
 interface UserMessageOptions {

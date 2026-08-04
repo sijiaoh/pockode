@@ -14,6 +14,28 @@ import (
 	"github.com/pockode/server/agent"
 )
 
+// parseTestLine mirrors streamOutput's decode-then-parse path so tests can feed
+// raw lines (including empty and malformed JSON) directly to parseLine.
+func parseTestLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
+	if len(line) == 0 {
+		return nil
+	}
+	var event cliEvent
+	if err := json.Unmarshal(line, &event); err != nil {
+		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
+	}
+	return parseLine(log, line, event, pendingRequests)
+}
+
+// observeLine decodes a raw line and forwards it to observe (test helper).
+func (m *claudeResumeStateManager) observeLine(line []byte) {
+	var event cliEvent
+	if err := json.Unmarshal(line, &event); err != nil {
+		return
+	}
+	m.observe(event)
+}
+
 func TestParseLine(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -235,7 +257,7 @@ func TestParseLine(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pendingRequests := &sync.Map{}
-			results := parseLine(testLogger(), []byte(tt.input), pendingRequests)
+			results := parseTestLine(testLogger(), []byte(tt.input), pendingRequests)
 
 			if !agentEventsEqual(results, tt.expected) {
 				t.Errorf("expected %+v, got %+v", tt.expected, results)
@@ -332,7 +354,7 @@ func TestParseLine_AskUserQuestionStoresPendingInput(t *testing.T) {
 	pendingRequests := &sync.Map{}
 	input := `{"type":"control_request","request_id":"req-q-store","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","input":{"questions":[{"question":"q?","header":"H","options":[{"label":"a","description":"d"}],"multiSelect":false}]}}}`
 
-	results := parseLine(testLogger(), []byte(input), pendingRequests)
+	results := parseTestLine(testLogger(), []byte(input), pendingRequests)
 	if len(results) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(results))
 	}
@@ -363,7 +385,7 @@ func TestParseLine_ControlCancelRemovesPendingQuestion(t *testing.T) {
 	pendingRequests := &sync.Map{}
 	pendingRequests.Store("req-cancel", pendingQuestionMarker{Input: json.RawMessage(`{"questions":[]}`)})
 
-	results := parseLine(testLogger(), []byte(`{"type":"control_cancel_request","request_id":"req-cancel"}`), pendingRequests)
+	results := parseTestLine(testLogger(), []byte(`{"type":"control_cancel_request","request_id":"req-cancel"}`), pendingRequests)
 	if len(results) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(results))
 	}
@@ -384,7 +406,7 @@ func TestParseLine_ControlResponseWithPendingInterrupt(t *testing.T) {
 	pendingRequests.Store(requestID, interruptMarker{})
 
 	input := `{"type":"control_response","response":{"subtype":"success","request_id":"interrupt-123"}}`
-	results := parseLine(testLogger(), []byte(input), pendingRequests)
+	results := parseTestLine(testLogger(), []byte(input), pendingRequests)
 
 	expected := []agent.AgentEvent{agent.InterruptedEvent{}}
 	if !agentEventsEqual(results, expected) {

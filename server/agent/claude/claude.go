@@ -406,13 +406,26 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 			continue
 		}
 
-		if resumeState != nil {
-			resumeState.observeLine(line)
+		// Decode the envelope once and share it with both the resume-state
+		// observer and the parser; both only need Type/Subtype/SessionID/Message.
+		var event cliEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			log.Warn("failed to parse JSON from CLI", "error", err, "lineLength", len(line))
+			select {
+			case events <- agent.TextEvent{Content: string(line)}:
+				continue
+			case <-ctx.Done():
+				return
+			}
 		}
 
-		for _, event := range parseLine(log, line, pendingRequests) {
+		if resumeState != nil {
+			resumeState.observe(event)
+		}
+
+		for _, ev := range parseLine(log, line, event, pendingRequests) {
 			select {
-			case events <- event:
+			case events <- ev:
 			case <-ctx.Done():
 				return
 			}
@@ -521,11 +534,7 @@ func (m *claudeResumeStateManager) save(sessionID string) {
 	}
 }
 
-func (m *claudeResumeStateManager) observeLine(line []byte) {
-	var event cliEvent
-	if err := json.Unmarshal(line, &event); err != nil {
-		return
-	}
+func (m *claudeResumeStateManager) observe(event cliEvent) {
 	if event.SessionID != "" {
 		m.sessionID.Store(event.SessionID)
 	}
@@ -659,17 +668,9 @@ type cliContentBlock struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 }
 
-func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
-	if len(line) == 0 {
-		return nil
-	}
-
-	var event cliEvent
-	if err := json.Unmarshal(line, &event); err != nil {
-		log.Warn("failed to parse JSON from CLI", "error", err, "lineLength", len(line))
-		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
-	}
-
+// parseLine converts one already-decoded stream-json envelope into agent events.
+// line is retained for the cases (result, control_*) that decode a superset struct.
+func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map) []agent.AgentEvent {
 	switch event.Type {
 	case "assistant":
 		return parseAssistantEvent(log, event)

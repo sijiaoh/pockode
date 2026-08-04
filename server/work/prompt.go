@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/pockode/server/agent"
@@ -63,15 +64,26 @@ func init() {
 	}
 }
 
+// compiledTemplates caches parsed templates keyed by their source string.
+// The prompt strings are compile-time constants (from embedded prompts.yaml),
+// so each is parsed once and reused across the many messages built per session.
+// *template.Template.Execute is safe for concurrent use.
+var compiledTemplates sync.Map // map[string]*template.Template
+
 // render executes a template string with the given data.
 func render(tmplStr string, data any) string {
-	tmpl, err := template.New("").Parse(tmplStr)
-	if err != nil {
-		// Template parse errors should be caught during development
-		panic("invalid template: " + err.Error())
+	compiled, ok := compiledTemplates.Load(tmplStr)
+	if !ok {
+		tmpl, err := template.New("").Parse(tmplStr)
+		if err != nil {
+			// Template parse errors should be caught during development
+			panic("invalid template: " + err.Error())
+		}
+		compiled, _ = compiledTemplates.LoadOrStore(tmplStr, tmpl)
 	}
+
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
+	if err := compiled.(*template.Template).Execute(&buf, data); err != nil {
 		panic("template execution failed: " + err.Error())
 	}
 	return strings.TrimSuffix(buf.String(), "\n")

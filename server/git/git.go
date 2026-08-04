@@ -255,6 +255,13 @@ func (s *GitStatus) IsUntracked(path string) bool {
 // Combined with ignoring CHMOD events in watcher.go, this prevents an infinite loop
 // when watching .git/index. If issues persist, consider switching to periodic polling.
 func Status(dir string) (*GitStatus, error) {
+	return statusWithSubmodules(dir, getSubmodulePaths(dir))
+}
+
+// statusWithSubmodules is Status with the directory's submodule paths already
+// computed, letting callers that also need the paths (Diff) avoid re-forking
+// `git config --file .gitmodules` for the same directory.
+func statusWithSubmodules(dir string, submodules []string) (*GitStatus, error) {
 	cmd := exec.Command("git", "--no-optional-locks", "status", "--porcelain=v1", "-uall", "--ignore-submodules=none")
 	cmd.Dir = dir
 	output, err := cmd.Output()
@@ -266,8 +273,6 @@ func Status(dir string) (*GitStatus, error) {
 		Staged:   []FileStatus{},
 		Unstaged: []FileStatus{},
 	}
-
-	submodules := getSubmodulePaths(dir)
 
 	// Initialize all submodules (even if empty) so clients know they exist
 	if len(submodules) > 0 {
@@ -369,7 +374,14 @@ type DiffOptions struct {
 // Returns empty string if file is not in git status (no changes).
 // For submodule paths (e.g., "submodule/path/to/file"), it runs diff inside the submodule.
 func Diff(dir, path string, opts DiffOptions) (string, error) {
-	status, err := Status(dir)
+	return diffWith(dir, path, opts, getSubmodulePaths(dir))
+}
+
+// diffWith is Diff with the directory's submodule paths already computed, so a
+// single DiffWithContent call resolves them once instead of forking git for
+// Status, the diff-side path resolution, and the content-side path resolution.
+func diffWith(dir, path string, opts DiffOptions, submodules []string) (string, error) {
+	status, err := statusWithSubmodules(dir, submodules)
 	if err != nil {
 		return "", err
 	}
@@ -379,12 +391,12 @@ func Diff(dir, path string, opts DiffOptions) (string, error) {
 
 	// Untracked files don't have a diff against index, generate synthetic diff
 	if !opts.Staged && status.IsUntracked(path) {
-		actualDir, relativePath := resolveSubmodulePath(dir, path)
+		actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
 		return showUntrackedFile(actualDir, relativePath)
 	}
 
 	// Resolve submodule path if needed
-	actualDir, relativePath := resolveSubmodulePath(dir, path)
+	actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
 
 	var args []string
 	if opts.Staged {
@@ -409,8 +421,11 @@ func Diff(dir, path string, opts DiffOptions) (string, error) {
 
 // resolveSubmodulePath resolves "submodule/path/to/file" to (dir/submodule, "path/to/file").
 func resolveSubmodulePath(dir, path string) (string, string) {
-	submodules := getSubmodulePaths(dir)
+	return resolveSubmodulePathWith(getSubmodulePaths(dir), dir, path)
+}
 
+// resolveSubmodulePathWith is resolveSubmodulePath with submodule paths precomputed.
+func resolveSubmodulePathWith(submodules []string, dir, path string) (string, string) {
 	for _, sub := range submodules {
 		prefix := sub + "/"
 		if strings.HasPrefix(path, prefix) {
@@ -476,7 +491,9 @@ type DiffResult struct {
 // For unstaged changes: old = index, new = worktree
 // Supports submodule paths (e.g., "submodule/path/to/file").
 func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
-	diff, err := Diff(dir, path, opts)
+	submodules := getSubmodulePaths(dir)
+
+	diff, err := diffWith(dir, path, opts, submodules)
 	if err != nil {
 		return nil, err
 	}
@@ -485,7 +502,7 @@ func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
 	}
 
 	// Resolve submodule path for content retrieval
-	actualDir, relativePath := resolveSubmodulePath(dir, path)
+	actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
 
 	var oldContent, newContent string
 

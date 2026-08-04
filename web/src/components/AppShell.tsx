@@ -135,6 +135,13 @@ function AppShell() {
 		};
 	}
 
+	// filteredSessions/currentSessionId get a fresh identity on every session-store
+	// update (new message, state change over WebSocket). Read them from a ref inside
+	// handleDeleteSession so its identity stays stable and doesn't defeat the memo on
+	// every SessionItem row.
+	const deleteSessionCtxRef = useRef({ filteredSessions, currentSessionId });
+	deleteSessionCtxRef.current = { filteredSessions, currentSessionId };
+
 	// A switch resolves through several transient renders (worktree store sync →
 	// session list reload → redirect/create). Treat all of them as "in transition"
 	// so the shell stays mounted until the new session lands.
@@ -230,6 +237,8 @@ function AppShell() {
 
 	const handleDeleteSession = useCallback(
 		async (id: string) => {
+			const { filteredSessions, currentSessionId } =
+				deleteSessionCtxRef.current;
 			const isCurrentSession = id === currentSessionId;
 			const remaining = filteredSessions.filter((s) => s.id !== id);
 
@@ -248,7 +257,7 @@ function AppShell() {
 				);
 			}
 		},
-		[currentSessionId, filteredSessions, deleteSession, navigate, urlWorktree],
+		[deleteSession, navigate, urlWorktree],
 	);
 
 	const handleSelectDiffFile = useCallback(

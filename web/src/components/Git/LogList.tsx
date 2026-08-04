@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { GitCommit } from "../../types/git";
 
 interface Props {
@@ -28,21 +29,21 @@ function formatRelativeDate(isoDate: string): string {
 	return `${Math.floor(diffDays / 365)}y ago`;
 }
 
-function CommitItem({
+const CommitItem = memo(function CommitItem({
 	commit,
 	isActive,
 	onSelect,
 }: {
 	commit: GitCommit;
 	isActive: boolean;
-	onSelect: () => void;
+	onSelect: (hash: string) => void;
 }) {
 	const shortHash = commit.hash.substring(0, 7);
 
 	return (
 		<button
 			type="button"
-			onClick={onSelect}
+			onClick={() => onSelect(commit.hash)}
 			className={`flex w-full min-h-[44px] flex-col justify-center gap-0.5 rounded-lg px-3 py-2 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset ${
 				isActive
 					? "bg-th-bg-tertiary border-l-2 border-th-accent"
@@ -61,7 +62,7 @@ function CommitItem({
 			</div>
 		</button>
 	);
-}
+});
 
 function LogList({ commits, activeHash, onSelectCommit }: Props) {
 	if (commits.length === 0) {
@@ -77,7 +78,7 @@ function LogList({ commits, activeHash, onSelectCommit }: Props) {
 					key={commit.hash}
 					commit={commit}
 					isActive={commit.hash === activeHash}
-					onSelect={() => onSelectCommit(commit.hash)}
+					onSelect={onSelectCommit}
 				/>
 			))}
 		</div>

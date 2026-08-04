@@ -363,9 +363,10 @@ func (s *FileStore) GetHistory(ctx context.Context, sessionID string) ([]json.Ra
 		return nil, err
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	// No lock: history lives in an independent per-session file reached via an
+	// immutable path, and AppendToHistory writes it lock-free. Taking s.mu here
+	// would only block metadata writers for the whole (potentially large) scan
+	// without protecting anything.
 	path := s.historyPath(sessionID)
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {

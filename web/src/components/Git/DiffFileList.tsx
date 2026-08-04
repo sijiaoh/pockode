@@ -7,7 +7,7 @@ interface Props {
 	files: FileStatus[];
 	staged: boolean;
 	onSelectFile: (path: string, staged: boolean) => void;
-	onToggleStage: (path: string) => void;
+	onToggleStage: (path: string, staged: boolean) => void;
 	onToggleAll: () => void;
 	activeFile: { path: string; staged: boolean } | null;
 	togglingPaths: Set<string>;
@@ -59,8 +59,8 @@ function DiffFileList({
 						key={`${staged}-${file.path}`}
 						file={file}
 						staged={staged}
-						onSelect={() => onSelectFile(file.path, staged)}
-						onToggleStage={() => onToggleStage(file.path)}
+						onSelect={onSelectFile}
+						onToggleStage={onToggleStage}
 						isActive={
 							activeFile?.staged === staged && activeFile?.path === file.path
 						}

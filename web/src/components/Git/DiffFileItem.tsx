@@ -1,4 +1,5 @@
 import { Loader2, Minus, Plus } from "lucide-react";
+import { memo } from "react";
 import { type FileStatus, GIT_STATUS_INFO } from "../../types/git";
 import { splitPath } from "../../utils/path";
 import SidebarListItem from "../common/SidebarListItem";
@@ -6,13 +7,13 @@ import SidebarListItem from "../common/SidebarListItem";
 interface Props {
 	file: FileStatus;
 	staged: boolean;
-	onSelect: () => void;
-	onToggleStage: () => void;
+	onSelect: (path: string, staged: boolean) => void;
+	onToggleStage: (path: string, staged: boolean) => void;
 	isActive: boolean;
 	isToggling?: boolean;
 }
 
-function DiffFileItem({
+const DiffFileItem = memo(function DiffFileItem({
 	file,
 	staged,
 	onSelect,
@@ -31,7 +32,7 @@ function DiffFileItem({
 			title={fileName}
 			subtitle={directory}
 			isActive={isActive}
-			onSelect={onSelect}
+			onSelect={() => onSelect(file.path, staged)}
 			ariaLabel={`View ${statusInfo.label.toLowerCase()} file: ${file.path}`}
 			leftSlot={
 				<span
@@ -46,7 +47,7 @@ function DiffFileItem({
 					type="button"
 					onClick={(e) => {
 						e.stopPropagation();
-						onToggleStage();
+						onToggleStage(file.path, staged);
 					}}
 					disabled={isToggling}
 					className={`flex items-center justify-center min-h-[36px] min-w-[36px] rounded-md transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
@@ -65,6 +66,6 @@ function DiffFileItem({
 			}
 		/>
 	);
-}
+});
 
 export default DiffFileItem;

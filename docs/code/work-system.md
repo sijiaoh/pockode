@@ -672,13 +672,30 @@ work_context: |
 //go:embed prompts.yaml
 var promptsYAML []byte
 
+// compiledTemplates caches parsed templates keyed by their source string.
+// Prompt strings are compile-time constants (from embedded prompts.yaml), so each
+// is parsed once and reused across the many messages built per session.
+var compiledTemplates sync.Map // map[string]*template.Template
+
 func render(tmplStr string, data any) string {
-    tmpl := template.New("").Parse(tmplStr)
+    compiled, ok := compiledTemplates.Load(tmplStr)
+    if !ok {
+        tmpl, err := template.New("").Parse(tmplStr)
+        if err != nil {
+            panic("invalid template: " + err.Error())
+        }
+        compiled, _ = compiledTemplates.LoadOrStore(tmplStr, tmpl)
+    }
     var buf bytes.Buffer
-    tmpl.Execute(&buf, data)
+    compiled.(*template.Template).Execute(&buf, data)
     return strings.TrimSuffix(buf.String(), "\n")
 }
 ```
+
+Templates are compiled lazily and cached because the same handful of prompt
+templates is rendered repeatedly (once per kickoff/restart/step message across
+every session); `*template.Template.Execute` is safe for concurrent use, so the
+cached entry needs no additional locking.
 
 ## Code Paths
 

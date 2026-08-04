@@ -74,6 +74,19 @@ func (b *BaseWatcher) GetSubscription(id string) *Subscription {
 	return b.subscriptions[id]
 }
 
+// HasSubscriptionForWorkID reports whether any subscription targets workID.
+// Used to skip expensive per-event work (store reads) when no subscriber cares.
+func (b *BaseWatcher) HasSubscriptionForWorkID(workID string) bool {
+	b.subMu.RLock()
+	defer b.subMu.RUnlock()
+	for _, sub := range b.subscriptions {
+		if sub.WorkID == workID {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *BaseWatcher) NotifyAll(method string, makeParams func(sub *Subscription) any) int {
 	subs := b.GetAllSubscriptions()
 	for _, sub := range subs {

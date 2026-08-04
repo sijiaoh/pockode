@@ -227,12 +227,19 @@ func streamOutput(ctx context.Context, stdout io.Reader, events chan<- agent.Age
 
     for scanner.Scan() {
         line := scanner.Bytes()
-        if resumeState != nil {
-            resumeState.observeLine(line)
+        // Decode the stream-json envelope once and share it with both the resume
+        // observer and the parser, rather than unmarshaling the same line twice.
+        var event cliEvent
+        if err := json.Unmarshal(line, &event); err != nil {
+            events <- agent.TextEvent{Content: string(line)} // graceful degradation
+            continue
         }
-        for _, event := range parseLine(log, line, pendingRequests) {
+        if resumeState != nil {
+            resumeState.observe(event)
+        }
+        for _, ev := range parseLine(log, line, event, pendingRequests) {
             select {
-            case events <- event:
+            case events <- ev:
             case <-ctx.Done():
                 return
             }
@@ -243,6 +250,7 @@ func streamOutput(ctx context.Context, stdout io.Reader, events chan<- agent.Age
 
 **Key Design Points**:
 - **1MB buffer**: Handles large tool outputs
+- **Single decode**: The envelope is unmarshaled once per line and reused by both the resume observer and `parseLine` (which retains the raw `line` only for events needing a superset struct), avoiding a redundant parse on every high-frequency line
 - **Non-blocking send**: Checks `ctx.Done()` to avoid deadlocks
 - **Graceful degradation**: Returns raw text when JSON parsing fails, no data is discarded
 
