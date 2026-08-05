@@ -139,6 +139,36 @@ type rpcConnState struct {
 	log           *slog.Logger
 	worktree      *worktree.Worktree       // set after auth
 	subscriptions map[string]watch.Watcher // subID → watcher for cleanup
+	closed        bool                     // set by cleanup; guards against binds/subscribes racing disconnect
+}
+
+// bindWorktree atomically binds wt to the connection, subscribing the
+// connection's notifier so notifications and the state change happen under a
+// single lock. Callers pass a worktree reference already acquired via
+// Manager.Get and interpret the result:
+//   - ok=false: the connection was cleaned up (disconnected) first; the bind did
+//     not take effect and the caller must release wt to avoid leaking it.
+//   - noop=true: wt is already the bound worktree instance; the caller must
+//     release the extra reference. prev is the (unchanged) bound worktree.
+//   - otherwise: prev is the previously bound worktree (may be nil) which the
+//     caller must unsubscribe and release once outside the lock.
+//
+// Pointer (not name) equality drives the no-op check so a stale instance left
+// over from a force-shutdown/recreate is replaced by the live one rather than
+// silently kept.
+func (s *rpcConnState) bindWorktree(wt *worktree.Worktree) (prev *worktree.Worktree, noop, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, false, false
+	}
+	if s.worktree == wt {
+		return s.worktree, true, true
+	}
+	prev = s.worktree
+	s.worktree = wt
+	wt.Subscribe(s.notifier)
+	return prev, false, true
 }
 
 func (s *rpcConnState) getConnID() string {
@@ -167,8 +197,15 @@ func (s *rpcConnState) getNotifier() watch.Notifier {
 
 func (s *rpcConnState) trackSubscription(id string, watcher watch.Watcher) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed {
+		s.mu.Unlock()
+		// Connection was cleaned up while this handler was subscribing; drop the
+		// just-created subscription so its watcher slot isn't leaked.
+		watcher.Unsubscribe(id)
+		return
+	}
 	s.subscriptions[id] = watcher
+	s.mu.Unlock()
 }
 
 func (s *rpcConnState) untrackSubscription(id string) {
@@ -203,6 +240,11 @@ func (s *rpcConnState) unsubscribeWorktreeWatchers(wt *worktree.Worktree) {
 func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Mark closed before releasing anything so in-flight handlers racing this
+	// cleanup (bindWorktree/trackSubscription) observe it and don't re-bind a
+	// worktree or re-track a subscription after we've torn everything down.
+	s.closed = true
 
 	// Unsubscribe all tracked subscriptions
 	for id, watcher := range s.subscriptions {
@@ -451,11 +493,25 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 		return
 	}
 
-	h.state.mu.Lock()
-	h.state.worktree = wt
-	h.state.mu.Unlock()
-
-	wt.Subscribe(h.state.getNotifier())
+	prevWorktree, noop, ok := h.state.bindWorktree(wt)
+	if !ok {
+		// Connection was closed while resolving the worktree; release the
+		// reference so the worktree (and its watchers/processes) isn't leaked.
+		h.worktreeManager.Release(wt)
+		return
+	}
+	if noop {
+		// Already bound to this worktree (e.g. a duplicate concurrent auth);
+		// drop the extra reference we just acquired.
+		h.worktreeManager.Release(wt)
+	} else if prevWorktree != nil {
+		// Two concurrent auth frames can both pass the not-authenticated gate
+		// (AsyncHandler) and bind different worktrees; release the one we
+		// displaced so its reference and subscription aren't leaked.
+		h.state.unsubscribeWorktreeWatchers(prevWorktree)
+		prevWorktree.Unsubscribe(h.state.getNotifier())
+		h.worktreeManager.Release(prevWorktree)
+	}
 
 	h.setAuthenticated()
 	h.log.Info("authenticated", "worktree", wt.Name, "workDir", wt.WorkDir)

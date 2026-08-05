@@ -257,6 +257,34 @@ Client                              Server
 - Optionally specify worktree; uses main worktree if not specified
 - Authentication response includes version number for detecting client/server version mismatch
 
+For where the server's token comes from (`--auth-token` / `POCKODE_AUTH_TOKEN`) and the overall trust model, see [Authentication](authentication.md).
+
+### Binding a Worktree vs. Disconnect
+
+`auth` and `worktree.switch` both acquire a worktree reference (`Manager.Get`) and
+then bind it to the connection, but they run on their own goroutines
+(`jsonrpc2.AsyncHandler`) and can race the connection's `cleanup` when the client
+disconnects mid-handler — a common case for a flaky mobile network. If the bind
+completed *after* cleanup had already torn the connection down, two things went
+wrong: the worktree reference was never released (its FS/git watchers, git polling,
+and process manager kept running until the process exited — a slow leak that
+accumulates under repeated reconnects), and subscribing on the now-nil state map
+panicked and orphaned the new watcher subscription.
+
+The fix funnels every state mutation through `rpcConnState.bindWorktree`, which
+holds the connection lock while it checks a `closed` flag (set first thing by
+`cleanup`), swaps `state.worktree`, and subscribes the notifier as one atomic step.
+When `closed` is already set the bind is refused and the caller releases the
+reference it acquired, so nothing leaks. `trackSubscription` mirrors this: after
+`closed` it immediately unsubscribes rather than storing into a map that will never
+be cleaned up. The no-op check (already bound to this worktree) compares worktree
+*pointers*, not names, so a stale instance left over from a force-shutdown +
+same-name recreate is replaced by the live one instead of being silently reused.
+
+Code: `server/ws/rpc.go` (`bindWorktree`, `trackSubscription`, `cleanup`),
+`server/ws/rpc_worktree.go` (`handleWorktreeSwitch`); regression coverage in
+`server/ws/rpc_lifecycle_test.go`.
+
 ## Connection Management
 
 ### Connection Status

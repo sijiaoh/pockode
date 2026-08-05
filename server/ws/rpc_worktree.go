@@ -151,19 +151,21 @@ func (h *rpcMethodHandler) handleWorktreeSwitch(ctx context.Context, conn *jsonr
 		return
 	}
 
-	// Atomically check, switch worktree, and get values for cleanup
-	h.state.mu.Lock()
-	currentWorktree := h.state.worktree
-	notifier := h.state.notifier
-
-	// No-op if switching to same worktree
-	if currentWorktree != nil && currentWorktree.Name == params.Name {
-		h.state.mu.Unlock()
-		// Release the extra ref we acquired above
+	// Atomically swap the connection's bound worktree, subscribing the notifier
+	// under the same lock so a concurrent disconnect can't leave the reference
+	// leaked or the new worktree unsubscribed.
+	prevWorktree, noop, ok := h.state.bindWorktree(newWorktree)
+	if !ok {
+		// Connection was closed mid-switch; drop the reference we just acquired.
+		h.worktreeManager.Release(newWorktree)
+		return
+	}
+	if noop {
+		// Already bound to this exact worktree; drop the extra ref.
 		h.worktreeManager.Release(newWorktree)
 		result := rpc.WorktreeSwitchResult{
-			WorkDir:      currentWorktree.WorkDir,
-			WorktreeName: currentWorktree.Name,
+			WorkDir:      newWorktree.WorkDir,
+			WorktreeName: newWorktree.Name,
 		}
 		if err := conn.Reply(ctx, req.ID, result); err != nil {
 			h.log.Error("failed to send worktree switch response", "error", err)
@@ -171,16 +173,12 @@ func (h *rpcMethodHandler) handleWorktreeSwitch(ctx context.Context, conn *jsonr
 		return
 	}
 
-	// Update state atomically first, then cleanup old worktree outside lock
-	h.state.worktree = newWorktree
-	newWorktree.Subscribe(notifier)
-	h.state.mu.Unlock()
-
 	// Cleanup old worktree (outside lock to avoid deadlock)
-	if currentWorktree != nil {
-		h.state.unsubscribeWorktreeWatchers(currentWorktree)
-		currentWorktree.Unsubscribe(notifier)
-		h.worktreeManager.Release(currentWorktree)
+	if prevWorktree != nil {
+		notifier := h.state.getNotifier()
+		h.state.unsubscribeWorktreeWatchers(prevWorktree)
+		prevWorktree.Unsubscribe(notifier)
+		h.worktreeManager.Release(prevWorktree)
 	}
 
 	h.log.Info("worktree switched", "to", newWorktree.Name)
