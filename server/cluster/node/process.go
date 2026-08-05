@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/pockode/server/authtoken"
 	"github.com/pockode/server/serverinfo"
 )
 
@@ -32,7 +34,10 @@ func NewProcessManager() *ProcessManager {
 }
 
 // Start starts a pockode process for the given node.
-// Token is required and passed as --auth-token command line argument.
+//
+// The token is required and passed via the POCKODE_AUTH_TOKEN environment
+// variable rather than a command-line flag, so it never appears in the child's
+// argv (which is world-readable on Linux through /proc/<pid>/cmdline and `ps`).
 // Returns an error if token is empty or if the node is already running.
 func (pm *ProcessManager) Start(n Node, token string) error {
 	if token == "" {
@@ -52,9 +57,11 @@ func (pm *ProcessManager) Start(n Node, token string) error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Build command with auth-token as command line argument
-	cmd := exec.Command(exePath, "--auth-token", token)
+	// Pass the token through the environment, not argv, so it stays out of
+	// /proc/<pid>/cmdline and `ps` output.
+	cmd := exec.Command(exePath)
 	cmd.Dir = n.Path
+	cmd.Env = nodeEnv(os.Environ(), token)
 
 	// Set platform-specific process attributes
 	setProcessDetached(cmd)
@@ -190,6 +197,20 @@ func (pm *ProcessManager) GetNodeStatus(n Node) NodeStatus {
 		LocalURL:  ptrOrNil(info.LocalURL),
 		RemoteURL: ptrOrNil(info.RemoteURL),
 	}
+}
+
+// nodeEnv returns base with the auth-token env var set to token, dropping any
+// inherited value for that key so the child sees exactly one, unambiguous token.
+func nodeEnv(base []string, token string) []string {
+	prefix := authtoken.EnvVar + "="
+	env := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		if strings.HasPrefix(kv, prefix) {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, prefix+token)
 }
 
 // getExecutablePath returns the path to the pockode executable.

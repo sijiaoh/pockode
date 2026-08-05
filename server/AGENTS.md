@@ -83,7 +83,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 
 | 参数 | 必需 | 默认 | 说明 |
 |------|:----:|------|------|
-| `--auth-token` | ✓ | — | API 认证令牌 |
+| `--auth-token` | ✓ | — | API 认证令牌（未设时回退到环境变量 `POCKODE_AUTH_TOKEN`；env 方式可避免 token 出现在进程 argv 中被同机其他用户读取）|
 | `--port` | | `9870` | 服务端口 |
 | `--work` | | `.` | 工作目录 |
 | `--data` | | `<work>/.pockode` | 数据目录 |

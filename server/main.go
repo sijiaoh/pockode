@@ -22,6 +22,7 @@ import (
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/authtoken"
 	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
@@ -129,7 +130,7 @@ func main() {
 	}
 
 	portFlag := flag.Int("port", defaultPort, "server port")
-	tokenFlag := flag.String("auth-token", "", "authentication token (required)")
+	tokenFlag := flag.String("auth-token", "", "authentication token (required; or set "+authtoken.EnvVar+")")
 	workDirFlag := flag.String("work", ".", "working directory")
 	dataDirFlag := flag.String("data", "", "data directory (default: <work>/.pockode)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
@@ -170,9 +171,9 @@ Flags:
 
 	port := netutil.FindAvailablePort(*portFlag)
 
-	token := *tokenFlag
+	token := authtoken.Load(*tokenFlag)
 	if token == "" {
-		slog.Error("--auth-token flag is required")
+		slog.Error("auth token is required: set --auth-token or the " + authtoken.EnvVar + " environment variable")
 		os.Exit(1)
 	}
 
@@ -486,7 +487,7 @@ func runMCP() {
 func runCluster() {
 	clusterFlags := flag.NewFlagSet("cluster", flag.ExitOnError)
 	portFlag := clusterFlags.Int("port", cluster.DefaultPort, "server port")
-	tokenFlag := clusterFlags.String("auth-token", "", "authentication token (required)")
+	tokenFlag := clusterFlags.String("auth-token", "", "authentication token (required; or set "+authtoken.EnvVar+")")
 	dataDirFlag := clusterFlags.String("data", "", "data directory (default: ~/.pockode-cluster)")
 	relayFlag := clusterFlags.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
 	relayFrontendPortFlag := clusterFlags.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
@@ -494,9 +495,9 @@ func runCluster() {
 	devModeFlag := clusterFlags.Bool("dev", false, "enable development mode")
 	clusterFlags.Parse(os.Args[2:])
 
-	token := *tokenFlag
+	token := authtoken.Load(*tokenFlag)
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "Error: --auth-token flag is required")
+		fmt.Fprintln(os.Stderr, "Error: auth token is required: set --auth-token or the "+authtoken.EnvVar+" environment variable")
 		os.Exit(1)
 	}
 

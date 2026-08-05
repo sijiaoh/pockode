@@ -84,6 +84,16 @@ The file is deleted when the server shuts down gracefully.
 - **Stop**: Sends SIGTERM to the process, then SIGKILL after 5 seconds if needed
 - **Clean Up**: For stale nodes, removes the orphaned server.json file
 
+**How the spawned node receives its token:** the cluster passes the auth token to
+each node server through the `POCKODE_AUTH_TOKEN` environment variable, never as a
+`--auth-token` command-line flag. On Linux a process's argv is world-readable via
+`/proc/<pid>/cmdline` and `ps`, so any local user on a shared cluster host could
+otherwise read the token — and because spawned nodes enable the relay by default,
+that token grants full remote read/write and AI execution over the project. The
+environment (`/proc/<pid>/environ`) is readable only by the owner and root. See
+[Authentication](code/authentication.md) for the full model. Implemented in
+`server/cluster/node/process.go` (`nodeEnv`) and `server/authtoken/`.
+
 If `node.stop` cannot find the saved process, the backend removes any stale
 `server.json` state it can clean up and returns `"node not running"`. The
 frontend treats this as a warning, refreshes `node.list`, and continues to show
@@ -100,7 +110,7 @@ cleanup guidance if stale state remains.
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--auth-token` | (required) | Authentication token for WebSocket connections |
+| `--auth-token` | (required) | Authentication token for WebSocket connections (falls back to the `POCKODE_AUTH_TOKEN` environment variable when the flag is unset) |
 | `--port` | `9871` | HTTP server port |
 | `--data` | `~/.pockode-cluster` | Data directory |
 | `--relay` | `true` | Enable relay for remote access (`-relay=false` to disable) |

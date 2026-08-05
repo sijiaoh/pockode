@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -329,6 +330,49 @@ func TestStart_AlreadyRunning(t *testing.T) {
 	if err != ErrNodeAlreadyRunning {
 		t.Errorf("Start() on running node should return ErrNodeAlreadyRunning, got: %v", err)
 	}
+}
+
+// --- nodeEnv ---
+
+func TestNodeEnv_SetsTokenAndPreservesBase(t *testing.T) {
+	base := []string{"PATH=/usr/bin", "HOME=/home/user"}
+	env := nodeEnv(base, "secret-token")
+
+	for _, kv := range base {
+		if !containsEnv(env, kv) {
+			t.Errorf("nodeEnv dropped base entry %q", kv)
+		}
+	}
+	if !containsEnv(env, "POCKODE_AUTH_TOKEN=secret-token") {
+		t.Errorf("nodeEnv did not set token env var, got %v", env)
+	}
+}
+
+func TestNodeEnv_OverridesInheritedToken(t *testing.T) {
+	base := []string{"POCKODE_AUTH_TOKEN=stale", "PATH=/usr/bin"}
+	env := nodeEnv(base, "fresh")
+
+	count := 0
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "POCKODE_AUTH_TOKEN=") {
+			count++
+			if kv != "POCKODE_AUTH_TOKEN=fresh" {
+				t.Errorf("token env = %q, want POCKODE_AUTH_TOKEN=fresh", kv)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly one token env entry, got %d", count)
+	}
+}
+
+func containsEnv(env []string, kv string) bool {
+	for _, e := range env {
+		if e == kv {
+			return true
+		}
+	}
+	return false
 }
 
 // --- Stop ---
