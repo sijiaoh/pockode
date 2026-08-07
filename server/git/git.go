@@ -262,8 +262,7 @@ func Status(dir string) (*GitStatus, error) {
 // computed, letting callers that also need the paths (Diff) avoid re-forking
 // `git config --file .gitmodules` for the same directory.
 func statusWithSubmodules(dir string, submodules []string) (*GitStatus, error) {
-	cmd := exec.Command("git", "--no-optional-locks", "status", "--porcelain=v1", "-uall", "--ignore-submodules=none")
-	cmd.Dir = dir
+	cmd := gitCommand(dir, "--no-optional-locks", "status", "--porcelain=v1", "-z", "-uall", "--ignore-submodules=none")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git status failed: %w", err)
@@ -293,35 +292,61 @@ func statusWithSubmodules(dir string, submodules []string) (*GitStatus, error) {
 		}
 	}
 
-	for _, line := range strings.Split(string(output), "\n") {
-		if len(line) < 3 {
-			continue
-		}
-
-		// Porcelain v1: XY PATH where X=staged, Y=unstaged
-		stagedStatus := line[0]
-		unstagedStatus := line[1]
-		path := strings.TrimSpace(line[3:])
-
-		// Handle renames: "old -> new"
-		if idx := strings.Index(path, " -> "); idx != -1 {
-			path = path[idx+4:]
-		}
-
+	for _, entry := range parseStatusZ(string(output)) {
 		// Skip submodule entries (already handled recursively)
-		if contains(submodules, path) {
+		if contains(submodules, entry.path) {
 			continue
 		}
 
-		if stagedStatus != ' ' && stagedStatus != '?' {
-			result.Staged = append(result.Staged, FileStatus{Path: path, Status: string(stagedStatus)})
+		if entry.staged != ' ' && entry.staged != '?' {
+			result.Staged = append(result.Staged, FileStatus{Path: entry.path, Status: string(entry.staged)})
 		}
-		if unstagedStatus != ' ' {
-			result.Unstaged = append(result.Unstaged, FileStatus{Path: path, Status: string(unstagedStatus)})
+		if entry.unstaged != ' ' {
+			result.Unstaged = append(result.Unstaged, FileStatus{Path: entry.path, Status: string(entry.unstaged)})
 		}
 	}
 
 	return result, nil
+}
+
+// statusEntry is one parsed record of `git status --porcelain=v1 -z`.
+type statusEntry struct {
+	staged   byte
+	unstaged byte
+	path     string
+}
+
+// parseStatusZ parses `git status --porcelain=v1 -z` output.
+//
+// The -z format is used instead of the line-based one because git C-escapes
+// paths that contain non-ASCII bytes or whitespace ("\344\270\255" instead of
+// "中"), and because the line format renders renames as "old -> new", which is
+// ambiguous for a file actually named "a -> b". With -z the path is emitted
+// verbatim and the rename source follows in its own NUL-terminated field.
+func parseStatusZ(output string) []statusEntry {
+	var entries []statusEntry
+
+	fields := strings.Split(output, "\x00")
+	for i := 0; i < len(fields); i++ {
+		field := fields[i]
+		// "XY PATH": two status bytes, a space, then at least one path byte.
+		if len(field) < 4 {
+			continue
+		}
+
+		entry := statusEntry{staged: field[0], unstaged: field[1], path: field[3:]}
+		if isRenameOrCopy(entry.staged) || isRenameOrCopy(entry.unstaged) {
+			i++ // consume the source path field
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return entries
+}
+
+func isRenameOrCopy(status byte) bool {
+	return status == 'R' || status == 'C'
 }
 
 func contains(slice []string, item string) bool {
@@ -342,23 +367,36 @@ func isGitRepository(dir string) bool {
 }
 
 func getSubmodulePaths(dir string) []string {
-	cmd := exec.Command("git", "config", "--file", ".gitmodules", "--get-regexp", "path")
-	cmd.Dir = dir
+	// -z terminates each entry with NUL and separates key from value with a
+	// newline, so submodule paths containing spaces stay intact.
+	cmd := gitCommand(dir, "config", "-z", "--file", ".gitmodules", "--get-regexp", "path")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
 
 	var paths []string
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		// Format: "submodule.<name>.path <path>"
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			paths = append(paths, parts[1])
+	for _, entry := range strings.Split(string(output), "\x00") {
+		// Format: "submodule.<name>.path\n<path>"
+		_, path, ok := strings.Cut(entry, "\n")
+		if !ok || path == "" {
+			continue
 		}
+		paths = append(paths, path)
 	}
 	return paths
+}
+
+// gitCommand builds a git command running in dir with core.quotePath disabled.
+//
+// git's default core.quotePath=true C-escapes non-ASCII paths (rendering "中"
+// as "\344\270\255") in human-readable output such as diff headers. Disabling
+// it keeps those paths as real UTF-8; paths containing quotes, backslashes or
+// control characters are still quoted by git regardless of this setting.
+func gitCommand(dir string, args ...string) *exec.Cmd {
+	cmd := exec.Command("git", append([]string{"-c", "core.quotePath=false"}, args...)...)
+	cmd.Dir = dir
+	return cmd
 }
 
 // DiffOptions contains options for git diff operations.
@@ -409,8 +447,7 @@ func diffWith(dir, path string, opts DiffOptions, submodules []string) (string, 
 	}
 	args = append(args, "--", relativePath)
 
-	cmd := exec.Command("git", args...)
-	cmd.Dir = actualDir
+	cmd := gitCommand(actualDir, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git diff failed: %w (output: %s)", err, string(output))
@@ -791,12 +828,12 @@ func Show(dir, hash string) (*ShowResult, error) {
 		"-m",
 		"--first-parent",
 		"--name-status",
+		"-z",
 		"--format=",
 		hash,
 	}
 
-	filesCmd := exec.Command("git", filesArgs...)
-	filesCmd.Dir = dir
+	filesCmd := gitCommand(dir, filesArgs...)
 	filesOutput, err := filesCmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git show --name-status failed: %w", err)
@@ -810,39 +847,38 @@ func Show(dir, hash string) (*ShowResult, error) {
 	}, nil
 }
 
-// parseNameStatus parses git's --name-status output.
+// parseNameStatus parses git's `--name-status -z` output.
+//
+// Fields are NUL-terminated: "M\0path\0" for ordinary changes and
+// "R100\0old\0new\0" for renames/copies. The tab-separated form is not used
+// because git C-escapes non-ASCII paths there (see gitCommand).
 func parseNameStatus(output string) []FileChange {
 	var files []FileChange
 
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	fields := strings.Split(output, "\x00")
+	for i := 0; i < len(fields); {
+		status := fields[i]
+		i++
+		if status == "" {
 			continue
 		}
-
-		// Format: "M\tfilename" or "R100\told\tnew"
-		parts := strings.Split(line, "\t")
-		if len(parts) < 2 {
-			continue
+		if i >= len(fields) {
+			break
 		}
 
-		status := parts[0]
-		path := parts[1]
+		path := fields[i]
+		i++
 
 		// For renames/copies, use the new filename and normalize to "R"
-		if len(parts) > 2 && (status[0] == 'R' || status[0] == 'C') {
-			path = parts[2]
+		if isRenameOrCopy(status[0]) && i < len(fields) {
+			path = fields[i]
+			i++
 			status = "R"
-		}
-
-		// Normalize status to single character
-		if len(status) > 1 {
-			status = string(status[0])
 		}
 
 		files = append(files, FileChange{
 			Path:   path,
-			Status: status,
+			Status: status[:1],
 		})
 	}
 
@@ -866,8 +902,7 @@ func ShowFileDiff(dir, hash, path string, hideWhitespace bool) (*DiffResult, err
 	}
 	args = append(args, "--", path)
 
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	cmd := gitCommand(dir, args...)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git show failed: %w", err)

@@ -139,7 +139,7 @@ func TestParseNameStatus(t *testing.T) {
 		},
 		{
 			name:  "simple changes",
-			input: "M\tserver/git/git.go\nA\tserver/git/log_test.go\nD\told_file.go",
+			input: "M\x00server/git/git.go\x00A\x00server/git/log_test.go\x00D\x00old_file.go\x00",
 			expected: []FileChange{
 				{Path: "server/git/git.go", Status: "M"},
 				{Path: "server/git/log_test.go", Status: "A"},
@@ -148,16 +148,31 @@ func TestParseNameStatus(t *testing.T) {
 		},
 		{
 			name:  "rename with percentage",
-			input: "R100\told_name.go\tnew_name.go",
+			input: "R100\x00old_name.go\x00new_name.go\x00",
 			expected: []FileChange{
 				{Path: "new_name.go", Status: "R"},
 			},
 		},
 		{
 			name:  "copy normalized to R",
-			input: "C050\toriginal.go\tcopy.go",
+			input: "C050\x00original.go\x00copy.go\x00",
 			expected: []FileChange{
 				{Path: "copy.go", Status: "R"}, // Copy normalized to "R"
+			},
+		},
+		{
+			name:  "non-ASCII path is kept verbatim",
+			input: "M\x00中文文件.txt\x00R100\x00旧名.txt\x00新名.txt\x00",
+			expected: []FileChange{
+				{Path: "中文文件.txt", Status: "M"},
+				{Path: "新名.txt", Status: "R"},
+			},
+		},
+		{
+			name:  "path containing spaces and arrow",
+			input: "M\x00a -> b.txt\x00",
+			expected: []FileChange{
+				{Path: "a -> b.txt", Status: "M"},
 			},
 		},
 	}
