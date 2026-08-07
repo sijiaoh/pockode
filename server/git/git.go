@@ -792,6 +792,17 @@ func parseLogOutput(output string) []Commit {
 	return commits
 }
 
+// firstParentShowArgs builds `git show` arguments that render a merge commit as
+// an ordinary diff against its first parent (a no-op on non-merge commits).
+//
+// Show (the file list) and ShowFileDiff (a file's contents) must both go through
+// it: plain `git show` on a merge produces a combined diff, which omits every
+// file whose content matches one of the parents, so the files the list reports
+// would open with an empty diff. hash^ in ShowFileDiff is that same parent.
+func firstParentShowArgs(extra ...string) []string {
+	return append([]string{"show", "-m", "--first-parent"}, extra...)
+}
+
 // Show returns detailed commit information including changed files.
 func Show(dir, hash string) (*ShowResult, error) {
 	if err := validateCommitHash(hash); err != nil {
@@ -821,18 +832,7 @@ func Show(dir, hash string) (*ShowResult, error) {
 	commit := commits[0]
 
 	// Get changed files with status
-	// -m: for merge commits, show diff against each parent (we take first)
-	// --first-parent: follow only the first parent
-	filesArgs := []string{
-		"show",
-		"-m",
-		"--first-parent",
-		"--name-status",
-		"-z",
-		"--format=",
-		hash,
-	}
-
+	filesArgs := firstParentShowArgs("--name-status", "-z", "--format=", hash)
 	filesCmd := gitCommand(dir, filesArgs...)
 	filesOutput, err := filesCmd.Output()
 	if err != nil {
@@ -896,7 +896,7 @@ func ShowFileDiff(dir, hash, path string, hideWhitespace bool) (*DiffResult, err
 	}
 
 	// Get the diff using git show
-	args := []string{"show", "--format=", hash}
+	args := firstParentShowArgs("--format=", hash)
 	if hideWhitespace {
 		args = append(args, "-w")
 	}

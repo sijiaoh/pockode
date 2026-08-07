@@ -670,6 +670,124 @@ func TestShowFileDiff_HideWhitespace(t *testing.T) {
 	}
 }
 
+// TestShow_FileDiffRoundTrip pins the contract that ties the two commit-history
+// paths together: every file Show lists must yield a non-empty ShowFileDiff.
+// Merge commits used to break it, so all commit shapes are checked together.
+func TestShow_FileDiffRoundTrip(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	commitAll := func(msg string) string {
+		t.Helper()
+		runGit(t, dir, "add", "-A")
+		runGit(t, dir, "commit", "--no-gpg-sign", "-m", msg)
+		return gitHead(t, dir)
+	}
+
+	type commitCase struct {
+		name      string
+		hash      string
+		wantFiles map[string]string
+	}
+	var cases []commitCase
+
+	writeTestFile(t, dir, "a.txt", "a\n")
+	cases = append(cases, commitCase{"initial", commitAll("initial"), map[string]string{"a.txt": "A"}})
+
+	writeTestFile(t, dir, "a.txt", "a\nb\n")
+	cases = append(cases, commitCase{"ordinary", commitAll("ordinary"), map[string]string{"a.txt": "M"}})
+
+	runGit(t, dir, "commit", "--no-gpg-sign", "--allow-empty", "-m", "empty")
+	cases = append(cases, commitCase{"empty", gitHead(t, dir), map[string]string{}})
+
+	// Pinned on: with a globally disabled core.fileMode git sees no change here
+	// and the commit below would fail instead of exercising a mode change.
+	runGit(t, dir, "config", "core.fileMode", "true")
+	if err := os.Chmod(filepath.Join(dir, "a.txt"), 0755); err != nil {
+		t.Fatalf("failed to chmod a.txt: %v", err)
+	}
+	cases = append(cases, commitCase{"mode change", commitAll("mode change"), map[string]string{"a.txt": "M"}})
+
+	runGit(t, dir, "mv", "a.txt", "renamed.txt")
+	cases = append(cases, commitCase{"rename", commitAll("rename"), map[string]string{"renamed.txt": "R"}})
+
+	// The branch file is identical in the merge and in the second parent, so a
+	// combined diff would render it empty.
+	base := gitOutput(t, dir, "rev-parse", "--abbrev-ref", "HEAD")
+	runGit(t, dir, "checkout", "-b", "feature")
+	writeTestFile(t, dir, "feature.txt", "feature\n")
+	commitAll("add feature file")
+	runGit(t, dir, "checkout", base)
+	writeTestFile(t, dir, "base.txt", "base\n")
+	commitAll("add base file")
+	runGit(t, dir, "merge", "--no-ff", "--no-gpg-sign", "-m", "merge feature", "feature")
+	cases = append(cases, commitCase{"merge", gitHead(t, dir), map[string]string{"feature.txt": "A"}})
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := Show(dir, tc.hash)
+			if err != nil {
+				t.Fatalf("Show() error: %v", err)
+			}
+
+			got := make(map[string]string, len(result.Files))
+			for _, f := range result.Files {
+				got[f.Path] = f.Status
+
+				diff, err := ShowFileDiff(dir, tc.hash, f.Path, false)
+				if err != nil {
+					t.Fatalf("ShowFileDiff(%q) error: %v", f.Path, err)
+				}
+				if diff.Diff == "" {
+					t.Errorf("ShowFileDiff(%q) is empty although Show listed the file", f.Path)
+				}
+			}
+			if !reflect.DeepEqual(got, tc.wantFiles) {
+				t.Errorf("files = %v, want %v", got, tc.wantFiles)
+			}
+		})
+	}
+}
+
+// TestShowFileDiff_MergeCommit checks the merge diff is taken against the first
+// parent, matching the file list and the OldContent/NewContent pair.
+func TestShowFileDiff_MergeCommit(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	writeTestFile(t, dir, "shared.txt", "base\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+
+	base := gitOutput(t, dir, "rev-parse", "--abbrev-ref", "HEAD")
+	runGit(t, dir, "checkout", "-b", "feature")
+	writeTestFile(t, dir, "shared.txt", "base\nfeature\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "extend on feature")
+
+	runGit(t, dir, "checkout", base)
+	writeTestFile(t, dir, "other.txt", "other\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "unrelated change")
+	runGit(t, dir, "merge", "--no-ff", "--no-gpg-sign", "-m", "merge feature", "feature")
+
+	hash := gitHead(t, dir)
+	result, err := ShowFileDiff(dir, hash, "shared.txt", false)
+	if err != nil {
+		t.Fatalf("ShowFileDiff() error: %v", err)
+	}
+
+	if !strings.Contains(result.Diff, "+feature") {
+		t.Errorf("diff should contain '+feature', got: %q", result.Diff)
+	}
+	if result.OldContent != "base\n" {
+		t.Errorf("OldContent = %q, want %q", result.OldContent, "base\n")
+	}
+	if result.NewContent != "base\nfeature\n" {
+		t.Errorf("NewContent = %q, want %q", result.NewContent, "base\nfeature\n")
+	}
+}
+
 func TestParseStatusZ(t *testing.T) {
 	tests := []struct {
 		name     string
