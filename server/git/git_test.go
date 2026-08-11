@@ -946,8 +946,9 @@ func TestParseStatusZ(t *testing.T) {
 }
 
 // nonASCIIPaths covers CJK plus names that git's line-based output would make
-// ambiguous even without escaping.
-var nonASCIIPaths = []string{"中文文件.txt", "目录/子文件.md", "带 空格 的 文件.txt", "箭头 -> 文件.txt"}
+// ambiguous even without escaping. Names that only some platforms can represent
+// live in platformNonASCIIPaths (paths_unix_test.go / paths_windows_test.go).
+var nonASCIIPaths = append([]string{"中文文件.txt", "目录/子文件.md", "带 空格 的 文件.txt"}, platformNonASCIIPaths...)
 
 // setupQuotedTestRepo is setupTestRepo with git's default path quoting pinned on,
 // so these tests still exercise escaped output when the host disables it globally.
