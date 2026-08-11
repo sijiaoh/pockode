@@ -412,6 +412,49 @@ Permission rules can be saved to different locations:
 
 ## Process Management
 
+### Subprocess Lifecycle
+
+`agent.Process` (`server/agent/process.go`) wraps the CLI subprocess. Both agent
+implementations go through it instead of using `exec.Cmd` directly, because an
+AI CLI is never a single process:
+
+- It spawns processes of its own — shell commands it runs, MCP servers it starts.
+- On Windows npm installs `claude` as `claude.cmd`, so the direct child is a
+  `cmd.exe` wrapper and the real node process is a grandchild.
+
+Two consequences follow, and `exec.Cmd` handles neither on its own.
+
+**Killing the child is not killing the tree.** Terminating only the direct child
+leaves the rest running: sessions never end, goroutines leak, and the worktree
+cannot be removed because orphans still hold files in it. `Process` therefore
+tracks the whole tree from the start:
+
+| Platform | Mechanism |
+|----------|-----------|
+| Unix | The child leads its own process group (`Setpgid`); termination signals the group |
+| Windows | The child is assigned to a Job Object; termination calls `TerminateJobObject` |
+
+The Job Object also carries `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so if the
+server itself dies the OS tears the tree down instead of leaving orphans behind.
+
+**Reaping must not depend on the pipes.** Descendants inherit the stdout and
+stderr write ends, so those pipes do not reach EOF while any of them is alive.
+`Cmd.StdoutPipe` must not be read after `Wait`, which forces callers into
+"drain, then Wait" — and that deadlocks outright the moment one orphan survives:
+the drain never finishes, so `Wait` is never reached. `Process` supplies its own
+`os.Pipe` files instead, which keeps `Wait` dependent only on the direct child,
+and reaps it concurrently with the drain:
+
+```
+Start ──┬─ reap goroutine:  Wait ─→ terminate tree ─→ close pipes
+        └─ caller:          drain stdout ─→ OutputDone ─→ Wait
+```
+
+Once the direct child is reaped, anything still holding the pipes outlived it, so
+the tree is terminated there too — that is what lets the caller's drain finish.
+A backstop closes the pipes a few seconds later regardless, covering a descendant
+that escaped the tree entirely (e.g. by starting a new session).
+
 ### State Machine
 
 ```
@@ -561,7 +604,7 @@ if errors.Is(err, bufio.ErrTooLong) {
 ### Fatal Errors
 
 The following conditions send an `ErrorEvent` and end the session:
-- Process crash (`cmd.Wait()` returns non-context error)
+- Process crash (`Process.Wait()` returns non-context error)
 - MCP initialization failure
 - Critical I/O errors
 
@@ -572,6 +615,7 @@ The following conditions send an `ErrorEvent` and end the session:
 | Agent interface | `server/agent/agent.go` |
 | Event types | `server/agent/event.go` |
 | Event serialization | `server/agent/history.go` |
+| Subprocess lifecycle | `server/agent/process.go`, `server/agent/procgroup_{unix,windows}.go` |
 | Claude implementation | `server/agent/claude/claude.go` |
 | Codex implementation | `server/agent/codex/codex.go` |
 | Chat client | `server/chat/client.go` |

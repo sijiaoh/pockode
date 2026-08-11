@@ -47,47 +47,22 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		return nil, fmt.Errorf("resolve executable path: %w", err)
 	}
 
-	cmd := exec.CommandContext(procCtx, Binary, mcpSubcommand)
-	cmd.Dir = opts.WorkDir
+	log := slog.With("sessionId", opts.SessionID, "agent", "codex")
 
-	stdin, err := cmd.StdinPipe()
+	proc, err := agent.StartProcess(procCtx, log, Binary, []string{mcpSubcommand}, opts.WorkDir)
 	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		stdin.Close()
-		cancel()
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		stdin.Close()
-		stdout.Close()
-		cancel()
-		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		stdin.Close()
-		stdout.Close()
-		stderr.Close()
 		cancel()
 		return nil, fmt.Errorf("failed to start codex: %w", err)
 	}
 
-	log := slog.With("sessionId", opts.SessionID, "agent", "codex")
-	log.Info("codex process started", "pid", cmd.Process.Pid, "subcommand", mcpSubcommand)
+	log.Info("codex process started", "pid", proc.Pid(), "subcommand", mcpSubcommand)
 
 	events := make(chan agent.AgentEvent, 100)
 
 	sess := &mcpSession{
 		log:               log,
 		events:            events,
-		stdin:             stdin,
+		stdin:             proc.Stdin,
 		cancel:            cancel,
 		procCtx:           procCtx,
 		opts:              opts,
@@ -108,13 +83,11 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}()
 		defer close(events)
 		defer cancel()
-		defer stdout.Close()
-		defer stderr.Close()
 
-		stderrCh := agent.ReadStderr(stderr, "codex")
-		sess.runMCPLoop(procCtx, stdout)
+		stderrCh := agent.ReadStderr(proc.Stderr, "codex")
+		sess.runMCPLoop(procCtx, proc.Stdout)
 		sess.cleanupPendingElicitations()
-		agent.WaitForProcess(procCtx, log, cmd, stderrCh, events)
+		agent.WaitForProcess(procCtx, log, proc, stderrCh, events)
 
 		select {
 		case events <- agent.ProcessEndedEvent{}:

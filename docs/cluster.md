@@ -81,7 +81,11 @@ The file is deleted when the server shuts down gracefully.
 **Operations:**
 
 - **Start**: Spawns a new Pockode process for the node (requires auth token)
-- **Stop**: Sends SIGTERM to the process, then SIGKILL after 5 seconds if needed
+- **Stop**: Asks the node to exit, then force-kills it after a 5 second grace
+  period. The polite step is platform-specific — SIGTERM on unix, a Ctrl+Break
+  console event on Windows. Windows can only deliver that event to a process
+  sharing its console, so a cluster running detached (as a service, say) has
+  nothing to wait for and goes straight to the forced kill.
 - **Clean Up**: For stale nodes, removes the orphaned server.json file
 
 **How the spawned node receives its token:** the cluster passes the auth token to
