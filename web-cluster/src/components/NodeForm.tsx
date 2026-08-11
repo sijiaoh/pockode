@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useIsDesktop } from "../hooks";
 import type { Node } from "../types/node";
+import { baseName } from "../utils/path";
 import { ConfirmDialog, ResponsivePanel, Spinner } from "./ui";
 
 interface Props {
@@ -93,9 +94,7 @@ export function NodeForm({ isOpen, onClose, onSubmit, editingNode }: Props) {
 	};
 
 	// Derive name placeholder from path
-	const namePlaceholder = path.trim()
-		? path.trim().split("/").filter(Boolean).pop() || ""
-		: "Derived from path";
+	const namePlaceholder = baseName(path.trim()) || "Derived from path";
 
 	return (
 		<ResponsivePanel

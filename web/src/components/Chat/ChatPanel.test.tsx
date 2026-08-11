@@ -50,6 +50,7 @@ vi.mock("../../lib/wsStore", () => {
 	const mockStore = ((selector: (state: unknown) => unknown) => {
 		const state = {
 			status: "connected",
+			workDir: "",
 			actions: createMockActions(),
 		};
 		return selector(state);
