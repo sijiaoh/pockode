@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/pockode/server/internal/fspermtest"
 )
 
 func TestWriteAndDelete(t *testing.T) {
@@ -74,6 +76,20 @@ func TestWriteCreatesDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, filename)); err != nil {
 		t.Errorf("server.json not created: %v", err)
 	}
+}
+
+// server.json carries the MCP local API token, so Write has to leave the file
+// and its directory out of reach of other local users. On Windows only the
+// directory's ACL delivers that; the 0600 there is inert.
+func TestWriteRestrictsTokenFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested", ".pockode")
+
+	if err := Write(dir, 9870, "http://localhost:9870", "", "secret-token"); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	fspermtest.RequireOwnerOnly(t, dir)
+	fspermtest.RequireOwnerOnly(t, filepath.Join(dir, filename))
 }
 
 func TestRead(t *testing.T) {

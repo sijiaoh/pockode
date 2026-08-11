@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/pockode/server/internal/fsperm"
 )
 
 type StoredConfig struct {
@@ -41,9 +43,15 @@ func (s *Store) Load() (*StoredConfig, error) {
 	return &cfg, nil
 }
 
-// Save uses 0600 permissions to protect the token.
+// Save restricts the data directory to the owner before writing, because that
+// is what protects the relay token: the 0600 below is inert on Windows, where a
+// file simply inherits its directory's ACL. See internal/fsperm.
+//
+// Stealing this token is worth doing — it lets the holder register the user's
+// subdomain on the relay and receive the requests their phone makes, auth
+// header included.
 func (s *Store) Save(cfg *StoredConfig) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
+	if err := fsperm.RestrictDir(filepath.Dir(s.path)); err != nil {
 		return err
 	}
 

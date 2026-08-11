@@ -26,6 +26,7 @@ import (
 	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/internal/fsperm"
 	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/internal/pathutil"
 	"github.com/pockode/server/logger"
@@ -200,6 +201,16 @@ Flags:
 		os.Exit(1)
 	}
 	dataDir := absDataDir
+
+	// Restrict the data directory before anything writes into it, so every file
+	// it ends up holding — the MCP local token, the relay token, session
+	// transcripts, the log — inherits the restriction instead of being fixed up
+	// afterwards. See internal/fsperm for why this is a property of the
+	// directory rather than of each file.
+	if err := fsperm.RestrictDir(dataDir); err != nil {
+		slog.Error("failed to secure data directory", "path", dataDir, "error", err)
+		os.Exit(1)
+	}
 
 	logger.Init(logger.Config{
 		DataDir:   dataDir,
@@ -514,7 +525,7 @@ func runCluster() {
 		}
 		dataDir = filepath.Join(homeDir, ".pockode-cluster")
 	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := fsperm.RestrictDir(dataDir); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to create data directory: %v\n", err)
 		os.Exit(1)
 	}

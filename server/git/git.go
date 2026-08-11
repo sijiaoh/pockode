@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/pockode/server/internal/fsperm"
 )
 
 // Config holds configuration for git initialization.
@@ -105,6 +107,22 @@ func shellQuote(s string) string {
 func setupLocalCredential(dir, host, token string) error {
 	gitDir := filepath.Join(dir, ".git")
 	credFile := filepath.Join(gitDir, ".git-credentials")
+
+	// Restrict .git before the PAT lands inside it. The directory rather than
+	// the file, for the usual reason plus a specific one: git's `store` helper
+	// rewrites the credentials file on every successful authentication, through
+	// a lock file it renames over the target. That replacement carries the
+	// permissions it was created with, so anything set on the file itself is
+	// gone after the first push. Its umask(077) keeps the rewrite at 0600 on
+	// unix, but a umask means nothing on Windows — there only an inherited ACL
+	// survives.
+	//
+	// Restricting a directory Pockode does not own would be presumptuous; this
+	// one it does. Init returns early when .git already exists, so reaching
+	// here means git init created it moments ago.
+	if err := fsperm.RestrictDir(gitDir); err != nil {
+		return fmt.Errorf("failed to restrict git directory: %w", err)
+	}
 
 	cmd := exec.Command("git", "config", "--local", "credential.helper", credentialHelperConfig(credFile))
 	cmd.Dir = dir

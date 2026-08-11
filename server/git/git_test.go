@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/pockode/server/internal/fspermtest"
 )
 
 func TestExtractHost(t *testing.T) {
@@ -545,6 +547,24 @@ func TestCredentialHelperConfig_NoBackslashesInNativePath(t *testing.T) {
 	if !strings.Contains(got, filepath.ToSlash(credFile)) {
 		t.Errorf("credentialHelperConfig(%q) = %q, should carry the credentials path", credFile, got)
 	}
+}
+
+// The PAT written here has the widest blast radius of any credential Pockode
+// stores — it stays valid off this machine. What protects it is .git being
+// restricted, not the file's own 0600: git's `store` helper rewrites
+// .git-credentials after every successful authentication and the replacement
+// carries its own permissions.
+func TestSetupLocalCredential_RestrictsGitDir(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	if err := setupLocalCredential(dir, "github.com", "secret-pat"); err != nil {
+		t.Fatalf("setupLocalCredential() error = %v", err)
+	}
+
+	gitDir := filepath.Join(dir, ".git")
+	fspermtest.RequireOwnerOnly(t, gitDir)
+	fspermtest.RequireOwnerOnly(t, filepath.Join(gitDir, ".git-credentials"))
 }
 
 // The contract that matters is what the shell hands to the helper process, so

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/pockode/server/internal/fsperm"
 )
 
 const filename = "server.json"
@@ -27,7 +29,7 @@ type Info struct {
 // Write creates the server.json file in the given data directory.
 // Creates the data directory if it doesn't exist.
 func Write(dataDir string, port int, localURL, remoteURL, token string) error {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := fsperm.RestrictDir(dataDir); err != nil {
 		return err
 	}
 
@@ -45,9 +47,11 @@ func Write(dataDir string, port int, localURL, remoteURL, token string) error {
 		return err
 	}
 
-	// 0600: server.json holds the local API token (a credential), so restrict it
-	// to the owner. Chmod as well, since WriteFile does not alter the mode of an
-	// already-existing file (e.g. a stale file left by a previous crash).
+	// server.json holds the local API token (a credential). The mode below only
+	// covers unix — on Windows the protection comes from the restricted data
+	// directory above, which the file inherits. Chmod as well, since WriteFile
+	// does not alter the mode of an already-existing file (e.g. a stale file
+	// left by a previous crash).
 	path := filepath.Join(dataDir, filename)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return err
