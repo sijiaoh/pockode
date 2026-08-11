@@ -422,6 +422,21 @@ body {
   color: var(--text-muted);
 }
 
+.install-note code {
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', monospace;
+  font-size: 0.875em;
+  color: var(--text-secondary);
+}
+
+.install-note a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.install-note a:hover {
+  text-decoration: underline;
+}
+
 /* Footer */
 .footer {
   padding: 4rem 2rem;

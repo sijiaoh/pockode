@@ -62,6 +62,25 @@ ws/                     # WebSocket RPC 处理（rpc_*.go 按领域分割）
 - 中间件模式：见 `middleware/auth.go`
 - Mutex 命名：不用 `mu`，用明确说明保护对象的名称（如 `requestsMu`、`streamsMu`）
 
+### 跨平台
+
+Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](../docs/platforms.md)）。平台差异一律用构建标签分文件承载，业务代码里不出现 `runtime.GOOS`：平台无关的文件定义类型和调用点，`_unix.go`（`//go:build !windows`）/ `_windows.go` 各提供一份实现。
+
+| 平台无关入口 | 平台实现 |
+|------|----------|
+| `filestore/lock.go` | `lock_{unix,windows}.go` — `flock(2)` / `LockFileEx` |
+| `filestore/rename.go` | `rename_{unix,windows}.go` — Windows 上替换目标可能被临时占用，需重试 |
+| `agent/process.go` | `procgroup_{unix,windows}.go` — 进程组 / Job Object |
+| `worktree/setup.go` | `hook_shell_{unix,windows}.go` — setup hook 的解释器（Windows 无 bash，探测 Git for Windows） |
+| `worktree/pathcmp.go` | `pathcmp_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
+| `cluster/node/process.go` | `process_{unix,windows}.go` — 优雅关闭信号 |
+
+三条最容易踩错的地方：
+
+- **跑 `GOOS=windows GOARCH=amd64 go vet ./...`，不只是 `go build`** —— `go build` 不编译 `_test.go`，而测试文件里的 `syscall` 和路径假设正是最容易在 Windows 上腐化的部分。CI 的 `windows-cross-compile` job 两步都跑。
+- **`git` 的输出永远是正斜杠**，即使在 Windows 上；和原生路径比较前要 `filepath.FromSlash`（见 `worktree/registry.go` 的 `parseWorktreeList`）。反过来，传给 bash 脚本的路径要 `filepath.ToSlash`，因为 bash 里反斜杠是转义符。
+- **平台相关的测试 skip 必须写明理由**。CI 的测试步骤会在末尾打印 skip 清单——全靠 skip 变绿的矩阵腿比没有这条腿更糟。装了 Git for Windows 的 Windows runner 上目前只应出现 `TestStore_FilePermissions` 一条，多出来的每一条都要追。能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip。
+
 ### 解析外部输出
 
 解析 CLI JSON 失败时，返回原始内容而非 nil（优雅降级）：

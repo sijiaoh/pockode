@@ -109,6 +109,14 @@ hosting) revisits them rather than rediscovering them:
   single-developer model this is not a privilege escalation — the same developer
   already has shell and agent access — and the data directory can be relocated with
   `--data`.
+- **`0600` on credential files buys nothing on Windows.** `server.json` (the MCP
+  local token), `relay.json` and `.git/.git-credentials` are written with `0600`,
+  which on unix keeps other local users out. Windows has no POSIX mode bits: Go
+  maps `perm` only to the read-only attribute, and the file inherits its parent
+  directory's ACL — so the actual protection is whatever that directory grants
+  (this is also why `relay`'s file-permission test skips on Windows). Under the
+  single-developer model the host is the developer's own machine; a shared
+  Windows host would need the directory ACL restricted explicitly.
 - **Symlinks are not resolved during path validation.** `ValidatePath` rejects
   `..` and absolute paths and re-checks that the joined path stays inside the work
   directory, but it does not resolve symlinks, so a symlink inside a worktree can
