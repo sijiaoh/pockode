@@ -114,6 +114,14 @@ func TestUpdate_Name(t *testing.T) {
 	s := newTestStore(t)
 	role := createRole(t, s, "Old", "prompt")
 
+	// Rewind so the assertion below is about Update refreshing UpdatedAt rather
+	// than about the wall clock's resolution: on Windows two time.Now() calls
+	// microseconds apart routinely return the same instant.
+	s.rolesMu.Lock()
+	backdated := role.UpdatedAt.Add(-time.Hour)
+	s.roles[s.findIndex(role.ID)].UpdatedAt = backdated
+	s.rolesMu.Unlock()
+
 	newName := "New"
 	if err := s.Update(context.Background(), role.ID, UpdateFields{Name: &newName}); err != nil {
 		t.Fatal(err)
@@ -123,8 +131,8 @@ func TestUpdate_Name(t *testing.T) {
 	if got.Name != "New" {
 		t.Errorf("name = %q, want %q", got.Name, "New")
 	}
-	if got.UpdatedAt.Equal(role.UpdatedAt) {
-		t.Error("expected updated_at to change")
+	if !got.UpdatedAt.After(backdated) {
+		t.Error("expected Update to refresh updated_at")
 	}
 }
 

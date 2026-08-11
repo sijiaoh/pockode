@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func newTestStore(t *testing.T) *FileStore {
@@ -191,6 +192,14 @@ func TestUpdate_Name(t *testing.T) {
 	dir := createTestDir(t, "project")
 	node := createNode(t, s, dir, "Old")
 
+	// Rewind so the assertion below is about Update refreshing UpdatedAt rather
+	// than about the wall clock's resolution: on Windows two time.Now() calls
+	// microseconds apart routinely return the same instant.
+	s.nodesMu.Lock()
+	backdated := node.UpdatedAt.Add(-time.Hour)
+	s.nodes[s.findIndex(node.ID)].UpdatedAt = backdated
+	s.nodesMu.Unlock()
+
 	newName := "New"
 	updated, err := s.Update(node.ID, UpdateFields{Name: &newName}, false)
 	if err != nil {
@@ -200,8 +209,8 @@ func TestUpdate_Name(t *testing.T) {
 	if updated.Name != "New" {
 		t.Errorf("name = %q, want %q", updated.Name, "New")
 	}
-	if updated.UpdatedAt.Equal(node.UpdatedAt) {
-		t.Error("expected updated_at to change")
+	if !updated.UpdatedAt.After(backdated) {
+		t.Error("expected Update to refresh updated_at")
 	}
 }
 
