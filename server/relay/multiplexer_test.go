@@ -25,9 +25,14 @@ func dialTestMux(t *testing.T, handler http.HandlerFunc) *Multiplexer {
 	}
 
 	mux := NewMultiplexer(conn, make(chan *VirtualStream, 1), nil, slog.Default())
-	// Shorten intervals so the test exercises several ping cycles quickly.
+	// Ping often so tests exercise several cycles quickly, but leave the timeout
+	// generous: a pong that does arrive must never be judged late. Deciding a
+	// healthy loopback connection is dead because the machine was busy is the
+	// exact false positive keepAlive exists to avoid, and a test that reproduces
+	// it under load is testing the scheduler rather than the code. Tests that
+	// need the timeout to fire shorten it themselves.
 	mux.pingInterval = 20 * time.Millisecond
-	mux.pingTimeout = 50 * time.Millisecond
+	mux.pingTimeout = 5 * time.Second
 	return mux
 }
 
@@ -46,6 +51,11 @@ func TestMultiplexerKeepAliveDetectsDeadConnection(t *testing.T) {
 		defer c.CloseNow()
 		<-serverDone // Never read, so pings are never answered.
 	})
+
+	// This is the one test that needs the timeout to elapse, so it has to be
+	// short enough to fit the budget below. Being on a slow machine only makes
+	// the pong later, which is the outcome this test wants either way.
+	mux.pingTimeout = 50 * time.Millisecond
 
 	start := time.Now()
 	runErr := make(chan error, 1)

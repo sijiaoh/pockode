@@ -3,6 +3,7 @@ package relay
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -78,6 +79,10 @@ func TestStore_LoadNonExistent(t *testing.T) {
 }
 
 func TestStore_FilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no POSIX mode bits: os.Stat reports 0666 regardless of the mode passed to OpenFile, and access is governed by inherited ACLs instead")
+	}
+
 	dir := t.TempDir()
 	store := NewStore(dir)
 

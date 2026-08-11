@@ -26,6 +26,11 @@ import (
 
 var bgCtx = context.Background()
 
+// opTimeout bounds one websocket send or receive. Large enough that a slow
+// machine never trips it, small enough that a genuinely stuck server fails with
+// the operation named rather than hanging until the test binary panics.
+const opTimeout = 30 * time.Second
+
 func mockRegistry(mock *mockAgent) *agent.Registry {
 	r := agent.NewRegistry()
 	r.Register(session.AgentTypeClaude, mock)
@@ -43,6 +48,11 @@ type testEnv struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	reqID           int
+	// pending holds notifications that arrived while waiting for an RPC
+	// response. The server is free to push an agent's output before it answers
+	// the request that triggered it, so dropping them on the floor would lose
+	// exactly the notifications a test is about to assert on.
+	pending []rpcNotification
 }
 
 func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
@@ -88,7 +98,7 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
 	server := httptest.NewServer(h)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
@@ -161,7 +171,30 @@ func (e *testEnv) nextID() int {
 	return e.reqID
 }
 
+// opCtx bounds a single websocket operation. The budget is per operation rather
+// than per test: a shared test-lifetime deadline turns "this machine is busy"
+// into a test failure once the accumulated work approaches it, which is exactly
+// what happens on a loaded CI runner.
+func (e *testEnv) opCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(e.ctx, opTimeout)
+}
+
+func (e *testEnv) read() []byte {
+	e.t.Helper()
+
+	ctx, cancel := e.opCtx()
+	defer cancel()
+
+	_, data, err := e.conn.Read(ctx)
+	if err != nil {
+		e.t.Fatalf("failed to read: %v", err)
+	}
+	return data
+}
+
 func (e *testEnv) call(method string, params interface{}) rpcResponse {
+	e.t.Helper()
+
 	reqID := e.nextID()
 	req := rpcRequest{
 		JSONRPC: "2.0",
@@ -170,41 +203,63 @@ func (e *testEnv) call(method string, params interface{}) rpcResponse {
 		Params:  params,
 	}
 	data, _ := json.Marshal(req)
-	if err := e.conn.Write(e.ctx, websocket.MessageText, data); err != nil {
+
+	ctx, cancel := e.opCtx()
+	defer cancel()
+	if err := e.conn.Write(ctx, websocket.MessageText, data); err != nil {
 		e.t.Fatalf("failed to send: %v", err)
 	}
 
-	// Read messages until we get the response with matching ID.
-	// This handles cases where notifications arrive before the response.
+	// Read messages until we get the response with matching ID, setting aside
+	// any notifications that overtook it.
 	for {
-		_, respData, err := e.conn.Read(e.ctx)
-		if err != nil {
-			e.t.Fatalf("failed to read: %v", err)
-		}
+		raw := e.read()
 
 		var resp rpcResponse
-		if err := json.Unmarshal(respData, &resp); err != nil {
+		if err := json.Unmarshal(raw, &resp); err != nil {
 			e.t.Fatalf("failed to unmarshal response: %v", err)
 		}
-
 		if resp.ID == reqID {
 			return resp
 		}
-		// Skip notifications (ID=0) and continue waiting
+
+		var notif rpcNotification
+		if err := json.Unmarshal(raw, &notif); err != nil {
+			e.t.Fatalf("failed to unmarshal notification: %v", err)
+		}
+		e.pending = append(e.pending, notif)
 	}
 }
 
 func (e *testEnv) readNotification() rpcNotification {
-	_, data, err := e.conn.Read(e.ctx)
-	if err != nil {
-		e.t.Fatalf("failed to read: %v", err)
+	e.t.Helper()
+
+	if len(e.pending) > 0 {
+		notif := e.pending[0]
+		e.pending = e.pending[1:]
+		return notif
 	}
 
 	var notif rpcNotification
-	if err := json.Unmarshal(data, &notif); err != nil {
+	if err := json.Unmarshal(e.read(), &notif); err != nil {
 		e.t.Fatalf("failed to unmarshal notification: %v", err)
 	}
 	return notif
+}
+
+// awaitNotification reads until the named notification arrives. Which
+// notifications a session emits, and in which order, is not part of any test's
+// contract here — asserting on whatever happens to arrive first makes a test
+// fail the moment an unrelated notification is added or reordered.
+func (e *testEnv) awaitNotification(method string) rpcNotification {
+	e.t.Helper()
+
+	for {
+		notif := e.readNotification()
+		if notif.Method == method {
+			return notif
+		}
+	}
 }
 
 func (e *testEnv) subscribeChatMessages(sessionID string) rpc.ChatMessagesSubscribeResult {
@@ -226,12 +281,12 @@ func (e *testEnv) sendMessage(sessionID, content string) {
 	}
 }
 
-func (e *testEnv) skipN(n int) {
-	for i := 0; i < n; i++ {
-		if _, _, err := e.conn.Read(e.ctx); err != nil {
-			e.t.Fatalf("failed to skip response %d: %v", i, err)
-		}
-	}
+// awaitResponseComplete drains notifications until the agent has finished
+// answering, which is what callers actually need before inspecting the
+// resulting state.
+func (e *testEnv) awaitResponseComplete() {
+	e.t.Helper()
+	e.awaitNotification("chat.done")
 }
 
 func TestHandler_Auth_InvalidToken(t *testing.T) {
@@ -366,7 +421,7 @@ func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
 	// Start process by sending message
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "hello")
-	env.skipN(2) // Text + Done notifications
+	env.awaitResponseComplete()
 
 	// Verify process is still running
 	if !wt.ProcessManager.HasProcess("sess") {
@@ -403,16 +458,10 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "Hello AI")
 
-	// Read notifications
-	notif1 := env.readNotification()
-	notif2 := env.readNotification()
-
-	if notif1.Method != "chat.text" {
-		t.Errorf("expected method 'chat.text', got %q", notif1.Method)
-	}
-	if notif2.Method != "chat.done" {
-		t.Errorf("expected method 'chat.done', got %q", notif2.Method)
-	}
+	// The agent's output must reach the client in order: awaiting the text first
+	// fails if done overtakes it, because done would be consumed on the way.
+	env.awaitNotification("chat.text")
+	env.awaitNotification("chat.done")
 }
 
 func TestHandler_MultipleSessions(t *testing.T) {
@@ -430,17 +479,17 @@ func TestHandler_MultipleSessions(t *testing.T) {
 	env.subscribeChatMessages("session-A")
 	env.subscribeChatMessages("session-B")
 	env.sendMessage("session-A", "Hello from A")
-	env.skipN(2)
+	env.awaitResponseComplete()
 	env.sendMessage("session-B", "Hello from B")
-	env.skipN(2)
+	env.awaitResponseComplete()
 	env.sendMessage("session-A", "Second from A")
-	env.skipN(2)
+	env.awaitResponseComplete()
 
-	if len(mock.messagesBySession["session-A"]) != 2 {
-		t.Errorf("expected 2 messages for session A, got %d", len(mock.messagesBySession["session-A"]))
+	if got := mock.sentMessagesFor("session-A"); len(got) != 2 {
+		t.Errorf("expected 2 messages for session A, got %d", len(got))
 	}
-	if len(mock.messagesBySession["session-B"]) != 1 {
-		t.Errorf("expected 1 message for session B, got %d", len(mock.messagesBySession["session-B"]))
+	if got := mock.sentMessagesFor("session-B"); len(got) != 1 {
+		t.Errorf("expected 1 message for session B, got %d", len(got))
 	}
 }
 
@@ -461,11 +510,7 @@ func TestHandler_PermissionRequest(t *testing.T) {
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "run ls")
-	notif := env.readNotification()
-
-	if notif.Method != "chat.permission_request" {
-		t.Errorf("expected method 'chat.permission_request', got %q", notif.Method)
-	}
+	notif := env.awaitNotification("chat.permission_request")
 
 	var params rpc.PermissionRequestParams
 	if err := json.Unmarshal(notif.Params, &params); err != nil {
@@ -507,9 +552,9 @@ func TestHandler_Interrupt(t *testing.T) {
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "hello")
-	env.skipN(2)
+	env.awaitResponseComplete()
 
-	sess := mock.sessions["sess"]
+	sess := mock.sessionFor("sess")
 	if sess == nil {
 		t.Fatal("session should exist")
 	}
@@ -521,7 +566,7 @@ func TestHandler_Interrupt(t *testing.T) {
 
 	select {
 	case <-sess.interruptCh:
-	case <-env.ctx.Done():
+	case <-time.After(opTimeout):
 		t.Fatal("timeout waiting for interrupt")
 	}
 }
@@ -549,10 +594,10 @@ func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 
 	env.subscribeChatMessages("new-session")
 	env.sendMessage("new-session", "hello")
-	env.skipN(2)
+	env.awaitResponseComplete()
 
-	if len(mock.startCalls) != 1 || mock.startCalls[0].resume {
-		t.Errorf("expected resume=false, got %+v", mock.startCalls)
+	if starts := mock.starts(); len(starts) != 1 || starts[0].resume {
+		t.Errorf("expected resume=false, got %+v", starts)
 	}
 
 	sess, _, _ := store.Get("new-session")
@@ -575,10 +620,10 @@ func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 
 	env.subscribeChatMessages("activated-session")
 	env.sendMessage("activated-session", "hello")
-	env.skipN(2)
+	env.awaitResponseComplete()
 
-	if len(mock.startCalls) != 1 || !mock.startCalls[0].resume {
-		t.Errorf("expected resume=true, got %+v", mock.startCalls)
+	if starts := mock.starts(); len(starts) != 1 || !starts[0].resume {
+		t.Errorf("expected resume=true, got %+v", starts)
 	}
 }
 
@@ -605,11 +650,7 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "ask me")
-	notif := env.readNotification()
-
-	if notif.Method != "chat.ask_user_question" {
-		t.Errorf("expected method 'chat.ask_user_question', got %q", notif.Method)
-	}
+	notif := env.awaitNotification("chat.ask_user_question")
 
 	var params rpc.AskUserQuestionParams
 	if err := json.Unmarshal(notif.Params, &params); err != nil {
@@ -1082,6 +1123,7 @@ func setupGitRepo(t *testing.T) string {
 	runGitIn(t, dir, "config", "user.email", "test@test.com")
 	runGitIn(t, dir, "config", "user.name", "Test")
 	runGitIn(t, dir, "config", "commit.gpgsign", "false")
+	runGitIn(t, dir, "config", "core.autocrlf", "false")
 	return dir
 }
 
@@ -1428,17 +1470,14 @@ func TestHandler_MissingParams(t *testing.T) {
 
 	// Send request without params field
 	data := []byte(`{"jsonrpc":"2.0","id":999,"method":"session.delete"}`)
-	if err := env.conn.Write(env.ctx, websocket.MessageText, data); err != nil {
+	ctx, cancel := env.opCtx()
+	defer cancel()
+	if err := env.conn.Write(ctx, websocket.MessageText, data); err != nil {
 		t.Fatalf("failed to send: %v", err)
 	}
 
-	_, respData, err := env.conn.Read(env.ctx)
-	if err != nil {
-		t.Fatalf("failed to read: %v", err)
-	}
-
 	var resp rpcResponse
-	json.Unmarshal(respData, &resp)
+	json.Unmarshal(env.read(), &resp)
 
 	if resp.Error == nil {
 		t.Fatal("expected error for missing params")

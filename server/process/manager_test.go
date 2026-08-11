@@ -147,16 +147,24 @@ func TestManager_GetOrCreateProcess_ExistingSession(t *testing.T) {
 	}
 }
 
+// testIdleTimeout is long enough that the background reaper never fires during
+// a test; reaping is driven explicitly through reapIdleAsOf instead.
+const testIdleTimeout = 10 * time.Minute
+
+// awaitTimeout bounds waits for something that must happen. It is not a tuning
+// knob: overshooting it means the transition never came, not that the machine
+// was slow.
+const awaitTimeout = 10 * time.Second
+
 func TestManager_IdleReaper(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	idleTimeout := 50 * time.Millisecond
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleTimeout)
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 	defer m.Shutdown()
 
 	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
-	time.Sleep(idleTimeout * 2)
+	m.reapIdleAsOf(time.Now().Add(2 * testIdleTimeout))
 
 	if proc := m.GetProcess("sess-1"); proc != nil {
 		t.Error("expected process to be reaped")
@@ -169,59 +177,59 @@ func TestManager_IdleReaper(t *testing.T) {
 func TestManager_IdleReaper_EmitsProcessStateEnded(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	idleTimeout := 50 * time.Millisecond
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleTimeout)
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 	defer m.Shutdown()
 
-	var mu sync.Mutex
-	var events []StateChangeEvent
+	ended := make(chan string, 8)
 	m.SetOnStateChange(func(e StateChangeEvent) {
-		mu.Lock()
-		events = append(events, e)
-		mu.Unlock()
+		if e.State == ProcessStateEnded {
+			ended <- e.SessionID
+		}
 	})
 
 	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
-	time.Sleep(idleTimeout * 2)
+	m.reapIdleAsOf(time.Now().Add(2 * testIdleTimeout))
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	var found bool
-	for _, e := range events {
-		if e.SessionID == "sess-1" && e.State == ProcessStateEnded {
-			found = true
-			break
+	// Emitted from the streamEvents goroutine once the session's event channel
+	// closes, so the wait is for a state transition rather than for a duration.
+	select {
+	case sessionID := <-ended:
+		if sessionID != "sess-1" {
+			t.Errorf("ProcessStateEnded for %q, want sess-1", sessionID)
 		}
-	}
-	if !found {
-		t.Errorf("expected ProcessStateEnded event for sess-1, got events: %v", events)
+	case <-time.After(awaitTimeout):
+		t.Error("timed out waiting for ProcessStateEnded event")
 	}
 }
 
 func TestManager_Touch_PreventsReaping(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	idleTimeout := 50 * time.Millisecond
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleTimeout)
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
-	// Touch periodically for 2x idleTimeout
-	// Reaper runs multiple times, but process survives due to Touch
-	for i := 0; i < 4; i++ {
-		time.Sleep(idleTimeout / 2)
-		m.Touch("sess-1")
-	}
-	// Total elapsed: 4 * 25ms = 100ms = 2x idleTimeout
+	// Start out already overdue, so Touch has to actually move the process out
+	// of reaping range. Touching a freshly created process proves nothing: it
+	// would survive the check below whether Touch did anything or not.
+	backdate(proc, 2*testIdleTimeout)
 
-	if proc := m.GetProcess("sess-1"); proc == nil {
-		t.Error("expected process to still exist after touch")
+	m.Touch("sess-1")
+	m.reapIdleAsOf(time.Now().Add(testIdleTimeout / 2))
+
+	if m.GetProcess("sess-1") == nil {
+		t.Fatal("expected process to still exist after touch")
 	}
 	if mock.sessions["sess-1"].isClosed() {
 		t.Error("expected process to not be closed")
+	}
+
+	// And once that touch goes stale the process must be reaped again.
+	m.reapIdleAsOf(time.Now().Add(2 * testIdleTimeout))
+	if m.GetProcess("sess-1") != nil {
+		t.Error("expected process to be reaped once the touch went stale")
 	}
 }
 
@@ -246,6 +254,32 @@ func TestManager_Shutdown_ClosesAllProcesses(t *testing.T) {
 	}
 	if m.GetProcess("sess-2") != nil {
 		t.Error("expected process for sess-2 to be removed from manager")
+	}
+}
+
+// Shutdown is the point after which the caller is entitled to tear down the
+// data directory, so nothing may still be writing to it. The streaming
+// goroutine writes session history and flips session state, and it keeps doing
+// both while draining events already buffered when the session closed.
+func TestManager_Shutdown_WaitsForStreamingToFinish(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
+
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+
+	// Give the goroutine real work left to do at shutdown: a closed channel
+	// still yields what was buffered before it closed.
+	for i := 0; i < 3; i++ {
+		mock.sessions["sess-1"].events <- agent.TextEvent{Content: "buffered"}
+	}
+
+	m.Shutdown()
+
+	select {
+	case <-proc.drained:
+	default:
+		t.Error("Shutdown returned while the session was still streaming")
 	}
 }
 
@@ -296,28 +330,41 @@ func TestManager_HasProcess(t *testing.T) {
 func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	idleTimeout := 50 * time.Millisecond
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleTimeout)
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	// streamEvents emits to the listener after touching the process, so the
+	// listener is the point at which the event is known to have been counted as
+	// activity. Sleeping instead would only guess at when that happened.
+	seen := make(chan struct{}, 8)
+	m.SetMessageListener(listenerFunc(func(ChatMessage) { seen <- struct{}{} }))
 
-	// Send events periodically for 2x idleTimeout
-	// Process should survive because streamEvents calls touch() on each event
-	for i := 0; i < 4; i++ {
-		time.Sleep(idleTimeout / 2)
-		mock.sessions["sess-1"].events <- agent.TextEvent{Content: "test"}
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+
+	// Same reason as in the Touch test: unless the process starts out overdue,
+	// it survives the check below whether or not the event counted as activity.
+	backdate(proc, 2*testIdleTimeout)
+
+	mock.sessions["sess-1"].events <- agent.TextEvent{Content: "test"}
+	select {
+	case <-seen:
+	case <-time.After(awaitTimeout):
+		t.Fatal("timed out waiting for the event to be streamed")
 	}
-	// Total elapsed: 4 * 25ms = 100ms = 2x idleTimeout
 
-	// Give streamEvents goroutine time to process the events
-	time.Sleep(10 * time.Millisecond)
+	m.reapIdleAsOf(time.Now().Add(testIdleTimeout / 2))
 
-	if proc := m.GetProcess("sess-1"); proc == nil {
-		t.Error("expected process to still exist while streaming events")
+	if m.GetProcess("sess-1") == nil {
+		t.Fatal("expected process to still exist while streaming events")
 	}
 	if mock.sessions["sess-1"].isClosed() {
 		t.Error("expected process to not be closed while streaming events")
+	}
+
+	// And once the stream goes quiet the process must be reaped again.
+	m.reapIdleAsOf(time.Now().Add(2 * testIdleTimeout))
+	if m.GetProcess("sess-1") != nil {
+		t.Error("expected process to be reaped once the stream went quiet")
 	}
 }
 
@@ -329,10 +376,14 @@ func TestProcess_ClosedFlagSuppressesStateChanges(t *testing.T) {
 
 	var mu sync.Mutex
 	var events []StateChangeEvent
+	ended := make(chan struct{}, 8)
 	m.SetOnStateChange(func(e StateChangeEvent) {
 		mu.Lock()
 		events = append(events, e)
 		mu.Unlock()
+		if e.State == ProcessStateEnded {
+			ended <- struct{}{}
+		}
 	})
 
 	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
@@ -340,8 +391,13 @@ func TestProcess_ClosedFlagSuppressesStateChanges(t *testing.T) {
 	// Close sets the closed flag, preventing further state changes.
 	m.Close("sess-1")
 
-	// Wait for the streamEvents goroutine to exit.
-	time.Sleep(50 * time.Millisecond)
+	// The ended event is the streamEvents goroutine's last act, so it marks the
+	// point after which any further event could only come from the calls below.
+	select {
+	case <-ended:
+	case <-time.After(awaitTimeout):
+		t.Fatal("timed out waiting for the streamEvents goroutine to exit")
+	}
 
 	mu.Lock()
 	events = nil // clear initial idle + ended
@@ -442,3 +498,15 @@ func TestProcess_SendMessage_SetsRunning(t *testing.T) {
 		t.Errorf("expected running event after SendMessage, got %v", events)
 	}
 }
+
+// backdate makes a process look as though it has been idle for d, giving a
+// later Touch or event something to actually move.
+func backdate(p *Process, d time.Duration) {
+	p.mu.Lock()
+	p.lastActive = time.Now().Add(-d)
+	p.mu.Unlock()
+}
+
+type listenerFunc func(ChatMessage)
+
+func (f listenerFunc) OnChatMessage(msg ChatMessage) { f(msg) }

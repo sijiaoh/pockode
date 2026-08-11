@@ -12,6 +12,8 @@ import (
 )
 
 type mockSession struct {
+	owner         *mockAgent
+	sessionID     string
 	events        chan agent.AgentEvent
 	messageQueue  chan string
 	ctx           context.Context
@@ -25,7 +27,13 @@ func (s *mockSession) Events() <-chan agent.AgentEvent {
 	return s.events
 }
 
+// SendMessage records the prompt before handing it off. Recording it on the
+// consumer side instead would leave every "was the agent asked to do X?"
+// assertion racing the consumer goroutine, since the RPC that triggered the
+// send returns as soon as the prompt is queued.
 func (s *mockSession) SendMessage(prompt string) error {
+	s.owner.recordMessage(s.sessionID, prompt)
+
 	select {
 	case s.messageQueue <- prompt:
 		return nil
@@ -77,6 +85,41 @@ type mockAgent struct {
 	startCalls        []startCall
 }
 
+func (m *mockAgent) recordMessage(sessionID, prompt string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.messages = append(m.messages, prompt)
+	if m.messagesBySession == nil {
+		m.messagesBySession = make(map[string][]string)
+	}
+	m.messagesBySession[sessionID] = append(m.messagesBySession[sessionID], prompt)
+}
+
+func (m *mockAgent) sentMessages() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.messages...)
+}
+
+func (m *mockAgent) sentMessagesFor(sessionID string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.messagesBySession[sessionID]...)
+}
+
+func (m *mockAgent) sessionFor(sessionID string) *mockSession {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions[sessionID]
+}
+
+func (m *mockAgent) starts() []startCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]startCall(nil), m.startCalls...)
+}
+
 func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	m.mu.Lock()
 	m.startCalls = append(m.startCalls, startCall{sessionID: opts.SessionID, resume: opts.Resume, mode: opts.Mode})
@@ -98,6 +141,8 @@ func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.S
 	}
 
 	sess := &mockSession{
+		owner:        m,
+		sessionID:    effectiveSessionID,
 		events:       eventsChan,
 		messageQueue: messageQueue,
 		ctx:          ctx,
@@ -116,18 +161,10 @@ func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.S
 
 		for {
 			select {
-			case prompt, ok := <-messageQueue:
+			case _, ok := <-messageQueue:
 				if !ok {
 					return
 				}
-
-				m.mu.Lock()
-				m.messages = append(m.messages, prompt)
-				if m.messagesBySession == nil {
-					m.messagesBySession = make(map[string][]string)
-				}
-				m.messagesBySession[effectiveSessionID] = append(m.messagesBySession[effectiveSessionID], prompt)
-				m.mu.Unlock()
 
 				for _, event := range m.events {
 					select {

@@ -20,6 +20,11 @@ const (
 	ProcessStateEnded   ProcessState = "ended"   // Process has ended (not in map)
 )
 
+// shutdownDrainTimeout caps how long Shutdown waits for sessions to stop
+// streaming. Generous enough that a session closing normally is never cut off,
+// short enough that a stuck agent cannot hold the server open.
+const shutdownDrainTimeout = 10 * time.Second
+
 type StateChangeEvent struct {
 	SessionID   string
 	State       ProcessState
@@ -72,6 +77,10 @@ type Process struct {
 	// Prevents stale buffered events from emitting state changes (e.g. running/idle)
 	// that would incorrectly interact with the AutoResumer.
 	closed atomic.Bool
+	// drained is closed once the streaming goroutine has finished, i.e. once the
+	// last history write and state change for this session are done. Shutdown
+	// waits on it so a closed manager leaves nothing writing behind it.
+	drained chan struct{}
 }
 
 // NewManager creates a new manager with the given idle timeout. dataDir is this
@@ -163,10 +172,12 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 		manager:      m,
 		lastActive:   time.Now(),
 		state:        ProcessStateIdle,
+		drained:      make(chan struct{}),
 	}
 	m.processes[sessionID] = proc
 
 	go func() {
+		defer close(proc.drained)
 		defer func() {
 			if r := recover(); r != nil {
 				logger.LogPanic(r, "session crashed", "sessionId", sessionID)
@@ -273,13 +284,28 @@ func (m *Manager) Close(sessionID string) {
 	}
 }
 
-// Shutdown closes all processes gracefully.
+// Shutdown closes all processes gracefully and returns once their streaming
+// goroutines have finished. Waiting matters because those goroutines still write
+// session history and flip session state: returning early would leave writes
+// landing in a data directory the caller already considers closed.
 func (m *Manager) Shutdown() {
 	m.cancel()
 	procs := m.removeWhere(func(*Process) bool { return true })
 	for _, p := range procs {
 		p.closed.Store(true)
 		p.agentSession.Close()
+	}
+	// Bounded: a session whose agent refuses to let go of its output must not be
+	// able to stall the whole server's shutdown. Report it rather than hang.
+	deadline := time.After(shutdownDrainTimeout)
+	for _, p := range procs {
+		select {
+		case <-p.drained:
+		case <-deadline:
+			slog.Warn("shutdown timed out waiting for sessions to stop streaming",
+				"sessionId", p.sessionID, "timeout", shutdownDrainTimeout)
+			return
+		}
 	}
 	slog.Info("manager shutdown complete", "processesClosed", len(procs))
 }
@@ -305,7 +331,15 @@ func (m *Manager) runIdleReaper() {
 }
 
 func (m *Manager) reapIdle() {
-	now := time.Now()
+	m.reapIdleAsOf(time.Now())
+}
+
+// reapIdleAsOf closes every process whose last activity is older than the idle
+// timeout, measured against the given instant. The instant is a parameter so
+// the reaping rule can be exercised without racing the wall clock: driving it
+// with a synthetic "now" states the elapsed time outright instead of hoping a
+// sleep outlasts a timeout.
+func (m *Manager) reapIdleAsOf(now time.Time) {
 	procs := m.removeWhere(func(p *Process) bool {
 		return now.Sub(p.getLastActive()) > m.idleTimeout
 	})
