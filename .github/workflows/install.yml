@@ -1,0 +1,161 @@
+name: Install Script
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/static/install.ps1"
+      - ".github/workflows/install.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "site/static/install.ps1"
+      - ".github/workflows/install.yml"
+  workflow_dispatch:
+
+jobs:
+  # install.ps1 rewrites the user's PATH in the registry, and it is the only
+  # supported way onto Windows. Neither of those can be checked by reading the
+  # script, and no machine in this project runs Windows, so it is exercised end
+  # to end: install, upgrade over it, uninstall.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: server/.go-version
+          cache-dependency-path: server/go.sum
+
+      # The real binary, not a stub: the install is only proven if what lands on
+      # PATH runs and answers -version. The frontend is not built here - the
+      # embed directories ship a .keep, which is all `go build` needs.
+      - name: Build pockode.exe
+        working-directory: server
+        run: |
+          New-Item -ItemType Directory -Path ../.ci-serve -Force | Out-Null
+          go build -o ../.ci-serve/pockode-windows-amd64.exe .
+
+      # The released asset does not exist until this branch ships, and pointing
+      # the test at a real release would test GitHub rather than the script.
+      - name: Serve the binary locally
+        run: |
+          # Absolute: Start-Process resolves -WorkingDirectory against the .NET
+          # process directory, not PowerShell's current location.
+          Start-Process python -ArgumentList '-m', 'http.server', '8000' -WorkingDirectory (Resolve-Path .ci-serve)
+          $url = 'http://127.0.0.1:8000/pockode-windows-amd64.exe'
+          $ready = $false
+          foreach ($attempt in 1..30) {
+            try {
+              Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing | Out-Null
+              $ready = $true
+              break
+            } catch {
+              Start-Sleep -Milliseconds 500
+            }
+          }
+          if (-not $ready) { throw "local file server never came up at $url" }
+
+      # An entry that is still a variable, in a REG_EXPAND_SZ value. This is the
+      # regression that silently wrecks a PATH: an installer that reads it
+      # expanded and writes it back freezes every other tool's entry into
+      # whatever it points at today.
+      - name: Seed the user PATH with a canary
+        run: |
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+          $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          $entries = @($raw -split ';' | Where-Object { $_.Trim() -ne '' }) + '%USERPROFILE%\ci-canary'
+          $key.SetValue('Path', ($entries -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)
+          $key.Close()
+
+      - name: Install
+        run: ./site/static/install.ps1 -Url http://127.0.0.1:8000/pockode-windows-amd64.exe
+
+      - name: Verify the install
+        run: |
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Pockode'
+          if (-not (Test-Path (Join-Path $installDir 'pockode.exe'))) {
+            throw "pockode.exe is not in $installDir"
+          }
+
+          # Resolve the command the way a terminal opened after the install would.
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (-not (Get-Command pockode -ErrorAction SilentlyContinue)) {
+            throw "pockode did not land on the user PATH"
+          }
+          pockode -version
+
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          if ($raw -notlike '*%USERPROFILE%\ci-canary*') {
+            throw "the installer expanded or dropped other PATH entries: $raw"
+          }
+          if ($key.GetValueKind('Path') -ne [Microsoft.Win32.RegistryValueKind]::ExpandString) {
+            throw "PATH is no longer REG_EXPAND_SZ"
+          }
+          $key.Close()
+
+      # The only step that talks to github.com, and the only one that covers the
+      # -Version URL. What it really guards is the recovery: a download that
+      # fails must not take a working install down with it.
+      - name: A failed download leaves the existing install alone
+        run: |
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Pockode'
+          $message = $null
+          try {
+            ./site/static/install.ps1 -Version 0.0.0-no-such-release
+          } catch {
+            $message = "$_"
+          }
+          if (-not $message) { throw "installing a version that does not exist should have failed" }
+          if ($message -notlike '*/releases/download/v0.0.0-no-such-release/pockode-windows-amd64.exe*') {
+            throw "the error did not name the URL it tried (or the tag lost its 'v'): $message"
+          }
+          if (-not (Test-Path (Join-Path $installDir 'pockode.exe'))) {
+            throw "the failed install removed the working binary"
+          }
+          if (Test-Path (Join-Path $installDir 'pockode.exe.download')) {
+            throw "a partial download was left behind"
+          }
+
+      # Also the documented `irm ... | iex` form, which turns the file into a
+      # script block instead of running it as a script.
+      - name: Install again (upgrade over the existing copy)
+        run: |
+          & ([scriptblock]::Create((Get-Content -Raw ./site/static/install.ps1))) -Url http://127.0.0.1:8000/pockode-windows-amd64.exe
+
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Pockode'
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          $key.Close()
+          $mine = @($raw -split ';' | Where-Object { $_.TrimEnd('\') -ieq $installDir.TrimEnd('\') })
+          if ($mine.Count -ne 1) {
+            throw "expected exactly one $installDir entry on PATH, found $($mine.Count): $raw"
+          }
+
+      - name: Uninstall
+        run: ./site/static/install.ps1 -Uninstall
+
+      - name: Verify the uninstall
+        run: |
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Pockode'
+          if (Test-Path (Join-Path $installDir 'pockode.exe')) {
+            throw "pockode.exe is still in $installDir"
+          }
+
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          $key.Close()
+          if ($raw -split ';' | Where-Object { $_.TrimEnd('\') -ieq $installDir.TrimEnd('\') }) {
+            throw "$installDir is still on PATH: $raw"
+          }
+          if ($raw -notlike '*%USERPROFILE%\ci-canary*') {
+            throw "the uninstall took other PATH entries with it: $raw"
+          }
