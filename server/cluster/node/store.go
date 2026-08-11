@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/filestore"
+	"github.com/pockode/server/internal/pathutil"
 )
 
 // Store provides CRUD operations for Node items.
@@ -102,7 +102,7 @@ func (s *FileStore) Create(path, name string, createMissingDir bool) (Node, erro
 	defer s.nodesMu.Unlock()
 
 	for _, n := range s.nodes {
-		if n.Path == absPath {
+		if pathutil.Equal(n.Path, absPath) {
 			return Node{}, fmt.Errorf("%w: path %q already exists", ErrDuplicatePath, absPath)
 		}
 	}
@@ -148,7 +148,7 @@ func (s *FileStore) Update(id string, fields UpdateFields, createMissingDir bool
 		}
 
 		for _, other := range s.nodes {
-			if other.ID != id && other.Path == absPath {
+			if other.ID != id && pathutil.Equal(other.Path, absPath) {
 				return Node{}, fmt.Errorf("%w: path %q already exists", ErrDuplicatePath, absPath)
 			}
 		}
@@ -278,13 +278,14 @@ func resolveDir(path string, createMissingDir bool) (string, error) {
 }
 
 // expandTilde expands special path prefixes to the user's home directory:
-//   - "~" or "~/" prefix: standard tilde expansion
+//   - home-relative paths (`~`, `~/...`, and `~\...` on Windows)
 //   - "." (exactly): treated as home directory in cluster mode (global context)
 //
 // Returns the original path unchanged if no expansion applies or if the home
 // directory cannot be determined.
 func expandTilde(path string) string {
-	// Handle "." as home directory in cluster mode
+	// Cluster mode has no single project directory for "." to resolve against,
+	// so it means the machine's home directory rather than the process's cwd.
 	if path == "." {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -293,17 +294,5 @@ func expandTilde(path string) string {
 		return home
 	}
 
-	if path != "~" && !strings.HasPrefix(path, "~/") {
-		return path
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-
-	if path == "~" {
-		return home
-	}
-	return filepath.Join(home, path[2:])
+	return pathutil.ExpandTilde(path)
 }

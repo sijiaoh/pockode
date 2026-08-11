@@ -23,19 +23,19 @@ func ValidatePath(workDir, path string) error {
 		return nil
 	}
 
-	cleanPath := filepath.Clean(path)
-	// Anchored paths are rejected wherever they are anchored, matching
-	// git.validatePath. filepath.IsAbs reports two Windows forms as relative
-	// even though the OS resolves them elsewhere: root-relative (`\etc`, against
-	// the current drive) and drive-relative (`C:etc`, against that drive's
-	// working directory). Without this they are silently reinterpreted as
-	// workDir-relative instead of refused.
-	if strings.HasPrefix(cleanPath, "..") || filepath.IsAbs(cleanPath) ||
-		strings.HasPrefix(cleanPath, string(filepath.Separator)) || filepath.VolumeName(cleanPath) != "" {
+	// filepath.IsLocal accepts exactly those paths the OS resolves inside the
+	// directory they are joined to: it rejects absolute and `..`-escaping paths
+	// everywhere, and on Windows also the forms filepath.IsAbs calls relative
+	// (`\etc` against the current drive, `C:etc` against that drive's working
+	// directory) and the reserved device names (`NUL`, `COM1`), which name a
+	// device rather than a file under workDir. Same gate as git.validatePath —
+	// ws/rpc_git.go runs both over one path, so they must agree.
+	if !filepath.IsLocal(path) {
 		return fmt.Errorf("%w: %s", ErrInvalidPath, path)
 	}
 
-	fullPath := filepath.Join(workDir, cleanPath)
+	// IsLocal accepts "."; the API spells the work directory itself as "".
+	fullPath := filepath.Join(workDir, path)
 	if !strings.HasPrefix(fullPath, workDir+string(filepath.Separator)) {
 		return fmt.Errorf("%w: %s", ErrInvalidPath, path)
 	}

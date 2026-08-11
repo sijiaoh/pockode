@@ -468,6 +468,27 @@ func TestValidatePath(t *testing.T) {
 	}
 }
 
+// `NUL` and friends name a device on Windows, not a file in the repository, so
+// staging one would act on the device instead. Everywhere else they are
+// ordinary file names and must keep working, which is why this asserts both
+// answers rather than skipping.
+//
+// Only the bare names are listed: since Windows 11 a reserved name with an
+// extension (`CON.txt`) is an ordinary file again, so `filepath.IsLocal`'s
+// verdict on those depends on the Windows version.
+func TestValidatePath_ReservedDeviceNames(t *testing.T) {
+	paths := []string{"NUL", "COM1", "aux", filepath.Join("dir", "CON")}
+	wantErr := runtime.GOOS == "windows"
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			if err := validatePath(path); (err != nil) != wantErr {
+				t.Errorf("validatePath(%q) error = %v, wantErr %v", path, err, wantErr)
+			}
+		})
+	}
+}
+
 // On other platforms these are ordinary (if odd) file names, so they can only be
 // asserted where the OS actually resolves them outside the repository.
 func TestValidatePath_WindowsAnchoredForms(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/pockode/server/internal/pathutil"
 	"github.com/pockode/server/session"
 )
 
@@ -60,10 +61,11 @@ func ValidateWorktreeBaseDir(path string) error {
 	native := NormalizeWorktreeBaseDir(path)
 	sep := string(filepath.Separator)
 
-	switch {
-	case native == "~" || strings.HasPrefix(native, "~"+sep):
-		rest := strings.TrimPrefix(strings.TrimPrefix(native, "~"), sep)
+	if rest, ok := pathutil.TrimTildePrefix(native); ok {
 		return validateWorktreeRelativeSegment(rest, false)
+	}
+
+	switch {
 	case filepath.IsAbs(native):
 		if filepath.Clean(native) != native {
 			return errors.New("worktree base directory must be a clean path (no '..' or redundant separators)")
@@ -80,18 +82,15 @@ func ValidateWorktreeBaseDir(path string) error {
 // repo-relative or home-relative worktree base directory. It must be clean, and
 // may only begin with `..` when allowParent is true (repo-relative paths).
 //
-// The remainder is rejected outright if it is anchored rather than relative.
-// Beyond absolute paths this covers two Windows-only forms that filepath.IsAbs
-// reports as relative but the OS resolves against something other than the
-// directory we are about to join them to: root-relative (`\worktrees`, resolved
-// against the current drive) and drive-relative (`C:worktrees`, resolved against
-// that drive's working directory).
+// The remainder is rejected outright if it is anchored rather than relative
+// (see pathutil.IsAnchored), since joining an anchored path to the repository
+// or home directory does not keep it there.
 func validateWorktreeRelativeSegment(rest string, allowParent bool) error {
 	if rest == "" {
 		return nil
 	}
 	sep := string(filepath.Separator)
-	if filepath.IsAbs(rest) || strings.HasPrefix(rest, sep) || filepath.VolumeName(rest) != "" || filepath.Clean(rest) != rest {
+	if pathutil.IsAnchored(rest) || filepath.Clean(rest) != rest {
 		return errors.New("worktree base directory must be a clean relative path (no redundant separators or interior '..')")
 	}
 	if !allowParent && (rest == ".." || strings.HasPrefix(rest, ".."+sep)) {

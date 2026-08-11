@@ -674,27 +674,24 @@ func Reset(dir, path string) error {
 	return nil
 }
 
-// validatePath checks for path traversal attacks.
+// validatePath checks that a repository-relative path stays inside the
+// repository.
 func validatePath(path string) error {
 	if path == "" {
 		return fmt.Errorf("path is empty")
 	}
 
-	cleanPath := filepath.Clean(path)
-
-	// Anchored paths are rejected regardless of where they are anchored. Beyond
-	// absolute paths this covers two Windows-only forms that filepath.IsAbs
-	// reports as relative even though the OS resolves them against something
-	// other than the repository: root-relative (`\etc`, resolved against the
-	// current drive) and drive-relative (`C:etc`, resolved against that drive's
-	// working directory).
-	if filepath.IsAbs(cleanPath) || strings.HasPrefix(cleanPath, string(filepath.Separator)) || filepath.VolumeName(cleanPath) != "" {
-		return fmt.Errorf("absolute paths are not allowed")
-	}
-
-	// Check if path escapes the base directory
-	if cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("path traversal is not allowed")
+	// filepath.IsLocal is the rest of the check: it accepts exactly those paths
+	// the OS resolves inside the directory they are joined to. That is absolute and
+	// `..`-escaping paths everywhere, plus, on Windows, the forms filepath.IsAbs
+	// calls relative — root-relative (`\etc`, the current drive), drive-relative
+	// (`C:etc`, that drive's working directory) — and the reserved device names
+	// (`NUL`, `COM1`), which name a device rather than a file in the repository.
+	//
+	// contents.ValidatePath gates the same paths on the way in and must stay in
+	// agreement with this; ws/rpc_git.go runs both over one path.
+	if !filepath.IsLocal(path) {
+		return fmt.Errorf("path must stay inside the repository: %s", path)
 	}
 
 	return nil

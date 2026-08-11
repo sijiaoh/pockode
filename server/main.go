@@ -27,6 +27,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/internal/netutil"
+	"github.com/pockode/server/internal/pathutil"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
@@ -177,7 +178,10 @@ Flags:
 		os.Exit(1)
 	}
 
-	absWorkDir, err := filepath.Abs(*workDirFlag)
+	// Path flags are expanded here because no shell does it for us on Windows:
+	// `--work ~\projects` arrives verbatim there and would otherwise create a
+	// directory literally named `~` next to the current one.
+	absWorkDir, err := filepath.Abs(pathutil.ExpandTilde(*workDirFlag))
 	if err != nil {
 		slog.Error("failed to resolve work directory", "error", err)
 		os.Exit(1)
@@ -186,7 +190,7 @@ Flags:
 
 	devMode := *devModeFlag
 
-	dataDirStr := *dataDirFlag
+	dataDirStr := pathutil.ExpandTilde(*dataDirFlag)
 	if dataDirStr == "" {
 		dataDirStr = filepath.Join(workDir, ".pockode")
 	}
@@ -202,7 +206,7 @@ Flags:
 		DevMode:   devMode,
 		LogLevel:  *logLevelFlag,
 		LogFormat: *logFormatFlag,
-		LogFile:   *logFileFlag,
+		LogFile:   pathutil.ExpandTilde(*logFileFlag),
 	})
 
 	if *gitEnabledFlag {
@@ -501,7 +505,7 @@ func runCluster() {
 		os.Exit(1)
 	}
 
-	dataDir := *dataDirFlag
+	dataDir := pathutil.ExpandTilde(*dataDirFlag)
 	if dataDir == "" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {

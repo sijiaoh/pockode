@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pockode/server/internal/pathutil"
 	"github.com/pockode/server/settings"
 )
 
@@ -96,22 +97,20 @@ func (r *Registry) worktreesDir() string {
 //   - `./`/`../`   → relative to the repository root (main worktree)
 func (r *Registry) expandBaseDir(base string) string {
 	base = settings.NormalizeWorktreeBaseDir(base)
-	sep := string(filepath.Separator)
 
-	switch {
-	case base == "~" || strings.HasPrefix(base, "~"+sep):
+	if rest, ok := pathutil.TrimTildePrefix(base); ok {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			// Home directory is unknown; fall back to a cleaned literal so the
 			// path stays deterministic rather than silently using the default.
 			return filepath.Clean(base)
 		}
-		return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(base, "~"), sep))
-	case filepath.IsAbs(base):
-		return filepath.Clean(base)
-	default:
-		return filepath.Join(r.mainDir, base)
+		return filepath.Join(home, rest)
 	}
+	if filepath.IsAbs(base) {
+		return filepath.Clean(base)
+	}
+	return filepath.Join(r.mainDir, base)
 }
 
 // resolveExistingPrefix resolves symlinks in the longest existing prefix of
@@ -186,7 +185,7 @@ func (r *Registry) Create(name, branch, baseBranch string) (Info, error) {
 
 	worktreesDir := r.worktreesDir()
 	worktreePath := filepath.Join(worktreesDir, name)
-	if _, inside := childName(worktreePath, worktreesDir); !inside {
+	if _, inside := pathutil.ChildName(worktreePath, worktreesDir); !inside {
 		return Info{}, errors.New("invalid name: path traversal detected")
 	}
 
@@ -363,11 +362,11 @@ func (r *Registry) parseWorktreeList(output string) map[string]Info {
 // createInfo returns Info for a worktree path.
 // Returns nil if the worktree should be skipped (external worktrees not managed by Pockode).
 func (r *Registry) createInfo(path, branch, worktreesDir string) *Info {
-	isMain := equalPath(path, r.mainDir)
+	isMain := pathutil.Equal(path, r.mainDir)
 
 	var name string
 	if !isMain {
-		child, inside := childName(path, worktreesDir)
+		child, inside := pathutil.ChildName(path, worktreesDir)
 		if !inside {
 			// External worktree: skip
 			return nil

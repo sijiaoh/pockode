@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"sync"
 	"time"
@@ -68,30 +69,31 @@ func (w *FSWatcher) Stop() {
 	slog.Info("FSWatcher stopped")
 }
 
-func (w *FSWatcher) Subscribe(path string, notifier Notifier) (string, error) {
+func (w *FSWatcher) Subscribe(subPath string, notifier Notifier) (string, error) {
 	id := w.GenerateID()
 
-	fullPath := filepath.Join(w.workDir, path)
+	fullPath := filepath.Join(w.workDir, subPath)
 	if _, err := os.Stat(fullPath); err != nil {
 		return "", err
 	}
 
+	key := subscriptionKey(subPath)
 	sub := &Subscription{ID: id, Notifier: notifier}
 
 	w.pathMu.Lock()
 
 	// Start fsnotify watch if first subscriber for this path
-	if w.pathRefCount[path] == 0 {
+	if w.pathRefCount[key] == 0 {
 		if err := w.watcher.Add(fullPath); err != nil {
 			w.pathMu.Unlock()
 			return "", err
 		}
-		slog.Debug("started watching path", "path", path)
+		slog.Debug("started watching path", "path", key)
 	}
 
-	w.pathToIDs[path] = append(w.pathToIDs[path], id)
-	w.idToPath[id] = path
-	w.pathRefCount[path]++
+	w.pathToIDs[key] = append(w.pathToIDs[key], id)
+	w.idToPath[id] = key
+	w.pathRefCount[key]++
 	w.pathMu.Unlock()
 
 	// Add to BaseWatcher after path mapping is set up
@@ -113,27 +115,39 @@ func (w *FSWatcher) Unsubscribe(id string) {
 }
 
 // removePathMapping removes path tracking. Caller must hold pathMu.
-func (w *FSWatcher) removePathMapping(id, path string) {
+func (w *FSWatcher) removePathMapping(id, key string) {
 	delete(w.idToPath, id)
 
-	ids := w.pathToIDs[path]
+	ids := w.pathToIDs[key]
 	for i, v := range ids {
 		if v == id {
-			w.pathToIDs[path] = append(ids[:i], ids[i+1:]...)
+			w.pathToIDs[key] = append(ids[:i], ids[i+1:]...)
 			break
 		}
 	}
-	if len(w.pathToIDs[path]) == 0 {
-		delete(w.pathToIDs, path)
+	if len(w.pathToIDs[key]) == 0 {
+		delete(w.pathToIDs, key)
 	}
 
-	w.pathRefCount[path]--
-	if w.pathRefCount[path] == 0 {
-		fullPath := filepath.Join(w.workDir, path)
+	w.pathRefCount[key]--
+	if w.pathRefCount[key] == 0 {
+		fullPath := filepath.Join(w.workDir, key)
 		w.watcher.Remove(fullPath)
-		delete(w.pathRefCount, path)
-		slog.Debug("stopped watching path", "path", path)
+		delete(w.pathRefCount, key)
+		slog.Debug("stopped watching path", "path", key)
 	}
+}
+
+// subscriptionKey normalises a workDir-relative path to the form used as a key
+// in the subscription maps.
+//
+// Subscribers name paths the way the rest of the API does — with `/`, which is
+// also what contents.GetContents hands out — while filesystem events arrive as
+// native paths. On Windows the two spellings of `src/main.go` are different map
+// keys, so without normalising, every subscription to anything below the work
+// directory root goes unnotified and the client silently shows stale content.
+func subscriptionKey(relPath string) string {
+	return filepath.ToSlash(relPath)
 }
 
 func (w *FSWatcher) eventLoop() {
@@ -156,11 +170,12 @@ func (w *FSWatcher) eventLoop() {
 }
 
 func (w *FSWatcher) handleEvent(event fsnotify.Event) {
-	relPath, err := filepath.Rel(w.workDir, event.Name)
+	native, err := filepath.Rel(w.workDir, event.Name)
 	if err != nil {
 		slog.Error("failed to get relative path", "path", event.Name, "error", err)
 		return
 	}
+	relPath := subscriptionKey(native)
 
 	w.timerMu.Lock()
 	if timer, exists := w.timerMap[relPath]; exists {
@@ -185,7 +200,9 @@ func (w *FSWatcher) notifyPath(changedPath string) {
 	w.pathMu.RLock()
 	ids := append([]string{}, w.pathToIDs[changedPath]...)
 	if changedPath != "" {
-		parent := filepath.Dir(changedPath)
+		// path.Dir, not filepath.Dir: subscription keys are slash-separated on
+		// every platform, so the parent has to be derived the same way.
+		parent := path.Dir(changedPath)
 		if parent == "." {
 			parent = ""
 		}
