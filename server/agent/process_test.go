@@ -24,6 +24,10 @@ const (
 	roleEnv  = "POCKODE_TEST_PROCESS_ROLE"
 	roleTree = "tree"
 	roleLeaf = "leaf"
+	// roleArgv stands in for the real CLI in the argument-passing tests: it
+	// prints what it was actually given, which is the only way to see what
+	// survived the command line.
+	roleArgv = "argv"
 
 	// leafLifetime only has to outlast the assertions; every test kills the leaf
 	// long before it elapses.
@@ -36,6 +40,8 @@ func TestMain(m *testing.M) {
 		runTreeRole()
 	case roleLeaf:
 		runLeafRole()
+	case roleArgv:
+		runArgvRole()
 	default:
 		os.Exit(m.Run())
 	}
@@ -65,6 +71,15 @@ func runTreeRole() {
 func runLeafRole() {
 	fmt.Println("leaf ready")
 	time.Sleep(leafLifetime)
+	os.Exit(0)
+}
+
+// runArgvRole prints one argument per line, so a caller can tell an argument
+// that was split from one that merely looks odd.
+func runArgvRole() {
+	for _, arg := range os.Args[1:] {
+		fmt.Println(arg)
+	}
 	os.Exit(0)
 }
 

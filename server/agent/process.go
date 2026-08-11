@@ -82,6 +82,14 @@ type Process struct {
 // in the background. The whole tree is terminated when ctx is cancelled, when
 // Terminate is called, or once the direct child exits on its own.
 func StartProcess(ctx context.Context, log *slog.Logger, name string, args []string, dir string) (*Process, error) {
+	// Resolved before anything is allocated: a CLI that cannot be found or
+	// cannot be called safely is a user-environment problem, and there is no
+	// point building pipes for it.
+	cmd, err := Command(name, args...)
+	if err != nil {
+		return nil, err
+	}
+
 	stdinR, stdinW, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
@@ -97,7 +105,6 @@ func StartProcess(ctx context.Context, log *slog.Logger, name string, args []str
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
-	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	// Handing exec.Cmd *os.File values (rather than an arbitrary io.Reader) makes
 	// it pass the descriptors straight to the child: no copying goroutines, and

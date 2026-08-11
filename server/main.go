@@ -294,6 +294,7 @@ Flags:
 	agents := agent.NewRegistry()
 	agents.Register(session.AgentTypeClaude, claude.New())
 	agents.Register(session.AgentTypeCodex, codex.New())
+	agentStatuses := agent.CheckBinaries(slog.Default(), claude.Binary, codex.Binary)
 
 	// Initialize worktree registry and manager
 	registry := worktree.NewRegistry(workDir, dataDir)
@@ -417,6 +418,7 @@ Flags:
 		LocalURL:     "http://localhost:" + portStr,
 		RemoteURL:    remoteURL,
 		Announcement: announcement,
+		Agents:       agentStatuses,
 	})
 
 	// Print QR code if relay is enabled

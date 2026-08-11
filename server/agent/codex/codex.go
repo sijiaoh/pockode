@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1019,9 +1018,13 @@ func extractFilePath(changes json.RawMessage) string {
 // getMCPSubcommand determines the correct MCP subcommand based on codex version.
 // Versions >= 0.43.0-alpha.5 use "mcp-server", older versions use "mcp".
 func getMCPSubcommand() (string, error) {
-	out, err := exec.Command(Binary, "--version").Output()
+	cmd, err := agent.Command(Binary, "--version")
 	if err != nil {
-		return "", fmt.Errorf("codex CLI not found: %w", err)
+		return "", err
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("could not run %s --version: %w", Binary, err)
 	}
 
 	version := strings.TrimSpace(string(out))
