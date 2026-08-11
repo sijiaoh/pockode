@@ -19,20 +19,22 @@ directories, then compiles the Go server binary into `dist/`.
 
 | Mode              | Command                   | Platforms built                                          | When to use                                  |
 | ----------------- | ------------------------- | -------------------------------------------------------- | -------------------------------------------- |
-| All platforms     | `./scripts/build.sh`      | `darwin/amd64`, `darwin/arm64`, `linux/amd64`, `linux/arm64` | Producing release artifacts                  |
+| All platforms     | `./scripts/build.sh`      | `darwin/amd64`, `darwin/arm64`, `linux/amd64`, `linux/arm64`, `windows/amd64` | Producing release artifacts                  |
 | Local only        | `./scripts/build.sh --local` | `$(go env GOOS)/$(go env GOARCH)`                     | Fast local builds / testing a single binary  |
 
 `--local` cross-compiles nothing — it targets only the platform Go reports for
-the current machine, which skips the other three builds. Use it when you just
+the current machine, which skips the other four builds. Use it when you just
 need a runnable binary for the machine you are on; use the default when you need
 the full set of release binaries.
+
+Binaries are named `pockode-<os>-<arch>`, with a `.exe` suffix on Windows.
 
 ### Environment variables
 
 | Variable     | Default | Description                                  |
 | ------------ | ------- | -------------------------------------------- |
 | `VERSION`    | `dev`   | Version stamped into the binary (leading `v` is stripped). |
-| `OUTPUT_DIR` | `dist`  | Directory the binaries are written to.       |
+| `OUTPUT_DIR` | `dist`  | Directory the binaries are written to. Absolute, or relative to the repository root. |
 
 ## `dev.sh` — Development server
 
