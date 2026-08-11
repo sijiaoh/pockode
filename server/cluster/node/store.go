@@ -32,7 +32,7 @@ type indexData struct {
 	Nodes []Node `json:"nodes"`
 }
 
-// FileStore persists Node items to a JSON file with flock-based inter-process safety.
+// FileStore persists Node items to a JSON file with file-lock-based inter-process safety.
 type FileStore struct {
 	file    *filestore.File
 	nodesMu sync.RWMutex

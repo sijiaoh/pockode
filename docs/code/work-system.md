@@ -162,19 +162,23 @@ serialized by a mutex and persisted atomically.
 server/filestore/filestore.go
 ```
 
-Writes take an exclusive flock and do write-temp → fsync → rename, so a crash or
-a concurrent reader never sees a torn file; reads take a shared flock:
+Writes take an exclusive lock and do write-temp → fsync → rename, so a crash or
+a concurrent reader never sees a torn file; reads take a shared lock:
 
 ```go
-lockFile := OpenFile(".lock", CREATE|RDWR)
-Flock(lockFile, LOCK_EX)
-defer Flock(lockFile, LOCK_UN)
+lock := acquireLock(path+".lock", exclusive) // blocks until granted
+defer lock.release()
 
 tmpFile := CreateTemp(path + ".tmp")
 tmpFile.Write(data)
-tmpFile.Sync()        // fsync ensures durability
-Rename(tmpFile, path) // POSIX atomic operation
+tmpFile.Sync()            // fsync ensures durability
+renameFile(tmpFile, path) // atomic replace
 ```
+
+The lock itself is platform-split (`lock_unix.go` / `lock_windows.go`): `flock(2)`
+on unix, `LockFileEx` on Windows. Windows also needs the rename retried, because
+an unrelated opener (antivirus, indexer) can transiently block replacing the
+destination — a failure mode that does not exist under POSIX rename.
 
 The filestore primitive also offers fsnotify-based reload for callers that need
 cross-process change detection (the settings and agent-role stores use it, as

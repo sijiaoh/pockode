@@ -10,7 +10,7 @@ React SPA                          Go Server                         AI CLI
 Zustand stores ◄─── WebSocket ───► RPC handlers ──┐                 MCP (stdio,
                     (JSON-RPC,                     ├─► work.Store      per-session
                     subscriptions)                 │   (JSON file,     subprocess)
-                                   MCP HTTP API ───┘    flock)            │
+                                   MCP HTTP API ───┘    file lock)        │
                                         ▲                                 │
                                         └──────────── /api/mcp ───────────┘
                                    AutoResumer
