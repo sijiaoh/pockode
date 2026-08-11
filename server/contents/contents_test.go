@@ -1,6 +1,7 @@
 package contents
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -278,9 +279,12 @@ func TestDelete(t *testing.T) {
 	t.Run("returns error for absolute path", func(t *testing.T) {
 		workDir := t.TempDir()
 
+		// Asserted on the reason, not just on "some error": an anchored path
+		// that slips past validation is joined onto workDir and then fails as
+		// not-found, which looks identical from the outside.
 		err := Delete(workDir, "/absolute/path")
-		if err == nil {
-			t.Fatal("expected error for absolute path")
+		if !errors.Is(err, ErrInvalidPath) {
+			t.Fatalf("Delete(%q) error = %v, want ErrInvalidPath", "/absolute/path", err)
 		}
 	})
 

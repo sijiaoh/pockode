@@ -24,7 +24,14 @@ func ValidatePath(workDir, path string) error {
 	}
 
 	cleanPath := filepath.Clean(path)
-	if strings.HasPrefix(cleanPath, "..") || filepath.IsAbs(cleanPath) {
+	// Anchored paths are rejected wherever they are anchored, matching
+	// git.validatePath. filepath.IsAbs reports two Windows forms as relative
+	// even though the OS resolves them elsewhere: root-relative (`\etc`, against
+	// the current drive) and drive-relative (`C:etc`, against that drive's
+	// working directory). Without this they are silently reinterpreted as
+	// workDir-relative instead of refused.
+	if strings.HasPrefix(cleanPath, "..") || filepath.IsAbs(cleanPath) ||
+		strings.HasPrefix(cleanPath, string(filepath.Separator)) || filepath.VolumeName(cleanPath) != "" {
 		return fmt.Errorf("%w: %s", ErrInvalidPath, path)
 	}
 

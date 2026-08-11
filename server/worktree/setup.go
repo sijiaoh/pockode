@@ -51,13 +51,21 @@ func InitSetupHook(dataDir string) error {
 	return os.WriteFile(hookPath, []byte(defaultSetupHookContent), 0644)
 }
 
+// hookShell resolves the interpreter for the setup hook. It is a variable so
+// tests can exercise the "no shell available" path on any platform.
+var hookShell = lookupHookShell
+
 // RunSetupHook executes the worktree setup hook if it exists.
 // The hook script receives environment variables:
 //   - POCKODE_MAIN_DIR: path to main worktree
 //   - POCKODE_WORKTREE_PATH: path to newly created worktree
 //   - POCKODE_WORKTREE_NAME: name of the worktree
 //
-// Returns nil if no hook exists or if execution succeeds.
+// Returns nil if no hook exists or if execution succeeds. A missing shell is
+// also not an error: on Windows bash is optional, and refusing to create the
+// worktree over it would make the whole feature unusable there. The skip is
+// logged at warn level instead, since a silently unconfigured worktree is worse
+// than a noisy one.
 func RunSetupHook(dataDir, mainDir, worktreePath, worktreeName string) error {
 	hookPath := filepath.Join(dataDir, setupHookFilename)
 
@@ -67,11 +75,28 @@ func RunSetupHook(dataDir, mainDir, worktreePath, worktreeName string) error {
 		return err
 	}
 
-	cmd := exec.Command("bash", hookPath)
+	shell, err := hookShell()
+	if err != nil {
+		// The remediation for the missing shell itself belongs to the platform
+		// that knows which shell it looked for; only the hook-side way out is
+		// stated here.
+		slog.Warn("worktree setup hook skipped: no shell available to run it",
+			"name", worktreeName,
+			"hook", hookPath,
+			"reason", err,
+			"hint", "delete the hook file to stop Pockode from trying to run it",
+		)
+		return nil
+	}
+
+	// Paths are handed to the hook with forward slashes: the hook is a bash
+	// script, and on Windows a backslash in a shell variable is an escape
+	// character. Git for Windows accepts `C:/...` everywhere it accepts `C:\...`.
+	cmd := exec.Command(shell, filepath.ToSlash(hookPath))
 	cmd.Dir = worktreePath
 	cmd.Env = append(os.Environ(),
-		"POCKODE_MAIN_DIR="+mainDir,
-		"POCKODE_WORKTREE_PATH="+worktreePath,
+		"POCKODE_MAIN_DIR="+filepath.ToSlash(mainDir),
+		"POCKODE_WORKTREE_PATH="+filepath.ToSlash(worktreePath),
 		"POCKODE_WORKTREE_NAME="+worktreeName,
 	)
 

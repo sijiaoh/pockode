@@ -80,12 +80,33 @@ func initRepo(dir string) error {
 	return nil
 }
 
+// credentialHelperConfig builds the credential.helper value that points git at
+// our credentials file.
+//
+// Git runs a helper whose configured value contains shell metacharacters through
+// `sh -c`, and the space before `--file=` always triggers that. So the path has
+// to survive shell parsing: on Windows `C:\Users\me\.git-credentials` reaches
+// the helper as `C:Usersme.git-credentials`, because the shell consumes each
+// backslash as an escape. Forward slashes avoid that (git accepts them on
+// Windows), and quoting keeps a path with spaces — `C:/Users/My Name/...`, the
+// common case there — from being split into two arguments.
+func credentialHelperConfig(credFile string) string {
+	return "store --file=" + shellQuote(filepath.ToSlash(credFile))
+}
+
+// shellQuote renders s as a single POSIX shell word. An embedded single quote
+// cannot be escaped inside a quoted run, so the run is closed, the quote emitted
+// as a backslash escape, and a new run opened.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // setupLocalCredential configures a local credential helper and writes the credentials file.
 func setupLocalCredential(dir, host, token string) error {
 	gitDir := filepath.Join(dir, ".git")
 	credFile := filepath.Join(gitDir, ".git-credentials")
 
-	cmd := exec.Command("git", "config", "--local", "credential.helper", fmt.Sprintf("store --file=%s", credFile))
+	cmd := exec.Command("git", "config", "--local", "credential.helper", credentialHelperConfig(credFile))
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -661,7 +682,13 @@ func validatePath(path string) error {
 
 	cleanPath := filepath.Clean(path)
 
-	if filepath.IsAbs(cleanPath) {
+	// Anchored paths are rejected regardless of where they are anchored. Beyond
+	// absolute paths this covers two Windows-only forms that filepath.IsAbs
+	// reports as relative even though the OS resolves them against something
+	// other than the repository: root-relative (`\etc`, resolved against the
+	// current drive) and drive-relative (`C:etc`, resolved against that drive's
+	// working directory).
+	if filepath.IsAbs(cleanPath) || strings.HasPrefix(cleanPath, string(filepath.Separator)) || filepath.VolumeName(cleanPath) != "" {
 		return fmt.Errorf("absolute paths are not allowed")
 	}
 

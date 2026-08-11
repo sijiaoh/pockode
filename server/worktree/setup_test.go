@@ -1,9 +1,9 @@
 package worktree
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -77,20 +77,50 @@ func TestRunSetupHook_NoScript(t *testing.T) {
 	}
 }
 
-func TestRunSetupHook_Success(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell scripts not supported on Windows")
+// Windows has no bash of its own, so the hook may be unrunnable there. Creating
+// the worktree must still succeed, and the hook must not be run some other way.
+func TestRunSetupHook_SkippedWhenShellUnavailable(t *testing.T) {
+	dataDir := t.TempDir()
+	mainDir := t.TempDir()
+	worktreeDir := t.TempDir()
+
+	hookScript := `#!/bin/bash
+touch hook-ran.txt
+`
+	hookPath := filepath.Join(dataDir, "worktree-setup.sh")
+	if err := os.WriteFile(hookPath, []byte(hookScript), 0644); err != nil {
+		t.Fatal(err)
 	}
+
+	original := hookShell
+	t.Cleanup(func() { hookShell = original })
+	hookShell = func() (string, error) { return "", errors.New("no bash found") }
+
+	if err := RunSetupHook(dataDir, mainDir, worktreeDir, "test-wt"); err != nil {
+		t.Fatalf("missing shell must not fail worktree creation, got: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(worktreeDir, "hook-ran.txt")); !os.IsNotExist(err) {
+		t.Error("hook must not run when no shell is available")
+	}
+}
+
+func TestRunSetupHook_Success(t *testing.T) {
+	requireHookShell(t)
 
 	dataDir := t.TempDir()
 	mainDir := t.TempDir()
 	worktreeDir := t.TempDir()
 
+	// The script is bash on both platforms, so paths embedded in it must use
+	// forward slashes — a native Windows path would have its separators eaten as
+	// escape characters. This is the same reason RunSetupHook hands the hook
+	// forward-slash paths, which is what the expectation below asserts.
 	markerFile := filepath.Join(worktreeDir, "hook-ran.txt")
 	hookScript := `#!/bin/bash
-echo "MAIN=$POCKODE_MAIN_DIR" > "` + markerFile + `"
-echo "PATH=$POCKODE_WORKTREE_PATH" >> "` + markerFile + `"
-echo "NAME=$POCKODE_WORKTREE_NAME" >> "` + markerFile + `"
+echo "MAIN=$POCKODE_MAIN_DIR" > "` + filepath.ToSlash(markerFile) + `"
+echo "PATH=$POCKODE_WORKTREE_PATH" >> "` + filepath.ToSlash(markerFile) + `"
+echo "NAME=$POCKODE_WORKTREE_NAME" >> "` + filepath.ToSlash(markerFile) + `"
 `
 	hookPath := filepath.Join(dataDir, "worktree-setup.sh")
 	if err := os.WriteFile(hookPath, []byte(hookScript), 0644); err != nil {
@@ -107,16 +137,14 @@ echo "NAME=$POCKODE_WORKTREE_NAME" >> "` + markerFile + `"
 		t.Fatalf("hook did not create marker file: %v", err)
 	}
 
-	expected := "MAIN=" + mainDir + "\nPATH=" + worktreeDir + "\nNAME=my-feature\n"
+	expected := "MAIN=" + filepath.ToSlash(mainDir) + "\nPATH=" + filepath.ToSlash(worktreeDir) + "\nNAME=my-feature\n"
 	if string(content) != expected {
 		t.Errorf("marker file content mismatch\ngot:\n%s\nwant:\n%s", content, expected)
 	}
 }
 
 func TestRunSetupHook_ScriptFails(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell scripts not supported on Windows")
-	}
+	requireHookShell(t)
 
 	dataDir := t.TempDir()
 	mainDir := t.TempDir()
@@ -137,9 +165,7 @@ exit 1
 }
 
 func TestRunSetupHook_ScriptFailsWithOutput(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell scripts not supported on Windows")
-	}
+	requireHookShell(t)
 
 	dataDir := t.TempDir()
 	mainDir := t.TempDir()
@@ -165,9 +191,7 @@ exit 1
 }
 
 func TestRunSetupHook_WorksInWorktreeDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell scripts not supported on Windows")
-	}
+	requireHookShell(t)
 
 	dataDir := t.TempDir()
 	mainDir := t.TempDir()
@@ -189,5 +213,18 @@ touch created-in-cwd.txt
 	createdFile := filepath.Join(worktreeDir, "created-in-cwd.txt")
 	if _, err := os.Stat(createdFile); os.IsNotExist(err) {
 		t.Error("hook did not run in worktree directory")
+	}
+}
+
+// requireHookShell skips tests that need to actually execute the hook. On unix
+// bash is part of the base system; on Windows it arrives with Git for Windows,
+// which is optional. Having no shell is a supported state — RunSetupHook skips
+// the hook rather than failing — and that path is covered unconditionally by
+// TestRunSetupHook_SkippedWhenShellUnavailable, so these tests only assert what
+// happens once a shell exists.
+func requireHookShell(t *testing.T) {
+	t.Helper()
+	if _, err := hookShell(); err != nil {
+		t.Skipf("no shell available to run the hook: %v", err)
 	}
 }
