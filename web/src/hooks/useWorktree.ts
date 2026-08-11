@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef } from "react";
 import { buildNavigation } from "../lib/navigation";
+import { fetchWorktrees, WORKTREES_QUERY_KEY } from "../lib/worktreeQuery";
 import {
 	getDisplayName,
 	useWorktreeStore,
@@ -13,23 +14,21 @@ import {
 	useWSStore,
 	wsActions,
 } from "../lib/wsStore";
-import type { WorktreeInfo } from "../types/message";
+import type { SetupHookSkip, WorktreeInfo } from "../types/message";
 import { useSubscription } from "./useSubscription";
 
-async function listWorktrees(): Promise<WorktreeInfo[]> {
-	return wsActions.listWorktrees();
-}
-
+/** Resolves to the skipped setup script, or null when it ran. */
 async function createWorktree(params: {
 	name: string;
 	branch: string;
 	baseBranch?: string;
-}): Promise<void> {
-	return wsActions.createWorktree(
+}): Promise<SetupHookSkip | null> {
+	const result = await wsActions.createWorktree(
 		params.name,
 		params.branch,
 		params.baseBranch,
 	);
+	return result.setup_hook_skip ?? null;
 }
 
 async function deleteWorktree(params: { name: string }): Promise<void> {
@@ -52,6 +51,7 @@ export function useWorktree({
 	const wsStatus = useWSStore((state) => state.status);
 	const current = useWorktreeStore((state) => state.current);
 	const isGitRepo = useWorktreeStore((state) => state.isGitRepo);
+	const setupHookSkip = useWorktreeStore((state) => state.setupHookSkip);
 
 	const isConnected = wsStatus === "connected";
 	const hasConnectedOnceRef = useRef(false);
@@ -59,7 +59,7 @@ export function useWorktree({
 	useEffect(() => {
 		if (isConnected) {
 			if (hasConnectedOnceRef.current) {
-				queryClient.invalidateQueries({ queryKey: ["worktrees"] });
+				queryClient.invalidateQueries({ queryKey: WORKTREES_QUERY_KEY });
 			}
 			hasConnectedOnceRef.current = true;
 		}
@@ -70,14 +70,14 @@ export function useWorktree({
 		isLoading,
 		isSuccess,
 	} = useQuery({
-		queryKey: ["worktrees"],
-		queryFn: listWorktrees,
+		queryKey: WORKTREES_QUERY_KEY,
+		queryFn: fetchWorktrees,
 		enabled: enabled && isConnected && isGitRepo,
 		staleTime: Number.POSITIVE_INFINITY,
 	});
 
 	const handleWorktreeChanged = useCallback(() => {
-		queryClient.invalidateQueries({ queryKey: ["worktrees"] });
+		queryClient.invalidateQueries({ queryKey: WORKTREES_QUERY_KEY });
 	}, [queryClient]);
 
 	useSubscription(
@@ -93,7 +93,7 @@ export function useWorktree({
 
 	useEffect(() => {
 		setWorktreeDeletedListener((name, wasCurrentWorktree) => {
-			queryClient.invalidateQueries({ queryKey: ["worktrees"] });
+			queryClient.invalidateQueries({ queryKey: WORKTREES_QUERY_KEY });
 			if (wasCurrentWorktree) {
 				navigate(
 					buildNavigation({ type: "home", worktree: "" }, { replace: true }),
@@ -114,16 +114,19 @@ export function useWorktree({
 	}, [navigate]);
 
 	const refresh = useCallback(() => {
-		queryClient.invalidateQueries({ queryKey: ["worktrees"] });
+		queryClient.invalidateQueries({ queryKey: WORKTREES_QUERY_KEY });
 	}, [queryClient]);
 
 	const createMutation = useMutation({
 		mutationFn: createWorktree,
 		onSuccess: (_, { name, branch }) => {
-			queryClient.setQueryData<WorktreeInfo[]>(["worktrees"], (old = []) => {
-				if (old.some((w) => w.name === name)) return old;
-				return [...old, { name, branch, path: "", is_main: false }];
-			});
+			queryClient.setQueryData<WorktreeInfo[]>(
+				WORKTREES_QUERY_KEY,
+				(old = []) => {
+					if (old.some((w) => w.name === name)) return old;
+					return [...old, { name, branch, path: "", is_main: false }];
+				},
+			);
 		},
 	});
 
@@ -136,8 +139,9 @@ export function useWorktree({
 	const deleteMutation = useMutation({
 		mutationFn: deleteWorktree,
 		onSuccess: (_, { name }) => {
-			queryClient.setQueryData<WorktreeInfo[]>(["worktrees"], (old = []) =>
-				old.filter((w) => w.name !== name),
+			queryClient.setQueryData<WorktreeInfo[]>(
+				WORKTREES_QUERY_KEY,
+				(old = []) => old.filter((w) => w.name !== name),
 			);
 			if (worktreeActions.getCurrent() === name) {
 				navigate(
@@ -167,6 +171,7 @@ export function useWorktree({
 		isLoading,
 		isSuccess,
 		isGitRepo,
+		setupHookSkip,
 		refresh,
 		select: selectWorktree,
 		create,

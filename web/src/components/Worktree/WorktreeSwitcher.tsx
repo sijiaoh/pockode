@@ -23,6 +23,7 @@ function WorktreeSwitcher({ onClose, isDesktop = true }: Props) {
 		worktrees,
 		isLoading,
 		isGitRepo,
+		setupHookSkip,
 		select,
 		create,
 		delete: deleteWorktree,
@@ -49,14 +50,33 @@ function WorktreeSwitcher({ onClose, isDesktop = true }: Props) {
 		[deleteWorktree, isDeleting],
 	);
 
+	// Worktree to switch to once the create sheet closes. Switching navigates,
+	// which would tear the sheet down before the user has read a skipped-setup
+	// warning, so it is deferred until they dismiss it.
+	const pendingSelectRef = useRef<string | null>(null);
+
 	const handleCreate = useCallback(
 		async (name: string, branch: string, baseBranch?: string) => {
-			await create(name, branch, baseBranch);
-			select(name);
-			setIsCreateOpen(false);
+			const skipped = await create(name, branch, baseBranch);
+			if (skipped) {
+				pendingSelectRef.current = name;
+			} else {
+				select(name);
+				setIsCreateOpen(false);
+			}
+			return skipped;
 		},
 		[create, select],
 	);
+
+	const handleCloseCreate = useCallback(() => {
+		setIsCreateOpen(false);
+		const pending = pendingSelectRef.current;
+		pendingSelectRef.current = null;
+		if (pending !== null) {
+			select(pending);
+		}
+	}, [select]);
 
 	const handleOpenCreate = useCallback(() => {
 		setIsOpen(false);
@@ -152,9 +172,10 @@ function WorktreeSwitcher({ onClose, isDesktop = true }: Props) {
 
 			{isCreateOpen && (
 				<WorktreeCreateSheet
-					onClose={() => setIsCreateOpen(false)}
+					onClose={handleCloseCreate}
 					onCreate={handleCreate}
 					isCreating={isCreating}
+					setupHookSkip={setupHookSkip}
 					isDesktop={isDesktop}
 				/>
 			)}

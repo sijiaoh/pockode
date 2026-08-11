@@ -239,8 +239,18 @@ type WorktreeInfo struct {
 	IsMain bool   `json:"is_main"`
 }
 
+// SetupHookSkip tells the client that the worktree setup hook does not run on
+// this machine, and why. Absent means it runs.
+type SetupHookSkip struct {
+	Reason string `json:"reason"`
+	Hint   string `json:"hint"`
+}
+
 type WorktreeListResult struct {
 	Worktrees []WorktreeInfo `json:"worktrees"`
+	// SetupHookSkip is set when creating a worktree *would* skip the hook, so
+	// the client can say so before the user creates one.
+	SetupHookSkip *SetupHookSkip `json:"setup_hook_skip,omitempty"`
 }
 
 type WorktreeCreateParams struct {
@@ -251,6 +261,9 @@ type WorktreeCreateParams struct {
 
 type WorktreeCreateResult struct {
 	Worktree WorktreeInfo `json:"worktree"`
+	// SetupHookSkip is set when this worktree was created but its setup hook
+	// did not run. Creation still succeeded, so this cannot be an RPC error.
+	SetupHookSkip *SetupHookSkip `json:"setup_hook_skip,omitempty"`
 }
 
 type WorktreeDeleteParams struct {

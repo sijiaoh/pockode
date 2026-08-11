@@ -108,7 +108,7 @@ func TestCreate_Success(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	info, err := r.Create("feature", "feature-branch", "")
+	info, _, err := r.Create("feature", "feature-branch", "")
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestCreate_ExistingBranch(t *testing.T) {
 		t.Fatalf("git branch failed: %s", out)
 	}
 
-	info, err := r.Create("feature", "existing-branch", "")
+	info, _, err := r.Create("feature", "existing-branch", "")
 	if err != nil {
 		t.Fatalf("Create() with existing branch failed: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestCreate_RemoteBranch(t *testing.T) {
 		t.Fatalf("git update-ref failed: %s", out)
 	}
 
-	info, err := r.Create("feature", "feature-x", "")
+	info, _, err := r.Create("feature", "feature-x", "")
 	if err != nil {
 		t.Fatalf("Create() with remote branch failed: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestCreate_WithBaseBranch(t *testing.T) {
 		t.Fatalf("git commit failed: %s", out)
 	}
 
-	info, err := r.Create("feature", "feature-branch", "base-branch")
+	info, _, err := r.Create("feature", "feature-branch", "base-branch")
 	if err != nil {
 		t.Fatalf("Create() with base branch failed: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestCreate_EmptyName(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	_, err := r.Create("", "branch", "")
+	_, _, err := r.Create("", "branch", "")
 	if err == nil {
 		t.Error("Create() with empty name should fail")
 	}
@@ -240,7 +240,7 @@ func TestCreate_EmptyBranch(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	_, err := r.Create("feature", "", "")
+	_, _, err := r.Create("feature", "", "")
 	if err == nil {
 		t.Error("Create() with empty branch should fail")
 	}
@@ -250,12 +250,12 @@ func TestCreate_Duplicate(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	_, err := r.Create("feature", "branch1", "")
+	_, _, err := r.Create("feature", "branch1", "")
 	if err != nil {
 		t.Fatalf("first Create() failed: %v", err)
 	}
 
-	_, err = r.Create("feature", "branch2", "")
+	_, _, err = r.Create("feature", "branch2", "")
 	if err != ErrWorktreeAlreadyExist {
 		t.Errorf("duplicate Create() error = %v, want ErrWorktreeAlreadyExist", err)
 	}
@@ -265,7 +265,7 @@ func TestCreate_PathTraversal(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	_, err := r.Create("../escape", "branch", "")
+	_, _, err := r.Create("../escape", "branch", "")
 	if err == nil {
 		t.Fatal("Create() with path traversal should fail")
 	}
@@ -278,7 +278,7 @@ func TestCreate_NonGitRepo(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(dir, "")
 
-	_, err := r.Create("feature", "branch", "")
+	_, _, err := r.Create("feature", "branch", "")
 	if err != ErrNotGitRepo {
 		t.Errorf("Create() error = %v, want ErrNotGitRepo", err)
 	}
@@ -302,7 +302,7 @@ exit 1
 
 	r := NewRegistry(dir, dataDir)
 
-	_, err := r.Create("feature", "feature-branch", "")
+	_, _, err := r.Create("feature", "feature-branch", "")
 	if err == nil {
 		t.Fatal("Create() should fail when setup hook fails")
 	}
@@ -321,11 +321,50 @@ exit 1
 	}
 }
 
+// A skipped hook must not fail creation, but it must not vanish either: the
+// worktree is handed to the user as if it had been set up.
+func TestCreate_SkippedSetupHookIsReported(t *testing.T) {
+	dir := initGitRepo(t)
+	dataDir := writeHook(t, "#!/bin/bash\nexit 0\n")
+	stubMissingShell(t, "no bash found")
+
+	r := NewRegistry(dir, dataDir)
+
+	info, skipped, err := r.Create("feature", "feature-branch", "")
+	if err != nil {
+		t.Fatalf("a skipped hook must not fail creation: %v", err)
+	}
+	if info.Name != "feature" {
+		t.Errorf("worktree should still be created, got name %q", info.Name)
+	}
+	if skipped == nil {
+		t.Fatal("Create() must report the skipped setup hook")
+	}
+	if !strings.Contains(skipped.Reason, "no bash found") {
+		t.Errorf("reason should carry the lookup failure, got: %q", skipped.Reason)
+	}
+}
+
+func TestCreate_NoSkipReportedWhenHookRuns(t *testing.T) {
+	requireHookShell(t)
+
+	dir := initGitRepo(t)
+	dataDir := writeHook(t, "#!/bin/bash\nexit 0\n")
+
+	r := NewRegistry(dir, dataDir)
+
+	if _, skipped, err := r.Create("feature", "feature-branch", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	} else if skipped != nil {
+		t.Errorf("hook ran, nothing was skipped, got: %+v", skipped)
+	}
+}
+
 func TestDelete_Success(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	info, err := r.Create("to-delete", "delete-branch", "")
+	info, _, err := r.Create("to-delete", "delete-branch", "")
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -351,7 +390,7 @@ func TestDelete_WithModifiedTrackedFile(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	info, err := r.Create("dirty-worktree", "dirty-branch", "")
+	info, _, err := r.Create("dirty-worktree", "dirty-branch", "")
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -628,7 +667,7 @@ func TestCreate_RelativeBaseDir(t *testing.T) {
 	r := NewRegistry(dir, "")
 	r.SetBaseDirProvider(func() string { return "../custom-wt" })
 
-	info, err := r.Create("feature", "feature-branch", "")
+	info, _, err := r.Create("feature", "feature-branch", "")
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -659,7 +698,7 @@ func TestCreate_ConfiguredBaseDir(t *testing.T) {
 	r := NewRegistry(dir, "")
 	r.SetBaseDirProvider(func() string { return base })
 
-	info, err := r.Create("feature", "feature-branch", "")
+	info, _, err := r.Create("feature", "feature-branch", "")
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}

@@ -55,38 +55,71 @@ func InitSetupHook(dataDir string) error {
 // tests can exercise the "no shell available" path on any platform.
 var hookShell = lookupHookShell
 
+// SetupHookSkip explains why the setup hook does not run. It exists so the skip
+// can travel back to the client instead of living only in the server log: a
+// worktree whose setup never ran looks exactly like a prepared one, and Pockode
+// users are on a phone, nowhere near that log.
+type SetupHookSkip struct {
+	// Reason is what stops the hook from running. The platform that looked for
+	// the shell owns this wording, including how to make it runnable — it is the
+	// only layer that knows which interpreter it wanted.
+	Reason string
+	// Hint is the hook-side way out, for users who do not want it to run at all.
+	Hint string
+}
+
+func newSetupHookSkip(err error) *SetupHookSkip {
+	return &SetupHookSkip{
+		Reason: err.Error(),
+		Hint:   "delete " + setupHookFilename + " from the data directory to stop Pockode from trying to run it",
+	}
+}
+
+// CheckSetupHook reports why the setup hook would be skipped on the next
+// worktree creation, or nil if it would run. It answers the same question
+// RunSetupHook answers after the fact, so the UI can warn before the user
+// creates a worktree that will silently miss its setup step.
+func CheckSetupHook(dataDir string) *SetupHookSkip {
+	if _, err := os.Stat(filepath.Join(dataDir, setupHookFilename)); err != nil {
+		// No hook means nothing is being skipped. A stat error other than
+		// not-exist is left for RunSetupHook, which can fail loudly.
+		return nil
+	}
+	if _, err := hookShell(); err != nil {
+		return newSetupHookSkip(err)
+	}
+	return nil
+}
+
 // RunSetupHook executes the worktree setup hook if it exists.
 // The hook script receives environment variables:
 //   - POCKODE_MAIN_DIR: path to main worktree
 //   - POCKODE_WORKTREE_PATH: path to newly created worktree
 //   - POCKODE_WORKTREE_NAME: name of the worktree
 //
-// Returns nil if no hook exists or if execution succeeds. A missing shell is
-// also not an error: on Windows bash is optional, and refusing to create the
-// worktree over it would make the whole feature unusable there. The skip is
-// logged at warn level instead, since a silently unconfigured worktree is worse
-// than a noisy one.
-func RunSetupHook(dataDir, mainDir, worktreePath, worktreeName string) error {
+// Returns a non-nil SetupHookSkip when the hook existed but could not be run.
+// That is not an error: on Windows bash is optional, and refusing to create the
+// worktree over it would make the whole feature unusable there. The caller is
+// expected to pass the skip on to the user rather than drop it.
+func RunSetupHook(dataDir, mainDir, worktreePath, worktreeName string) (*SetupHookSkip, error) {
 	hookPath := filepath.Join(dataDir, setupHookFilename)
 
 	if _, err := os.Stat(hookPath); os.IsNotExist(err) {
-		return nil
+		return nil, nil
 	} else if err != nil {
-		return err
+		return nil, err
 	}
 
 	shell, err := hookShell()
 	if err != nil {
-		// The remediation for the missing shell itself belongs to the platform
-		// that knows which shell it looked for; only the hook-side way out is
-		// stated here.
+		skip := newSetupHookSkip(err)
 		slog.Warn("worktree setup hook skipped: no shell available to run it",
 			"name", worktreeName,
 			"hook", hookPath,
-			"reason", err,
-			"hint", "delete the hook file to stop Pockode from trying to run it",
+			"reason", skip.Reason,
+			"hint", skip.Hint,
 		)
-		return nil
+		return skip, nil
 	}
 
 	// Paths are handed to the hook with forward slashes: the hook is a bash
@@ -109,11 +142,11 @@ func RunSetupHook(dataDir, mainDir, worktreePath, worktreeName string) error {
 			"output", outputStr,
 		)
 		if outputStr != "" {
-			return fmt.Errorf("%w: %s", err, outputStr)
+			return nil, fmt.Errorf("%w: %s", err, outputStr)
 		}
-		return err
+		return nil, err
 	}
 
 	slog.Info("worktree setup hook completed", "name", worktreeName)
-	return nil
+	return nil, nil
 }
