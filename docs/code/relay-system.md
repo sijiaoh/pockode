@@ -290,14 +290,18 @@ These headers are only valid for the current connection and should not be forwar
 ### Token Protection
 
 ```go
-// store.go:45-56
 func (s *Store) Save(cfg *StoredConfig) error {
+    if err := fsperm.RestrictDir(filepath.Dir(s.path)); err != nil {
+        return err
+    }
     // ...
-    return os.WriteFile(s.path, data, 0600)  // Owner-only access
+    return os.WriteFile(s.path, data, 0600)
 }
 ```
 
-The Relay token is the credential for accessing the user's PC and must be strictly protected. File permission 0600 ensures only the file owner can read and write.
+The relay token is a credential for reaching the user's PC — whoever holds it can register the user's subdomain and receive the requests their phone makes, auth header included — so `relay.json` must not be readable by other local users.
+
+The mode alone does not achieve that. `0600` is owner-only on unix, but on Windows it is inert: Go maps the `perm` argument only to the read-only attribute, and the file takes its access rights from the parent directory's ACL instead. `Save` therefore restricts the **directory** first, which is what actually protects the token there and what survives an atomic rewrite. See [Authentication → Credentials on Disk](authentication.md#credentials-on-disk) for the full reasoning and `server/internal/fsperm/` for the implementation.
 
 ### Version Check
 

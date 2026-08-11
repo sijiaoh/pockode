@@ -2,6 +2,10 @@
 
 Helper scripts for local development and release builds.
 
+Both are bash scripts, verified only on macOS and Linux. On Windows use WSL — see
+[Developing Pockode on Windows](../docs/platforms.md#developing-pockode-on-windows)
+for why that is a decision rather than an oversight.
+
 ## `build.sh` — Release build
 
 Builds both frontends (`web`, `web-cluster`) into the server's static

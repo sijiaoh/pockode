@@ -46,7 +46,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | settingsStore | App settings | State/Actions interface split |
 | authStore | Auth token | localStorage init |
 | inputStore | Draft text | persist middleware |
-| worktreeStore | Current worktree | External listener pattern |
+| worktreeStore | Current worktree, and whether the server can run the setup hook | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |
 
 ### Why wsStore is Large (858 lines)
@@ -78,7 +78,7 @@ export type SessionStore = SessionState & SessionActions;
 **Pattern B: Listener Pattern** — worktreeStore uses external listeners for non-React contexts:
 
 ```typescript
-// web/src/lib/worktreeStore.ts:16-21
+// web/src/lib/worktreeStore.ts:24-65 (abridged)
 const changeListeners = new Set<WorktreeChangeListener>();
 
 export const worktreeActions = {
@@ -303,4 +303,12 @@ Key features:
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |
+| `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |
+
+`worktreeQuery.ts` exists because two hooks (`useWorktree`, `useWorktreeDisplay`)
+read the same react-query cache entry. Key and fetcher living in separate files
+let each hook write its own fetcher, and the moment the response shape changed the
+two disagreed about what that cache entry holds. Keeping them in one module makes
+"same entry, same shape" a property of where the code is, not of everyone
+remembering.

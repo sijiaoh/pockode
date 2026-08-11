@@ -44,11 +44,15 @@ pockode -auth-token YOUR_PASSWORD
 
 **Windows**
 
-The install script above is macOS/Linux only. Download `pockode-windows-amd64.exe` from the [latest release](https://github.com/sijiaoh/pockode/releases/latest) and run it from your project directory:
-
 ```powershell
-.\pockode-windows-amd64.exe -auth-token YOUR_PASSWORD
+# Install
+irm https://pockode.com/install.ps1 | iex
+
+# Run (from your project directory)
+pockode -auth-token YOUR_PASSWORD
 ```
+
+No administrator rights needed. Open a new terminal after installing so `PATH` picks it up.
 
 Scan the QR code with your phone. Done.
 

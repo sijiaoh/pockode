@@ -260,7 +260,10 @@ itself):
   reopen and an AI start/reopen behave identically.
 
 **Authentication**: the server generates a random token at startup and writes
-it to `server.json` (mode `0600`, since it is a credential) alongside the port.
+it to `server.json` alongside the port. Being a credential, it goes into a data
+directory restricted to the current user (see
+[Authentication → Credentials on Disk](authentication.md#credentials-on-disk));
+a `0600` mode would protect it on unix only.
 It is distinct from the user-facing `--auth-token` (which is never written to
 disk) and lives only for the lifetime of the process. `middleware.Auth` bypasses
 the exact `/api/mcp/tools/call` route; the `APIHandler` verifies the local token

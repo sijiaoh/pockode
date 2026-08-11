@@ -412,6 +412,46 @@ Permission rules can be saved to different locations:
 
 ## Process Management
 
+### Starting the CLI
+
+Every AI CLI launch goes through `agent.Command` (`server/agent/command.go`)
+rather than `exec.Command`, because on Windows two things have to happen before
+`Start` that `exec.Cmd` will not do.
+
+**Resolving the binary cannot rely on `PATH` alone.** A process keeps the
+environment it was started with, so the `PATH` entry an installer appends is
+invisible to an already-running `pockode.exe` — the CLI exists, but the inherited
+`PATH` predates it. `agent.Command` tries `PATH` first (whatever the user's
+own shell would run is the right answer when it exists), then the directories the
+CLI installers actually write to. When it still fails, the error names the CLI,
+every directory that was searched, the need to restart Pockode, and — on Windows
+— that a CLI installed inside WSL is not reachable from a Windows process. Naming
+the search set is the point: without it "not found" is a conclusion the user
+cannot check. The same lookup feeds the startup banner, so what the banner
+reports and what a session gets are the same answer, not two implementations of
+it.
+
+**The command line has to be built by hand for `.cmd` wrappers.** `npm install
+-g` installs the CLIs as batch files, and Windows runs a batch file by handing
+the command line to `cmd.exe`. Go quotes arguments for `CommandLineToArgvW`,
+which quotes only on spaces and tabs — so a path containing `&`, `^`, `(` or `)`
+arrives at `cmd.exe` unquoted and is split at that character. Go documents this
+as the caller's problem and does not intend to fix it, which is why it is fixed
+here: `agent.Command` invokes `cmd.exe` explicitly, so that the behaviours a user
+can change in the registry — AutoRun, command extensions, delayed expansion — are
+pinned here rather than inherited, and quotes each argument for both parsers it
+will cross. Arguments that quoting cannot make safe — a quote, a newline, a `%NAME%`
+naming a variable that is actually defined — are rejected with an error that
+names the offender, because handing the CLI a quietly different path is the worse
+outcome. The string-building half lives in `agent/cmdline.go`, deliberately
+platform-independent so it can be tested everywhere rather than only on a Windows
+runner.
+
+`server/AGENTS.md` carries this as a rule: start an AI CLI through
+`agent.Command`, never `exec.Command`. `lookupBinary` is unexported for the same
+reason — resolving a path separately and then calling `exec.Command` on it would
+bypass exactly the quoting that the resolved path determines.
+
 ### Subprocess Lifecycle
 
 `agent.Process` (`server/agent/process.go`) wraps the CLI subprocess. Both agent
@@ -419,8 +459,8 @@ implementations go through it instead of using `exec.Cmd` directly, because an
 AI CLI is never a single process:
 
 - It spawns processes of its own — shell commands it runs, MCP servers it starts.
-- On Windows npm installs `claude` as `claude.cmd`, so the direct child is a
-  `cmd.exe` wrapper and the real node process is a grandchild.
+- On Windows npm installs `claude` as `claude.cmd`, so the direct child is the
+  `cmd.exe` invoked above and the real node process is a grandchild.
 
 Two consequences follow, and `exec.Cmd` handles neither on its own.
 

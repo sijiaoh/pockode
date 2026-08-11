@@ -70,16 +70,44 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 |------|----------|
 | `filestore/lock.go` | `lock_{unix,windows}.go` — `flock(2)` / `LockFileEx` |
 | `filestore/rename.go` | `rename_{unix,windows}.go` — Windows 上替换目标可能被临时占用，需重试 |
-| `agent/process.go` | `procgroup_{unix,windows}.go` — 进程组 / Job Object |
+| `agent/process.go` | `procgroup_{unix,windows}.go` — 进程组 / Job Object，Windows 另加 `CREATE_NO_WINDOW` |
+| `agent/command.go` | `command_{unix,windows}.go` — AI CLI 的查找兜底目录 + `.cmd` 包装器的命令行构造 |
 | `worktree/setup.go` | `hook_shell_{unix,windows}.go` — setup hook 的解释器（Windows 无 bash，探测 Git for Windows） |
-| `worktree/pathcmp.go` | `pathcmp_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
-| `cluster/node/process.go` | `process_{unix,windows}.go` — 优雅关闭信号 |
+| `internal/pathutil/pathutil.go` | `equal_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
+| `internal/fsperm/fsperm.go` | `fsperm_{unix,windows}.go` — 0700/0600 mode 位 / 显式 DACL |
+| `cluster/node/process.go` | `process_{unix,windows}.go` — 与终端脱钩（`Setsid` / `DETACHED_PROCESS`）、优雅关闭与强杀的等待方式 |
+| `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — SIGTERM / 命名事件 |
+
+**路径处理统一走 `internal/pathutil`**，不要在各包里重新实现一遍：
+
+| 函数 | 用途 |
+|------|------|
+| `Equal(a, b)` | 原生路径相等判断（Windows 大小写不敏感）|
+| `ChildName(path, dir)` | path 是否在 dir 下，以及其下第一段的名字 |
+| `IsAnchored(path)` | 路径是否被 OS 锚定在别处——绝对路径，外加 `filepath.IsAbs` 判为相对的两种 Windows 形式：`\etc`（当前盘）和 `C:etc`（该盘的工作目录）。给「允许有意逃逸、但不能被锚在别处」的场景用（如 `../worktrees` 设置）|
+| `TrimTildePrefix(path)` / `ExpandTilde(path)` | `~` 展开。`\` 只在 Windows 上算分隔符；Windows 上没有 shell 替我们展开 `~`，用户输入的 `~\projects` 是原样送达的 |
+
+参数一律是**原生路径**。外部来的值默认不是：git 的输出、手写的设置、我们自己 API 里的路径都用 `/`，进来时 `filepath.FromSlash`，出去时 `filepath.ToSlash`。
+
+**启动 AI CLI 一律走 `agent.Command`**，不要直接 `exec.Command(claude.Binary, …)`。它做两件各自都容易漏掉的事：`lookupBinary` 在 PATH 之外补上安装器的默认目录（Windows 上 PATH 是进程启动时定死的，装在 pockode.exe 启动之后的 CLI 就是看不见的），以及在可执行文件是 npm 装出来的 `.cmd` 时自己构造命令行——Windows 跑批处理文件是把命令行交给 cmd.exe，而 `os/exec` 按 `CommandLineToArgvW` 的规则加引号，两套规则对不上（Go 只在文档里提了一句，没有修，见 `agent/cmdline.go`）。
+
+**存凭据的地方用 `internal/fsperm` 收紧，收紧的对象是目录不是文件**。`os.WriteFile(path, data, 0600)` 在 Windows 上什么也没做——Go 只把 perm 映射到只读属性，实际访问权来自父目录继承来的 ACL，而盘符根下建出来的目录一律继承一条 `BUILTIN\Users` 读权限。收紧目录才有两个逐个收紧文件拿不到的性质：**新建的文件自动继承**（`.pockode` 里的 session 记录、`server.log`、work store 都归它管，不必在每个写入点重复一遍），以及**扛得住 temp+rename**（`filestore` 和 git 的 `store` helper 都是先写临时文件再改名覆盖，改名进来的文件带的是它自己创建时的权限，逐个文件收紧会被下一次写入静默抹掉）。
+
+`RestrictDir(dir) error` 是这个包唯一的入口：建目录并收紧。返回的 error 只来自建目录；权限本身设不上（FAT/exFAT 没有权限可言）只 warn 不失败，这层是纵深防御，不该变成 Pockode 拒绝启动的新理由。
+
+**别加「收紧单个文件」的口子。** `.git/.git-credentials` 看着像是需要它，其实不是：git 的 `store` helper 在每次认证成功后都会重写这个文件（写 `.lock` 再改名覆盖），设在文件上的权限第一次 push 就没了——它自己的 `umask(077)` 在 unix 上兜住了 0600，但 umask 在 Windows 上不代表任何东西。所以收紧的是 `.git` 目录，而且只在 `git.Init` 亲手 `git init` 出来的那个仓库上做（`.git` 已存在时 `Init` 直接返回，不碰用户自己的仓库）。
+
+**退出请求统一走 `internal/shutdown`**：`Listen()` 让本进程知道该退出了，`RequestExit(pid)` 让别的进程退出。别在别处再写一遍 `signal.Notify`。Windows 没有 SIGTERM 可发，官方的替代品 Ctrl+Break 只能送到与**调用方**共享控制台的进程，服务 / 计划任务 / detached 启动的集群一律送不到，所以那边走的是命名事件；等待方和发信方必须对上同一个名字，两半因此放在同一个包里。来龙去脉见 [docs/cluster.md](../docs/cluster.md#asking-a-node-to-exit-on-windows)。
+
+**节点与集群的终端脱钩，两个平台都是**：unix 用 `Setsid`，Windows 用 `DETACHED_PROCESS`——节点要活过启动集群的那个 shell，就不能待在它的终端/控制台上，否则关掉终端窗口会把节点一起带走（Windows 会给控制台上所有进程发 `CTRL_CLOSE_EVENT`）。**这件事和 AI CLI 那边的 `CREATE_NO_WINDOW` 是一对**：没有控制台的进程再去启动控制台程序时，Windows 会给它新分配一个**可见**的控制台窗口，集群模式下每次调 AI CLI 都会闪一个黑窗。改其中一处务必看另一处。
+
+「这个路径必须留在某目录内」用标准库的 **`filepath.IsLocal`**，别自己拼条件：它一并挡掉 `..` 逃逸和 Windows 保留设备名（`NUL`、`COM1`——这类名字解析到设备而不是目录里的文件）。`git.validatePath` 和 `contents.ValidatePath` 都走它，因此二者的判定是结构上一致的，而不是各写一遍碰巧一致。
 
 三条最容易踩错的地方：
 
 - **跑 `GOOS=windows GOARCH=amd64 go vet ./...`，不只是 `go build`** —— `go build` 不编译 `_test.go`，而测试文件里的 `syscall` 和路径假设正是最容易在 Windows 上腐化的部分。CI 的 `windows-cross-compile` job 两步都跑。
 - **`git` 的输出永远是正斜杠**，即使在 Windows 上；和原生路径比较前要 `filepath.FromSlash`（见 `worktree/registry.go` 的 `parseWorktreeList`）。反过来，传给 bash 脚本的路径要 `filepath.ToSlash`，因为 bash 里反斜杠是转义符。
-- **平台相关的测试 skip 必须写明理由**。CI 的测试步骤会在末尾打印 skip 清单——全靠 skip 变绿的矩阵腿比没有这条腿更糟。装了 Git for Windows 的 Windows runner 上目前只应出现 `TestStore_FilePermissions` 一条，多出来的每一条都要追。能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip。
+- **平台相关的测试 skip 必须写明理由**。CI 的测试步骤会在末尾打印 skip 清单——全靠 skip 变绿的矩阵腿比没有这条腿更糟。装了 Git for Windows 的 Windows runner 上**目前一条都不应出现**，多出来的每一条都要追。能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 
 ### 解析外部输出
 
