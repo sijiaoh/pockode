@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pockode/server/internal/termtest"
 )
 
 // The scenarios below all need the same shape: a child that spawns a grandchild
@@ -28,6 +30,10 @@ const (
 	// prints what it was actually given, which is the only way to see what
 	// survived the command line.
 	roleArgv = "argv"
+	// roleTerminal prints whether it ended up on the terminal of the process
+	// that started it, which is the one thing about a child that only the child
+	// can answer.
+	roleTerminal = "terminal"
 
 	// leafLifetime only has to outlast the assertions; every test kills the leaf
 	// long before it elapses.
@@ -42,6 +48,8 @@ func TestMain(m *testing.M) {
 		runLeafRole()
 	case roleArgv:
 		runArgvRole()
+	case roleTerminal:
+		runTerminalRole()
 	default:
 		os.Exit(m.Run())
 	}
@@ -80,6 +88,14 @@ func runArgvRole() {
 	for _, arg := range os.Args[1:] {
 		fmt.Println(arg)
 	}
+	os.Exit(0)
+}
+
+// runTerminalRole reports how it is attached to the terminal of the process
+// that started it. Only used on Windows, where the CLI is deliberately kept off
+// the server's console, but it costs nothing to be able to ask anywhere.
+func runTerminalRole() {
+	fmt.Println(termtest.Of())
 	os.Exit(0)
 }
 

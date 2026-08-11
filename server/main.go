@@ -11,11 +11,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/pockode/server/agent"
@@ -29,6 +27,7 @@ import (
 	"github.com/pockode/server/internal/fsperm"
 	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/internal/pathutil"
+	"github.com/pockode/server/internal/shutdown"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
@@ -373,6 +372,11 @@ Flags:
 		}()
 	}
 
+	// Start listening for exit requests before publishing server.json: that file
+	// is how a cluster finds this process, and it may ask us to stop the moment
+	// the file appears.
+	exitRequests := shutdown.Listen()
+
 	// Write server.json for orchestration programs to discover the running server
 	localURL := "http://localhost:" + portStr
 	if err := serverinfo.Write(dataDir, port, localURL, remoteURL, mcpToken); err != nil {
@@ -383,10 +387,10 @@ Flags:
 	// Graceful shutdown
 	shutdownDone := make(chan struct{})
 	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		signal.Stop(sigCh)
+		<-exitRequests.Done()
+		// Restore the default handling, so a second Ctrl+C aborts a shutdown
+		// that is taking too long.
+		exitRequests.Stop()
 
 		slog.Info("shutting down server")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

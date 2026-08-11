@@ -38,11 +38,24 @@ type processGroup struct {
 //
 // CREATE_NEW_PROCESS_GROUP mirrors the Unix side, keeping a console Ctrl+C from
 // reaching the CLI before the server can shut its sessions down in order.
+//
+// CREATE_NO_WINDOW keeps the CLI's console off the screen. It matters most
+// where the server has no console of its own — a node started by a cluster, a
+// service, Task Scheduler — because Windows allocates a *visible* console for
+// the first console program such a process starts, and every AI CLI call would
+// flash a black window at whoever is using the machine. Where the server does
+// have a console the flag costs nothing that was being used: all three of the
+// CLI's streams are pipes, so nothing it writes was going to reach a console
+// either way.
+//
+// Windows ignores CREATE_NO_WINDOW when it is combined with CREATE_NEW_CONSOLE
+// or DETACHED_PROCESS, so the CLI must not be handed either of those as a way of
+// keeping it off ours — the flag beside it here is not one of them.
 func newProcessGroup(cmd *exec.Cmd) *processGroup {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW
 
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {

@@ -5,10 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"os/signal"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/pockode/server/agent"
@@ -16,6 +13,7 @@ import (
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/internal/netutil"
+	"github.com/pockode/server/internal/shutdown"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/startup"
@@ -126,10 +124,11 @@ func Run(cfg Config) error {
 
 	shutdownDone := make(chan struct{})
 	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		signal.Stop(sigCh)
+		exitRequests := shutdown.Listen()
+		<-exitRequests.Done()
+		// Restore the default handling, so a second Ctrl+C aborts a shutdown
+		// that is taking too long.
+		exitRequests.Stop()
 
 		log.Info("shutting down cluster server")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
