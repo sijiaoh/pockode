@@ -38,7 +38,7 @@ type indexData struct {
 	Roles []AgentRole `json:"roles"`
 }
 
-// FileStore persists AgentRole items to a JSON file with flock-based inter-process safety.
+// FileStore persists AgentRole items to a JSON file with file-lock-based inter-process safety.
 type FileStore struct {
 	file      *filestore.File
 	rolesMu   sync.RWMutex

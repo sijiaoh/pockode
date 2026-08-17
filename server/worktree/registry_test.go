@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -107,7 +108,7 @@ func TestCreate_Success(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	info, err := r.Create("feature", "feature-branch", "")
+	info, _, err := r.Create("feature", "feature-branch", "")
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -148,7 +149,7 @@ func TestCreate_ExistingBranch(t *testing.T) {
 		t.Fatalf("git branch failed: %s", out)
 	}
 
-	info, err := r.Create("feature", "existing-branch", "")
+	info, _, err := r.Create("feature", "existing-branch", "")
 	if err != nil {
 		t.Fatalf("Create() with existing branch failed: %v", err)
 	}
@@ -170,7 +171,7 @@ func TestCreate_RemoteBranch(t *testing.T) {
 		t.Fatalf("git update-ref failed: %s", out)
 	}
 
-	info, err := r.Create("feature", "feature-x", "")
+	info, _, err := r.Create("feature", "feature-x", "")
 	if err != nil {
 		t.Fatalf("Create() with remote branch failed: %v", err)
 	}
@@ -206,7 +207,7 @@ func TestCreate_WithBaseBranch(t *testing.T) {
 		t.Fatalf("git commit failed: %s", out)
 	}
 
-	info, err := r.Create("feature", "feature-branch", "base-branch")
+	info, _, err := r.Create("feature", "feature-branch", "base-branch")
 	if err != nil {
 		t.Fatalf("Create() with base branch failed: %v", err)
 	}
@@ -229,7 +230,7 @@ func TestCreate_EmptyName(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	_, err := r.Create("", "branch", "")
+	_, _, err := r.Create("", "branch", "")
 	if err == nil {
 		t.Error("Create() with empty name should fail")
 	}
@@ -239,7 +240,7 @@ func TestCreate_EmptyBranch(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	_, err := r.Create("feature", "", "")
+	_, _, err := r.Create("feature", "", "")
 	if err == nil {
 		t.Error("Create() with empty branch should fail")
 	}
@@ -249,12 +250,12 @@ func TestCreate_Duplicate(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	_, err := r.Create("feature", "branch1", "")
+	_, _, err := r.Create("feature", "branch1", "")
 	if err != nil {
 		t.Fatalf("first Create() failed: %v", err)
 	}
 
-	_, err = r.Create("feature", "branch2", "")
+	_, _, err = r.Create("feature", "branch2", "")
 	if err != ErrWorktreeAlreadyExist {
 		t.Errorf("duplicate Create() error = %v, want ErrWorktreeAlreadyExist", err)
 	}
@@ -264,7 +265,7 @@ func TestCreate_PathTraversal(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	_, err := r.Create("../escape", "branch", "")
+	_, _, err := r.Create("../escape", "branch", "")
 	if err == nil {
 		t.Fatal("Create() with path traversal should fail")
 	}
@@ -277,13 +278,17 @@ func TestCreate_NonGitRepo(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(dir, "")
 
-	_, err := r.Create("feature", "branch", "")
+	_, _, err := r.Create("feature", "branch", "")
 	if err != ErrNotGitRepo {
 		t.Errorf("Create() error = %v, want ErrNotGitRepo", err)
 	}
 }
 
 func TestCreate_SetupHookFailure_CleansUpWorktree(t *testing.T) {
+	// The rollback is triggered by the hook exiting non-zero, so the hook has to
+	// actually run. With no shell RunSetupHook skips it and Create succeeds.
+	requireHookShell(t)
+
 	dir := initGitRepo(t)
 	dataDir := t.TempDir()
 
@@ -297,7 +302,7 @@ exit 1
 
 	r := NewRegistry(dir, dataDir)
 
-	_, err := r.Create("feature", "feature-branch", "")
+	_, _, err := r.Create("feature", "feature-branch", "")
 	if err == nil {
 		t.Fatal("Create() should fail when setup hook fails")
 	}
@@ -316,11 +321,50 @@ exit 1
 	}
 }
 
+// A skipped hook must not fail creation, but it must not vanish either: the
+// worktree is handed to the user as if it had been set up.
+func TestCreate_SkippedSetupHookIsReported(t *testing.T) {
+	dir := initGitRepo(t)
+	dataDir := writeHook(t, "#!/bin/bash\nexit 0\n")
+	stubMissingShell(t, "no bash found")
+
+	r := NewRegistry(dir, dataDir)
+
+	info, skipped, err := r.Create("feature", "feature-branch", "")
+	if err != nil {
+		t.Fatalf("a skipped hook must not fail creation: %v", err)
+	}
+	if info.Name != "feature" {
+		t.Errorf("worktree should still be created, got name %q", info.Name)
+	}
+	if skipped == nil {
+		t.Fatal("Create() must report the skipped setup hook")
+	}
+	if !strings.Contains(skipped.Reason, "no bash found") {
+		t.Errorf("reason should carry the lookup failure, got: %q", skipped.Reason)
+	}
+}
+
+func TestCreate_NoSkipReportedWhenHookRuns(t *testing.T) {
+	requireHookShell(t)
+
+	dir := initGitRepo(t)
+	dataDir := writeHook(t, "#!/bin/bash\nexit 0\n")
+
+	r := NewRegistry(dir, dataDir)
+
+	if _, skipped, err := r.Create("feature", "feature-branch", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	} else if skipped != nil {
+		t.Errorf("hook ran, nothing was skipped, got: %+v", skipped)
+	}
+}
+
 func TestDelete_Success(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	info, err := r.Create("to-delete", "delete-branch", "")
+	info, _, err := r.Create("to-delete", "delete-branch", "")
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -346,7 +390,7 @@ func TestDelete_WithModifiedTrackedFile(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")
 
-	info, err := r.Create("dirty-worktree", "dirty-branch", "")
+	info, _, err := r.Create("dirty-worktree", "dirty-branch", "")
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -441,10 +485,10 @@ func TestDelete_NonGitRepo(t *testing.T) {
 }
 
 func TestWorktreesDir(t *testing.T) {
-	r := NewRegistry("/path/to/myproject", "")
+	r := NewRegistry(absPath(t, "path", "to", "myproject"), "")
 
 	got := r.worktreesDir()
-	want := "/path/to/myproject-worktrees"
+	want := absPath(t, "path", "to", "myproject-worktrees")
 
 	if got != want {
 		t.Errorf("worktreesDir() = %q, want %q", got, want)
@@ -452,38 +496,38 @@ func TestWorktreesDir(t *testing.T) {
 }
 
 func TestWorktreesDir_ConfiguredBase(t *testing.T) {
-	r := NewRegistry("/path/to/myproject", "")
+	r := NewRegistry(absPath(t, "path", "to", "myproject"), "")
 
-	base := "/custom/worktrees"
+	base := absPath(t, "custom", "worktrees")
 	r.SetBaseDirProvider(func() string { return base })
 	if got := r.worktreesDir(); got != base {
 		t.Errorf("worktreesDir() with configured base = %q, want %q", got, base)
 	}
 
 	// Cleaned before use.
-	r.SetBaseDirProvider(func() string { return "/custom/worktrees/" })
+	r.SetBaseDirProvider(func() string { return base + string(filepath.Separator) })
 	if got := r.worktreesDir(); got != base {
 		t.Errorf("worktreesDir() should clean base, = %q, want %q", got, base)
 	}
 
 	// Empty provider value falls back to the default.
 	r.SetBaseDirProvider(func() string { return "" })
-	if got, want := r.worktreesDir(), "/path/to/myproject-worktrees"; got != want {
+	if got, want := r.worktreesDir(), absPath(t, "path", "to", "myproject-worktrees"); got != want {
 		t.Errorf("worktreesDir() with empty base = %q, want default %q", got, want)
 	}
 }
 
 func TestWorktreesDir_RelativeBase(t *testing.T) {
-	r := NewRegistry("/path/to/myproject", "")
+	r := NewRegistry(absPath(t, "path", "to", "myproject"), "")
 
 	tests := []struct {
 		name string
 		base string
 		want string
 	}{
-		{"dot prefix resolves against repo root", "./worktrees", "/path/to/myproject/worktrees"},
-		{"parent prefix resolves against repo parent", "../worktrees", "/path/to/worktrees"},
-		{"deep parent prefix", "../../shared/wt", "/path/shared/wt"},
+		{"dot prefix resolves against repo root", "./worktrees", absPath(t, "path", "to", "myproject", "worktrees")},
+		{"parent prefix resolves against repo parent", "../worktrees", absPath(t, "path", "to", "worktrees")},
+		{"deep parent prefix", "../../shared/wt", absPath(t, "path", "shared", "wt")},
 	}
 
 	for _, tt := range tests {
@@ -496,13 +540,116 @@ func TestWorktreesDir_RelativeBase(t *testing.T) {
 	}
 }
 
+// git prints worktree paths with forward slashes on every platform, so the
+// parser has to translate them before comparing against native paths. Getting
+// this wrong on Windows drops every worktree — including the main one — as
+// "external", leaving the user with an empty list and no error.
+func TestParseWorktreeList_NormalizesGitPaths(t *testing.T) {
+	r := NewRegistry(t.TempDir(), "")
+	mainDir := r.MainDir()
+	r.SetBaseDirProvider(func() string { return "./wt" })
+
+	worktreesDir := r.worktreesDir()
+	featurePath := filepath.Join(worktreesDir, "feature")
+	externalPath := filepath.Join(filepath.Dir(mainDir), "elsewhere")
+
+	// Exactly the shape git emits: forward slashes, blank line between entries.
+	output := "worktree " + filepath.ToSlash(mainDir) + "\nHEAD abc\nbranch refs/heads/main\n\n" +
+		"worktree " + filepath.ToSlash(featurePath) + "\nHEAD def\nbranch refs/heads/feature-branch\n\n" +
+		"worktree " + filepath.ToSlash(externalPath) + "\nHEAD ghi\nbranch refs/heads/other\n"
+
+	got := r.parseWorktreeList(output)
+
+	main, ok := got[""]
+	if !ok {
+		t.Fatalf("main worktree missing from %+v", got)
+	}
+	if main.Path != mainDir || !main.IsMain || main.Branch != "main" {
+		t.Errorf("main worktree = %+v, want path %q, IsMain, branch main", main, mainDir)
+	}
+
+	feature, ok := got["feature"]
+	if !ok {
+		t.Fatalf("managed worktree missing from %+v", got)
+	}
+	if feature.Path != featurePath || feature.IsMain || feature.Branch != "feature-branch" {
+		t.Errorf("feature worktree = %+v, want path %q, not main, branch feature-branch", feature, featurePath)
+	}
+
+	if len(got) != 2 {
+		t.Errorf("worktrees outside the base directory should be skipped, got %+v", got)
+	}
+}
+
+// Nothing keeps git's spelling of a path and ours in the same case: git reports
+// what was recorded when the worktree was added, while our paths come from
+// --work via EvalSymlinks, which upper-cases the drive letter. Windows resolves
+// both to the same file, so discovery has to as well — otherwise every
+// worktree, the main one included, is written off as external and the list
+// comes back empty with no error to explain it.
+func TestParseWorktreeList_DriveLetterCaseMismatch(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("case-insensitive path matching only holds on Windows; unix paths that differ in case are different files")
+	}
+
+	r := NewRegistry(t.TempDir(), "")
+	r.SetBaseDirProvider(func() string { return "./wt" })
+
+	featurePath := filepath.Join(r.worktreesDir(), "feature")
+
+	// Same paths git would report, but with the drive letter git happens to
+	// have recorded rather than the one EvalSymlinks handed us.
+	output := "worktree " + swapDriveLetterCase(filepath.ToSlash(r.MainDir())) + "\nHEAD abc\nbranch refs/heads/main\n\n" +
+		"worktree " + swapDriveLetterCase(filepath.ToSlash(featurePath)) + "\nHEAD def\nbranch refs/heads/feature-branch\n"
+
+	got := r.parseWorktreeList(output)
+
+	if _, ok := got[""]; !ok {
+		t.Errorf("main worktree lost to a drive letter case difference, got %+v", got)
+	}
+	if _, ok := got["feature"]; !ok {
+		t.Errorf("managed worktree lost to a drive letter case difference, got %+v", got)
+	}
+}
+
+func swapDriveLetterCase(path string) string {
+	if len(path) < 2 || path[1] != ':' {
+		return path
+	}
+	return strings.ToLower(path[:1]) + path[1:]
+}
+
+// A base directory is hand-written and often shared between machines, so `/`
+// must work as a separator everywhere. Both spellings have to resolve to the
+// same directory, otherwise a Windows user's worktrees land somewhere the
+// registry will not discover them. Where each base resolves to is covered by
+// TestWorktreesDir_RelativeBase and TestWorktreesDir_HomeBase.
+func TestWorktreesDir_SeparatorSpellingsAgree(t *testing.T) {
+	r := NewRegistry(t.TempDir(), "")
+
+	bases := []string{"./worktrees", "../worktrees", "../../shared/wt", "~/worktrees"}
+
+	for _, base := range bases {
+		t.Run(base, func(t *testing.T) {
+			r.SetBaseDirProvider(func() string { return base })
+			slashed := r.worktreesDir()
+
+			native := filepath.FromSlash(base)
+			r.SetBaseDirProvider(func() string { return native })
+			if got := r.worktreesDir(); got != slashed {
+				t.Errorf("worktreesDir(%q) = %q, but worktreesDir(%q) = %q", native, got, base, slashed)
+			}
+		})
+	}
+}
+
 func TestWorktreesDir_HomeBase(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skipf("no home directory: %v", err)
 	}
 
-	r := NewRegistry("/path/to/myproject", "")
+	r := NewRegistry(absPath(t, "path", "to", "myproject"), "")
 	r.SetBaseDirProvider(func() string { return "~/pockode-worktrees" })
 
 	// worktreesDir resolves symlinks in the longest existing prefix (the home
@@ -520,7 +667,7 @@ func TestCreate_RelativeBaseDir(t *testing.T) {
 	r := NewRegistry(dir, "")
 	r.SetBaseDirProvider(func() string { return "../custom-wt" })
 
-	info, err := r.Create("feature", "feature-branch", "")
+	info, _, err := r.Create("feature", "feature-branch", "")
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -551,7 +698,7 @@ func TestCreate_ConfiguredBaseDir(t *testing.T) {
 	r := NewRegistry(dir, "")
 	r.SetBaseDirProvider(func() string { return base })
 
-	info, err := r.Create("feature", "feature-branch", "")
+	info, _, err := r.Create("feature", "feature-branch", "")
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -584,6 +731,7 @@ func initGitRepo(t *testing.T) string {
 		{"git", "config", "user.email", "test@test.com"},
 		{"git", "config", "user.name", "Test"},
 		{"git", "config", "commit.gpgsign", "false"},
+		{"git", "config", "core.autocrlf", "false"},
 		{"git", "commit", "--allow-empty", "-m", "initial"},
 	}
 
@@ -596,6 +744,28 @@ func initGitRepo(t *testing.T) string {
 	}
 
 	return dir
+}
+
+// absPath builds an absolute path from plain segments. A literal "/path/to/x"
+// is only absolute on unix — on Windows filepath.IsAbs reports false for it, so
+// the registry would treat it as repo-relative and the expectations below would
+// be testing a different code path than intended. Deriving the root from the
+// working directory keeps the same table meaningful on both platforms.
+func absPath(t *testing.T, segments ...string) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() failed: %v", err)
+	}
+	root := filepath.VolumeName(wd) + string(filepath.Separator)
+	path := filepath.Join(append([]string{root}, segments...)...)
+	// The callers exist to exercise the absolute-path branch. If this ever came
+	// back relative they would silently test the repo-relative branch instead
+	// and still pass, because the expected values are built the same way.
+	if !filepath.IsAbs(path) {
+		t.Fatalf("absPath(%v) = %q, which is not absolute on this platform", segments, path)
+	}
+	return path
 }
 
 // resolveSymlinks resolves symlinks for consistent path comparison (e.g., /var -> /private/var on macOS).

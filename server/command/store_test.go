@@ -9,6 +9,31 @@ import (
 	"time"
 )
 
+// useAged records a command and rewinds its timestamp, on disk as well as in
+// memory, so that a command recorded afterwards is strictly newer. Ordering
+// assertions cannot rely on two consecutive time.Now() calls differing: on
+// Windows they routinely return the same instant, which leaves List's sort
+// nothing to order by and makes the result arbitrary.
+func useAged(t *testing.T, store *Store, name string, age time.Duration) {
+	t.Helper()
+	if _, err := store.Use(name); err != nil {
+		t.Fatal(err)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for i := range store.recent {
+		if store.recent[i].Name == name {
+			store.recent[i].UsedAt = store.recent[i].UsedAt.Add(-age)
+			if err := store.persist(); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+	t.Fatalf("command %q was not recorded", name)
+}
+
 func TestList_EmptyStore(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewStore(dir)
@@ -39,7 +64,7 @@ func TestList_RecentCommandsFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store.Use("help")
+	useAged(t, store, "help", time.Hour)
 	store.Use("model")
 
 	commands := store.List()
@@ -78,8 +103,8 @@ func TestList_DuplicateUsageDeduped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store.Use("help")
-	store.Use("model")
+	useAged(t, store, "help", 2*time.Hour)
+	useAged(t, store, "model", time.Hour)
 	store.Use("help")
 
 	commands := store.List()
@@ -151,7 +176,7 @@ func TestPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store.Use("help")
+	useAged(t, store, "help", time.Hour)
 	store.Use("model")
 
 	store2, err := NewStore(dir)

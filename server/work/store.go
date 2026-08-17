@@ -104,7 +104,7 @@ type indexData struct {
 	Comments []Comment `json:"comments,omitempty"`
 }
 
-// FileStore persists Work items to a JSON file with flock-based inter-process safety.
+// FileStore persists Work items to a JSON file with file-lock-based inter-process safety.
 type FileStore struct {
 	file             *filestore.File
 	worksMu          sync.RWMutex

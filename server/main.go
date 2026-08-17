@@ -11,11 +11,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/pockode/server/agent"
@@ -26,7 +24,10 @@ import (
 	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/internal/fsperm"
 	"github.com/pockode/server/internal/netutil"
+	"github.com/pockode/server/internal/pathutil"
+	"github.com/pockode/server/internal/shutdown"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
@@ -177,7 +178,10 @@ Flags:
 		os.Exit(1)
 	}
 
-	absWorkDir, err := filepath.Abs(*workDirFlag)
+	// Path flags are expanded here because no shell does it for us on Windows:
+	// `--work ~\projects` arrives verbatim there and would otherwise create a
+	// directory literally named `~` next to the current one.
+	absWorkDir, err := filepath.Abs(pathutil.ExpandTilde(*workDirFlag))
 	if err != nil {
 		slog.Error("failed to resolve work directory", "error", err)
 		os.Exit(1)
@@ -186,7 +190,7 @@ Flags:
 
 	devMode := *devModeFlag
 
-	dataDirStr := *dataDirFlag
+	dataDirStr := pathutil.ExpandTilde(*dataDirFlag)
 	if dataDirStr == "" {
 		dataDirStr = filepath.Join(workDir, ".pockode")
 	}
@@ -197,12 +201,22 @@ Flags:
 	}
 	dataDir := absDataDir
 
+	// Restrict the data directory before anything writes into it, so every file
+	// it ends up holding — the MCP local token, the relay token, session
+	// transcripts, the log — inherits the restriction instead of being fixed up
+	// afterwards. See internal/fsperm for why this is a property of the
+	// directory rather than of each file.
+	if err := fsperm.RestrictDir(dataDir); err != nil {
+		slog.Error("failed to secure data directory", "path", dataDir, "error", err)
+		os.Exit(1)
+	}
+
 	logger.Init(logger.Config{
 		DataDir:   dataDir,
 		DevMode:   devMode,
 		LogLevel:  *logLevelFlag,
 		LogFormat: *logFormatFlag,
-		LogFile:   *logFileFlag,
+		LogFile:   pathutil.ExpandTilde(*logFileFlag),
 	})
 
 	if *gitEnabledFlag {
@@ -279,6 +293,7 @@ Flags:
 	agents := agent.NewRegistry()
 	agents.Register(session.AgentTypeClaude, claude.New())
 	agents.Register(session.AgentTypeCodex, codex.New())
+	agentStatuses := agent.CheckBinaries(slog.Default(), claude.Binary, codex.Binary)
 
 	// Initialize worktree registry and manager
 	registry := worktree.NewRegistry(workDir, dataDir)
@@ -357,6 +372,11 @@ Flags:
 		}()
 	}
 
+	// Start listening for exit requests before publishing server.json: that file
+	// is how a cluster finds this process, and it may ask us to stop the moment
+	// the file appears.
+	exitRequests := shutdown.Listen()
+
 	// Write server.json for orchestration programs to discover the running server
 	localURL := "http://localhost:" + portStr
 	if err := serverinfo.Write(dataDir, port, localURL, remoteURL, mcpToken); err != nil {
@@ -367,10 +387,10 @@ Flags:
 	// Graceful shutdown
 	shutdownDone := make(chan struct{})
 	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		signal.Stop(sigCh)
+		<-exitRequests.Done()
+		// Restore the default handling, so a second Ctrl+C aborts a shutdown
+		// that is taking too long.
+		exitRequests.Stop()
 
 		slog.Info("shutting down server")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -402,6 +422,7 @@ Flags:
 		LocalURL:     "http://localhost:" + portStr,
 		RemoteURL:    remoteURL,
 		Announcement: announcement,
+		Agents:       agentStatuses,
 	})
 
 	// Print QR code if relay is enabled
@@ -501,7 +522,7 @@ func runCluster() {
 		os.Exit(1)
 	}
 
-	dataDir := *dataDirFlag
+	dataDir := pathutil.ExpandTilde(*dataDirFlag)
 	if dataDir == "" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
@@ -510,7 +531,7 @@ func runCluster() {
 		}
 		dataDir = filepath.Join(homeDir, ".pockode-cluster")
 	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := fsperm.RestrictDir(dataDir); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to create data directory: %v\n", err)
 		os.Exit(1)
 	}

@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/pockode/server/internal/fsperm"
 )
 
 // Config holds configuration for git initialization.
@@ -80,12 +82,49 @@ func initRepo(dir string) error {
 	return nil
 }
 
+// credentialHelperConfig builds the credential.helper value that points git at
+// our credentials file.
+//
+// Git runs a helper whose configured value contains shell metacharacters through
+// `sh -c`, and the space before `--file=` always triggers that. So the path has
+// to survive shell parsing: on Windows `C:\Users\me\.git-credentials` reaches
+// the helper as `C:Usersme.git-credentials`, because the shell consumes each
+// backslash as an escape. Forward slashes avoid that (git accepts them on
+// Windows), and quoting keeps a path with spaces — `C:/Users/My Name/...`, the
+// common case there — from being split into two arguments.
+func credentialHelperConfig(credFile string) string {
+	return "store --file=" + shellQuote(filepath.ToSlash(credFile))
+}
+
+// shellQuote renders s as a single POSIX shell word. An embedded single quote
+// cannot be escaped inside a quoted run, so the run is closed, the quote emitted
+// as a backslash escape, and a new run opened.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // setupLocalCredential configures a local credential helper and writes the credentials file.
 func setupLocalCredential(dir, host, token string) error {
 	gitDir := filepath.Join(dir, ".git")
 	credFile := filepath.Join(gitDir, ".git-credentials")
 
-	cmd := exec.Command("git", "config", "--local", "credential.helper", fmt.Sprintf("store --file=%s", credFile))
+	// Restrict .git before the PAT lands inside it. The directory rather than
+	// the file, for the usual reason plus a specific one: git's `store` helper
+	// rewrites the credentials file on every successful authentication, through
+	// a lock file it renames over the target. That replacement carries the
+	// permissions it was created with, so anything set on the file itself is
+	// gone after the first push. Its umask(077) keeps the rewrite at 0600 on
+	// unix, but a umask means nothing on Windows — there only an inherited ACL
+	// survives.
+	//
+	// Restricting a directory Pockode does not own would be presumptuous; this
+	// one it does. Init returns early when .git already exists, so reaching
+	// here means git init created it moments ago.
+	if err := fsperm.RestrictDir(gitDir); err != nil {
+		return fmt.Errorf("failed to restrict git directory: %w", err)
+	}
+
+	cmd := exec.Command("git", "config", "--local", "credential.helper", credentialHelperConfig(credFile))
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -653,21 +692,24 @@ func Reset(dir, path string) error {
 	return nil
 }
 
-// validatePath checks for path traversal attacks.
+// validatePath checks that a repository-relative path stays inside the
+// repository.
 func validatePath(path string) error {
 	if path == "" {
 		return fmt.Errorf("path is empty")
 	}
 
-	cleanPath := filepath.Clean(path)
-
-	if filepath.IsAbs(cleanPath) {
-		return fmt.Errorf("absolute paths are not allowed")
-	}
-
-	// Check if path escapes the base directory
-	if cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("path traversal is not allowed")
+	// filepath.IsLocal is the rest of the check: it accepts exactly those paths
+	// the OS resolves inside the directory they are joined to. That is absolute and
+	// `..`-escaping paths everywhere, plus, on Windows, the forms filepath.IsAbs
+	// calls relative — root-relative (`\etc`, the current drive), drive-relative
+	// (`C:etc`, that drive's working directory) — and the reserved device names
+	// (`NUL`, `COM1`), which name a device rather than a file in the repository.
+	//
+	// contents.ValidatePath gates the same paths on the way in and must stay in
+	// agreement with this; ws/rpc_git.go runs both over one path.
+	if !filepath.IsLocal(path) {
+		return fmt.Errorf("path must stay inside the repository: %s", path)
 	}
 
 	return nil

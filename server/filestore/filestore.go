@@ -1,6 +1,7 @@
 // Package filestore provides infrastructure for JSON-file-backed stores:
-// atomic file I/O (flock + write-temp-fsync-rename), fsnotify-based external
-// change detection with debounce, and writeGen-based stale reload prevention.
+// atomic file I/O (file lock + write-temp-fsync-rename), fsnotify-based
+// external change detection with debounce, and writeGen-based stale reload
+// prevention.
 package filestore
 
 import (
@@ -11,7 +12,6 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -69,19 +69,14 @@ func (f *File) lockPath() string {
 	return f.path + ".lock"
 }
 
-// Read reads the index file under a shared flock and returns the raw bytes.
+// Read reads the index file under a shared lock and returns the raw bytes.
 // Returns nil, nil if the file does not exist.
 func (f *File) Read() ([]byte, error) {
-	lockF, err := os.OpenFile(f.lockPath(), os.O_CREATE|os.O_RDWR, 0644)
+	lock, err := acquireLock(f.lockPath(), false)
 	if err != nil {
-		return nil, fmt.Errorf("open lock file: %w", err)
+		return nil, err
 	}
-	defer lockF.Close()
-
-	if err := syscall.Flock(int(lockF.Fd()), syscall.LOCK_SH); err != nil {
-		return nil, fmt.Errorf("flock shared: %w", err)
-	}
-	defer syscall.Flock(int(lockF.Fd()), syscall.LOCK_UN)
+	defer lock.release()
 
 	data, err := os.ReadFile(f.path)
 	if os.IsNotExist(err) {
@@ -91,18 +86,13 @@ func (f *File) Read() ([]byte, error) {
 }
 
 // Write atomically writes data using write-temp-fsync-rename under an
-// exclusive flock. Increments writeGen on success.
+// exclusive lock. Increments writeGen on success.
 func (f *File) Write(data []byte) error {
-	lockF, err := os.OpenFile(f.lockPath(), os.O_CREATE|os.O_RDWR, 0644)
+	lock, err := acquireLock(f.lockPath(), true)
 	if err != nil {
-		return fmt.Errorf("open lock file: %w", err)
+		return err
 	}
-	defer lockF.Close()
-
-	if err := syscall.Flock(int(lockF.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("flock exclusive: %w", err)
-	}
-	defer syscall.Flock(int(lockF.Fd()), syscall.LOCK_UN)
+	defer lock.release()
 
 	tmpPath := f.path + ".tmp"
 
@@ -126,7 +116,7 @@ func (f *File) Write(data []byte) error {
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, f.path); err != nil {
+	if err := renameFile(tmpPath, f.path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("rename temp to index: %w", err)
 	}

@@ -5,8 +5,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/pockode/server/internal/fspermtest"
 )
 
 func TestExtractHost(t *testing.T) {
@@ -95,6 +98,9 @@ func setupTestRepoWithSubmoduleOpts(t *testing.T, initSubmodule bool) (string, f
 		{"git", "init"},
 		{"git", "config", "user.email", "test@test.com"},
 		{"git", "config", "user.name", "Test"},
+		// Pinned: Git for Windows defaults autocrlf on, which would rewrite
+		// line endings underneath the content assertions.
+		{"git", "config", "core.autocrlf", "false"},
 	}
 	for _, args := range cmds {
 		cmd := exec.Command(args[0], args[1:]...)
@@ -148,6 +154,9 @@ func setupTestRepoWithSubmoduleOpts(t *testing.T, initSubmodule bool) (string, f
 			{"git", "init"},
 			{"git", "config", "user.email", "test@test.com"},
 			{"git", "config", "user.name", "Test"},
+			// Pinned: Git for Windows defaults autocrlf on, which would rewrite
+			// line endings underneath the content assertions.
+			{"git", "config", "core.autocrlf", "false"},
 		}
 		for _, args := range cmds {
 			cmd := exec.Command(args[0], args[1:]...)
@@ -275,6 +284,9 @@ func setupTestRepo(t *testing.T) (string, func()) {
 		{"git", "init"},
 		{"git", "config", "user.email", "test@test.com"},
 		{"git", "config", "user.name", "Test"},
+		// Pinned: Git for Windows defaults autocrlf on, which would rewrite
+		// line endings underneath the content assertions.
+		{"git", "config", "core.autocrlf", "false"},
 	}
 	for _, args := range cmds {
 		cmd := exec.Command(args[0], args[1:]...)
@@ -453,6 +465,134 @@ func TestValidatePath(t *testing.T) {
 			err := validatePath(tt.path)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validatePath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// `NUL` and friends name a device on Windows, not a file in the repository, so
+// staging one would act on the device instead. Everywhere else they are
+// ordinary file names and must keep working, which is why this asserts both
+// answers rather than skipping.
+//
+// Only the bare names are listed: since Windows 11 a reserved name with an
+// extension (`CON.txt`) is an ordinary file again, so `filepath.IsLocal`'s
+// verdict on those depends on the Windows version.
+func TestValidatePath_ReservedDeviceNames(t *testing.T) {
+	paths := []string{"NUL", "COM1", "aux", filepath.Join("dir", "CON")}
+	wantErr := runtime.GOOS == "windows"
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			if err := validatePath(path); (err != nil) != wantErr {
+				t.Errorf("validatePath(%q) error = %v, wantErr %v", path, err, wantErr)
+			}
+		})
+	}
+}
+
+// On other platforms these are ordinary (if odd) file names, so they can only be
+// asserted where the OS actually resolves them outside the repository.
+func TestValidatePath_WindowsAnchoredForms(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("anchored path forms are Windows-specific")
+	}
+
+	paths := []string{
+		`C:\Windows\system32\config\SAM`, // absolute
+		`C:secret`,                       // drive-relative
+		`\Windows\system32`,              // root-relative
+		`..\secret`,                      // traversal with native separator
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			if err := validatePath(path); err == nil {
+				t.Errorf("validatePath(%q) = nil, want error", path)
+			}
+		})
+	}
+}
+
+func TestCredentialHelperConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		credFile string
+		want     string
+	}{
+		{"plain path", "/home/me/repo/.git/.git-credentials", "store --file='/home/me/repo/.git/.git-credentials'"},
+		{"path with spaces", "/home/my name/repo/.git/.git-credentials", "store --file='/home/my name/repo/.git/.git-credentials'"},
+		{"path with single quote", "/home/o'brien/.git-credentials", `store --file='/home/o'\''brien/.git-credentials'`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := credentialHelperConfig(tt.credFile); got != tt.want {
+				t.Errorf("credentialHelperConfig(%q) = %q, want %q", tt.credFile, got, tt.want)
+			}
+		})
+	}
+}
+
+// Git hands the helper string to a shell, which treats a backslash as an escape
+// character rather than a path separator. A native Windows path must therefore
+// come out with forward slashes.
+func TestCredentialHelperConfig_NoBackslashesInNativePath(t *testing.T) {
+	credFile := filepath.Join(t.TempDir(), ".git", ".git-credentials")
+
+	got := credentialHelperConfig(credFile)
+	if strings.Contains(got, `\`) {
+		t.Errorf("credentialHelperConfig(%q) = %q, must not contain backslashes", credFile, got)
+	}
+	if !strings.Contains(got, filepath.ToSlash(credFile)) {
+		t.Errorf("credentialHelperConfig(%q) = %q, should carry the credentials path", credFile, got)
+	}
+}
+
+// The PAT written here has the widest blast radius of any credential Pockode
+// stores — it stays valid off this machine. What protects it is .git being
+// restricted, not the file's own 0600: git's `store` helper rewrites
+// .git-credentials after every successful authentication and the replacement
+// carries its own permissions.
+func TestSetupLocalCredential_RestrictsGitDir(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	if err := setupLocalCredential(dir, "github.com", "secret-pat"); err != nil {
+		t.Fatalf("setupLocalCredential() error = %v", err)
+	}
+
+	gitDir := filepath.Join(dir, ".git")
+	fspermtest.RequireOwnerOnly(t, gitDir)
+	fspermtest.RequireOwnerOnly(t, filepath.Join(gitDir, ".git-credentials"))
+}
+
+// The contract that matters is what the shell hands to the helper process, so
+// assert it against a real shell rather than against the quoting rules.
+func TestShellQuote_SurvivesShellParsing(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no POSIX shell available: %v", err)
+	}
+
+	paths := []string{
+		"/home/me/.git-credentials",
+		"C:/Users/My Name/repo/.git/.git-credentials",
+		"/home/o'brien/.git-credentials",
+		"/home/me/$HOME `whoami`/.git-credentials",
+		`/home/me/back\slash/.git-credentials`,
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			// Mirrors how git invokes a helper: the whole configured string is
+			// parsed by the shell, so the quoted path must survive as one word.
+			out, err := exec.Command(sh, "-c", "printf %s "+shellQuote(path)).Output()
+			if err != nil {
+				t.Fatalf("shell rejected quoted path: %v", err)
+			}
+			if string(out) != path {
+				t.Errorf("shell parsed %q as %q, want %q", shellQuote(path), out, path)
 			}
 		})
 	}
@@ -700,13 +840,17 @@ func TestShow_FileDiffRoundTrip(t *testing.T) {
 	runGit(t, dir, "commit", "--no-gpg-sign", "--allow-empty", "-m", "empty")
 	cases = append(cases, commitCase{"empty", gitHead(t, dir), map[string]string{}})
 
-	// Pinned on: with a globally disabled core.fileMode git sees no change here
-	// and the commit below would fail instead of exercising a mode change.
-	runGit(t, dir, "config", "core.fileMode", "true")
-	if err := os.Chmod(filepath.Join(dir, "a.txt"), 0755); err != nil {
-		t.Fatalf("failed to chmod a.txt: %v", err)
+	// Windows has no executable bit for git to record, so os.Chmod produces no
+	// change to commit and the case cannot be constructed there at all.
+	if runtime.GOOS != "windows" {
+		// Pinned on: with a globally disabled core.fileMode git sees no change here
+		// and the commit below would fail instead of exercising a mode change.
+		runGit(t, dir, "config", "core.fileMode", "true")
+		if err := os.Chmod(filepath.Join(dir, "a.txt"), 0755); err != nil {
+			t.Fatalf("failed to chmod a.txt: %v", err)
+		}
+		cases = append(cases, commitCase{"mode change", commitAll("mode change"), map[string]string{"a.txt": "M"}})
 	}
-	cases = append(cases, commitCase{"mode change", commitAll("mode change"), map[string]string{"a.txt": "M"}})
 
 	runGit(t, dir, "mv", "a.txt", "renamed.txt")
 	cases = append(cases, commitCase{"rename", commitAll("rename"), map[string]string{"renamed.txt": "R"}})
@@ -843,8 +987,9 @@ func TestParseStatusZ(t *testing.T) {
 }
 
 // nonASCIIPaths covers CJK plus names that git's line-based output would make
-// ambiguous even without escaping.
-var nonASCIIPaths = []string{"中文文件.txt", "目录/子文件.md", "带 空格 的 文件.txt", "箭头 -> 文件.txt"}
+// ambiguous even without escaping. Names that only some platforms can represent
+// live in platformNonASCIIPaths (paths_unix_test.go / paths_windows_test.go).
+var nonASCIIPaths = append([]string{"中文文件.txt", "目录/子文件.md", "带 空格 的 文件.txt"}, platformNonASCIIPaths...)
 
 // setupQuotedTestRepo is setupTestRepo with git's default path quoting pinned on,
 // so these tests still exercise escaped output when the host disables it globally.

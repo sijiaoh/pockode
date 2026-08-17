@@ -11,7 +11,7 @@ let mockWorktrees: WorktreeInfo[] = [];
 vi.mock("../../lib/wsStore", () => ({
 	useWSStore: vi.fn((selector) => selector({ status: "connected" })),
 	wsActions: {
-		listWorktrees: () => Promise.resolve(mockWorktrees),
+		listWorktrees: () => Promise.resolve({ worktrees: mockWorktrees }),
 	},
 }));
 

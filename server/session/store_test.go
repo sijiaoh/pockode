@@ -10,6 +10,25 @@ import (
 
 var ctx = context.Background()
 
+// backdateUpdatedAt rewinds a session's UpdatedAt and returns the new value, so
+// that "this operation refreshed UpdatedAt" can be asserted independently of the
+// wall clock's resolution: on Windows two consecutive time.Now() calls routinely
+// return the same instant, which makes a strict After() against a just-created
+// session fail even though the operation did its job.
+func backdateUpdatedAt(t *testing.T, store *FileStore, sessionID string) time.Time {
+	t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for i := range store.sessions {
+		if store.sessions[i].ID == sessionID {
+			store.sessions[i].UpdatedAt = store.sessions[i].UpdatedAt.Add(-time.Hour)
+			return store.sessions[i].UpdatedAt
+		}
+	}
+	t.Fatalf("session %q not found", sessionID)
+	return time.Time{}
+}
+
 func TestFileStore_Create(t *testing.T) {
 	store, err := NewFileStore(t.TempDir())
 	if err != nil {
@@ -111,6 +130,7 @@ func TestFileStore_Update(t *testing.T) {
 	if sess.Title != "New Chat" {
 		t.Fatalf("expected initial title 'New Chat', got %q", sess.Title)
 	}
+	backdated := backdateUpdatedAt(t, store, sess.ID)
 
 	err := store.Update(ctx, sess.ID, "Updated Title")
 	if err != nil {
@@ -124,8 +144,8 @@ func TestFileStore_Update(t *testing.T) {
 	if sessions[0].Title != "Updated Title" {
 		t.Errorf("expected title 'Updated Title', got %q", sessions[0].Title)
 	}
-	if !sessions[0].UpdatedAt.After(sess.UpdatedAt) {
-		t.Error("expected UpdatedAt to be updated")
+	if !sessions[0].UpdatedAt.After(backdated) {
+		t.Error("expected Update to refresh UpdatedAt")
 	}
 }
 
@@ -170,6 +190,7 @@ func TestFileStore_Activate(t *testing.T) {
 	if sess.Activated {
 		t.Error("expected new session to not be activated")
 	}
+	backdated := backdateUpdatedAt(t, store, sess.ID)
 
 	err := store.Activate(ctx, sess.ID)
 	if err != nil {
@@ -183,8 +204,8 @@ func TestFileStore_Activate(t *testing.T) {
 	if !updated.Activated {
 		t.Error("expected session to be activated")
 	}
-	if !updated.UpdatedAt.After(sess.UpdatedAt) {
-		t.Error("expected UpdatedAt to be updated")
+	if !updated.UpdatedAt.After(backdated) {
+		t.Error("expected Activate to refresh UpdatedAt")
 	}
 }
 
@@ -261,14 +282,13 @@ func TestFileStore_Touch_UpdatesUpdatedAt(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
 	sess, _ := store.Create(ctx, "test-session", "", "")
-	initialUpdatedAt := sess.UpdatedAt
+	backdated := backdateUpdatedAt(t, store, sess.ID)
 
-	time.Sleep(time.Millisecond) // Ensure time difference
 	store.Touch(ctx, sess.ID)
 
 	sessions, _ := store.List()
-	if !sessions[0].UpdatedAt.After(initialUpdatedAt) {
-		t.Error("expected UpdatedAt to be updated after Touch")
+	if !sessions[0].UpdatedAt.After(backdated) {
+		t.Error("expected Touch to refresh UpdatedAt")
 	}
 }
 

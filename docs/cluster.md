@@ -34,7 +34,7 @@ type Node struct {
 The path must point to a directory. If the directory does not exist, the request is rejected with `invalid node: path does not exist`; the frontend detects this and asks whether to create it, retrying with `create_missing_dir` set (see [Frontend UX](#frontend-ux)). A path that exists but is not a directory (or is otherwise inaccessible, e.g. permission denied) is always rejected and never offered for creation. Duplicate paths are rejected.
 
 **Path expansion:**
-- `~` or `~/...` → expanded to user's home directory (e.g., `~/projects/my-app` → `/home/user/projects/my-app`)
+- `~` or `~/...` → expanded to user's home directory (e.g., `~/projects/my-app` → `/home/user/projects/my-app`); `~\...` works the same on Windows (see [Paths on Windows](platforms.md#paths-on-windows))
 - `.` (exactly) → expanded to user's home directory (useful when `cwd` is not a project directory)
 
 ### Node Lifecycle
@@ -81,7 +81,11 @@ The file is deleted when the server shuts down gracefully.
 **Operations:**
 
 - **Start**: Spawns a new Pockode process for the node (requires auth token)
-- **Stop**: Sends SIGTERM to the process, then SIGKILL after 5 seconds if needed
+- **Stop**: Asks the node to exit, then force-kills it after a 5 second grace
+  period. Either way the node is gone and its `server.json` removed before the
+  operation reports success, so stopping a node never leaves stale state behind.
+  The polite step is platform-specific — SIGTERM on unix, a named event on
+  Windows (see [Asking a node to exit on Windows](#asking-a-node-to-exit-on-windows))
 - **Clean Up**: For stale nodes, removes the orphaned server.json file
 
 **How the spawned node receives its token:** the cluster passes the auth token to
@@ -98,6 +102,40 @@ If `node.stop` cannot find the saved process, the backend removes any stale
 `server.json` state it can clean up and returns `"node not running"`. The
 frontend treats this as a warning, refreshes `node.list`, and continues to show
 cleanup guidance if stale state remains.
+
+### Asking a node to exit on Windows
+
+Windows has no SIGTERM to send another process. Its documented stand-in is a
+Ctrl+Break console event, and that only reaches processes sharing the *caller's*
+console — which rules out every way of running a cluster in the background:
+a Windows service, Task Scheduler with "run whether user is logged on or not",
+or any other detached launch. Exactly the setups an always-on machine is likely
+to use would have gone straight to the forced kill, and the node would never
+have run its shutdown: no chance to finish in-flight requests, close its AI CLI
+sessions in order, or remove its own `server.json`.
+
+So a node publishes a named kernel event instead, `Local\pockode-shutdown-<pid>`,
+and the cluster signals it. Nothing about that depends on a console. The name is
+in the session-local namespace, which is the right reach: a cluster only stops
+nodes it started itself, so both are always in the same session, and no other
+session can reach in. The console event survives only as a fallback for a node
+started by a build that predates the event and still running while the cluster
+is upgraded and restarted around it — and only while that older node still shares
+the cluster's console. It cannot reach a node this version started, and does not
+need to: those have no console at all, and every one of them publishes the event.
+
+Both halves live in `server/internal/shutdown` — the waiting side and the
+signalling side have to agree on the name, so they are kept in one place. Server
+mode and cluster mode both listen; `pockode mcp` does not, being a stdio proxy
+that the AI CLI owns and ends by closing its input.
+
+**Nodes no longer die with the terminal.** Nodes are started detached on every
+platform, and on Windows that now means with no console at all — the counterpart
+of the `setsid` unix has always used. Previously a node inherited the cluster's
+console, so closing that terminal window sent it a close event and took it down;
+now it survives, which is what unix already did. Stop a node from the UI instead.
+Shutting the cluster down has never stopped nodes either, so the two platforms
+finally agree.
 
 ## Usage
 
@@ -205,7 +243,7 @@ After authentication:
 
 When cluster mode starts, it displays the same CLI startup interface as normal mode:
 
-- **Banner**: Logo, version, local URL, remote URL (if relay enabled), and cloud announcements
+- **Banner**: Logo, version, local URL, remote URL (if relay enabled), cloud announcements, and which AI CLIs were found. Cluster mode does not run an AI CLI itself, but a node is this same executable and inherits this environment, so it searches the same PATH and the same install directories — and a node's own banner is never seen, because nodes are started detached with their output going to a log file
 - **QR Code**: Scannable QR code for the remote URL (when relay is enabled)
 - **Footer**: "Press Ctrl+C to stop" instruction
 

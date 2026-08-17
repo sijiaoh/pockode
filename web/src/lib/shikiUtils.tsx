@@ -10,6 +10,7 @@ import {
 	createHighlighter,
 	type Highlighter,
 } from "shiki";
+import { splitNativePath } from "../utils/path";
 
 export const CODE_FONT_SIZE_MOBILE = 12;
 export const CODE_FONT_SIZE_DESKTOP = 13;
@@ -25,7 +26,10 @@ for (const lang of bundledLanguagesInfo) {
 }
 
 export function getLanguageFromPath(path: string): string | undefined {
-	const fileName = path.split("/").pop() ?? "";
+	// Callers pass both kinds of path: a tool result's native `file_path` (which
+	// is backslash-separated on Windows) and a slash-separated path from
+	// Pockode's own API. Splitting on either separator is correct for both.
+	const fileName = splitNativePath(path).pop() ?? "";
 
 	if (fileName.toLowerCase() === "dockerfile") return "docker";
 	if (fileName.startsWith(".env")) return "shellscript";

@@ -359,12 +359,14 @@ describe("MessageItem", () => {
 		expect(screen.getByText("init")).toBeInTheDocument();
 	});
 
+	// The formatting rules themselves are covered in utils/path.test.ts; this only
+	// checks that the tool call's file_path and the work dir reach the formatter.
 	describe("file path display", () => {
 		beforeEach(() => {
 			mockWorkDir.value = "/Users/test/project";
 		});
 
-		it("shows filename with relative path for files within workDir", () => {
+		it("summarizes a file tool call as filename plus relative dir", () => {
 			const message: Message = {
 				id: "fp-1",
 				role: "assistant",
@@ -388,50 +390,6 @@ describe("MessageItem", () => {
 			expect(
 				screen.getByText("Button.tsx (src/components)"),
 			).toBeInTheDocument();
-		});
-
-		it("shows filename with parent dir only for files outside workDir", () => {
-			const message: Message = {
-				id: "fp-2",
-				role: "assistant",
-				parts: [
-					{
-						type: "tool_call",
-						tool: {
-							id: "tool-fp-2",
-							name: "Read",
-							input: { file_path: "/etc/hosts" },
-						},
-					},
-				],
-				status: "complete",
-				createdAt: new Date(),
-			};
-
-			render(<MessageItem message={message} />);
-			expect(screen.getByText("hosts (etc)")).toBeInTheDocument();
-		});
-
-		it("shows filename only for files in workDir root", () => {
-			const message: Message = {
-				id: "fp-3",
-				role: "assistant",
-				parts: [
-					{
-						type: "tool_call",
-						tool: {
-							id: "tool-fp-3",
-							name: "Read",
-							input: { file_path: "/Users/test/project/README.md" },
-						},
-					},
-				],
-				status: "complete",
-				createdAt: new Date(),
-			};
-
-			render(<MessageItem message={message} />);
-			expect(screen.getByText("README.md")).toBeInTheDocument();
 		});
 	});
 });

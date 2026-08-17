@@ -65,16 +65,17 @@ func (w *WorkListWatcher) eventLoop() {
 Multiple subscriptions can watch the same path, but fsnotify should only monitor it once:
 
 ```go
-// server/watch/fs.go:84-94
-if w.pathRefCount[path] == 0 {
+// server/watch/fs.go — Subscribe
+key := subscriptionKey(subPath)
+if w.pathRefCount[key] == 0 {
     if err := w.watcher.Add(fullPath); err != nil {
         w.pathMu.Unlock()
         return "", err
     }
 }
-w.pathToIDs[path] = append(w.pathToIDs[path], id)
-w.idToPath[id] = path
-w.pathRefCount[path]++
+w.pathToIDs[key] = append(w.pathToIDs[key], id)
+w.idToPath[id] = key
+w.pathRefCount[key]++
 ```
 
 **Rationale:**
@@ -84,6 +85,8 @@ w.pathRefCount[path]++
 2. **Consistent behavior**: All subscribers to the same path receive identical notifications.
 
 3. **Clean teardown**: Unsubscribe decrements the count; the watch is only removed when the last subscriber leaves.
+
+Keys go through `subscriptionKey` (`filepath.ToSlash`) because the two sides of the map have different origins: subscribers name paths with `/`, as the rest of the API does, while filesystem events arrive with the platform's separator. On Windows the un-normalized spellings of `src/main.go` are two distinct keys, so every subscription below the work directory root would go unnotified — silently, with the client showing stale content.
 
 ### Why 100ms Debounce for FSWatcher?
 
@@ -155,10 +158,10 @@ wg.Wait()
 ### Why Parent Directory Notification in FSWatcher?
 
 ```go
-// server/watch/fs.go:186-193
+// server/watch/fs.go — notifyPath
 ids := append([]string{}, w.pathToIDs[changedPath]...)
 if changedPath != "" {
-    parent := filepath.Dir(changedPath)
+    parent := path.Dir(changedPath)
     if parent == "." {
         parent = ""
     }
@@ -167,6 +170,8 @@ if changedPath != "" {
 ```
 
 **Rationale:** Directory listings need to update when files inside them change. Instead of requiring separate watches on both file and directory, FSWatcher automatically notifies parent directory subscribers.
+
+`path.Dir`, not `filepath.Dir`: subscription keys are slash-separated on every platform, so the parent has to be derived the same way.
 
 ## Frontend: useSubscription Hook
 

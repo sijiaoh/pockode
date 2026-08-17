@@ -3,15 +3,19 @@ import { X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { overlayToNavigation, SETUP_HOOK_PATH } from "../../lib/navigation";
+import type { SetupHookSkip } from "../../types/message";
 
 interface Props {
 	onClose: () => void;
+	/** Resolves to the skipped setup script, or null when it ran. */
 	onCreate: (
 		name: string,
 		branch: string,
 		baseBranch?: string,
-	) => Promise<void>;
+	) => Promise<SetupHookSkip | null>;
 	isCreating: boolean;
+	/** Why the setup script will not run on the server, or null if it will. */
+	setupHookSkip: SetupHookSkip | null;
 	/** Whether in desktop mode (controls layout) */
 	isDesktop: boolean;
 }
@@ -20,6 +24,7 @@ function WorktreeCreateSheet({
 	onClose,
 	onCreate,
 	isCreating,
+	setupHookSkip,
 	isDesktop,
 }: Props) {
 	const navigate = useNavigate();
@@ -27,6 +32,11 @@ function WorktreeCreateSheet({
 	const [branch, setBranch] = useState("");
 	const [baseBranch, setBaseBranch] = useState("");
 	const [error, setError] = useState<string | null>(null);
+	// Set once the worktree exists but its setup script did not run. The sheet
+	// stays open on it: the new worktree is indistinguishable from a prepared
+	// one, so this is the only moment the user can be told.
+	const [skippedAfterCreate, setSkippedAfterCreate] =
+		useState<SetupHookSkip | null>(null);
 	const nameInputRef = useRef<HTMLInputElement>(null);
 	const titleId = useId();
 	const mobile = !isDesktop;
@@ -71,7 +81,14 @@ function WorktreeCreateSheet({
 		const trimmedBaseBranch = baseBranch.trim() || undefined;
 
 		try {
-			await onCreate(trimmedName, trimmedBranch, trimmedBaseBranch);
+			const skipped = await onCreate(
+				trimmedName,
+				trimmedBranch,
+				trimmedBaseBranch,
+			);
+			if (skipped) {
+				setSkippedAfterCreate(skipped);
+			}
 		} catch (err) {
 			setError(
 				err instanceof Error ? err.message : "Failed to create worktree",
@@ -80,6 +97,17 @@ function WorktreeCreateSheet({
 	};
 
 	const canSubmit = name.trim().length > 0 && !isCreating;
+
+	const handleCustomize = () => {
+		onClose();
+		navigate(
+			overlayToNavigation(
+				{ type: "file", path: SETUP_HOOK_PATH, edit: true },
+				"",
+				null,
+			),
+		);
+	};
 
 	return createPortal(
 		<div
@@ -108,7 +136,7 @@ function WorktreeCreateSheet({
 				{/* Header */}
 				<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
 					<h2 id={titleId} className="text-base font-bold text-th-text-primary">
-						New Worktree
+						{skippedAfterCreate ? "Setup Script Skipped" : "New Worktree"}
 					</h2>
 					<button
 						type="button"
@@ -120,135 +148,175 @@ function WorktreeCreateSheet({
 					</button>
 				</div>
 
-				{/* Form */}
-				<form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-					<div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-						{/* Name input */}
-						<div className="space-y-1.5">
-							<label
-								htmlFor="worktree-name"
-								className="text-sm text-th-text-primary"
-							>
-								Name
-							</label>
-							<input
-								ref={nameInputRef}
-								id="worktree-name"
-								type="text"
-								value={name}
-								onChange={(e) => setName(e.target.value)}
-								placeholder="review"
-								className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
-								disabled={isCreating}
-								autoComplete="off"
-								required
-							/>
-							<p className="text-xs text-th-text-muted">
-								Worktree directory name
+				{/* Created, but the setup script never ran */}
+				{skippedAfterCreate ? (
+					<div className="flex min-h-0 flex-1 flex-col">
+						<div
+							className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
+							role="alert"
+						>
+							<p className="text-sm text-th-text-primary">
+								Worktree <span className="font-medium">{name.trim()}</span> was
+								created, but its setup script did not run.
 							</p>
+							<div className="space-y-1 rounded-lg border border-th-warning/40 bg-th-warning/5 px-3 py-2">
+								<SetupHookSkipDetails skip={skippedAfterCreate} />
+							</div>
 						</div>
-
-						{/* Branch input */}
-						<div className="space-y-1.5">
-							<label
-								htmlFor="worktree-branch"
-								className="text-sm text-th-text-primary"
-							>
-								Branch{" "}
-								<span className="font-normal text-th-text-muted">
-									(optional)
-								</span>
-							</label>
-							<input
-								id="worktree-branch"
-								type="text"
-								value={branch}
-								onChange={(e) => setBranch(e.target.value)}
-								placeholder="feature/my-feature"
-								className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
-								disabled={isCreating}
-								autoComplete="off"
-							/>
-							<p className="text-xs text-th-text-muted">Uses name if empty</p>
-						</div>
-
-						{/* Base Branch input */}
-						<div className="space-y-1.5">
-							<label
-								htmlFor="worktree-base-branch"
-								className="text-sm text-th-text-primary"
-							>
-								Base Branch{" "}
-								<span className="font-normal text-th-text-muted">
-									(optional)
-								</span>
-							</label>
-							<input
-								id="worktree-base-branch"
-								type="text"
-								value={baseBranch}
-								onChange={(e) => setBaseBranch(e.target.value)}
-								placeholder="main"
-								className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
-								disabled={isCreating}
-								autoComplete="off"
-							/>
-							<p className="text-xs text-th-text-muted">
-								Base for new branch (ignored if branch exists)
-							</p>
-						</div>
-
-						{/* Info */}
-						<p className="rounded-lg bg-th-bg-tertiary px-3 py-2 text-sm text-th-text-secondary">
-							Setup script runs after creation.{" "}
+						<div className="flex shrink-0 gap-3 border-t border-th-border p-4">
 							<button
 								type="button"
-								className="text-th-accent hover:underline"
-								onClick={() => {
-									onClose();
-									navigate(
-										overlayToNavigation(
-											{ type: "file", path: SETUP_HOOK_PATH, edit: true },
-											"",
-											null,
-										),
-									);
-								}}
+								onClick={onClose}
+								className="flex-1 rounded-lg bg-th-accent px-4 py-2.5 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover"
 							>
-								Customize
+								Done
 							</button>
-						</p>
-
-						{/* Error message */}
-						{error && (
-							<p className="text-sm text-th-error" role="alert">
-								{error}
-							</p>
-						)}
+						</div>
 					</div>
+				) : (
+					/* Form */
+					<form
+						onSubmit={handleSubmit}
+						className="flex min-h-0 flex-1 flex-col"
+					>
+						<div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+							{/* Name input */}
+							<div className="space-y-1.5">
+								<label
+									htmlFor="worktree-name"
+									className="text-sm text-th-text-primary"
+								>
+									Name
+								</label>
+								<input
+									ref={nameInputRef}
+									id="worktree-name"
+									type="text"
+									value={name}
+									onChange={(e) => setName(e.target.value)}
+									placeholder="review"
+									className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+									disabled={isCreating}
+									autoComplete="off"
+									required
+								/>
+								<p className="text-xs text-th-text-muted">
+									Worktree directory name
+								</p>
+							</div>
 
-					{/* Footer */}
-					<div className="flex shrink-0 gap-3 border-t border-th-border p-4">
-						<button
-							type="button"
-							onClick={onClose}
-							className="flex-1 rounded-lg bg-th-bg-tertiary px-4 py-2.5 text-sm text-th-text-primary transition-opacity hover:opacity-90"
-							disabled={isCreating}
-						>
-							Cancel
-						</button>
-						<button
-							type="submit"
-							className="flex-1 rounded-lg bg-th-accent px-4 py-2.5 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-							disabled={!canSubmit}
-						>
-							{isCreating ? "Creating..." : "Create"}
-						</button>
-					</div>
-				</form>
+							{/* Branch input */}
+							<div className="space-y-1.5">
+								<label
+									htmlFor="worktree-branch"
+									className="text-sm text-th-text-primary"
+								>
+									Branch{" "}
+									<span className="font-normal text-th-text-muted">
+										(optional)
+									</span>
+								</label>
+								<input
+									id="worktree-branch"
+									type="text"
+									value={branch}
+									onChange={(e) => setBranch(e.target.value)}
+									placeholder="feature/my-feature"
+									className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+									disabled={isCreating}
+									autoComplete="off"
+								/>
+								<p className="text-xs text-th-text-muted">Uses name if empty</p>
+							</div>
+
+							{/* Base Branch input */}
+							<div className="space-y-1.5">
+								<label
+									htmlFor="worktree-base-branch"
+									className="text-sm text-th-text-primary"
+								>
+									Base Branch{" "}
+									<span className="font-normal text-th-text-muted">
+										(optional)
+									</span>
+								</label>
+								<input
+									id="worktree-base-branch"
+									type="text"
+									value={baseBranch}
+									onChange={(e) => setBaseBranch(e.target.value)}
+									placeholder="main"
+									className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+									disabled={isCreating}
+									autoComplete="off"
+								/>
+								<p className="text-xs text-th-text-muted">
+									Base for new branch (ignored if branch exists)
+								</p>
+							</div>
+
+							{/* Setup script */}
+							<div className="space-y-1 rounded-lg bg-th-bg-tertiary px-3 py-2 text-sm text-th-text-secondary">
+								{setupHookSkip ? (
+									<>
+										<p className="text-th-warning">
+											Setup script will not run on the server.
+										</p>
+										<SetupHookSkipDetails skip={setupHookSkip} />
+									</>
+								) : (
+									<p>Setup script runs after creation.</p>
+								)}
+								<button
+									type="button"
+									className="text-sm text-th-accent hover:underline"
+									onClick={handleCustomize}
+								>
+									Customize
+								</button>
+							</div>
+
+							{/* Error message */}
+							{error && (
+								<p className="text-sm text-th-error" role="alert">
+									{error}
+								</p>
+							)}
+						</div>
+
+						{/* Footer */}
+						<div className="flex shrink-0 gap-3 border-t border-th-border p-4">
+							<button
+								type="button"
+								onClick={onClose}
+								className="flex-1 rounded-lg bg-th-bg-tertiary px-4 py-2.5 text-sm text-th-text-primary transition-opacity hover:opacity-90"
+								disabled={isCreating}
+							>
+								Cancel
+							</button>
+							<button
+								type="submit"
+								className="flex-1 rounded-lg bg-th-accent px-4 py-2.5 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+								disabled={!canSubmit}
+							>
+								{isCreating ? "Creating..." : "Create"}
+							</button>
+						</div>
+					</form>
+				)}
 			</div>
 		</div>,
 		document.body,
+	);
+}
+
+/** Server-provided explanation of why the setup script does not run, plus the way out. */
+function SetupHookSkipDetails({ skip }: { skip: SetupHookSkip }) {
+	return (
+		<>
+			<p className="text-xs text-th-text-secondary">{skip.reason}</p>
+			<p className="text-xs text-th-text-muted">{skip.hint}</p>
+		</>
 	);
 }
 

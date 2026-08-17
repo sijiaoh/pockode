@@ -35,9 +35,10 @@ generate a default.
 The in-process AI agent reaches the server over a loopback HTTP API
 (`/api/mcp/tools/call`). This path is authenticated with its **own** token —
 a 256-bit hex string from `crypto/rand`, regenerated per server start
-(`main.go:generateToken`) and written to `server.json` with `0600` permissions
-(`server/serverinfo/serverinfo.go`) — not the user-facing `--auth-token`. Two
-guards keep it local-only:
+(`main.go:generateToken`) and written to `server.json` inside the restricted data
+directory (`server/serverinfo/serverinfo.go`, see
+[Credentials on Disk](#credentials-on-disk)) — not the user-facing
+`--auth-token`. Two guards keep it local-only:
 
 - The auth middleware bypasses the MCP route by **exact match**, so a future
   `/api/mcp/*` route is auth-protected by default rather than silently exposed
@@ -89,6 +90,70 @@ choke point, which keeps future spawn sites safe by default (DRY). The MCP
 subprocess is unaffected — it authenticates with the separate `server.json` token,
 not this one.
 
+## Credentials on Disk
+
+Three files hold secrets: `server.json` (the MCP local token), `relay.json` (the
+relay token) and, in `--git` mode, `.git/.git-credentials` (a GitHub PAT in
+cleartext). They are still written `0600`, but that mode is not what protects
+them. It is the right permission attached to the wrong *unit*, and on Windows it
+is not a permission at all.
+
+### Why the directory, not the file
+
+Go maps the `perm` argument of `os.WriteFile` to the Windows read-only attribute
+and to nothing else — and `0600` has the write bit set, so it does not even do
+that. A file on Windows gets whatever ACL it inherits from its parent directory,
+and the default ACL below a drive root grants `BUILTIN\Users` read access. A data
+directory at `C:\dev\app\.pockode` is therefore readable by **every account on
+the machine**, while one under `%USERPROFILE%` is not, because the profile
+folder's ACL is protected and names only the user, SYSTEM and Administrators.
+Which of the two a user gets is decided by where they keep their projects —
+something Pockode has no say in, and Windows developers commonly keep them
+outside the profile to avoid long paths and cloud sync.
+
+`server/internal/fsperm` therefore restricts the **directory** — `0700` on unix,
+an explicit protected DACL naming the user, SYSTEM and Administrators on
+Windows — and lets the files inside inherit it. Two properties follow that
+per-file hardening cannot provide:
+
+- **Files created later are covered.** The data directory also accumulates
+  session transcripts, `server.log` and the work store, all written `0644`. One
+  call at startup covers them; per-file hardening would have to be repeated at
+  every write site and would still miss files written by other programs.
+- **It survives atomic rewrites.** Both `filestore` and git's `store` credential
+  helper replace a file by writing a temp file beside it and renaming over the
+  target. The replacement carries the mode and ACL it was *created* with, so a
+  per-file restriction is silently undone by the next write. A temp file created
+  inside a restricted directory inherits the restriction instead.
+
+The second point is what decides the `.git-credentials` case, which otherwise
+looks like it wants per-file treatment. git's `store` helper rewrites that file
+on **every successful authentication**, through a lock file it renames over the
+target — so a mode or ACL set on the file is gone after the first push. The
+helper's own `umask(077)` keeps the rewrite at `0600` on unix, but a umask means
+nothing on Windows, where only an inherited ACL survives. So `.git` is restricted
+as a directory, and only the one `git.Init` creates itself: `Init` returns early
+when `.git` already exists, so a repository Pockode did not make is never
+touched.
+
+### Why SYSTEM and Administrators stay in the DACL
+
+An administrator can take ownership of any object and read it regardless, so
+excluding them would keep the secret from nobody. It would only break backup,
+antivirus and run-as-a-service setups, while leaving the accounts this actually
+guards against — ordinary co-tenants, who are in `BUILTIN\Users` but not in
+`Administrators` — exactly where they were. This is the same principal set
+Win32-OpenSSH accepts on a private key.
+
+### Why a failure to restrict is a warning, not an error
+
+Some filesystems have no permissions to express: FAT and exFAT on a removable
+drive, some network mounts. Keeping a project on one is legitimate, and the
+server started there before this hardening existed. Refusing to start would turn
+a defence-in-depth layer into a new way for Pockode to fail, over something that
+is not the control actually guarding the server. `fsperm` logs the path and the
+underlying error and continues.
+
 ## Connection Lifecycle
 
 Binding a worktree to a WebSocket connection races the connection's teardown when a
@@ -125,3 +190,4 @@ hosting) revisits them rather than rediscovering them:
 | MCP local API token | `server/mcp/handler.go`, `server/serverinfo/serverinfo.go` |
 | Relay MCP rejection | `server/relay/http.go` |
 | Cluster node token delivery | `server/cluster/node/process.go` |
+| On-disk restriction of credentials | `server/internal/fsperm/` |

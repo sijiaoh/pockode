@@ -412,6 +412,89 @@ Permission rules can be saved to different locations:
 
 ## Process Management
 
+### Starting the CLI
+
+Every AI CLI launch goes through `agent.Command` (`server/agent/command.go`)
+rather than `exec.Command`, because on Windows two things have to happen before
+`Start` that `exec.Cmd` will not do.
+
+**Resolving the binary cannot rely on `PATH` alone.** A process keeps the
+environment it was started with, so the `PATH` entry an installer appends is
+invisible to an already-running `pockode.exe` — the CLI exists, but the inherited
+`PATH` predates it. `agent.Command` tries `PATH` first (whatever the user's
+own shell would run is the right answer when it exists), then the directories the
+CLI installers actually write to. When it still fails, the error names the CLI,
+every directory that was searched, the need to restart Pockode, and — on Windows
+— that a CLI installed inside WSL is not reachable from a Windows process. Naming
+the search set is the point: without it "not found" is a conclusion the user
+cannot check. The same lookup feeds the startup banner, so what the banner
+reports and what a session gets are the same answer, not two implementations of
+it.
+
+**The command line has to be built by hand for `.cmd` wrappers.** `npm install
+-g` installs the CLIs as batch files, and Windows runs a batch file by handing
+the command line to `cmd.exe`. Go quotes arguments for `CommandLineToArgvW`,
+which quotes only on spaces and tabs — so a path containing `&`, `^`, `(` or `)`
+arrives at `cmd.exe` unquoted and is split at that character. Go documents this
+as the caller's problem and does not intend to fix it, which is why it is fixed
+here: `agent.Command` invokes `cmd.exe` explicitly, so that the behaviours a user
+can change in the registry — AutoRun, command extensions, delayed expansion — are
+pinned here rather than inherited, and quotes each argument for both parsers it
+will cross. Arguments that quoting cannot make safe — a quote, a newline, a `%NAME%`
+naming a variable that is actually defined — are rejected with an error that
+names the offender, because handing the CLI a quietly different path is the worse
+outcome. The string-building half lives in `agent/cmdline.go`, deliberately
+platform-independent so it can be tested everywhere rather than only on a Windows
+runner.
+
+`server/AGENTS.md` carries this as a rule: start an AI CLI through
+`agent.Command`, never `exec.Command`. `lookupBinary` is unexported for the same
+reason — resolving a path separately and then calling `exec.Command` on it would
+bypass exactly the quoting that the resolved path determines.
+
+### Subprocess Lifecycle
+
+`agent.Process` (`server/agent/process.go`) wraps the CLI subprocess. Both agent
+implementations go through it instead of using `exec.Cmd` directly, because an
+AI CLI is never a single process:
+
+- It spawns processes of its own — shell commands it runs, MCP servers it starts.
+- On Windows npm installs `claude` as `claude.cmd`, so the direct child is the
+  `cmd.exe` invoked above and the real node process is a grandchild.
+
+Two consequences follow, and `exec.Cmd` handles neither on its own.
+
+**Killing the child is not killing the tree.** Terminating only the direct child
+leaves the rest running: sessions never end, goroutines leak, and the worktree
+cannot be removed because orphans still hold files in it. `Process` therefore
+tracks the whole tree from the start:
+
+| Platform | Mechanism |
+|----------|-----------|
+| Unix | The child leads its own process group (`Setpgid`); termination signals the group |
+| Windows | The child is assigned to a Job Object; termination calls `TerminateJobObject` |
+
+The Job Object also carries `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so if the
+server itself dies the OS tears the tree down instead of leaving orphans behind.
+
+**Reaping must not depend on the pipes.** Descendants inherit the stdout and
+stderr write ends, so those pipes do not reach EOF while any of them is alive.
+`Cmd.StdoutPipe` must not be read after `Wait`, which forces callers into
+"drain, then Wait" — and that deadlocks outright the moment one orphan survives:
+the drain never finishes, so `Wait` is never reached. `Process` supplies its own
+`os.Pipe` files instead, which keeps `Wait` dependent only on the direct child,
+and reaps it concurrently with the drain:
+
+```
+Start ──┬─ reap goroutine:  Wait ─→ terminate tree ─→ close pipes
+        └─ caller:          drain stdout ─→ OutputDone ─→ Wait
+```
+
+Once the direct child is reaped, anything still holding the pipes outlived it, so
+the tree is terminated there too — that is what lets the caller's drain finish.
+A backstop closes the pipes a few seconds later regardless, covering a descendant
+that escaped the tree entirely (e.g. by starting a new session).
+
 ### State Machine
 
 ```
@@ -561,7 +644,7 @@ if errors.Is(err, bufio.ErrTooLong) {
 ### Fatal Errors
 
 The following conditions send an `ErrorEvent` and end the session:
-- Process crash (`cmd.Wait()` returns non-context error)
+- Process crash (`Process.Wait()` returns non-context error)
 - MCP initialization failure
 - Critical I/O errors
 
@@ -572,6 +655,7 @@ The following conditions send an `ErrorEvent` and end the session:
 | Agent interface | `server/agent/agent.go` |
 | Event types | `server/agent/event.go` |
 | Event serialization | `server/agent/history.go` |
+| Subprocess lifecycle | `server/agent/process.go`, `server/agent/procgroup_{unix,windows}.go` |
 | Claude implementation | `server/agent/claude/claude.go` |
 | Codex implementation | `server/agent/codex/codex.go` |
 | Chat client | `server/chat/client.go` |

@@ -1,10 +1,65 @@
 package contents
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+// ValidatePath guards every file operation the client can reach, and ws/rpc_git.go
+// runs it over paths it then hands to git — whose own validatePath must reach the
+// same verdict. Both now delegate to filepath.IsLocal, so they agree by
+// construction; this pins down what that contract admits.
+func TestValidatePath(t *testing.T) {
+	workDir := filepath.Join(string(filepath.Separator)+"repo", "project")
+
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"empty means the work directory itself", "", false},
+		{"plain file", "file.txt", false},
+		{"nested file", "dir/file.txt", false},
+		{"dotfile", ".gitignore", false},
+		// A leading ".." is only an escape when the whole segment is "..".
+		// git.validatePath has always accepted this one; ValidatePath used to
+		// reject it, so the same file was listable but not stageable.
+		{"file whose name starts with dots", "..foo", false},
+		{"traversal", "../secret", true},
+		{"traversal after normalization", "dir/../../secret", true},
+		{"absolute", "/etc/passwd", true},
+		// The work directory is spelled "", never "." — the containment check
+		// keeps the two from becoming interchangeable spellings.
+		{"dot", ".", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidatePath(workDir, tt.path); (err != nil) != tt.wantErr {
+				t.Errorf("ValidatePath(%q, %q) error = %v, wantErr %v", workDir, tt.path, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// A path Windows resolves to a device rather than to a file under workDir is no
+// more "inside" the work directory than an absolute path is. Elsewhere these are
+// ordinary names and must keep working, so both answers are asserted.
+func TestValidatePath_ReservedDeviceNames(t *testing.T) {
+	workDir := filepath.Join(string(filepath.Separator)+"repo", "project")
+	wantErr := runtime.GOOS == "windows"
+
+	for _, path := range []string{"NUL", "COM1", "aux", "dir/CON"} {
+		t.Run(path, func(t *testing.T) {
+			if err := ValidatePath(workDir, path); (err != nil) != wantErr {
+				t.Errorf("ValidatePath(%q, %q) error = %v, wantErr %v", workDir, path, err, wantErr)
+			}
+		})
+	}
+}
 
 func TestWriteFile(t *testing.T) {
 	t.Run("creates new file", func(t *testing.T) {
@@ -278,9 +333,12 @@ func TestDelete(t *testing.T) {
 	t.Run("returns error for absolute path", func(t *testing.T) {
 		workDir := t.TempDir()
 
+		// Asserted on the reason, not just on "some error": an anchored path
+		// that slips past validation is joined onto workDir and then fails as
+		// not-found, which looks identical from the outside.
 		err := Delete(workDir, "/absolute/path")
-		if err == nil {
-			t.Fatal("expected error for absolute path")
+		if !errors.Is(err, ErrInvalidPath) {
+			t.Fatalf("Delete(%q) error = %v, want ErrInvalidPath", "/absolute/path", err)
 		}
 	})
 

@@ -1,18 +1,18 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type {
 	WorktreeCreateParams,
+	WorktreeCreateResult,
 	WorktreeDeleteParams,
-	WorktreeInfo,
 	WorktreeListResult,
 } from "../../types/message";
 
 export interface WorktreeActions {
-	listWorktrees: () => Promise<WorktreeInfo[]>;
+	listWorktrees: () => Promise<WorktreeListResult>;
 	createWorktree: (
 		name: string,
 		branch: string,
 		baseBranch?: string,
-	) => Promise<void>;
+	) => Promise<WorktreeCreateResult>;
 	deleteWorktree: (name: string) => Promise<void>;
 }
 
@@ -28,24 +28,20 @@ export function createWorktreeActions(
 	};
 
 	return {
-		listWorktrees: async (): Promise<WorktreeInfo[]> => {
-			const result: WorktreeListResult = await requireClient().request(
-				"worktree.list",
-				{},
-			);
-			return result.worktrees;
+		listWorktrees: async (): Promise<WorktreeListResult> => {
+			return requireClient().request("worktree.list", {});
 		},
 
 		createWorktree: async (
 			name: string,
 			branch: string,
 			baseBranch?: string,
-		): Promise<void> => {
+		): Promise<WorktreeCreateResult> => {
 			const params: WorktreeCreateParams = { name, branch };
 			if (baseBranch) {
 				params.base_branch = baseBranch;
 			}
-			await requireClient().request("worktree.create", params);
+			return requireClient().request("worktree.create", params);
 		},
 
 		deleteWorktree: async (name: string): Promise<void> => {

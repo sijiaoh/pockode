@@ -46,6 +46,10 @@ func setupResumerTest(t *testing.T) (*FileStore, *AutoResumer, *mockSender) {
 	resumer := NewAutoResumer(store, 3)
 	resumer.settleDelay = 10 * time.Millisecond
 	resumer.SetSender(sender)
+	// Its work happens on goroutines that outlive the call that scheduled them.
+	// Without stopping it, those goroutines keep writing to the store after the
+	// test's temp directory is gone.
+	t.Cleanup(resumer.Stop)
 	return store, resumer, sender
 }
 
@@ -233,24 +237,20 @@ func TestAutoResumer_RetryLimit_TransitionsToStopped(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, sid)
 
 	// Exhaust retries (maxRetries=3)
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		resumer.HandleProcessStateChange(sid, "idle", false, false, false)
-		if i < 3 {
-			waitFor(t, func() bool { return len(sender.getMessages()) >= i+1 })
-		} else {
-			time.Sleep(50 * time.Millisecond) // 4th attempt should be rejected
-		}
+		waitFor(t, func() bool { return len(sender.getMessages()) >= i+1 })
 	}
 
-	msgs := sender.getMessages()
-	if len(msgs) != 3 {
+	// The attempt past the limit stops the work instead of resuming it. Waiting
+	// on that transition rather than on a duration is what makes this reliable:
+	// the settle delay plus a store write is not something a fixed sleep can
+	// outlast on a loaded machine.
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
+	waitFor(t, func() bool { return getWork(t, store, story.ID).Status == StatusStopped })
+
+	if msgs := sender.getMessages(); len(msgs) != 3 {
 		t.Errorf("expected 3 messages (retry limit), got %d", len(msgs))
-	}
-
-	// Work should be transitioned to stopped
-	w := getWork(t, store, story.ID)
-	if w.Status != StatusStopped {
-		t.Errorf("status = %q, want %q after retry limit", w.Status, StatusStopped)
 	}
 }
 

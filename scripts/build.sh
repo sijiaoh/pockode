@@ -49,21 +49,31 @@ else
         "darwin/arm64"
         "linux/amd64"
         "linux/arm64"
+        "windows/amd64"
     )
 fi
 
 mkdir -p "$OUTPUT_DIR"
 
+# go build runs with -C server, so it resolves -o from inside server/. Normalising
+# to an absolute path here is what keeps that detail from leaking: prefixing "../"
+# only works for a relative OUTPUT_DIR, and for an absolute one it silently writes
+# the binaries somewhere else while still reporting success.
+OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd)
+
 for platform in "${platforms[@]}"; do
     os="${platform%/*}"
     arch="${platform#*/}"
     output="$OUTPUT_DIR/pockode-${os}-${arch}"
+    if [ "$os" = "windows" ]; then
+        output="$output.exe"
+    fi
 
     echo "Building $output..."
     CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build \
         -C server \
         -ldflags="-w -s -X main.version=$VERSION" \
-        -o "../$output" .
+        -o "$output" .
 done
 
 echo ""

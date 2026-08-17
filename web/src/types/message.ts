@@ -180,14 +180,31 @@ export interface WorktreeInfo {
 	is_main: boolean;
 }
 
+/**
+ * Why the worktree setup script does not run on the server's machine.
+ * Absent means it runs.
+ */
+export interface SetupHookSkip {
+	reason: string;
+	hint: string;
+}
+
 export interface WorktreeListResult {
 	worktrees: WorktreeInfo[];
+	/** Set when creating a worktree would skip the setup script. */
+	setup_hook_skip?: SetupHookSkip;
 }
 
 export interface WorktreeCreateParams {
 	name: string;
 	branch: string;
 	base_branch?: string;
+}
+
+export interface WorktreeCreateResult {
+	worktree: WorktreeInfo;
+	/** Set when the worktree was created but its setup script did not run. */
+	setup_hook_skip?: SetupHookSkip;
 }
 
 export interface WorktreeDeleteParams {
