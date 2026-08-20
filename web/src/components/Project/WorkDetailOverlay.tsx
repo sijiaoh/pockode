@@ -113,10 +113,7 @@ export default function WorkDetailOverlay({
 						<InlineEditableTitle work={work} />
 						<div className="mt-2 flex flex-wrap items-center gap-2">
 							<StatusBadge status={work.status} />
-							<WorktreeBadge
-								worktree={work.worktree}
-								className="max-w-[16rem]"
-							/>
+							<WorktreeBadge work={work} className="max-w-[16rem]" />
 						</div>
 					</div>
 

@@ -51,8 +51,10 @@ frozen:
   parent's worktree is fixed by then. A child pre-created under a still-open
   story would inherit the empty default instead, so `SetWorktree` also propagates
   the captured worktree down to any open descendant when the story starts. Either
-  way an entire story subtree shares one worktree — the coordinator and all its
-  tasks stay together.
+  way an entire story subtree normally shares one worktree — the coordinator and
+  all its tasks stay together. The one gap is a task started *before* its story
+  (nothing forbids it): it is no longer open by then, so propagation skips it and
+  it keeps whatever it inherited at create time.
 - **Immutable once started** — `SetWorktree` only mutates a work while its status
   is still `open`; any later call is rejected. Assigning the *same* value is a
   no-op, so a main-worktree story that goes open → start → stop → start does not
@@ -441,9 +443,11 @@ The work list is **global — it spans every worktree** (its subscription sets `
 
 Design decisions specific to this display:
 
+- **A work whose worktree is not decided yet shows no badge at all**, since a badge would assert a binding that can still change. What counts as decided follows from *Worktree Binding* above: a work that is no longer `open` is already frozen, and an `open` one is decided the moment its **root** starts and propagates the captured worktree down. So an open work is judged by its root, not by itself — that is what keeps the badge on an open task under a running story while hiding it for the same task under a story that has not started.
+- **The badge resolves that verdict itself rather than being told it.** `isWorktreeBound` (`workStore.ts`) owns the rule and `WorktreeBadge` reads it through a `useWorkStore` selector, so no call site can forget it. Reaching the root needs the whole work list, which is why the badge subscribes to the store instead of taking the verdict as a prop. When an ancestor is missing from that list (subscription not synced yet), the walk stops at the deepest known one and *its* status decides — with the two-level hierarchy `validParents` enforces, that means falling back to the work's own status, which errs toward hiding.
 - **The binding is read-only, but the badge is a navigation link.** The worktree binding is frozen once a work starts (see *Worktree Binding*), so — unlike the editable role — the badge never *reassigns* a work's worktree. It is, however, a clickable `<Link>` (target from `buildNavigation({ type: "home", worktree })`) that jumps to that worktree's root URL (main → `/`, feature → `/w/<worktree>/`), letting the user pivot from the mixed global list straight into the context of any work's worktree. It carries no work/chat context — just the worktree switch — and uses real anchor semantics (middle-click / open-in-new-tab) rather than a button.
-- **List page shows the badge on story rows only.** A story subtree shares one worktree (the same invariant that lets `SetWorktree` propagate to descendants), so a task's worktree always equals its story's. Labeling only the story row avoids repeating the same badge on every task and the prop-threading that would require.
-- **Detail page shows it on both stories and tasks**, because a task detail can be opened directly, without its story on screen.
+- **List page shows the badge on story rows only.** A story subtree normally shares one worktree (the same invariant that lets `SetWorktree` propagate to descendants), so a badge on every task row would almost always restate the story badge already sitting above it — noise in an already dense row.
+- **Detail page shows it on both stories and tasks**, because a task detail can be opened directly, without its story on screen — and because a task started ahead of its story (see *Worktree Binding*) is the one case where it differs from the story's.
 - **Feature name comes straight from the stored `Worktree` string**, so a work still shows its original worktree name even after that worktree is deleted — no lookup against the live worktree list is needed.
 - **Empty `Worktree` (main) resolves to the main branch name**, matching `WorktreeSwitcher`, and falls back to a neutral `Default` until the worktree list loads (never a guessed `main`/`master` literal). Only this main path reads the worktree list, and it reuses the existing `["worktrees"]` react-query cache read-only rather than opening a new subscription. On non-git projects the main badge renders nothing, since there is no worktree concept to show.
 - **Visual hierarchy encodes the exception.** A feature worktree is accented (it is the noteworthy case, and accent doubles as the app's interactive/link color, so the chip also reads as clickable); the main worktree is muted, matching that it is the silent default.

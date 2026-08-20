@@ -2,18 +2,26 @@ import { Link } from "@tanstack/react-router";
 import { GitBranch } from "lucide-react";
 import { useWorktreeDisplay } from "../../hooks/useWorktreeDisplay";
 import { buildNavigation } from "../../lib/navigation";
+import { isWorktreeBound, useWorkStore } from "../../lib/workStore";
 import { useIsGitRepo } from "../../lib/worktreeStore";
+import type { Work } from "../../types/work";
 
 interface Props {
-	/** The work's raw `worktree` field (empty/undefined = main). */
-	worktree: string | undefined;
+	/** The work whose worktree assignment is shown. */
+	work: Pick<Work, "id" | "parent_id" | "status" | "worktree">;
 	/** Extra classes for layout, e.g. `max-w-*` in dense list rows. */
 	className?: string;
 }
 
-function WorktreeBadge({ worktree, className }: Props) {
+function WorktreeBadge({ work, className }: Props) {
+	const { worktree } = work;
 	const isGitRepo = useIsGitRepo();
 	const { displayName, isMain } = useWorktreeDisplay(worktree);
+	const isBound = useWorkStore((s) => isWorktreeBound(s.works, work));
+
+	// A worktree that the backend can still rewrite would be misleading to show,
+	// so an undecided binding renders nothing rather than a provisional name.
+	if (!isBound) return null;
 
 	// Non-git projects have no worktree concept, so the main badge is just noise.
 	if (isMain && !isGitRepo) return null;
