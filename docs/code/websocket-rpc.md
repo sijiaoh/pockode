@@ -429,6 +429,7 @@ const RPC_TIMEOUT_MS = 30000;
 
 3. **Add frontend action**
    - Add method in `web/src/lib/rpc/*.ts`
+   - If its result is cached with react-query and scoped to a worktree, register the query key in `WORKTREE_DEPENDENT_QUERY_KEYS` (see [frontend-state.md](frontend-state.md#server-cache-vs-store))
 
 ### Adding New Subscription Types
 

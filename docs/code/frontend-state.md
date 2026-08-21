@@ -16,6 +16,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  UI State Layer                                                 │
 │  ├─ themeStore ◀─────── subscribeThemeRegistry              │   │
 │  ├─ inputStore (localStorage)                               │   │
+│  ├─ filesSearchStore (localStorage)                         │   │
 │  └─ worktreeStore + listeners                               │   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Domain Data Layer                                              │
@@ -46,6 +47,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | settingsStore | App settings | State/Actions interface split |
 | authStore | Auth token | localStorage init |
 | inputStore | Draft text | persist middleware |
+| filesSearchStore | File search options | localStorage init |
 | worktreeStore | Current worktree | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |
 
@@ -114,6 +116,22 @@ subscribeThemeRegistry(() => {
   useThemeStore.setState({ theme: "abyss" });
 });
 ```
+
+## Server Cache vs Store
+
+Not every piece of server data belongs in a store. Data the client fetches
+request/response — directory contents, git status, commit diffs, file search
+results — lives in the react-query cache instead, so staleness, in-flight state
+and deduplication come with it rather than being re-implemented per store.
+Stores hold what the app itself owns (UI preferences) and what arrives as a
+stream of subscription notifications. A watcher notification and a cached query
+compose: `*.changed` says something moved, and the query refetches.
+
+The catch is scope: those caches are keyed by query key, not by worktree, so
+`queryClient.ts` invalidates every key in `WORKTREE_DEPENDENT_QUERY_KEYS` once a
+switch completes. A worktree-scoped query missing from that list keeps serving
+the previous worktree's data — paths that look fine until they 404 on open —
+and it is the easy step to forget when adding a query.
 
 ## Message Reducer
 
@@ -303,6 +321,7 @@ Key features:
 | File | Purpose |
 |------|---------|
 | `web/src/lib/wsStore.ts` | WebSocket + RPC + subscription management |
+| `web/src/lib/queryClient.ts` | react-query setup + worktree-dependent invalidation |
 | `web/src/lib/messageReducer.ts` | Event → Message state transformation |
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
