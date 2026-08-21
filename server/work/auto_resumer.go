@@ -59,8 +59,9 @@ type AutoResumer struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	retryMu      sync.Mutex
-	retries      map[string]int  // sessionID → retry count
-	continuing   map[string]bool // sessionID → auto-continuation pending
+	retries      map[string]int    // sessionID → retry count
+	continuing   map[string]bool   // sessionID → auto-continuation pending
+	activations  map[string]uint64 // sessionID → number of times the session started running
 	maxRetries   int
 	settleDelay  time.Duration // delay before checking work status after process stop
 }
@@ -80,6 +81,7 @@ func NewAutoResumer(workStore Store, maxRetries int) *AutoResumer {
 		cancel:      cancel,
 		retries:     make(map[string]int),
 		continuing:  make(map[string]bool),
+		activations: make(map[string]uint64),
 		maxRetries:  maxRetries,
 		settleDelay: defaultSettleDelay,
 	}
@@ -184,9 +186,10 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 	if state == "ended" {
 		r.retryMu.Lock()
 		pending := r.continuing[sessionID]
+		activation := r.activations[sessionID]
 		r.retryMu.Unlock()
 		if !pending {
-			go r.handleProcessEnded(sessionID)
+			go r.handleProcessEnded(sessionID, activation)
 		}
 		return
 	}
@@ -195,13 +198,21 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 	// This covers the case where a user sends a message to a session
 	// whose work was stopped (e.g. after process exit), bypassing work_start.
 	if state == "running" {
+		r.retryMu.Lock()
+		r.activations[sessionID]++
+		r.retryMu.Unlock()
 		r.handleProcessRunning(sessionID)
 		return
 	}
 
-	// User-initiated interrupt: stop work without auto-continuation.
+	// The turn was aborted rather than finished — a user interrupt, a denied
+	// permission, a turn replaced by the next one. Stop the work instead of
+	// nudging the agent to carry on with something it was told to abandon.
 	if interrupted {
-		go r.handleProcessEnded(sessionID)
+		r.retryMu.Lock()
+		activation := r.activations[sessionID]
+		r.retryMu.Unlock()
+		go r.handleProcessEnded(sessionID, activation)
 		return
 	}
 
@@ -217,18 +228,44 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 
 	r.retryMu.Lock()
 	r.continuing[sessionID] = true
+	activation := r.activations[sessionID]
 	r.retryMu.Unlock()
 
-	go r.handleAutoContinuation(sessionID)
+	go r.handleAutoContinuation(sessionID, activation)
+}
+
+// settled waits out the settle delay and reports whether the lifecycle event
+// that started the wait still describes the session.
+//
+// Both delayed handlers decide what to do about a session that stopped, and a
+// session can start running again inside the delay: an aborted turn is followed
+// immediately by its replacement, and a user can answer a dead session's prompt,
+// which builds a new process. Acting on the older event would then stop or nudge
+// work that is running right now. activation is the count read when the event
+// arrived; HandleProcessStateChange bumps it on every running.
+func (r *AutoResumer) settled(sessionID string, activation uint64) bool {
+	select {
+	case <-time.After(r.settleDelay):
+	case <-r.ctx.Done():
+		return false
+	}
+
+	r.retryMu.Lock()
+	current := r.activations[sessionID]
+	r.retryMu.Unlock()
+
+	if current != activation {
+		slog.Info("session active again, skipping stale lifecycle follow-up", "sessionId", sessionID)
+		return false
+	}
+	return true
 }
 
 // handleProcessEnded transitions in_progress/needs_input/waiting work to stopped when its process terminates.
 // This catches cases like user interrupt or unexpected process exit.
-func (r *AutoResumer) handleProcessEnded(sessionID string) {
+func (r *AutoResumer) handleProcessEnded(sessionID string, activation uint64) {
 	// Use the same settle delay as auto-continuation to allow step_done to propagate.
-	select {
-	case <-time.After(r.settleDelay):
-	case <-r.ctx.Done():
+	if !r.settled(sessionID, activation) {
 		return
 	}
 
@@ -275,7 +312,7 @@ func (r *AutoResumer) handleProcessRunning(sessionID string) {
 	slog.Info("stopped work reactivated by process running", "workId", w.ID, "sessionId", sessionID)
 }
 
-func (r *AutoResumer) handleAutoContinuation(sessionID string) {
+func (r *AutoResumer) handleAutoContinuation(sessionID string, activation uint64) {
 	defer func() {
 		r.retryMu.Lock()
 		delete(r.continuing, sessionID)
@@ -283,10 +320,8 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string) {
 	}()
 
 	// Let an in-flight step_done's in-process retry reset land before we read
-	// the retry count below. Use select so we abort immediately on shutdown.
-	select {
-	case <-time.After(r.settleDelay):
-	case <-r.ctx.Done():
+	// the retry count below.
+	if !r.settled(sessionID, activation) {
 		return
 	}
 

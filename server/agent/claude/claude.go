@@ -167,7 +167,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		defer stderr.Close()
 
 		stderrCh := agent.ReadStderr(stderr, "claude")
-		streamOutput(procCtx, log, stdout, events, pendingRequests, resumeState)
+		streamOutput(procCtx, log, stdout, events, pendingRequests, resumeState, sess.declineControlRequest)
 		agent.WaitForProcess(procCtx, log, cmd, stderrCh, events)
 
 		// Notify client that process has ended (abnormal: process should stay alive)
@@ -329,6 +329,30 @@ func (s *cliSession) sendControlResponse(requestID string, content controlRespon
 	return s.writeStdin(data)
 }
 
+// declineControlRequest answers a control request we cannot service with a
+// protocol-level error. The CLI blocks the turn until every request it
+// originates gets a reply, so staying silent would hang the session.
+func (s *cliSession) declineControlRequest(requestID, message string) {
+	response := controlErrorResponse{
+		Type: "control_response",
+		Response: controlErrorPayload{
+			Subtype:   "error",
+			RequestID: requestID,
+			Error:     message,
+		},
+	}
+
+	data, err := json.Marshal(response)
+	if err != nil {
+		s.log.Error("failed to marshal control error response", "error", err)
+		return
+	}
+
+	if err := s.writeStdin(data); err != nil {
+		s.log.Error("failed to send control error response", "error", err, "requestId", requestID)
+	}
+}
+
 // interruptMarker is stored in pendingRequests to identify interrupt responses.
 // Needed because control_response only contains request_id, not the request type.
 type interruptMarker struct{}
@@ -396,7 +420,7 @@ func (s *cliSession) writeStdin(data []byte) error {
 	return err
 }
 
-func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager) {
+func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, decline declineFunc) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
@@ -423,7 +447,7 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 			resumeState.observe(event)
 		}
 
-		for _, ev := range parseLine(log, line, event, pendingRequests) {
+		for _, ev := range parseLine(log, line, event, pendingRequests, decline) {
 			select {
 			case events <- ev:
 			case <-ctx.Done():
@@ -630,6 +654,17 @@ type controlResponseContent struct {
 	UpdatedPermissions []agent.PermissionUpdate `json:"updatedPermissions,omitempty"`
 }
 
+type controlErrorResponse struct {
+	Type     string              `json:"type"`
+	Response controlErrorPayload `json:"response"`
+}
+
+type controlErrorPayload struct {
+	Subtype   string `json:"subtype"`
+	RequestID string `json:"request_id"`
+	Error     string `json:"error"`
+}
+
 type interruptRequest struct {
 	Type      string               `json:"type"`
 	RequestID string               `json:"request_id"`
@@ -668,9 +703,13 @@ type cliContentBlock struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 }
 
+// declineFunc answers a control request the CLI is blocking on with a
+// protocol-level error. Injected so parsing stays independent of the session.
+type declineFunc func(requestID, message string)
+
 // parseLine converts one already-decoded stream-json envelope into agent events.
 // line is retained for the cases (result, control_*) that decode a superset struct.
-func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map) []agent.AgentEvent {
+func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, decline declineFunc) []agent.AgentEvent {
 	switch event.Type {
 	case "assistant":
 		return parseAssistantEvent(log, event)
@@ -679,22 +718,22 @@ func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *s
 	case "result":
 		return []agent.AgentEvent{parseResultEvent(line)}
 	case "system":
-		// Skip noise events that carry no meaning for users:
-		// - init: session-start metadata
-		// - thinking_tokens: high-frequency streaming thinking-token estimates
-		if event.Subtype == "init" || event.Subtype == "thinking_tokens" {
-			return nil
-		}
-		return []agent.AgentEvent{agent.SystemEvent{Content: string(line)}}
+		return parseSystemEvent(log, line, event)
 	case "control_request":
-		return parseControlRequest(log, line, pendingRequests)
+		return parseControlRequest(log, line, pendingRequests, decline)
 	case "control_response":
 		return parseControlResponse(log, line, pendingRequests)
 	case "control_cancel_request":
 		return parseControlCancelRequest(log, line, pendingRequests)
-	case "progress":
-		// Undocumented event (e.g., bash_progress) not in official SDK docs.
-		// Other CLI wrappers also ignore it.
+	case "progress", "tool_progress", "tool_use_summary", "rate_limit_event",
+		"auth_status", "prompt_suggestion", "command_lifecycle":
+		// Telemetry and host-control frames that carry nothing for the transcript;
+		// the CLI's own SDK adapter drops the same set. "progress" is the pre-2.1
+		// name of "tool_progress" and is kept for older CLIs.
+		//
+		// Deliberately absent: "conversation_reset", which does carry meaning (the
+		// CLI dropped its history, e.g. after /clear) but has no Pockode handling
+		// yet, so it stays on the unhandled path where the debug log records it.
 		return nil
 	default:
 		log.Debug("unhandled event type from CLI", "type", event.Type)
@@ -702,16 +741,95 @@ func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *s
 	}
 }
 
-func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
-	var req controlRequest
-	if err := json.Unmarshal(line, &req); err != nil {
-		log.Warn("failed to parse control request from CLI", "error", err)
+// userVisibleSystemSubtypes lists the `system` subtypes worth putting in the
+// transcript. Everything else is internal bookkeeping.
+//
+// Why an allowlist: the CLI emits dozens of internal system subtypes (task_*,
+// hook_*, session_state_changed, turn_duration, ...) and keeps adding more, so
+// forwarding unknown subtypes by default turns every tool call into transcript
+// noise — a plain `echo hi` alone emits task_started and task_notification.
+//
+// This mirrors the CLI's own SDK message adapter, which renders exactly this set
+// and ignores unknown subtypes. Two deliberate additions: the adapter drops
+// api_retry and permission_denied because the interactive REPL has its own
+// surfaces for a retry banner and a denial dialog — Pockode has neither, so
+// without these a stalled turn or an auto-denied tool would go unexplained.
+//
+// Two notable exclusions: `init` is session-start metadata that the CLI re-emits
+// at the start of every turn, and `thinking_tokens` is a per-delta token
+// estimate — both are pure noise in a transcript.
+var userVisibleSystemSubtypes = map[string]bool{
+	"compact_boundary":          true, // conversation was compacted
+	"informational":             true, // loop text banner, e.g. hook feedback
+	"api_retry":                 true, // API call failed and is being retried
+	"permission_denied":         true, // tool auto-denied without an interactive prompt
+	"model_fallback":            true, // switched to a fallback model
+	"model_consent_fallback":    true,
+	"model_refusal_fallback":    true,
+	"model_refusal_no_fallback": true, // model refused and no fallback ran
+}
+
+// systemContent extracts the display text of a system event.
+type systemContent struct {
+	Content string `json:"content"`
+}
+
+func parseSystemEvent(log *slog.Logger, line []byte, event cliEvent) []agent.AgentEvent {
+	// Output of a local slash command (e.g. /usage). The legacy path delivers
+	// the same text inside a user message wrapped in <local-command-stdout>.
+	if event.Subtype == "local_command_output" {
+		var payload systemContent
+		if err := json.Unmarshal(line, &payload); err != nil {
+			log.Warn("failed to parse local command output from CLI", "error", err)
+			return []agent.AgentEvent{agent.SystemEvent{Content: string(line)}}
+		}
+		if payload.Content == "" {
+			return nil
+		}
+		return []agent.AgentEvent{agent.CommandOutputEvent{Content: payload.Content}}
+	}
+
+	if !userVisibleSystemSubtypes[event.Subtype] {
+		log.Debug("ignoring internal system event from CLI", "subtype", event.Subtype)
 		return nil
 	}
 
+	return []agent.AgentEvent{agent.SystemEvent{Content: string(line)}}
+}
+
+// unsupportedControlSubtypes names the requests the CLI originates that Pockode
+// has no way to service (we register neither SDK hooks nor in-process MCP
+// servers, and have no UI for CLI-driven dialogs), so that the decline can say
+// what was asked for. Only the wording depends on this map: every subtype other
+// than can_use_tool is declined, named or not.
+var unsupportedControlSubtypes = map[string]string{
+	"hook_callback":           "hook callbacks",
+	"mcp_message":             "in-process MCP servers",
+	"elicitation":             "MCP elicitation",
+	"request_user_dialog":     "CLI-driven dialogs",
+	"oauth_token_refresh":     "OAuth token refresh",
+	"host_auth_token_refresh": "host auth token refresh",
+}
+
+func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Map, decline declineFunc) []agent.AgentEvent {
+	var req controlRequest
+	if err := json.Unmarshal(line, &req); err != nil {
+		// The line is valid JSON — streamOutput decoded it already — so this is a
+		// field of an unexpected shape. The request id is usually still readable,
+		// and answering matters more than understanding what was asked.
+		log.Warn("failed to parse control request from CLI", "error", err)
+		var partial struct {
+			RequestID string `json:"request_id"`
+		}
+		if err := json.Unmarshal(line, &partial); err != nil || partial.RequestID == "" {
+			log.Warn("cannot answer an unreadable control request, the turn may hang")
+			return nil
+		}
+		return declineUnservable(log, decline, partial.RequestID, "", "a request Pockode could not read")
+	}
+
 	if req.Request == nil {
-		log.Debug("ignoring request with nil request data")
-		return nil
+		return declineUnservable(log, decline, req.RequestID, "", "a request with no request data")
 	}
 
 	switch req.Request.Subtype {
@@ -722,8 +840,12 @@ func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Ma
 				Questions []agent.AskUserQuestion `json:"questions"`
 			}
 			if err := json.Unmarshal(req.Request.Input, &input); err != nil {
+				// A question we cannot render is still a question the CLI waits
+				// on, and the shape of `input` is exactly the kind of thing a new
+				// CLI changes. Declining costs the user this one question;
+				// returning nil costs them the conversation.
 				log.Warn("failed to parse AskUserQuestion input from CLI", "error", err)
-				return nil
+				return declineUnservable(log, decline, req.RequestID, req.Request.Subtype, "a question Pockode could not read")
 			}
 
 			// Remember the original input so SendQuestionResponse can echo it
@@ -749,9 +871,33 @@ func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Ma
 		}}
 
 	default:
-		log.Debug("ignoring unknown subtype", "subtype", req.Request.Subtype)
-		return nil
+		capability, named := unsupportedControlSubtypes[req.Request.Subtype]
+		if !named {
+			capability = req.Request.Subtype
+		}
+		return declineUnservable(log, decline, req.RequestID, req.Request.Subtype, capability)
 	}
+}
+
+// declineUnservable answers a control request Pockode cannot serve and tells the
+// user why the CLI just failed something.
+//
+// Every control_request is an RPC the CLI blocks the turn on until it is
+// answered, and can_use_tool is the only one Pockode can serve. Everything that
+// reaches here is answered — an unreadable request, a request missing its body, a
+// subtype added by a CLI newer than this code — because the two ways of being
+// wrong are not comparable: staying silent hangs the conversation with nothing to
+// recover it, while an error answer to a request that turned out not to need one
+// costs a spurious warning and the turn goes on.
+// subtype is empty for the requests that never got far enough to have one.
+func declineUnservable(log *slog.Logger, decline declineFunc, requestID, subtype, capability string) []agent.AgentEvent {
+	log.Warn("declining control request Pockode cannot serve",
+		"subtype", subtype, "requestId", requestID, "reason", capability)
+	decline(requestID, fmt.Sprintf("Pockode does not support %s", capability))
+	return []agent.AgentEvent{agent.WarningEvent{
+		Message: fmt.Sprintf("Claude requested %s, which Pockode does not support", capability),
+		Code:    "unsupported_control_request",
+	}}
 }
 
 // cliControlResponse represents a control_response from Claude CLI.
@@ -980,10 +1126,30 @@ func hasImageContent(content json.RawMessage) bool {
 }
 
 type resultEvent struct {
-	Subtype   string   `json:"subtype"`
-	SessionID string   `json:"session_id"`
-	Errors    []string `json:"errors"`
+	Subtype        string   `json:"subtype"`
+	SessionID      string   `json:"session_id"`
+	IsError        bool     `json:"is_error"`
+	TerminalReason string   `json:"terminal_reason"`
+	Result         string   `json:"result"`
+	Errors         []string `json:"errors"`
 }
+
+// abortTerminalReasonPrefix identifies the terminal reasons that mean the turn
+// was stopped (a user interrupt, a denied tool) rather than having failed.
+// Where: `terminal_reason` on the result message; older CLIs omit the field.
+// 2.1.222 spells them aborted_streaming and aborted_tools; every other reason it
+// defines — the failures (model_error, api_error, ...) and the normal endings
+// (completed, max_turns, ...) — is named without the prefix.
+//
+// Matched by prefix rather than against those two values because the distinction
+// reaches further than the transcript: an interrupted turn stops the running work
+// item, while a completed or failed one lets the work engine auto-continue (see
+// work.AutoResumer.HandleProcessStateChange). A new abort reason read as a
+// failure would carry on with a turn the user stopped.
+const abortTerminalReasonPrefix = "aborted"
+
+// legacyAbortError is how CLIs without terminal_reason reported an abort.
+const legacyAbortError = "Request was aborted"
 
 func parseResultEvent(line []byte) agent.AgentEvent {
 	var result resultEvent
@@ -991,14 +1157,51 @@ func parseResultEvent(line []byte) agent.AgentEvent {
 		return agent.DoneEvent{}
 	}
 
-	// Check if this was an interrupt (aborted request)
-	if result.Subtype == "error_during_execution" {
-		for _, e := range result.Errors {
-			if strings.Contains(e, "Request was aborted") {
-				return agent.InterruptedEvent{}
-			}
-		}
+	if result.aborted() {
+		return agent.InterruptedEvent{}
+	}
+
+	// A failed turn must not look like a completed one; without this the user
+	// only sees the response stop with no explanation.
+	if result.IsError {
+		return agent.ErrorEvent{Error: result.errorMessage()}
 	}
 
 	return agent.DoneEvent{}
+}
+
+func (r resultEvent) aborted() bool {
+	if r.TerminalReason != "" {
+		return strings.HasPrefix(r.TerminalReason, abortTerminalReasonPrefix)
+	}
+	if r.Subtype != "error_during_execution" {
+		return false
+	}
+	for _, e := range r.Errors {
+		if strings.Contains(e, legacyAbortError) {
+			return true
+		}
+	}
+	return false
+}
+
+// errorMessage picks the CLI's own description of the failure. Error subtypes
+// report it in `errors`; a `success` result flagged is_error puts it in `result`.
+func (r resultEvent) errorMessage() string {
+	var reported []string
+	for _, e := range r.Errors {
+		if e := strings.TrimSpace(e); e != "" {
+			reported = append(reported, e)
+		}
+	}
+	if len(reported) > 0 {
+		return strings.Join(reported, "; ")
+	}
+	if msg := strings.TrimSpace(r.Result); msg != "" {
+		return msg
+	}
+	if r.Subtype != "" {
+		return fmt.Sprintf("Claude ended the turn with an error (%s)", r.Subtype)
+	}
+	return "Claude ended the turn with an error"
 }

@@ -72,11 +72,14 @@ type Agent interface {
 type Session interface {
 	// Events returns the channel that streams all events from the agent process.
 	// The channel remains open until the process terminates.
-	// EventTypeDone signals the current message response is complete.
+	// A turn ends with exactly one event whose type AwaitsUserInput: done when it
+	// completed, error when it failed, interrupted when it was aborted, or a
+	// permission/question request when it is blocked on the user.
 	Events() <-chan AgentEvent
 
-	// SendMessage sends a new message to the agent.
-	// It should only be called after the previous message is complete (received EventTypeDone).
+	// SendMessage sends a new message to the agent. Callers may send before the
+	// current turn has ended; what happens then is up to the CLI (Claude queues
+	// the message, Codex aborts the running turn and replaces it).
 	SendMessage(prompt string) error
 
 	// SendPermissionResponse sends a permission response to the agent.

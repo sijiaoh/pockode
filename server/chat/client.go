@@ -13,6 +13,16 @@ import (
 
 var ErrSessionNotFound = errors.New("session not found")
 
+// ErrSessionNotRunning is returned when a request only makes sense to a live
+// agent process and the session has none.
+//
+// Answers belong to the process that asked the question, so a prompt whose
+// process is gone — reaped after an idle timeout, or replayed from history after
+// a server restart — cannot be answered at all. Starting a process to receive the
+// answer sends it nowhere and leaves that process marked running with nothing to
+// run, which is worse than saying so.
+var ErrSessionNotRunning = errors.New("session is no longer running, send a message to continue")
+
 // MessageBroadcastFunc broadcasts a user message to all session subscribers,
 // optionally excluding one notifier. The exclude parameter is typed as any
 // to avoid importing the watch package; the wiring code casts it.
@@ -89,7 +99,7 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 }
 
 func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, data agent.PermissionRequestData, choice agent.PermissionChoice) error {
-	proc, err := c.getOrCreateProcess(ctx, sessionID)
+	proc, err := c.liveProcess(sessionID)
 	if err != nil {
 		return err
 	}
@@ -111,7 +121,7 @@ func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, d
 }
 
 func (c *Client) SendQuestionResponse(ctx context.Context, sessionID string, data agent.QuestionRequestData, answers map[string]string) error {
-	proc, err := c.getOrCreateProcess(ctx, sessionID)
+	proc, err := c.liveProcess(sessionID)
 	if err != nil {
 		return err
 	}
@@ -132,12 +142,40 @@ func (c *Client) SendQuestionResponse(ctx context.Context, sessionID string, dat
 	return nil
 }
 
-func (c *Client) Interrupt(ctx context.Context, sessionID string) error {
-	proc, err := c.getOrCreateProcess(ctx, sessionID)
+// Interrupt stops the turn a session is running. A session with no process has
+// nothing to stop, which counts as success — starting one would spawn the CLI the
+// user just asked to stop.
+func (c *Client) Interrupt(_ context.Context, sessionID string) error {
+	proc, err := c.liveProcess(sessionID)
+	if errors.Is(err, ErrSessionNotRunning) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	return proc.SendInterrupt()
+}
+
+// liveProcess returns the session's running process. Unlike getOrCreateProcess it
+// never starts one, for requests that are only meaningful to a process already
+// there.
+func (c *Client) liveProcess(sessionID string) (*process.Process, error) {
+	_, found, err := c.store.Get(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("get session: %w", err)
+	}
+	if !found {
+		return nil, ErrSessionNotFound
+	}
+
+	proc := c.pm.GetProcess(sessionID)
+	if proc == nil {
+		return nil, ErrSessionNotRunning
+	}
+	// Answering counts as activity, the same way GetOrCreateProcess treats a
+	// message, so the reaper does not collect a session the user is using.
+	c.pm.Touch(sessionID)
+	return proc, nil
 }
 
 // getOrCreateProcess handles session validation, process creation, and activation.

@@ -46,6 +46,12 @@ type AgentEvent interface {
 
 Terminal events end the current message response. Non-terminal events are appended to the active assistant message.
 
+"Terminal" above is about the message shown to the user. The process state machine
+asks two different questions of the same types — `AwaitsUserInput` and
+`IndicatesAgentActivity` — and they are neither complements nor the same split as
+this table, so a new event type has to answer both explicitly. See [What an Event
+Says About Process State](code/agent-integration.md#what-an-event-says-about-process-state).
+
 #### Message Origin (user vs. system)
 
 The `message` event covers both messages a user types and the automatic prompts Pockode itself sends to drive an agent (kickoff, restart, auto-continue, step-advance, reopen, child-completion — today all produced by the Work system). They travel the same persistence + broadcast path but must render differently, so the event carries an origin instead of introducing a separate event type:
@@ -64,17 +70,21 @@ The `message` event covers both messages a user types and the automatic prompts 
 
 Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
 
-### Event Parsing (Claude)
+### Event Parsing
 
-`server/agent/claude/claude.go` — `streamOutput()` reads stdout line-by-line, `parseLine()` maps CLI JSON to events:
+Each backend maps its CLI's output to this event set: `server/agent/claude/claude.go`
+scans stream-json line-by-line (`streamOutput()` → `parseLine()`), and
+`server/agent/codex/codex.go` reads MCP JSON-RPC notifications and `tools/call`
+results.
 
-| CLI Message Type | Events Produced |
-|-----------------|-----------------|
-| `assistant` | `TextEvent` + `ToolCallEvent` (per content block) |
-| `result` | `ToolResultEvent` |
-| `control_request` | `PermissionRequestEvent` or `AskUserQuestionEvent` |
-| `control_response` | `InterruptedEvent` (interrupt acknowledgment) |
-| `control_cancel_request` | `RequestCancelledEvent` |
+Both parsers forward only what they recognise. The CLIs emit far more than Pockode
+can render and both keep adding types, so each parser also names the types it
+drops on purpose, leaving its default branch to mean "never seen before" and log
+accordingly. The per-CLI mapping tables, the CLI versions they were derived from,
+and the reasoning behind each drop live in
+[code/agent-integration.md](code/agent-integration.md#protocol-baselines) — they
+change whenever the CLIs do, so they are documented once, next to the code that
+owns them.
 
 ### Broadcasting
 
