@@ -152,7 +152,7 @@ func readFile(relPath, fullPath string, info os.FileInfo) (*FileContent, error) 
 	encoding := EncodingText
 	contentStr := string(content)
 
-	if isBinary(content) {
+	if IsBinary(content) {
 		encoding = EncodingBase64
 		contentStr = base64.StdEncoding.EncodeToString(content)
 	}
@@ -166,8 +166,8 @@ func readFile(relPath, fullPath string, info os.FileInfo) (*FileContent, error) 
 	}, nil
 }
 
-// isBinary detects binary content by checking for null bytes in the first 512 bytes.
-func isBinary(content []byte) bool {
+// IsBinary detects binary content by checking for null bytes in the first 512 bytes.
+func IsBinary(content []byte) bool {
 	checkLen := min(512, len(content))
 	for i := 0; i < checkLen; i++ {
 		if content[i] == 0 {

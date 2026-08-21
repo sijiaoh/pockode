@@ -10,6 +10,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/search"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
@@ -99,6 +100,21 @@ type FileWriteParams struct {
 type FileDeleteParams struct {
 	Path string `json:"path"`
 }
+
+type FileSearchParams struct {
+	Query string `json:"query"`
+	// Mode is "name" (default) or "content".
+	Mode string `json:"mode"`
+	// Path limits the search to a subdirectory of the work directory.
+	Path string `json:"path"`
+	// RespectGitignore defaults to true when omitted, so clients opt in to
+	// searching ignored files rather than accidentally scanning build output.
+	RespectGitignore *bool `json:"respect_gitignore"`
+	CaseSensitive    bool  `json:"case_sensitive"`
+	MaxResults       int   `json:"max_results"`
+}
+
+type FileSearchResult = search.Result
 
 // Git namespace
 
