@@ -12,6 +12,7 @@ const WORKTREE_DEPENDENT_QUERY_KEYS = [
 	"git-diff",
 	"sessions",
 	"contents",
+	"file-search",
 ];
 
 export function createQueryClient(): QueryClient {

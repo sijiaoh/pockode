@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 
 interface Props {
-	title: string;
-	subtitle?: string;
+	title: ReactNode;
+	subtitle?: ReactNode;
 	isActive: boolean;
 	hasChanges?: boolean;
 	needsInput?: boolean;
