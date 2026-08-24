@@ -187,6 +187,19 @@ Claude session ID; otherwise it starts with `--session-id` and writes the resume
 file after the first assistant event. Legacy sessions with assistant history but
 no resume file are migrated by using the Pockode session ID once.
 
+Both resume-state files (`claude_resume.json`, `codex_resume.json`) are written
+with `filestore.WriteFileAtomic`: a half-written one would silently cost the user
+the ability to resume that session. Neither sits on a hot path — Claude writes it
+once the provider session ID becomes known, Codex on close — so the fsync costs
+nothing measurable.
+
+`mcp-config.json` is written atomically for a different reason: it is rewritten
+on *every* session start, but it lives in the shared main data dir rather than
+per session. A plain write truncates the file first, so a second session
+starting at that moment would hand its CLI a half-written config and that agent
+would come up with no `work_*` tools at all — a failure with no error message
+anywhere. Replacing the file by rename removes the window.
+
 `StartOptions` carries two directories because they answer different questions.
 `DataDir` is the session's own data dir (`claude_resume.json`, history) — for a
 named worktree this is the worktree's data dir, so session state stays with the
@@ -492,6 +505,24 @@ History is stored in JSON Lines format, one `EventRecord` per line:
 ```
 
 This format facilitates append-only writes and streaming reads.
+
+**Crash safety** (`server/filestore/jsonl.go`):
+
+- Each record is written with a single `write` syscall, so a killed process can
+  never split one.
+- Appends are not fsynced: this is the streaming path, and a disk round-trip per
+  event would stall messages on their way to the UI. A power loss can therefore
+  drop the not-yet-flushed tail.
+- The next append terminates an unterminated trailing line before writing, so a
+  partial line left by a crash cannot swallow the following record.
+- Reads skip lines that are not valid JSON (or exceed the 1 MiB line limit),
+  keeping the rest of the conversation loadable, and report the count so the
+  session store can log it and surface a `warning` record in the chat.
+
+The session index (`sessions/index.json`) is a whole-file rewrite instead, and
+uses `filestore.WriteFileAtomic`. If it is nonetheless found corrupt at startup,
+it is moved to `index.json.corrupt` and the store starts empty rather than
+failing to boot.
 
 ## Concurrency Safety
 

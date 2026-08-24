@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/filestore"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
@@ -58,8 +59,11 @@ func ensureMCPConfig(dataDir string) (string, error) {
 		return "", err
 	}
 
+	// Written atomically because every session start rewrites this shared file:
+	// a plain write truncates it, and a CLI that another session is spawning at
+	// that instant would read the truncated JSON and lose its MCP tools.
 	configPath := filepath.Join(dataDir, "mcp-config.json")
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := filestore.WriteFileAtomic(configPath, data, 0644); err != nil {
 		return "", err
 	}
 
@@ -524,12 +528,7 @@ func (m *claudeResumeStateManager) save(sessionID string) {
 		m.log.Error("failed to marshal claude resume state", "error", err)
 		return
 	}
-	path := m.path()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		m.log.Error("failed to create claude resume state directory", "error", err)
-		return
-	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := filestore.WriteFileAtomic(m.path(), data, 0644); err != nil {
 		m.log.Error("failed to write claude resume state", "error", err)
 	}
 }

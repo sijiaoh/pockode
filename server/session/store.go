@@ -1,15 +1,18 @@
 package session
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/pockode/server/filestore"
 )
 
 type Store interface {
@@ -73,17 +76,15 @@ func (s *FileStore) indexPath() string {
 }
 
 func (s *FileStore) readIndexFromDisk() (indexData, error) {
-	data, err := os.ReadFile(s.indexPath())
-	if os.IsNotExist(err) {
-		return indexData{Sessions: []SessionMeta{}}, nil
-	}
+	// A corrupt index must not make every session unreachable: it is quarantined
+	// for hand recovery and the store starts from an empty list.
+	var idx indexData
+	found, err := filestore.ReadJSONOrQuarantine(s.indexPath(), "session index", &idx)
 	if err != nil {
 		return indexData{}, err
 	}
-
-	var idx indexData
-	if err := json.Unmarshal(data, &idx); err != nil {
-		return indexData{}, err
+	if !found {
+		return indexData{Sessions: []SessionMeta{}}, nil
 	}
 
 	// Migrate: ensure all sessions have valid defaults
@@ -100,12 +101,11 @@ func (s *FileStore) readIndexFromDisk() (indexData, error) {
 }
 
 func (s *FileStore) persistIndex() error {
-	idx := indexData{Sessions: s.sessions}
-	data, err := json.MarshalIndent(idx, "", "  ")
+	data, err := filestore.MarshalIndex(indexData{Sessions: s.sessions})
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.indexPath(), data, 0644)
+	return filestore.WriteFileAtomic(s.indexPath(), data, 0644)
 }
 
 func (s *FileStore) SetOnChangeListener(listener OnChangeListener) {
@@ -368,45 +368,51 @@ func (s *FileStore) GetHistory(ctx context.Context, sessionID string) ([]json.Ra
 	// would only block metadata writers for the whole (potentially large) scan
 	// without protecting anything.
 	path := s.historyPath(sessionID)
-	file, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return []json.RawMessage{}, nil
-	}
+	records, stats, err := filestore.ReadJSONL(path, filestore.DefaultMaxLineBytes)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
 
-	var records []json.RawMessage
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // Match CLI output buffer size
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		// Make a copy since scanner reuses the buffer
-		record := make(json.RawMessage, len(line))
-		copy(record, line)
-		records = append(records, record)
-	}
-
-	if err := scanner.Err(); err != nil {
-		if errors.Is(err, bufio.ErrTooLong) {
-			// Buffer overflow: append warning and return partial results
-			warning := map[string]string{
-				"type":    "warning",
-				"message": "Some history entries were too large to load",
-				"code":    "history_buffer_overflow",
-			}
-			warningJSON, _ := json.Marshal(warning)
-			records = append(records, warningJSON)
-			return records, nil
-		}
-		return nil, err
+	if stats.Damaged() {
+		slog.Warn("session history has unreadable records",
+			"sessionId", sessionID, "path", path,
+			"corrupted", stats.Corrupted, "oversized", stats.Oversized)
+		records = append(records, historyWarning(stats))
 	}
 
 	return records, nil
+}
+
+// historyWarning surfaces skipped records in the chat itself, so a user does
+// not silently see a shorter history than what actually happened.
+func historyWarning(stats filestore.JSONLStats) json.RawMessage {
+	var parts []string
+	if stats.Corrupted > 0 {
+		parts = append(parts, fmt.Sprintf("%s damaged by an interrupted write", countEntries(stats.Corrupted)))
+	}
+	if stats.Oversized > 0 {
+		parts = append(parts, fmt.Sprintf("%s too large to load", countEntries(stats.Oversized)))
+	}
+
+	code := "history_buffer_overflow"
+	if stats.Corrupted > 0 {
+		code = "history_corrupted"
+	}
+
+	// Marshaling a map of plain strings cannot fail.
+	warning, _ := json.Marshal(map[string]string{
+		"type":    "warning",
+		"message": "Skipped " + strings.Join(parts, ", and "),
+		"code":    code,
+	})
+	return warning
+}
+
+func countEntries(n int) string {
+	if n == 1 {
+		return "1 history entry"
+	}
+	return fmt.Sprintf("%d history entries", n)
 }
 
 func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, record any) error {
@@ -414,26 +420,7 @@ func (s *FileStore) AppendToHistory(ctx context.Context, sessionID string, recor
 		return err
 	}
 
-	path := s.historyPath(sessionID)
-
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	data, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-
-	data = append(data, '\n')
-	_, err = file.Write(data)
-	return err
+	return filestore.AppendJSONL(s.historyPath(sessionID), record)
 }
 
 func (s *FileStore) Touch(ctx context.Context, sessionID string) error {

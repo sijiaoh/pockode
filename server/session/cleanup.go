@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/pockode/server/filestore"
 )
 
 // ClearOrphanedNeedsInput resets NeedsInput to false for all sessions
@@ -30,8 +32,12 @@ func ClearOrphanedNeedsInput(dataDir string) {
 }
 
 func clearNeedsInputInIndex(path string) {
-	data, err := os.ReadFile(path)
+	data, err := filestore.ReadFileLocked(path)
 	if err != nil {
+		slog.Warn("failed to read session index for cleanup", "path", path, "error", err)
+		return
+	}
+	if data == nil {
 		return // File doesn't exist
 	}
 
@@ -52,12 +58,12 @@ func clearNeedsInputInIndex(path string) {
 		return
 	}
 
-	out, err := json.MarshalIndent(idx, "", "  ")
+	out, err := filestore.MarshalIndex(idx)
 	if err != nil {
 		slog.Warn("failed to marshal session index for cleanup", "path", path, "error", err)
 		return
 	}
-	if err := os.WriteFile(path, out, 0644); err != nil {
+	if err := filestore.WriteFileAtomic(path, out, 0644); err != nil {
 		slog.Warn("failed to write session index for cleanup", "path", path, "error", err)
 		return
 	}

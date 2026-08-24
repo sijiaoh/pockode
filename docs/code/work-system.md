@@ -159,7 +159,7 @@ serialized by a mutex and persisted atomically.
 ### Atomic Persistence
 
 ```
-server/filestore/filestore.go
+server/filestore/atomic.go
 ```
 
 Writes take an exclusive flock and do write-temp → fsync → rename, so a crash or
@@ -170,9 +170,9 @@ lockFile := OpenFile(".lock", CREATE|RDWR)
 Flock(lockFile, LOCK_EX)
 defer Flock(lockFile, LOCK_UN)
 
-tmpFile := CreateTemp(path + ".tmp")
+tmpFile := OpenFile(path+".tmp", CREATE|WRONLY|TRUNC, perm)
 tmpFile.Write(data)
-tmpFile.Sync()        // fsync ensures durability
+tmpFile.Sync()        // fsync: bytes on disk before anything points at them
 Rename(tmpFile, path) // POSIX atomic operation
 ```
 
@@ -713,5 +713,5 @@ cached entry needs no additional locking.
 | MCP stdio proxy + client | `server/mcp/server.go`, `server/mcp/client.go` |
 | MCP tool definitions | `server/mcp/tools.go` |
 | MCP tool executor + HTTP API | `server/mcp/executor.go`, `server/mcp/handler.go` |
-| File I/O | `server/filestore/filestore.go` |
+| File I/O | `server/filestore/filestore.go`, `server/filestore/atomic.go` |
 | Frontend store | `web/src/lib/workStore.ts` |

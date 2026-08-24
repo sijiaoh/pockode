@@ -35,7 +35,7 @@ agentrole/              # AgentRole 存储 + 类型定义
 chat/                   # Chat 客户端
 command/                # 命令存储
 contents/               # 文件内容获取
-filestore/              # JSON 文件存储基础设施
+filestore/              # 文件存储基础设施（原子写 / flock / JSONL / 变更监听）
 git/                    # Git 操作
 logger/                 # 结构化日志 (slog)
 mcp/                    # MCP：stdio 代理客户端 + 服务端 Executor/APIHandler
@@ -71,6 +71,26 @@ if err := json.Unmarshal(data, &parsed); err != nil {
     return []Event{{Type: TypeText, Content: string(data)}}
 }
 ```
+
+### 持久化写入
+
+服务器要长期保存的状态文件一律走 `filestore` 的公共 API，**不要直接 `os.WriteFile`**。裸写会先 truncate 再写，断电、`kill -9`、磁盘写满都会留下一个被截断的文件——session 索引损坏、relay 永久起不来、agent 静默失去全部 MCP 工具，都是这么来的。
+
+| 场景 | API |
+|------|-----|
+| 整文件重写 | `filestore.WriteFileAtomic(path, data, perm)`（写临时文件 → fsync → rename；含 token 的传 `0600`，替换后的文件不继承旧权限） |
+| store 读回自己的状态文件 | `filestore.ReadFileLocked(path)`（共享锁；`filestore.New` 的 `File.Read` 走的就是它） |
+| 启动时加载 JSON 状态 | `filestore.ReadJSONOrQuarantine(path, label, v)`——解析失败则隔离为 `<path>.corrupt` 并以空状态启动，**不要**因为一个文件坏了就让服务器起不来 |
+| 只追加的流式记录 | `filestore.AppendJSONL` / `filestore.ReadJSONL`（单次 write 系统调用、**不** fsync，读端跳过坏行；绝不能丢尾部的数据请改用整文件重写） |
+
+用 `filestore.New` 建的 `File` 已经内建这套写入方式，直接用即可。
+
+读这一侧记住一句话：**加锁是为「读-改-写」服务的，不是为「读到一个完整文件」服务的**——后者 rename 本身已经保证了。由此有两个容易踩的点：
+
+- **只是想读一眼某个数据目录（比如探测别的项目的 `server.json`），用 `os.ReadFile`，别加锁。** 锁挡不住「读到的是旧版还是新版」（那取决于时序），却会在一个你只想看一眼的目录里凭空建出 `.lock`。`serverinfo.Read` 正是因此从 `ReadFileLocked` 回退成了普通读。
+- **`ReadFileLocked` 拿的是共享锁，不能让「读-改-写」变成原子的。** 需要那个语义就得整段持排他锁——`ReadJSONOrQuarantine` 就是这么做的：读和隔离在同一把排他锁内，否则会把两次上锁之间别人刚写好的完好文件给隔离掉。
+
+**故意不用的情况**：用户项目里的源码文件（rename 会断链接、改权限、换 inode，还在工作区留 `.tmp`/`.lock`）、追加型日志、以及锁文件名会和外部工具撞车的文件（`.git-credentials`）。这类例外的理由都不直觉，**必须在调用点写注释**说明为什么不能改；完整清单见 [docs/projects/data-model.md](../docs/projects/data-model.md#atomic-writes)。
 
 ## 日志
 
@@ -144,4 +164,4 @@ MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir
 
 ⚠️ **Ask First**: 添加外部依赖 · 修改认证逻辑 · 更改 API 路由
 
-🚫 **Never**: 硬编码密钥 · 忽略错误 · 直接编辑 `go.sum`
+🚫 **Never**: 硬编码密钥 · 忽略错误 · 直接编辑 `go.sum` · 用裸 `os.WriteFile` 写持久化状态文件（见「持久化写入」）

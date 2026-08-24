@@ -54,6 +54,8 @@ Manager.Start()
     │   │         └─ Receive subdomain + token
     │   │         └─ Save to relay.json
     │   │
+    │   ├─ corrupt → quarantined as relay.json.corrupt, treated as nil
+    │   │
     │   └─ exists → Refresh token
     │                └─ Invalid? → Delete config, re-register
     │
@@ -62,6 +64,8 @@ Manager.Start()
 ```
 
 On first run, register with the cloud to obtain a unique subdomain and authentication token. Subsequent startups refresh the token to verify validity. Configuration is persisted locally to avoid re-registering every time.
+
+A config file damaged by an interrupted write takes the same recovery path as an invalid token: it is set aside and the server registers again. That costs the user their subdomain, which is not free — but the file is unreadable either way, and a relay that comes back at a new address beats one that refuses to start at all. The damaged copy is kept at `relay.json.corrupt` in case the old subdomain is worth recovering by hand.
 
 ### Registering a Tunnel
 

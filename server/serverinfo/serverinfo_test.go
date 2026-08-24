@@ -56,6 +56,28 @@ func TestWriteAndDelete(t *testing.T) {
 	}
 }
 
+// server.json carries the local API token, so it must end up owner-only even
+// when a world-readable file from an earlier run is already in place.
+func TestWriteRestrictsPermissions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, filename)
+	if err := os.WriteFile(path, []byte("{}"), 0644); err != nil {
+		t.Fatalf("seed stale file: %v", err)
+	}
+
+	if err := Write(dir, 9870, "", "", "test-token"); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("permissions = %o, want 600", perm)
+	}
+}
+
 func TestDeleteNonExistent(t *testing.T) {
 	dir := t.TempDir()
 

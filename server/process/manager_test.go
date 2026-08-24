@@ -10,6 +10,28 @@ import (
 	"github.com/pockode/server/session"
 )
 
+// testIdleTimeout paces the tests that assert a process is *kept alive* by
+// activity. Those cannot poll for an outcome — they have to let wall-clock time
+// pass — so the budget is generous: a loaded machine easily stalls a goroutine
+// for a few hundred milliseconds, which a shorter budget misread as an idle
+// process.
+const testIdleTimeout = time.Second
+
+// waitFor polls until cond holds, so tests that expect something to happen
+// finish as soon as it does instead of betting on a fixed sleep.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
 func mockRegistry(mock *mockAgent) *agent.Registry {
 	r := agent.NewRegistry()
 	r.Register(session.AgentTypeClaude, mock)
@@ -150,17 +172,14 @@ func TestManager_GetOrCreateProcess_ExistingSession(t *testing.T) {
 func TestManager_IdleReaper(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	idleTimeout := 50 * time.Millisecond
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleTimeout)
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 50*time.Millisecond)
 	defer m.Shutdown()
 
 	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
-	time.Sleep(idleTimeout * 2)
-
-	if proc := m.GetProcess("sess-1"); proc != nil {
-		t.Error("expected process to be reaped")
-	}
+	waitFor(t, "idle process to be reaped", func() bool {
+		return m.GetProcess("sess-1") == nil
+	})
 	if !mock.sessions["sess-1"].isClosed() {
 		t.Error("expected process to be closed")
 	}
@@ -169,8 +188,7 @@ func TestManager_IdleReaper(t *testing.T) {
 func TestManager_IdleReaper_EmitsProcessStateEnded(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	idleTimeout := 50 * time.Millisecond
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleTimeout)
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 50*time.Millisecond)
 	defer m.Shutdown()
 
 	var mu sync.Mutex
@@ -183,27 +201,22 @@ func TestManager_IdleReaper_EmitsProcessStateEnded(t *testing.T) {
 
 	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
-	time.Sleep(idleTimeout * 2)
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	var found bool
-	for _, e := range events {
-		if e.SessionID == "sess-1" && e.State == ProcessStateEnded {
-			found = true
-			break
+	waitFor(t, "ProcessStateEnded event for sess-1", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, e := range events {
+			if e.SessionID == "sess-1" && e.State == ProcessStateEnded {
+				return true
+			}
 		}
-	}
-	if !found {
-		t.Errorf("expected ProcessStateEnded event for sess-1, got events: %v", events)
-	}
+		return false
+	})
 }
 
 func TestManager_Touch_PreventsReaping(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	idleTimeout := 50 * time.Millisecond
+	idleTimeout := testIdleTimeout
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleTimeout)
 	defer m.Shutdown()
 
@@ -215,7 +228,6 @@ func TestManager_Touch_PreventsReaping(t *testing.T) {
 		time.Sleep(idleTimeout / 2)
 		m.Touch("sess-1")
 	}
-	// Total elapsed: 4 * 25ms = 100ms = 2x idleTimeout
 
 	if proc := m.GetProcess("sess-1"); proc == nil {
 		t.Error("expected process to still exist after touch")
@@ -296,19 +308,33 @@ func TestManager_HasProcess(t *testing.T) {
 func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	idleTimeout := 50 * time.Millisecond
+	idleTimeout := testIdleTimeout
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleTimeout)
 	defer m.Shutdown()
 
 	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
 
+	// The reaper closes the events channel, and sending on a closed channel
+	// panics — recover so a regression fails this test instead of aborting the
+	// whole package run.
+	sendEvent := func() (sent bool) {
+		defer func() {
+			if recover() != nil {
+				sent = false
+			}
+		}()
+		mock.sessions["sess-1"].events <- agent.TextEvent{Content: "test"}
+		return true
+	}
+
 	// Send events periodically for 2x idleTimeout
 	// Process should survive because streamEvents calls touch() on each event
 	for i := 0; i < 4; i++ {
 		time.Sleep(idleTimeout / 2)
-		mock.sessions["sess-1"].events <- agent.TextEvent{Content: "test"}
+		if !sendEvent() {
+			t.Fatal("process was reaped while events were still streaming")
+		}
 	}
-	// Total elapsed: 4 * 25ms = 100ms = 2x idleTimeout
 
 	// Give streamEvents goroutine time to process the events
 	time.Sleep(10 * time.Millisecond)

@@ -1,10 +1,11 @@
 package relay
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/pockode/server/filestore"
 )
 
 type StoredConfig struct {
@@ -23,19 +24,17 @@ func NewStore(dataDir string) *Store {
 	}
 }
 
-// Load returns nil if the file does not exist.
+// Load returns nil if the file does not exist, or if it was damaged by an
+// interrupted write and had to be quarantined — the caller then re-registers,
+// which is the same recovery path as an invalid token.
 func (s *Store) Load() (*StoredConfig, error) {
-	data, err := os.ReadFile(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+	var cfg StoredConfig
+	found, err := filestore.ReadJSONOrQuarantine(s.path, "relay config", &cfg)
 	if err != nil {
 		return nil, err
 	}
-
-	var cfg StoredConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
+	if !found {
+		return nil, nil
 	}
 
 	return &cfg, nil
@@ -43,16 +42,12 @@ func (s *Store) Load() (*StoredConfig, error) {
 
 // Save uses 0600 permissions to protect the token.
 func (s *Store) Save(cfg *StoredConfig) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
-		return err
-	}
-
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := filestore.MarshalIndex(cfg)
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(s.path, data, 0600)
+	return filestore.WriteFileAtomic(s.path, data, 0600)
 }
 
 func (s *Store) Delete() error {

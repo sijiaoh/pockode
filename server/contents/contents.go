@@ -196,6 +196,11 @@ func WriteFile(workDir, path, content string) error {
 		return fmt.Errorf("failed to create parent directories: %w", err)
 	}
 
+	// Deliberately a plain write, not filestore.WriteFileAtomic: these are files
+	// in the user's own project. Replacing one by rename would break hard links,
+	// reset an executable script back to 0644, swap the inode out from under
+	// anything watching it, and litter the working tree with .tmp/.lock files
+	// that show up in git status. In-place writing keeps the file the user's.
 	return os.WriteFile(fullPath, []byte(content), 0644)
 }
 

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/pockode/server/filestore"
 )
 
 const filename = "server.json"
@@ -27,10 +29,6 @@ type Info struct {
 // Write creates the server.json file in the given data directory.
 // Creates the data directory if it doesn't exist.
 func Write(dataDir string, port int, localURL, remoteURL, token string) error {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return err
-	}
-
 	info := Info{
 		PID:       os.Getpid(),
 		Port:      port,
@@ -40,24 +38,26 @@ func Write(dataDir string, port int, localURL, remoteURL, token string) error {
 		Token:     token,
 	}
 
-	data, err := json.MarshalIndent(info, "", "  ")
+	data, err := filestore.MarshalIndex(info)
 	if err != nil {
 		return err
 	}
 
-	// 0600: server.json holds the local API token (a credential), so restrict it
-	// to the owner. Chmod as well, since WriteFile does not alter the mode of an
-	// already-existing file (e.g. a stale file left by a previous crash).
-	path := filepath.Join(dataDir, filename)
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0600)
+	// Written atomically: a truncated server.json leaves every MCP subprocess
+	// unable to reach the local API, and unlike most state it is not re-read
+	// from a source of truth — this write is the source of truth.
+	// 0600 because it holds the local API token (a credential). WriteFileAtomic
+	// always applies the mode, including over a stale file left by a crash.
+	return filestore.WriteFileAtomic(filepath.Join(dataDir, filename), data, 0600)
 }
 
 // Read reads the server.json file from the given data directory.
 // Returns (nil, nil) if the file doesn't exist.
 func Read(dataDir string) (*Info, error) {
+	// A plain read is enough, and deliberately so: Write replaces this file by
+	// rename, so a reader always sees one whole version, and taking a lock here
+	// would make every reader create a lock file in a data dir it only wants to
+	// inspect.
 	data, err := os.ReadFile(filepath.Join(dataDir, filename))
 	if err != nil {
 		if os.IsNotExist(err) {

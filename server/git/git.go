@@ -96,6 +96,10 @@ func setupLocalCredential(dir, host, token string) error {
 
 	// x-access-token is GitHub's required username for PAT authentication
 	credContent := fmt.Sprintf("https://x-access-token:%s@%s\n", token, host)
+	// Deliberately a plain write, not filestore.WriteFileAtomic: git's own
+	// credential-store helper locks this path with "<file>.lock", the same name
+	// WriteFileAtomic leaves behind, and git then dies with "unable to get
+	// credential storage lock". A one-shot write of one line is the smaller risk.
 	if err := os.WriteFile(credFile, []byte(credContent), 0600); err != nil {
 		return fmt.Errorf("failed to write credentials file: %w", err)
 	}

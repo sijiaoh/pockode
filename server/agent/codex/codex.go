@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/filestore"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
@@ -968,12 +969,7 @@ func (s *mcpSession) saveResumeState() {
 		return
 	}
 
-	path := s.resumeStatePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		s.log.Error("failed to create state directory", "error", err)
-		return
-	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := filestore.WriteFileAtomic(s.resumeStatePath(), data, 0644); err != nil {
 		s.log.Error("failed to write codex resume state", "error", err)
 	}
 }
