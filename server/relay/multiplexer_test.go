@@ -12,7 +12,7 @@ import (
 	"github.com/coder/websocket"
 )
 
-func dialTestMux(t *testing.T, handler http.HandlerFunc) *Multiplexer {
+func dialTestMux(t *testing.T, pingTimeout time.Duration, handler http.HandlerFunc) *Multiplexer {
 	t.Helper()
 
 	srv := httptest.NewServer(handler)
@@ -25,9 +25,9 @@ func dialTestMux(t *testing.T, handler http.HandlerFunc) *Multiplexer {
 	}
 
 	mux := NewMultiplexer(conn, make(chan *VirtualStream, 1), nil, slog.Default())
-	// Shorten intervals so the test exercises several ping cycles quickly.
+	// Shorten the interval so the test exercises several ping cycles quickly.
 	mux.pingInterval = 20 * time.Millisecond
-	mux.pingTimeout = 50 * time.Millisecond
+	mux.pingTimeout = pingTimeout
 	return mux
 }
 
@@ -38,7 +38,7 @@ func TestMultiplexerKeepAliveDetectsDeadConnection(t *testing.T) {
 	serverDone := make(chan struct{})
 	defer close(serverDone)
 
-	mux := dialTestMux(t, func(w http.ResponseWriter, r *http.Request) {
+	mux := dialTestMux(t, 50*time.Millisecond, func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
@@ -67,9 +67,11 @@ func TestMultiplexerKeepAliveDetectsDeadConnection(t *testing.T) {
 }
 
 // A responsive server must not trigger a false-positive close: as long as pongs
-// arrive, Run stays up across many ping cycles.
+// arrive, Run stays up across many ping cycles. The timeout stays generous
+// relative to the interval because even loopback pongs occasionally take ~100ms
+// (delayed ACK), which is exactly the false positive being guarded against.
 func TestMultiplexerKeepAliveHealthyConnectionStaysUp(t *testing.T) {
-	mux := dialTestMux(t, func(w http.ResponseWriter, r *http.Request) {
+	mux := dialTestMux(t, 2*time.Second, func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return

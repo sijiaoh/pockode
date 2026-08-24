@@ -392,13 +392,21 @@ function AppShell() {
 				: null;
 
 	if (!displaySession) {
-		if (wsStatus === "error") {
+		// "reconnecting" belongs here only because there is nothing to show yet
+		// (the app was opened while the server was unreachable): retries now run for
+		// as long as the tab is open, so without this the user would sit on
+		// "Loading..." forever with no idea why. Once a session has rendered,
+		// displaySession keeps the shell mounted and a reconnect shows the banner
+		// below instead.
+		if (wsStatus === "error" || wsStatus === "reconnecting") {
 			return (
 				<div
 					className="flex h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary"
 					role="alert"
 				>
-					<div className="text-th-text-muted">Unable to connect to server</div>
+					<div className="text-th-text-muted">
+						Can&apos;t reach the server &mdash; retrying&hellip;
+					</div>
 					<button
 						type="button"
 						onClick={() => window.location.reload()}

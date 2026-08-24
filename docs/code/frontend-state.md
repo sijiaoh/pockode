@@ -49,7 +49,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | worktreeStore | Current worktree | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |
 
-### Why wsStore is Large (858 lines)
+### Why wsStore is Large (~950 lines)
 
 wsStore manages WebSocket connection, JSON-RPC channels, and subscription callbacks in one place. This is intentional:
 
@@ -58,6 +58,10 @@ wsStore manages WebSocket connection, JSON-RPC channels, and subscription callba
 3. **Notification routing needs global view** — must know all callbacks to dispatch
 
 The alternative (each store managing its own connection) would lead to duplicate connections and lifecycle conflicts.
+
+Reconnect policy lives here too — an unbounded backoff retry rather than a fixed
+attempt count, because the connection may be a relay tunnel the server itself takes
+~20s to notice is dead. See [websocket-rpc.md](websocket-rpc.md#auto-reconnect).
 
 ### Store Patterns
 
@@ -292,7 +296,7 @@ Key features:
 
 1. **Generation counter** — prevents race conditions when multiple subscribes overlap
 2. **Worktree switch handling** — the server invalidates worktree-scoped subscriptions on switch, so the hook resubscribes. Rather than clearing data (`onReset`), a switch is a soft refresh: previous data stays on screen and is swapped out by `onSubscribed` when the new worktree's snapshot arrives (see [subscription-system.md](subscription-system.md#why-worktree-switch-is-a-soft-refresh-not-a-reset))
-3. **Connection state** — triggers reset on disconnect, resubscribes on reconnect
+3. **Connection state** — resets on disconnect, but deliberately keeps data during `reconnecting` and resubscribes once the connection is back
 
 ## Key Files
 

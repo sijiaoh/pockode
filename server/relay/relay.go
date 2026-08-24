@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -19,28 +20,41 @@ type Config struct {
 	ClientVersion string
 }
 
+// Establishing a tunnel has no keepalive to fall back on: the multiplexer only
+// starts pinging once the handshake is done. http.DefaultTransport bounds the
+// TCP dial and the TLS handshake, but nothing bounds the wait for the 101
+// response, nor the wait for the register reply, so a peer that accepts the
+// connection and then answers nothing blocks both forever — and one stalled
+// attempt parks the reconnect loop for good. A blackholed network produces
+// that; so would a cloud still holding the previous registration — a hypothesis
+// only, since the cloud is not part of this repository. The bound does not
+// depend on which it is; it only keeps the loop turning.
+const connectTimeout = 15 * time.Second
+
 type Manager struct {
-	config       Config
-	backendPort  int
-	frontendPort int
-	store        *Store
-	client       *Client
-	log          *slog.Logger
-	cancel       context.CancelFunc
-	remoteURL    string
-	wg           sync.WaitGroup
-	newStreamCh  chan *VirtualStream
+	config         Config
+	backendPort    int
+	frontendPort   int
+	store          *Store
+	client         *Client
+	log            *slog.Logger
+	cancel         context.CancelFunc
+	remoteURL      string
+	wg             sync.WaitGroup
+	newStreamCh    chan *VirtualStream
+	connectTimeout time.Duration
 }
 
 func NewManager(cfg Config, backendPort, frontendPort int, log *slog.Logger) *Manager {
 	return &Manager{
-		config:       cfg,
-		backendPort:  backendPort,
-		frontendPort: frontendPort,
-		store:        NewStore(cfg.DataDir),
-		client:       NewClientWithVersion(cfg.CloudURL, cfg.ClientVersion),
-		log:          log.With("module", "relay"),
-		newStreamCh:  make(chan *VirtualStream),
+		config:         cfg,
+		backendPort:    backendPort,
+		frontendPort:   frontendPort,
+		store:          NewStore(cfg.DataDir),
+		client:         NewClientWithVersion(cfg.CloudURL, cfg.ClientVersion),
+		log:            log.With("module", "relay"),
+		newStreamCh:    make(chan *VirtualStream),
+		connectTimeout: connectTimeout,
 	}
 }
 
@@ -105,26 +119,34 @@ func (m *Manager) Start(ctx context.Context) (string, error) {
 				logger.LogPanic(r, "relay connection crashed")
 			}
 		}()
-		m.runWithReconnect(relayCtx, storedCfg)
+		m.runWithReconnect(relayCtx, buildRelayWSURL(storedCfg), storedCfg.RelayToken)
 	}()
 
 	return m.remoteURL, nil
 }
 
-func (m *Manager) runWithReconnect(ctx context.Context, cfg *StoredConfig) {
+func (m *Manager) runWithReconnect(ctx context.Context, url, relayToken string) {
 	backoff := time.Second
+	attempt := 0
 
 	for ctx.Err() == nil {
 		start := time.Now()
-		err := m.connectAndRun(ctx, cfg)
+		attempt++
+		err := m.connectAndRun(ctx, url, relayToken, attempt)
 		if ctx.Err() != nil {
 			return
 		}
 
-		m.log.Error("relay connection failed", "error", err, "backoff", backoff)
+		// A connection that stayed up for over a minute is jitter rather than an
+		// unreachable network: retry at once and reset the backoff.
+		stable := time.Since(start) > time.Minute
+		retryIn := backoff
+		if stable {
+			retryIn = 0
+		}
+		m.log.Error("relay disconnected, reconnecting", "error", err, "retryIn", retryIn)
 
-		// Skip wait and reset backoff if connection was stable (> 1 minute)
-		if time.Since(start) > time.Minute {
+		if stable {
 			backoff = time.Second
 			continue
 		}
@@ -138,22 +160,34 @@ func (m *Manager) runWithReconnect(ctx context.Context, cfg *StoredConfig) {
 	}
 }
 
-func (m *Manager) connectAndRun(ctx context.Context, cfg *StoredConfig) error {
-	url := buildRelayWSURL(cfg)
-	m.log.Info("connecting to relay", "url", url)
+func (m *Manager) connectAndRun(ctx context.Context, url, relayToken string, attempt int) error {
+	m.log.Info("connecting to relay", "url", url, "attempt", attempt)
 
-	conn, _, err := websocket.Dial(ctx, url, nil)
+	// HTTPClient.Timeout is the library-supported way to bound the handshake;
+	// it is cleared once the connection is established, so it never truncates
+	// the tunnel itself.
+	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
+		HTTPClient: &http.Client{Timeout: m.connectTimeout},
+	})
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
 	conn.SetReadLimit(10 * 1024 * 1024) // 10MB for HTTP responses
-	defer conn.Close(websocket.StatusNormalClosure, "")
+	// CloseNow instead of a graceful close: this path is reached precisely when
+	// the peer is unresponsive, and a close handshake nobody answers costs the
+	// reconnect loop up to ~25s of the library's internal timeouts.
+	defer conn.CloseNow()
 
-	if err := m.register(ctx, conn, cfg.RelayToken); err != nil {
+	registerCtx, cancelRegister := context.WithTimeout(ctx, m.connectTimeout)
+	err = m.register(registerCtx, conn, relayToken)
+	cancelRegister()
+	if err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
 
-	m.log.Info("connected to relay")
+	// attempt is what tells a reconnect apart from the first connect, and a
+	// stuck loop apart from a quiet one.
+	m.log.Info("relay connected", "attempt", attempt)
 
 	httpHandler := NewHTTPHandler(m.backendPort, m.frontendPort, m.log)
 	mux := NewMultiplexer(conn, m.newStreamCh, httpHandler, m.log)

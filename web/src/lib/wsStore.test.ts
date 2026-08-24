@@ -71,6 +71,24 @@ class MockWebSocket {
 		this.readyState = MockWebSocket.CLOSED;
 		this.onclose?.();
 	}
+	// The socket is up but nothing ever answers: what a browser sees when the
+	// cloud accepts its connection while the relay tunnel behind it is dead.
+	mockNoResponse() {
+		this.send = vi.fn();
+	}
+	// close() is not instant in a browser: it starts a handshake, and against a
+	// dead relay onclose lands seconds later. The default mock fires it
+	// synchronously, which hides every bug that needs a socket to outlive its
+	// own close() call.
+	mockSlowClose() {
+		this.close = vi.fn(() => {
+			this.readyState = MockWebSocket.CLOSING;
+		});
+	}
+	finishClose() {
+		this.readyState = MockWebSocket.CLOSED;
+		this.onclose?.();
+	}
 	mockAuthFailure() {
 		this.send = vi.fn((data: string) => {
 			const parsed = JSON.parse(data);
@@ -459,23 +477,64 @@ describe("wsStore", () => {
 	});
 
 	describe("auto-reconnect", () => {
-		it("reconnects up to 5 times on close, then sets error", async () => {
+		// A relay outage lasts far longer than a handful of quick retries: the
+		// server alone needs ~20s to notice the tunnel is dead. Giving up would
+		// leave the page dead until the user manually refreshes it.
+		it("keeps retrying through a long outage and recovers on its own", async () => {
 			const useWSStore = await getUseWSStore();
 			await connectAndAuth();
 
-			for (let i = 0; i < 5; i++) {
+			for (let i = 0; i < 10; i++) {
 				getMockWs()?.simulateClose();
-				vi.advanceTimersByTime(3000);
+				expect(useWSStore.getState().status).toBe("reconnecting");
+				// Longer than the capped backoff, so every attempt gets to fire.
+				await vi.advanceTimersByTimeAsync(60000);
 			}
+			expect(mockWsInstances.length).toBe(11);
 
-			// 1 initial + 5 reconnects
-			expect(mockWsInstances.length).toBe(6);
+			// Network is back: no refresh needed.
+			getMockWs()?.simulateOpen();
+			await vi.runAllTimersAsync();
+			expect(useWSStore.getState().status).toBe("connected");
+		});
 
-			// 6th close exhausts retries
+		// Retrying forever is only safe if the attempts spread out.
+		it("backs off between attempts instead of hammering", async () => {
+			await connectAndAuth();
+
+			// A brief blip still recovers within a second.
 			getMockWs()?.simulateClose();
-			expect(useWSStore.getState().status).toBe("error");
-			vi.advanceTimersByTime(3000);
-			expect(mockWsInstances.length).toBe(6);
+			await vi.advanceTimersByTimeAsync(999);
+			expect(mockWsInstances.length).toBe(1);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(mockWsInstances.length).toBe(2);
+
+			// Each further failure waits longer.
+			getMockWs()?.simulateClose();
+			await vi.advanceTimersByTimeAsync(1999);
+			expect(mockWsInstances.length).toBe(2);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(mockWsInstances.length).toBe(3);
+		});
+
+		// The cloud can accept the browser's socket while the tunnel behind it is
+		// dead, so auth is sent and never answered. That is a network problem, not
+		// a credential problem: classifying it as auth_failed would strand the
+		// user on a terminal error screen that only a refresh clears.
+		it("retries when auth is never answered instead of failing auth", async () => {
+			const wsActions = await getWsActions();
+			const useWSStore = await getUseWSStore();
+
+			wsActions.connect(TEST_TOKEN);
+			getMockWs()?.mockNoResponse();
+			getMockWs()?.simulateOpen();
+
+			// Past the RPC timeout.
+			await vi.advanceTimersByTimeAsync(30000);
+
+			expect(useWSStore.getState().status).toBe("reconnecting");
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(mockWsInstances.length).toBe(2);
 		});
 
 		it("handles socket error by letting onclose manage state", async () => {
@@ -490,6 +549,36 @@ describe("wsStore", () => {
 			// onclose triggers reconnection attempt
 			getMockWs()?.simulateClose();
 			expect(useWSStore.getState().status).toBe("reconnecting");
+		});
+
+		// reconnectWebSocket() — the fallback when worktree.switch fails, which is
+		// exactly when the tunnel is sick — closes the socket and opens its
+		// replacement 100ms later, while a close handshake against a dead relay
+		// drags on for seconds. The superseded socket must not take the live
+		// connection down with it when it finally lands.
+		it("ignores the close of a socket that has already been replaced", async () => {
+			const useWSStore = await getUseWSStore();
+			const { reconnectWebSocket } = await import("./wsStore");
+			await connectAndAuth();
+
+			const superseded = getMockWs();
+			superseded?.mockSlowClose();
+
+			reconnectWebSocket();
+			await vi.advanceTimersByTimeAsync(100);
+			const replacement = getMockWs();
+			expect(replacement).not.toBe(superseded);
+
+			replacement?.simulateOpen();
+			await vi.runAllTimersAsync();
+			expect(useWSStore.getState().status).toBe("connected");
+
+			superseded?.finishClose();
+			await vi.runAllTimersAsync();
+
+			expect(useWSStore.getState().status).toBe("connected");
+			// No reconnect was scheduled on top of the healthy connection.
+			expect(mockWsInstances.length).toBe(2);
 		});
 
 		it("does not reconnect on auth failure", async () => {

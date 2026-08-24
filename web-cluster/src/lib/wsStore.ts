@@ -1,11 +1,36 @@
 import { getWebSocketUrl } from "@pockode/shared";
-import { JSONRPCClient } from "json-rpc-2.0";
+import { JSONRPCClient, JSONRPCErrorException } from "json-rpc-2.0";
 import { create } from "zustand";
 import { createNodeActions, type NodeActions } from "./rpc";
 
 const RPC_TIMEOUT_MS = 30000;
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_INTERVAL_MS = 3000;
+
+// A relay tunnel can be down for ~20s before the server even notices, and the
+// server then reconnects with its own backoff. Giving up after a fixed handful
+// of quick attempts would always land on the error screen before the tunnel is
+// back, so retry indefinitely and back off instead. Mirrors the web client.
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+
+function reconnectDelay(attempt: number): number {
+	return Math.min(
+		RECONNECT_BASE_DELAY_MS * 2 ** attempt,
+		RECONNECT_MAX_DELAY_MS,
+	);
+}
+
+/**
+ * Whether a rejected auth request means the server actually turned us away.
+ *
+ * json-rpc-2.0 surfaces its own client-side timeout as a JSON-RPC error too,
+ * but with DefaultErrorCode (0); a real rejection always carries a genuine
+ * (negative) JSON-RPC code, and a dead transport rejects with a plain Error.
+ * "auth_failed" is a dead end for reconnects, so reading a timeout as bad
+ * credentials would strand the user whenever the tunnel is slow or down.
+ */
+function isAuthRejection(error: unknown): boolean {
+	return error instanceof JSONRPCErrorException && error.code !== 0;
+}
 
 type ConnectionStatus =
 	| "connecting"
@@ -70,14 +95,16 @@ export const useWSStore = create<WSState>()((set, get) => {
 	};
 
 	const scheduleReconnect = () => {
-		if (internal.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+		// Without a token there is nothing to retry with; that needs the user.
+		if (!internal.token) {
 			set({
 				status: "error",
-				errorMessage: "Connection failed after multiple attempts",
+				errorMessage: "No token to reconnect with",
 			});
 			return;
 		}
 
+		const delay = reconnectDelay(internal.reconnectAttempts);
 		internal.reconnectAttempts++;
 		set({ status: "reconnecting" });
 
@@ -85,11 +112,27 @@ export const useWSStore = create<WSState>()((set, get) => {
 			if (internal.token) {
 				connectInternal(internal.token);
 			}
-		}, RECONNECT_INTERVAL_MS);
+		}, delay);
 	};
 
 	const connectInternal = (token: string) => {
 		clearReconnectTimeout();
+
+		// A previous socket may still be opening — the unreachable screen's Retry
+		// button is on screen throughout a reconnect, and against a blackholed
+		// network a browser takes tens of seconds to give up on the attempt in
+		// flight. Left attached, that socket is orphaned but still live: its
+		// eventual close would null out the newer connection's state and schedule
+		// a reconnect on top of it.
+		if (internal.socket) {
+			const stale = internal.socket;
+			internal.socket = null;
+			stale.onopen = null;
+			stale.onclose = null;
+			stale.onmessage = null;
+			stale.onerror = null;
+			stale.close();
+		}
 
 		// During an automatic reconnect keep the "reconnecting" status: flipping
 		// to "connecting" would show the full-screen spinner and remount NodeList,
@@ -118,6 +161,15 @@ export const useWSStore = create<WSState>()((set, get) => {
 					errorMessage: null,
 				});
 			} catch (err) {
+				// Not a rejection: the request timed out or the socket died mid-auth.
+				// Close (a no-op if it is already gone) and let onclose run the normal
+				// reconnect path instead of showing a dead-end token screen.
+				if (!isAuthRejection(err)) {
+					console.warn("Auth did not complete, retrying:", err);
+					socket.close();
+					return;
+				}
+
 				internal.socket?.close();
 				set({
 					status: "auth_failed",
@@ -140,6 +192,16 @@ export const useWSStore = create<WSState>()((set, get) => {
 		};
 
 		socket.onclose = () => {
+			// A newer socket may already have replaced this one. disconnect() drops
+			// its reference before the close handshake finishes, and against a dead
+			// cluster that handshake takes seconds, so a stale close can easily land
+			// after the replacement is already up. Clearing the shared state here
+			// would strip that live connection of its RPC client and schedule a
+			// reconnect on top of it.
+			if (internal.socket !== socket) {
+				return;
+			}
+
 			internal.client = null;
 			internal.socket = null;
 
@@ -186,8 +248,10 @@ export const useWSStore = create<WSState>()((set, get) => {
 			disconnect: () => {
 				clearReconnectTimeout();
 				internal.token = null;
-				// Prevent onclose from auto-reconnecting, mirroring the web client.
-				internal.reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
+				// Auto-reconnect is already off: token is cleared and onclose bails on
+				// "disconnected". Reset so a later connect() starts at the short end of
+				// the backoff. Mirrors the web client.
+				internal.reconnectAttempts = 0;
 				// Set status BEFORE closing so onclose sees "disconnected" and skips
 				// scheduleReconnect(); otherwise closing a connected socket would flip
 				// through "reconnecting" and leave a stray no-op timer.

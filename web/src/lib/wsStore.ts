@@ -1,4 +1,8 @@
-import { JSONRPCClient, type JSONRPCRequester } from "json-rpc-2.0";
+import {
+	JSONRPCClient,
+	JSONRPCErrorException,
+	type JSONRPCRequester,
+} from "json-rpc-2.0";
 import { create } from "zustand";
 import type {
 	AgentRole,
@@ -228,8 +232,36 @@ export function setOnWorktreeSwitched(callback: (() => void) | null) {
 	onWorktreeSwitched = callback;
 }
 
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_INTERVAL = 3000;
+// A relay tunnel can be down for ~20s before the server even notices (its
+// keepalive detection window), and the server then reconnects with its own
+// backoff. A client that gives up after a fixed handful of attempts is
+// therefore guaranteed to be gone before the tunnel is back, leaving a dead
+// page that only a manual refresh recovers. So retry indefinitely and back off
+// instead: a long outage costs one attempt per RECONNECT_MAX_DELAY_MS rather
+// than a hot loop, and a brief blip still recovers within a second.
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+
+function reconnectDelay(attempt: number): number {
+	return Math.min(
+		RECONNECT_BASE_DELAY_MS * 2 ** attempt,
+		RECONNECT_MAX_DELAY_MS,
+	);
+}
+
+/**
+ * Whether a rejected auth request means the server actually turned us away.
+ *
+ * json-rpc-2.0 surfaces its own client-side timeout as a JSON-RPC error too,
+ * but with DefaultErrorCode (0); a real rejection always carries a genuine
+ * (negative) JSON-RPC code, and a dead transport rejects with a plain Error.
+ * The distinction matters because "auth_failed" is terminal: misreading a
+ * timeout as bad credentials strands the user whenever the tunnel is merely
+ * slow or down.
+ */
+function isAuthRejection(error: unknown): boolean {
+	return error instanceof JSONRPCErrorException && error.code !== 0;
+}
 
 function getClient(): JSONRPCRequester<void> | null {
 	return rpcRequester;
@@ -377,7 +409,9 @@ export const useWSStore = create<WSState>((set, get) => ({
 	actions: {
 		connect: (token: string) => {
 			const currentStatus = get().status;
-			// "error" is a terminal state requiring user intervention (page refresh)
+			// "error" now means only "no token to connect with", which genuinely
+			// needs the user; a connection that keeps failing stays in
+			// "reconnecting" and retries on its own.
 			if (
 				currentStatus === "connecting" ||
 				currentStatus === "connected" ||
@@ -389,6 +423,14 @@ export const useWSStore = create<WSState>((set, get) => ({
 			if (!token) {
 				set({ status: "error" });
 				return;
+			}
+
+			// A retry is already armed while status is "reconnecting"; leaving it
+			// there would open a second socket a moment from now and orphan this
+			// one. Mirrors web-cluster's connectInternal.
+			if (reconnectTimeout) {
+				clearTimeout(reconnectTimeout);
+				reconnectTimeout = undefined;
 			}
 
 			const isReconnecting = currentStatus === "reconnecting";
@@ -430,6 +472,15 @@ export const useWSStore = create<WSState>((set, get) => ({
 					});
 					reconnectAttempts = 0;
 				} catch (error) {
+					// Not a rejection: the request timed out or the socket died
+					// mid-auth. Close (a no-op if it is already gone) and let onclose
+					// run the normal reconnect path.
+					if (!isAuthRejection(error)) {
+						console.warn("WebSocket auth did not complete, retrying:", error);
+						socket.close(1000, "auth_incomplete");
+						return;
+					}
+
 					const currentWorktree = worktreeActions.getCurrent();
 					// If auth failed with a specific worktree, reset to main and retry
 					if (currentWorktree) {
@@ -474,6 +525,18 @@ export const useWSStore = create<WSState>((set, get) => ({
 			};
 
 			socket.onclose = () => {
+				// A newer socket may already have replaced this one. Closing is not
+				// instant — the handshake against a dead relay drags on for seconds —
+				// and reconnectWebSocket() opens the replacement only 100ms after
+				// asking for the close, so a superseded socket routinely outlives its
+				// successor's setup. Without this guard it would then strip the live
+				// connection of its RPC client and subscriptions and demote it to
+				// "reconnecting", leaving a healthy socket that nothing can reach and
+				// that disconnect() can no longer close.
+				if (ws !== socket) {
+					return;
+				}
+
 				ws = null;
 				rpcReceiver = null;
 				rpcRequester = null;
@@ -488,19 +551,21 @@ export const useWSStore = create<WSState>((set, get) => ({
 					return;
 				}
 
-				// Retry if we have attempts left and a token
-				if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && currentToken) {
-					// Use "reconnecting" to preserve UI state; "disconnected" is for intentional disconnect
-					set({ status: "reconnecting" });
-					reconnectAttempts += 1;
-					reconnectTimeout = window.setTimeout(() => {
-						if (currentToken) {
-							get().actions.connect(currentToken);
-						}
-					}, RECONNECT_INTERVAL);
-				} else {
+				// Without a token there is nothing to retry with; that needs the user.
+				if (!currentToken) {
 					set({ status: "error" });
+					return;
 				}
+
+				// Use "reconnecting" to preserve UI state; "disconnected" is for intentional disconnect
+				set({ status: "reconnecting" });
+				const delay = reconnectDelay(reconnectAttempts);
+				reconnectAttempts += 1;
+				reconnectTimeout = window.setTimeout(() => {
+					if (currentToken) {
+						get().actions.connect(currentToken);
+					}
+				}, delay);
 			};
 
 			ws = socket;
@@ -512,7 +577,10 @@ export const useWSStore = create<WSState>((set, get) => ({
 				reconnectTimeout = undefined;
 			}
 			currentToken = null;
-			reconnectAttempts = MAX_RECONNECT_ATTEMPTS; // Prevent auto-reconnect
+			// Auto-reconnect is already off: onclose bails on "disconnected" and the
+			// pending timer checks currentToken. Reset so a later connect() starts
+			// at the short end of the backoff.
+			reconnectAttempts = 0;
 			// Set status BEFORE closing so onclose sees correct state
 			set({ status: "disconnected" });
 			if (ws) {
@@ -520,6 +588,11 @@ export const useWSStore = create<WSState>((set, get) => ({
 				ws = null;
 				rpcReceiver = null;
 				rpcRequester = null;
+				// onclose used to do this on its way past; it now ignores a socket
+				// that is no longer the current one, and this one just stopped being
+				// it. Doing it here also frees the callbacks immediately rather than
+				// whenever the close handshake happens to finish.
+				clearAllWatchSubscriptions();
 			}
 		},
 

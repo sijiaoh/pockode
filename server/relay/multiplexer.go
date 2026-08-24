@@ -14,12 +14,18 @@ import (
 )
 
 // Keepalive detects half-open connections (e.g. after the host machine wakes
-// from sleep) so runWithReconnect can re-establish the relay tunnel. Without an
-// active ping, m.conn.Read blocks forever on a silently-dead connection and the
-// reconnect logic never fires. Worst-case detection latency is roughly
-// pingInterval + pingTimeout.
+// from sleep or loses its network route) so runWithReconnect can re-establish
+// the relay tunnel. Without an active ping, m.conn.Read blocks forever on a
+// silently-dead connection and the reconnect logic never fires. Worst-case
+// detection latency is roughly pingInterval + pingTimeout.
+//
+// pingTimeout doubles as a cap on how long a single message may take to
+// transmit: the library holds its frame lock for the whole payload, so an
+// in-flight write blocks the ping until it finishes. Shrinking pingTimeout to
+// speed up detection would shrink the largest response the relay can push over
+// a slow uplink by the same factor, so only pingInterval is tuned here.
 const (
-	pingInterval = 15 * time.Second
+	pingInterval = 10 * time.Second
 	pingTimeout  = 10 * time.Second
 )
 
@@ -68,6 +74,12 @@ func NewMultiplexer(conn *websocket.Conn, newStreamCh chan<- *VirtualStream, htt
 func (m *Multiplexer) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// The cloud assigns fresh connection IDs after a reconnect, so every stream
+	// of this tunnel is dead once Run returns. Closing them lets the readers
+	// (jsonrpc2 connections) see EOF and shut down instead of blocking forever
+	// on a channel nobody will ever send to again.
+	defer m.closeAllStreams()
 
 	go m.keepAlive(ctx, cancel)
 
@@ -203,6 +215,18 @@ func (m *Multiplexer) closeStream(connectionID string) {
 	}
 }
 
+func (m *Multiplexer) closeAllStreams() {
+	m.streamsMu.Lock()
+	streams := m.streams
+	m.streams = make(map[string]*VirtualStream)
+	m.streamsMu.Unlock()
+
+	for connectionID, stream := range streams {
+		close(stream.incoming)
+		m.log.Info("virtual stream closed", "connectionId", connectionID)
+	}
+}
+
 func (m *Multiplexer) send(connectionID string, payload interface{}) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -223,6 +247,10 @@ func (m *Multiplexer) send(connectionID string, payload interface{}) error {
 		return err
 	}
 
+	// Deliberately unbounded: a deadline here would abort legitimately slow
+	// large responses on a slow uplink, and the connection would be torn down
+	// with it. keepAlive already bounds a stuck write — its ping cannot get out
+	// either, so it closes the connection and this Write returns.
 	return m.conn.Write(context.Background(), websocket.MessageText, envData)
 }
 

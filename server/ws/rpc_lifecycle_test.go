@@ -1,9 +1,13 @@
 package ws
 
 import (
+	"io"
+	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/watch"
+	"github.com/sourcegraph/jsonrpc2"
 )
 
 // recordingWatcher captures Unsubscribe calls so tests can assert that a
@@ -16,6 +20,67 @@ type recordingWatcher struct {
 func (w *recordingWatcher) Start() error          { return nil }
 func (w *recordingWatcher) Stop()                 {}
 func (w *recordingWatcher) Unsubscribe(id string) { w.unsubscribed = append(w.unsubscribed, id) }
+
+// idleStream is a jsonrpc2 stream that never yields a message and records what
+// is written to it, so a test can build a real *jsonrpc2.Conn and observe when
+// a handler replies.
+type idleStream struct {
+	written chan any
+	closed  chan struct{}
+}
+
+func newIdleStream() *idleStream {
+	return &idleStream{written: make(chan any, 4), closed: make(chan struct{})}
+}
+
+func (s *idleStream) ReadObject(any) error { <-s.closed; return io.EOF }
+func (s *idleStream) WriteObject(v any) error {
+	s.written <- v
+	return nil
+}
+func (s *idleStream) Close() error { close(s.closed); return nil }
+
+// jsonrpc2 starts dispatching on its own goroutine as soon as NewConn is
+// called, which is before HandleStream can finish wiring the state — and on a
+// relay stream the client's first request is often already buffered, so this is
+// the common case, not a corner one. A handler that ran early would subscribe
+// the still-nil notifier to the worktree, an entry cleanup can never remove
+// because it unsubscribes the real one: the connection dies, the entry stays,
+// and the next worktree notification dereferences it.
+func TestRPCMethodHandler_HandleWaitsForConnectionState(t *testing.T) {
+	state := &rpcConnState{ready: make(chan struct{}), log: slog.New(slog.DiscardHandler)}
+	handler := &rpcMethodHandler{
+		RPCHandler: &RPCHandler{},
+		state:      state,
+		log:        slog.New(slog.DiscardHandler),
+	}
+
+	// The stream never yields a request, so this connection only ever dispatches
+	// what the test hands to Handle directly.
+	stream := newIdleStream()
+	conn := jsonrpc2.NewConn(bgCtx, stream, handler)
+
+	// Unauthenticated, so the handler's first act once it may run is to reply
+	// with an error — which is what makes "did it run yet" observable.
+	go handler.Handle(bgCtx, conn, &jsonrpc2.Request{Method: "work.list.subscribe"})
+
+	select {
+	case reply := <-stream.written:
+		t.Fatalf("Handle ran against a connection state that was still being built: replied %v", reply)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	state.setConn(conn)
+	if state.notifier == nil || state.subscriptions == nil {
+		t.Fatal("setConn must publish the notifier and subscription map before releasing handlers")
+	}
+
+	select {
+	case <-stream.written:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Handle stayed blocked after the connection state was ready")
+	}
+}
 
 // A worktree.switch (or auth) can be processed on its own goroutine while the
 // connection is simultaneously torn down (mobile clients drop often). Without a

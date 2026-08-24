@@ -111,6 +111,7 @@ func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 	state := &rpcConnState{
 		connID: connID,
 		log:    log,
+		ready:  make(chan struct{}),
 		// worktree is set after auth
 	}
 
@@ -121,6 +122,10 @@ func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 		authenticated: false,
 	}
 
+	// NewConn starts its read loop before returning, so a request can be
+	// dispatched before setConn runs. That is not hypothetical on a relay
+	// stream: the cloud's first message is often already buffered by the time
+	// this goroutine gets here. state.ready makes handlers wait for the wiring.
 	rpcConn := jsonrpc2.NewConn(ctx, stream, jsonrpc2.AsyncHandler(handler))
 	state.setConn(rpcConn)
 
@@ -140,6 +145,12 @@ type rpcConnState struct {
 	worktree      *worktree.Worktree       // set after auth
 	subscriptions map[string]watch.Watcher // subID → watcher for cleanup
 	closed        bool                     // set by cleanup; guards against binds/subscribes racing disconnect
+	// ready is closed by setConn. Handlers must wait on it before touching the
+	// state: a handler that runs first would subscribe the still-nil notifier
+	// to the worktree — an entry cleanup can never find (it unsubscribes the
+	// real one), so it outlives the connection and panics the next watcher that
+	// notifies it — and would write to the still-nil subscriptions map.
+	ready chan struct{}
 }
 
 // bindWorktree atomically binds wt to the connection, subscribing the
@@ -187,6 +198,12 @@ func (s *rpcConnState) setConn(conn *jsonrpc2.Conn) {
 	s.notifier = NewJSONRPCNotifier(conn)
 	s.subscriptions = make(map[string]watch.Watcher)
 	s.mu.Unlock()
+	close(s.ready)
+}
+
+// waitReady blocks until the state is wired to its jsonrpc2 connection.
+func (s *rpcConnState) waitReady() {
+	<-s.ready
 }
 
 func (s *rpcConnState) getNotifier() watch.Notifier {
@@ -277,6 +294,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 			logger.LogPanic(r, "rpc handler panic", "method", req.Method, "connId", h.state.connID)
 		}
 	}()
+
+	h.state.waitReady()
 
 	h.log.Debug("received request", "method", req.Method, "id", req.ID)
 

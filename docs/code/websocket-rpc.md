@@ -285,6 +285,39 @@ Code: `server/ws/rpc.go` (`bindWorktree`, `trackSubscription`, `cleanup`),
 `server/ws/rpc_worktree.go` (`handleWorktreeSwitch`); regression coverage in
 `server/ws/rpc_lifecycle_test.go`.
 
+### Handlers Wait for Connection State
+
+The same connection state races again at the opposite end of its life — setup
+rather than teardown. `jsonrpc2.NewConn` starts its read loop before it returns,
+while `HandleStream` only wires the state (`setConn`, which installs the notifier
+and the subscriptions map) once `NewConn` has returned. A request arriving in that
+window is dispatched against a half-built state.
+
+Two things then go wrong, neither of them gracefully. `handleAuth` would call
+`bindWorktree` while the notifier is still `nil`, subscribing that nil to the
+worktree; `cleanup` later unsubscribes the *real* notifier, so the nil entry is
+unreachable, outlives the connection, and panics the next watcher that notifies
+that worktree. `trackSubscription` would write to a still-`nil` map and panic
+immediately — recovered, but the recover only logs, so the client gets no reply
+at all and waits out its full 30-second timeout.
+
+`rpcConnState.ready` closes this window: `setConn` closes the channel and `Handle`
+waits on it before touching anything. One gate covers the whole class of
+"half-built state" bugs, which is why it is preferred over nil-checking each field
+as it is added. It cannot deadlock — `setConn` follows `NewConn` with nothing in
+between that can block or panic — and `Handle` runs on its own `AsyncHandler`
+goroutine, so waiting there never stalls the read loop.
+
+Over a direct WebSocket the window is narrow, since the client still has to finish
+its handshake. Over a relay tunnel it is the common case: the cloud's first message
+is usually already buffered in the `VirtualStream` before `HandleStream` runs, so
+the read loop has work the instant it starts. See
+[relay-system.md](relay-system.md#recovering-end-to-end).
+
+Code: `server/ws/rpc.go` (`setConn`, `waitReady`); regression coverage in
+`server/ws/rpc_lifecycle_test.go`
+(`TestRPCMethodHandler_HandleWaitsForConnectionState`).
+
 ## Connection Management
 
 ### Connection Status
@@ -294,32 +327,73 @@ type ConnectionStatus =
   | "connecting"   // WebSocket connecting
   | "connected"    // Authenticated and ready
   | "disconnected" // Intentionally closed (no auto-reconnect)
-  | "reconnecting" // Connection lost, attempting to reconnect
-  | "auth_failed"  // Token invalid
-  | "error";       // Terminal state (no auto-reconnect)
+  | "reconnecting" // Connection lost, retrying with backoff
+  | "auth_failed"  // Server rejected the token
+  | "error";       // No token to connect with (needs user intervention)
 ```
 
 **Key distinction**: `disconnected` indicates an intentional disconnect (user action), while `reconnecting` indicates an unexpected connection loss that triggers automatic recovery.
 
+Besides the intentional `disconnected`, `auth_failed` and `error` are the only
+states that stop retrying, so both are deliberately narrow. `error` means there is
+no token to retry *with*; a connection that merely keeps failing stays in
+`reconnecting` indefinitely rather than escalating to either of them.
+
 ### Auto-Reconnect
 
-Automatically retries after unexpected disconnect, up to 5 times with 3-second intervals:
+Retries run for as long as the tab is open, with exponential backoff:
 
 ```typescript
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_INTERVAL = 3000;
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 30000;
 ```
+
+**Why unbounded rather than a fixed attempt count**: a relay tunnel can be dead for
+~20s before the server's keepalive even notices, and the server then reconnects on
+its own backoff. Any fixed budget of a few quick attempts expires before the tunnel
+can possibly be back, so every outage ended on a dead page that only a manual
+refresh cleared. Backoff keeps the cost of a long outage at two attempts a minute
+while a brief blip still recovers in about a second. The full arithmetic is in
+[relay-system.md](relay-system.md#recovering-end-to-end).
 
 **Reconnection behavior**:
 - Connection loss sets status to `reconnecting` (not `disconnected`)
 - UI remains stable during `reconnecting` state (no page refresh or data clearing)
 - Subscriptions are invalidated but data is preserved
 - On successful reconnect, subscriptions are automatically re-established
-- `auth_failed` and `error` states do not trigger reconnection and require user intervention
+- `connect()` clears any armed retry timer first, so calling it manually during
+  `reconnecting` cannot leave a second socket opening a moment later
+- Only the socket that is still the current one may touch the store. `close()`
+  *starts* a handshake rather than finishing one, and against a dead relay that
+  drags on for seconds — while `reconnectWebSocket()` opens the replacement just
+  100ms after asking for the close — so a superseded socket routinely outlives
+  its successor's setup. `onclose` therefore returns immediately for a socket
+  that is no longer current; without that check it would strip the live
+  connection of its RPC client and subscriptions and demote it to
+  `reconnecting`, leaving a healthy socket that nothing can reach and that
+  `disconnect()` can no longer close. `disconnect()` does its own subscription
+  cleanup for the same reason, rather than relying on `onclose` to pass by later.
+
+**A timed-out `auth` is not an auth failure.** The cloud can accept the browser's
+WebSocket while the tunnel behind it is dead, so `auth` goes out and nothing
+answers. The stakes are high for getting this wrong: `auth_failed` is terminal, it
+makes `AppShell` log the user out, and on the worktree-retry path it also discards
+their selected worktree — all for what may be a passing network fault. So the store
+distinguishes by error code:
+json-rpc-2.0 raises its own client-side timeout as a JSON-RPC error too, but with
+`DefaultErrorCode` (0), whereas a genuine rejection always carries a real (negative)
+JSON-RPC code and a dead transport rejects with a plain `Error`. Only a real code
+counts as a rejection; everything else falls back to the normal reconnect path.
 
 ### UI During Reconnection
 
 When the connection enters `reconnecting` state, a non-intrusive banner is displayed at the top of the screen to inform users. The rest of the UI remains functional with cached data, avoiding disruptive full-page loading states.
+
+The exception is a reconnect with nothing on screen yet — the app was opened while
+the server was unreachable. There is no previous view to preserve and no terminal
+state to fall into any more, so `AppShell` treats "reconnecting and nothing
+rendered" as the cue to say the server is unreachable and that retries are running,
+rather than showing a loading spinner indefinitely.
 
 ### Request Timeout
 

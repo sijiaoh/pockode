@@ -133,7 +133,12 @@ export default function App() {
 		);
 	}
 
-	if (status === "error") {
+	// A reconnect normally keeps NodeList mounted so the last-known nodes stay on
+	// screen. But when nothing was ever loaded (the app was opened while the
+	// cluster was unreachable) that renders an empty list with no explanation,
+	// and retries now run for as long as the tab is open, so version === null is
+	// what says "we have never been connected, show the reason instead".
+	if (status === "error" || (status === "reconnecting" && version === null)) {
 		return (
 			<div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary p-4 text-center">
 				<div className="flex h-16 w-16 items-center justify-center rounded-full bg-th-error/10 text-th-error">
@@ -155,7 +160,7 @@ export default function App() {
 					Cluster unreachable
 				</h2>
 				<p className="text-sm text-th-text-secondary">
-					{errorMessage || "Failed to connect to the cluster server."}
+					{errorMessage || "Can't reach the cluster server — retrying…"}
 				</p>
 				<button
 					type="button"

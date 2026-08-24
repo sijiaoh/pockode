@@ -78,10 +78,12 @@ const mockSubscribe = vi.fn(
 );
 const mockUnsubscribe = vi.fn(async () => {});
 
+const ws = vi.hoisted(() => ({ status: "connected" }));
+
 vi.mock("../lib/wsStore", () => ({
 	useWSStore: (selector: (s: unknown) => unknown) =>
 		selector({
-			status: "connected",
+			status: ws.status,
 			actions: {
 				sessionListSubscribe: mockSubscribe,
 				sessionListUnsubscribe: mockUnsubscribe,
@@ -112,6 +114,33 @@ function renderAppShell(initialPath: string) {
 	);
 	return router;
 }
+
+// Opening the app while the server is unreachable leaves nothing to render, and
+// the store now retries for as long as the tab is open rather than settling
+// into a terminal error. Without a reconnecting branch here the user would be
+// left staring at "Loading..." with no idea the server is the problem.
+describe("AppShell when the server is unreachable", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+		});
+		useAuthStore.setState({ token: "test-token" });
+		ws.status = "reconnecting";
+		return () => {
+			ws.status = "connected";
+		};
+	});
+
+	it("explains the outage instead of loading forever", async () => {
+		renderAppShell("/");
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(/retrying/i);
+	});
+});
 
 describe("AppShell cross-worktree navigation", () => {
 	let unsubscribeSwitch: (() => void) | null = null;

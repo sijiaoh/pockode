@@ -38,6 +38,7 @@ type testEnv struct {
 	worktreeManager *worktree.Manager
 	workStore       work.Store
 	testRoleID      string // pre-created agent role ID for tests
+	handler         *RPCHandler
 	server          *httptest.Server
 	conn            *websocket.Conn
 	ctx             context.Context
@@ -104,6 +105,7 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 		worktreeManager: worktreeManager,
 		workStore:       workStore,
 		testRoleID:      testRole.ID,
+		handler:         h,
 		server:          server,
 		conn:            conn,
 		ctx:             ctx,
