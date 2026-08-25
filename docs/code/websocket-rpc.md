@@ -380,10 +380,13 @@ answers. The stakes are high for getting this wrong: `auth_failed` is terminal, 
 makes `AppShell` log the user out, and on the worktree-retry path it also discards
 their selected worktree — all for what may be a passing network fault. So the store
 distinguishes by error code:
-json-rpc-2.0 raises its own client-side timeout as a JSON-RPC error too, but with
-`DefaultErrorCode` (0), whereas a genuine rejection always carries a real (negative)
-JSON-RPC code and a dead transport rejects with a plain `Error`. Only a real code
-counts as a rejection; everything else falls back to the normal reconnect path.
+a genuine rejection always carries a real (negative) JSON-RPC code, while every way
+a request can die on this side of the wire carries `DefaultErrorCode` (0) — the
+client-side timeout and the rejection an in-flight request gets when its socket
+closes under it (both in [Request Timeout](#request-timeout)), and a send onto a
+socket that is not open, which json-rpc-2.0 catches and turns into a code-0 response
+carrying the thrown message. Only a real code counts as a rejection; everything else
+falls back to the normal reconnect path.
 
 ### UI During Reconnection
 
@@ -402,6 +405,25 @@ All RPC requests have a default 30-second timeout:
 ```typescript
 const RPC_TIMEOUT_MS = 30000;
 ```
+
+That clock is the fallback, not the normal way a doomed request ends. A request's
+answer can only arrive on the socket it left by, so `onclose` rejects everything
+still pending rather than let a known-dead request sit out its remaining seconds.
+`disconnect()` has to make that call itself as well — for the same reason it does
+its own subscription cleanup, the `onclose` that follows it arrives for a socket
+that is no longer current and returns early (see
+[Auto-Reconnect](#auto-reconnect)).
+
+**A timeout is not a failure the caller may retry blindly.** The server is likely
+still working on the request, so a retry stacks a second copy of that work on top
+of the first: with react-query's default budget one slow response becomes four,
+each re-running the whole thing. `isRPCTimeout` exists so callers can tell "we
+stopped waiting" from "this failed", and `useContents` — the one query that can
+carry megabytes of file content — uses it to skip the retry. What marks a timeout
+is its message, not an error code of its own: code 0 is already spoken for above,
+and taking a second meaning would cost more than it buys. The message is supplied
+through the timeout's own error factory rather than left to json-rpc-2.0, so what
+`isRPCTimeout` matches on is not a library default that an upgrade could reword.
 
 ## Code Paths
 

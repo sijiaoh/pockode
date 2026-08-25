@@ -25,7 +25,8 @@ const (
 	maxLinesPerFile  = 20
 	maxRangesPerLine = 20
 
-	// Matches contents.IsBinary, which only inspects the first 512 bytes.
+	// contents.IsBinaryProbe sniffs at most this much, so a larger probe would
+	// only buy a longer UTF-8 check on bytes the scanner is about to read anyway.
 	binaryProbeBytes = 512
 
 	// Long lines (minified bundles, embedded data) are clipped to a window
@@ -160,7 +161,7 @@ func (fs *fileScanner) scanFile(fullPath, relPath string, m *matcher) (*FileMatc
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, false
 	}
-	if contents.IsBinary(head) {
+	if contents.IsBinaryProbe(head) {
 		return nil, false
 	}
 

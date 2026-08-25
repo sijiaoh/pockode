@@ -10,6 +10,7 @@ export {
 } from "./ContentView";
 export { DiffViewer } from "./DiffViewer";
 export { FileContentDisplay } from "./FileContentDisplay";
+export { FileStateCard } from "./FileStateCard";
 export { default as PullToRefresh } from "./PullToRefresh";
 export { default as ScrollableContent } from "./ScrollableContent";
 export { default as StatusIcon } from "./StatusIcon";

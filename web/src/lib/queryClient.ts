@@ -7,6 +7,9 @@ function isUnauthorized(error: unknown): boolean {
 	return error instanceof HttpError && error.status === 401;
 }
 
+/** Attempts after the first, before a query is allowed to surface its error. */
+export const DEFAULT_RETRY_COUNT = 3;
+
 const WORKTREE_DEPENDENT_QUERY_KEYS = [
 	"git-status",
 	"git-diff",
@@ -23,7 +26,7 @@ export function createQueryClient(): QueryClient {
 					if (isUnauthorized(error)) {
 						return false;
 					}
-					return failureCount < 3;
+					return failureCount < DEFAULT_RETRY_COUNT;
 				},
 			},
 			mutations: {

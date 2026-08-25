@@ -153,7 +153,10 @@ async function connectAndAuth(token = TEST_TOKEN) {
 	expect(useWSStore.getState().status).toBe("connected");
 }
 
-describe("wsStore", () => {
+// The first case in the file pays for importing the store and its dependencies,
+// which on a loaded machine outruns the 5s default and fails a test that does no
+// waiting of its own.
+describe("wsStore", { timeout: 20_000 }, () => {
 	describe("connect", () => {
 		it("sets status to connecting then connected after auth", async () => {
 			const wsActions = await getWsActions();
@@ -322,6 +325,38 @@ describe("wsStore", () => {
 			await expect(wsActions.sendMessage("test", "hello")).rejects.toThrow(
 				"Not connected",
 			);
+		});
+	});
+
+	describe("unanswered requests", () => {
+		it("fails them as soon as the socket closes", async () => {
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+			getMockWs()?.mockNoResponse();
+
+			const pending = wsActions.getFile("big.png");
+			const rejection = expect(pending).rejects.toThrow("Connection lost");
+
+			// Their answer could only have come down this socket, so waiting out the
+			// 30s timeout would just be a slower way of failing.
+			getMockWs()?.simulateClose();
+			await rejection;
+		});
+
+		it("marks a request the client gave up on as a timeout", async () => {
+			const { isRPCTimeout } = await import("./wsStore");
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+			getMockWs()?.mockNoResponse();
+
+			const caught = wsActions.getFile("big.png").catch((error) => error);
+			await vi.advanceTimersByTimeAsync(30_000);
+
+			// Callers use this to tell "we stopped waiting" — where the server may
+			// still be working and a retry would duplicate it — from a real failure.
+			expect(isRPCTimeout(await caught)).toBe(true);
 		});
 	});
 

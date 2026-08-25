@@ -10,11 +10,13 @@ import { overlayToNavigation } from "../../lib/navigation";
 import { useWSStore } from "../../lib/wsStore";
 import { isFileContent } from "../../types/contents";
 import {
-	BottomActionBar,
-	ContentView,
-	FileContentDisplay,
-	getActionIconButtonClass,
-} from "../ui";
+	canEditFileView,
+	getEditLabel,
+	getFileViewState,
+} from "../../utils/fileView";
+import { splitPath } from "../../utils/path";
+import { BottomActionBar, ContentView, getActionIconButtonClass } from "../ui";
+import FileBody from "./FileBody";
 
 interface Props {
 	path: string;
@@ -33,7 +35,8 @@ function FileView({ path, onBack }: Props) {
 	const [isDeleting, setIsDeleting] = useState(false);
 	const [deleteError, setDeleteError] = useState<string | null>(null);
 
-	const isBinary = data && isFileContent(data) && data.encoding !== "text";
+	const file = data && isFileContent(data) ? data : null;
+	const state = useMemo(() => (file ? getFileViewState(file) : null), [file]);
 
 	const navigateToEdit = useCallback(() => {
 		navigate(
@@ -72,55 +75,11 @@ function FileView({ path, onBack }: Props) {
 		}, [queryClient, path]),
 	});
 
-	const content = useMemo(() => {
-		if (!data || !isFileContent(data)) return null;
-
-		const ext = path.split(".").pop()?.toLowerCase();
-
-		if (data.encoding === "text" && ext === "svg") {
-			return (
-				<div className="flex items-center justify-center p-4">
-					<img
-						src={`data:image/svg+xml,${encodeURIComponent(data.content)}`}
-						alt={path}
-						className="max-w-full max-h-[70vh] object-contain"
-					/>
-				</div>
-			);
-		}
-
-		if (data.encoding === "base64") {
-			const isImage = ["png", "jpg", "jpeg", "gif", "webp"].includes(ext ?? "");
-
-			if (isImage) {
-				const mimeType = `image/${ext === "jpg" ? "jpeg" : ext}`;
-				return (
-					<div className="flex items-center justify-center p-4">
-						<img
-							src={`data:${mimeType};base64,${data.content}`}
-							alt={path}
-							className="max-w-full max-h-[70vh] object-contain"
-						/>
-					</div>
-				);
-			}
-
-			return (
-				<div className="p-4 text-center text-th-text-muted">
-					Binary file cannot be displayed
-				</div>
-			);
-		}
-
-		return (
-			<div className="p-2">
-				<FileContentDisplay content={data.content} filePath={path} />
-			</div>
-		);
-	}, [data, path]);
-
-	const showActionBar = !isBinary;
-	const fileName = path.split("/").pop() ?? path;
+	// Deleting stays available for everything the viewer cannot render; only
+	// editing depends on there being editable text. While the file is loading or
+	// failed to load there is nothing to act on at all.
+	const canEdit = state !== null && canEditFileView(state);
+	const { fileName } = splitPath(path);
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
@@ -135,17 +94,18 @@ function FileView({ path, onBack }: Props) {
 						{deleteError}
 					</div>
 				)}
-				{content}
+				{state && <FileBody state={state} path={path} />}
 			</ContentView>
-			{showActionBar && (
+			{state && (
 				<BottomActionBar>
 					<div className="flex items-center gap-2">
 						<button
 							type="button"
 							onClick={navigateToEdit}
-							disabled={isDeleting}
-							className={getActionIconButtonClass(!isDeleting)}
-							aria-label="Edit"
+							disabled={isDeleting || !canEdit}
+							className={getActionIconButtonClass(!isDeleting && canEdit)}
+							aria-label={getEditLabel(state)}
+							title={getEditLabel(state)}
 						>
 							<Pencil className="h-4 w-4" aria-hidden="true" />
 						</button>

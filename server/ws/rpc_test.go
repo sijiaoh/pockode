@@ -16,6 +16,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/contents"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -936,6 +937,38 @@ func TestHandler_FileGet_ReadFile(t *testing.T) {
 	}
 	if result.File.Content != "world" {
 		t.Errorf("expected content 'world', got %q", result.File.Content)
+	}
+	if result.File.Size != 5 || result.File.MIME == "" {
+		t.Errorf("expected size and mime, got size %d mime %q", result.File.Size, result.File.MIME)
+	}
+}
+
+func TestHandler_FileGet_BinaryFileReturnsMetadataOnly(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	os.WriteFile(filepath.Join(workDir, "app.wasm"), []byte("\x00asm\x01\x00\x00\x00"), 0644)
+
+	resp := env.call("file.get", rpc.FileGetParams{Path: "app.wasm"})
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result rpc.FileGetResult
+	json.Unmarshal(resp.Result, &result)
+
+	if result.File == nil {
+		t.Fatal("expected file metadata")
+	}
+	if result.File.Encoding != contents.EncodingNone || result.File.Omitted != contents.OmitBinary {
+		t.Errorf("got encoding %q omitted %q, want %q/%q",
+			result.File.Encoding, result.File.Omitted, contents.EncodingNone, contents.OmitBinary)
+	}
+	if result.File.Content != "" {
+		t.Errorf("expected no content, got %q", result.File.Content)
+	}
+	if result.File.MIME != "application/wasm" {
+		t.Errorf("got mime %q, want application/wasm", result.File.MIME)
 	}
 }
 

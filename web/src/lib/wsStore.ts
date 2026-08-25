@@ -1,4 +1,5 @@
 import {
+	createJSONRPCErrorResponse,
 	JSONRPCClient,
 	JSONRPCErrorException,
 	type JSONRPCRequester,
@@ -269,6 +270,25 @@ function getClient(): JSONRPCRequester<void> | null {
 
 const RPC_TIMEOUT_MS = 30000;
 
+const RPC_TIMEOUT_MESSAGE = "Request timed out";
+
+/**
+ * Whether a request was given up on by our own clock rather than answered.
+ *
+ * The server may well still be working on it, so a caller that retries a timeout
+ * stacks a second copy of the same work on top of the first — which is how one
+ * slow response turns into four.
+ */
+export function isRPCTimeout(error: unknown): boolean {
+	// Code 0 first: the server can word an error however it likes, and only a
+	// client-side failure carries DefaultErrorCode. See isAuthRejection.
+	return (
+		error instanceof JSONRPCErrorException &&
+		error.code === 0 &&
+		error.message === RPC_TIMEOUT_MESSAGE
+	);
+}
+
 interface RPCClients {
 	base: JSONRPCClient;
 	withTimeout: JSONRPCRequester<void>;
@@ -281,7 +301,15 @@ function createRPCClient(socket: WebSocket): RPCClients {
 		}
 		socket.send(JSON.stringify(request));
 	});
-	return { base, withTimeout: base.timeout(RPC_TIMEOUT_MS) };
+	return {
+		base,
+		// Code 0 is json-rpc-2.0's DefaultErrorCode, the same one it uses for its
+		// own timeouts; isAuthRejection reads that code as "the transport gave up",
+		// as opposed to a genuine (negative) code meaning the server said no.
+		withTimeout: base.timeout(RPC_TIMEOUT_MS, (id) =>
+			createJSONRPCErrorResponse(id, 0, RPC_TIMEOUT_MESSAGE),
+		),
+	};
 }
 
 function stripNamespace(method: string): string {
@@ -538,6 +566,9 @@ export const useWSStore = create<WSState>((set, get) => ({
 				}
 
 				ws = null;
+				// Their answers can only have come down this socket, so waiting out
+				// the 30s timeout would just be a slower way of failing.
+				rpcReceiver?.rejectAllPendingRequests("Connection lost");
 				rpcReceiver = null;
 				rpcRequester = null;
 				clearAllWatchSubscriptions();
@@ -586,6 +617,9 @@ export const useWSStore = create<WSState>((set, get) => ({
 			if (ws) {
 				ws.close(1000, "disconnect");
 				ws = null;
+				// onclose will ignore this socket for the same reason it ignores any
+				// superseded one, so nothing else is going to settle these.
+				rpcReceiver?.rejectAllPendingRequests("Connection lost");
 				rpcReceiver = null;
 				rpcRequester = null;
 				// onclose used to do this on its way past; it now ignores a socket

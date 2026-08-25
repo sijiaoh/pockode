@@ -15,6 +15,7 @@ import {
 } from "../../lib/shikiUtils";
 import { useWSStore } from "../../lib/wsStore";
 import { isFileContent } from "../../types/contents";
+import { EDITOR_HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { BottomActionBar, ContentView, getActionIconButtonClass } from "../ui";
 
 interface Props {
@@ -36,8 +37,20 @@ function FileEditor({ path, onBack }: Props) {
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const [isInitialized, setIsInitialized] = useState(false);
 
-	const isBinary = data && isFileContent(data) && data.encoding !== "text";
-	const language = getLanguageFromPath(path);
+	const file = data && isFileContent(data) ? data : null;
+	const isBinary = file !== null && file.encoding !== "text";
+
+	// Large files stay editable and only lose their colours, which
+	// `useEditorHighlight` already falls back to when it has no language.
+	//
+	// Measured against the buffer as well as the file it came from: the server's
+	// size settles what was loaded, but pasting into a small file grows what has
+	// to be re-highlighted on every keystroke. `length` counts UTF-16 units and
+	// so undercounts multi-byte text, but it is O(1) — and taking the larger of
+	// the two keeps the byte-accurate figure as the floor.
+	const isLargeText =
+		Math.max(file?.size ?? 0, content.length) > EDITOR_HIGHLIGHT_LIMIT;
+	const language = isLargeText ? undefined : getLanguageFromPath(path);
 	const highlight = useEditorHighlight(language);
 
 	const navigateToView = useCallback(() => {
