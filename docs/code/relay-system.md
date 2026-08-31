@@ -327,6 +327,40 @@ return &HTTPResponse{
 
 HTTP body uses base64 encoding. JSON only supports text, but HTTP body can be binary (images, fonts, compressed data). Base64 ensures binary safety.
 
+#### Size Ceiling
+
+Encoding the body whole makes the envelope, not the endpoint, the thing that
+bounds a remote request. `MaxEnvelopeSize` (10 MiB) is the read limit on the
+tunnel, so a request that exceeds it does not come back as an HTTP error — the
+read fails and the connection goes down, which the user sees as a reconnect
+with no explanation. `MaxTunneledRequestBody` is what that leaves once the
+envelope's own JSON, the method and path, and the request headers are reserved
+for and base64's 4/3 expansion is undone.
+
+The point of naming it is that anything quoting a size to a remote client has to
+bound it by this rather than by what the endpoint would accept on its own. File
+upload does: `filetransfer.MaxUploadSizeForBody` takes this body limit, reserves
+a further allowance for the multipart boundary and part headers, rounds down to
+a whole MiB so the answer reads like a limit rather than a measurement, and caps
+the result at the endpoint's own ceiling for the case where the route is the
+wider of the two. What comes out is what the client is told, as the `auth`
+reply's `max_upload_size` (see [File § Transfer](../file.md#transfer)).
+
+The two reservations look alike and are not the same thing: `envelopeReserve`
+covers everything *outside* the body — the JSON frame, the method and path, the
+headers — while the multipart allowance covers framing *inside* it, which a body
+limit counts and a content limit does not. Folding them into one would leave the
+envelope short by whichever was dropped. The ceiling also belongs to the route
+rather than to the server, since the same process serves connections that never
+travel the tunnel, so it cannot be applied globally
+([WebSocket § Connection Route](websocket-rpc.md#connection-route)).
+
+This bounds what *this* side will read. The cloud relay is not part of this
+repository and may hold a limit of its own; a smaller one there would show up
+the same way, and would have to be discovered rather than derived. Streaming
+bodies instead of enveloping them whole is what removes the ceiling altogether,
+and it needs both ends.
+
 ### Skipping Hop-by-Hop Headers
 
 ```go

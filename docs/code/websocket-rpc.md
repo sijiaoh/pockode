@@ -247,7 +247,9 @@ Client                              Server
   │   auth { token, worktree? }        │
   ├───────────────────────────────────▶│   Validate token
   │                                    │   Bind to worktree
-  │   { version, title, work_dir }     │
+  │   { version, title, work_dir,      │
+  │     worktree_name,                 │
+  │     max_upload_size }              │
   │◀───────────────────────────────────┤
   │                                    │
   │   (Authenticated - can send other requests)
@@ -256,8 +258,48 @@ Client                              Server
 - Token uses constant-time comparison to prevent timing attacks
 - Optionally specify worktree; uses main worktree if not specified
 - Authentication response includes version number for detecting client/server version mismatch
+- `max_upload_size` is the ceiling on one HTTP upload request in bytes, sent so a
+  client can refuse an oversized file before spending a slow link on it instead
+  of keeping its own copy of the number ([File § Transfer](../file.md#transfer)).
+  It describes **this connection**, not the server (see
+  [Route](#connection-route)), so a client must read it from its own `auth` reply
+  and never treat it as a constant. The web client keeps it in `wsStore` as
+  `maxUploadSize` and overwrites it on every `auth` reply, so a reconnect onto a
+  different route replaces the value rather than adding a second answer
 
 For where the server's token comes from (`--auth-token` / `POCKODE_AUTH_TOKEN`) and the overall trust model, see [Authentication](authentication.md).
+
+### Connection Route
+
+A connection reaches the server one of two ways, and `HandleStream` is told which
+(`ws.RouteDirect` / `ws.RouteRelay`): a WebSocket upgrade on the server's own
+listener, or a virtual stream multiplexed over the relay tunnel
+([Relay System](relay-system.md)). One process serves both at the same time — a
+browser on the same machine and a phone on the relay — so the route is per
+connection and cannot be a server-wide setting.
+
+The route is passed in rather than detected, because the two arrivals are already
+separate code paths — `ServeHTTP` passes `RouteDirect` for an upgrade on the
+server's own listener, `main` passes `RouteRelay` for a stream it takes off the
+tunnel — while the connection itself gives nothing away: the relay proxies to
+`localhost`, so a forwarded request and a genuinely local one carry the same peer
+address.
+
+Reading the WebSocket's route as the client's route holds because a page's
+WebSocket and its `fetch` calls are same-origin: whichever URL the UI was opened
+from, both travel it. That is what makes it sound for this connection to answer a
+question about a separate HTTP request.
+
+The route matters wherever a limit belongs to the path a request travels rather
+than to the machine it lands on. Today that is `max_upload_size`. Upload and
+download run over HTTP rather than over this connection, but a client reached
+over the relay sends that HTTP through the same tunnel, and the tunnel bounds
+what one request can carry ([Relay § Size Ceiling](relay-system.md#size-ceiling)).
+Quoting the endpoint's own ceiling to such a client would be a false statement
+about its connection, and nothing on the server stands behind that statement: an
+oversized request never arrives as a request at all. Telling the truth up front
+is the only defense, which is why the value is computed here and not written
+down in the client.
 
 ### Binding a Worktree vs. Disconnect
 

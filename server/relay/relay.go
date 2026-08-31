@@ -31,6 +31,13 @@ type Config struct {
 // depend on which it is; it only keeps the loop turning.
 const connectTimeout = 15 * time.Second
 
+// MaxEnvelopeSize bounds one message read from the tunnel. Because the cloud
+// packs a whole proxied HTTP request into a single envelope, this is also the
+// hard ceiling on a request that reaches this server remotely — and crossing it
+// is not a rejected request but a failed read, which tears the tunnel down. See
+// MaxTunneledRequestBody for what that leaves for a body.
+const MaxEnvelopeSize = 10 << 20 // 10 MiB
+
 type Manager struct {
 	config         Config
 	backendPort    int
@@ -172,7 +179,7 @@ func (m *Manager) connectAndRun(ctx context.Context, url, relayToken string, att
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
-	conn.SetReadLimit(10 * 1024 * 1024) // 10MB for HTTP responses
+	conn.SetReadLimit(MaxEnvelopeSize)
 	// CloseNow instead of a graceful close: this path is reached precisely when
 	// the peer is unresponsive, and a close handshake nobody answers costs the
 	// reconnect loop up to ~25s of the library's internal timeouts.

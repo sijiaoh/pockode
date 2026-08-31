@@ -36,6 +36,7 @@ chat/                   # Chat 客户端
 command/                # 命令存储
 contents/               # 文件内容获取
 filestore/              # 文件存储基础设施（原子写 / flock / JSONL / 变更监听）
+filetransfer/           # 文件上传 / 下载 HTTP 端点
 git/                    # Git 操作
 logger/                 # 结构化日志 (slog)
 mcp/                    # MCP：stdio 代理客户端 + 服务端 Executor/APIHandler

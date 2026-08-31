@@ -1,5 +1,5 @@
 import { EyeOff, FileText, Search, X } from "lucide-react";
-import type { KeyboardEvent, RefObject } from "react";
+import type { KeyboardEvent, ReactNode, RefObject } from "react";
 import { useFilesSearchStore } from "../../lib/filesSearchStore";
 import ToggleChip from "../common/ToggleChip";
 import { Spinner } from "../ui";
@@ -11,6 +11,8 @@ interface Props {
 	showOptions: boolean;
 	isSearching: boolean;
 	inputRef: RefObject<HTMLInputElement | null>;
+	/** Controls sharing the search row, e.g. the upload button. */
+	actions?: ReactNode;
 }
 
 function FileSearchBar({
@@ -19,6 +21,7 @@ function FileSearchBar({
 	showOptions,
 	isSearching,
 	inputRef,
+	actions,
 }: Props) {
 	const respectGitignore = useFilesSearchStore(
 		(state) => state.respectGitignore,
@@ -93,6 +96,7 @@ function FileSearchBar({
 						</button>
 					)}
 				</div>
+				{actions}
 			</div>
 
 			{showOptions && (

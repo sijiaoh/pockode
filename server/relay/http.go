@@ -12,6 +12,23 @@ import (
 	"time"
 )
 
+// envelopeReserve is what an inbound envelope spends on everything that is not
+// the body: the JSON framing, the method and path, and the request headers,
+// which a browser keeps to a few KiB. Generous, because the cost of guessing
+// low here is a dropped tunnel.
+const envelopeReserve = 64 << 10
+
+// MaxTunneledRequestBody is the largest HTTP request body that can reach this
+// server through the tunnel. An inbound request travels as one envelope with
+// its body base64 encoded, so the body claims 4/3 of what it spends of
+// MaxEnvelopeSize.
+//
+// This is a ceiling to stay under, not one to be refused at: an oversized
+// request never arrives as a request at all, it kills the connection it was
+// sent on. Anything that hands a size to a remote client should bound it by
+// this rather than by what the endpoint itself would allow.
+const MaxTunneledRequestBody = (MaxEnvelopeSize - envelopeReserve) * 3 / 4
+
 type HTTPRequest struct {
 	Method  string              `json:"method"`
 	Path    string              `json:"path"`

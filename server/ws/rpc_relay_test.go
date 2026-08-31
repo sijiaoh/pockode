@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/work"
@@ -28,6 +29,9 @@ type relayTunnel struct {
 	cancel  context.CancelFunc
 	runDone chan struct{}
 	reqID   int
+	// authResult is what connect got back, kept here so the common case can go
+	// on ignoring it while a test about the reply's contents can read it.
+	authResult rpc.AuthResult
 }
 
 func newRelayTunnel(t *testing.T) *relayTunnel {
@@ -174,6 +178,9 @@ func (r *relayTunnel) connect(h *RPCHandler, connectionID string) <-chan struct{
 	if resp.Error != nil {
 		r.t.Fatalf("auth over relay failed: %s", resp.Error.Message)
 	}
+	if err := json.Unmarshal(resp.Result, &r.authResult); err != nil {
+		r.t.Fatalf("unmarshal auth result: %v", err)
+	}
 	return done
 }
 
@@ -196,9 +203,47 @@ func (r *relayTunnel) serve(h *RPCHandler, connectionID string) <-chan struct{} 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.HandleStream(bgCtx, stream, stream.ConnectionID())
+		h.HandleStream(bgCtx, stream, stream.ConnectionID(), RouteRelay)
 	}()
 	return done
+}
+
+// The upload ceiling in the auth reply describes the connection's route, not
+// the upload endpoint. Handing a relayed client the endpoint's own 32 MiB tells
+// it something untrue about the connection it is on: the tunnel carries a whole
+// request in one envelope, so a file it was told was fine takes the tunnel down
+// and surfaces as an unexplained reconnect rather than a 413. The same server
+// answers both routes at once, so this cannot be one number.
+func TestAuth_MaxUploadSizeFollowsTheConnectionRoute(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	if got := env.authResult.MaxUploadSize; got != filetransfer.MaxUploadSize {
+		t.Fatalf("direct connection got max_upload_size=%d, want the endpoint's own %d", got, filetransfer.MaxUploadSize)
+	}
+
+	tun := newRelayTunnel(t)
+	tun.connect(env.handler, "c1")
+
+	relayed := tun.authResult.MaxUploadSize
+	if want := filetransfer.MaxUploadSizeForBody(relay.MaxTunneledRequestBody); relayed != want {
+		t.Fatalf("relayed connection got max_upload_size=%d, want the tunnel's %d", relayed, want)
+	}
+	if relayed >= filetransfer.MaxUploadSize {
+		t.Fatalf("relayed max_upload_size %d is not below the endpoint's %d, so the tunnel's own ceiling went unreported", relayed, filetransfer.MaxUploadSize)
+	}
+	if relayed <= 0 {
+		t.Fatalf("relayed max_upload_size is %d, which leaves a remote client unable to upload at all", relayed)
+	}
+
+	// The promise this number makes, checked against the envelope limit rather
+	// than the constants that produced it: a client filling it exactly must
+	// encode to less than the whole budget, so there is room left for the
+	// headers the tunnel wraps around it (that the reserve for those is enough
+	// is TestMaxTunneledRequestBody_FitsInAnEnvelope's job).
+	if encoded := relayed * 4 / 3; encoded >= relay.MaxEnvelopeSize {
+		t.Fatalf("a client filling max_upload_size=%d sends %d base64 bytes, at or over the %d envelope limit: obeying us would still drop the tunnel",
+			relayed, encoded, int64(relay.MaxEnvelopeSize))
+	}
 }
 
 // A dead tunnel must tear its connections down all the way up the stack: the

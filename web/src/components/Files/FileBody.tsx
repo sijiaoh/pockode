@@ -8,6 +8,12 @@ import ImagePreview from "./ImagePreview";
 interface Props {
 	state: FileViewState;
 	path: string;
+	/**
+	 * Offered on the cards that stand in for content, since a file that cannot be
+	 * previewed is exactly the one the user needs to open elsewhere — the icon in
+	 * the bottom bar is easy to miss when the page says "can't be previewed".
+	 */
+	downloadAction: { label: string; onClick: () => void; disabled?: boolean };
 }
 
 function fileDetails(mime: string, size: number) {
@@ -17,7 +23,7 @@ function fileDetails(mime: string, size: number) {
 	];
 }
 
-function FileBody({ state, path }: Props) {
+function FileBody({ state, path, downloadAction }: Props) {
 	switch (state.kind) {
 		case "empty":
 			// A zero-byte file would otherwise render as blank space that reads as
@@ -66,6 +72,7 @@ function FileBody({ state, path }: Props) {
 					description="This file can't be previewed."
 					details={fileDetails(state.mime, state.size)}
 					footnote="Editing is disabled for binary files."
+					action={downloadAction}
 				/>
 			);
 
@@ -88,6 +95,7 @@ function FileBody({ state, path }: Props) {
 					}
 					details={fileDetails(state.mime, state.size)}
 					footnote="Editing is disabled for files this large."
+					action={downloadAction}
 				/>
 			);
 	}

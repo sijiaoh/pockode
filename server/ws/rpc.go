@@ -14,13 +14,28 @@ import (
 	"github.com/google/uuid"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/relay"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/watch"
 	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
+)
+
+// Route is how a connection reached the server. One process serves both at
+// once — a browser on the same machine and a phone on the relay — so anything
+// that depends on the path a request travels rather than on the machine it
+// lands on has to be answered per connection.
+type Route int
+
+const (
+	// RouteDirect is a WebSocket upgrade on this server's own listener.
+	RouteDirect Route = iota
+	// RouteRelay is a virtual stream multiplexed over the relay tunnel.
+	RouteRelay
 )
 
 // RPCHandler handles JSON-RPC 2.0 over WebSocket.
@@ -95,10 +110,10 @@ func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *RPCHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
 	stream := NewWebSocketStream(wsConn)
 	connID := uuid.Must(uuid.NewV7()).String()
-	h.HandleStream(ctx, stream, connID)
+	h.HandleStream(ctx, stream, connID, RouteDirect)
 }
 
-func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStream, connID string) {
+func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStream, connID string, route Route) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.LogPanic(r, "websocket connection crashed", "connId", connID)
@@ -118,6 +133,7 @@ func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 	handler := &rpcMethodHandler{
 		RPCHandler:    h,
 		state:         state,
+		route:         route,
 		log:           log,
 		authenticated: false,
 	}
@@ -283,6 +299,7 @@ func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
 type rpcMethodHandler struct {
 	*RPCHandler
 	state         *rpcConnState
+	route         Route
 	log           *slog.Logger
 	authenticated bool
 	authMu        sync.Mutex
@@ -539,14 +556,29 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 
 	title := filepath.Base(h.worktreeManager.Registry().MainDir())
 	result := rpc.AuthResult{
-		Version:      h.version,
-		Title:        title,
-		WorkDir:      wt.WorkDir,
-		WorktreeName: wt.Name,
+		Version:       h.version,
+		Title:         title,
+		WorkDir:       wt.WorkDir,
+		WorktreeName:  wt.Name,
+		MaxUploadSize: h.maxUploadSize(),
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send auth response", "error", err)
 	}
+}
+
+// maxUploadSize is what an upload may weigh on this connection's route, which
+// is not the same as what the upload endpoint would accept. A client reached
+// over the relay uploads through the tunnel too, and there the whole request
+// rides in one envelope: a file the endpoint would happily store is not refused
+// on the way in, it breaks the tunnel and comes back as an unexplained
+// reconnect. Reporting the endpoint's own limit to such a client is telling it
+// something untrue about its own connection.
+func (h *rpcMethodHandler) maxUploadSize() int64 {
+	if h.route == RouteRelay {
+		return filetransfer.MaxUploadSizeForBody(relay.MaxTunneledRequestBody)
+	}
+	return filetransfer.MaxUploadSize
 }
 
 func (h *rpcMethodHandler) replyError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, code int64, message string) {

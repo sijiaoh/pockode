@@ -12,7 +12,7 @@ interface Props {
 	description?: string;
 	details?: Detail[];
 	footnote?: string;
-	action?: { label: string; onClick: () => void };
+	action?: { label: string; onClick: () => void; disabled?: boolean };
 }
 
 /**
@@ -55,7 +55,8 @@ export function FileStateCard({
 				<button
 					type="button"
 					onClick={action.onClick}
-					className="min-h-[44px] rounded-lg bg-th-bg-tertiary px-4 text-sm text-th-text-primary transition-colors hover:bg-th-bg-secondary"
+					disabled={action.disabled}
+					className="min-h-[44px] rounded-lg bg-th-bg-tertiary px-4 text-sm text-th-text-primary transition-colors hover:bg-th-bg-secondary disabled:opacity-50"
 				>
 					{action.label}
 				</button>

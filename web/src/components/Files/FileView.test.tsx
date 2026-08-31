@@ -1,12 +1,22 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LARGE_DOWNLOAD_WARNING_SIZE } from "../../lib/fileDownload";
 import type { FileContent } from "../../types/contents";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import FileView from "./FileView";
 
 const getFile = vi.fn();
+const downloadFile = vi.fn();
+
+// Only the transfer itself is replaced; the size threshold and the abort check
+// are the real ones, so the view is tested against the rules it ships with.
+vi.mock("../../lib/fileDownload", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/fileDownload")>()),
+	downloadFile: (...args: unknown[]) => downloadFile(...args),
+}));
 
 vi.mock("../../lib/wsStore", () => ({
 	useWSStore: (selector: (state: unknown) => unknown) =>
@@ -60,19 +70,28 @@ async function renderFileView(file: FileContent) {
 		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 	);
 
-	render(<FileView path={file.path} onBack={vi.fn()} />, { wrapper });
+	const result = render(<FileView path={file.path} onBack={vi.fn()} />, {
+		wrapper,
+	});
 	// Every case needs the fetch to have landed before it can assert anything,
 	// and the default 1s outruns a query round trip on a loaded machine.
 	await screen.findByRole("button", { name: /^Edit/ }, { timeout: 10_000 });
+	return result;
 }
 
 function editButton() {
 	return screen.getByRole("button", { name: /^Edit/ });
 }
 
+function downloadButton() {
+	return screen.getByRole("button", { name: "Download" });
+}
+
 describe("FileView", { timeout: 20_000 }, () => {
 	beforeEach(() => {
 		getFile.mockReset();
+		downloadFile.mockReset();
+		downloadFile.mockResolvedValue(undefined);
 	});
 
 	it("shows text content and allows editing", async () => {
@@ -175,5 +194,143 @@ describe("FileView", { timeout: 20_000 }, () => {
 		).toBeInTheDocument();
 		expect(screen.getByText("big")).toBeInTheDocument();
 		expect(editButton()).toBeEnabled();
+	});
+
+	describe("download", () => {
+		it("saves the file the view is showing", async () => {
+			const user = userEvent.setup();
+			await renderFileView(fileContent({}));
+
+			await user.click(downloadButton());
+
+			expect(downloadFile).toHaveBeenCalledWith(
+				expect.objectContaining({ path: "src/app.ts", worktree: "" }),
+			);
+		});
+
+		it("keeps the destructive action last in the action bar", async () => {
+			await renderFileView(fileContent({}));
+
+			const labels = screen
+				.getAllByRole("button")
+				.map((button) => button.getAttribute("aria-label"))
+				.filter((label): label is string =>
+					["Edit", "Download", "Delete"].includes(label ?? ""),
+				);
+			expect(labels).toEqual(["Edit", "Download", "Delete"]);
+		});
+
+		it("offers the download from the card that stands in for a binary file", async () => {
+			const user = userEvent.setup();
+			await renderFileView(
+				fileContent({
+					path: "app.zip",
+					mime: "application/zip",
+					encoding: "none",
+					omitted: "binary",
+					content: "",
+					size: 4096,
+				}),
+			);
+
+			// The file the viewer cannot render is the one most likely to be wanted
+			// elsewhere, so the card carries the action too. The bottom bar's button
+			// is an icon, so the labelled one is the card's.
+			await user.click(screen.getByText("Download"));
+
+			expect(downloadFile).toHaveBeenCalledWith(
+				expect.objectContaining({ path: "app.zip" }),
+			);
+		});
+
+		it("reports a failed download in the action banner", async () => {
+			const user = userEvent.setup();
+			downloadFile.mockRejectedValue(new Error("File not found"));
+			await renderFileView(fileContent({}));
+
+			await user.click(downloadButton());
+
+			expect(
+				await screen.findByText("Download failed: File not found"),
+			).toBeInTheDocument();
+		});
+
+		it("cancels a running download on the next click, without reporting it", async () => {
+			const user = userEvent.setup();
+			let abortSignal: AbortSignal | undefined;
+			downloadFile.mockImplementation(({ signal }: { signal: AbortSignal }) => {
+				abortSignal = signal;
+				return new Promise((_resolve, reject) => {
+					signal.addEventListener("abort", () => {
+						const aborted = new Error("The operation was aborted.");
+						aborted.name = "AbortError";
+						reject(aborted);
+					});
+				});
+			});
+			await renderFileView(fileContent({}));
+
+			await user.click(downloadButton());
+			const cancel = await screen.findByRole("button", {
+				name: "Cancel download",
+			});
+			await user.click(cancel);
+
+			expect(abortSignal?.aborted).toBe(true);
+			await waitFor(() => expect(downloadButton()).toBeInTheDocument());
+			expect(screen.queryByText(/Download failed/)).not.toBeInTheDocument();
+		});
+
+		it("does not carry one file's failure over to the next", async () => {
+			const user = userEvent.setup();
+			downloadFile.mockRejectedValue(new Error("File not found"));
+			const { rerender } = await renderFileView(fileContent({}));
+			await user.click(downloadButton());
+			await screen.findByText("Download failed: File not found");
+
+			// The view is reused across paths, so a banner about the file that was
+			// open would otherwise sit above the one that is.
+			getFile.mockResolvedValue({
+				type: "file",
+				file: fileContent({ path: "other.ts", content: "the next file" }),
+			});
+			rerender(<FileView path="other.ts" onBack={vi.fn()} />);
+
+			// Waiting for the new content matters: while the query is in flight the
+			// viewer renders a spinner instead of its children, which would hide a
+			// surviving banner and make this pass either way.
+			expect(await screen.findByText("the next file")).toBeInTheDocument();
+			expect(screen.queryByText(/Download failed/)).not.toBeInTheDocument();
+		});
+
+		it("confirms before a file large enough to strain the browser", async () => {
+			const user = userEvent.setup();
+			await renderFileView(
+				fileContent({
+					path: "dump.log",
+					encoding: "none",
+					omitted: "too_large",
+					content: "",
+					size: LARGE_DOWNLOAD_WARNING_SIZE + 1,
+				}),
+			);
+
+			await user.click(screen.getByText("Download"));
+			expect(downloadFile).not.toHaveBeenCalled();
+
+			const dialog = screen.getByRole("dialog", {
+				name: "Download this file?",
+			});
+			expect(
+				within(dialog).getByText(/This file is 200 MB/),
+			).toBeInTheDocument();
+			await user.click(
+				within(dialog).getByRole("button", { name: "Download" }),
+			);
+
+			expect(downloadFile).toHaveBeenCalledWith(
+				expect.objectContaining({ path: "dump.log" }),
+			);
+		});
 	});
 });

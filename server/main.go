@@ -25,6 +25,7 @@ import (
 	"github.com/pockode/server/authtoken"
 	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/logger"
@@ -46,7 +47,7 @@ var version = "dev"
 //go:embed static/*
 var staticFS embed.FS
 
-func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler) http.Handler {
+func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +61,11 @@ func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler, mcpHandler
 	})
 
 	mux.Handle("GET /ws", wsHandler)
+
+	// Whole-file transfer stays off the WebSocket connection; see the
+	// filetransfer package for why.
+	mux.HandleFunc("GET /api/files/download", transferHandler.Download)
+	mux.HandleFunc("POST /api/files/upload", transferHandler.Upload)
 
 	// Local MCP API. middleware.Auth bypasses this exact route; mcpHandler
 	// self-auths with the locally-generated MCP token instead of the user
@@ -310,7 +316,8 @@ Flags:
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, workAutoResumer, settingsStore), mcpToken)
 
 	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
-	handler := newHandler(token, devMode, wsHandler, mcpHandler)
+	transferHandler := filetransfer.NewHandler(registry, slog.Default())
+	handler := newHandler(token, devMode, wsHandler, mcpHandler, transferHandler)
 
 	portStr := strconv.Itoa(port)
 	srv := &http.Server{
@@ -352,7 +359,7 @@ Flags:
 		relayStreamCtx, cancelRelayStreams = context.WithCancel(context.Background())
 		go func() {
 			for stream := range relayManager.NewStreams() {
-				go wsHandler.HandleStream(relayStreamCtx, stream, stream.ConnectionID())
+				go wsHandler.HandleStream(relayStreamCtx, stream, stream.ConnectionID(), ws.RouteRelay)
 			}
 		}()
 	}

@@ -202,6 +202,14 @@ export interface AuthResult {
 	version: string;
 	title: string;
 	work_dir: string;
+	/**
+	 * Ceiling on one upload request, in bytes, for the route this connection
+	 * came in on — not a property of the server. A relay connection is bounded
+	 * by what the tunnel can carry, well under what the endpoint would store,
+	 * and one server answers both kinds at once. Read it from this reply and
+	 * replace it on every reconnect (see docs/file.md#transfer).
+	 */
+	max_upload_size: number;
 }
 
 export interface MessageParams {

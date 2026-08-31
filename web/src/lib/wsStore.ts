@@ -142,6 +142,8 @@ interface WSState {
 	status: ConnectionStatus;
 	projectTitle: string;
 	workDir: string;
+	/** See `AuthResult.max_upload_size`; 0 until an auth reply has arrived. */
+	maxUploadSize: number;
 	actions: RPCActions;
 }
 
@@ -433,6 +435,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 	status: "disconnected",
 	projectTitle: "",
 	workDir: "",
+	maxUploadSize: 0,
 
 	actions: {
 		connect: (token: string) => {
@@ -497,6 +500,9 @@ export const useWSStore = create<WSState>((set, get) => ({
 						status: "connected",
 						projectTitle: result.title,
 						workDir: result.work_dir,
+						// Kept only until the next auth reply: a reconnect can land on
+						// a route with a different ceiling.
+						maxUploadSize: result.max_upload_size,
 					});
 					reconnectAttempts = 0;
 				} catch (error) {

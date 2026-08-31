@@ -28,6 +28,16 @@ type AuthResult struct {
 	Title        string `json:"title"`
 	WorkDir      string `json:"work_dir"`
 	WorktreeName string `json:"worktree_name"`
+	// MaxUploadSize is the ceiling on one HTTP upload request, in bytes, sent so
+	// a client can refuse an oversized file before spending a slow link on it
+	// instead of keeping its own copy of the number (see docs/file.md#transfer).
+	//
+	// It describes the connection this reply is going out on, not the server: a
+	// connection that arrived over the relay is bounded by what the tunnel can
+	// carry, which is well under what the upload endpoint would store. One
+	// server answers both kinds of connection at once, so this is not a
+	// constant and a client must read it from its own auth reply.
+	MaxUploadSize int64 `json:"max_upload_size"`
 }
 
 type MessageParams struct {

@@ -10,6 +10,13 @@ interface Props {
 	activeFilePath: string | null;
 	expandSignal: number;
 	watchEnabled: boolean;
+	/** Folder uploads currently land in; empty is the workspace root. */
+	uploadDestPath: string;
+	onSelectDir: (path: string) => void;
+	/** Where a drop would land right now; null while nothing is being dragged. */
+	dropTargetPath: string | null;
+	/** Folder a drag has hovered long enough to open. */
+	springOpenPath: string | null;
 }
 
 function FileTree({
@@ -17,6 +24,10 @@ function FileTree({
 	activeFilePath,
 	expandSignal,
 	watchEnabled,
+	uploadDestPath,
+	onSelectDir,
+	dropTargetPath,
+	springOpenPath,
 }: Props) {
 	const queryClient = useQueryClient();
 	const { data, isLoading, error } = useContents();
@@ -57,7 +68,9 @@ function FileTree({
 	}
 
 	return (
-		<div className="py-1">
+		// The root has no row of its own, so the whole listing lights up to say a
+		// drop would land at the top level.
+		<div className={`py-1 ${dropTargetPath === "" ? "bg-th-accent/10" : ""}`}>
 			{data.map((entry) => (
 				<FileTreeNode
 					key={entry.path}
@@ -67,6 +80,10 @@ function FileTree({
 					activeFilePath={activeFilePath}
 					expandSignal={expandSignal}
 					watchEnabled={watchEnabled}
+					uploadDestPath={uploadDestPath}
+					onSelectDir={onSelectDir}
+					dropTargetPath={dropTargetPath}
+					springOpenPath={springOpenPath}
 				/>
 			))}
 		</div>

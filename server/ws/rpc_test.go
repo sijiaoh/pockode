@@ -45,6 +45,7 @@ type testEnv struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	reqID           int
+	authResult      rpc.AuthResult
 }
 
 func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
@@ -90,7 +91,12 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
 	server := httptest.NewServer(h)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// One deadline covers every read and write the test makes, so it has to
+	// outlast the whole test rather than any single exchange. It is here only so
+	// a message that never arrives fails with a message instead of hanging until
+	// the package timeout; sized to what a test does, it turned the suite flaky
+	// whenever another package's git or process work loaded the machine.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
@@ -118,6 +124,9 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 	resp := env.call("auth", rpc.AuthParams{Token: "test-token"})
 	if resp.Error != nil {
 		t.Fatalf("auth failed: %s", resp.Error.Message)
+	}
+	if err := json.Unmarshal(resp.Result, &env.authResult); err != nil {
+		t.Fatalf("unmarshal auth result: %v", err)
 	}
 
 	t.Cleanup(func() {

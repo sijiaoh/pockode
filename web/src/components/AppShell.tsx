@@ -2,6 +2,7 @@ import { useIsDesktop } from "@pockode/shared";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
+import { useFileDropGuard } from "../hooks/useFileDropGuard";
 import { useRouteState } from "../hooks/useRouteState";
 import { useSession } from "../hooks/useSession";
 import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
@@ -26,6 +27,12 @@ function AppShell() {
 	const isDesktop = useIsDesktop();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 	const isCreatingSession = useRef(false);
+
+	// Here rather than in `MainContainer`, which only exists once a session has
+	// resolved: the token screen, the loading screen and the "can't reach the
+	// server" screen are all screens someone can drop a file on, and every one of
+	// them would be replaced by it.
+	useFileDropGuard();
 
 	const {
 		overlay,
