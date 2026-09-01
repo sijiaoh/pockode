@@ -21,6 +21,14 @@ function normalizeOrigin(raw: unknown): MessageOrigin | undefined {
 	return undefined;
 }
 
+// A cancelled question is stored with a nil answers map, and `omitempty` on the
+// Go side then drops the key from the record entirely — so cancellation reaches
+// the client as an absent field, not as null. Both mean cancelled.
+function normalizeAnswers(raw: unknown): Record<string, string> | null {
+	if (raw === null || typeof raw !== "object") return null;
+	return raw as Record<string, string>;
+}
+
 // Normalized event with camelCase (internal representation)
 export type NormalizedEvent =
 	| { type: "text"; content: string }
@@ -162,7 +170,7 @@ export function normalizeEvent(
 			return {
 				type: "question_response",
 				requestId: record.request_id as string,
-				answers: record.answers as Record<string, string> | null,
+				answers: normalizeAnswers(record.answers),
 			};
 		case "raw":
 			return { type: "raw", content: (record.content as string) ?? "" };
@@ -219,19 +227,35 @@ export function applyEventToParts(
 					status: "pending",
 				},
 			];
-		case "ask_user_question":
-			return [
-				...parts,
-				{
-					type: "ask_user_question",
-					request: {
-						requestId: event.requestId,
-						toolUseId: event.toolUseId,
-						questions: event.questions,
-					},
-					status: "pending",
+		case "ask_user_question": {
+			const questionPart: ContentPart = {
+				type: "ask_user_question",
+				request: {
+					requestId: event.requestId,
+					toolUseId: event.toolUseId,
+					questions: event.questions,
 				},
-			];
+				status: "pending",
+			};
+			// Claude asks through a regular AskUserQuestion tool call: the CLI
+			// emits tool_call for it immediately before the question, and a
+			// tool_result echoing the answers after. All three describe one tool
+			// use, and the question card already renders the whole interaction, so
+			// take the tool_call's place rather than sit beside a card duplicating
+			// it. The trailing tool_result then matches no tool_call and is
+			// dropped as an orphan.
+			const toolCallIndex = event.toolUseId
+				? parts.findIndex(
+						(part) =>
+							part.type === "tool_call" && part.tool.id === event.toolUseId,
+					)
+				: -1;
+			if (toolCallIndex === -1) return [...parts, questionPart];
+
+			const updated = [...parts];
+			updated[toolCallIndex] = questionPart;
+			return updated;
+		}
 		case "system":
 			return [...parts, { type: "system", content: event.content }];
 		case "warning":
