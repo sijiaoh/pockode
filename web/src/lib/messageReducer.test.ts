@@ -225,6 +225,18 @@ describe("messageReducer", () => {
 			});
 		});
 
+		it("normalizes question_response event without answers key (cancelled)", () => {
+			const event = normalizeEvent({
+				type: "question_response",
+				request_id: "q-1",
+			});
+			expect(event).toEqual({
+				type: "question_response",
+				requestId: "q-1",
+				answers: null,
+			});
+		});
+
 		it("normalizes request_cancelled event", () => {
 			const event = normalizeEvent({
 				type: "request_cancelled",
@@ -309,6 +321,52 @@ describe("messageReducer", () => {
 					status: "pending",
 				},
 			]);
+		});
+
+		it("replaces the AskUserQuestion tool_call with the question part", () => {
+			const withToolCall = applyEventToParts([], {
+				type: "tool_call",
+				toolUseId: "toolu_q_1",
+				toolName: "AskUserQuestion",
+				toolInput: { questions: sampleQuestions },
+			});
+			const parts = applyEventToParts(withToolCall, {
+				type: "ask_user_question",
+				requestId: "q-1",
+				toolUseId: "toolu_q_1",
+				questions: sampleQuestions,
+			});
+			expect(parts).toEqual([
+				{
+					type: "ask_user_question",
+					request: {
+						requestId: "q-1",
+						toolUseId: "toolu_q_1",
+						questions: sampleQuestions,
+					},
+					status: "pending",
+				},
+			]);
+		});
+
+		it("keeps unrelated tool_calls when the question part is added", () => {
+			const parts = applyEventToParts(
+				[
+					{
+						type: "tool_call",
+						tool: { id: "tool-1", name: "Bash", input: { command: "ls" } },
+					},
+				],
+				{
+					type: "ask_user_question",
+					requestId: "q-1",
+					toolUseId: "toolu_q_1",
+					questions: sampleQuestions,
+				},
+			);
+			expect(parts).toHaveLength(2);
+			expect(parts[0]).toMatchObject({ type: "tool_call" });
+			expect(parts[1]).toMatchObject({ type: "ask_user_question" });
 		});
 
 		it("adds warning as new part", () => {
@@ -1296,6 +1354,44 @@ describe("messageReducer", () => {
 			});
 		});
 
+		it("replays the full AskUserQuestion tool sequence as a single part", () => {
+			const history = [
+				{ type: "message", content: "Help me choose" },
+				{
+					type: "tool_call",
+					tool_name: "AskUserQuestion",
+					tool_input: { questions: sampleQuestions },
+					tool_use_id: "toolu_q_1",
+				},
+				{
+					type: "ask_user_question",
+					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
+					questions: sampleQuestions,
+				},
+				{
+					type: "question_response",
+					request_id: "q-1",
+					answers: { "Which library?": "React" },
+				},
+				{
+					type: "tool_result",
+					tool_use_id: "toolu_q_1",
+					tool_result:
+						'Your questions have been answered: "Which library?"="React".',
+				},
+				{ type: "done" },
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts).toHaveLength(1);
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "answered",
+				answers: { "Which library?": "React" },
+			});
+		});
+
 		it("replays ask_user_question with cancelled response", () => {
 			const history = [
 				{ type: "message", content: "Help me choose" },
@@ -1306,6 +1402,28 @@ describe("messageReducer", () => {
 					questions: sampleQuestions,
 				},
 				{ type: "question_response", request_id: "q-1", answers: null },
+				{ type: "interrupted" },
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "cancelled",
+			});
+		});
+
+		// What the server actually persists on cancel: a nil answers map, which
+		// `omitempty` then strips from the record.
+		it("replays ask_user_question as cancelled when answers key is absent", () => {
+			const history = [
+				{ type: "message", content: "Help me choose" },
+				{
+					type: "ask_user_question",
+					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
+					questions: sampleQuestions,
+				},
+				{ type: "question_response", request_id: "q-1" },
 				{ type: "interrupted" },
 			];
 			const messages = replayHistory(history);

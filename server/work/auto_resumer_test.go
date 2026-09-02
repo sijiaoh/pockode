@@ -195,6 +195,79 @@ func TestAutoResumer_InterruptStopsWork(t *testing.T) {
 	}
 }
 
+// widenSettleDelay lengthens the wait before a lifecycle follow-up fires, and
+// returns a duration that outlasts it. A test that reports the session running
+// again needs that report to land inside the window, and the default 10ms is
+// short enough that a loaded machine fires the follow-up first.
+func widenSettleDelay(resumer *AutoResumer) (outlastDelay time.Duration) {
+	resumer.settleDelay = 200 * time.Millisecond
+	return 2 * resumer.settleDelay
+}
+
+// TestAutoResumer_InterruptDoesNotStopResumedSession covers the gap between a
+// lifecycle event and the delayed decision it triggers. Codex aborts the running
+// turn when a second message replaces it, which reaches this as an interrupt
+// immediately followed by the replacement turn starting. Stopping the work then
+// would kill a work item whose agent is right now doing what it was asked to.
+func TestAutoResumer_InterruptDoesNotStopResumedSession(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	outlast := widenSettleDelay(resumer)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, true)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+
+	time.Sleep(outlast)
+	if w := getWork(t, store, story.ID); w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q for a session that is running again", w.Status, StatusInProgress)
+	}
+	if len(sender.getMessages()) != 0 {
+		t.Error("should not send a continuation message after an interrupt")
+	}
+}
+
+// TestAutoResumer_ProcessEndedDoesNotStopRestartedSession is the same guard for
+// a dead process: answering a prompt on a reaped session builds a new process,
+// and the old process's stop must not follow the new one into the grave.
+func TestAutoResumer_ProcessEndedDoesNotStopRestartedSession(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	outlast := widenSettleDelay(resumer)
+	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+
+	time.Sleep(outlast)
+	if w := getWork(t, store, story.ID); w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q for a session that restarted", w.Status, StatusInProgress)
+	}
+}
+
+// TestAutoResumer_NoContinuationForResumedSession keeps the nudge from piling on
+// top of a turn somebody else already started during the settle delay.
+func TestAutoResumer_NoContinuationForResumedSession(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	outlast := widenSettleDelay(resumer)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+
+	time.Sleep(outlast)
+	if msgs := sender.getMessages(); len(msgs) != 0 {
+		t.Errorf("expected no continuation for a session already running, got %v", msgs)
+	}
+}
+
 func TestAutoResumer_IgnoresNeedsInput(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
@@ -233,24 +306,19 @@ func TestAutoResumer_RetryLimit_TransitionsToStopped(t *testing.T) {
 	startWorkWithSession(t, store, story.ID, sid)
 
 	// Exhaust retries (maxRetries=3)
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		resumer.HandleProcessStateChange(sid, "idle", false, false, false)
-		if i < 3 {
-			waitFor(t, func() bool { return len(sender.getMessages()) >= i+1 })
-		} else {
-			time.Sleep(50 * time.Millisecond) // 4th attempt should be rejected
-		}
+		waitFor(t, func() bool { return len(sender.getMessages()) >= i+1 })
 	}
 
-	msgs := sender.getMessages()
-	if len(msgs) != 3 {
+	// The next idle is over the limit: it stops the work instead of nudging again.
+	// Waiting for the stop rather than sleeping also settles the message count —
+	// a fourth nudge would have been sent before the stop.
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
+	waitFor(t, func() bool { return getWork(t, store, story.ID).Status == StatusStopped })
+
+	if msgs := sender.getMessages(); len(msgs) != 3 {
 		t.Errorf("expected 3 messages (retry limit), got %d", len(msgs))
-	}
-
-	// Work should be transitioned to stopped
-	w := getWork(t, store, story.ID)
-	if w.Status != StatusStopped {
-		t.Errorf("status = %q, want %q after retry limit", w.Status, StatusStopped)
 	}
 }
 

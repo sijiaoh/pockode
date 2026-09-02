@@ -20,9 +20,14 @@ go build -o server .
 # Docker 镜像（从仓库根目录执行，build context 需要包含 web/ 和 site/static/images/logo.svg）
 docker build -f server/Dockerfile -t pockode:local .
 
-# 集成测试（消耗 token）
+# 集成测试（消耗 token，需要对应 CLI 已登录）
 go test -tags=integration ./agent/claude -v
+go test -tags=integration ./agent/codex -v
 ```
+
+两端共用 `agent/integration_test_suite.go` 的同一套场景，CLI 之间的差异通过
+`IntegrationTestOptions` 显式表达。往共用套件里加场景意味着它对两个 CLI 都必须成立；
+只对某个 CLI 成立的断言放进该 CLI 自己的 `*_integration_test.go`。
 
 ## 结构
 

@@ -470,6 +470,76 @@ describe("ChatPanel", () => {
 				answers: { "Which library?": "React" },
 			});
 		});
+
+		it("restores the answered form when replaying history", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = [
+				{
+					type: "ask_user_question",
+					request_id: "q-2",
+					tool_use_id: "toolu_q_2",
+					questions: [
+						{
+							question: "Which library?",
+							header: "Library",
+							options: [
+								{ label: "React", description: "UI library" },
+								{ label: "Vue", description: "Progressive framework" },
+							],
+							multiSelect: false,
+						},
+					],
+				},
+				{
+					type: "question_response",
+					request_id: "q-2",
+					answers: { "Which library?": "Vue" },
+				},
+				{ type: "done" },
+			];
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByRole("button", { name: /Library/ }));
+
+			const chosen = screen.getByRole("radio", {
+				name: /Progressive framework/,
+			});
+			expect(chosen).toBeChecked();
+			expect(chosen).toBeDisabled();
+		});
+
+		// A cancelled question is persisted with a nil answers map, which the Go
+		// encoder strips entirely — so the key is absent, not null.
+		it("shows a cancelled question as cancelled when replaying history", async () => {
+			mockState.mockHistory = [
+				{
+					type: "ask_user_question",
+					request_id: "q-3",
+					tool_use_id: "toolu_q_3",
+					questions: [
+						{
+							question: "Which library?",
+							header: "Library",
+							options: [
+								{ label: "React", description: "UI library" },
+								{ label: "Vue", description: "Progressive framework" },
+							],
+							multiSelect: false,
+						},
+					],
+				},
+				{ type: "question_response", request_id: "q-3" },
+				{ type: "done" },
+			];
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByText("Cancelled")).toBeInTheDocument();
+			expect(screen.queryByText("Answered")).not.toBeInTheDocument();
+		});
 	});
 
 	describe("history replay", () => {

@@ -10,14 +10,12 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/pockode/server/agent"
-	"github.com/pockode/server/filestore"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
@@ -98,7 +96,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	}
 
 	if opts.Resume {
-		sess.loadResumeState()
+		sess.warnSessionNotResumable()
 	}
 
 	go func() {
@@ -146,11 +144,9 @@ type mcpSession struct {
 	nextID            atomic.Int64
 	pendingRPCResults *sync.Map // id -> chan *rpcResponse
 	pendingElicit     *sync.Map // id -> chan elicitAnswer
-	interrupted       atomic.Bool
 
-	idMu           sync.Mutex // protects sessionID and conversationID
-	sessionID      string
-	conversationID string
+	idMu     sync.Mutex // protects threadID
+	threadID string
 
 	closeOnce sync.Once
 }
@@ -165,19 +161,21 @@ func (s *mcpSession) SendMessage(prompt string) error {
 	s.log.Debug("sending prompt", "length", len(prompt))
 
 	s.idMu.Lock()
-	sid := s.sessionID
-	cid := s.conversationID
+	threadID := s.threadID
 	s.idMu.Unlock()
 
-	if sid == "" {
+	if threadID == "" {
 		// First message: start a new session.
 		return s.callToolAsync("codex", s.buildStartConfig(prompt))
 	}
 
-	// Subsequent messages: continue the session.
+	// Subsequent messages continue the same thread. `threadId` is what current
+	// CLIs read; `conversationId` is its deprecated predecessor, still accepted
+	// and the only key CLIs before the rename understand. Sending both keeps one
+	// call working across versions — neither side rejects the extra field.
 	return s.callToolAsync("codex-reply", map[string]interface{}{
-		"sessionId":      sid,
-		"conversationId": cid,
+		"threadId":       threadID,
+		"conversationId": threadID,
 		"prompt":         prompt,
 	})
 }
@@ -213,7 +211,6 @@ func (s *mcpSession) SendQuestionResponse(data agent.QuestionRequestData, answer
 // SendInterrupt sends an abort by cancelling the current tool call.
 func (s *mcpSession) SendInterrupt() error {
 	s.log.Info("sending interrupt (cancel notification)")
-	s.interrupted.Store(true)
 
 	// Resolve pending elicitations FIRST so RequestCancelledEvent is enqueued
 	// before InterruptedEvent (which is emitted when callToolAsync receives
@@ -232,11 +229,11 @@ func (s *mcpSession) SendInterrupt() error {
 			s.writeStdin(data)
 		}
 
-		// Unblock the callToolAsync goroutine by sending a synthetic response.
-		// Codex may not return the RPC response upon cancellation.
+		// Unblock the callToolAsync goroutine with a synthetic response: Codex
+		// answers neither the cancelled tools/call nor any other pending request.
 		ch := value.(chan *rpcResponse)
 		select {
-		case ch <- &rpcResponse{Error: &rpcError{Code: -32800, Message: "cancelled"}}:
+		case ch <- &rpcResponse{abortReason: abortReasonInterrupted}:
 		default:
 		}
 		return true
@@ -249,7 +246,6 @@ func (s *mcpSession) SendInterrupt() error {
 func (s *mcpSession) Close() {
 	s.closeOnce.Do(func() {
 		s.log.Info("terminating codex process")
-		s.saveResumeState()
 		s.cancel()
 		s.stdinMu.Lock()
 		s.stdin.Close()
@@ -271,6 +267,11 @@ type rpcResponse struct {
 	ID      *int64          `json:"id,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *rpcError       `json:"error,omitempty"`
+
+	// abortReason is only set on responses Pockode synthesizes for a turn Codex
+	// aborted. Codex never answers the tools/call of an aborted turn, so without
+	// a synthetic response the turn would stay "running" until the process exits.
+	abortReason string
 }
 
 type rpcError struct {
@@ -351,6 +352,10 @@ func (s *mcpSession) sendRPC(ctx context.Context, method string, params interfac
 
 	select {
 	case resp := <-ch:
+		// An interrupt resolves every pending request, this one included.
+		if resp.abortReason != "" {
+			return nil, fmt.Errorf("%s cancelled: %s", method, resp.abortReason)
+		}
 		if resp.Error != nil {
 			return nil, fmt.Errorf("RPC error %d: %s", resp.Error.Code, resp.Error.Message)
 		}
@@ -364,11 +369,6 @@ func (s *mcpSession) sendRPC(ctx context.Context, method string, params interfac
 // Events are emitted via the events channel as they arrive (from notifications).
 // The tool call result triggers a DoneEvent.
 func (s *mcpSession) callToolAsync(toolName string, args interface{}) error {
-	// Clear any stale interrupted flag from a previous turn.
-	// This prevents a late "turn_aborted" event from incorrectly
-	// converting the next turn's DoneEvent into an InterruptedEvent.
-	s.interrupted.Store(false)
-
 	id := s.nextID.Add(1)
 	ch := make(chan *rpcResponse, 1)
 	s.pendingRPCResults.Store(id, ch)
@@ -412,17 +412,15 @@ func (s *mcpSession) callToolAsync(toolName string, args interface{}) error {
 		if resp == nil {
 			return
 		}
-		if s.interrupted.CompareAndSwap(true, false) {
-			s.emitEvent(agent.InterruptedEvent{})
+		if resp.abortReason != "" {
+			s.emitEvent(abortEvent(resp.abortReason))
 			return
 		}
 		if resp.Error != nil {
 			s.emitEvent(agent.ErrorEvent{Error: fmt.Sprintf("codex tool call failed: %s", resp.Error.Message)})
 			return
 		}
-		// Extract session/conversation IDs from response.
-		s.extractIdentifiers(resp.Result)
-		s.emitEvent(agent.DoneEvent{})
+		s.emitEvent(s.parseTurnResult(resp.Result))
 	}()
 
 	return nil
@@ -430,17 +428,20 @@ func (s *mcpSession) callToolAsync(toolName string, args interface{}) error {
 
 // buildStartConfig builds the Codex session start configuration.
 func (s *mcpSession) buildStartConfig(prompt string) map[string]interface{} {
+	overrides := map[string]interface{}{}
+	if !s.opts.DisableMCP {
+		overrides["mcp_servers"] = map[string]interface{}{
+			"pockode": map[string]interface{}{
+				"command": s.exe,
+				"args":    []string{"mcp", "--data-dir", s.opts.MCPDir()},
+			},
+		}
+	}
+
 	config := map[string]interface{}{
 		"prompt": prompt,
 		"cwd":    s.opts.WorkDir,
-		"config": map[string]interface{}{
-			"mcp_servers": map[string]interface{}{
-				"pockode": map[string]interface{}{
-					"command": s.exe,
-					"args":    []string{"mcp", "--data-dir", s.opts.MCPDir()},
-				},
-			},
-		},
+		"config": overrides,
 	}
 
 	switch s.opts.Mode {
@@ -520,19 +521,37 @@ func (s *mcpSession) handleNotification(msg rpcMessage) {
 }
 
 // handleCodexEventDirect handles the codex/event custom notification.
-// Wire format: {"jsonrpc":"2.0","method":"codex/event","params":{"msg":{...}}}
+// Wire format: {"jsonrpc":"2.0","method":"codex/event","params":{"_meta":{"requestId":2},"msg":{...}}}
 func (s *mcpSession) handleCodexEventDirect(params json.RawMessage) {
 	var notif struct {
-		Msg json.RawMessage `json:"msg"`
+		Meta json.RawMessage `json:"_meta"`
+		Msg  json.RawMessage `json:"msg"`
 	}
 	if err := json.Unmarshal(params, &notif); err != nil {
 		s.log.Warn("failed to parse codex/event params", "error", err)
 		return
 	}
-	s.processCodexMsg(notif.Msg)
+	s.processCodexMsg(notif.Msg, requestIDFromMeta(notif.Meta))
 }
 
-// handleCodexEventLogging handles the standard MCP notifications/message.
+// requestIDFromMeta extracts the id of the tools/call an event belongs to.
+// Codex mirrors the id type the client used, and Pockode only ever sends
+// numeric ids, so anything else did not originate from one of our calls.
+func requestIDFromMeta(meta json.RawMessage) *int64 {
+	if len(meta) == 0 {
+		return nil
+	}
+	var parsed struct {
+		RequestID *int64 `json:"requestId"`
+	}
+	if err := json.Unmarshal(meta, &parsed); err != nil {
+		return nil
+	}
+	return parsed.RequestID
+}
+
+// handleCodexEventLogging handles the standard MCP notifications/message, the
+// channel CLIs older than the codex/event notification used.
 // Wire format: {"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":{"msg":{...}}}}
 func (s *mcpSession) handleCodexEventLogging(params json.RawMessage) {
 	var notif struct {
@@ -544,11 +563,71 @@ func (s *mcpSession) handleCodexEventLogging(params json.RawMessage) {
 		s.log.Warn("failed to parse notifications/message params", "error", err)
 		return
 	}
-	s.processCodexMsg(notif.Data.Msg)
+	s.processCodexMsg(notif.Data.Msg, nil)
 }
 
-// processCodexMsg processes a single Codex event message.
-func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
+// ignoredCodexEvents are event types Pockode deliberately drops, listed so the
+// default branch keeps meaning "type we have never seen".
+//
+// Why a list and not a blanket "forward what we do not recognise": Codex emits
+// 70+ event types, most of them per-turn bookkeeping or duplicates of data we
+// already render, and it keeps adding more — anything forwarded by default ends
+// up as transcript noise.
+//
+// Two groups deserve a note beyond their heading below: item_started and
+// item_completed mirror the whole turn a second time in the "thread item"
+// shape, and the last group (reasoning, plan, web search, turn diff) carries
+// information Pockode simply has no surface for yet — dropped by choice, not by
+// accident.
+var ignoredCodexEvents = map[string]bool{
+	// Turn bookkeeping.
+	"task_started":        true,
+	"turn_started":        true, // newer alias of task_started
+	"task_complete":       true, // the tools/call result ends the turn
+	"turn_complete":       true, // newer alias of task_complete
+	"token_count":         true, // usage and rate-limit accounting
+	"shutdown_complete":   true,
+	"context_compacted":   true,
+	"thread_goal_updated": true,
+	"hook_started":        true,
+	"hook_completed":      true,
+	"mcp_startup_update":  true, // per-server progress; the summary is reported
+	"deprecation_notice":  true, // aimed at CLI users, not at this session
+
+	// Second copies of content rendered elsewhere.
+	"user_message":      true, // echo of the prompt Pockode just sent
+	"raw_response_item": true,
+	"item_started":      true,
+	"item_completed":    true,
+
+	// Approval requests reach the user as an elicitation instead. Codex emits
+	// the begin event of a command or patch *before* asking for approval, and
+	// the approval request repeats that call_id, so rendering both shows the
+	// same work twice and leaves one copy without a result.
+	"exec_approval_request":        true,
+	"apply_patch_approval_request": true,
+
+	// Incremental copies of content that also arrives complete.
+	"agent_message_content_delta": true,
+	"reasoning_content_delta":     true,
+	"reasoning_raw_content_delta": true,
+	"exec_command_output_delta":   true,
+	"plan_delta":                  true,
+	"patch_apply_updated":         true, // partial patch preview; the begin/end pair is rendered
+
+	// Real information with no surface in Pockode yet.
+	"agent_reasoning":               true,
+	"agent_reasoning_raw_content":   true,
+	"agent_reasoning_section_break": true,
+	"plan_update":                   true,
+	"turn_diff":                     true,
+	"web_search_begin":              true,
+	"web_search_end":                true,
+}
+
+// processCodexMsg processes a single Codex event message. requestID identifies
+// the tools/call the event belongs to, when the notification carried one.
+func (s *mcpSession) processCodexMsg(raw json.RawMessage, requestID *int64) {
 	if len(raw) == 0 {
 		return
 	}
@@ -561,9 +640,12 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 		return
 	}
 
-	s.updateIdentifiersFromEvent(raw)
-
 	switch codexMsg.Type {
+	case "session_configured":
+		// Start of the session, and the earliest report of the thread id that
+		// every following turn has to be sent to.
+		s.rememberThreadIDFromEvent(raw)
+
 	case "agent_message":
 		var ev struct {
 			Message string `json:"message"`
@@ -576,14 +658,14 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 			s.emitEvent(agent.TextEvent{Content: ev.Message})
 		}
 
-	case "exec_command_begin", "exec_approval_request":
+	case "exec_command_begin":
 		var ev struct {
 			CallID  string          `json:"call_id"`
 			Command json.RawMessage `json:"command"`
 			Cwd     string          `json:"cwd"`
 		}
 		if err := json.Unmarshal(raw, &ev); err != nil {
-			s.log.Warn("failed to parse exec event", "error", err)
+			s.log.Warn("failed to parse exec_command_begin", "error", err)
 			return
 		}
 		command := normalizeCommand(ev.Command)
@@ -601,16 +683,24 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 	case "exec_command_end":
 		var ev struct {
 			CallID string `json:"call_id"`
-			Output string `json:"output"`
-			Error  string `json:"error"`
+			// formatted_output is the output as the model saw it: the merged
+			// stream, truncated, with a note when the command timed out. The
+			// other fields back it up for CLIs that omit it.
+			FormattedOutput  string `json:"formatted_output"`
+			AggregatedOutput string `json:"aggregated_output"`
+			Stdout           string `json:"stdout"`
+			Stderr           string `json:"stderr"`
+			ExitCode         int    `json:"exit_code"`
 		}
 		if err := json.Unmarshal(raw, &ev); err != nil {
 			s.log.Warn("failed to parse exec_command_end", "error", err)
 			return
 		}
-		result := ev.Output
-		if result == "" {
-			result = ev.Error
+		result := firstNonEmpty(ev.FormattedOutput, ev.AggregatedOutput, joinOutput(ev.Stdout, ev.Stderr))
+		if result == "" && ev.ExitCode != 0 {
+			// A silent failure is still a failure: without this the user sees an
+			// empty result and no hint that the command did not succeed.
+			result = fmt.Sprintf("(no output, exit code %d)", ev.ExitCode)
 		}
 		s.emitEvent(agent.ToolResultEvent{
 			ToolUseID:  ev.CallID,
@@ -710,16 +800,75 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage) {
 			ToolResult: result,
 		})
 
-	case "task_complete":
-		// Informational; the actual DoneEvent is sent when the RPC result arrives.
+	case "mcp_startup_complete":
+		var ev struct {
+			Failed []struct {
+				Server string `json:"server"`
+				Error  string `json:"error"`
+			} `json:"failed"`
+		}
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			s.log.Warn("failed to parse mcp_startup_complete", "error", err)
+			return
+		}
+		// A server that fails to start silently removes its tools from the
+		// session — for the pockode server that means no work_* tools at all.
+		for _, failed := range ev.Failed {
+			s.log.Warn("codex MCP server failed to start", "server", failed.Server, "error", failed.Error)
+			s.emitEvent(agent.WarningEvent{
+				Message: fmt.Sprintf("MCP server %q failed to start, its tools are unavailable: %s", failed.Server, failed.Error),
+				Code:    "mcp_startup_failed",
+			})
+		}
+
+	case "stream_error", "warning", "guardian_warning":
+		// Non-fatal: the turn keeps going. Surfacing them is what explains a
+		// stalled turn (stream retries) or a guardrail that changed what ran.
+		var ev struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			s.log.Warn("failed to parse codex warning event", "type", codexMsg.Type, "error", err)
+			return
+		}
+		if ev.Message == "" {
+			s.log.Debug("ignoring codex warning without a message", "type", codexMsg.Type)
+			return
+		}
+		s.emitEvent(agent.WarningEvent{Message: ev.Message, Code: codexMsg.Type})
+
+	case "error":
+		// Fatal for the turn, and Codex answers the tools/call with the same
+		// message and isError set. parseTurnResult reports it from there, which
+		// also covers the failures that never produce an error event.
+		var ev struct {
+			Message string `json:"message"`
+			// A plain string for most causes, an object for the ones that carry
+			// details (an HTTP status, for example).
+			Info json.RawMessage `json:"codex_error_info"`
+		}
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			s.log.Warn("failed to parse codex error event", "error", err)
+			return
+		}
+		s.log.Info("codex reported a turn error", "message", ev.Message, "info", string(ev.Info))
 
 	case "turn_aborted":
-		// Informational only. SendInterrupt already sets the interrupted flag;
-		// setting it here would race with the next turn's callToolAsync (which
-		// clears the flag) if this event arrives late.
-		s.log.Info("codex turn aborted")
+		var ev struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			// Deliberately no early return: an abort we cannot read is still an
+			// abort, and leaving the turn pending would hang the session.
+			s.log.Warn("failed to parse turn_aborted", "error", err)
+		}
+		s.log.Info("codex turn aborted", "reason", ev.Reason)
+		s.abortPendingTurn(requestID, ev.Reason)
 
 	default:
+		if ignoredCodexEvents[codexMsg.Type] {
+			return
+		}
 		s.log.Debug("unhandled codex event type", "type", codexMsg.Type)
 	}
 }
@@ -744,12 +893,15 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 		CodexCallID        string          `json:"codex_call_id"`
 		CodexCommand       json.RawMessage `json:"codex_command"`
 		CodexCwd           string          `json:"codex_cwd"`
+		CodexChanges       json.RawMessage `json:"codex_changes"`
 		CodexMCPToolCallID string          `json:"codex_mcp_tool_call_id"`
 		CodexEventID       string          `json:"codex_event_id"`
 	}
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
 		s.log.Warn("failed to parse elicitation params", "error", err)
-		s.sendRPCResponse(*msg.ID, map[string]interface{}{"action": "deny"}, nil)
+		// `decision` is the field Codex reads; without it the denial would only
+		// happen as a side effect of Codex failing to parse this response.
+		s.sendRPCResponse(*msg.ID, map[string]interface{}{"action": "deny", "decision": "denied"}, nil)
 		return
 	}
 
@@ -758,13 +910,14 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 		requestID = fmt.Sprintf("elicit-%d", *msg.ID)
 	}
 
-	// Route based on elicitation type.
+	// Route based on elicitation type. Codex only ever sends these two, and a
+	// patch approval describes its edits in codex_changes, not codex_command.
 	toolName := "Bash"
 	var toolInput json.RawMessage
 	switch params.CodexElicitation {
-	case "patch_apply":
+	case "patch-approval":
 		toolName = "Edit"
-		toolInput = buildEditInput(params.CodexCommand)
+		toolInput = buildEditInput(params.CodexChanges)
 	default:
 		command := normalizeCommand(params.CodexCommand)
 		inputMap := map[string]interface{}{
@@ -777,12 +930,14 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 	ch := make(chan elicitAnswer, 1)
 	s.pendingElicit.Store(requestID, ch)
 
-	// Emit permission request event.
+	// ToolUseID is the id of the command or patch being approved, so the prompt
+	// points at the same call as the tool events. codex_mcp_tool_call_id, which
+	// identifies the whole tools/call, is the fallback for CLIs that omit it.
 	s.emitEvent(agent.PermissionRequestEvent{
 		RequestID: requestID,
 		ToolName:  toolName,
 		ToolInput: toolInput,
-		ToolUseID: params.CodexMCPToolCallID,
+		ToolUseID: firstNonEmpty(params.CodexCallID, params.CodexMCPToolCallID),
 	})
 
 	// Wait for user response.
@@ -845,81 +1000,142 @@ func (s *mcpSession) writeStdin(data []byte) error {
 	return err
 }
 
-func (s *mcpSession) extractIdentifiers(result json.RawMessage) {
+// turnResult is the tools/call payload Codex returns when a turn ends.
+//
+// `structuredContent.threadId` is the only identifier current CLIs report here;
+// older ones exposed the same value as sessionId/conversationId. `isError` is
+// how a failed turn is reported: the JSON-RPC frame stays a success, so a turn
+// that died on an API error, an unusable thread id or a runtime failure is
+// indistinguishable from a completed one unless this field is read.
+type turnResult struct {
+	Content []struct {
+		Text string `json:"text"`
+	} `json:"content"`
+	StructuredContent struct {
+		ThreadID string `json:"threadId"`
+		Content  string `json:"content"`
+	} `json:"structuredContent"`
+	IsError bool `json:"isError"`
+
+	// Identifier fields of pre-threadId CLIs.
+	SessionID      string `json:"sessionId"`
+	ConversationID string `json:"conversationId"`
+
+	// How CLIs before the MCP result shape was standardised reported a failed
+	// turn: a bare {"error": "..."} object with no isError flag.
+	LegacyError string `json:"error"`
+}
+
+// text returns the turn's closing message: the agent's last message on success,
+// the failure description when isError is set.
+func (r turnResult) text() string {
+	if r.StructuredContent.Content != "" {
+		return r.StructuredContent.Content
+	}
+	var parts []string
+	for _, c := range r.Content {
+		if c.Text != "" {
+			parts = append(parts, c.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// parseTurnResult converts the tools/call result into the event that ends the turn.
+func (s *mcpSession) parseTurnResult(result json.RawMessage) agent.AgentEvent {
 	if len(result) == 0 {
-		return
-	}
-	var data struct {
-		Meta struct {
-			SessionID      string `json:"sessionId"`
-			ConversationID string `json:"conversationId"`
-		} `json:"meta"`
-		SessionID      string `json:"sessionId"`
-		ConversationID string `json:"conversationId"`
-		Content        []struct {
-			SessionID      string `json:"sessionId"`
-			ConversationID string `json:"conversationId"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(result, &data); err != nil {
-		return
+		return agent.DoneEvent{}
 	}
 
-	s.idMu.Lock()
-	defer s.idMu.Unlock()
+	var parsed turnResult
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		s.log.Warn("failed to parse codex tool call result", "error", err)
+		return agent.DoneEvent{}
+	}
 
-	if id := firstNonEmpty(data.Meta.SessionID, data.SessionID); id != "" {
-		s.sessionID = id
-		s.log.Debug("session ID extracted", "sessionId", id)
+	s.rememberThreadID(parsed.StructuredContent.ThreadID, parsed.ConversationID, parsed.SessionID)
+
+	if parsed.IsError || parsed.LegacyError != "" {
+		return agent.ErrorEvent{Error: firstNonEmpty(
+			parsed.text(),
+			parsed.LegacyError,
+			"codex reported an error without a message",
+		)}
 	}
-	if id := firstNonEmpty(data.Meta.ConversationID, data.ConversationID); id != "" {
-		s.conversationID = id
-		s.log.Debug("conversation ID extracted", "conversationId", id)
+
+	return agent.DoneEvent{}
+}
+
+const (
+	abortReasonInterrupted   = "interrupted"
+	abortReasonBudgetLimited = "budget_limited"
+)
+
+// abortEvent maps a Codex turn abort to the event that ends the turn.
+//
+// Everything except a budget cap is a stop somebody asked for (the user
+// interrupting, a turn being replaced, a review ending), which is what
+// InterruptedEvent means: work.AutoResumer stops the work item instead of
+// continuing it. A budget cap is a failure the user has to be told about, so it
+// surfaces as an error rather than a silent stop.
+func abortEvent(reason string) agent.AgentEvent {
+	if reason == abortReasonBudgetLimited {
+		return agent.ErrorEvent{Error: "codex aborted the turn: budget limit reached"}
 	}
-	for _, item := range data.Content {
-		if s.sessionID == "" && item.SessionID != "" {
-			s.sessionID = item.SessionID
-		}
-		if s.conversationID == "" && item.ConversationID != "" {
-			s.conversationID = item.ConversationID
-		}
+	return agent.InterruptedEvent{}
+}
+
+// abortPendingTurn resolves the tools/call that the aborted turn belongs to.
+// requestID comes from the event's _meta and is what keeps a late abort of a
+// finished turn from ending the turn that is running now.
+func (s *mcpSession) abortPendingTurn(requestID *int64, reason string) {
+	if requestID == nil {
+		s.log.Debug("ignoring turn_aborted without request id", "reason", reason)
+		return
 	}
-	if s.conversationID == "" && s.sessionID != "" {
-		s.conversationID = s.sessionID
+	pending, ok := s.pendingRPCResults.Load(*requestID)
+	if !ok {
+		s.log.Debug("ignoring turn_aborted for a settled request", "requestId", *requestID, "reason", reason)
+		return
+	}
+	ch := pending.(chan *rpcResponse)
+	select {
+	case ch <- &rpcResponse{abortReason: reason}:
+	default:
 	}
 }
 
-func (s *mcpSession) updateIdentifiersFromEvent(raw json.RawMessage) {
+// rememberThreadID stores the first non-empty thread identifier, in preference
+// order. Codex reports it under different names depending on its version.
+func (s *mcpSession) rememberThreadID(candidates ...string) {
+	for _, id := range candidates {
+		if id == "" {
+			continue
+		}
+		s.idMu.Lock()
+		changed := s.threadID != id
+		s.threadID = id
+		s.idMu.Unlock()
+		if changed {
+			s.log.Debug("codex thread ID updated", "threadId", id)
+		}
+		return
+	}
+}
+
+// rememberThreadIDFromEvent reads the thread identifier out of a
+// session_configured event. Which field holds it depends on the CLI version:
+// current ones send thread_id, older ones only session_id.
+func (s *mcpSession) rememberThreadIDFromEvent(raw json.RawMessage) {
 	var ev struct {
-		SessionID      string `json:"session_id"`
+		ThreadID       string `json:"thread_id"`
 		ConversationID string `json:"conversation_id"`
-		Data           struct {
-			SessionID      string `json:"session_id"`
-			ConversationID string `json:"conversation_id"`
-		} `json:"data"`
+		SessionID      string `json:"session_id"`
 	}
 	if err := json.Unmarshal(raw, &ev); err != nil {
 		return
 	}
-
-	s.idMu.Lock()
-	defer s.idMu.Unlock()
-
-	if id := firstNonEmpty(ev.SessionID, ev.Data.SessionID); id != "" {
-		s.sessionID = id
-	}
-	if id := firstNonEmpty(ev.ConversationID, ev.Data.ConversationID); id != "" {
-		s.conversationID = id
-	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
+	s.rememberThreadID(ev.ThreadID, ev.ConversationID, ev.SessionID)
 }
 
 // --- Lifecycle helpers ---
@@ -940,57 +1156,45 @@ func (s *mcpSession) cleanupPendingElicitations() {
 	})
 }
 
-// --- Resume state ---
+// --- Resume ---
 
-type codexResumeState struct {
-	SessionID      string `json:"sessionId"`
-	ConversationID string `json:"conversationId"`
-}
-
-func (s *mcpSession) resumeStatePath() string {
-	return filepath.Join(s.opts.DataDir, "sessions", s.opts.SessionID, "codex_resume.json")
-}
-
-func (s *mcpSession) saveResumeState() {
-	s.idMu.Lock()
-	state := codexResumeState{
-		SessionID:      s.sessionID,
-		ConversationID: s.conversationID,
-	}
-	s.idMu.Unlock()
-
-	if state.SessionID == "" {
-		return
-	}
-
-	data, err := json.Marshal(state)
-	if err != nil {
-		s.log.Error("failed to marshal codex resume state", "error", err)
-		return
-	}
-
-	if err := filestore.WriteFileAtomic(s.resumeStatePath(), data, 0644); err != nil {
-		s.log.Error("failed to write codex resume state", "error", err)
-	}
-}
-
-func (s *mcpSession) loadResumeState() {
-	path := s.resumeStatePath()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-	var state codexResumeState
-	if err := json.Unmarshal(data, &state); err != nil {
-		s.log.Warn("failed to parse codex resume state", "error", err)
-		return
-	}
-	s.sessionID = state.SessionID
-	s.conversationID = state.ConversationID
-	s.log.Info("resuming codex session", "codexSessionId", state.SessionID)
+// warnSessionNotResumable tells the user that a restarted session starts over.
+//
+// Codex keeps threads in the memory of the mcp-server process that created
+// them: codex-reply resolves a thread id against an in-memory map and answers
+// "Session not found for thread_id" for anything else, verified against the
+// real CLI. So a thread id carried across process restarts is not just useless,
+// it makes every following message fail — the only way to keep the session
+// usable is to start a new thread, and the only honest thing to do is say that
+// the earlier turns are gone from the agent's memory (Pockode's own transcript
+// keeps them).
+func (s *mcpSession) warnSessionNotResumable() {
+	s.log.Info("codex session restarted without its previous thread")
+	s.emitEvent(agent.WarningEvent{
+		Message: "Codex cannot continue a conversation across restarts, so it does not have the earlier messages of this session.",
+		Code:    "session_not_resumable",
+	})
 }
 
 // --- Codex message helpers ---
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// joinOutput merges the two captured streams for CLIs that report them
+// separately instead of as one aggregated stream.
+func joinOutput(stdout, stderr string) string {
+	if stdout != "" && stderr != "" {
+		return stdout + "\n" + stderr
+	}
+	return firstNonEmpty(stdout, stderr)
+}
 
 // normalizeCommand converts a Codex command field (string or array) to a plain string.
 // Codex emits command as either a JSON string or a JSON array of strings.

@@ -166,6 +166,9 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error) {
 	if errors.Is(err, chat.ErrSessionNotFound) {
 		h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, "session not found")
+	} else if errors.Is(err, chat.ErrSessionNotRunning) {
+		// The user acted on a prompt whose process is gone, not a server fault.
+		h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {
 		h.replyError(ctx, conn, id, jsonrpc2.CodeInternalError, err.Error())
 	}

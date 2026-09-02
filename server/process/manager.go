@@ -68,6 +68,10 @@ type Process struct {
 	mu         sync.Mutex
 	lastActive time.Time
 	state      ProcessState
+	// turnEnded says whether the last idle this process reported ended a turn,
+	// as opposed to pausing it for a permission or question answer. Only
+	// meaningful while state is idle. Guarded by mu; see setIdle.
+	turnEnded bool
 	// closed is set when the process is explicitly terminated (Close/Shutdown/reap).
 	// Prevents stale buffered events from emitting state changes (e.g. running/idle)
 	// that would incorrectly interact with the AutoResumer.
@@ -163,6 +167,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 		manager:      m,
 		lastActive:   time.Now(),
 		state:        ProcessStateIdle,
+		turnEnded:    true, // no turn has started yet
 	}
 	m.processes[sessionID] = proc
 
@@ -359,18 +364,20 @@ func (p *Process) State() ProcessState {
 	return p.state
 }
 
-func (p *Process) setState(state ProcessState) {
-	p.mu.Lock()
-	p.state = state
-	p.mu.Unlock()
-}
-
 // SetRunning transitions the process to running state and notifies subscribers.
 func (p *Process) SetRunning() {
-	if p.closed.Load() || p.State() == ProcessStateRunning {
+	if p.closed.Load() {
 		return
 	}
-	p.setState(ProcessStateRunning)
+
+	p.mu.Lock()
+	if p.state == ProcessStateRunning {
+		p.mu.Unlock()
+		return
+	}
+	p.state = ProcessStateRunning
+	p.mu.Unlock()
+
 	p.manager.emitStateChange(p.sessionID, ProcessStateRunning, false)
 }
 
@@ -385,11 +392,30 @@ func (p *Process) SetIdleInterrupted() {
 	p.setIdle(false, true)
 }
 
+// setIdle emits a state change unless this idle says nothing the last one didn't.
+//
+// Being idle already is not enough to skip it: a turn that paused for a
+// permission answer is idle, and the interrupt or error that then ends it has to
+// be reported, or the session stays marked as waiting for an answer that no
+// longer exists and work.AutoResumer never hears the turn stopped.
+//
+// The end of a turn is reported once. Agents can announce it twice — Codex
+// answers an aborted call itself while Pockode synthesizes a response for the
+// same call — and a second idle reads downstream as a second stop.
 func (p *Process) setIdle(needsInput, interrupted bool) {
-	if p.closed.Load() || p.State() == ProcessStateIdle {
+	if p.closed.Load() {
 		return
 	}
-	p.setState(ProcessStateIdle)
+
+	p.mu.Lock()
+	if p.state == ProcessStateIdle && (p.turnEnded || needsInput) {
+		p.mu.Unlock()
+		return
+	}
+	p.state = ProcessStateIdle
+	p.turnEnded = !needsInput
+	p.mu.Unlock()
+
 	p.manager.emitStateChangeEvent(StateChangeEvent{
 		SessionID:   p.sessionID,
 		State:       ProcessStateIdle,
@@ -408,8 +434,11 @@ func (p *Process) streamEvents(ctx context.Context) {
 		eventType := event.EventType()
 		log.Debug("streaming event", "type", eventType)
 
-		// Ensure running state on event (handles edge cases like resumed sessions)
-		p.SetRunning()
+		// Agent output means a turn is under way even if nothing on the send path
+		// said so — output queued behind an interrupt resumes on its own.
+		if eventType.IndicatesAgentActivity() {
+			p.SetRunning()
+		}
 
 		// Persist to history
 		if err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event)); err != nil {

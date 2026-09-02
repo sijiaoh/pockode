@@ -17,6 +17,10 @@ import (
 // parseTestLine mirrors streamOutput's decode-then-parse path so tests can feed
 // raw lines (including empty and malformed JSON) directly to parseLine.
 func parseTestLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
+	return parseTestLineWithDecline(log, line, pendingRequests, func(string, string) {})
+}
+
+func parseTestLineWithDecline(log *slog.Logger, line []byte, pendingRequests *sync.Map, decline declineFunc) []agent.AgentEvent {
 	if len(line) == 0 {
 		return nil
 	}
@@ -24,7 +28,7 @@ func parseTestLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []a
 	if err := json.Unmarshal(line, &event); err != nil {
 		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
 	}
-	return parseLine(log, line, event, pendingRequests)
+	return parseLine(log, line, event, pendingRequests, decline)
 }
 
 // observeLine decodes a raw line and forwards it to observe (test helper).
@@ -63,19 +67,62 @@ func TestParseLine(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:     "system non-init event is forwarded",
+			name:     "system compact_boundary is forwarded",
 			input:    `{"type":"system","subtype":"compact_boundary"}`,
 			expected: []agent.AgentEvent{agent.SystemEvent{Content: `{"type":"system","subtype":"compact_boundary"}`}},
 		},
 		{
+			name:     "system task_started is filtered",
+			input:    `{"type":"system","subtype":"task_started","task_id":"bg1","task_type":"local_bash"}`,
+			expected: nil,
+		},
+		{
+			name:     "system task_notification is filtered",
+			input:    `{"type":"system","subtype":"task_notification","task_id":"bg1","status":"completed"}`,
+			expected: nil,
+		},
+		{
+			name:     "system local_command_output becomes command output",
+			input:    `{"type":"system","subtype":"local_command_output","content":"## Context Usage"}`,
+			expected: []agent.AgentEvent{agent.CommandOutputEvent{Content: "## Context Usage"}},
+		},
+		{
 			name:     "result event success",
-			input:    `{"type":"result","subtype":"success","result":"Hello"}`,
+			input:    `{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","result":"Hello"}`,
 			expected: []agent.AgentEvent{agent.DoneEvent{}},
 		},
 		{
-			name:     "result event interrupted",
+			name:     "result event aborted by terminal_reason",
+			input:    `{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_tools","errors":["[ede_diagnostic] stop_reason=tool_use"]}`,
+			expected: []agent.AgentEvent{agent.InterruptedEvent{}},
+		},
+		{
+			// An abort reason this code predates still has to stop the work item
+			// rather than let it auto-continue.
+			name:     "result event aborted by an unknown aborted_ reason",
+			input:    `{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_by_something_new"}`,
+			expected: []agent.AgentEvent{agent.InterruptedEvent{}},
+		},
+		{
+			name:     "result event interrupted without terminal_reason",
 			input:    `{"type":"result","subtype":"error_during_execution","errors":["Error: Request was aborted."]}`,
 			expected: []agent.AgentEvent{agent.InterruptedEvent{}},
+		},
+		{
+			name:     "result event failure surfaces error",
+			input:    `{"type":"result","subtype":"error_max_turns","is_error":true,"terminal_reason":"max_turns","errors":["Reached maximum number of turns (10)"]}`,
+			expected: []agent.AgentEvent{agent.ErrorEvent{Error: "Reached maximum number of turns (10)"}},
+		},
+		{
+			name:     "result event success flagged is_error uses result text",
+			input:    `{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","result":"API Error: overloaded"}`,
+			expected: []agent.AgentEvent{agent.ErrorEvent{Error: "API Error: overloaded"}},
+		},
+		{
+			// Blank entries must not leak a bare separator as the error text.
+			name:     "result event failure without usable detail falls back to subtype",
+			input:    `{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"model_error","errors":["","  "]}`,
+			expected: []agent.AgentEvent{agent.ErrorEvent{Error: "Claude ended the turn with an error (error_during_execution)"}},
 		},
 		{
 			name:     "assistant text message",
@@ -187,6 +234,16 @@ func TestParseLine(t *testing.T) {
 			expected: nil,
 		},
 		{
+			name:     "tool_progress event is intentionally ignored",
+			input:    `{"type":"tool_progress","tool_use_id":"toolu_1","session_id":"s1"}`,
+			expected: nil,
+		},
+		{
+			name:     "rate_limit_event is intentionally ignored",
+			input:    `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"},"session_id":"s1"}`,
+			expected: nil,
+		},
+		{
 			name:     "unknown event type is ignored",
 			input:    `{"type":"unknown_event"}`,
 			expected: nil,
@@ -216,16 +273,6 @@ func TestParseLine(t *testing.T) {
 					},
 				},
 			}},
-		},
-		{
-			name:     "control_request non-permission request ignored",
-			input:    `{"type":"control_request","request_id":"req-456","request":{"subtype":"other_type"}}`,
-			expected: nil,
-		},
-		{
-			name:     "control_request with nil request ignored",
-			input:    `{"type":"control_request","request_id":"req-789"}`,
-			expected: nil,
 		},
 		{
 			name:     "system init event with session_id is filtered",
@@ -345,6 +392,9 @@ func agentEventEqual(a, b agent.AgentEvent) bool {
 	case agent.RawEvent:
 		bv, ok := b.(agent.RawEvent)
 		return ok && av.Content == bv.Content
+	case agent.CommandOutputEvent:
+		bv, ok := b.(agent.CommandOutputEvent)
+		return ok && av.Content == bv.Content
 	default:
 		return false
 	}
@@ -378,6 +428,119 @@ func TestParseLine_AskUserQuestionStoresPendingInput(t *testing.T) {
 	}
 	if len(parsed.Questions) != 1 || parsed.Questions[0].Question != "q?" {
 		t.Errorf("stored input does not preserve questions: %+v", parsed.Questions)
+	}
+}
+
+// The CLI blocks the turn until a request it originates is answered, so every
+// control request that is not can_use_tool has to be answered with an error.
+// Leaving any of these shapes unanswered hangs the session for good, which is why
+// they are covered together rather than one per known subtype.
+func TestParseLine_UnservableControlRequestIsDeclined(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string // request id the CLI must be answered on
+	}{
+		{
+			name:  "subtype Pockode cannot serve",
+			input: `{"type":"control_request","request_id":"req-dialog","request":{"subtype":"request_user_dialog","dialog_kind":"plan"}}`,
+			want:  "req-dialog",
+		},
+		{
+			// Where an unknown subtype comes from is a CLI newer than this code.
+			name:  "subtype this code has never seen",
+			input: `{"type":"control_request","request_id":"req-unknown","request":{"subtype":"some_future_subtype"}}`,
+			want:  "req-unknown",
+		},
+		{
+			name:  "request without a body",
+			input: `{"type":"control_request","request_id":"req-empty"}`,
+			want:  "req-empty",
+		},
+		{
+			// Unreadable is not unanswerable: the id survives a body of the
+			// wrong shape, and answering matters more than understanding.
+			name:  "request whose body is not an object",
+			input: `{"type":"control_request","request_id":"req-broken","request":"nonsense"}`,
+			want:  "req-broken",
+		},
+		{
+			// The one shape that reaches here through can_use_tool: a question
+			// whose input the CLI has restructured.
+			name:  "AskUserQuestion with unreadable input",
+			input: `{"type":"control_request","request_id":"req-q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":"not-a-list"}}}`,
+			want:  "req-q",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotRequestID, gotMessage string
+			decline := func(requestID, message string) {
+				gotRequestID, gotMessage = requestID, message
+			}
+
+			results := parseTestLineWithDecline(testLogger(), []byte(tt.input), &sync.Map{}, decline)
+
+			if len(results) != 1 {
+				t.Fatalf("expected 1 event, got %+v", results)
+			}
+			warning, ok := results[0].(agent.WarningEvent)
+			if !ok {
+				t.Fatalf("expected WarningEvent, got %T", results[0])
+			}
+			if warning.Code != "unsupported_control_request" {
+				t.Errorf("warning code = %q, want unsupported_control_request", warning.Code)
+			}
+			if gotRequestID != tt.want {
+				t.Errorf("declined request id = %q, want %q", gotRequestID, tt.want)
+			}
+			if gotMessage == "" {
+				t.Error("expected a non-empty decline message")
+			}
+		})
+	}
+}
+
+// An unreadable request with no id left cannot be answered at all; the only thing
+// that must not happen is a bogus response on an empty id.
+func TestParseLine_ControlRequestWithoutIDIsNotDeclined(t *testing.T) {
+	declined := false
+	decline := func(string, string) { declined = true }
+
+	input := `{"type":"control_request","request_id":123,"request":{"subtype":"whatever"}}`
+	results := parseTestLineWithDecline(testLogger(), []byte(input), &sync.Map{}, decline)
+
+	if declined {
+		t.Error("must not answer a request whose id could not be read")
+	}
+	if len(results) != 0 {
+		t.Errorf("expected no events, got %+v", results)
+	}
+}
+
+func TestSession_DeclineControlRequest(t *testing.T) {
+	var buf bytes.Buffer
+	sess := &cliSession{
+		log:             testLogger(),
+		stdin:           nopWriteCloser{&buf},
+		pendingRequests: &sync.Map{},
+	}
+
+	sess.declineControlRequest("req-1", "not supported")
+
+	var response controlErrorResponse
+	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if response.Response.Subtype != "error" {
+		t.Errorf("subtype = %q, want error", response.Response.Subtype)
+	}
+	if response.Response.RequestID != "req-1" {
+		t.Errorf("request_id = %q, want req-1", response.Response.RequestID)
+	}
+	if response.Response.Error != "not supported" {
+		t.Errorf("error = %q, want 'not supported'", response.Response.Error)
 	}
 }
 

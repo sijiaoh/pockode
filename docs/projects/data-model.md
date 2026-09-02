@@ -111,8 +111,8 @@ a slow disk: ~150ms → ~220ms).
 The same primitive (`filestore.WriteFileAtomic`) backs every file the server
 rewrites whole: the stores built on `filestore.File` (work, agent-role,
 settings, the cluster node registry), the session and command indexes, plus
-`server.json`, `relay.json`, `mcp-config.json` and the per-session agent resume
-files. Files whose mode matters pass it explicitly — `server.json` and
+`server.json`, `relay.json`, `mcp-config.json` and the per-session Claude resume
+file. Files whose mode matters pass it explicitly — `server.json` and
 `relay.json` stay `0600` because they hold tokens.
 
 Session history is the one piece of state not rewritten whole: it is appended a

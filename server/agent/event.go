@@ -42,6 +42,33 @@ func (e EventType) AwaitsUserInput() bool {
 	}
 }
 
+// IndicatesAgentActivity returns true for the events that carry the agent's own
+// output, and therefore only arrive while a turn is under way. These move the
+// process state to running.
+//
+// It is a whitelist because being wrong is not symmetric. An event wrongly
+// counted as output marks a session running with nothing running, and nothing
+// corrects that until the idle reaper collects the process hours later — the
+// startup warning Codex emits for a session it cannot resume did exactly that.
+// An event wrongly left out costs at most one missed transition, because the
+// send that started the turn has already set running.
+//
+// Excluded, and why they are not oversights: AwaitsUserInput events end or pause
+// the turn, so they drive idle instead (the two predicates never overlap);
+// warning is how a session-level problem is reported, which can happen before the
+// first message; request_cancelled withdraws a prompt the user may never have
+// answered, so the process is likely idle already; process_ended is an obituary.
+// The remaining types are only ever replayed from history, never streamed.
+func (e EventType) IndicatesAgentActivity() bool {
+	switch e {
+	case EventTypeText, EventTypeToolCall, EventTypeToolResult,
+		EventTypeSystem, EventTypeCommandOutput, EventTypeRaw:
+		return true
+	default:
+		return false
+	}
+}
+
 // PermissionBehavior represents the permission action.
 type PermissionBehavior string
 

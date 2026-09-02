@@ -11,11 +11,18 @@ import (
 	"github.com/pockode/server/session"
 )
 
-const integrationTimeout = 60 * time.Second
+// A single real turn that calls a tool routinely takes 45-55s, so a 60s budget
+// fails on latency rather than on behaviour.
+const integrationTimeout = 120 * time.Second
 
 // IntegrationTestOptions configures which tests to skip.
 type IntegrationTestOptions struct {
 	SkipEvents []EventType
+
+	// DenyEndsInterrupted requires a denied permission to end the turn with an
+	// interrupted event rather than a plain done. Opt-in because only some CLIs
+	// report the denial as an abort.
+	DenyEndsInterrupted bool
 }
 
 func shouldSkip(opts IntegrationTestOptions, eventType EventType) bool {
@@ -37,7 +44,7 @@ func RunIntegrationTests(t *testing.T, newAgent func() Agent, opts IntegrationTe
 		testPermissionAllow(t, newAgent())
 	})
 	t.Run("PermissionDeny", func(t *testing.T) {
-		testPermissionDeny(t, newAgent())
+		testPermissionDeny(t, newAgent(), opts)
 	})
 	t.Run("PermissionAlwaysAllow", func(t *testing.T) {
 		testPermissionAlwaysAllow(t, newAgent())
@@ -47,6 +54,9 @@ func RunIntegrationTests(t *testing.T, newAgent func() Agent, opts IntegrationTe
 			t.Skip("skipped by IntegrationTestOptions")
 		}
 		testAskUserQuestionFlow(t, newAgent())
+	})
+	t.Run("MultiTurn", func(t *testing.T) {
+		testMultiTurn(t, newAgent())
 	})
 	t.Run("YoloNoPermission", func(t *testing.T) {
 		testYoloNoPermission(t, newAgent())
@@ -250,7 +260,7 @@ eventLoop:
 
 // testPermissionDeny verifies the permission deny flow:
 // PermissionRequest → Deny → Done/Interrupted
-func testPermissionDeny(t *testing.T, a Agent) {
+func testPermissionDeny(t *testing.T, a Agent, opts IntegrationTestOptions) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
@@ -307,6 +317,9 @@ eventLoop:
 	}
 	if interruptedEvents == 0 && doneEvents == 0 {
 		t.Error("expected either interrupted or done event after denial")
+	}
+	if opts.DenyEndsInterrupted && interruptedEvents == 0 {
+		t.Error("expected the denied turn to end as interrupted, not done")
 	}
 }
 
@@ -482,6 +495,68 @@ eventLoop:
 	response := responseText.String()
 	if !strings.Contains(strings.ToLower(response), strings.ToLower(selectedAnswer)) {
 		t.Errorf("expected response to mention selected answer %q, got: %s", selectedAnswer, truncate(response, 200))
+	}
+}
+
+// testMultiTurn verifies that a second message continues the same conversation.
+//
+// Every other test sends a single message, which is why a CLI renaming the
+// identifier that routes follow-up turns can break every conversation without a
+// single test failing: the reply is rejected inside a successful response, so
+// the turn still ends in a plain done event.
+func testMultiTurn(t *testing.T, a Agent) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*integrationTimeout)
+	defer cancel()
+
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer sess.Close()
+
+	if err := sess.SendMessage("Remember this number: 31415. Reply with just OK."); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	const secondTurn = "What number did I ask you to remember? Reply with the number only."
+	turn := 1
+	var response strings.Builder
+
+	for {
+		select {
+		case event, ok := <-sess.Events():
+			if !ok {
+				t.Fatalf("channel closed during turn %d", turn)
+			}
+			requireFields(t, event)
+
+			switch e := event.(type) {
+			case TextEvent:
+				t.Logf("turn %d text: %s", turn, truncate(e.Content, 100))
+				if turn == 2 {
+					response.WriteString(e.Content)
+				}
+			case ErrorEvent:
+				t.Fatalf("turn %d error event: %s", turn, e.Error)
+			case InterruptedEvent:
+				t.Fatalf("turn %d ended as interrupted", turn)
+			case DoneEvent:
+				if turn == 2 {
+					if !strings.Contains(response.String(), "31415") {
+						t.Errorf("second turn lost the conversation: expected the number back, got %q",
+							truncate(response.String(), 200))
+					}
+					return
+				}
+				turn = 2
+				if err := sess.SendMessage(secondTurn); err != nil {
+					t.Fatalf("SendMessage failed for the second turn: %v", err)
+				}
+			}
+
+		case <-ctx.Done():
+			t.Fatalf("timeout during turn %d", turn)
+		}
 	}
 }
 
