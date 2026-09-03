@@ -35,6 +35,7 @@ interface UseChatMessagesReturn {
 	isProcessRunning: boolean;
 	mode: SessionMode;
 	agentType: AgentType;
+	isSessionActivated: boolean;
 	status: ConnectionStatus;
 	sendUserMessage: (content: string) => Promise<boolean>;
 	interrupt: () => Promise<void>;
@@ -83,6 +84,15 @@ export function useChatMessages({
 	// Sync agentType from session store (updated via session list notifications)
 	const sessionAgentTypeFromStore = useSessionStore(
 		(state) => state.sessions.find((s) => s.id === sessionId)?.agent_type,
+	);
+	// The server refuses to change agent type once the agent has answered here,
+	// and says so through this flag. The transcript is not a substitute for it: a
+	// first turn that failed before the agent said anything leaves messages behind
+	// in a session that never started, and that is exactly when switching agents
+	// is the only way out.
+	const isSessionActivated = useSessionStore(
+		(state) =>
+			state.sessions.find((s) => s.id === sessionId)?.activated ?? false,
 	);
 	useEffect(() => {
 		if (sessionAgentTypeFromStore !== undefined) {
@@ -276,6 +286,7 @@ export function useChatMessages({
 		isProcessRunning,
 		mode,
 		agentType,
+		isSessionActivated,
 		status,
 		sendUserMessage: sendUserMessageHandler,
 		interrupt: useCallback(

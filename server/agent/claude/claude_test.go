@@ -8,8 +8,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/pockode/server/agent"
 )
@@ -138,6 +141,27 @@ func TestParseLine(t *testing.T) {
 			name:     "assistant message with empty content",
 			input:    `{"type":"assistant","message":{"content":[]}}`,
 			expected: nil,
+		},
+		{
+			// How Claude reports a turn that never reached the model: an assistant
+			// message it wrote itself, marked by the <synthetic> model. Captured from
+			// claude 2.1.259 against a local endpoint answering 401.
+			name:  "synthetic assistant message becomes a warning labelled by the CLI",
+			input: `{"type":"assistant","message":{"id":"58516ac7","model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"Invalid API key \u00b7 Fix external API key"}]},"session_id":"08165e10","error":"authentication_failed","is_api_error_message":true}`,
+			expected: []agent.AgentEvent{agent.WarningEvent{
+				Message: "Invalid API key \u00b7 Fix external API key",
+				Code:    "authentication_failed",
+			}},
+		},
+		{
+			// The CLI answers its own resume continuation prompt with this, and does
+			// not label it. Still not the agent talking, so it takes the same path.
+			name:  "synthetic assistant message without a label falls back to a generic code",
+			input: `{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"No response requested."}]}}`,
+			expected: []agent.AgentEvent{agent.WarningEvent{
+				Message: "No response requested.",
+				Code:    "synthetic_message",
+			}},
 		},
 		{
 			name:  "assistant tool_use message",
@@ -400,6 +424,59 @@ func agentEventEqual(a, b agent.AgentEvent) bool {
 	}
 }
 
+// TestParseLine_FailedFirstTurnLeavesSessionSwitchable replays a whole turn that
+// never reached the model and holds the property the transcript exists to
+// protect: nothing in it may start the session, so a user whose login expired can
+// still move the session to another agent.
+//
+// Where the report comes from: claude 2.1.259, ANTHROPIC_BASE_URL pointed at a
+// local endpoint answering 401 to everything, run until the CLI exhausted its
+// retries and exited on its own (3m15s). Shortened here to two retry banners; the
+// assistant and result frames are the measured ones.
+//
+// The assistant frame is why this test is not redundant with the ones over
+// hand-built event slices: reading it as agent output is what made the escape
+// hatch unreachable in exactly the scenario it was built for, and only a test
+// that goes through the parser can catch that.
+func TestParseLine_FailedFirstTurnLeavesSessionSwitchable(t *testing.T) {
+	report := []string{
+		`{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":611,"error_status":401,"error":"authentication_failed","session_id":"08165e10"}`,
+		`{"type":"system","subtype":"api_retry","attempt":10,"max_retries":10,"retry_delay_ms":38000,"error_status":401,"error":"authentication_failed","session_id":"08165e10"}`,
+		`{"type":"assistant","message":{"id":"58516ac7","model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","type":"message","content":[{"type":"text","text":"Invalid API key \u00b7 Fix external API key"}]},"session_id":"08165e10","error":"authentication_failed","is_api_error_message":true}`,
+		`{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","api_error_status":401,"result":"Invalid API key \u00b7 Fix external API key","session_id":"08165e10"}`,
+	}
+
+	var events []agent.AgentEvent
+	for _, line := range report {
+		events = append(events, parseTestLine(testLogger(), []byte(line), &sync.Map{})...)
+	}
+
+	if len(events) == 0 {
+		t.Fatal("expected the failed turn to be reported to the user")
+	}
+	for _, e := range events {
+		if e.EventType().ActivatesSession() {
+			t.Errorf("a turn that never reached the model must not start the session, got %s from %#v",
+				e.EventType(), e)
+		}
+	}
+
+	// Silently dropping the CLI's account of the failure would trade one bug for
+	// another, so it has to survive the change of event type. Asserted as its own
+	// warning rather than by searching every event for the words: in this report
+	// the trailing result repeats them verbatim, so a search would still pass with
+	// the notice thrown away.
+	var found bool
+	for _, e := range events {
+		if w, ok := e.(agent.WarningEvent); ok && strings.Contains(w.Message, "Invalid API key") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected the CLI's account of the failure to reach the user, got %#v", events)
+	}
+}
+
 func TestParseLine_AskUserQuestionStoresPendingInput(t *testing.T) {
 	pendingRequests := &sync.Map{}
 	input := `{"type":"control_request","request_id":"req-q-store","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","input":{"questions":[{"question":"q?","header":"H","options":[{"label":"a","description":"d"}],"multiSelect":false}]}}}`
@@ -584,94 +661,78 @@ func TestParseLine_ControlResponseWithPendingInterrupt(t *testing.T) {
 
 func TestClaudeResumeStateResolve(t *testing.T) {
 	tests := []struct {
-		name        string
-		resume      bool
-		stateID     string
-		history     []agent.AgentEvent
-		wantID      string
-		wantResume  bool
-		wantStateID string
-		wantNoState bool
+		name  string
+		state *claudeResumeState
+		// resume mirrors opts.Resume (the session was activated before).
+		resume bool
+		want   claudeLaunch
+		// wantMintedID expects a freshly minted UUID instead of want.sessionID.
+		wantMintedID bool
 	}{
 		{
-			name:       "new session uses pockode session id",
-			wantID:     "pockode-session",
-			wantResume: false,
+			name: "new session claims the pockode session id",
+			want: claudeLaunch{sessionID: "pockode-session"},
 		},
 		{
-			name:        "missing resume state starts new session",
-			resume:      true,
-			wantID:      "pockode-session",
-			wantResume:  false,
-			wantNoState: true,
+			name:   "activated session without recorded id is forked",
+			resume: true,
+			want:   claudeLaunch{sessionID: "pockode-session", resume: true, fork: true},
 		},
 		{
-			name:        "user-only history still starts new session",
-			resume:      true,
-			history:     []agent.AgentEvent{agent.MessageEvent{Content: "hello"}},
-			wantID:      "pockode-session",
-			wantResume:  false,
-			wantNoState: true,
+			name:   "recorded id is resumed",
+			state:  &claudeResumeState{SessionID: "claude-session"},
+			resume: true,
+			want:   claudeLaunch{sessionID: "claude-session", resume: true},
 		},
 		{
-			name:        "existing resume state resumes provider session",
-			resume:      true,
-			stateID:     "claude-session",
-			wantID:      "claude-session",
-			wantResume:  true,
-			wantStateID: "claude-session",
+			name:   "fork stage resumes with fork",
+			state:  &claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork},
+			resume: true,
+			want:   claudeLaunch{sessionID: "claude-session", resume: true, fork: true},
 		},
 		{
-			name:        "legacy assistant history migrates pockode session id",
-			resume:      true,
-			history:     []agent.AgentEvent{agent.MessageEvent{Content: "hello"}, agent.TextEvent{Content: "hi"}},
-			wantID:      "pockode-session",
-			wantResume:  true,
-			wantStateID: "pockode-session",
+			name:         "fresh stage starts a new provider session",
+			state:        &claudeResumeState{SessionID: "claude-session", Recovery: recoveryFresh},
+			resume:       true,
+			wantMintedID: true,
+		},
+		{
+			name:   "unknown stage falls back to a plain resume",
+			state:  &claudeResumeState{SessionID: "claude-session", Recovery: "bogus"},
+			resume: true,
+			want:   claudeLaunch{sessionID: "claude-session", resume: true},
+		},
+		{
+			// A recorded id proves the CLI already owns that session, which
+			// makes --session-id fatal no matter what the session store thinks.
+			name:  "recorded id wins over a session that looks unactivated",
+			state: &claudeResumeState{SessionID: "claude-session"},
+			want:  claudeLaunch{sessionID: "claude-session", resume: true},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			opts := agent.StartOptions{
-				DataDir:   dir,
-				SessionID: "pockode-session",
-				Resume:    tt.resume,
-			}
-			manager := newClaudeResumeStateManager(opts, testLogger())
-			if tt.stateID != "" {
-				manager.save(tt.stateID)
-			}
-			writeHistory(t, dir, opts.SessionID, tt.history)
-
-			gotID, gotResume := manager.resolve()
-			if gotID != tt.wantID {
-				t.Fatalf("provider session id = %q, want %q", gotID, tt.wantID)
-			}
-			if gotResume != tt.wantResume {
-				t.Fatalf("resume = %v, want %v", gotResume, tt.wantResume)
+			manager := newTestResumeManager(t, tt.resume)
+			if tt.state != nil {
+				writeResumeState(t, manager, *tt.state)
 			}
 
-			data, err := os.ReadFile(manager.path())
-			if tt.wantNoState {
-				if !os.IsNotExist(err) {
-					t.Fatalf("resume state should not exist, read err = %v", err)
+			got := manager.resolve()
+			if tt.wantMintedID {
+				if _, err := uuid.Parse(got.sessionID); err != nil {
+					t.Fatalf("minted session id %q is not a UUID: %v", got.sessionID, err)
+				}
+				if got.sessionID == "pockode-session" || got.sessionID == "claude-session" {
+					t.Fatalf("fresh stage reused session id %q", got.sessionID)
+				}
+				if got.resume || got.fork {
+					t.Fatalf("fresh stage must not resume, got %+v", got)
 				}
 				return
 			}
-			if tt.wantStateID == "" {
-				return
-			}
-			if err != nil {
-				t.Fatalf("read resume state: %v", err)
-			}
-			var state claudeResumeState
-			if err := json.Unmarshal(data, &state); err != nil {
-				t.Fatalf("parse resume state: %v", err)
-			}
-			if state.SessionID != tt.wantStateID {
-				t.Fatalf("saved session id = %q, want %q", state.SessionID, tt.wantStateID)
+			if got != tt.want {
+				t.Fatalf("launch = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
@@ -694,13 +755,7 @@ func TestClaudeResumeStateResolveIgnoresInvalidState(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			opts := agent.StartOptions{
-				DataDir:   dir,
-				SessionID: "pockode-session",
-				Resume:    true,
-			}
-			manager := newClaudeResumeStateManager(opts, testLogger())
+			manager := newTestResumeManager(t, true)
 			path := manager.path()
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				t.Fatalf("create resume dir: %v", err)
@@ -709,33 +764,197 @@ func TestClaudeResumeStateResolveIgnoresInvalidState(t *testing.T) {
 				t.Fatalf("write resume state: %v", err)
 			}
 
-			gotID, gotResume := manager.resolve()
-			if gotID != "pockode-session" {
-				t.Fatalf("provider session id = %q, want pockode-session", gotID)
-			}
-			if gotResume {
-				t.Fatal("resume should be false for invalid resume state")
+			want := claudeLaunch{sessionID: "pockode-session", resume: true, fork: true}
+			if got := manager.resolve(); got != want {
+				t.Fatalf("launch = %+v, want %+v", got, want)
 			}
 		})
 	}
 }
 
-func TestClaudeResumeStateObserveLineSavesOnFirstAssistant(t *testing.T) {
-	dir := t.TempDir()
-	opts := agent.StartOptions{
-		DataDir:   dir,
-		SessionID: "pockode-session",
+func TestClaudeResumeStateSavesOnInit(t *testing.T) {
+	manager := newTestResumeManager(t, false)
+	manager.resolve()
+
+	if _, err := os.Stat(manager.path()); !os.IsNotExist(err) {
+		t.Fatalf("resume state should not exist before init, stat err = %v", err)
 	}
-	manager := newClaudeResumeStateManager(opts, testLogger())
 
 	manager.observeLine([]byte(`{"type":"system","subtype":"init","session_id":"claude-session"}`))
-	if _, err := os.Stat(manager.path()); !os.IsNotExist(err) {
-		t.Fatalf("resume state should not exist before assistant event, stat err = %v", err)
+	if got := readResumeState(t, manager); got != (claudeResumeState{SessionID: "claude-session"}) {
+		t.Fatalf("resume state = %+v, want sessionId claude-session", got)
+	}
+}
+
+func TestClaudeResumeStateInitDoesNotRewriteUnchangedState(t *testing.T) {
+	manager := newTestResumeManager(t, true)
+	// Formatting a save() would not reproduce, so any rewrite is visible in the
+	// bytes on disk rather than only in a coarse-grained mtime.
+	seeded := []byte("{\n  \"sessionId\": \"claude-session\"\n}\n")
+	if err := os.MkdirAll(filepath.Dir(manager.path()), 0755); err != nil {
+		t.Fatalf("create resume dir: %v", err)
+	}
+	if err := os.WriteFile(manager.path(), seeded, 0644); err != nil {
+		t.Fatalf("write resume state: %v", err)
+	}
+	manager.resolve()
+
+	// The CLI repeats init at the start of every turn.
+	for range 3 {
+		manager.observeLine([]byte(`{"type":"system","subtype":"init","session_id":"claude-session"}`))
 	}
 
-	manager.observeLine([]byte(`{"type":"assistant","session_id":"claude-session","message":{"content":[{"type":"text","text":"hi"}]}}`))
-
 	data, err := os.ReadFile(manager.path())
+	if err != nil {
+		t.Fatalf("read resume state: %v", err)
+	}
+	if !bytes.Equal(data, seeded) {
+		t.Fatalf("resume state was rewritten for an unchanged session id: %s", data)
+	}
+}
+
+// The CLI does not always keep the id it was handed: resuming a session that
+// another process still holds open silently forks it and reports a new id
+// through init. Verified against claude 2.1.259.
+func TestClaudeResumeStateInitAdoptsAReassignedID(t *testing.T) {
+	manager := newTestResumeManager(t, true)
+	writeResumeState(t, manager, claudeResumeState{SessionID: "claude-session"})
+	if got := manager.resolve(); !got.resume || got.fork {
+		t.Fatalf("launch = %+v, want a plain resume", got)
+	}
+
+	manager.observeLine([]byte(`{"type":"system","subtype":"init","session_id":"reassigned-session"}`))
+
+	if got := readResumeState(t, manager); got != (claudeResumeState{SessionID: "reassigned-session"}) {
+		t.Fatalf("resume state = %+v, want the id the CLI reported back", got)
+	}
+}
+
+func TestClaudeResumeStateInitClearsRecovery(t *testing.T) {
+	manager := newTestResumeManager(t, true)
+	writeResumeState(t, manager, claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork})
+	manager.resolve()
+
+	// A fork mints a new provider session id, reported through init.
+	manager.observeLine([]byte(`{"type":"system","subtype":"init","session_id":"forked-session"}`))
+
+	if got := readResumeState(t, manager); got != (claudeResumeState{SessionID: "forked-session"}) {
+		t.Fatalf("resume state = %+v, want forked-session with cleared recovery", got)
+	}
+	// A later exit must not re-escalate a session that already succeeded.
+	manager.processExited(false)
+	if got := readResumeState(t, manager); got.Recovery != recoveryNone {
+		t.Fatalf("recovery = %q after a successful launch, want empty", got.Recovery)
+	}
+}
+
+func TestClaudeResumeStateEscalatesOnExitWithoutInit(t *testing.T) {
+	tests := []struct {
+		name  string
+		state *claudeResumeState
+		want  claudeResumeState
+	}{
+		{
+			name: "new session escalates to fork",
+			want: claudeResumeState{SessionID: "pockode-session", Recovery: recoveryFork},
+		},
+		{
+			name:  "resume escalates to fork",
+			state: &claudeResumeState{SessionID: "claude-session"},
+			want:  claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork},
+		},
+		{
+			name:  "fork escalates to fresh",
+			state: &claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork},
+			want:  claudeResumeState{SessionID: "claude-session", Recovery: recoveryFresh},
+		},
+		{
+			name:  "fresh is terminal",
+			state: &claudeResumeState{SessionID: "claude-session", Recovery: recoveryFresh},
+			want:  claudeResumeState{SessionID: "claude-session", Recovery: recoveryFresh},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := newTestResumeManager(t, tt.state != nil)
+			if tt.state != nil {
+				writeResumeState(t, manager, *tt.state)
+			}
+			manager.resolve()
+			manager.processExited(false)
+
+			if got := readResumeState(t, manager); got != tt.want {
+				t.Fatalf("resume state = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudeResumeStateDoesNotEscalateWhenCancelled(t *testing.T) {
+	manager := newTestResumeManager(t, true)
+	writeResumeState(t, manager, claudeResumeState{SessionID: "claude-session"})
+	manager.resolve()
+
+	manager.processExited(true)
+
+	if got := readResumeState(t, manager); got.Recovery != recoveryNone {
+		t.Fatalf("recovery = %q after our own shutdown, want empty", got.Recovery)
+	}
+}
+
+func TestClaudeResumeStatePendingWarningOnlyForFreshStage(t *testing.T) {
+	manager := newTestResumeManager(t, true)
+	writeResumeState(t, manager, claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork})
+	manager.resolve()
+	if _, ok := manager.pendingWarning(); ok {
+		t.Fatal("fork stage should not warn: it keeps the agent-side context")
+	}
+
+	manager = newTestResumeManager(t, true)
+	writeResumeState(t, manager, claudeResumeState{SessionID: "claude-session", Recovery: recoveryFresh})
+	manager.resolve()
+
+	warning, ok := manager.pendingWarning()
+	if !ok {
+		t.Fatal("fresh stage should warn that the earlier context is gone")
+	}
+	if warning.Code != "session_not_resumable" {
+		t.Fatalf("warning code = %q, want session_not_resumable", warning.Code)
+	}
+	if _, ok := manager.pendingWarning(); ok {
+		t.Fatal("warning should be delivered only once")
+	}
+}
+
+func newTestResumeManager(t *testing.T, resume bool) *claudeResumeStateManager {
+	t.Helper()
+	return newClaudeResumeStateManager(agent.StartOptions{
+		DataDir:   t.TempDir(),
+		SessionID: "pockode-session",
+		Resume:    resume,
+	}, testLogger())
+}
+
+// writeResumeState seeds claude_resume.json as a previous process would have
+// left it, without going through the manager that is under test.
+func writeResumeState(t *testing.T, m *claudeResumeStateManager, state claudeResumeState) {
+	t.Helper()
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal resume state: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(m.path()), 0755); err != nil {
+		t.Fatalf("create resume dir: %v", err)
+	}
+	if err := os.WriteFile(m.path(), data, 0644); err != nil {
+		t.Fatalf("write resume state: %v", err)
+	}
+}
+
+func readResumeState(t *testing.T, m *claudeResumeStateManager) claudeResumeState {
+	t.Helper()
+	data, err := os.ReadFile(m.path())
 	if err != nil {
 		t.Fatalf("read resume state: %v", err)
 	}
@@ -743,34 +962,7 @@ func TestClaudeResumeStateObserveLineSavesOnFirstAssistant(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatalf("parse resume state: %v", err)
 	}
-	if state.SessionID != "claude-session" {
-		t.Fatalf("saved session id = %q, want claude-session", state.SessionID)
-	}
-}
-
-func writeHistory(t *testing.T, dataDir, sessionID string, events []agent.AgentEvent) {
-	t.Helper()
-	if len(events) == 0 {
-		return
-	}
-	path := filepath.Join(dataDir, "sessions", sessionID, "history.jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatalf("create history dir: %v", err)
-	}
-	file, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("create history: %v", err)
-	}
-	defer file.Close()
-	for _, event := range events {
-		data, err := json.Marshal(agent.NewEventRecord(event))
-		if err != nil {
-			t.Fatalf("marshal history: %v", err)
-		}
-		if _, err := file.Write(append(data, '\n')); err != nil {
-			t.Fatalf("write history: %v", err)
-		}
-	}
+	return state
 }
 
 // nopWriteCloser wraps a Writer to implement WriteCloser

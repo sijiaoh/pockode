@@ -108,6 +108,7 @@ function ChatPanel({
 		isProcessRunning,
 		mode,
 		agentType,
+		isSessionActivated,
 		status,
 		sendUserMessage,
 		interrupt,
@@ -298,13 +299,13 @@ function ChatPanel({
 							<CustomAgentSelector
 								agentType={agentType}
 								onAgentTypeChange={setAgentType}
-								disabled={isStreaming || messages.length > 0}
+								disabled={isStreaming || isSessionActivated}
 							/>
 						) : (
 							<AgentSelector
 								agentType={agentType}
 								onAgentTypeChange={setAgentType}
-								disabled={isStreaming || messages.length > 0}
+								disabled={isStreaming || isSessionActivated}
 							/>
 						)}
 						{CustomModeSelector === null ? null : CustomModeSelector ? (

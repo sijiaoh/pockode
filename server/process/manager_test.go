@@ -699,3 +699,52 @@ func TestProcess_SendMessage_SetsRunning(t *testing.T) {
 		t.Errorf("expected running event after SendMessage, got %v", events)
 	}
 }
+
+// TestProcess_ActivationFollowsAgentOutput covers what "activated" is supposed
+// to mean. A first turn that dies before the agent says anything — expired
+// login, provider outage — leaves a session that never really started; marking
+// it activated would resume that non-existent conversation on the next message
+// and lock the session to the agent type that just failed.
+func TestProcess_ActivationFollowsAgentOutput(t *testing.T) {
+	ctx := context.Background()
+	store, _ := session.NewFileStore(t.TempDir())
+	if _, err := store.Create(ctx, "sess-1", session.AgentTypeClaude, session.ModeDefault); err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
+	defer m.Shutdown()
+
+	if _, _, err := m.GetOrCreateProcess(ctx, "sess-1", false, session.AgentTypeClaude, session.ModeDefault); err != nil {
+		t.Fatalf("failed to create process: %v", err)
+	}
+
+	// The whole of what a first message gets from Claude when the login has
+	// expired or the endpoint is unreachable, in order: retry banners, the CLI's
+	// own account of the failure, then a result flagged as an error (subtype
+	// "success", is_error set — the flag is what counts). Two traps are buried
+	// here — the banners are system events, which do mean a turn is under way but
+	// not that the agent said anything, and the account of the failure arrives as
+	// an assistant message, which the Claude parser has to keep off the text path
+	// for it to reach this layer as a warning (see
+	// claude.TestParseLine_FailedFirstTurnLeavesSessionSwitchable).
+	sess := mock.session(t, "sess-1")
+	sess.emit(t, agent.SystemEvent{Content: `{"subtype":"api_retry"}`})
+	sess.emit(t, agent.WarningEvent{
+		Message: "Invalid API key \u00b7 Fix external API key",
+		Code:    "authentication_failed",
+	})
+	sess.emit(t, agent.ErrorEvent{Error: "Invalid API key \u00b7 Fix external API key"})
+	waitForHistory(t, store, "sess-1", 3)
+
+	if meta, _, _ := store.Get("sess-1"); meta.Activated {
+		t.Error("a turn that produced no agent output should not activate the session")
+	}
+
+	sess.emit(t, agent.TextEvent{Content: "hi"})
+	waitUntil(t, "the session to be activated", func() bool {
+		meta, _, _ := store.Get("sess-1")
+		return meta.Activated
+	})
+}

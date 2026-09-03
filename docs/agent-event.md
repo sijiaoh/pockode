@@ -46,11 +46,12 @@ type AgentEvent interface {
 
 Terminal events end the current message response. Non-terminal events are appended to the active assistant message.
 
-"Terminal" above is about the message shown to the user. The process state machine
-asks two different questions of the same types — `AwaitsUserInput` and
-`IndicatesAgentActivity` — and they are neither complements nor the same split as
-this table, so a new event type has to answer both explicitly. See [What an Event
-Says About Process State](code/agent-integration.md#what-an-event-says-about-process-state).
+"Terminal" above is about the message shown to the user. The state layer asks
+three different questions of the same types — `AwaitsUserInput`,
+`IndicatesAgentActivity` and `ActivatesSession` — and they are neither complements
+nor the same split as this table, so a new event type has to answer all three
+explicitly. See [What an Event Says About Process
+State](code/agent-integration.md#what-an-event-says-about-process-state).
 
 #### Message Origin (user vs. system)
 

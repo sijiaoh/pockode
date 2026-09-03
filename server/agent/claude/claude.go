@@ -16,7 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
+
+	"github.com/google/uuid"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/filestore"
@@ -88,12 +89,15 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	}
 
 	resumeState := newClaudeResumeStateManager(opts, slog.With("sessionId", opts.SessionID))
-	providerSessionID, shouldResume := resumeState.resolve()
-	if providerSessionID != "" {
-		if shouldResume {
-			claudeArgs = append(claudeArgs, "--resume", providerSessionID)
+	launch := resumeState.resolve()
+	if launch.sessionID != "" {
+		if launch.resume {
+			claudeArgs = append(claudeArgs, "--resume", launch.sessionID)
+			if launch.fork {
+				claudeArgs = append(claudeArgs, "--fork-session")
+			}
 		} else {
-			claudeArgs = append(claudeArgs, "--session-id", providerSessionID)
+			claudeArgs = append(claudeArgs, "--session-id", launch.sessionID)
 		}
 	}
 
@@ -170,9 +174,21 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		defer stdout.Close()
 		defer stderr.Close()
 
+		// Drain stderr before anything can block on the event channel: the
+		// warning below waits for a consumer, and a CLI that fills the stderr
+		// pipe meanwhile would wedge instead of starting up.
 		stderrCh := agent.ReadStderr(stderr, "claude")
+
+		if warning, ok := resumeState.pendingWarning(); ok {
+			select {
+			case events <- warning:
+			case <-procCtx.Done():
+			}
+		}
+
 		streamOutput(procCtx, log, stdout, events, pendingRequests, resumeState, sess.declineControlRequest)
 		agent.WaitForProcess(procCtx, log, cmd, stderrCh, events)
+		resumeState.processExited(procCtx.Err() != nil)
 
 		// Notify client that process has ended (abnormal: process should stay alive)
 		select {
@@ -480,54 +496,137 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 
 // --- Resume state ---
 
+// Recovery stages of the resume ladder, persisted in claude_resume.json. A stage
+// says how the *next* launch should be attempted: processExited() escalates it
+// one rung when a launch fails, observe() resets it as soon as one works.
+const (
+	// recoveryNone is the healthy state: resume the recorded provider session.
+	recoveryNone = ""
+	// recoveryFork resumes the recorded session but lets the CLI mint a new ID
+	// for it, which sidesteps an ID that the CLI already owns while still
+	// carrying the agent-side context over.
+	recoveryFork = "fork"
+	// recoveryFresh gives up on the recorded session and starts a brand new one.
+	// Terminal stage: it never escalates further, so the ladder cannot loop.
+	recoveryFresh = "fresh"
+)
+
 type claudeResumeState struct {
 	SessionID string `json:"sessionId"`
+	Recovery  string `json:"recovery,omitempty"`
 }
 
+// claudeLaunch is how the CLI should be started for this session.
+type claudeLaunch struct {
+	sessionID string
+	// resume selects --resume over --session-id.
+	resume bool
+	// fork adds --fork-session, which only applies together with resume.
+	fork bool
+}
+
+// claudeResumeStateManager owns claude_resume.json: it picks how to launch the
+// CLI, records the provider session ID the CLI reports back, and walks a
+// recovery ladder when a launch turns out to be unusable.
 type claudeResumeStateManager struct {
 	opts agent.StartOptions
 	log  *slog.Logger
 
-	sessionID atomic.Value // string
-	saved     atomic.Bool
+	mu sync.Mutex
+	// persisted mirrors what we believe is on disk, so repeated observations
+	// don't rewrite an unchanged file.
+	persisted claudeResumeState
+	// anchorID is the provider session the ladder is trying to recover.
+	anchorID  string
+	stage     string
+	sawInit   bool
+	warnFresh bool
 }
 
 func newClaudeResumeStateManager(opts agent.StartOptions, log *slog.Logger) *claudeResumeStateManager {
-	m := &claudeResumeStateManager{opts: opts, log: log}
-	if opts.SessionID != "" {
-		m.sessionID.Store(opts.SessionID)
-	}
-	return m
+	return &claudeResumeStateManager{opts: opts, log: log}
 }
 
 func (m *claudeResumeStateManager) path() string {
 	return filepath.Join(m.opts.DataDir, "sessions", m.opts.SessionID, resumeStateFile)
 }
 
-func (m *claudeResumeStateManager) resolve() (providerSessionID string, resume bool) {
+// resolve decides how to launch the CLI, based on the recovery stage left
+// behind by the previous launch.
+//
+//	| state file            | launch                                      |
+//	|-----------------------|---------------------------------------------|
+//	| none, never activated | --session-id <pockodeID>                    |
+//	| none, activated       | --resume <pockodeID> --fork-session         |
+//	| recovery ""           | --resume <sessionId>                        |
+//	| recovery "fork"       | --resume <sessionId> --fork-session         |
+//	| recovery "fresh"      | --session-id <new UUID> (+ user warning)    |
+func (m *claudeResumeStateManager) resolve() claudeLaunch {
 	if m.opts.SessionID == "" {
-		return "", false
-	}
-	if !m.opts.Resume {
-		return m.opts.SessionID, false
+		return claudeLaunch{}
 	}
 
-	state, ok := m.load()
-	if ok && state.SessionID != "" {
-		m.sessionID.Store(state.SessionID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, _ := m.load()
+	m.persisted = state
+
+	if state.SessionID == "" {
+		m.anchorID = m.opts.SessionID
+		if !m.opts.Resume {
+			m.stage = recoveryNone
+			return claudeLaunch{sessionID: m.opts.SessionID}
+		}
+		// Activated but no provider ID recorded: a legacy session from before we
+		// persisted the mapping, or one whose state file was lost. Activation
+		// means the agent has answered here before, so the CLI already owns
+		// <pockodeID> — the init that carried that answer is what claims it —
+		// and reusing it as --session-id is fatal ("Session ID ... is already in
+		// use"). Forking resumes the transcript *and* mints a new ID, so the
+		// agent-side context survives instead of being thrown away.
+		m.stage = recoveryFork
+		m.log.Info("forking claude session with no recorded provider id")
+		return claudeLaunch{sessionID: m.opts.SessionID, resume: true, fork: true}
+	}
+
+	m.anchorID = state.SessionID
+	switch state.Recovery {
+	case recoveryFork:
+		m.stage = recoveryFork
+		m.log.Info("forking claude session after a failed resume", "claudeSessionId", state.SessionID)
+		return claudeLaunch{sessionID: state.SessionID, resume: true, fork: true}
+	case recoveryFresh:
+		m.stage = recoveryFresh
+		m.warnFresh = true
+		// The CLI rejects anything that is not a UUID, so mint a real one.
+		newID := uuid.Must(uuid.NewV7()).String()
+		m.log.Warn("starting a new claude session after resume attempts failed",
+			"unusableSessionId", state.SessionID, "claudeSessionId", newID)
+		return claudeLaunch{sessionID: newID}
+	default:
+		m.stage = recoveryNone
 		m.log.Info("resuming claude session", "claudeSessionId", state.SessionID)
-		return state.SessionID, true
+		return claudeLaunch{sessionID: state.SessionID, resume: true}
 	}
+}
 
-	if m.hasAssistantHistory() {
-		m.sessionID.Store(m.opts.SessionID)
-		m.save(m.opts.SessionID)
-		m.log.Info("migrated legacy claude session", "claudeSessionId", m.opts.SessionID)
-		return m.opts.SessionID, true
+// pendingWarning reports the warning owed to the user when the ladder had to
+// abandon the previous provider session.
+//
+// The caller must emit it from the streaming goroutine: the event channel is
+// unbuffered, so sending from Start() would deadlock before a consumer exists.
+func (m *claudeResumeStateManager) pendingWarning() (agent.WarningEvent, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.warnFresh {
+		return agent.WarningEvent{}, false
 	}
-
-	m.log.Info("starting new claude session because resume state is missing")
-	return m.opts.SessionID, false
+	m.warnFresh = false
+	return agent.WarningEvent{
+		Message: "Claude could not reopen this session's earlier conversation, so it is starting over without those messages. The transcript above is unaffected.",
+		Code:    "session_not_resumable",
+	}, true
 }
 
 func (m *claudeResumeStateManager) load() (claudeResumeState, bool) {
@@ -543,63 +642,83 @@ func (m *claudeResumeStateManager) load() (claudeResumeState, bool) {
 	return state, true
 }
 
-func (m *claudeResumeStateManager) save(sessionID string) {
-	if sessionID == "" {
+// save persists state unless it already matches what is on disk. Callers must
+// hold m.mu.
+func (m *claudeResumeStateManager) save(state claudeResumeState) {
+	// Without a Pockode session there is nothing to resume later, and path()
+	// would point at a stray file shared by every anonymous session.
+	if m.opts.SessionID == "" || state == m.persisted {
 		return
 	}
-	data, err := json.Marshal(claudeResumeState{SessionID: sessionID})
+	data, err := json.Marshal(state)
 	if err != nil {
 		m.log.Error("failed to marshal claude resume state", "error", err)
 		return
 	}
 	if err := filestore.WriteFileAtomic(m.path(), data, 0644); err != nil {
 		m.log.Error("failed to write claude resume state", "error", err)
+		return
 	}
+	m.persisted = state
 }
 
+// observe records the provider session ID as soon as the CLI reports it.
+//
+// The init event is the earliest point at which the ID exists, and it is also
+// the point at which the CLI creates <id>.jsonl and owns that ID forever. Any
+// later checkpoint (the first assistant message, say) leaves a window where a
+// failed turn burns an ID we never wrote down. The CLI repeats init at the start
+// of every turn, so save() deduplicates against what is already on disk.
 func (m *claudeResumeStateManager) observe(event cliEvent) {
-	if event.SessionID != "" {
-		m.sessionID.Store(event.SessionID)
-	}
-	if event.Type != "assistant" || m.saved.Load() {
+	if event.Type != "system" || event.Subtype != "init" || event.SessionID == "" {
 		return
 	}
-	sessionID, _ := m.sessionID.Load().(string)
-	if sessionID == "" {
-		return
-	}
-	m.save(sessionID)
-	m.saved.Store(true)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.sawInit = true
+	m.anchorID = event.SessionID
+	m.stage = recoveryNone
+	// Reaching init means the launch worked, so the ladder resets.
+	m.save(claudeResumeState{SessionID: event.SessionID})
 }
 
-func (m *claudeResumeStateManager) hasAssistantHistory() bool {
-	path := filepath.Join(m.opts.DataDir, "sessions", m.opts.SessionID, "history.jsonl")
-	file, err := os.Open(path)
-	if err != nil {
-		return false
+// processExited walks the recovery ladder one step when the CLI died without
+// ever reporting a session.
+//
+// Never seeing init means the launch itself failed: both "Session ID ... is
+// already in use" and "No conversation found with session ID ..." abort before
+// the first turn. This is only a valid failure signal because a process is
+// always created to carry a message — chat.Client.sendEvent is the sole caller
+// of GetOrCreateProcess and sends immediately after. A CLI started with nothing
+// to do exits cleanly without emitting init, and would be misread as a failure.
+//
+// cancelled means we killed the process ourselves (Close, shutdown), which says
+// nothing about whether the session is usable.
+func (m *claudeResumeStateManager) processExited(cancelled bool) {
+	if m.opts.SessionID == "" || cancelled {
+		return
 	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-	for scanner.Scan() {
-		var record struct {
-			Type agent.EventType `json:"type"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			continue
-		}
-		switch record.Type {
-		case agent.EventTypeText, agent.EventTypeToolCall, agent.EventTypeToolResult,
-			agent.EventTypeDone, agent.EventTypeInterrupted, agent.EventTypePermissionRequest,
-			agent.EventTypeAskUserQuestion:
-			return true
-		}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.sawInit {
+		return
 	}
-	if err := scanner.Err(); err != nil {
-		m.log.Warn("failed to scan claude history for legacy migration", "error", err)
+	next := nextRecovery(m.stage)
+	m.log.Warn("claude exited before reporting a session; escalating recovery",
+		"claudeSessionId", m.anchorID, "recovery", next)
+	m.save(claudeResumeState{SessionID: m.anchorID, Recovery: next})
+}
+
+func nextRecovery(stage string) string {
+	if stage == recoveryNone {
+		return recoveryFork
 	}
-	return false
+	// fork and the terminal fresh stage both go to fresh.
+	return recoveryFresh
 }
 
 // --- Types ---
@@ -684,6 +803,7 @@ type cliEvent struct {
 }
 
 type cliMessage struct {
+	Model   string            `json:"model"`
 	Content []cliContentBlock `json:"content"`
 }
 
@@ -707,11 +827,12 @@ type cliContentBlock struct {
 type declineFunc func(requestID, message string)
 
 // parseLine converts one already-decoded stream-json envelope into agent events.
-// line is retained for the cases (result, control_*) that decode a superset struct.
+// line is retained for the cases (assistant, result, control_*) that decode a
+// superset struct.
 func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, decline declineFunc) []agent.AgentEvent {
 	switch event.Type {
 	case "assistant":
-		return parseAssistantEvent(log, event)
+		return parseAssistantEvent(log, line, event)
 	case "user":
 		return parseUserEvent(log, event)
 	case "result":
@@ -950,7 +1071,79 @@ func parseControlCancelRequest(log *slog.Logger, line []byte, pendingRequests *s
 	return []agent.AgentEvent{agent.RequestCancelledEvent{RequestID: req.RequestID}}
 }
 
-func parseAssistantEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
+// syntheticModel is what the CLI puts in an assistant message it wrote itself
+// instead of receiving from a model. Where: `message.model` on the assistant
+// frame, as spelled by claude 2.1.259.
+const syntheticModel = "<synthetic>"
+
+// syntheticNoticeCode labels a synthetic message the CLI did not attribute to a
+// specific failure. Where: the assistant frame's own `error` field supplies the
+// label when there is one ("authentication_failed", "server_error", ...).
+const syntheticNoticeCode = "synthetic_message"
+
+// assistantEnvelope holds the assistant frame fields that sit beside `message`
+// rather than inside it. Decoded here rather than added to cliEvent so that a
+// CLI spelling one of them differently costs this one label instead of the
+// envelope of every frame — a failed cliEvent decode turns the whole line into
+// raw text, which does start the session.
+type assistantEnvelope struct {
+	Error string `json:"error"`
+}
+
+// syntheticNotice converts an assistant message the CLI generated itself into a
+// warning instead of agent output.
+//
+// These are the CLI's announcement surface, not the agent answering: an expired
+// login ends a turn with "Invalid API key · Fix external API key", a provider
+// outage with "API Error: 529 Overloaded". Measured on claude 2.1.259 against a
+// local endpoint that always answers 401: the turn emits init, ten
+// system/api_retry banners, then this message, then its result.
+//
+// Why it must not be a TextEvent: text starts the session
+// (agent.EventType.ActivatesSession), which locks it to the current agent type.
+// A first turn that never reached the model would then be stuck on the agent
+// that just failed — the one situation where switching agents is the only way
+// out. Warnings do not start a session, and they render as their own banner, so
+// the user still reads the same words.
+//
+// Applied to every synthetic message, including the benign ones (the CLI answers
+// its own resume continuation prompt with "No response requested."). Keeping a
+// second class on the text path would restore the same bug for whichever notice
+// fell into it, and a message with no model behind it is never the agent
+// contributing to the conversation regardless of what it says.
+func syntheticNotice(log *slog.Logger, line []byte, msg cliMessage) []agent.AgentEvent {
+	var textParts []string
+	for _, block := range msg.Content {
+		if block.Type != "text" {
+			// Nothing wrote these but the CLI itself, and it has no model to call
+			// a tool with — every synthetic message on record carries one text
+			// block and nothing else. Say so out loud rather than drop it, so a
+			// CLI that breaks the assumption is visible instead of silent.
+			log.Warn("ignoring non-text block in a synthetic assistant message",
+				"blockType", block.Type)
+			continue
+		}
+		if block.Text != "" {
+			textParts = append(textParts, block.Text)
+		}
+	}
+	if len(textParts) == 0 {
+		return nil
+	}
+
+	code := syntheticNoticeCode
+	var envelope assistantEnvelope
+	if err := json.Unmarshal(line, &envelope); err == nil && envelope.Error != "" {
+		code = envelope.Error
+	}
+
+	return []agent.AgentEvent{agent.WarningEvent{
+		Message: strings.Join(textParts, ""),
+		Code:    code,
+	}}
+}
+
+func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent) []agent.AgentEvent {
 	if event.Message == nil {
 		log.Warn("assistant event message is nil", "subtype", event.Subtype)
 		return nil
@@ -960,6 +1153,10 @@ func parseAssistantEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 	if err := json.Unmarshal(event.Message, &msg); err != nil {
 		log.Warn("failed to parse assistant message from CLI", "error", err)
 		return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message)}}
+	}
+
+	if msg.Model == syntheticModel {
+		return syntheticNotice(log, line, msg)
 	}
 
 	var events []agent.AgentEvent

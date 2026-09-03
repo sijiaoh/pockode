@@ -178,7 +178,13 @@ func (c *Client) liveProcess(sessionID string) (*process.Process, error) {
 	return proc, nil
 }
 
-// getOrCreateProcess handles session validation, process creation, and activation.
+// getOrCreateProcess handles session validation and process creation.
+//
+// Activation is not decided here: a session counts as started once the agent
+// produces output, which the process manager sees and records. Marking it here
+// would claim a session had started whenever the CLI merely spawned, and a first
+// turn that failed outright would then be resumed — and locked to its agent
+// type — as if it had run.
 func (c *Client) getOrCreateProcess(ctx context.Context, sessionID string) (*process.Process, error) {
 	meta, found, err := c.store.Get(sessionID)
 	if err != nil {
@@ -188,17 +194,9 @@ func (c *Client) getOrCreateProcess(ctx context.Context, sessionID string) (*pro
 		return nil, ErrSessionNotFound
 	}
 
-	resume := meta.Activated
-	proc, created, err := c.pm.GetOrCreateProcess(ctx, sessionID, resume, meta.AgentType, meta.Mode)
+	proc, _, err := c.pm.GetOrCreateProcess(ctx, sessionID, meta.Activated, meta.AgentType, meta.Mode)
 	if err != nil {
 		return nil, err
-	}
-
-	// Activate session on first process creation
-	if created && !resume {
-		if err := c.store.Activate(ctx, sessionID); err != nil {
-			slog.Error("failed to activate session", "sessionId", sessionID, "error", err)
-		}
 	}
 
 	return proc, nil

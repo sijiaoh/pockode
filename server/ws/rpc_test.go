@@ -573,6 +573,86 @@ func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 	}
 }
 
+// TestHandler_FailedFirstTurn_KeepsAgentTypeSwitchable covers the escape hatch a
+// session needs when its very first turn fails before the agent says anything.
+// Nothing was started, so the session must not be treated as started: the user
+// can still move it to another agent instead of being stuck retrying the one
+// whose login expired.
+func TestHandler_FailedFirstTurn_KeepsAgentTypeSwitchable(t *testing.T) {
+	mock := &mockAgent{
+		// What Claude emits for a first message it cannot deliver, measured on
+		// 2.1.259 against an endpoint answering 401: retry banners (system events),
+		// the CLI's own account of the failure, then a result flagged as an error
+		// (subtype "success", is_error set — the flag is what counts). The account
+		// comes over the wire as an assistant message and only reaches this layer
+		// as a warning because the Claude parser keeps synthetic messages off the
+		// text path — read as agent output it would start the session and take the
+		// escape hatch away in precisely this scenario.
+		events: []agent.AgentEvent{
+			agent.SystemEvent{Content: `{"subtype":"api_retry"}`},
+			agent.WarningEvent{
+				Message: "Invalid API key \u00b7 Fix external API key",
+				Code:    "authentication_failed",
+			},
+			agent.ErrorEvent{Error: "Invalid API key \u00b7 Fix external API key"},
+		},
+	}
+	env := newTestEnv(t, mock)
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "failed-session", session.AgentTypeClaude, "")
+
+	env.subscribeChatMessages("failed-session")
+	env.sendMessage("failed-session", "hello")
+	env.skipN(4) // api_retry, warning, error, done
+
+	sess, _, _ := store.Get("failed-session")
+	if sess.Activated {
+		t.Error("expected session to stay unactivated after a turn with no agent output")
+	}
+
+	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
+		SessionID: "failed-session",
+		AgentType: session.AgentTypeCodex,
+	})
+	if resp.Error != nil {
+		t.Errorf("expected agent type change to be allowed, got %s", resp.Error.Message)
+	}
+
+	// The failed turn's process can still be alive — Codex's mcp-server outlives
+	// a turn it could not run. Reusing it would send the next message to the
+	// agent the user just switched away from.
+	if env.getMainWorktree().ProcessManager.HasProcess("failed-session") {
+		t.Error("expected the old agent's process to be closed by the switch")
+	}
+}
+
+// TestHandler_SessionWithAgentOutput_LocksAgentType is the other half: once the
+// agent has actually produced output there is a conversation on the agent's side,
+// and switching backends would silently abandon it.
+func TestHandler_SessionWithAgentOutput_LocksAgentType(t *testing.T) {
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			agent.TextEvent{Content: "Response"},
+			agent.DoneEvent{},
+		},
+	}
+	env := newTestEnv(t, mock)
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "started-session", session.AgentTypeClaude, "")
+
+	env.subscribeChatMessages("started-session")
+	env.sendMessage("started-session", "hello")
+	env.skipN(2) // text, done
+
+	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
+		SessionID: "started-session",
+		AgentType: session.AgentTypeCodex,
+	})
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "cannot change agent type after session has started") {
+		t.Errorf("expected rejection for a session the agent has answered in, got %+v", resp)
+	}
+}
+
 func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
