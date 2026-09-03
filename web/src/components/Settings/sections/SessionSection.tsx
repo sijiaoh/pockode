@@ -11,6 +11,7 @@ function ToggleGroup<T extends string>({
 	selected,
 	onSelect,
 	getInfo,
+	hint,
 }: {
 	label: string;
 	items: readonly T[];
@@ -20,6 +21,7 @@ function ToggleGroup<T extends string>({
 		label: string;
 		icon: React.ComponentType<{ className?: string }>;
 	};
+	hint?: string;
 }) {
 	return (
 		<div className="space-y-1.5">
@@ -51,6 +53,9 @@ function ToggleGroup<T extends string>({
 					);
 				})}
 			</div>
+			{hint && (
+				<p className="whitespace-pre-line text-xs text-th-text-muted">{hint}</p>
+			)}
 		</div>
 	);
 }
@@ -79,6 +84,7 @@ export default function SessionSection() {
 				selected={defaultMode}
 				onSelect={(mode) => updateSettings({ default_mode: mode })}
 				getInfo={(mode) => getSessionModeInfo(mode, agentType)}
+				hint={getSessionModeInfo(defaultMode, agentType).description}
 			/>
 		</div>
 	);
