@@ -182,6 +182,12 @@ embedded in the Claude binary, whose `.describe()` annotations the online
 documentation omits or contradicts, and the `protocol/` and `mcp-server/` crates
 at the matching `openai/codex` tag.
 
+Codex is by now the exception to that "one observed CLI": the event mapping was
+read at 0.130.0, but the approval path — policy values, elicitation payloads,
+response shapes, and where begin events fall around an approval — was re-checked
+live against **0.153.0**, which is where the captured approval fixtures in
+`agent/codex/mcp_test.go` come from.
+
 The versions are written down because these findings expire. When a mapping stops
 working, the useful question is which version changed what, and the way to answer
 it is to re-run the CLI and diff against the baseline rather than reason about it.
@@ -461,7 +467,10 @@ Codex is the one agent Pockode cannot resume. A thread lives in the memory of th
 
 ### Elicitation (Permission Requests)
 
-Codex uses `elicitation/create` notifications to request user authorization:
+Codex uses `elicitation/create` notifications to request user authorization.
+Which actions get this far is a question of the session mode rather than of this
+path: in `default`, almost nothing inside Codex's sandbox reaches it (see
+[Session Modes](#session-modes)):
 
 ```json
 {
@@ -486,6 +495,36 @@ Pockode handling flow:
 4. Wait for user response via `chat.permission_response`
 5. Send MCP response: `{"action": "accept", "decision": "approved"}`
 
+`decision` is deserialized into Codex's `ReviewDecision`, an externally tagged
+enum, so the two answers do not have the same shape. The approvals are unit
+variants and travel as bare strings (`"approved"`, `"approved_for_session"`), but
+a refusal is a struct variant and has to carry its reason:
+
+```json
+{"action": "decline", "decision": {"denied": {"rejection": "The user denied this request."}}}
+```
+
+Sending the bare string `"denied"` fails silently in the direction that matters:
+Codex still blocks the request — an approval it cannot read is not an approval —
+but it drops the refusal, logs `failed to deserialize {Exec,Patch}ApprovalResponse`
+to stderr, and tells the model `approval request failed` instead of why. Because
+it blocks either way, no assertion that the denied work did not happen can tell
+the two apart; the difference is only in what comes back. The `rejection` string
+is what the model reads, and for a patch it is also `patch_apply_end`'s `stderr`,
+so it reaches the transcript as user-visible text rather than a log line.
+
+The two kinds are not equally reachable from a test, which is why only one of
+them is in the integration suite. An exec approval is asked *before* the command
+runs and the approved command then runs outside the sandbox, so it needs nothing
+working from the sandbox. A patch approval does: `apply_patch` verifies its
+target through Codex's filesystem sandbox helper — bubblewrap on Linux — so on a
+host that restricts unprivileged user namespaces
+(`kernel.apparmor_restrict_unprivileged_userns=1`, the Ubuntu 24.04 default) the
+patch fails while merely *reading* the file, long before Codex decides an
+approval is needed. No prompt can work around that. So the patch path is pinned
+by unit tests against captured payloads instead, and reproducing it live means a
+privileged container.
+
 ### Codex Event Mapping
 
 | Codex Event | Agent Event |
@@ -509,7 +548,9 @@ arrive from. So the place an event is constructed answers the wrong question —
 whether a legacy event still reaches us is decided by that compatibility layer,
 and reading only the constructor makes a live event look removed.
 
-`exec_approval_request` and `apply_patch_approval_request` deliberately map to nothing. Codex emits the begin event of a command or patch *before* it asks for approval, and the approval request repeats the same `call_id`, so emitting a tool call for both shows the same work twice and leaves one copy without a result. A denied command still reports back: Codex answers it with an `exec_command_end` carrying the rejection message and `exit_code: -1`.
+`exec_approval_request` and `apply_patch_approval_request` deliberately map to nothing. Each announces the same approval Codex is already raising as an `elicitation/create` with the same `call_id`, and that elicitation is what becomes the `PermissionRequestEvent` — so anything derived from these two would be a second copy of a prompt the user already has. They are no better as a source for the tool call: a patch has already emitted `patch_apply_begin` by the time it asks, so that would double it, while a command emits `exec_command_begin` only once approved (checked on codex-cli 0.153.0). Where the begin event falls relative to the approval is per-kind, not a rule to build on.
+
+A refusal reports back differently by kind too, which is why the tool result is not where a denial can be detected. A denied patch still gets a `patch_apply_end` (`success: false`, `stderr` set to the `rejection` string). A denied command gets nothing at all — no begin, no end — and the refusal reaches the model only inside its own tool output.
 
 The `error` event is likewise logged and not forwarded. Upstream's tool runner
 always answers the `tools/call` and stops the turn after emitting it, so the
@@ -519,6 +560,59 @@ same failure twice.
 Everything else is dropped through an explicit ignore list (`ignoredCodexEvents`) rather than forwarded. Codex emits 70+ event types — per-turn bookkeeping, token deltas, and a second copy of the whole turn in "thread item" shape — so a parser that forwards what it does not recognise fills the transcript with noise every time upstream adds a type. The list also keeps the default branch meaning "type we have never seen", which is what the debug log is for. Events that carry real information Pockode has no surface for yet (`agent_reasoning*`, `plan_update`, `web_search_*`, `turn_diff`) are listed there by choice, not by accident.
 
 ## Permission Handling Mechanism
+
+### Session Modes
+
+A session runs in one of two modes, `default` or `yolo`, and each CLI is told
+which one at startup and only there — Claude through its arguments, Codex through
+the `approval-policy` / `sandbox` pair on the `codex` tool call, which
+`codex-reply` does not accept. `session.set_mode` therefore closes the running
+process instead of retuning it. For Codex that costs more than a restart: the
+thread cannot be resumed, so switching mode mid-session takes the earlier turns
+away from the agent (see [No Session Recovery](#no-session-recovery)).
+
+| Mode | Claude | Codex |
+|---|---|---|
+| `default` | `--permission-prompt-tool stdio`, no allowlist | `approval-policy: on-request`, `sandbox: workspace-write` |
+| `yolo` | adds `--permission-mode bypassPermissions` | `approval-policy: never`, `sandbox: danger-full-access` |
+
+Read as a promise to the user, those two `default` cells say different things.
+Claude's puts everything its own rules gate — file edits and commands among
+them — in front of the user as a `PermissionRequestEvent`, since Pockode adds no
+allowlist of its own. Codex's gates nothing inside its sandbox: the working
+directory, `$TMPDIR` and `/tmp` are writable (checked on Linux, codex-cli
+0.153.0) and work there simply happens. Only what the sandbox refuses — writing
+outside those roots, reaching the network — can produce a prompt at all.
+
+**That gap cannot be closed.** `untrusted`, the policy Pockode relied on to make
+Codex ask before running a command, is gone: `approval-policy` now enumerates
+`on-request` and `never` and nothing else, from the tool schema and `config.toml`
+alike (`codex.go:buildStartConfig` carries the exact errors). What is left is a
+choice between sandbox modes, and `read-only` — the only remaining setting that
+would still put an approval in front of workspace edits — was rejected on product
+grounds rather than technical ones: on a phone, tapping approve for every write of
+a multi-file edit is not a safety feature, it is an unusable session. So `default`
+maps to `on-request` + `workspace-write` — the pairing Codex itself runs by
+default, which `codex doctor` reports as `approval policy OnRequest` with a
+restricted filesystem and network sandbox — and "Codex changed files without
+asking" is the accepted cost of that trade rather than a regression to undo.
+
+**Under `on-request` the prompt is a model decision, not a gate.** The CLI
+describes the policy as "the model decides when to ask the user for approval"
+(codex-cli 0.153.0). A sandbox-blocked action may equally just fail and be handed
+back to the model, with the escalation arriving only afterwards — or never. What
+is enforced is the sandbox; the prompt is how the model asks for it to be lifted
+for one action. The integration suite holds that line: a first approval preceded
+by any tool result means the CLI asked only after something failed, and the suite
+fails such a run rather than counting it as a boundary that worked.
+
+`yolo` needs no such distinction — nothing prompts, on either agent — even though
+the mechanisms differ, Codex additionally dropping the sandbox it otherwise runs
+under. That difference does not change what the user is promised, which is why
+only `default` has to be told apart. The frontend copy is therefore keyed on
+agent as well as mode (`web/src/lib/sessionMode.ts`); one shared string would
+have to describe the looser of the two `default`s, which is how a UI ends up
+promising more protection than the session actually has.
 
 ### Permission Options
 
