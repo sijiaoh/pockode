@@ -970,6 +970,114 @@ func TestAutoResumer_ProcessEndedNoopWhenWorkWaiting(t *testing.T) {
 	}
 }
 
+// --- session tracking cleanup ---
+
+// trackedSessions reports how many sessions the resumer still holds state for.
+func trackedSessions(r *AutoResumer) (retries, activations int) {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	return len(r.retries), len(r.activations)
+}
+
+// continuationPending reports whether an auto-continuation is still in flight.
+// A pending one suppresses the process-ended handler, so a test that wants that
+// handler to run must wait this out first.
+func continuationPending(r *AutoResumer, sessionID string) bool {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	return r.continuing[sessionID]
+}
+
+func TestAutoResumer_ProcessEndedForgetsSessionTracking(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// One activation and one consumed retry to clean up.
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
+	waitFor(t, func() bool { return !continuationPending(resumer, sid) })
+
+	if retries, activations := trackedSessions(resumer); retries != 1 || activations != 1 {
+		t.Fatalf("precondition: tracked %d retries and %d activations, want 1 each", retries, activations)
+	}
+
+	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
+
+	waitFor(t, func() bool {
+		retries, activations := trackedSessions(resumer)
+		return retries == 0 && activations == 0
+	})
+}
+
+// TestAutoResumer_ProcessEndedForgetsSessionWithoutWork covers the only tracking
+// a work-less session ever gets: no work item means no OnWorkChange to clean up
+// after it.
+func TestAutoResumer_ProcessEndedForgetsSessionWithoutWork(t *testing.T) {
+	_, resumer, _ := setupResumerTest(t)
+
+	sid := "session-without-work"
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
+
+	waitFor(t, func() bool {
+		_, activations := trackedSessions(resumer)
+		return activations == 0
+	})
+}
+
+func TestAutoResumer_WorkChangeForgetsSessionTracking(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		event ChangeEvent
+	}{
+		{"closed", ChangeEvent{Op: OperationUpdate, Work: Work{ID: "w1", Status: StatusClosed, SessionID: "session-1"}}},
+		{"stopped", ChangeEvent{Op: OperationUpdate, Work: Work{ID: "w1", Status: StatusStopped, SessionID: "session-1"}}},
+		{"deleted", ChangeEvent{Op: OperationDelete, Work: Work{ID: "w1", Status: StatusInProgress, SessionID: "session-1"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, resumer, _ := setupResumerTest(t)
+
+			resumer.HandleProcessStateChange("session-1", "running", false, false, false)
+			resumer.OnWorkChange(tc.event)
+
+			if retries, activations := trackedSessions(resumer); retries != 0 || activations != 0 {
+				t.Errorf("tracked %d retries and %d activations, want none after %s", retries, activations, tc.name)
+			}
+		})
+	}
+}
+
+// TestAutoResumer_ForgottenSessionGetsFreshActivationNumber pins the reason
+// activation numbers are globally unique. A follow-up captured before the
+// cleanup must still see the session's next turn as a newer activation — a
+// counter restarting at 1 would look identical to it and stop work that is
+// running right now.
+func TestAutoResumer_ForgottenSessionGetsFreshActivationNumber(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	outlast := widenSettleDelay(resumer)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, true)
+
+	// A stop inside the settle window drops the session's tracking, and the
+	// session then starts a new turn. The pending interrupt must read that turn
+	// as a newer activation and leave the work alone.
+	resumer.OnWorkChange(ChangeEvent{Op: OperationUpdate, Work: Work{ID: story.ID, Status: StatusStopped, SessionID: sid}})
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+
+	time.Sleep(outlast)
+	if w := getWork(t, store, story.ID); w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q for a session running again after cleanup", w.Status, StatusInProgress)
+	}
+}
+
 // --- StopOrphanedWork ---
 
 func TestAutoResumer_StopOrphanedWork(t *testing.T) {

@@ -61,9 +61,14 @@ type AutoResumer struct {
 	retryMu      sync.Mutex
 	retries      map[string]int    // sessionID → retry count
 	continuing   map[string]bool   // sessionID → auto-continuation pending
-	activations  map[string]uint64 // sessionID → number of times the session started running
-	maxRetries   int
-	settleDelay  time.Duration // delay before checking work status after process stop
+	activations  map[string]uint64 // sessionID → sequence number of the session's latest start
+	// Numbers activations globally rather than per session, so that an entry
+	// dropped by forgetSession is never re-created with a number some pending
+	// follow-up captured before the drop — that would make a stale event look
+	// current and stop work the session is running right now.
+	activationSeq uint64
+	maxRetries    int
+	settleDelay   time.Duration // delay before checking work status after process stop
 }
 
 // defaultSettleDelay is the time to wait after a process goes idle/ends before
@@ -199,7 +204,8 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 	// whose work was stopped (e.g. after process exit), bypassing work_start.
 	if state == "running" {
 		r.retryMu.Lock()
-		r.activations[sessionID]++
+		r.activationSeq++
+		r.activations[sessionID] = r.activationSeq
 		r.retryMu.Unlock()
 		r.handleProcessRunning(sessionID)
 		return
@@ -241,8 +247,9 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 // session can start running again inside the delay: an aborted turn is followed
 // immediately by its replacement, and a user can answer a dead session's prompt,
 // which builds a new process. Acting on the older event would then stop or nudge
-// work that is running right now. activation is the count read when the event
-// arrived; HandleProcessStateChange bumps it on every running.
+// work that is running right now. activation is the number read when the event
+// arrived; HandleProcessStateChange assigns a new one on every running, so any
+// change — including the entry being dropped — means the event is stale.
 func (r *AutoResumer) settled(sessionID string, activation uint64) bool {
 	select {
 	case <-time.After(r.settleDelay):
@@ -269,6 +276,11 @@ func (r *AutoResumer) handleProcessEnded(sessionID string, activation uint64) {
 		return
 	}
 
+	// The session stopped and never came back within the settle window, so nothing
+	// is left to follow up on. This is the only cleanup a session without a work
+	// item ever gets — OnWorkChange never fires for one.
+	defer r.forgetSession(sessionID)
+
 	w := r.findWorkBySessionID(sessionID, StatusInProgress, StatusNeedsInput, StatusWaiting)
 	if w == nil {
 		return
@@ -281,10 +293,15 @@ func (r *AutoResumer) handleProcessEnded(sessionID string, activation uint64) {
 	} else {
 		slog.Info("work stopped after process ended", "workId", w.ID, "sessionId", sessionID)
 	}
+}
 
-	// Clean up retry tracking
+// forgetSession drops all per-session tracking once nothing is following up on
+// the session. Safe to call while a follow-up is still in flight: the dropped
+// activation reads back as 0, which that follow-up sees as a mismatch and skips.
+func (r *AutoResumer) forgetSession(sessionID string) {
 	r.retryMu.Lock()
 	delete(r.retries, sessionID)
+	delete(r.activations, sessionID)
 	r.retryMu.Unlock()
 }
 
@@ -382,9 +399,7 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 	// Clean up tracking state on delete
 	if event.Op == OperationDelete {
 		if event.Work.SessionID != "" {
-			r.retryMu.Lock()
-			delete(r.retries, event.Work.SessionID)
-			r.retryMu.Unlock()
+			r.forgetSession(event.Work.SessionID)
 		}
 		return
 	}
@@ -393,12 +408,11 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 		return
 	}
 
-	// Reset retries when work completes or stops
+	// Drop tracking when work completes or stops; a later turn on the same session
+	// starts from a clean retry count and a fresh activation number.
 	if event.Work.Status == StatusClosed || event.Work.Status == StatusStopped {
 		if event.Work.SessionID != "" {
-			r.retryMu.Lock()
-			delete(r.retries, event.Work.SessionID)
-			r.retryMu.Unlock()
+			r.forgetSession(event.Work.SessionID)
 		}
 	}
 
