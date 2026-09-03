@@ -279,7 +279,7 @@ Built-in themes are typed (`ThemeName`), custom themes are runtime-registered.
 Allows extensions to replace UI components:
 
 ```typescript
-// web/src/lib/registries/chatUIRegistry.ts:40-67
+// web/src/lib/registries/chatUIRegistry.ts:41-68
 export interface ChatUIConfig {
   UserAvatar?: ComponentType<AvatarProps>;
   AssistantAvatar?: ComponentType<AvatarProps>;

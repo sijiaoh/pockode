@@ -1,5 +1,5 @@
 import { AGENT_TYPE_INFO, AGENT_TYPES } from "../../../lib/agentType";
-import { SESSION_MODE_INFO, SESSION_MODES } from "../../../lib/sessionMode";
+import { getSessionModeInfo, SESSION_MODES } from "../../../lib/sessionMode";
 import { useSettingsStore } from "../../../lib/settingsStore";
 import { useWSStore } from "../../../lib/wsStore";
 import type { SessionMode } from "../../../types/message";
@@ -78,7 +78,7 @@ export default function SessionSection() {
 				items={SESSION_MODES}
 				selected={defaultMode}
 				onSelect={(mode) => updateSettings({ default_mode: mode })}
-				getInfo={(mode) => SESSION_MODE_INFO[mode]}
+				getInfo={(mode) => getSessionModeInfo(mode, agentType)}
 			/>
 		</div>
 	);

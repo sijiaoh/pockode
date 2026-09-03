@@ -310,12 +310,14 @@ function ChatPanel({
 						{CustomModeSelector === null ? null : CustomModeSelector ? (
 							<CustomModeSelector
 								mode={mode}
+								agentType={agentType}
 								onModeChange={setMode}
 								disabled={isStreaming}
 							/>
 						) : (
 							<ModeSelector
 								mode={mode}
+								agentType={agentType}
 								onModeChange={setMode}
 								disabled={isStreaming}
 							/>

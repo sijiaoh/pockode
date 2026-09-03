@@ -90,7 +90,12 @@ describe("ChatPanel", () => {
 		mockState.chatMessagesSubscribe.mockImplementation(() =>
 			Promise.resolve({
 				id: "sub-1",
-				initial: { history: mockState.mockHistory, state: "ended" },
+				initial: {
+					history: mockState.mockHistory,
+					state: "ended",
+					mode: "default",
+					agent_type: "claude",
+				},
 			}),
 		);
 		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
@@ -268,6 +273,7 @@ describe("ChatPanel", () => {
 					initial: {
 						history: [],
 						state: "ended",
+						mode: "default",
 						agent_type: "codex",
 					},
 				}),

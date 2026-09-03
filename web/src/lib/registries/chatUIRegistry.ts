@@ -15,6 +15,7 @@ export interface InputBarProps {
 
 export interface ModeSelectorProps {
 	mode: "default" | "yolo";
+	agentType: "claude" | "codex";
 	onModeChange: (mode: "default" | "yolo") => Promise<void>;
 	disabled?: boolean;
 }
