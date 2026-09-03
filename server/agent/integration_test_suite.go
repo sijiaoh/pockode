@@ -4,6 +4,9 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -67,54 +70,62 @@ func RunIntegrationTests(t *testing.T, newAgent func() Agent, opts IntegrationTe
 }
 
 type chatCase struct {
-	name       string
-	prompt     string
+	name string
+	// prompt is built per run because the approval cases need a fresh
+	// out-of-sandbox path that only that run may write to.
+	prompt     func(t *testing.T) string
 	expectType EventType
 	mode       session.Mode
+}
+
+func staticPrompt(prompt string) func(*testing.T) string {
+	return func(*testing.T) string { return prompt }
 }
 
 func runChatTests(t *testing.T, newAgent func() Agent, opts IntegrationTestOptions) {
 	cases := []chatCase{
 		{
 			name:       "TextEvent",
-			prompt:     "Hi",
+			prompt:     staticPrompt("Hi"),
 			expectType: EventTypeText,
 		},
 		{
 			name:       "ToolCallEvent",
-			prompt:     "Run this exact bash command: echo hi",
+			prompt:     staticPrompt("Run this exact bash command: echo hi"),
 			expectType: EventTypeToolCall,
 		},
 		{
 			name:       "ToolResultEvent",
-			prompt:     "Run this exact bash command: echo hi",
+			prompt:     staticPrompt("Run this exact bash command: echo hi"),
 			expectType: EventTypeToolResult,
 		},
 		{
-			name:       "PermissionRequestEvent",
-			prompt:     "Run this exact bash command: ruby --version",
+			name: "PermissionRequestEvent",
+			prompt: func(t *testing.T) string {
+				return escapeSandboxPrompt(newApprovalTarget(t))
+			},
 			expectType: EventTypePermissionRequest,
 		},
 		{
 			name:       "AskUserQuestionEvent",
-			prompt:     "Use AskUserQuestion to ask if I like bread. Two options: Yes and No.",
+			prompt:     staticPrompt("Use AskUserQuestion to ask if I like bread. Two options: Yes and No."),
 			expectType: EventTypeAskUserQuestion,
 		},
 		{
 			name:       "ToolCallEvent/yolo",
-			prompt:     "Run this exact bash command: echo hi",
+			prompt:     staticPrompt("Run this exact bash command: echo hi"),
 			expectType: EventTypeToolCall,
 			mode:       session.ModeYolo,
 		},
 		{
 			name:       "ToolResultEvent/yolo",
-			prompt:     "Run this exact bash command: echo hi",
+			prompt:     staticPrompt("Run this exact bash command: echo hi"),
 			expectType: EventTypeToolResult,
 			mode:       session.ModeYolo,
 		},
 		{
 			name:       "AskUserQuestionEvent/yolo",
-			prompt:     "Use AskUserQuestion to ask if I like bread. Two options: Yes and No.",
+			prompt:     staticPrompt("Use AskUserQuestion to ask if I like bread. Two options: Yes and No."),
 			expectType: EventTypeAskUserQuestion,
 			mode:       session.ModeYolo,
 		},
@@ -131,6 +142,8 @@ func runChatTests(t *testing.T, newAgent func() Agent, opts IntegrationTestOptio
 }
 
 func runChatScenario(t *testing.T, a Agent, tc chatCase) {
+	prompt := tc.prompt(t)
+
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
@@ -140,7 +153,7 @@ func runChatScenario(t *testing.T, a Agent, tc chatCase) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage(tc.prompt); err != nil {
+	if err := sess.SendMessage(prompt); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -196,9 +209,66 @@ func runChatScenario(t *testing.T, a Agent, tc chatCase) {
 	}
 }
 
-// testPermissionAllow verifies the full permission allow flow:
-// PermissionRequest → Allow → ToolResult → Done
-func testPermissionAllow(t *testing.T, a Agent) {
+// approvalTargetRoot sits outside every root Codex's workspace-write sandbox
+// grants — the working directory, $TMPDIR and /tmp — so writing there is a real
+// sandbox escape rather than a command that merely looks risky. A t.TempDir()
+// path would sit inside /tmp and need no approval at all, which is how prompts
+// that only looked dangerous ended up depending on a broken sandbox to produce
+// an approval. Checked against codex-cli 0.153.0 on Linux.
+const approvalTargetRoot = "/var/tmp"
+
+// newApprovalTarget returns a path the agent can only create by escaping its
+// sandbox. Whether it exists afterwards is what tells an approval apart from a
+// denial, independently of what the CLI reported.
+func newApprovalTarget(t *testing.T) string {
+	t.Helper()
+	// $TMPDIR is a writable root, so a $TMPDIR covering approvalTargetRoot would
+	// hand the target to the sandbox and no CLI would ask for anything. Name that
+	// cause here rather than leave a bare "expected at least one
+	// permission_request" for someone to chase.
+	if rel, err := filepath.Rel(os.TempDir(), approvalTargetRoot); err == nil && !strings.HasPrefix(rel, "..") {
+		t.Fatalf("TMPDIR (%s) contains %s, so the sandbox would make the approval target writable; unset TMPDIR to run the approval tests",
+			os.TempDir(), approvalTargetRoot)
+	}
+
+	dir, err := os.MkdirTemp(approvalTargetRoot, "pockode-approval-")
+	if err != nil {
+		t.Fatalf("create out-of-sandbox dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "approved.txt")
+}
+
+// escapeSandboxPrompt asks for a single command that cannot run without an
+// approval. The escape has to be inherent to the command: a command the sandbox
+// would have allowed only draws an approval on a machine whose sandbox is
+// broken, and even there the CLI asks after the attempt already failed rather
+// than before it runs.
+func escapeSandboxPrompt(target string) string {
+	return fmt.Sprintf("Run this exact command: echo ok > %s\n"+
+		"The path is outside your working directory on purpose. Run nothing else.", target)
+}
+
+// approvalOutcome is what one turn that blocked on an approval did.
+type approvalOutcome struct {
+	permissionRequests int
+	toolCalls          int
+	toolResults        int
+	interruptedEvents  int
+	doneEvents         int
+	suggestions        int
+	// targetWritten reports whether the out-of-sandbox file exists once the turn
+	// is over.
+	targetWritten bool
+}
+
+// runApprovalScenario drives one turn that must block on an approval, answering
+// every request with choice, and reports what happened.
+func runApprovalScenario(t *testing.T, a Agent, choice PermissionChoice) approvalOutcome {
+	t.Helper()
+
+	target := newApprovalTarget(t)
+
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
@@ -208,11 +278,12 @@ func testPermissionAllow(t *testing.T, a Agent) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage("Run this exact command and show output: ruby --version"); err != nil {
+	if err := sess.SendMessage(escapeSandboxPrompt(target)); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
-	var toolCalls, toolResults, permissionRequests int
+	var out approvalOutcome
+	askedAfterFailure := false
 
 eventLoop:
 	for {
@@ -224,22 +295,33 @@ eventLoop:
 			requireFields(t, event)
 			switch e := event.(type) {
 			case ToolCallEvent:
-				toolCalls++
+				out.toolCalls++
 				t.Logf("tool_call: %s (id=%s)", e.ToolName, e.ToolUseID)
 			case ToolResultEvent:
-				toolResults++
+				out.toolResults++
 				t.Logf("tool_result: id=%s, content=%s", e.ToolUseID, truncate(e.ToolResult, 100))
 			case PermissionRequestEvent:
-				permissionRequests++
-				t.Logf("permission_request: %s (request_id=%s)", e.ToolName, e.RequestID)
-				if err := sess.SendPermissionResponse(permissionDataFromEvent(e), PermissionAllow); err != nil {
+				out.permissionRequests++
+				if out.permissionRequests == 1 && out.toolResults > 0 {
+					askedAfterFailure = true
+				}
+				out.suggestions += len(e.PermissionSuggestions)
+				t.Logf("permission_request: tool=%s, request_id=%s, suggestions=%d",
+					e.ToolName, e.RequestID, len(e.PermissionSuggestions))
+				if err := sess.SendPermissionResponse(permissionDataFromEvent(e), choice); err != nil {
 					t.Errorf("failed to send permission response: %v", err)
 				}
-			case ErrorEvent:
-				t.Logf("error: %s", e.Error)
 			case TextEvent:
 				t.Logf("text: %s", truncate(e.Content, 100))
+			case ErrorEvent:
+				t.Logf("error: %s", e.Error)
+			case InterruptedEvent:
+				out.interruptedEvents++
+				t.Log("interrupted event received")
+				break eventLoop
 			case DoneEvent:
+				out.doneEvents++
+				t.Log("done event received")
 				break eventLoop
 			}
 		case <-ctx.Done():
@@ -247,145 +329,78 @@ eventLoop:
 		}
 	}
 
-	t.Logf("summary: permission_requests=%d, tool_calls=%d, tool_results=%d",
-		permissionRequests, toolCalls, toolResults)
+	out.targetWritten = approvalTargetExists(t, target)
 
-	if permissionRequests == 0 {
+	t.Logf("summary: permission_requests=%d, tool_calls=%d, tool_results=%d, interrupted=%d, done=%d, target_written=%v",
+		out.permissionRequests, out.toolCalls, out.toolResults,
+		out.interruptedEvents, out.doneEvents, out.targetWritten)
+
+	if out.permissionRequests == 0 {
 		t.Error("expected at least one permission_request event")
 	}
-	if permissionRequests > 0 && toolResults == 0 {
+	if askedAfterFailure {
+		// The observation is only that something ran first; the prompt asks for a
+		// single command, so read the logged events before picking a cause. Either
+		// the CLI attempted the escape, failed, and escalated afterwards — the
+		// by-product of a broken sandbox this case exists to reject — or the model
+		// ran an extra tool the prompt told it not to.
+		t.Error("a tool result arrived before the first permission_request, so the approval did not gate the command")
+	}
+	return out
+}
+
+func approvalTargetExists(t *testing.T, target string) bool {
+	t.Helper()
+	_, err := os.Stat(target)
+	if err == nil {
+		return true
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("stat approval target: %v", err)
+	}
+	return false
+}
+
+// testPermissionAllow verifies the full permission allow flow:
+// PermissionRequest → Allow → ToolResult → Done
+func testPermissionAllow(t *testing.T, a Agent) {
+	out := runApprovalScenario(t, a, PermissionAllow)
+
+	if out.toolResults == 0 {
 		t.Error("permission was approved but no tool_result received")
+	}
+	if !out.targetWritten {
+		t.Error("permission was approved but the out-of-sandbox file was never written")
 	}
 }
 
 // testPermissionDeny verifies the permission deny flow:
-// PermissionRequest → Deny → Done/Interrupted
+// PermissionRequest → Deny → Done/Interrupted, with the command never running.
 func testPermissionDeny(t *testing.T, a Agent, opts IntegrationTestOptions) {
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
-	defer cancel()
+	out := runApprovalScenario(t, a, PermissionDeny)
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
-	if err != nil {
-		t.Fatalf("Start failed: %v", err)
+	if out.targetWritten {
+		t.Error("permission was denied but the out-of-sandbox file was written anyway")
 	}
-	defer sess.Close()
-
-	if err := sess.SendMessage("Run this bash command: cat /etc/shells"); err != nil {
-		t.Fatalf("SendMessage failed: %v", err)
-	}
-
-	var permissionRequests, interruptedEvents, doneEvents int
-
-eventLoop:
-	for {
-		select {
-		case event, ok := <-sess.Events():
-			if !ok {
-				break eventLoop
-			}
-			requireFields(t, event)
-			switch e := event.(type) {
-			case PermissionRequestEvent:
-				permissionRequests++
-				t.Logf("permission_request: tool=%s, request_id=%s", e.ToolName, e.RequestID)
-				if err := sess.SendPermissionResponse(permissionDataFromEvent(e), PermissionDeny); err != nil {
-					t.Errorf("failed to send permission response: %v", err)
-				}
-			case InterruptedEvent:
-				interruptedEvents++
-				t.Log("interrupted event received after denial")
-				break eventLoop
-			case DoneEvent:
-				doneEvents++
-				t.Log("done event received")
-				break eventLoop
-			case TextEvent:
-				t.Logf("text: %s", truncate(e.Content, 100))
-			case ErrorEvent:
-				t.Logf("error: %s", e.Error)
-			}
-		case <-ctx.Done():
-			t.Fatal("timeout waiting for events")
-		}
-	}
-
-	t.Logf("summary: permission_requests=%d, interrupted=%d, done=%d",
-		permissionRequests, interruptedEvents, doneEvents)
-
-	if permissionRequests == 0 {
-		t.Error("expected at least one permission_request event")
-	}
-	if interruptedEvents == 0 && doneEvents == 0 {
+	if out.interruptedEvents == 0 && out.doneEvents == 0 {
 		t.Error("expected either interrupted or done event after denial")
 	}
-	if opts.DenyEndsInterrupted && interruptedEvents == 0 {
+	if opts.DenyEndsInterrupted && out.interruptedEvents == 0 {
 		t.Error("expected the denied turn to end as interrupted, not done")
 	}
 }
 
 // testPermissionAlwaysAllow verifies the always-allow flow with permission suggestions.
 func testPermissionAlwaysAllow(t *testing.T, a Agent) {
-	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
-	defer cancel()
+	out := runApprovalScenario(t, a, PermissionAlwaysAllow)
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
-	if err != nil {
-		t.Fatalf("Start failed: %v", err)
-	}
-	defer sess.Close()
-
-	if err := sess.SendMessage("Run this bash command: head -3 /etc/shells"); err != nil {
-		t.Fatalf("SendMessage failed: %v", err)
-	}
-
-	var permissionRequests, toolResults int
-	var hasPermissionSuggestions bool
-
-eventLoop:
-	for {
-		select {
-		case event, ok := <-sess.Events():
-			if !ok {
-				break eventLoop
-			}
-			requireFields(t, event)
-			switch e := event.(type) {
-			case PermissionRequestEvent:
-				permissionRequests++
-				t.Logf("permission_request: tool=%s, request_id=%s", e.ToolName, e.RequestID)
-				if len(e.PermissionSuggestions) > 0 {
-					hasPermissionSuggestions = true
-					t.Logf("permission_suggestions: %d items", len(e.PermissionSuggestions))
-				}
-				if err := sess.SendPermissionResponse(permissionDataFromEvent(e), PermissionAlwaysAllow); err != nil {
-					t.Errorf("failed to send permission response: %v", err)
-				}
-			case ToolResultEvent:
-				toolResults++
-				t.Logf("tool_result: id=%s", e.ToolUseID)
-			case DoneEvent:
-				t.Log("done event received")
-				break eventLoop
-			case TextEvent:
-				t.Logf("text: %s", truncate(e.Content, 100))
-			case ErrorEvent:
-				t.Logf("error: %s", e.Error)
-			}
-		case <-ctx.Done():
-			t.Fatal("timeout waiting for events")
-		}
-	}
-
-	t.Logf("summary: permission_requests=%d, tool_results=%d, has_suggestions=%v",
-		permissionRequests, toolResults, hasPermissionSuggestions)
-
-	if permissionRequests == 0 {
-		t.Error("expected at least one permission_request event")
-	}
-	if toolResults == 0 {
+	if out.toolResults == 0 {
 		t.Error("expected at least one tool_result after approval")
 	}
-	if !hasPermissionSuggestions {
+	if !out.targetWritten {
+		t.Error("permission was always-allowed but the out-of-sandbox file was never written")
+	}
+	if out.suggestions == 0 {
 		t.Log("note: no permission_suggestions in request - AlwaysAllow will work but won't persist")
 	}
 }
@@ -560,8 +575,13 @@ func testMultiTurn(t *testing.T, a Agent) {
 	}
 }
 
-// testYoloNoPermission verifies that yolo mode skips permission prompts.
+// testYoloNoPermission verifies that yolo mode skips permission prompts. It asks
+// for the same sandbox escape the approval tests use, so passing means yolo
+// really lifted the sandbox — a command the sandbox would have allowed anyway
+// would prove nothing about the mode.
 func testYoloNoPermission(t *testing.T, a Agent) {
+	target := newApprovalTarget(t)
+
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
@@ -571,15 +591,16 @@ func testYoloNoPermission(t *testing.T, a Agent) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage("Run this exact bash command: ruby --version"); err != nil {
+	if err := sess.SendMessage(escapeSandboxPrompt(target)); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
+eventLoop:
 	for {
 		select {
 		case event, ok := <-sess.Events():
 			if !ok {
-				return
+				break eventLoop
 			}
 			requireFields(t, event)
 			t.Logf("event: %s", event.EventType())
@@ -590,11 +611,15 @@ func testYoloNoPermission(t *testing.T, a Agent) {
 			case ErrorEvent:
 				t.Fatalf("error event: %s", e.Error)
 			case DoneEvent:
-				return
+				break eventLoop
 			}
 		case <-ctx.Done():
 			t.Fatal("timeout")
 		}
+	}
+
+	if !approvalTargetExists(t, target) {
+		t.Error("yolo mode asked for nothing but the out-of-sandbox file was never written")
 	}
 }
 
