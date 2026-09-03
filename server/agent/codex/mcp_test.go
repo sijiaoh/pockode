@@ -661,6 +661,27 @@ func pendingTurnID(t *testing.T, sess *mcpSession) int64 {
 	return id
 }
 
+// waitForWrite returns the first thing the session wrote to stdin. The write
+// happens on handleElicitation's goroutine, so it can trail the answer.
+func waitForWrite(t *testing.T, w *recordingWriteCloser) []byte {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		w.mu.Lock()
+		var first []byte
+		if len(w.writes) > 0 {
+			first = w.writes[0]
+		}
+		w.mu.Unlock()
+		if first != nil {
+			return first
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for a write to stdin")
+	return nil
+}
+
 // waitForEvent reads the next event, failing if the turn never ends.
 func waitForEvent(t *testing.T, sess *mcpSession) agent.AgentEvent {
 	t.Helper()
@@ -968,10 +989,15 @@ func TestSendMessage_StartsNewThreadWhenUnknown(t *testing.T) {
 	}
 }
 
-// --- handleElicitation routing ---
+// --- handleElicitation ---
 
-// Params mirror what codex mcp-server sends: a patch approval describes its
-// edits in codex_changes, and both elicitation kinds are spelled with a hyphen.
+// Params take their shape from a patch approval captured off codex-cli 0.153.0,
+// trimmed to the fields we read (the path is renamed for readability; real ones
+// arrive absolute, which changes nothing here). A patch approval describes its
+// edits in codex_changes and carries no codex_command/codex_cwd at all, so
+// routing on codex_elicitation is what keeps an edit from being shown as an
+// empty shell command. Each change is internally tagged by "type"; only
+// "update" carries unified_diff, "add" and "delete" carry content instead.
 func TestHandleElicitation_PatchApproval(t *testing.T) {
 	sess := newTestSession()
 	sess.stdin = &discardWriteCloser{}
@@ -982,7 +1008,11 @@ func TestHandleElicitation_PatchApproval(t *testing.T) {
 		"codex_elicitation": "patch-approval",
 		"codex_call_id":     "call-edit-1",
 		"codex_changes": map[string]interface{}{
-			"src/main.go": map[string]interface{}{"type": "update", "unified_diff": "@@ -1 +1 @@"},
+			"src/main.go": map[string]interface{}{
+				"type":         "update",
+				"unified_diff": "@@ -1,3 +1,3 @@\n alpha\n-bravo\n+BRAVO\n charlie\n",
+				"move_path":    nil,
+			},
 		},
 		"codex_mcp_tool_call_id": "2",
 	}
@@ -1072,5 +1102,74 @@ func TestHandleElicitation_ExecApproval(t *testing.T) {
 	}
 	if input["cwd"] != "/home/user" {
 		t.Errorf("cwd = %v, want %q", input["cwd"], "/home/user")
+	}
+}
+
+// Codex parses the elicitation result into a ReviewDecision, so the wire shapes
+// below are the contract — a wrong one makes Codex drop the decision and report
+// "approval request failed" to the model. Captured from codex-cli 0.153.0.
+func TestHandleElicitation_ResponseShape(t *testing.T) {
+	tests := []struct {
+		name     string
+		choice   agent.PermissionChoice
+		wantJSON string
+	}{
+		{
+			name:     "allow",
+			choice:   agent.PermissionAllow,
+			wantJSON: `{"action":"accept","decision":"approved"}`,
+		},
+		{
+			name:     "always allow",
+			choice:   agent.PermissionAlwaysAllow,
+			wantJSON: `{"action":"accept","decision":"approved_for_session"}`,
+		},
+		{
+			// ReviewDecision::Denied is a struct variant; the bare string
+			// "denied" fails to deserialize and loses the refusal.
+			name:     "deny",
+			choice:   agent.PermissionDeny,
+			wantJSON: `{"action":"decline","decision":{"denied":{"rejection":"` + deniedByUser + `"}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := newTestSession()
+			stdin := &recordingWriteCloser{}
+			sess.stdin = stdin
+			defer sess.cancel()
+
+			paramsJSON, _ := json.Marshal(map[string]interface{}{
+				"codex_elicitation": "exec-approval",
+				"codex_call_id":     "call-1",
+				"codex_command":     []string{"ls"},
+			})
+			msgID := int64(7)
+			go sess.handleElicitation(sess.procCtx, rpcMessage{
+				ID:     &msgID,
+				Method: "elicitation/create",
+				Params: paramsJSON,
+			})
+
+			perm, ok := waitForEvent(t, sess).(agent.PermissionRequestEvent)
+			if !ok {
+				t.Fatal("expected a PermissionRequestEvent")
+			}
+			if err := sess.SendPermissionResponse(agent.PermissionRequestData{RequestID: perm.RequestID}, tt.choice); err != nil {
+				t.Fatalf("SendPermissionResponse error: %v", err)
+			}
+
+			got := waitForWrite(t, stdin)
+			var resp struct {
+				Result json.RawMessage `json:"result"`
+			}
+			if err := json.Unmarshal(got, &resp); err != nil {
+				t.Fatalf("failed to parse response: %v", err)
+			}
+			if string(resp.Result) != tt.wantJSON {
+				t.Errorf("result = %s, want %s", resp.Result, tt.wantJSON)
+			}
+		})
 	}
 }

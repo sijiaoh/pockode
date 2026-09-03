@@ -906,9 +906,10 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 	}
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
 		s.log.Warn("failed to parse elicitation params", "error", err)
-		// `decision` is the field Codex reads; without it the denial would only
-		// happen as a side effect of Codex failing to parse this response.
-		s.sendRPCResponse(*msg.ID, map[string]interface{}{"action": "deny", "decision": "denied"}, nil)
+		// Deliberately not deniedByUser: nobody decided anything here, and this
+		// text is what the model gets told, so blaming the user for a request we
+		// could not read would send it looking in the wrong place.
+		s.sendRPCResponse(*msg.ID, denialResponse("Pockode could not read this approval request."), nil)
 		return
 	}
 
@@ -957,16 +958,42 @@ func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
 
 	s.pendingElicit.Delete(requestID)
 
-	// Map our decision to MCP elicitation response.
-	action := "deny"
-	if answer.decision == "approved" || answer.decision == "approved_for_session" {
-		action = "accept"
-	}
+	s.sendRPCResponse(*msg.ID, elicitationResponse(answer.decision), nil)
+}
 
-	s.sendRPCResponse(*msg.ID, map[string]interface{}{
-		"action":   action,
-		"decision": answer.decision,
-	}, nil)
+// deniedByUser is the reason Codex hands the model when the user refuses; it
+// reaches the transcript as Rejected("..."), so it has to read as an
+// explanation rather than a status code.
+const deniedByUser = "The user denied this request."
+
+// elicitationResponse answers one elicitation. Anything that is not an approval
+// denies, so a decision we do not recognise fails closed.
+func elicitationResponse(decision string) map[string]interface{} {
+	if decision == "approved" || decision == "approved_for_session" {
+		return map[string]interface{}{"action": "accept", "decision": decision}
+	}
+	return denialResponse(deniedByUser)
+}
+
+// denialResponse refuses an elicitation, telling Codex why.
+//
+// Codex deserializes `decision` into its ReviewDecision, which is externally
+// tagged: the approvals are unit variants and travel as bare strings, but
+// `denied` is a struct variant and needs {"denied": {"rejection": "..."}}. The
+// bare string "denied" fails to deserialize, after which Codex reports
+// "approval request failed" to the model instead of the refusal. It still
+// blocks the request either way, which is why that mistake survives any test
+// that only checks the denied work did not happen — the difference is in what
+// comes back. `rejection` is the text the model reads, and for a patch it also
+// returns as patch_apply_end's stderr. Verified against codex-cli 0.153.0.
+func denialResponse(rejection string) map[string]interface{} {
+	return map[string]interface{}{
+		// MCP's own field, which Codex does not appear to read at all: the
+		// "deny" this used to send is not one of MCP's values and Codex took it
+		// regardless. "decline" is the value MCP defines for a refusal.
+		"action":   "decline",
+		"decision": map[string]interface{}{"denied": map[string]interface{}{"rejection": rejection}},
+	}
 }
 
 // --- Helpers ---
