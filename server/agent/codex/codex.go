@@ -449,7 +449,14 @@ func (s *mcpSession) buildStartConfig(prompt string) map[string]interface{} {
 		config["approval-policy"] = "never"
 		config["sandbox"] = "danger-full-access"
 	default:
-		config["approval-policy"] = "untrusted"
+		// Not "untrusted": current Codex CLIs reject that policy from both the tool
+		// arg ("unknown variant `untrusted`", failing the session's first call, so
+		// not one message gets through) and config.toml ("no longer supported");
+		// verified on codex-cli 0.153.0. "on-request" + "workspace-write" is Codex's
+		// own auto mode and is valid on old and new CLIs alike: work inside the
+		// sandbox runs unprompted, only escapes from it (writes outside WorkDir,
+		// network) ask for approval.
+		config["approval-policy"] = "on-request"
 		config["sandbox"] = "workspace-write"
 	}
 

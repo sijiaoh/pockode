@@ -113,6 +113,36 @@ func TestBuildStartConfig_DisableMCP(t *testing.T) {
 	}
 }
 
+func TestBuildStartConfig_ApprovalPolicy(t *testing.T) {
+	// Codex removed the "untrusted" policy; default mode must map to "on-request",
+	// otherwise every default-mode session dies on its first tool call.
+	tests := []struct {
+		mode        session.Mode
+		wantPolicy  string
+		wantSandbox string
+	}{
+		{session.ModeDefault, "on-request", "workspace-write"},
+		{session.ModeYolo, "never", "danger-full-access"},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			sess := &mcpSession{
+				opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", DisableMCP: true, Mode: tt.mode},
+				exe:  "/usr/local/bin/pockode",
+			}
+
+			config := sess.buildStartConfig("hello")
+			if config["approval-policy"] != tt.wantPolicy {
+				t.Errorf("approval-policy = %v, want %q", config["approval-policy"], tt.wantPolicy)
+			}
+			if config["sandbox"] != tt.wantSandbox {
+				t.Errorf("sandbox = %v, want %q", config["sandbox"], tt.wantSandbox)
+			}
+		})
+	}
+}
+
 func TestNormalizeCommand(t *testing.T) {
 	tests := []struct {
 		name string

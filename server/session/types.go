@@ -30,7 +30,11 @@ type Mode string
 
 const (
 	ModeDefault Mode = "default" // Normal mode with permission prompts
-	ModeYolo    Mode = "yolo"    // Skip all permission prompts (--dangerously-skip-permissions)
+	// Each agent gives up its own gate: Claude runs with
+	// --permission-mode bypassPermissions, Codex with approval-policy "never"
+	// and its sandbox at danger-full-access. See agent/claude/claude.go and
+	// agent/codex/codex.go buildStartConfig.
+	ModeYolo Mode = "yolo"
 	// ModePlan Mode = "plan"    // Planning mode (future)
 )
 
