@@ -107,6 +107,13 @@ func (h *rpcMethodHandler) handleSessionSetAgentType(ctx context.Context, conn *
 		return
 	}
 
+	// An unactivated session can still have a live process — the CLI that was
+	// spawned for a first turn nobody heard back from is exactly the case this
+	// switch exists for. GetOrCreateProcess reuses a process by session ID
+	// without looking at its agent type, so leaving it running would silently
+	// send the next message to the agent the user just switched away from.
+	wt.ProcessManager.Close(params.SessionID)
+
 	if err := wt.SessionStore.SetAgentType(ctx, params.SessionID, params.AgentType); err != nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to set agent type")
 		return

@@ -10,6 +10,8 @@ export interface SessionListItem {
 	updated_at: string;
 	mode: SessionMode;
 	agent_type: AgentType;
+	/** True once the agent has produced output in this session. */
+	activated: boolean;
 	state: ProcessState;
 	needs_input: boolean;
 	unread: boolean;

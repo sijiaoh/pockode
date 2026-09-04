@@ -58,6 +58,7 @@ const session = (id: string) => ({
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default" as const,
 	agent_type: "codex",
+	activated: false,
 	state: "ended" as const,
 	needs_input: false,
 	unread: false,

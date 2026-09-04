@@ -76,6 +76,9 @@ type Process struct {
 	// Prevents stale buffered events from emitting state changes (e.g. running/idle)
 	// that would incorrectly interact with the AutoResumer.
 	closed atomic.Bool
+	// activated mirrors the session's Activated flag so the store is written once,
+	// on the transition, rather than on every event the agent produces.
+	activated atomic.Bool
 }
 
 // NewManager creates a new manager with the given idle timeout. dataDir is this
@@ -169,6 +172,9 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 		state:        ProcessStateIdle,
 		turnEnded:    true, // no turn has started yet
 	}
+	// resume is the session's Activated flag, so an already activated session
+	// starts out knowing it has nothing to record.
+	proc.activated.Store(resume)
 	m.processes[sessionID] = proc
 
 	go func() {
@@ -424,6 +430,24 @@ func (p *Process) setIdle(needsInput, interrupted bool) {
 	})
 }
 
+// markActivated records that the agent has contributed to this session.
+//
+// Activation is deliberately tied to agent output rather than to process
+// creation: spawning the CLI proves nothing about the session behind it. A first
+// message that dies before the agent says anything — expired login, provider
+// outage — leaves a session that never really started, and it should still be
+// possible to point it at a different agent type instead of retrying the broken
+// one forever. See EventType.ActivatesSession for why "says anything" is
+// narrower than "a turn is under way".
+func (p *Process) markActivated(ctx context.Context, log *slog.Logger) {
+	if p.activated.Swap(true) {
+		return
+	}
+	if err := p.sessionStore.Activate(ctx, p.sessionID); err != nil {
+		log.Error("failed to activate session", "error", err)
+	}
+}
+
 // streamEvents routes events to history and emits to the event listener.
 func (p *Process) streamEvents(ctx context.Context) {
 	log := slog.With("sessionId", p.sessionID)
@@ -438,6 +462,9 @@ func (p *Process) streamEvents(ctx context.Context) {
 		// said so — output queued behind an interrupt resumes on its own.
 		if eventType.IndicatesAgentActivity() {
 			p.SetRunning()
+		}
+		if eventType.ActivatesSession() {
+			p.markActivated(ctx, log)
 		}
 
 		// Persist to history

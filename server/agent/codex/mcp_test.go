@@ -899,6 +899,37 @@ func TestRememberThreadID_Sources(t *testing.T) {
 	}
 }
 
+// Rejecting an unknown thread echoes the rejected id back in
+// structuredContent (payload captured from codex-cli 0.153.0). Believing it
+// would re-pin the dead id on every attempt, so the session could never
+// recover on its own.
+func TestParseTurnResult_RejectedThreadIDIsNotAdopted(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.parseTurnResult(json.RawMessage(`{"isError":true,"content":[{"type":"text","text":"Session not found for thread_id: 01a06563-5a9d"}],"structuredContent":{"threadId":"01a06563-5a9d","content":"Session not found for thread_id: 01a06563-5a9d"}}`))
+
+	if sess.threadID != "" {
+		t.Fatalf("threadID = %q, want empty so the next message opens a new thread", sess.threadID)
+	}
+}
+
+// A turn that dies on an expired login still ran inside a registered thread,
+// and replying into it works (verified against codex-cli 0.153.0, whose 401
+// result this payload is). Dropping the thread would discard the agent's
+// context for a failure it survived.
+func TestParseTurnResult_FailedTurnKeepsConfirmedThreadID(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.processCodexMsg(json.RawMessage(`{"type":"session_configured","session_id":"01a06564-d116","thread_id":"01a06564-d116"}`), nil)
+	sess.parseTurnResult(json.RawMessage(`{"isError":true,"content":[{"type":"text","text":"unexpected status 401 Unauthorized"}],"structuredContent":{"threadId":"01a06564-d116","content":"unexpected status 401 Unauthorized"}}`))
+
+	if sess.threadID != "01a06564-d116" {
+		t.Fatalf("threadID = %q, want the thread the failed turn ran in", sess.threadID)
+	}
+}
+
 func TestSendMessage_ContinuesThreadAfterFirstTurn(t *testing.T) {
 	sess := newTestSession()
 	defer sess.cancel()

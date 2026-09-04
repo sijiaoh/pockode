@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStore } from "../../lib/sessionStore";
 import type { ServerNotification } from "../../types/message";
 import ChatPanel from "./ChatPanel";
 
@@ -99,6 +100,7 @@ describe("ChatPanel", () => {
 			}),
 		);
 		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
+		useSessionStore.setState({ sessions: [] });
 	});
 
 	// Helper to wait for history loading to complete
@@ -545,6 +547,52 @@ describe("ChatPanel", () => {
 
 			expect(screen.getByText("Cancelled")).toBeInTheDocument();
 			expect(screen.queryByText("Answered")).not.toBeInTheDocument();
+		});
+	});
+
+	describe("agent selector", () => {
+		const seedSession = (activated: boolean) => {
+			useSessionStore.setState({
+				sessions: [
+					{
+						id: "test-session",
+						title: "Test Chat",
+						created_at: "2024-01-01T00:00:00Z",
+						updated_at: "2024-01-01T00:00:00Z",
+						mode: "default",
+						agent_type: "claude",
+						activated,
+						state: "ended",
+						needs_input: false,
+						unread: false,
+					},
+				],
+			});
+		};
+
+		// A first turn that failed before the agent said anything leaves messages
+		// in the transcript but never started the session, and switching agents is
+		// the only way out of it — so the transcript must not be what locks it.
+		it("stays enabled when a failed first turn left messages behind", async () => {
+			seedSession(false);
+			mockState.mockHistory = [
+				{ type: "message", content: "Hello" },
+				{ type: "error", error: "Invalid API key" },
+			];
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByRole("button", { name: "Claude" })).not.toBeDisabled();
+		});
+
+		it("locks once the agent has answered in this session", async () => {
+			seedSession(true);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByRole("button", { name: "Claude" })).toBeDisabled();
 		});
 	});
 

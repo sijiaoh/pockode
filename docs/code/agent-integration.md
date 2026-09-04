@@ -109,33 +109,122 @@ type AgentEvent interface {
 
 ### What an Event Says About Process State
 
-Two predicates on `EventType` are the entire contract between an agent and the
-process state machine. Every agent event answers both, and nothing else in the
-state layer inspects event types.
+Three predicates on `EventType` are the entire contract between an agent and the
+state layer. Every agent event answers all three, and nothing else in that layer
+inspects event types.
 
 ```go
 // agent/event.go
 func (e EventType) AwaitsUserInput() bool      // done, error, interrupted, permission_request, ask_user_question
 func (e EventType) IndicatesAgentActivity() bool
+func (e EventType) ActivatesSession() bool
 ```
 
 - `AwaitsUserInput` — the turn stopped: it finished, failed, was aborted, or is
   blocked on a permission or question. Moves the process to `idle`.
-- `IndicatesAgentActivity` — the event is output the agent produced, so a turn is
-  under way. Moves the process to `running`.
+- `IndicatesAgentActivity` — a turn is under way. Moves the process to `running`.
+- `ActivatesSession` — the agent has put something on its own side of the
+  conversation. Sets `SessionMeta.Activated` (see [Activation](#activation)).
 
-They are not complements. `warning`, `request_cancelled` and `process_ended` are
-neither: they can reach the process with no turn in flight — Codex emits a
-warning at startup when a restarted session cannot recover its thread — and
-treating them as output would leave a session marked `running` forever, which
-`work.AutoResumer` reads as "the agent is working" and never corrects.
+`AwaitsUserInput` and `IndicatesAgentActivity` are not complements. `warning`,
+`request_cancelled` and `process_ended` are neither: they can reach the process
+with no turn in flight — Codex emits a warning at startup when a restarted session
+cannot recover its thread — and treating them as activity would leave a session
+marked `running` forever, which `work.AutoResumer` reads as "the agent is working"
+and never corrects.
 
-That asymmetry is why `IndicatesAgentActivity` lists what counts as output rather
-than what doesn't: a wrong inclusion strands a session until the idle reaper
-collects it hours later, while a wrong exclusion costs one missed transition that
-the send path had already made. A new event type is therefore inert by default,
-and adding it to the list is a deliberate claim that it cannot arrive between
-turns.
+That asymmetry is why `IndicatesAgentActivity` lists what counts as activity
+rather than what doesn't: a wrong inclusion strands a session until the idle
+reaper collects it hours later, while a wrong exclusion costs one missed
+transition that the send path had already made. A new event type is therefore
+inert by default, and adding it to the list is a deliberate claim that it cannot
+arrive between turns.
+
+#### Why `ActivatesSession` Is Not `IndicatesAgentActivity`
+
+The two differ by exactly one event type — `system` — and that single difference
+is the whole reason the second predicate exists. A turn can be under way from
+start to finish without the agent ever contributing to it: a first message sent
+through an expired login or a dead endpoint gets an `init`, a run of
+`system/api_retry`, the CLI's own account of why it gave up, and a `result`
+flagged as an error — the whole turn without the model being reached (measured on
+claude 2.1.259 against both a refused port and a local endpoint answering 401).
+Those retries mean a turn really is running, so `system` belongs to
+`IndicatesAgentActivity`. But nothing was added to the conversation, so it must
+stay out of `ActivatesSession` — otherwise the session that just failed to reach
+the agent is marked started and locked to that agent type, which is precisely the
+case where switching agents is the user's only way out.
+
+Their biases point in opposite directions, which is why the two lists must not be
+collapsed back into one. Over-including in `IndicatesAgentActivity` strands a
+session as `running`; over-including in `ActivatesSession` confiscates the escape
+hatch. So `command_output` and `raw` are in `ActivatesSession` despite being
+borderline — neither can come from a turn that never started — while `system`,
+borderline in the other direction, is not. `IndicatesAgentActivity` is written as
+the union (`system || ActivatesSession()`) rather than as a second literal list,
+so a future output event type added to one cannot silently go missing from the
+other.
+
+The exclusion this section claims is not something the predicate can enforce on
+its own. The CLI's account of the failure arrives as an `assistant` message like
+any other, and it stays out of `ActivatesSession` only because
+`claude.syntheticNotice` recognises `message.model == "<synthetic>"` (the
+spelling as of claude 2.1.259) and maps it to a warning rather than to text. The
+property therefore rests on two things in different packages — the lists above
+and that one branch in the Claude parser — and losing either brings the bug back
+on its own. Anything that restores a text path for synthetic messages restores
+the lock-out with it.
+
+It is the only such dependency on the well-formed path. The CLI's other
+self-authored frames — an interrupt marker, a continuation prompt — arrive as
+`user` messages, and `parseUserEvent` produces nothing from prose: text blocks
+are logged and dropped, and plain-string content yields events only for
+`<local-command-*>` output.
+
+It is not, however, the only way bytes the CLI wrote can become a `TextEvent` and
+start the session. Three fallbacks deliberately surface whatever the parser
+cannot decode: a stdout line that is not JSON (`streamOutput`), a `user` frame
+whose `message` is neither a block array nor a string, and an `assistant` frame
+whose `message` does not decode at all — that last one returns before the
+`<synthetic>` check can run, so a malformed synthetic notice would still be read
+as agent output. Each is the graceful degradation the server style guide asks
+for, and each fires only on output no version of this parser understands, so none
+should be closed off blindly. They are why the escape hatch is a property of
+well-formed reports rather than an invariant: a CLI that started printing prose
+to stdout while failing would take it away again.
+
+The CLI writes synthetic messages for two purposes: announcing why a turn failed
+("Invalid API key · Fix external API key", "API Error: 529 Overloaded"), and
+answering the continuation prompt it injects into the transcript itself on
+`--resume` with "No response requested." Both deliberately take the same path.
+Keeping the benign class on the text path would leave a way back to this bug for
+whichever future notice landed in it, and a message with no model behind it is
+not the agent contributing to the conversation whatever it happens to say. That
+class was never meaningful output in any case: the prompt it answers is one the
+CLI marks `isMeta` and never shows anyone, so the reply used to surface as an
+assistant bubble that came from nowhere.
+
+The warning's `Code` comes from the `error` field on the assistant frame itself,
+falling back to `synthetic_message` when the frame carries none. The label set is
+open rather than a fixed enumeration: `authentication_failed` and `server_error`
+are what the messages on one developer machine carry, and a local endpoint
+answering 400 was measured later producing `unknown`. Nothing branches on the
+value — it is passed straight to the banner — so a label nobody anticipated costs
+at most a less helpful code. Across those 35 messages and that run, `error` is
+non-empty exactly when `isApiErrorMessage` is true, so reading the second field
+would add nothing.
+
+Every one of those messages carries exactly one text block, which is all a CLI
+with no model to call a tool with can produce. `syntheticNotice` logs a block of
+any other type rather than skipping it quietly, so the day that assumption stops
+holding is a line in the log rather than content silently missing from a
+transcript.
+
+`SystemEvent` would have kept the session switchable just as well, and is still
+the wrong target: `SystemItem` in the frontend runs an unguarded `JSON.parse` on
+the content (`web/src/components/Chat/MessageItem.tsx`), so prose reaching it
+throws during render. `WarningItem` already draws a message-and-code banner,
+which is the shape this is.
 
 ## EventRecord: Unified Event Format
 
@@ -217,11 +306,16 @@ if opts.Mode == ModeYolo {
     args = append(args, "--permission-mode", "bypassPermissions")
 }
 
-providerSessionID, shouldResume := resumeState.resolve()
-if shouldResume {
-    args = append(args, "--resume", providerSessionID)
-} else {
-    args = append(args, "--session-id", providerSessionID)
+launch := resumeState.resolve()
+if launch.sessionID != "" {
+    if launch.resume {
+        args = append(args, "--resume", launch.sessionID)
+        if launch.fork {
+            args = append(args, "--fork-session")
+        }
+    } else {
+        args = append(args, "--session-id", launch.sessionID)
+    }
 }
 
 if mcpConfig != "" {
@@ -229,24 +323,15 @@ if mcpConfig != "" {
 }
 ```
 
-Claude keeps its provider-side session ID in `claude_resume.json` under the
-Pockode session directory. A process resumes only when that file contains a
-Claude session ID; otherwise it starts with `--session-id` and writes the resume
-file after the first assistant event. Legacy sessions with assistant history but
-no resume file are migrated by using the Pockode session ID once.
+`resolve()` is what decides between `--session-id`, `--resume` and
+`--resume --fork-session`; see [Session Recovery Ladder](#session-recovery-ladder).
 
-`claude_resume.json` is written with `filestore.WriteFileAtomic`: a half-written
-one would silently cost the user the ability to resume that session. It is not on
-a hot path — it is written once the provider session ID becomes known — so the
-fsync costs nothing measurable. Codex has no counterpart because its threads
-cannot outlive the CLI process at all (see [Codex Implementation](#codex-implementation)).
-
-`mcp-config.json` is written atomically for a different reason: it is rewritten
-on *every* session start, but it lives in the shared main data dir rather than
-per session. A plain write truncates the file first, so a second session
-starting at that moment would hand its CLI a half-written config and that agent
-would come up with no `work_*` tools at all — a failure with no error message
-anywhere. Replacing the file by rename removes the window.
+`mcp-config.json` is written atomically because it is rewritten on *every*
+session start, yet it lives in the shared main data dir rather than per session. A
+plain write truncates the file first, so a second session starting at that moment
+would hand its CLI a half-written config and that agent would come up with no
+`work_*` tools at all — a failure with no error message anywhere. Replacing the
+file by rename removes the window.
 
 `StartOptions` carries two directories because they answer different questions.
 `DataDir` is the session's own data dir (`claude_resume.json`, history) — for a
@@ -258,11 +343,113 @@ always the main data dir — a worktree's `DataDir` has no `server.json`, and
 pointing the proxy there would leave the agent unable to reach `work_*` tools.
 `MCPDir()` falls back to `DataDir` when the two are not split.
 
+### Session Recovery Ladder
+
+Claude keeps its provider-side session ID in `claude_resume.json` under the
+Pockode session directory, and `claudeResumeStateManager` is the only thing that
+reads or writes it.
+
+**The ID is claimed earlier than it is useful.** The CLI creates
+`~/.claude/projects/<encoded-cwd>/<id>.jsonl` when the first turn begins, and from
+that moment `--session-id <id>` is rejected outright (`Session ID ... is already
+in use`, exit 1, nothing on stdout). Recording the ID any later than that leaves a
+window in which a failed turn burns an ID Pockode never wrote down — and every
+subsequent message reruns the same fatal launch, so an expired login or a provider
+outage on the *first* message used to kill the session permanently. So the ID is
+persisted at `init`, the earliest event that carries it, which is also the exact
+event that claims it.
+
+**Only `system/init` counts**, not merely the first event carrying a `session_id`:
+a `--resume` against an ID that does not exist emits a `result` event carrying
+that same nonexistent ID before giving up, and writing it down would poison the
+file with an ID nothing can resume. `init` also repeats at the start of every
+turn, so `save()` compares against an in-memory mirror of the file and writes only
+on a change.
+
+**The reported ID is always adopted, never assumed from the one passed in.** Asking to
+resume a session another live process is holding does not fail — the CLI silently
+forks it and returns a brand-new ID in `init` (claude 2.1.259; resuming a finished
+session returns the same ID it was given). Because the reported ID is always taken
+at face value, that case needs no special handling.
+
+**A failed launch advances a recovery rung**, persisted alongside the ID, which
+`resolve()` reads back on the next start:
+
+| State on disk | Launch |
+|---|---|
+| no file, not activated | `--session-id <pockodeID>` |
+| no file, activated | `--resume <pockodeID> --fork-session` |
+| `recovery: ""` | `--resume <sessionId>` |
+| `recovery: "fork"` | `--resume <sessionId> --fork-session` |
+| `recovery: "fresh"` | `--session-id <new UUID>` + a user-visible warning |
+
+Forking is the middle rung because it is the least destructive move that can
+still sidestep an ID the CLI already owns: it resumes the transcript *and* mints a
+new ID, so the agent-side context survives instead of being discarded. `fresh` is
+terminal — it never escalates further, so the ladder cannot loop — and it is the
+only rung that mints its own UUID, which must be a real UUID because the CLI
+rejects anything else.
+
+Reaching `init` resets the rung to `""`, so a session that recovers does not stay
+in recovery mode. Note that a state file plus `Resume == false` still resumes: a
+recorded provider ID is proof the CLI owns that ID, which makes `--session-id`
+certain to fail. This is a deliberate change from the older behaviour of falling
+back to `--session-id` whenever the session was not marked activated.
+
+The "no file, activated" rung also absorbs what used to be a separate legacy
+migration path (`hasAssistantHistory()`, now deleted). Both faced the same
+situation — a transcript may already exist under the Pockode ID, so using it as
+`--session-id` is fatal — and activation now answers it directly: the agent has
+answered here before, so an `init` must have been emitted, so the CLI owns that
+ID. That is a stronger argument than scanning history for event types that
+happened to look like output — and it is also why the rung is now nearly
+unreachable: activation implies an `init`, which implies the file was written. What
+is left is a session created before the mapping was persisted at all, or one whose
+state file was lost.
+
+**Failure is detected structurally, not by matching error text**: the process
+exited without ever emitting `init`. Both fatal launches — the ID collision and
+`No conversation found with session ID ...` — abort before the first turn, so
+neither reaches `init`, and neither depends on an English message that upstream is
+free to reword. The signal is only valid because a process is always created to
+carry a message (`chat.Client.sendEvent` is the sole caller of
+`GetOrCreateProcess` and sends immediately after); a CLI started with nothing to
+do exits cleanly and emits no `init`, and would be misread as a failure. A process
+Pockode cancelled itself (`Close`, shutdown) never escalates either — killing it
+says nothing about whether the session was usable.
+
+Reading "no init" as "the launch failed" is safe precisely because the failures
+that motivated the ladder do not look like that: an expired login or a dead
+endpoint still emits `init` before its `api_retry` storm, so a healthy session is
+never forked merely because the network was down. The genuine false positive is a
+CLI that dies before its first turn for reasons of its own — a crash on startup, a
+kill from outside — and it costs one message, since the next launch forks,
+succeeds, and resets the rung with the agent-side context intact. Only an
+installation broken badly enough to fail every launch reaches `fresh`, where the
+warning is imprecise rather than untrue: the Pockode transcript really is
+unaffected, and there was no agent-side context to lose. Being terminal stops
+`fresh` from looping but does not silence it — the warning goes out with every
+launch made from that rung until one reaches `init` and resets it.
+
+The `fresh` warning is emitted from the streaming goroutine rather than from
+`Start()`. Claude's event channel is unbuffered, so sending before a consumer
+exists would deadlock; it also has to come after `ReadStderr` starts draining, or
+a CLI that fills the stderr pipe wedges while the warning waits.
+
+Like `mcp-config.json`, `claude_resume.json` is written with
+`filestore.WriteFileAtomic` — a half-written one would silently cost the user the
+ability to resume that session. It is not on a hot path — it changes when the
+provider ID changes or the ladder moves — so the fsync costs nothing measurable.
+Sessions with no Pockode session ID (integration tests) skip the write entirely,
+since `path()` would otherwise collapse to one file shared by all of them. Codex
+has no counterpart because its threads cannot outlive the CLI process at all (see [Codex Implementation](#codex-implementation)).
+
 ### Message Type Mapping
 
-| CLI Message | Subtype | Converts To |
-|-------------|---------|-------------|
-| `assistant` | — | `TextEvent` + `ToolCallEvent` |
+| CLI Message | Subtype / Field | Converts To |
+|-------------|-----------------|-------------|
+| `assistant` | `message.model` is `<synthetic>` | `WarningEvent` (the CLI's own notice, not the agent — [why](#why-activatessession-is-not-indicatesagentactivity)) |
+| `assistant` | anything else | `TextEvent` + `ToolCallEvent` |
 | `user` | — | `ToolResultEvent` |
 | `result` | any | `InterruptedEvent`, `ErrorEvent`, or `DoneEvent` (see below) |
 | `control_request` | `can_use_tool` | `PermissionRequestEvent` or `AskUserQuestionEvent` |
@@ -412,7 +599,7 @@ Pending control requests we need to correlate later are tracked via `pendingRequ
 | Protocol | stream-json | MCP JSON-RPC 2.0 |
 | Tool calls | Stateless (request → response) | Stateful (call → wait for result) |
 | Permission requests | `PermissionUpdate` objects | Elicitation mechanism |
-| Session recovery | `claude_resume.json` → `--resume <providerSessionID>` | none — see below |
+| Session recovery | `claude_resume.json` → a `--resume` → `--fork-session` → new-session ladder ([above](#session-recovery-ladder)) | none — see below |
 
 ### MCP Initialization
 
@@ -448,9 +635,20 @@ func (c *Codex) SendMessage(prompt string) error {
 - Sends `tools/call` request (non-blocking)
 - Goroutine waits for the response and turns it into the event that ends the turn
 
-The response identifies the conversation by **thread ID**, taken from only two places — the `session_configured` event and `structuredContent.threadId` on the `tools/call` result — so a future upstream field of the same name elsewhere cannot hijack it. Follow-up turns pass it back as `threadId`; `conversationId` is its deprecated predecessor and is sent alongside so one call works across CLI versions. Codex renamed this identifier over time (`sessionId` → `conversationId` → `threadId`), and picking the wrong name is not a visible failure: the reply is rejected inside a *successful* JSON-RPC frame, so the turn looks completed while the message was never delivered.
+The response identifies the conversation by **thread ID**, taken from only two places — the `session_configured` event and `structuredContent.threadId` on a *successful* `tools/call` result — so a future upstream field of the same name elsewhere cannot hijack it. Follow-up turns pass it back as `threadId`; `conversationId` is its deprecated predecessor and is sent alongside so one call works across CLI versions. Codex renamed this identifier over time (`sessionId` → `conversationId` → `threadId`), and picking the wrong name is not a visible failure: the reply is rejected inside a *successful* JSON-RPC frame, so the turn looks completed while the message was never delivered.
 
-That is also why the result's `isError` flag decides between `DoneEvent` and `ErrorEvent`. The MCP frame stays a success for API errors, unusable thread IDs and runtime failures alike — reading only the JSON-RPC error field reports every one of them as a normal completion.
+That is also why the result's `isError` flag decides between `DoneEvent` and `ErrorEvent`. The MCP frame stays a success for API errors, unusable thread IDs and runtime failures alike — reading only the JSON-RPC error field reports every one of them as a normal completion. The same flag decides whether the thread ID in that result is worth keeping. A failed turn is no evidence that its thread exists, because Codex answers a reply to an unknown thread with `Session not found for thread_id: X` and echoes X straight back in `structuredContent` — believing it re-pins the dead ID on every attempt, and the session can never recover on its own. A failure therefore never adopts a thread ID, and equally never drops one that `session_configured` or a completed turn has already confirmed: a turn that dies on an expired login or a budget cap still ran inside a registered thread, and replying into it works.
+
+**Known limitation**: a confirmed thread ID is never cleared again. Nothing ever
+assigns `threadID` an empty value, so if the thread does stop working later,
+every `codex-reply` for the remaining life of the process fails the same way. The
+session only heals when that process goes away — the idle reaper, a mode change,
+a restart — and the next message opens a fresh thread. Clearing it would take a
+precise signal, and the only one Codex offers is the English string `Session not
+found for thread_id`, the kind of error-text matching the rest of this file
+exists to avoid. The stale ID is the cheaper side of that trade: a string match
+misfires the day upstream rewords it, and throws away the agent-side context of a
+thread that was working fine.
 
 An aborted turn gets **no response at all**: Codex answers neither the cancelled `tools/call` nor an interrupted one. Pockode resolves the pending request itself when it sees `turn_aborted` (or when it sends the interrupt), matching the event's `_meta.requestId` against the pending call so a late abort of a finished turn cannot end the turn running now. `budget_limited` becomes an `ErrorEvent`, every other reason an `InterruptedEvent` — the latter stops the work item rather than letting `work.AutoResumer` continue it.
 
@@ -661,7 +859,7 @@ ProcessStateEnded
 
 Transition conditions:
 - Idle → Running: SendMessage / SendPermissionResponse / SendQuestionResponse,
-  or an IndicatesAgentActivity event (output that resumes on its own, such as a
+  or an IndicatesAgentActivity event (a turn that resumes on its own, such as a
   message that stayed queued behind an interrupt)
 - Running → Idle: AwaitsUserInput events (done, error, interrupted, permission_request, ask_user_question)
 - Any → Ended: Process termination / Idle timeout
@@ -697,6 +895,9 @@ func (p *Process) streamEvents(ctx context.Context) {
 
         if event.EventType().IndicatesAgentActivity() {
             p.SetRunning()
+        }
+        if event.EventType().ActivatesSession() {
+            p.markActivated(ctx, log) // first transition only
         }
 
         // 1. Persistence
@@ -741,7 +942,7 @@ func (m *Manager) runIdleReaper() {
 type SessionMeta struct {
     ID         string
     Title      string
-    Activated  bool      // True after first message sent
+    Activated  bool      // True once the agent has produced output
     AgentType  AgentType // claude, codex
     Mode       Mode      // default, yolo
     NeedsInput bool      // Awaiting user permission/question response
@@ -755,6 +956,55 @@ building a process marks the session unread, whether or not the agent said
 anything. `StateChangeEvent.IsInitial` distinguishes that first idle, but only
 `work.AutoResumer` reads it. Noted rather than fixed: what "unread" should mean
 for a session that was merely started is a product question.
+
+### Activation
+
+`Activated` marks a session as *started*, and three things read it:
+
+- Claude's [recovery ladder](#session-recovery-ladder), which receives it as
+  `StartOptions.Resume`.
+- Codex, through the same field, to warn that the agent has lost the earlier turns
+  — its threads never survive the process that made them.
+- `session.set_agent_type`, which refuses to switch a started session's backend.
+
+It is set from the event stream — the first event answering
+`ActivatesSession` — rather than when the process is created. Spawning a CLI
+proves nothing about the session behind it, and the difference is the whole point
+of the flag: a first message that dies before the agent says anything (expired
+login, provider outage) leaves a session that never really started, and the user
+should be able to point it at a different agent instead of retrying the broken one
+forever. Codex's warning gets more accurate for free: a session whose first turn
+died before the agent spoke no longer claims to have lost context it never had.
+`process/manager.go` owns the write because the event stream passes through it
+already, next to the history append.
+
+The write happens on the transition only, guarded by an `atomic.Bool` seeded from
+the session's existing flag, so an active session does not rewrite the index and
+broadcast a change on every event it produces. There is deliberately no `closed`
+guard like `SetRunning` has: that guard exists to avoid announcing stale process
+*state*, whereas "the agent has spoken" is a fact that reaping the process does not
+undo.
+
+Switching agent type also closes any live process for the session.
+`GetOrCreateProcess` keys on session ID alone and ignores agent type, so a CLI
+still running from the first turn nobody heard back from — exactly the case this
+switch exists for — would keep receiving the next messages, and the user's choice
+would silently do nothing. The close happens after the `Activated` check, so a
+rejected request does not kill a process on its way out.
+
+**Known limitation**: the check and the switch are not atomic. `Activated` is
+read from a snapshot taken before the close, so a user who picks a different
+agent in the instant the first token lands kills a process that was working and
+has the session marked activated by the events already in flight. The window runs
+from that read to `SetAgentType`, and the state it leaves is self-consistent — the
+resume file is intact, so switching back resumes — which is why it stands. Closing it
+properly means a compare-and-swap in the store (`SetAgentTypeIfNotActivated` or
+similar) instead of a read followed by an unconditional write.
+
+The frontend disables the agent selector on the same flag, which `SessionListItem`
+carries. Using the transcript instead (`messages.length > 0`) looks equivalent and
+is not: a failed first turn leaves a user message and an error behind, so the
+selector would stay disabled in exactly the situation it is meant to rescue.
 
 ### History Storage
 

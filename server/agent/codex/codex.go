@@ -1087,15 +1087,26 @@ func (s *mcpSession) parseTurnResult(result json.RawMessage) agent.AgentEvent {
 		return agent.DoneEvent{}
 	}
 
-	s.rememberThreadID(parsed.StructuredContent.ThreadID, parsed.ConversationID, parsed.SessionID)
-
 	if parsed.IsError || parsed.LegacyError != "" {
+		// A failed turn's thread id is not evidence that the thread exists:
+		// Codex answers a reply to an unknown thread with "Session not found
+		// for thread_id: X" and echoes X straight back in structuredContent
+		// (verified against the CLI). Adopting it re-pins the dead id on every
+		// attempt, so a session that ends up holding one never recovers.
+		//
+		// An id already held is deliberately left alone rather than cleared:
+		// session_configured or a completed turn confirmed it, and a turn that
+		// dies on an expired login or a budget cap still ran inside a
+		// registered thread that codex-reply still works against (also
+		// verified) — clearing it would drop the agent's context for nothing.
 		return agent.ErrorEvent{Error: firstNonEmpty(
 			parsed.text(),
 			parsed.LegacyError,
 			"codex reported an error without a message",
 		)}
 	}
+
+	s.rememberThreadID(parsed.StructuredContent.ThreadID, parsed.ConversationID, parsed.SessionID)
 
 	return agent.DoneEvent{}
 }
@@ -1141,6 +1152,11 @@ func (s *mcpSession) abortPendingTurn(requestID *int64, reason string) {
 
 // rememberThreadID stores the first non-empty thread identifier, in preference
 // order. Codex reports it under different names depending on its version.
+//
+// Only call it for a thread Codex has confirmed exists: a session_configured
+// event (the server registered it) or a turn that completed on it. A failed
+// turn is not a confirmation — Codex echoes back the very thread id it just
+// rejected as unknown, so believing it pins a dead id in place for good.
 func (s *mcpSession) rememberThreadID(candidates ...string) {
 	for _, id := range candidates {
 		if id == "" {
