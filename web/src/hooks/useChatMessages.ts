@@ -203,10 +203,20 @@ export function useChatMessages({
 				return true;
 			} catch (error) {
 				console.error("Failed to send message:", error);
+				// The server's reason is what tells a missing CLI apart from a dropped
+				// connection; without it every failure reads the same.
+				const reason =
+					error instanceof Error && error.message
+						? error.message
+						: "Unknown error";
 				setMessages((prev) =>
 					prev.map((m): Message => {
 						if (m.role === "assistant" && m.id === assistantMessageId) {
-							return { ...m, status: "error", error: "Failed to send message" };
+							return {
+								...m,
+								status: "error",
+								error: `Failed to send message: ${reason}`,
+							};
 						}
 						return m;
 					}),

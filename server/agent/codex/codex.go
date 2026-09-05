@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/logger"
@@ -21,6 +23,26 @@ import (
 )
 
 const Binary = "codex"
+
+// Startup steps must be bounded: process.Manager calls Agent.Start while holding
+// its worktree-wide process lock, so a step that never returns deadlocks every
+// session of the worktree. A timeout downgrades that to a recoverable start
+// failure.
+//
+// Both budgets cover local work only — `--version` just prints a string, and the
+// MCP handshake is answered before Codex does anything with the model — so they
+// are sized for a cold start on a loaded machine, not for model latency.
+//
+// The client is sized against their sum: web/src/lib/wsStore.ts mirrors it as
+// CODEX_START_BUDGET_MS and keeps the timeout of the requests that run Start
+// above it, with margin. Raising either budget eats into that margin, and once
+// the sum outgrows it the client gives up first: the error naming the stalled
+// step then goes into a reply nobody is waiting for. Grow these two and the web
+// constant together.
+const (
+	versionProbeTimeout = 10 * time.Second
+	handshakeTimeout    = 30 * time.Second
+)
 
 // Agent implements agent.Agent using Codex CLI via MCP.
 type Agent struct{}
@@ -34,7 +56,7 @@ func New() *Agent {
 func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	procCtx, cancel := context.WithCancel(ctx)
 
-	mcpSubcommand, err := getMCPSubcommand()
+	mcpSubcommand, err := getMCPSubcommand(procCtx)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -121,9 +143,17 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}
 	}()
 
-	// Initialize the MCP connection before returning.
-	if err := sess.initialize(procCtx); err != nil {
+	// Initialize the MCP connection before returning. The deadline lives on a
+	// child context so it expires with the handshake instead of taking procCtx —
+	// and the running CLI — down with it.
+	initCtx, cancelInit := context.WithTimeout(procCtx, handshakeTimeout)
+	defer cancelInit()
+
+	if err := sess.initialize(initCtx); err != nil {
 		sess.Close()
+		if errors.Is(initCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("codex did not answer the MCP handshake within %s", handshakeTimeout)
+		}
 		return nil, fmt.Errorf("MCP initialize failed: %w", err)
 	}
 
@@ -1295,9 +1325,21 @@ func extractFilePath(changes json.RawMessage) string {
 
 // getMCPSubcommand determines the correct MCP subcommand based on codex version.
 // Versions >= 0.43.0-alpha.5 use "mcp-server", older versions use "mcp".
-func getMCPSubcommand() (string, error) {
-	out, err := exec.Command(Binary, "--version").Output()
+func getMCPSubcommand(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, Binary, "--version")
+	// The context kills the process, but Wait still blocks until the stdout pipe
+	// closes — a grandchild holding it open would restore the unbounded wait this
+	// timeout exists to prevent. WaitDelay caps that tail.
+	cmd.WaitDelay = time.Second
+
+	out, err := cmd.Output()
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("codex --version did not finish within %s", versionProbeTimeout)
+		}
 		return "", fmt.Errorf("codex CLI not found: %w", err)
 	}
 

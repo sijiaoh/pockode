@@ -619,6 +619,13 @@ params := map[string]any{
 
 After initialization, sends `notifications/initialized` notification.
 
+Both waits on the CLI here — the `--version` probe that chooses `mcp-server` over
+`mcp`, and the handshake itself — run under a deadline, because `Start` runs
+under the manager's process lock ([Lock Strategy](#lock-strategy)). Either one
+expiring fails the start with a message naming the step that timed out. An expired
+handshake also closes the session it was initializing: an MCP connection that
+never came up leaves nothing to continue from.
+
 ### Asynchronous Tool Calls
 
 ```go
@@ -1044,6 +1051,26 @@ failing to boot.
 | `requestsMu` | Pending requests map |
 | `processesMu` | Process map |
 | `sessionsMu` | Session list |
+
+`processesMu` is held from the lookup that finds no process through to the one it
+registers, `Agent.Start` included — that is what keeps two messages arriving at
+once from launching two CLIs for one session. The cost is that a worktree-wide
+lock is held while a CLI comes up, so a startup step that never returns does not
+hang one session: it freezes every process operation in the worktree, behind a
+frontend that can only spin. Every step of `Start` that waits on something
+outside the process therefore owes a bound, which turns a hang into an ordinary
+start failure: the lock is released and the request is answered, instead of
+neither. Codex is the only agent that has any — the version probe and the MCP
+handshake ([MCP Initialization](#mcp-initialization)); Claude's `Start` spawns
+and returns.
+
+Those bounds are also a promise to the client. `chat.message` runs this path, and
+so does `work.start`, whose kickoff (or restart) message goes out the same way and
+is awaited before the work item's reply; both are given a client timeout sized
+from the sum of these bounds
+([Request Timeout](websocket-rpc.md#request-timeout)). A request that merely
+queues behind the lock while a start drags on keeps the default clock, so there a
+stalled start still surfaces as a plain timeout.
 
 ### Ending a Turn Exactly Once
 

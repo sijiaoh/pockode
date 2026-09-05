@@ -2,6 +2,7 @@ import {
 	createJSONRPCErrorResponse,
 	JSONRPCClient,
 	JSONRPCErrorException,
+	type JSONRPCID,
 	type JSONRPCRequester,
 } from "json-rpc-2.0";
 import { create } from "zustand";
@@ -149,8 +150,7 @@ interface WSState {
 
 // Module-level state for mutable objects (not reactive)
 let ws: WebSocket | null = null;
-let rpcReceiver: JSONRPCClient | null = null;
-let rpcRequester: JSONRPCRequester<void> | null = null;
+let rpcClients: RPCClients | null = null;
 let currentToken: string | null = null;
 let reconnectAttempts = 0;
 let reconnectTimeout: number | undefined;
@@ -267,7 +267,11 @@ function isAuthRejection(error: unknown): boolean {
 }
 
 function getClient(): JSONRPCRequester<void> | null {
-	return rpcRequester;
+	return rpcClients?.withTimeout ?? null;
+}
+
+function getAgentStartClient(): JSONRPCRequester<void> | null {
+	return rpcClients?.withAgentStartTimeout ?? null;
 }
 
 const RPC_TIMEOUT_MS = 30000;
@@ -291,9 +295,39 @@ export function isRPCTimeout(error: unknown): boolean {
 	);
 }
 
+// Where: server/agent/codex/codex.go's versionProbeTimeout (10s) and
+// handshakeTimeout (30s), which run in series inside codex.Start.
+const CODEX_START_BUDGET_MS = 10000 + 30000;
+
+/**
+ * Timeout for the RPCs that are given room to wait out an agent CLI start:
+ * `chat.message` and `work.start`.
+ *
+ * Both reach `GetOrCreateProcess` -> `Agent.Start` on their own request path —
+ * `chat.message` directly, `work.start` through the kickoff (or restart) message
+ * it awaits before replying. Requests that only address a process already there
+ * (permission, question, interrupt) keep RPC_TIMEOUT_MS.
+ *
+ * Why it must exceed CODEX_START_BUDGET_MS: the server ends a hung start with an
+ * error naming the step that stalled ("codex did not answer the MCP handshake
+ * within 30s"). Give up before that error is written and the user gets
+ * "Request timed out" instead — every time, not occasionally, since the two
+ * deadlines are fixed. The extra margin covers what those two constants don't:
+ * spawning the process and building its pipes, the file writes a request makes
+ * around that (`work.start` claims the work item and creates its session first),
+ * a loaded disk, the round trip.
+ *
+ * Overshooting costs little: a dead socket rejects everything still pending at
+ * once (see `onclose`) rather than leaving it to sit out the clock, so the extra
+ * seconds are only ever spent on a server that is genuinely still working.
+ */
+const AGENT_START_RPC_TIMEOUT_MS = CODEX_START_BUDGET_MS + 20000;
+
 interface RPCClients {
 	base: JSONRPCClient;
 	withTimeout: JSONRPCRequester<void>;
+	/** For agent-starting requests only; see AGENT_START_RPC_TIMEOUT_MS. */
+	withAgentStartTimeout: JSONRPCRequester<void>;
 }
 
 function createRPCClient(socket: WebSocket): RPCClients {
@@ -303,14 +337,15 @@ function createRPCClient(socket: WebSocket): RPCClients {
 		}
 		socket.send(JSON.stringify(request));
 	});
+	// Code 0 is json-rpc-2.0's DefaultErrorCode, the same one it uses for its own
+	// timeouts; isAuthRejection reads that code as "the transport gave up", as
+	// opposed to a genuine (negative) code meaning the server said no.
+	const timedOut = (id: JSONRPCID) =>
+		createJSONRPCErrorResponse(id, 0, RPC_TIMEOUT_MESSAGE);
 	return {
 		base,
-		// Code 0 is json-rpc-2.0's DefaultErrorCode, the same one it uses for its
-		// own timeouts; isAuthRejection reads that code as "the transport gave up",
-		// as opposed to a genuine (negative) code meaning the server said no.
-		withTimeout: base.timeout(RPC_TIMEOUT_MS, (id) =>
-			createJSONRPCErrorResponse(id, 0, RPC_TIMEOUT_MESSAGE),
-		),
+		withTimeout: base.timeout(RPC_TIMEOUT_MS, timedOut),
+		withAgentStartTimeout: base.timeout(AGENT_START_RPC_TIMEOUT_MS, timedOut),
 	};
 }
 
@@ -399,13 +434,13 @@ function handleNotification(method: string, params: unknown): void {
 
 // Create namespace-specific actions
 const agentRoleActions = createAgentRoleActions(getClient);
-const chatActions = createChatActions(getClient);
+const chatActions = createChatActions(getClient, getAgentStartClient);
 const commandActions = createCommandActions(getClient);
 const sessionActions = createSessionActions(getClient);
 const settingsActions = createSettingsActions(getClient);
 const fileActions = createFileActions(getClient);
 const gitActions = createGitActions(getClient);
-const workActions = createWorkActions(getClient);
+const workActions = createWorkActions(getClient, getAgentStartClient);
 const worktreeRpcActions = createWorktreeActions(getClient);
 
 // Listener for worktree deleted notification
@@ -476,12 +511,11 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 			socket.onopen = async () => {
 				const clients = createRPCClient(socket);
-				rpcReceiver = clients.base;
-				rpcRequester = clients.withTimeout;
+				rpcClients = clients;
 
 				try {
 					const currentWorktree = worktreeActions.getCurrent();
-					const result = (await rpcRequester.request("auth", {
+					const result = (await clients.withTimeout.request("auth", {
 						token,
 						worktree: currentWorktree || undefined,
 					} as AuthParams)) as AuthResult;
@@ -541,7 +575,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 					// JSON-RPC 2.0 response (has id)
 					if ("id" in data && data.id !== null) {
-						rpcReceiver?.receive(data);
+						rpcClients?.base.receive(data);
 						return;
 					}
 
@@ -573,10 +607,9 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 				ws = null;
 				// Their answers can only have come down this socket, so waiting out
-				// the 30s timeout would just be a slower way of failing.
-				rpcReceiver?.rejectAllPendingRequests("Connection lost");
-				rpcReceiver = null;
-				rpcRequester = null;
+				// the RPC timeout would just be a slower way of failing.
+				rpcClients?.base.rejectAllPendingRequests("Connection lost");
+				rpcClients = null;
 				clearAllWatchSubscriptions();
 
 				const currentStatus = get().status;
@@ -625,9 +658,8 @@ export const useWSStore = create<WSState>((set, get) => ({
 				ws = null;
 				// onclose will ignore this socket for the same reason it ignores any
 				// superseded one, so nothing else is going to settle these.
-				rpcReceiver?.rejectAllPendingRequests("Connection lost");
-				rpcReceiver = null;
-				rpcRequester = null;
+				rpcClients?.base.rejectAllPendingRequests("Connection lost");
+				rpcClients = null;
 				// onclose used to do this on its way past; it now ignores a socket
 				// that is no longer the current one, and this one just stopped being
 				// it. Doing it here also frees the callbacks immediately rather than
@@ -935,12 +967,13 @@ type SwitchResult = "success" | "not_connected" | "failed";
 
 // Switch worktree on existing connection
 async function switchWorktreeRPC(name: string): Promise<SwitchResult> {
-	if (!rpcRequester) {
+	const client = getClient();
+	if (!client) {
 		return "not_connected";
 	}
 
 	try {
-		const result = (await rpcRequester.request("worktree.switch", {
+		const result = (await client.request("worktree.switch", {
 			name,
 		})) as { work_dir: string; worktree_name: string };
 
@@ -973,8 +1006,7 @@ export function resetWSStore() {
 		ws.close(1000, "disconnect");
 		ws = null;
 	}
-	rpcReceiver = null;
-	rpcRequester = null;
+	rpcClients = null;
 	currentToken = null;
 	if (reconnectTimeout) {
 		clearTimeout(reconnectTimeout);

@@ -26,7 +26,6 @@ function AppShell() {
 	const navigate = useNavigate();
 	const isDesktop = useIsDesktop();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
-	const isCreatingSession = useRef(false);
 
 	// Here rather than in `MainContainer`, which only exists once a session has
 	// resolved: the token screen, the loading screen and the "can't reach the
@@ -124,6 +123,8 @@ function AppShell() {
 		redirectSessionId,
 		needsNewSession,
 		createSession,
+		createError,
+		clearCreateError,
 		deleteSession,
 		updateTitle,
 	} = useSession({ enabled: hasAuthToken, routeSessionId });
@@ -179,10 +180,21 @@ function AppShell() {
 		overlay,
 	]);
 
+	// A create that failed in the worktree we left must not be reported against
+	// the one we entered, nor keep the effect below from creating a session there.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: urlWorktree is what this effect reacts to, not something it reads
+	useEffect(() => {
+		clearCreateError();
+	}, [urlWorktree, clearCreateError]);
+
+	// createError gates this effect because needsNewSession stays true for as long
+	// as the worktree has no session: without the gate a failing create re-runs
+	// here on every render it causes, hammering the server thousands of times a
+	// minute. One attempt, then the error screen hands the retry back to the user.
 	useEffect(() => {
 		if (worktreeSwitchInFlight) return;
-		if (needsNewSession && !isCreatingSession.current) {
-			isCreatingSession.current = true;
+		if (createError) return;
+		if (needsNewSession) {
 			createSession()
 				.then((newSession) => {
 					navigate(
@@ -196,13 +208,15 @@ function AppShell() {
 						),
 					);
 				})
-				.finally(() => {
-					isCreatingSession.current = false;
+				.catch((error) => {
+					// Reported through createError below; logged for the console trail.
+					console.error("Failed to create session:", error);
 				});
 		}
 	}, [
 		worktreeSwitchInFlight,
 		needsNewSession,
+		createError,
 		createSession,
 		navigate,
 		urlWorktree,
@@ -231,16 +245,29 @@ function AppShell() {
 	);
 
 	const handleCreateSession = useCallback(async () => {
-		const newSession = await createSession();
-		setSidebarOpen(false);
-		navigate(
-			buildNavigation({
-				type: "session",
-				worktree: urlWorktree,
-				sessionId: newSession.id,
-			}),
-		);
+		try {
+			const newSession = await createSession();
+			setSidebarOpen(false);
+			navigate(
+				buildNavigation({
+					type: "session",
+					worktree: urlWorktree,
+					sessionId: newSession.id,
+				}),
+			);
+		} catch (error) {
+			// Reported through createError below; logged for the console trail.
+			console.error("Failed to create session:", error);
+		}
 	}, [createSession, navigate, urlWorktree]);
+
+	// Serves both create paths: clearing the error lets the auto-create effect run
+	// again, and createSession deduplicates, so the effect joins the request
+	// started here rather than adding a second one.
+	const handleRetryCreateSession = useCallback(() => {
+		clearCreateError();
+		void handleCreateSession();
+	}, [clearCreateError, handleCreateSession]);
 
 	const handleDeleteSession = useCallback(
 		async (id: string) => {
@@ -385,6 +412,10 @@ function AppShell() {
 		[navigate],
 	);
 
+	// The server's own wording is the whole point here: "claude: executable file
+	// not found in $PATH" and a dropped connection must not read the same.
+	const createErrorMessage = createError?.message || "Unknown error";
+
 	if (!hasAuthToken) {
 		return <TokenInput onSubmit={handleTokenSubmit} />;
 	}
@@ -425,6 +456,32 @@ function AppShell() {
 			);
 		}
 
+		// Checked after the transport screen on purpose: a create that failed
+		// because the socket dropped is a symptom, and "retrying..." is both the
+		// truer explanation and the one that resolves itself.
+		if (createError) {
+			return (
+				<div
+					className="flex h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary px-6 text-center"
+					role="alert"
+				>
+					<div className="text-th-text-muted">
+						Couldn&apos;t start a new session
+					</div>
+					<div className="max-w-md break-words text-sm text-th-error">
+						{createErrorMessage}
+					</div>
+					<button
+						type="button"
+						onClick={handleRetryCreateSession}
+						className="rounded bg-th-accent px-4 py-2 text-sm text-th-accent-text hover:opacity-90"
+					>
+						Retry
+					</button>
+				</div>
+			);
+		}
+
 		return (
 			// biome-ignore lint/a11y/useSemanticElements: loading indicator is not a form output
 			<div
@@ -439,6 +496,33 @@ function AppShell() {
 
 	return (
 		<div className="flex h-dvh flex-col">
+			{createError && (
+				// Wraps rather than truncates: the reason is server text of any
+				// length, and the narrow screens this app targets are exactly where
+				// truncation would cut it off.
+				<div
+					className="flex flex-wrap items-center justify-center gap-3 bg-th-error/20 px-4 py-1 text-sm text-th-error"
+					role="alert"
+				>
+					<span className="break-words">
+						Couldn&apos;t start a new session: {createErrorMessage}
+					</span>
+					<button
+						type="button"
+						onClick={handleRetryCreateSession}
+						className="shrink-0 underline hover:opacity-80"
+					>
+						Retry
+					</button>
+					<button
+						type="button"
+						onClick={clearCreateError}
+						className="shrink-0 underline hover:opacity-80"
+					>
+						Dismiss
+					</button>
+				</div>
+			)}
 			{wsStatus === "reconnecting" && (
 				// biome-ignore lint/a11y/useSemanticElements: status banner is not a form output
 				<div

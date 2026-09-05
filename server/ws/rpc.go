@@ -581,6 +581,16 @@ func (h *rpcMethodHandler) maxUploadSize() int64 {
 	return filetransfer.MaxUploadSize
 }
 
+// replyInternalError reports a server-side failure to both the server log and
+// the client. Users here are developers working on their own machine, so the
+// underlying cause (disk full, unwritable data dir, ...) travels with the reply
+// rather than being dropped — a bare "failed to X" leaves a real failure
+// without a trace on either side. logArgs add locating context (session ID).
+func (h *rpcMethodHandler) replyInternalError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, message string, err error, logArgs ...any) {
+	h.log.With(logArgs...).Error(message, "error", err)
+	h.replyError(ctx, conn, id, jsonrpc2.CodeInternalError, message+": "+err.Error())
+}
+
 func (h *rpcMethodHandler) replyError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, code int64, message string) {
 	err := &jsonrpc2.Error{
 		Code:    code,

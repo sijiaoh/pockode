@@ -35,6 +35,7 @@ func mockRegistry(mock *mockAgent) *agent.Registry {
 
 type testEnv struct {
 	t               *testing.T
+	dataDir         string
 	mock            *mockAgent
 	worktreeManager *worktree.Manager
 	workStore       work.Store
@@ -108,6 +109,7 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 
 	env := &testEnv{
 		t:               t,
+		dataDir:         dataDir,
 		mock:            mock,
 		worktreeManager: worktreeManager,
 		workStore:       workStore,
@@ -794,6 +796,36 @@ func TestHandler_SessionCreate(t *testing.T) {
 	}
 	if result.Activated {
 		t.Error("expected activated=false for new session")
+	}
+}
+
+// A create that fails on disk (full disk, unwritable .pockode) used to reply
+// with a bare "failed to create session" and log nothing, leaving the failure
+// without a trace on either side of the connection.
+func TestHandler_SessionCreate_ReportsUnderlyingCause(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	env := newTestEnv(t, &mockAgent{})
+
+	// A read-only sessions dir stands in for any I/O failure the store hits.
+	sessionsDir := filepath.Join(env.dataDir, "sessions")
+	if err := os.Chmod(sessionsDir, 0500); err != nil {
+		t.Fatalf("chmod sessions dir: %v", err)
+	}
+	defer os.Chmod(sessionsDir, 0700) // let t.TempDir clean up
+
+	resp := env.call("session.create", nil)
+
+	if resp.Error == nil {
+		t.Fatal("expected an error when the sessions dir is not writable")
+	}
+	if !strings.Contains(resp.Error.Message, "failed to create session") {
+		t.Errorf("expected the message to say what failed, got %q", resp.Error.Message)
+	}
+	if !strings.Contains(resp.Error.Message, "permission denied") {
+		t.Errorf("expected the message to carry the underlying cause, got %q", resp.Error.Message)
 	}
 }
 

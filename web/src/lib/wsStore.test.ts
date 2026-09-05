@@ -337,11 +337,23 @@ describe("wsStore", { timeout: 20_000 }, () => {
 
 			const pending = wsActions.getFile("big.png");
 			const rejection = expect(pending).rejects.toThrow("Connection lost");
+			// The agent-start requests wait on their own, much longer clock, so they
+			// have the most to lose from being left to time out — and they only escape
+			// that because they share the underlying client whose pending requests are
+			// rejected here.
+			const pendingSend = wsActions.sendMessage("session-1", "hello");
+			const sendRejection =
+				expect(pendingSend).rejects.toThrow("Connection lost");
+			const pendingStart = wsActions.startWork("work-1");
+			const startRejection =
+				expect(pendingStart).rejects.toThrow("Connection lost");
 
 			// Their answer could only have come down this socket, so waiting out the
-			// 30s timeout would just be a slower way of failing.
+			// timeout would just be a slower way of failing.
 			getMockWs()?.simulateClose();
 			await rejection;
+			await sendRejection;
+			await startRejection;
 		});
 
 		it("marks a request the client gave up on as a timeout", async () => {
@@ -357,6 +369,41 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			// Callers use this to tell "we stopped waiting" — where the server may
 			// still be working and a retry would duplicate it — from a real failure.
 			expect(isRPCTimeout(await caught)).toBe(true);
+		});
+
+		it("waits longer on agent-starting requests than on other requests", async () => {
+			const { isRPCTimeout } = await import("./wsStore");
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+			getMockWs()?.mockNoResponse();
+
+			const otherRequest = wsActions.getFile("big.png").catch((error) => error);
+			const agentStarters = [
+				wsActions.sendMessage("session-1", "hello"),
+				wsActions.startWork("work-1"),
+			].map((pending) => {
+				const settled = { done: false };
+				const caught = pending.catch((error) => error);
+				void caught.then(() => {
+					settled.done = true;
+				});
+				return { caught, settled };
+			});
+
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(isRPCTimeout(await otherRequest)).toBe(true);
+			// An agent CLI starts on these requests' path, and the server spends up
+			// to 40s on that before answering. Giving up here would throw away the
+			// reply that says which startup step stalled.
+			for (const { settled } of agentStarters) {
+				expect(settled.done).toBe(false);
+			}
+
+			await vi.advanceTimersByTimeAsync(30_000);
+			for (const { caught } of agentStarters) {
+				expect(isRPCTimeout(await caught)).toBe(true);
+			}
 		});
 	});
 

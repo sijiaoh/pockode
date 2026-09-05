@@ -341,7 +341,7 @@ worktree; `cleanup` later unsubscribes the *real* notifier, so the nil entry is
 unreachable, outlives the connection, and panics the next watcher that notifies
 that worktree. `trackSubscription` would write to a still-`nil` map and panic
 immediately — recovered, but the recover only logs, so the client gets no reply
-at all and waits out its full 30-second timeout.
+at all and waits out its full timeout.
 
 `rpcConnState.ready` closes this window: `setConn` closes the channel and `Handle`
 waits on it before touching anything. One gate covers the whole class of
@@ -442,7 +442,7 @@ rather than showing a loading spinner indefinitely.
 
 ### Request Timeout
 
-All RPC requests have a default 30-second timeout:
+RPC requests carry a client-side timeout, 30 seconds by default:
 
 ```typescript
 const RPC_TIMEOUT_MS = 30000;
@@ -456,6 +456,18 @@ its own subscription cleanup, the `onclose` that follows it arrives for a socket
 that is no longer current and returns early (see
 [Auto-Reconnect](#auto-reconnect)).
 
+The exception is `AGENT_START_RPC_TIMEOUT_MS`, a longer clock for the requests
+that start an agent CLI on their own path.
+[Lock Strategy](agent-integration.md#lock-strategy) names those requests and the
+deadlines the server bounds a start with before it answers. Give up first and
+the reply naming the step that stalled is thrown away and the user is told
+"Request timed out" instead; because both budgets are fixed, that is what happens
+every time rather than now and then. So the rule is directional: a request's
+client timeout must outlast the deadlines the server spends answering it. A test
+pins those requests to a longer clock than the default, but nothing ties that
+clock to the Go deadlines it is derived from — the two sides only name each other
+in comments.
+
 **A timeout is not a failure the caller may retry blindly.** The server is likely
 still working on the request, so a retry stacks a second copy of that work on top
 of the first: with react-query's default budget one slow response becomes four,
@@ -466,6 +478,31 @@ is its message, not an error code of its own: code 0 is already spoken for above
 and taking a second meaning would cost more than it buys. The message is supplied
 through the timeout's own error factory rather than left to json-rpc-2.0, so what
 `isRPCTimeout` matches on is not a library default that an upgrade could reword.
+
+## Error Replies
+
+`replyInternalError` (`ws/rpc.go`) is how a handler reports a failure that is not
+the caller's fault: it answers `-32603` with `<what failed>: <why>` and logs the
+same failure with the ids that locate it (`connId`, plus a `sessionId` where the
+handler has one), in one call so neither half can go missing. The person on the
+other end is the developer running this server, and what keeps a session from
+starting is an unwritable data directory or a full disk — something only the
+server side can see. A bare "failed to create session" strands that failure with
+no trace anywhere: nothing in the log, and nothing for the frontend to show but
+the phrase repeated back. Every `session.*` handler replies this way, as does the
+session lookup in `chat.messages.subscribe`; handlers written before the helper
+still answer with a bare phrase or a bare cause. The chat handlers keep their own
+`replyErrorForChat`: what is not the server's fault (no such session, no live
+process) becomes a client error, and anything else is logged there and forwarded
+as the cause — a failing agent start has to leave a trace even when the client
+stopped waiting for the reply.
+
+A server's error message is therefore text to put in front of a user, never a
+value to branch on — it embeds an arbitrary error string, and its fixed half is
+free to be reworded. Nothing on the client matches text against a server reply:
+`isAuthRejection` ([above](#auto-reconnect)) reads the code alone, and
+`isRPCTimeout` ([above](#request-timeout)) compares text only after code 0 has
+established that the error never came from the server at all.
 
 ## Code Paths
 
@@ -490,6 +527,7 @@ through the timeout's own error factory rather than left to json-rpc-2.0, so wha
 2. **Implement backend handler**
    - Add handler in the corresponding `server/ws/rpc_*.go`
    - Register in the `Handle` switch in `rpc.go`
+   - Report a failure that is not the caller's fault with `replyInternalError` (see [Error Replies](#error-replies))
 
 3. **Add frontend action**
    - Add method in `web/src/lib/rpc/*.ts`

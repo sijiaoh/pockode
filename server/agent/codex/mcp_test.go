@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -528,6 +529,26 @@ func TestProcessCodexMsg_BookkeepingEventsAreDropped(t *testing.T) {
 
 	if events := drainEvents(sess.events); len(events) != 0 {
 		t.Errorf("expected no events, got %v", events)
+	}
+}
+
+// process.Manager calls Agent.Start under its global process lock, so a CLI that
+// never answers the handshake must fail on a deadline of its own — one that
+// expires without cancelling procCtx, which would kill a healthy CLI.
+func TestInitialize_DeadlineFailsWithoutCancellingProcess(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stdin = &discardWriteCloser{}
+
+	ctx, cancel := context.WithTimeout(sess.procCtx, 50*time.Millisecond)
+	defer cancel()
+
+	err := sess.initialize(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected a deadline error, got %v", err)
+	}
+	if sess.procCtx.Err() != nil {
+		t.Fatalf("handshake deadline cancelled procCtx: %v", sess.procCtx.Err())
 	}
 }
 

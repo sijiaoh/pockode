@@ -5,6 +5,7 @@ import {
 	RouterProvider,
 } from "@tanstack/react-router";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "../lib/authStore";
 import { useSessionStore } from "../lib/sessionStore";
@@ -13,8 +14,12 @@ import {
 	useWorktreeStore,
 	worktreeActions,
 } from "../lib/worktreeStore";
+import { wsActions } from "../lib/wsStore";
 import { routeTree } from "../router";
-import type { SessionListChangedNotification } from "../types/message";
+import type {
+	SessionListChangedNotification,
+	SessionListItem,
+} from "../types/message";
 
 // ChatPanel is the attach point; render only the active session id so the test
 // can assert the final landing session from the user's perspective.
@@ -24,8 +29,16 @@ vi.mock("./Chat", () => ({
 	),
 }));
 
+// The sidebar's only role in these tests is to fire onCreateSession, the manual
+// "+" path.
 vi.mock("./Session", () => ({
-	SessionSidebar: () => <div data-testid="session-sidebar" />,
+	SessionSidebar: ({ onCreateSession }: { onCreateSession: () => void }) => (
+		<div data-testid="session-sidebar">
+			<button type="button" onClick={onCreateSession}>
+				New Chat
+			</button>
+		</div>
+	),
 }));
 
 // The worktree existence guard would otherwise redirect unknown worktrees to
@@ -51,7 +64,7 @@ vi.mock("../hooks/useAgentRoleSubscription", () => ({
 	useAgentRoleSubscription: () => {},
 }));
 
-const session = (id: string) => ({
+const session = (id: string): SessionListItem => ({
 	id,
 	title: id,
 	created_at: "2024-01-01T00:00:00Z",
@@ -140,6 +153,70 @@ describe("AppShell when the server is unreachable", () => {
 		renderAppShell("/");
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(/retrying/i);
+	});
+});
+
+// An empty worktree makes AppShell create a session on its own. That create used
+// to run without a catch, so a failure re-armed the effect on the very render it
+// caused: thousands of session.create calls a minute behind a permanent
+// "Loading...", with nothing on screen saying why.
+describe("AppShell when the automatic session create fails", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+		});
+		useAuthStore.setState({ token: "test-token" });
+	});
+
+	it("attempts once, shows the reason, and creates on retry", async () => {
+		vi.mocked(wsActions.createSession)
+			.mockRejectedValueOnce(new Error("no agent configured"))
+			.mockResolvedValueOnce(session("fresh"));
+		const user = userEvent.setup();
+
+		renderAppShell("/");
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"no agent configured",
+		);
+		expect(wsActions.createSession).toHaveBeenCalledTimes(1);
+
+		await user.click(screen.getByRole("button", { name: /retry/i }));
+
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("fresh");
+		});
+		expect(wsActions.createSession).toHaveBeenCalledTimes(2);
+	});
+
+	// The manual "+" fails the same way but must not take the screen: the session
+	// the user already has stays open, with the reason reported next to it.
+	it("reports a failed manual create without losing the open session", async () => {
+		mockSubscribe.mockImplementationOnce(async () => ({
+			id: "watch-main",
+			initial: [session("m1")],
+		}));
+		vi.mocked(wsActions.createSession).mockRejectedValueOnce(
+			new Error("worktree is dirty"),
+		);
+		const user = userEvent.setup();
+
+		renderAppShell("/");
+
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("m1");
+		});
+
+		await user.click(screen.getByRole("button", { name: "New Chat" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"worktree is dirty",
+		);
+		expect(screen.getByTestId("chat-panel")).toHaveTextContent("m1");
 	});
 });
 

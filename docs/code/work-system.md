@@ -503,6 +503,19 @@ fires, so the cross-worktree jump lands stably on its intended session. (The
 *attaching* to a stale session, but that alone does not stop the redirect
 effect from rewriting the URL — the guard is what closes that gap.)
 
+The new-session recovery effect carries a second gate for the same structural
+reason. `needsNewSession` stays true for as long as the worktree has no session,
+so a create that fails re-arms the effect on the very render its failure caused —
+measured at over 11,000 `session.create` calls in 45 seconds, behind a permanent
+"Loading..." that never said why. The effect therefore also skips while
+`useSession` holds an unacknowledged `createError`: one attempt, then the failure
+reaches the screen with the server's own wording — which carries the underlying
+cause, see [Error Replies](websocket-rpc.md#error-replies) — and a Retry that
+clears the error (which is what lets the effect run again). Retries are never
+automatic: a `session.create` that merely timed out may well have succeeded
+([Request Timeout](websocket-rpc.md#request-timeout)), so each silent retry
+risks leaving an orphan session behind.
+
 ## Multi-Step Execution
 
 Agent roles can define a `steps` array to break task execution into sequential phases. This is useful for complex workflows like:

@@ -146,8 +146,12 @@ describe("ChatPanel", () => {
 			expect(onUpdateTitle).toHaveBeenCalledWith("My first message");
 		});
 
-		it("shows error when send fails", async () => {
-			mockState.sendMessage.mockRejectedValueOnce(new Error("Network error"));
+		// The generic wording alone made "the CLI isn't installed" and "the network
+		// dropped" indistinguishable; the server's own reason has to reach the user.
+		it("shows the server's reason when send fails", async () => {
+			mockState.sendMessage.mockRejectedValueOnce(
+				new Error('failed to start claude: exec: "claude": not found in $PATH'),
+			);
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -157,7 +161,7 @@ describe("ChatPanel", () => {
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
 			await waitFor(() => {
-				expect(screen.getByText("Failed to send message")).toBeInTheDocument();
+				expect(screen.getByText(/not found in \$PATH/)).toBeInTheDocument();
 			});
 		});
 	});

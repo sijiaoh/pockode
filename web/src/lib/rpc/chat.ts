@@ -13,11 +13,19 @@ export interface ChatActions {
 	questionResponse: (params: QuestionResponseParams) => Promise<void>;
 }
 
+/**
+ * @param getAgentStartClient Requester for `chat.message` alone, which unlike
+ * every other call here may have to wait out an agent CLI cold start. See
+ * AGENT_START_RPC_TIMEOUT_MS in wsStore.
+ */
 export function createChatActions(
 	getClient: () => JSONRPCRequester<void> | null,
+	getAgentStartClient: () => JSONRPCRequester<void> | null,
 ): ChatActions {
-	const requireClient = (): JSONRPCRequester<void> => {
-		const client = getClient();
+	const requireClient = (
+		get: () => JSONRPCRequester<void> | null = getClient,
+	): JSONRPCRequester<void> => {
+		const client = get();
 		if (!client) {
 			throw new Error("Not connected");
 		}
@@ -26,7 +34,7 @@ export function createChatActions(
 
 	return {
 		sendMessage: async (sessionId: string, content: string): Promise<void> => {
-			await requireClient().request("chat.message", {
+			await requireClient(getAgentStartClient).request("chat.message", {
 				session_id: sessionId,
 				content,
 			} as MessageParams);
