@@ -1,7 +1,9 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type {
+	GitBranches,
 	GitDiffData,
 	GitLogResult,
+	GitPullResult,
 	GitShowResult,
 	GitStatus,
 } from "../../types/git";
@@ -17,6 +19,17 @@ export interface GitActions {
 	) => Promise<GitDiffData>;
 	stage: (paths: string[]) => Promise<void>;
 	unstage: (paths: string[]) => Promise<void>;
+	/** Reverts unstaged edits; the server decides per path whether that means deleting it. */
+	discard: (paths: string[]) => Promise<void>;
+	commit: (message: string, amend: boolean) => Promise<void>;
+	getBranches: () => Promise<GitBranches>;
+	checkout: (branch: string) => Promise<void>;
+	createBranch: (name: string) => Promise<void>;
+	/** Named for the git command rather than "fetch", which the global already is. */
+	fetchRemote: () => Promise<void>;
+	/** Resolves to the number of commits the fast-forward brought in. */
+	pull: () => Promise<number>;
+	push: (force: boolean) => Promise<void>;
 }
 
 export function createGitActions(
@@ -56,6 +69,34 @@ export function createGitActions(
 		},
 		unstage: async (paths: string[]): Promise<void> => {
 			await requireClient().request("git.reset", { paths });
+		},
+		discard: async (paths: string[]): Promise<void> => {
+			await requireClient().request("git.discard", { paths });
+		},
+		commit: async (message: string, amend: boolean): Promise<void> => {
+			await requireClient().request("git.commit", { message, amend });
+		},
+		getBranches: async (): Promise<GitBranches> => {
+			return requireClient().request("git.branches", {});
+		},
+		checkout: async (branch: string): Promise<void> => {
+			await requireClient().request("git.checkout", { branch });
+		},
+		createBranch: async (name: string): Promise<void> => {
+			await requireClient().request("git.branch.create", { name });
+		},
+		fetchRemote: async (): Promise<void> => {
+			await requireClient().request("git.fetch", {});
+		},
+		pull: async (): Promise<number> => {
+			const result: GitPullResult = await requireClient().request(
+				"git.pull",
+				{},
+			);
+			return result.commits;
+		},
+		push: async (force: boolean): Promise<void> => {
+			await requireClient().request("git.push", { force });
 		},
 	};
 }

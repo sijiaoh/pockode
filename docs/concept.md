@@ -29,7 +29,7 @@ The Go server spawns AI CLI processes (Claude Code, Codex) as subprocesses, stre
 
 Infrastructure docs: [websocket-rpc-design.md](websocket-rpc-design.md) (RPC layer), [relay.md](relay.md) (NAT traversal), [cluster.md](cluster.md) (multi-project node orchestration), [agent-event.md](agent-event.md) (event stream), [watcher.md](watcher.md) (real-time subscriptions).
 
-Feature docs: [agent-chat.md](agent-chat.md) (chat), [file.md](file.md) (file ops), [git.md](git.md) (git ops).
+Feature docs: [agent-chat.md](agent-chat.md) (chat), [file.md](file.md) (file ops), [git.md](git.md) (git ops), [git-ui.md](git-ui.md) (the git panel's UI).
 
 ## Agent-Centric Workflow
 

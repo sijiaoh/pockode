@@ -12,6 +12,8 @@ export const DEFAULT_RETRY_COUNT = 3;
 
 const WORKTREE_DEPENDENT_QUERY_KEYS = [
 	"git-status",
+	"git-branches",
+	"git-log",
 	"git-diff",
 	"sessions",
 	"contents",

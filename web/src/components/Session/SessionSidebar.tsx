@@ -27,6 +27,8 @@ interface Props {
 	onCreateSession: () => void;
 	onDeleteSession: (id: string) => void;
 	onSelectDiffFile: (path: string, staged: boolean) => void;
+	/** Closes the content area when the diff it shows is discarded away. */
+	onCloseDiffFile: () => void;
 	activeDiffFile: { path: string; staged: boolean } | null;
 	onSelectCommit: (hash: string) => void;
 	activeCommitHash: string | null;
@@ -45,6 +47,7 @@ function SessionSidebar({
 	onCreateSession,
 	onDeleteSession,
 	onSelectDiffFile,
+	onCloseDiffFile,
 	activeDiffFile,
 	onSelectCommit,
 	activeCommitHash,
@@ -162,6 +165,7 @@ function SessionSidebar({
 			<DiffTab
 				onSelectFile={handleSelectDiffFile}
 				onSelectCommit={handleSelectCommit}
+				onCloseFile={onCloseDiffFile}
 				activeFile={activeDiffFile}
 				activeCommitHash={activeCommitHash}
 			/>
