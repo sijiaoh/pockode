@@ -23,6 +23,7 @@ import (
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/apiroute"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/logger"
@@ -77,7 +78,7 @@ func newSPAHandler(apiHandler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
-		if strings.HasPrefix(path, "/api") || path == "/ws" || path == "/health" {
+		if apiroute.IsAPI(path) {
 			apiHandler.ServeHTTP(w, r)
 			return
 		}
@@ -340,7 +341,6 @@ func main() {
 
 	// Initialize relay if enabled
 	var relayManager *relay.Manager
-	var cancelRelayStreams context.CancelFunc
 	var remoteURL string
 	relayEnabled := *relayFlag && os.Getenv("RELAY_ENABLED") != "false"
 	if relayEnabled {
@@ -365,14 +365,6 @@ func main() {
 		}
 
 		slog.Info("remote access enabled", "url", remoteURL)
-
-		var relayStreamCtx context.Context
-		relayStreamCtx, cancelRelayStreams = context.WithCancel(context.Background())
-		go func() {
-			for stream := range relayManager.NewStreams() {
-				go wsHandler.HandleStream(relayStreamCtx, stream, stream.ConnectionID())
-			}
-		}()
 	}
 
 	// Graceful shutdown
@@ -383,14 +375,17 @@ func main() {
 		<-sigCh
 
 		slog.Info("shutting down server")
+		// Close the relay before draining srv, not after: every relayed request
+		// is served by srv, so a tunnel still delivering traffic into a server
+		// that has stopped accepting would turn those requests into errors, and
+		// long-lived relayed WebSockets would hold Shutdown until its deadline.
+		if relayManager != nil {
+			relayManager.Stop()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			slog.Error("server shutdown error", "error", err)
-		}
-		if relayManager != nil {
-			cancelRelayStreams()
-			relayManager.Stop()
 		}
 		wsHandler.Stop()
 		workAutoResumer.Stop()
