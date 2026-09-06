@@ -60,8 +60,8 @@ func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content st
 
 // SendSystemMessage sends a system-driven automatic message (kickoff, restart,
 // auto-continue, etc.). It is tagged with origin "system" plus a subtype and
-// optional meta so the frontend can render it as a collapsed system message
-// rather than a user bubble.
+// optional meta so the frontend can fold it into the receiving work's progress
+// card rather than render it as a user bubble.
 func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error {
 	event := agent.MessageEvent{
 		Content: content,

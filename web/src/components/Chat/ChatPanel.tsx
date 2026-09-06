@@ -1,7 +1,8 @@
-import { ClipboardList, Square } from "lucide-react";
+import { Square } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
+import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -10,6 +11,7 @@ import type {
 	PermissionRequest,
 } from "../../types/message";
 import type { OverlayState } from "../../types/overlay";
+import { formatStepProgress, getStepProgress } from "../../utils/workSteps";
 import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
@@ -20,6 +22,7 @@ import {
 	WorkListOverlay,
 } from "../Project";
 import { SettingsPage } from "../Settings";
+import { statusDotStyles, statusLabels } from "../ui/StatusBadge";
 import AgentSelector from "./AgentSelector";
 import ChatSkeleton from "./ChatSkeleton";
 import DefaultInputBar from "./InputBar";
@@ -49,17 +52,43 @@ function LinkedWorkButton({
 	const linkedWork = useWorkStore((s) =>
 		s.works.find((w) => w.session_id === sessionId),
 	);
+	const role = useAgentRoleStore((s) =>
+		s.roles.find((r) => r.id === linkedWork?.agent_role_id),
+	);
 
 	if (!linkedWork) return null;
+
+	const progress = getStepProgress(linkedWork, role);
+	// The dot carries the status by color alone, so the accessible name has to
+	// spell it out. Commas rather than the visible "·": screen readers pause on a
+	// comma and stumble over the dot.
+	const label = [
+		statusLabels[linkedWork.status],
+		linkedWork.title,
+		progress && formatStepProgress(progress),
+	]
+		.filter(Boolean)
+		.join(", ");
 
 	return (
 		<button
 			type="button"
+			aria-label={label}
 			onClick={() => onOpenWorkDetail?.(linkedWork.id)}
 			className="flex min-w-0 items-center gap-1 rounded px-2 py-1 text-xs text-th-text-secondary transition-all hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
 		>
-			<ClipboardList className="size-3.5 shrink-0" />
+			{/* Never a spinner, even for in_progress: here a spinner means "the agent
+			    is producing this turn", and a work whose process sits idle mid-step is
+			    a normal resting state. See docs/code/work-system.md. */}
+			<span
+				className={`size-2 shrink-0 rounded-full ${statusDotStyles[linkedWork.status]}`}
+			/>
 			<span className="max-w-[120px] truncate">{linkedWork.title}</span>
+			{progress && (
+				<span className="shrink-0 text-th-text-muted">
+					· {formatStepProgress(progress)}
+				</span>
+			)}
 		</button>
 	);
 }
@@ -241,6 +270,7 @@ function ChatPanel({
 					onPermissionRespond={handlePermissionRespond}
 					onQuestionRespond={handleQuestionRespond}
 					onHintClick={handleSend}
+					onOpenWorkDetail={onOpenWorkDetail}
 				/>
 			);
 		}

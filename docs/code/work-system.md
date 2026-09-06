@@ -638,25 +638,6 @@ Check if you have completed the current step:
 - If NO: Continue working on this step.
 ```
 
-### System-Origin Message Tagging
-
-All of these work-driven prompts are byte-for-byte indistinguishable from a user-typed message once they reach the agent — same stdin, same `message` event. To let the frontend tell them apart, they are sent via `chat.Client.SendSystemMessage` (not the plain user path), which stamps the `MessageEvent` with `origin: "system"`, a `subtype`, and a `meta` summary. The origin is `"system"` rather than `"work"` because it marks a message produced by Pockode itself; the Work engine is today's only such producer, but the concept is source-agnostic. The user path leaves `origin` empty, so old history stays a normal user message — backward compatible by omission. (For why this reuses the `message` event rather than a new event type, see [agent-event.md](../agent-event.md#message-origin-user-vs-system).)
-
-**Subtypes** (`server/work/prompt.go`) — one per send site, so the frontend can pick a label without parsing the prompt:
-
-| Subtype | Sent from | Frontend label |
-|---------|-----------|----------------|
-| `kickoff` | `WorkStarter` fresh start | Kickoff |
-| `restart` | `WorkStarter` restart | Restart |
-| `auto_continue` | `AutoResumer` auto-continuation | Auto-continue |
-| `step_advance` | `AutoResumer.NotifyStepDone` | Next step (Step N/M) |
-| `reopen` | `AutoResumer.NotifyReopen` | Reopen |
-| `child_done` | `AutoResumer` parent reactivation | Child task done |
-
-**Meta summary** — `NewMessageMeta(title, step, total)` builds the collapsed-bar data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). `title` is the work title; `step` is included only when the send site has real step context (`total > 0` and `1 <= step <= total`), so a stepless work or an out-of-range auto-continuation omits it. This mirrors the prompt itself falling back to the stepless body in the same cases, keeping bar and body consistent.
-
-**Frontend collapse rendering** (`web/`) — the origin/subtype/meta ride through the reducer: `normalizeEvent` runs the raw `origin` through `normalizeOrigin`, which folds both the current `"system"` and the legacy stored `"work"` to `"system"` (so old persisted history and live events converge on the new name at this single wire boundary), passes `"user"` through, and drops anything else to `undefined`; it then copies origin/subtype/meta onto the normalized `message` event. `applyUserMessage` tags the resulting `UserMessage` with `source`/`subtype`/`meta` **only** when `origin === "system"` (plain user messages stay source-less, so optimistic local echoes and old history render as normal bubbles). `MessageItem` then branches on `message.source === "system"` to render `SystemMessageItem` — a low-contrast, default-collapsed banner (`Pockode · {label}` + truncated title) that expands to the full prompt via `MarkdownContent`, instead of a right-aligned user bubble. An unknown subtype degrades to the `System Message` label but still expands.
-
 ### Design Notes
 
 - **Steps apply to both Stories and Tasks**: Any work item with an agent role that has steps defined will display step progress.
@@ -666,6 +647,80 @@ All of these work-driven prompts are byte-for-byte indistinguishable from a user
 - **step_done completion flow**:
   - All work items: increments `CurrentStep` while more steps remain.
   - All work items: marks the work as `closed` on the final step or when the role has no steps.
+
+## Work Messages in Chat
+
+The prompts the Work engine sends land in the user's transcript alongside
+everything the agent itself writes, and a work's progress has to be readable
+there. One rule governs how, and the rest of this section follows from it:
+
+> **A message records an event; the work store holds the state.** Messages are
+> immutable history — they can say what happened, never what is true now.
+> Anything the UI presents as a work's *current* state is read live from
+> `workStore`, and no status is ever written into a message's `meta`.
+
+That rule is not academic. An interrupt stops a work through a pure state change
+(`AutoResumer`'s interrupted branch → `stopped`) and produces no message at all,
+so a transcript that inferred status from its last message would go on claiming
+the work was being nudged along after it had already stopped.
+
+### System-Origin Message Tagging
+
+A work-driven prompt is byte-for-byte indistinguishable from a user-typed message once it reaches the agent — same stdin, same `message` event. To let the frontend tell them apart, they are sent via `chat.Client.SendSystemMessage` (not the plain user path), which stamps the `MessageEvent` with `origin: "system"`, a `subtype`, and a `meta` summary. The origin is `"system"` rather than `"work"` because it marks a message produced by Pockode itself; the Work engine is today's only such producer, but the concept is source-agnostic. The user path leaves `origin` empty, so old history stays a normal user message — backward compatible by omission. (For why this reuses the `message` event rather than a new event type, see [agent-event.md](../agent-event.md#message-origin-user-vs-system).)
+
+**Subtypes** (`server/work/prompt.go`) — one per send site, so the frontend can pick a label without parsing the prompt. Both renderings below draw their labels from `web/src/utils/systemMessage.ts`; a card's timeline row says less than a standalone banner because the card header already names the work:
+
+| Subtype | Sent from | Banner label | Card timeline row |
+|---------|-----------|--------------|-------------------|
+| `kickoff` | `WorkStarter` fresh start | Kickoff | Kickoff |
+| `restart` | `WorkStarter` restart | Restart | Restart |
+| `auto_continue` | `AutoResumer` auto-continuation | Auto-continue | Auto-continue (`×N` when consecutive) |
+| `step_advance` | `AutoResumer.NotifyStepDone` | Next step (Step N/M) | Next step N |
+| `reopen` | `AutoResumer.NotifyReopen` | Reopen | Reopen |
+| `child_done` | `AutoResumer` parent reactivation | Child task done | Child task done: \<child title\> |
+
+**Meta summary** — `NewMessageMeta(w, step, total)` builds that data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). It carries `work_id` / `work_type` / `title` from `w`, plus `step` when the send site has real step context (`total > 0` and `1 <= step <= total`); `child_done` additionally carries `child: {id, title}`, so a timeline row can name the finished subtask without parsing the prompt.
+
+Every subtype fills `step`, including the three whose prompt body never restates one — `restart`, `reopen` and `child_done` append only their nudge (see *Prompt Format*). Summary and body answer different questions: the body says what the agent has to act on, the summary says where the work stood, and the UI needs the latter even when the prompt withholds it. `step` is omitted only when there is genuinely no position to report — a stepless role, a failed step lookup (`stepCount` answers 0 for both, since a missing step provider must not block a message), or a `current_step` left out of range by a role whose steps were shortened afterwards.
+
+`w` is the **receiving** work — the one whose session the message is delivered to, which is not always the one the message is about. `child_done` is delivered to the *parent's* session, so its `work_id` is the parent's; filing it under the child would shatter the parent's card into orphans. Taking the whole `Work` rather than a loose title and id is what makes that hard to get wrong: every field is derived from one value, so no call site can label one work while keying on another.
+
+`meta.step` is the field most easily mistaken for live state: it records where the work stood **when the message was sent**. It words timeline rows and stands in for a deleted work's position — never the work's current step.
+
+### Rendering in the Transcript
+
+Origin, subtype and meta ride through the reducer: `normalizeEvent` runs the raw `origin` through `normalizeOrigin`, which folds both the current `"system"` and the legacy stored `"work"` to `"system"` (so old persisted history and live events converge on the new name at this single wire boundary), passes `"user"` through, and drops anything else to `undefined`; it then copies origin/subtype/meta onto the normalized `message` event.
+
+`applyServerEvent` then splits on whether `meta.work_id` is present:
+
+- **With `work_id`** — `applyWorkCardMessage` folds the message into that work's card, and a `step_advance` additionally drops a step divider into the stream.
+- **Without `work_id`** — history recorded before the card existed falls through to `applyUserMessage`, which tags the `UserMessage` with `source`/`subtype`/`meta` and renders the original `SystemMessageItem` banner (`Pockode · {label}` + truncated title). Plain user messages stay source-less, so optimistic local echoes and ordinary history render as normal bubbles. There is no data migration; the two paths simply coexist.
+
+Aggregation lives in `applyServerEvent` rather than on a history-only path **on purpose**: `replayHistory` feeds the same function, so replay and live streaming cannot drift into two different renderings. Keep it that way.
+
+**The work card** (`WorkCardMessage` → `WorkCardItem`) is anchored where the work's *first* system message landed and updated in place from then on. It never moves and never changes its `id` — `MessageList` keys on `message.id` and does not virtualize, so a new id would remount the card and discard whatever the user had expanded. The messages themselves become collapsed timeline rows inside it, each still expandable to its full prompt body; a consecutive run of `auto_continue` collapses into one counted row, that being the only subtype which repeats in practice and the least informative when it does.
+
+Status, step and blocking subtasks come from the component's own `workStore` / `agentRoleStore` subscriptions, never from props: `MessageItem` is `memo`ised, so a prop-borne status would freeze at whatever it was when the card last re-rendered. Two consequences worth stating outright:
+
+- **Terminal cards stay in the stream.** A `stopped` or `closed` card is not hidden or collapsed away; that a work finished is exactly what a transcript should keep showing — and a `stopped` card is where the user restarts it.
+- **A work missing from the store** (deleted) leaves the card with only what its messages recorded — `meta`'s title and newest step — and it shows `—` for status rather than guessing one.
+
+**Step dividers** (`StepDividerMessage`) — a hairline reading `Step n/m`, inserted where the work moved on. It preserves the transcript's answer to "which output belongs to which step", which the old per-step banner carried, and because it states no status it cannot contradict the card.
+
+**The status strip** — the card is anchored, so a long transcript scrolls it out of sight, and "is my work still running?" is the question asked most often. `LinkedWorkButton` (`web/src/components/Chat/ChatPanel.tsx`) answers it from the top bar: a status dot plus `Step n/m` beside the linked work's title, from the same live subscriptions and never from the transcript.
+
+**One vocabulary for work status.** Every surface that paints a work status draws from the same sources, so they cannot disagree: labels and palette from `StatusBadge` (`statusLabels` / `statusDotStyles`), glyphs from `StatusIcon`, step arithmetic and wording from `web/src/utils/workSteps.ts` (`getStepProgress` / `formatStepProgress`), and the step list markup from `web/src/components/Project/StepList.tsx` — the last two shared with `WorkDetailOverlay`, so the chat card and the detail page cannot disagree about which step a work is on. Two notes on that shared vocabulary:
+
+- **Never a spinner for `in_progress`**, on the card or the strip. In this chat a spinner means "the agent is producing this turn", while a work that is `in_progress` with its process idle is an ordinary resting state — showing one would re-merge the two things this section exists to keep apart. It also spares a false alarm: `handleProcessEnded`'s settle delay leaves an interrupted work on `in_progress` for a couple of seconds, which a spinner would dramatize and a static glyph does not.
+- **`open` and `closed` share one muted color** in `StatusBadge`. That would be ambiguous on the strip's bare dot if both could appear there, and they cannot: `open` is the one status that always goes with an empty `SessionID` (creation, and the fresh-start rollback that clears it), so no chat is ever linked to an open work. On the card the question does not arise, since its glyph sits beside a text label.
+
+### Reply Placeholders
+
+Every message added to the transcript leaves an empty assistant message behind it — a system message drives the agent just as a user message does, and the placeholder is where the reply streams in. When the agent answers with nothing at all, that placeholder would render as a blank box, so it is dropped at either of the two moments its fate is settled: when the next message arrives (`closePreviousTurn`) and when a terminal event ends the turn. An agent that goes quiet under repeated auto-continuation produces a run of them, which is why this is worth doing at all.
+
+The condition (`isEmptyPlaceholder`) is `parts` empty **and** status `complete`, and the second half is not incidental: `interrupted`, `error` and `process_ended` say their whole message in the status line, so an empty body is exactly when they matter. Dropping those would hide an aborted turn from the user — and an interrupt is the case that produces them most. (The terminal sweep clears one more thing, older than this rule and unrelated to it: a bubble still `sending` when the turn ended, meaning the send never produced anything at all.)
+
+Three entry points add a message, and all three have to call `closePreviousTurn`. Two are in the reducer (`applyUserMessage` for broadcasts, `applyWorkCardMessage` for system messages); the third is `sendUserMessageHandler` in `useChatMessages`, which appends the local echo straight to the list without going through `applyServerEvent`. Missing it there is not hypothetical: a session whose process died right after a message was persisted replays as an unanswered placeholder, and the next thing the user sends would strand it as a blank box.
 
 ## Prompt Configuration
 
@@ -765,3 +820,5 @@ cached entry needs no additional locking.
 | MCP tool executor + HTTP API | `server/mcp/executor.go`, `server/mcp/handler.go` |
 | File I/O | `server/filestore/filestore.go`, `server/filestore/atomic.go` |
 | Frontend store | `web/src/lib/workStore.ts` |
+| Frontend step progress + list | `web/src/utils/workSteps.ts`, `web/src/components/Project/StepList.tsx` |
+| Frontend work-in-chat rendering | `web/src/lib/messageReducer.ts`, `web/src/components/Chat/WorkCardItem.tsx`, `web/src/utils/systemMessage.ts` |

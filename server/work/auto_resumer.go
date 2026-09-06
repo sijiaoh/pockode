@@ -178,6 +178,22 @@ func (r *AutoResumer) getStepProvider() StepProvider {
 	return nil
 }
 
+// stepCount is the number of steps the work's role defines, or 0 when that is
+// unknown. Unknown and stepless are deliberately the same answer: both mean
+// "no step context to report", and a missing provider must not block a message.
+func (r *AutoResumer) stepCount(w Work) int {
+	sp := r.getStepProvider()
+	if sp == nil {
+		return 0
+	}
+	steps, err := sp.GetSteps(w.AgentRoleID)
+	if err != nil {
+		slog.Warn("failed to get steps for message meta", "agentRoleId", w.AgentRoleID, "error", err)
+		return 0
+	}
+	return len(steps)
+}
+
 // HandleProcessStateChange syncs work status with process lifecycle:
 //   - running → reactivate stopped work to in_progress.
 //   - idle → send auto-continuation message for in_progress work.
@@ -370,19 +386,17 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, activation uint64
 
 	// Build message with step context if available.
 	var msg string
-	var meta *agent.MessageMeta
+	totalSteps := 0
 	if sp := r.getStepProvider(); sp != nil {
 		if steps, err := sp.GetSteps(w.AgentRoleID); err == nil && len(steps) > 0 {
 			msg = BuildAutoContinuationMessageWithSteps(*w, steps, w.CurrentStep)
-			meta = NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
+			totalSteps = len(steps)
 		}
 	}
 	if msg == "" {
 		msg = BuildAutoContinuationMessage(*w)
 	}
-	if meta == nil {
-		meta = NewMessageMeta(w.Title, 0, 0)
-	}
+	meta := NewMessageMeta(*w, w.CurrentStep+1, totalSteps)
 
 	if err := sender.SendSystemMessage(r.ctx, sessionID, msg, MessageSubtypeAutoContinue, meta); err != nil {
 		if r.ctx.Err() != nil {
@@ -478,7 +492,7 @@ func (r *AutoResumer) sendStepAdvance(w Work, sp StepProvider) {
 	r.retryMu.Unlock()
 
 	msg := BuildStepAdvanceMessage(w, steps[w.CurrentStep], w.CurrentStep+1, len(steps))
-	meta := NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
+	meta := NewMessageMeta(w, w.CurrentStep+1, len(steps))
 	if err := sender.SendSystemMessage(r.ctx, w.SessionID, msg, MessageSubtypeStepAdvance, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return
@@ -503,7 +517,8 @@ func (r *AutoResumer) sendReopen(w Work) {
 	r.retryMu.Unlock()
 
 	msg := BuildReopenMessage(w)
-	if err := sender.SendSystemMessage(r.ctx, w.SessionID, msg, MessageSubtypeReopen, NewMessageMeta(w.Title, 0, 0)); err != nil {
+	meta := NewMessageMeta(w, w.CurrentStep+1, r.stepCount(w))
+	if err := sender.SendSystemMessage(r.ctx, w.SessionID, msg, MessageSubtypeReopen, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
@@ -561,7 +576,11 @@ func (r *AutoResumer) handleParentReactivation(child Work) {
 
 	// Send child completion message to parent (StatusInProgress, StatusNeedsInput, StatusWaiting->InProgress, StatusStopped)
 	msg := BuildChildCompletionMessage(parent, child.Title, child.ID)
-	if err := sender.SendSystemMessage(r.ctx, parent.SessionID, msg, MessageSubtypeChildDone, NewMessageMeta(parent.Title, 0, 0)); err != nil {
+	// Addressed to the parent's session, so the meta describes the parent; the
+	// child rides along in its own field.
+	meta := NewMessageMeta(parent, parent.CurrentStep+1, r.stepCount(parent))
+	meta.Child = &agent.ChildInfo{ID: child.ID, Title: child.Title}
+	if err := sender.SendSystemMessage(r.ctx, parent.SessionID, msg, MessageSubtypeChildDone, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}

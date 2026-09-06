@@ -2,9 +2,6 @@ import { ConfirmDialog } from "@pockode/shared";
 import {
 	AlertCircle,
 	Check,
-	Circle,
-	CircleCheck,
-	CircleDot,
 	Loader2,
 	MessageSquare,
 	Pencil,
@@ -23,7 +20,8 @@ import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
-import type { Comment, Work, WorkStatus, WorkType } from "../../types/work";
+import type { Comment, Work, WorkType } from "../../types/work";
+import { formatStepCount, getStepProgress } from "../../utils/workSteps";
 import { MarkdownContent } from "../Chat/MarkdownContent";
 import BackButton from "../ui/BackButton";
 import BottomActionBar from "../ui/BottomActionBar";
@@ -31,6 +29,7 @@ import StatusBadge from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
 import { WorktreeBadge } from "../Worktree";
 import CreateWorkForm from "./CreateWorkForm";
+import StepList from "./StepList";
 import { StartButton } from "./WorkListOverlay";
 
 interface Props {
@@ -858,102 +857,31 @@ function StepProgressSection({
 	role: AgentRole | undefined;
 }) {
 	const steps = role?.steps ?? [];
-	// Clamp currentStep to valid range
-	const rawCurrentStep = work.current_step ?? 0;
-	const currentStep = Math.max(0, Math.min(rawCurrentStep, steps.length - 1));
+	const progress = getStepProgress(work, role);
+	const currentStep = progress?.currentStep ?? 0;
 
 	if (steps.length === 0) return null;
-
-	const isClosed = work.status === "closed";
-	// Show progress for all active states (in_progress, waiting, needs_input, stopped)
-	const showProgress = !isClosed && work.status !== "open";
 
 	return (
 		<div>
 			<h3 className="mb-1 text-xs font-medium uppercase text-th-text-muted">
 				Steps{" "}
-				{showProgress && (
-					<span className="text-th-accent">
-						({currentStep + 1}/{steps.length})
-					</span>
-				)}
-				{isClosed && (
-					<span className="text-th-success">
-						({steps.length}/{steps.length})
+				{progress && (
+					<span
+						className={
+							progress.isComplete ? "text-th-success" : "text-th-accent"
+						}
+					>
+						({formatStepCount(progress)})
 					</span>
 				)}
 			</h3>
-			<ol className="space-y-1 rounded-lg bg-th-bg-secondary px-3 py-2">
-				{steps.map((step, index) => (
-					<StepItem
-						// biome-ignore lint/suspicious/noArrayIndexKey: steps are strings without unique IDs, index is stable within the array
-						key={index}
-						step={step}
-						index={index}
-						currentStep={currentStep}
-						workStatus={work.status}
-					/>
-				))}
-			</ol>
+			<StepList
+				steps={steps}
+				currentStep={currentStep}
+				workStatus={work.status}
+				className="rounded-lg bg-th-bg-secondary px-3 py-2"
+			/>
 		</div>
-	);
-}
-
-function StepItem({
-	step,
-	index,
-	currentStep,
-	workStatus,
-}: {
-	step: string;
-	index: number;
-	currentStep: number;
-	workStatus: WorkStatus;
-}) {
-	const isClosed = workStatus === "closed";
-	const isCompleted = isClosed || index < currentStep;
-	// Show as current only for active states (not open or closed)
-	const isActiveState =
-		workStatus === "in_progress" ||
-		workStatus === "waiting" ||
-		workStatus === "needs_input" ||
-		workStatus === "stopped";
-	const isCurrent = isActiveState && index === currentStep;
-
-	return (
-		<li
-			className={`flex items-start gap-3 rounded-lg px-3 py-2 transition-all duration-300 ${
-				isCurrent ? "border-l-2 border-th-accent bg-th-accent/10" : ""
-			}`}
-		>
-			<span
-				className={`mt-0.5 shrink-0 transition-colors duration-300 ${
-					isCompleted
-						? "text-th-success"
-						: isCurrent
-							? "text-th-accent"
-							: "text-th-text-muted"
-				}`}
-			>
-				{isCompleted ? (
-					<CircleCheck className="size-4" />
-				) : isCurrent ? (
-					<CircleDot className="size-4" />
-				) : (
-					<Circle className="size-4" />
-				)}
-			</span>
-			<span
-				className={`text-sm ${
-					isCompleted
-						? "text-th-text-muted"
-						: isCurrent
-							? "font-medium text-th-text-primary"
-							: "text-th-text-muted"
-				}`}
-			>
-				{step}
-			</span>
-		</li>
 	);
 }

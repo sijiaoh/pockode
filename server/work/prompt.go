@@ -22,10 +22,18 @@ const (
 	MessageSubtypeChildDone    = "child_done"
 )
 
-// NewMessageMeta builds the collapsed-bar summary metadata for a system message.
-// step is 1-indexed; pass total <= 0 to omit step info (e.g. stepless works).
-func NewMessageMeta(title string, step, total int) *agent.MessageMeta {
-	meta := &agent.MessageMeta{Title: title}
+// NewMessageMeta builds the summary metadata for a system message.
+//
+// w is the *receiving* work — the one whose session the message is delivered
+// to, which is not always the work the message talks about (see
+// agent.MessageMeta.WorkID). step is 1-indexed; pass total <= 0 to omit step
+// info (e.g. stepless works).
+func NewMessageMeta(w Work, step, total int) *agent.MessageMeta {
+	meta := &agent.MessageMeta{
+		WorkID:   w.ID,
+		WorkType: string(w.Type),
+		Title:    w.Title,
+	}
 	if total > 0 && step >= 1 && step <= total {
 		meta.Step = &agent.StepInfo{Current: step, Total: total}
 	}

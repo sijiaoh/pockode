@@ -30,6 +30,7 @@ interface Props {
 		answers: Record<string, string> | null,
 	) => void;
 	onHintClick?: (hint: string) => void;
+	onOpenWorkDetail?: (workId: string) => void;
 }
 
 function MessageList({
@@ -39,6 +40,7 @@ function MessageList({
 	onPermissionRespond,
 	onQuestionRespond,
 	onHintClick,
+	onOpenWorkDetail,
 }: Props) {
 	const { EmptyState: CustomEmptyState } = useChatUIConfig();
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -199,6 +201,7 @@ function MessageList({
 									isCodex={isCodex}
 									onPermissionRespond={onPermissionRespond}
 									onQuestionRespond={onQuestionRespond}
+									onOpenWorkDetail={onOpenWorkDetail}
 								/>
 							</div>
 						);
