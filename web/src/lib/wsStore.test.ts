@@ -7,6 +7,10 @@ vi.mock("../utils/config", () => ({
 
 const TEST_TOKEN = "test-token";
 
+// Mirrors RECONNECT_MAX_DELAY_MS in wsStore; not exported, since the ceiling is
+// an implementation detail everywhere except here.
+const RECONNECT_MAX_DELAY = 30000;
+
 // Track created WebSocket instances
 let mockWsInstances: MockWebSocket[] = [];
 let currentMockWs: MockWebSocket | null = null;
@@ -107,6 +111,8 @@ afterEach(async () => {
 	const { resetWSStore } = await import("./wsStore");
 	resetWSStore();
 
+	vi.restoreAllMocks();
+
 	vi.useRealTimers();
 	globalThis.WebSocket = OriginalWebSocket;
 });
@@ -123,6 +129,19 @@ async function getUseWSStore() {
 
 function getMockWs() {
 	return currentMockWs;
+}
+
+function setVisibility(state: "visible" | "hidden") {
+	Object.defineProperty(document, "visibilityState", {
+		value: state,
+		configurable: true,
+	});
+}
+
+function fireRecoveryEvents() {
+	window.dispatchEvent(new Event("online"));
+	setVisibility("visible");
+	document.dispatchEvent(new Event("visibilitychange"));
 }
 
 async function connectAndAuth(token = TEST_TOKEN) {
@@ -459,23 +478,172 @@ describe("wsStore", () => {
 	});
 
 	describe("auto-reconnect", () => {
-		it("reconnects up to 5 times on close, then sets error", async () => {
-			const useWSStore = await getUseWSStore();
-			await connectAndAuth();
+		// Jitter is spread around the delay, so pinning Math.random to the middle
+		// of its range makes the backoff exact. See "spreads each delay" below for
+		// the jitter itself.
+		function withoutJitter() {
+			vi.spyOn(Math, "random").mockReturnValue(0.5);
+		}
 
+		// Drives the store into a backoff long enough that only an explicit retry
+		// would end it, and returns the number of sockets opened so far.
+		async function waitOutALongBackoff(): Promise<number> {
+			await connectAndAuth();
+			withoutJitter();
 			for (let i = 0; i < 5; i++) {
 				getMockWs()?.simulateClose();
-				vi.advanceTimersByTime(3000);
+				vi.advanceTimersByTime(RECONNECT_MAX_DELAY);
 			}
-
-			// 1 initial + 5 reconnects
-			expect(mockWsInstances.length).toBe(6);
-
-			// 6th close exhausts retries
 			getMockWs()?.simulateClose();
-			expect(useWSStore.getState().status).toBe("error");
-			vi.advanceTimersByTime(3000);
-			expect(mockWsInstances.length).toBe(6);
+			return mockWsInstances.length;
+		}
+
+		it("backs off exponentially and never stops trying", async () => {
+			const useWSStore = await getUseWSStore();
+			await connectAndAuth();
+			withoutJitter();
+
+			// More rounds than the retry limit this store used to have: a drop
+			// lasting longer than a fixed count of attempts must not be terminal.
+			const delays = [1000, 2000, 4000, 8000, 16000, 30000, 30000];
+
+			for (const [round, delay] of delays.entries()) {
+				getMockWs()?.simulateClose();
+				expect(useWSStore.getState().status).toBe("reconnecting");
+
+				vi.advanceTimersByTime(delay - 1);
+				expect(mockWsInstances.length).toBe(round + 1);
+
+				vi.advanceTimersByTime(1);
+				expect(mockWsInstances.length).toBe(round + 2);
+			}
+		});
+
+		// Every client of a restarting server begins its backoff at the same
+		// instant; without jitter they would all retry in the same millisecond.
+		it("spreads each delay with jitter", async () => {
+			await connectAndAuth();
+
+			vi.spyOn(Math, "random").mockReturnValue(0);
+			getMockWs()?.simulateClose();
+			vi.advanceTimersByTime(799);
+			expect(mockWsInstances.length).toBe(1);
+			vi.advanceTimersByTime(1);
+			expect(mockWsInstances.length).toBe(2);
+
+			vi.spyOn(Math, "random").mockReturnValue(1);
+			getMockWs()?.simulateClose();
+			vi.advanceTimersByTime(2399);
+			expect(mockWsInstances.length).toBe(2);
+			vi.advanceTimersByTime(1);
+			expect(mockWsInstances.length).toBe(3);
+		});
+
+		it("restarts the backoff after a connection succeeds", async () => {
+			const useWSStore = await getUseWSStore();
+			await connectAndAuth();
+			withoutJitter();
+
+			getMockWs()?.simulateClose();
+			vi.advanceTimersByTime(1000);
+			getMockWs()?.simulateClose();
+			vi.advanceTimersByTime(2000);
+
+			getMockWs()?.simulateOpen();
+			await vi.runAllTimersAsync();
+			expect(useWSStore.getState().status).toBe("connected");
+
+			const opened = mockWsInstances.length;
+			getMockWs()?.simulateClose();
+			vi.advanceTimersByTime(1000);
+			expect(mockWsInstances.length).toBe(opened + 1);
+		});
+
+		// "reconnecting" looks the same after one second and after an hour, so the
+		// attempt count is what lets the UI escalate from a blip to an outage.
+		it("counts consecutive failures and clears the count on success", async () => {
+			const useWSStore = await getUseWSStore();
+			await connectAndAuth();
+			withoutJitter();
+			expect(useWSStore.getState().reconnectAttempts).toBe(0);
+
+			getMockWs()?.simulateClose();
+			expect(useWSStore.getState().reconnectAttempts).toBe(1);
+			vi.advanceTimersByTime(1000);
+			getMockWs()?.simulateClose();
+			expect(useWSStore.getState().reconnectAttempts).toBe(2);
+
+			vi.advanceTimersByTime(2000);
+			getMockWs()?.simulateOpen();
+			await vi.runAllTimersAsync();
+			expect(useWSStore.getState().reconnectAttempts).toBe(0);
+		});
+
+		// Waiting out the rest of a 30 second backoff is pointless once the
+		// browser has told us the network is back.
+		it("retries at once when connectivity returns", async () => {
+			const waiting = await waitOutALongBackoff();
+
+			window.dispatchEvent(new Event("online"));
+
+			expect(mockWsInstances.length).toBe(waiting + 1);
+		});
+
+		// Otherwise a user flipping between tabs on a dead network resets the
+		// budget on every flip, and the "backoff" degenerates into a tight retry
+		// loop driven by how often they switch.
+		it("resumes the backoff where it left off after an immediate retry", async () => {
+			const waiting = await waitOutALongBackoff();
+
+			window.dispatchEvent(new Event("online"));
+			expect(mockWsInstances.length).toBe(waiting + 1);
+
+			getMockWs()?.simulateClose();
+			vi.advanceTimersByTime(RECONNECT_MAX_DELAY - 1);
+			expect(mockWsInstances.length).toBe(waiting + 1);
+			vi.advanceTimersByTime(1);
+			expect(mockWsInstances.length).toBe(waiting + 2);
+		});
+
+		// A phone wakes with the tab already in front; the user should not watch a
+		// stale screen until the backoff happens to elapse.
+		it("retries at once when a hidden tab becomes visible again", async () => {
+			const waiting = await waitOutALongBackoff();
+
+			setVisibility("hidden");
+			document.dispatchEvent(new Event("visibilitychange"));
+			expect(mockWsInstances.length).toBe(waiting);
+
+			setVisibility("visible");
+			document.dispatchEvent(new Event("visibilitychange"));
+			expect(mockWsInstances.length).toBe(waiting + 1);
+		});
+
+		it("ignores recovery events while connected", async () => {
+			await connectAndAuth();
+
+			fireRecoveryEvents();
+
+			expect(mockWsInstances.length).toBe(1);
+		});
+
+		// The state with teeth: connect() lets "auth_failed" through, and the
+		// token survives the rejection, so nothing but the listeners' own guard
+		// stops a waking browser from re-offering a token the server refused —
+		// once per tab switch, indefinitely.
+		it("ignores recovery events after auth was rejected", async () => {
+			const wsActions = await getWsActions();
+			const useWSStore = await getUseWSStore();
+
+			wsActions.connect(TEST_TOKEN);
+			getMockWs()?.mockAuthFailure();
+			getMockWs()?.simulateOpen();
+			await vi.runAllTimersAsync();
+			expect(useWSStore.getState().status).toBe("auth_failed");
+
+			fireRecoveryEvents();
+
+			expect(mockWsInstances.length).toBe(1);
 		});
 
 		it("handles socket error by letting onclose manage state", async () => {

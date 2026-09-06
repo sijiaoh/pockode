@@ -65,6 +65,8 @@ export type ConnectionStatus =
 interface ConnectionActions {
 	connect: (token: string) => void;
 	disconnect: () => void;
+	/** Skip the remaining backoff and attempt to reconnect immediately. */
+	retryNow: () => void;
 }
 
 // TODO: Implement retry logic for watcher subscriptions.
@@ -135,6 +137,13 @@ type RPCActions = ConnectionActions &
 
 interface WSState {
 	status: ConnectionStatus;
+	/**
+	 * Consecutive failed reconnects. The UI reads it to tell a blip apart from
+	 * an outage: "reconnecting" alone looks identical after 1 second and after
+	 * 10 minutes, and silently looking identical forever is the failure this
+	 * store used to have.
+	 */
+	reconnectAttempts: number;
 	projectTitle: string;
 	workDir: string;
 	actions: RPCActions;
@@ -145,7 +154,6 @@ let ws: WebSocket | null = null;
 let rpcReceiver: JSONRPCClient | null = null;
 let rpcRequester: JSONRPCRequester<void> | null = null;
 let currentToken: string | null = null;
-let reconnectAttempts = 0;
 let reconnectTimeout: number | undefined;
 const fsWatchCallbacks = new Map<string, () => void>();
 const gitWatchCallbacks = new Map<string, () => void>();
@@ -207,8 +215,76 @@ export function setOnWorktreeSwitched(callback: (() => void) | null) {
 	onWorktreeSwitched = callback;
 }
 
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_INTERVAL = 3000;
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+const RECONNECT_JITTER = 0.2;
+
+/**
+ * Milliseconds to wait before reconnect attempt `attempt`, counting from 0.
+ *
+ * There is no attempt limit. A phone that loses signal in a lift, or a laptop
+ * whose lid was shut, must recover by itself when the network returns; giving
+ * up after a fixed count left the app permanently dead after a blip that
+ * outlasted the count. At the ceiling an idle client costs two attempts a
+ * minute, which is cheap enough to keep doing indefinitely.
+ *
+ * Jitter matters because every client of a restarting server begins its backoff
+ * at the same instant, and would otherwise retry in lockstep.
+ */
+function reconnectDelay(attempt: number): number {
+	const base = Math.min(
+		RECONNECT_BASE_DELAY_MS * 2 ** attempt,
+		RECONNECT_MAX_DELAY_MS,
+	);
+	return Math.round(base * (1 + RECONNECT_JITTER * (2 * Math.random() - 1)));
+}
+
+function scheduleReconnect(): void {
+	if (reconnectTimeout !== undefined) return;
+
+	const attempts = useWSStore.getState().reconnectAttempts;
+	const delay = reconnectDelay(attempts);
+	// "reconnecting" rather than "disconnected", which means the user asked to
+	// stop and must not be reconnected.
+	useWSStore.setState({
+		status: "reconnecting",
+		reconnectAttempts: attempts + 1,
+	});
+
+	reconnectTimeout = window.setTimeout(() => {
+		reconnectTimeout = undefined;
+		// Only disconnect() clears the token, and it stops reconnection by way
+		// of the "disconnected" status, so this is a type narrowing rather than
+		// a case that happens.
+		if (currentToken) {
+			useWSStore.getState().actions.connect(currentToken);
+		}
+	}, delay);
+}
+
+/**
+ * The browser knows a retry is worth attempting before the timer does: regained
+ * connectivity, or a backgrounded tab coming back, both mean waiting out the
+ * rest of a 30 second backoff is pointless.
+ *
+ * The "reconnecting" check is not just throttling. connect() does not guard
+ * against "auth_failed", and the token outlives the rejection, so without it
+ * every wake-up would re-offer a token the server has already refused.
+ */
+function listenForRecovery(): void {
+	if (typeof window === "undefined") return;
+
+	const retryIfWaiting = () => {
+		const store = useWSStore.getState();
+		if (store.status === "reconnecting") {
+			store.actions.retryNow();
+		}
+	};
+	window.addEventListener("online", retryIfWaiting);
+	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "visible") retryIfWaiting();
+	});
+}
 
 function getClient(): JSONRPCRequester<void> | null {
 	return rpcRequester;
@@ -350,6 +426,7 @@ export function setWorktreeNotFoundListener(
 
 export const useWSStore = create<WSState>((set, get) => ({
 	status: "disconnected",
+	reconnectAttempts: 0,
 	projectTitle: "",
 	workDir: "",
 
@@ -404,10 +481,10 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 					set({
 						status: "connected",
+						reconnectAttempts: 0,
 						projectTitle: result.title,
 						workDir: result.work_dir,
 					});
-					reconnectAttempts = 0;
 				} catch (error) {
 					const currentWorktree = worktreeActions.getCurrent();
 					// If auth failed with a specific worktree, reset to main and retry
@@ -467,19 +544,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 					return;
 				}
 
-				// Retry if we have attempts left and a token
-				if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && currentToken) {
-					// Use "reconnecting" to preserve UI state; "disconnected" is for intentional disconnect
-					set({ status: "reconnecting" });
-					reconnectAttempts += 1;
-					reconnectTimeout = window.setTimeout(() => {
-						if (currentToken) {
-							get().actions.connect(currentToken);
-						}
-					}, RECONNECT_INTERVAL);
-				} else {
-					set({ status: "error" });
-				}
+				scheduleReconnect();
 			};
 
 			ws = socket;
@@ -491,15 +556,27 @@ export const useWSStore = create<WSState>((set, get) => ({
 				reconnectTimeout = undefined;
 			}
 			currentToken = null;
-			reconnectAttempts = MAX_RECONNECT_ATTEMPTS; // Prevent auto-reconnect
-			// Set status BEFORE closing so onclose sees correct state
-			set({ status: "disconnected" });
+			// Set status BEFORE closing so onclose sees "disconnected" and does
+			// not treat an intentional close as a drop worth reconnecting.
+			set({ status: "disconnected", reconnectAttempts: 0 });
 			if (ws) {
 				ws.close(1000, "disconnect");
 				ws = null;
 				rpcReceiver = null;
 				rpcRequester = null;
 			}
+		},
+
+		retryNow: () => {
+			if (!currentToken) return;
+			if (reconnectTimeout !== undefined) {
+				clearTimeout(reconnectTimeout);
+				reconnectTimeout = undefined;
+			}
+			// The attempt counter is deliberately left alone: an immediate retry
+			// that also fails should resume the backoff where it was, not restart
+			// it, or a series of recovery events could retry without limit.
+			get().actions.connect(currentToken);
 		},
 
 		fsSubscribe: async (path: string, callback: () => void) => {
@@ -797,6 +874,8 @@ export function reconnectWebSocket(): void {
 // Expose actions for non-React contexts (e.g., authStore logout)
 export const wsActions = useWSStore.getState().actions;
 
+listenForRecovery();
+
 type SwitchResult = "success" | "not_connected" | "failed";
 
 // Switch worktree on existing connection
@@ -846,7 +925,6 @@ export function resetWSStore() {
 		clearTimeout(reconnectTimeout);
 		reconnectTimeout = undefined;
 	}
-	reconnectAttempts = 0;
 	fsWatchCallbacks.clear();
 	gitWatchCallbacks.clear();
 	gitDiffWatchCallbacks.clear();
@@ -861,6 +939,7 @@ export function resetWSStore() {
 	onWorktreeSwitched = null;
 	useWSStore.setState({
 		status: "disconnected",
+		reconnectAttempts: 0,
 		projectTitle: "",
 		workDir: "",
 	});

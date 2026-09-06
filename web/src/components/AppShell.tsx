@@ -18,6 +18,7 @@ import { useWSStore, wsActions } from "../lib/wsStore";
 import TokenInput from "./Auth/TokenInput";
 import { ChatPanel } from "./Chat";
 import { SessionSidebar } from "./Session";
+import { ReconnectBanner } from "./ui";
 
 function AppShell() {
 	const hasAuthToken = useAuthStore(selectHasAuthToken);
@@ -361,16 +362,7 @@ function AppShell() {
 
 	return (
 		<div className="flex h-dvh flex-col">
-			{wsStatus === "reconnecting" && (
-				// biome-ignore lint/a11y/useSemanticElements: status banner is not a form output
-				<div
-					className="flex items-center justify-center gap-2 bg-th-accent/20 px-4 py-1 text-sm text-th-text-muted"
-					role="status"
-				>
-					<span className="inline-block h-2 w-2 animate-pulse rounded-full bg-th-accent" />
-					Reconnecting...
-				</div>
-			)}
+			<ReconnectBanner />
 			<div className="flex min-h-0 flex-1">
 				<SessionSidebar
 					isOpen={sidebarOpen}
