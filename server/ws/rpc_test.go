@@ -26,6 +26,17 @@ import (
 
 var bgCtx = context.Background()
 
+// dialTestClient dials with compression negotiated, so the suite runs over the
+// connection production actually builds rather than one it never uses. It is
+// not browser-shaped — this dialer offers a bare permessage-deflate — so the
+// tests that turn on the browser's own offer hand-roll a client instead, in
+// rpc_compression_test.go.
+func dialTestClient(ctx context.Context, serverURL string) (*websocket.Conn, error) {
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(serverURL, "http"),
+		&websocket.DialOptions{CompressionMode: clientCompression})
+	return conn, err
+}
+
 func mockRegistry(mock *mockAgent) *agent.Registry {
 	r := agent.NewRegistry()
 	r.Register(session.AgentTypeClaude, mock)
@@ -89,8 +100,7 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, err := dialTestClient(ctx, server.URL)
 	if err != nil {
 		cancel()
 		server.Close()
@@ -253,8 +263,7 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, err := dialTestClient(ctx, server.URL)
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -304,8 +313,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, err := dialTestClient(ctx, server.URL)
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}

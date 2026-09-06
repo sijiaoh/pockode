@@ -81,9 +81,29 @@ func (h *RPCHandler) Stop() {
 	h.agentRoleListWatcher.Stop()
 }
 
+// clientCompression negotiates permessage-deflate with the browser.
+//
+// The relay tunnel compresses too, but that hop ends at the cloud; this is the
+// only one that covers the phone's own link.
+//
+// The mode is a real choice, not a memory-for-ratio dial. A session's history
+// arrives as one large message and compresses the same either way; the streamed
+// events that follow are individually small, so they only compress against a
+// window shared with the messages before them. Giving up context takeover gives
+// up exactly the half that matters.
+//
+// The cost is on the order of a megabyte per connection, held until it closes.
+// Nothing in this package bounds how many connections there are; for a phone
+// reaching pockode through the relay, the relay's per-tunnel stream limit does.
+// Browsers that do not offer the extension keep working, uncompressed.
+//
+// Measurements and the trade-off: docs/websocket-rpc-design.md.
+const clientCompression = websocket.CompressionContextTakeover
+
 func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: h.devMode,
+		CompressionMode:    clientCompression,
 	})
 	if err != nil {
 		slog.Error("failed to accept websocket", "error", err)
