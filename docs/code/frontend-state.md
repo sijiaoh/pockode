@@ -49,7 +49,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | worktreeStore | Current worktree | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |
 
-### Why wsStore is Large (858 lines)
+### Why wsStore is Large
 
 wsStore manages WebSocket connection, JSON-RPC channels, and subscription callbacks in one place. This is intentional:
 

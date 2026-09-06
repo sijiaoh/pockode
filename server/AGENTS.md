@@ -32,6 +32,7 @@ agent/                  # Agent 抽象（接口, 事件, 进程管理, 注册表
   claude/               # Claude CLI 实现
   codex/                # Codex CLI 实现
 agentrole/              # AgentRole 存储 + 类型定义
+apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代理共用）
 chat/                   # Chat 客户端
 command/                # 命令存储
 contents/               # 文件内容获取
@@ -41,7 +42,7 @@ logger/                 # 结构化日志 (slog)
 mcp/                    # MCP 服务器（stdio JSON-RPC，供 AI CLI 使用）
 middleware/             # Token 认证中间件
 process/                # 进程管理器
-relay/                  # HTTP 中继 / 多路复用（NAT 穿透）
+relay/                  # NAT 穿透：yamux over WSS 隧道 + 本地反向代理
 rpc/                    # RPC 消息类型定义
 session/                # Session 存储 + 清理
 settings/               # 设置存储
@@ -86,7 +87,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `SERVER_PORT` | | `8080` | 服务端口 |
 | `WORK_DIR` | | `/workspace` | 工作目录 |
 | `DEV_MODE` | | `false` | 开发模式（true 时不 serve 静态文件） |
-| `RELAY_PORT` | | `SERVER_PORT` | Relay 转发目标端口（开发时可设为前端端口） |
+| `RELAY_FRONTEND_PORT` | | `SERVER_PORT` | Relay 转发前端请求的目标端口（开发时设为 Vite 端口） |
 | `LOG_FORMAT` | | `text` | `json` / `text` |
 | `LOG_LEVEL` | | `info` | `debug`/`info`/`warn`/`error` |
 | `LOG_FILE` | | `dataDir/server.log`(生产) | 日志文件路径（开发模式默认输出到 stdout） |

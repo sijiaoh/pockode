@@ -1,45 +1,52 @@
 # Relay NAT Traversal System
 
-Pockode needs to allow mobile devices to access development environments on users' PCs, but PCs are typically behind NAT and cannot be accessed directly from the outside. The Relay system solves this problem: the PC establishes an outbound connection to a cloud relay server, and the mobile device forwards requests to the PC through the relay server.
+Pockode needs to allow mobile devices to access development environments on users' PCs, but PCs are typically behind NAT and cannot be reached from the outside. The Relay system solves this: the PC establishes an outbound connection to a cloud relay server, and the mobile device reaches the PC through that server.
 
 ## Architecture Overview
 
 ```
 ┌─────────────────┐
 │   Mobile App    │
-│   (WebSocket)   │
 └────────┬────────┘
-         │ HTTPS
+         │ HTTPS / WSS
          ▼
 ┌─────────────────────────────────────┐
 │  Relay Server (Cloud)               │
 │  - Assigns subdomain                │
-│  - Routes by token                  │
-│  - Forwards over WebSocket          │
+│  - Authenticates by relay_token     │
+│  - ReverseProxy → one yamux stream  │
+│    per public request               │
 └────────┬────────────────────────────┘
-         │ outbound WebSocket
+         │ outbound WSS carrying a yamux session
          ▼
 ┌─────────────────────────────────────┐
 │  User PC (behind NAT)               │
 │  ┌─────────────────────────────────┐│
 │  │ Manager                         ││
 │  │ - Register/refresh with cloud   ││
+│  │ - Dial + reconnect              ││
 │  └────────────────┬────────────────┘│
 │  ┌────────────────▼────────────────┐│
-│  │ Multiplexer                     ││
-│  │ - Demux by connectionID         ││
-│  │ - Manage VirtualStream          ││
-│  └────────┬──────────┬─────────────┘│
-│           │          │              │
-│  ┌────────▼──┐  ┌────▼───────────┐ │
-│  │Virtual    │  │ HTTPHandler    │ │
-│  │Stream × N │  │ - /api → :8080 │ │
-│  └───────────┘  │ - /*   → :5173 │ │
-│                 └────────────────┘ │
+│  │ http.Server.Serve(yamuxSession) ││
+│  │ (*yamux.Session is a Listener)  ││
+│  └────────────────┬────────────────┘│
+│  ┌────────────────▼────────────────┐│
+│  │ local ReverseProxy              ││
+│  │ - /api, /ws, /health → :8080    ││
+│  │ - /*                  → :5173   ││
+│  └─────────────────────────────────┘│
 └─────────────────────────────────────┘
 ```
 
-**Key Design Decision**: Use outbound WebSocket instead of inbound connections. The PC proactively connects to the cloud, bypassing NAT, firewalls, and dynamic IP issues.
+**Key design decision 1 — outbound, not inbound.** The PC proactively connects to the cloud, bypassing NAT, firewalls and dynamic IPs.
+
+**Key design decision 2 — a real stream multiplexer, not a hand-rolled one.** The tunnel carries a [yamux](https://github.com/hashicorp/yamux) session, the same choice frp and Consul make (ngrok uses its own muxado, Cloudflare Tunnel uses HTTP/2 then QUIC). Pockode previously multiplexed by hand: every message was a JSON `Envelope` tagged with a `connection_id`, HTTP bodies were base64-encoded and buffered whole, and one WebSocket message carried one whole envelope.
+
+That design had a failure mode that no amount of tuning could fix: a WebSocket message is atomic on the wire, so a large transfer occupied the entire tunnel until it finished. A 39-byte interactive message measured **16.6 s** of queueing behind a 4 MiB download; the same case over yamux measured **0.5 s**. Worse, an oversized response exceeded the peer's WebSocket read limit, which is a fatal protocol error — downloading an 8 MB file killed the tunnel and every client on it.
+
+yamux fixes both structurally: it has per-stream sliding-window flow control and interleaves frames from different streams, so a stalled or slow stream cannot starve the others, and a body streams instead of being buffered.
+
+The full diagnosis lives in the cloud repository at `docs/design/relay-resilience.md`.
 
 ## Connection Lifecycle
 
@@ -51,7 +58,7 @@ Manager.Start()
     ├─ Load stored config (relay.json)
     │   │
     │   ├─ nil → Register with cloud
-    │   │         └─ Receive subdomain + token
+    │   │         └─ Receive subdomain + relay_token
     │   │         └─ Save to relay.json
     │   │
     │   └─ exists → Refresh token
@@ -61,168 +68,79 @@ Manager.Start()
         └─ Return public URL: https://{subdomain}.{relay_server}
 ```
 
-On first run, register with the cloud to obtain a unique subdomain and authentication token. Subsequent startups refresh the token to verify validity. Configuration is persisted locally to avoid re-registering every time.
+On first run the PC registers with the cloud to obtain a unique subdomain and token. Later startups refresh the token to verify it is still valid. Configuration is persisted so a restart does not consume a new subdomain.
 
 ### Reconnection Mechanism
 
-```go
-// relay.go:114-138
-func (m *Manager) runWithReconnect(ctx context.Context, cfg *StoredConfig) {
-    backoff := time.Second
+`reconnector` (`server/relay/reconnect.go`) keeps the uplink up for as long as the manager lives.
 
-    for ctx.Err() == nil {
-        start := time.Now()
-        err := m.connectAndRun(ctx, cfg)
+**Exponential backoff with jitter**: after a failure, wait 1s, 2s, 4s… capped at 10s, each spread by ±20%. Without the jitter every pockode that was connected to a restarting cloud retries in the same millisecond and arrives as one burst.
 
-        // Skip wait if connection was stable (> 1 minute)
-        if time.Since(start) > time.Minute {
-            backoff = time.Second
-            continue
-        }
+**A stable connection resets the budget**: if the uplink had lasted over a minute, the drop is a new problem rather than a continuing one — retry at once instead of inheriting a backoff that belonged to an earlier outage.
 
-        time.Sleep(backoff)
-        backoff = min(backoff*2, 10*time.Second)
-    }
-}
-```
+**There is no attempt limit.** The relay is this server's only route in from outside, so a client that stopped retrying would be indistinguishable from one that had crashed.
 
-**Exponential Backoff**: After connection failure, wait 1s, 2s, 4s... up to 10s max. However, if the connection was stable for more than 1 minute before disconnecting, treat it as network jitter—retry immediately and reset the backoff time. This distinguishes between "network unreachable" and "temporary interruption" scenarios.
+**The 10s ceiling is not arbitrary**: it must stay below the cloud's tunnel grace period (30s). A reconnect that lands inside that window reclaims the subdomain's hub entry, so public requests that arrived during the gap are served instead of answered 503. The two values must move together — see the cloud repository's `server/relay/hub.go` and its `relay.md`.
 
-### WebSocket Authentication
+`connectAndRun` returns only when the session ends, so the tunnel's lifetime and one iteration of the reconnect loop are the same thing. It is injected into `reconnector` rather than called directly, which is what lets the backoff be tested by failing the uplink on demand against a fake clock.
 
-After the connection is established, the PC needs to prove its identity to the cloud:
+### Authentication
+
+The relay token travels on the WebSocket upgrade request:
 
 ```go
-// relay.go:179-200
-func (m *Manager) register(ctx context.Context, conn *websocket.Conn, relayToken string) error {
-    req := registerRequest{
-        JSONRPC: "2.0",
-        Method:  "register",
-        Params:  map[string]string{"relay_token": relayToken},
-        ID:      1,
-    }
-    wsjson.Write(ctx, conn, req)
-
-    var resp registerResponse
-    wsjson.Read(ctx, conn, &resp)
-    // ...
-}
+conn, resp, err := websocket.Dial(ctx, url, uplinkDialOptions(cfg.RelayToken))
 ```
 
-Uses JSON-RPC 2.0 format, consistent with other Pockode communication protocols.
+The cloud verifies it (constant-time) *before* accepting the upgrade, so a bad token costs one 401 instead of a WebSocket handshake plus an application-level round trip. Past the 101 the connection carries nothing but yamux frames — there is no in-band handshake and no second protocol to reason about.
 
-## Multiplexing
+### Compression
 
-A single WebSocket connection carries multiple client connections. Each mobile connection corresponds to a `VirtualStream` on the PC side.
+The uplink negotiates permessage-deflate with **context takeover** (`tunnelCompression`), matching the cloud's `AcceptOptions`. Both ends must ask for the same mode: whichever side offers the weaker one decides the result for both directions.
 
-### Signal Format
+Context takeover is what makes it worth doing here, and the reason is the transport. Every yamux write is its own WebSocket message — a frame's header and its body are two separate writes — so a stream of chat events crosses the wire as a stream of few-hundred-byte messages. No-context-takeover mode only compresses messages over 512 bytes, so most of those go out verbatim and that mode measures byte-for-byte the same as no compression at all. With a window shared across messages, a relayed JSON-RPC stream drops to 0.40x of its uncompressed size and text HTTP responses to 0.04x, while random binary grows 0.06%.
+
+The price is a `flate.Writer` held for the life of the connection — about 1,176 KiB, whatever the compression level. That is one per pockode process here, so the trade-off does not really bite on this side; the cloud multiplies it by the number of connected servers, and that is where it is accounted for.
+
+Since `/ws` started negotiating its own permessage-deflate
+([websocket-rpc-design.md](../websocket-rpc-design.md#compression)), relayed
+WebSocket traffic arrives here already deflated and the tunnel's compression is
+close to a no-op for it — measured 414 KB against 412 KB for the same recorded
+conversation. It stays on because HTTP responses still travel the tunnel
+uncompressed.
+
+## Serving the Tunnel
+
+`*yamux.Session` implements `net.Listener`, so the entire PC-side data plane is:
 
 ```go
-// multiplexer.go:15-30
-type Envelope struct {
-    ConnectionID string          `json:"connection_id"`
-    Type         EnvelopeType    `json:"type,omitempty"`
-    Payload      json.RawMessage `json:"payload,omitempty"`
-    HTTPRequest  *HTTPRequest    `json:"http_request,omitempty"`
-    HTTPResponse *HTTPResponse   `json:"http_response,omitempty"`
-}
+session, err := yamux.Client(conn, yamuxConfig(log))
+srv := &http.Server{Handler: handler, ...}
+return srv.Serve(session)
 ```
 
-`ConnectionID` is the key for routing: the cloud assigns a unique ID to each mobile connection, and the PC side routes messages to the corresponding VirtualStream based on the ID.
+The cloud opens one stream per public request; each stream is an ordinary HTTP connection served by `net/http`. There is no relay-specific message format, no routing table, and no `connection_id`: **a stream closing *is* the disconnect signal.**
 
-Four signal types:
+This is why the mobile app's JSON-RPC WebSocket needs no special handling any more. It arrives as a normal `Upgrade: websocket` request on its own stream, is relayed as a normal 101 by both reverse proxies, and terminates at the local `GET /ws` handler — the same handler that serves a browser on localhost.
 
-| Type | Direction | Purpose |
-|------|-----------|---------|
-| `message` | Cloud → PC | WebSocket message forwarding |
-| `disconnected` | Cloud → PC | Client disconnection notification |
-| `http_request` | Cloud → PC | HTTP request forwarding |
-| `http_response` | PC → Cloud | HTTP response return |
-
-### Message Routing
+### Liveness
 
 ```go
-// multiplexer.go:52-86
-func (m *Multiplexer) Run(ctx context.Context) error {
-    for {
-        _, data, err := m.conn.Read(ctx)
-        var env Envelope
-        json.Unmarshal(data, &env)
-
-        switch env.Type {
-        case EnvelopeTypeMessage:
-            stream, isNew := m.getOrCreateStream(env.ConnectionID)
-            if isNew {
-                m.newStreamCh <- stream  // Notify upper layer
-            }
-            stream.deliver(env.Payload)
-
-        case EnvelopeTypeDisconnected:
-            m.closeStream(env.ConnectionID)
-
-        case EnvelopeTypeHTTPRequest:
-            go m.handleHTTPRequest(ctx, env.ConnectionID, env.HTTPRequest)
-        }
-    }
-}
+cfg.KeepAliveInterval = 30 * time.Second
+cfg.ConnectionWriteTimeout = 30 * time.Second
 ```
 
-- **Message**: Delivered to the VirtualStream's buffer, read by the upper-layer JSON-RPC handler
-- **HTTP Request**: Handled asynchronously to avoid blocking the main loop
-- **Disconnected**: Closes the corresponding VirtualStream
+yamux pings every 30 s and fails the session if a ping goes unanswered within `ConnectionWriteTimeout`. That timeout is also the budget for handing a single frame to the WebSocket, and it is deliberately raised from yamux's 10 s default: on a mobile uplink a ping queues behind the frames already in flight, and 10 s is short enough that a merely *slow* link reads as a *dead* one. Mistaking congestion for death is precisely the bug the previous implementation had.
 
-### VirtualStream
+## Local HTTP Proxy
 
-VirtualStream implements the `jsonrpc2.ObjectStream` interface, making Relay connections transparent to the upper layer compared to direct WebSocket connections:
-
-```go
-// multiplexer.go:178-215
-type VirtualStream struct {
-    connectionID string
-    incoming     chan json.RawMessage  // buffer size: 16
-    multiplexer  *Multiplexer
-}
-
-func (s *VirtualStream) ReadObject(v interface{}) error {
-    msg, ok := <-s.incoming
-    if !ok {
-        return io.EOF
-    }
-    return json.Unmarshal(msg, v)
-}
-
-func (s *VirtualStream) WriteObject(v interface{}) error {
-    return s.multiplexer.send(s.connectionID, v)
-}
-```
-
-**Buffer Design**: Capacity of 16 is a tradeoff. Too small would frequently block the sender, too large wastes memory. When the buffer is full, `deliver()` returns false, triggering stream closure—this is a backpressure signal indicating the consumer cannot keep up with the producer.
-
-### Write Lock Protection
-
-```go
-// multiplexer.go:155-176
-func (m *Multiplexer) send(connectionID string, payload interface{}) error {
-    // ...
-    m.writeMu.Lock()
-    defer m.writeMu.Unlock()
-    return m.conn.Write(context.Background(), websocket.MessageText, envData)
-}
-```
-
-Multiple VirtualStreams may write concurrently. `writeMu` ensures WebSocket write operations are atomic, preventing message interleaving at the protocol level.
-
-## HTTP Proxy
-
-HTTP requests from mobile devices accessing development servers are also forwarded through Relay.
+Every stream is served by a reverse proxy onto this machine's own HTTP servers.
 
 ### Routing Rules
 
 ```go
-// http.go:102-104
-func (h *HTTPHandler) isBackendPath(path string) bool {
-    return strings.HasPrefix(path, "/api") || path == "/ws" || path == "/health"
-}
+// apiroute.IsAPI
+return strings.HasPrefix(path, "/api") || path == "/ws" || path == "/health"
 ```
 
 | Path | Target |
@@ -230,73 +148,53 @@ func (h *HTTPHandler) isBackendPath(path string) bool {
 | `/api/*` | Backend (:8080) |
 | `/ws` | Backend (:8080) |
 | `/health` | Backend (:8080) |
-| `/*` (others) | Frontend (:5173) |
+| `/*` (others) | Frontend (:5173 in dev, `RELAY_FRONTEND_PORT`) |
 
-This reflects Pockode's architecture: Go backend handles API and WebSocket, Vite frontend handles UI.
+The split exists for dev mode, where the Vite dev server owns the UI. In production both ports are the same and the split is a no-op.
 
-### Body Encoding
+The predicate lives in `server/apiroute` rather than here because `main.go`'s SPA handler needs exactly the same rule to decide what to serve from the embedded static files. Two copies would silently diverge: add a backend endpoint, forget the relay's list, and the endpoint becomes unreachable through the relay in dev mode only.
 
-```go
-// http.go:54-61
-if req.Body != "" {
-    decoded, err := base64.StdEncoding.DecodeString(req.Body)
-    bodyReader = bytes.NewReader(decoded)
-}
-
-// http.go:95-99
-return &HTTPResponse{
-    Body: base64.StdEncoding.EncodeToString(body),
-}
-```
-
-HTTP body uses base64 encoding. JSON only supports text, but HTTP body can be binary (images, fonts, compressed data). Base64 ensures binary safety.
-
-### Skipping Hop-by-Hop Headers
+### Preserving the Public Request
 
 ```go
-// http.go:108-115
-func isHopByHopHeader(header string) bool {
-    switch http.CanonicalHeaderKey(header) {
-    case "Connection", "Keep-Alive", "Proxy-Authenticate",
-         "Proxy-Authorization", "Te", "Trailer",
-         "Transfer-Encoding", "Upgrade":
-        return true
-    }
-    return false
-}
+pr.Out.Host = pr.In.Host
 ```
 
-These headers are only valid for the current connection and should not be forwarded by proxies. For example, `Transfer-Encoding: chunked` has different meanings between the original response and the proxied response.
+**The original `Host` must survive both proxy hops.** This is not cosmetic: `websocket.Accept` rejects an upgrade whose `Origin` disagrees with `Host`, so rewriting `Host` to `localhost:8080` would make every legitimate mobile WebSocket fail the same-origin check. It also means the SPA sees the URL the browser actually used when building absolute URLs.
+
+The same-origin check is now the *only* origin defence for mobile clients — the cloud no longer terminates their WebSocket, so it cannot inspect their `Origin`. Strict same-origin at this layer is stricter than the wildcard allow-list the cloud used to apply.
+
+`X-Forwarded-For` / `-Host` / `-Proto` are copied from the inbound request, since the cloud already filled them from the public request.
+
+### Timeouts
+
+`ResponseHeaderTimeout` bounds how long a local backend may take to *start* answering. There is deliberately no whole-request timeout: the relayed WebSocket and streaming responses are open-ended by design. The old `http.Client{Timeout: 10 * time.Second}` was a total timeout, which would have made both impossible.
 
 ## Security Mechanisms
 
 ### Token Protection
 
 ```go
-// store.go:45-56
 func (s *Store) Save(cfg *StoredConfig) error {
-    // ...
     return os.WriteFile(s.path, data, 0600)  // Owner-only access
 }
 ```
 
-The Relay token is the credential for accessing the user's PC and must be strictly protected. File permission 0600 ensures only the file owner can read and write.
+The relay token is the credential for reaching the user's PC. Permission 0600 keeps it readable only by its owner.
 
 ### Version Check
 
 ```go
-// client.go:52-54
 if resp.StatusCode == http.StatusForbidden {
     return nil, ErrUpgradeRequired
 }
 ```
 
-The cloud can reject outdated client versions. This allows forced upgrades to fix security vulnerabilities or protocol incompatibilities.
+The cloud can reject outdated clients, which is what makes it possible to fix a protocol or security problem without waiting for every user to upgrade voluntarily.
 
 ### Token Invalidation Handling
 
 ```go
-// relay.go:76-82
 if errors.Is(err, ErrInvalidToken) {
     m.log.Warn("stored token is invalid, re-registering")
     m.store.Delete()
@@ -304,36 +202,20 @@ if errors.Is(err, ErrInvalidToken) {
 }
 ```
 
-Tokens may become invalid for various reasons (cloud reset, expiration, manual revocation). Upon detecting invalidation, automatically re-register—transparent to the user.
+Tokens can be invalidated by a cloud reset, expiry, or manual revocation. The client re-registers automatically, transparently to the user.
 
-## Integration with Upper Layers
+### Auth is Unchanged by the Relay
 
-### New Connection Notification
-
-```go
-// relay.go:216-218
-func (m *Manager) NewStreams() <-chan *VirtualStream {
-    return m.newStreamCh
-}
-```
-
-The upper layer receives new VirtualStreams through this channel, then handles them just like direct WebSocket connections:
-
-```go
-// server/main.go (illustrative)
-for stream := range relayManager.NewStreams() {
-    go wsHandler.HandleStream(ctx, stream, stream.ConnectionID())
-}
-```
-
-**Adapter Pattern**: VirtualStream implements the `jsonrpc2.ObjectStream` interface, making Relay connections transparent to the business layer. The same RPC handler handles both direct and Relay connections.
+Requests arriving through the tunnel go through the same `middleware.Auth` and the same WebSocket `auth` RPC as local requests. The relay proxies; it never authorizes on the application's behalf.
 
 ## Code Paths
 
 | Component | Path | Responsibility |
 |-----------|------|----------------|
-| Manager | `server/relay/relay.go` | Lifecycle management, authentication, reconnection |
-| Client | `server/relay/client.go` | Communication with cloud HTTP API |
-| Multiplexer | `server/relay/multiplexer.go` | Signal routing, stream management |
-| HTTPHandler | `server/relay/http.go` | HTTP request proxying |
+| Manager | `server/relay/relay.go` | Lifecycle, dial + authentication |
+| Reconnector | `server/relay/reconnect.go` | Backoff loop keeping the uplink up |
+| Client | `server/relay/client.go` | Communication with the cloud HTTP API |
+| Tunnel | `server/relay/tunnel.go` | yamux session, serving HTTP over its streams |
+| Local proxy | `server/relay/proxy.go` | Reverse proxy onto local backend/frontend |
 | Store | `server/relay/store.go` | Configuration persistence |
+| API path split | `server/apiroute/` | Shared with `main.go`'s SPA handler |

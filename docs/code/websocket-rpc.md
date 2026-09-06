@@ -275,12 +275,20 @@ type ConnectionStatus =
 
 ### Auto-Reconnect
 
-Automatically retries after unexpected disconnect, up to 5 times with 3-second intervals:
+Retries after an unexpected disconnect with exponential backoff and **no attempt
+limit**:
 
 ```typescript
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_INTERVAL = 3000;
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+const RECONNECT_JITTER = 0.2;
 ```
+
+A phone that loses signal in a lift, or a laptop whose lid was shut, has to
+recover on its own when the network returns; a fixed attempt cap left the app
+permanently dead after any blip that outlasted the count. At the 30 s ceiling an
+idle client costs two attempts a minute. Jitter spreads the retries so every
+client of a restarting server does not arrive as one burst.
 
 **Reconnection behavior**:
 - Connection loss sets status to `reconnecting` (not `disconnected`)
@@ -288,10 +296,39 @@ const RECONNECT_INTERVAL = 3000;
 - Subscriptions are invalidated but data is preserved
 - On successful reconnect, subscriptions are automatically re-established
 - `auth_failed` and `error` states do not trigger reconnection and require user intervention
+- `online` and `visibilitychange` skip the rest of the current backoff: regained
+  connectivity or a foregrounded tab both mean the timer is now pessimistic. The
+  attempt counter is deliberately *not* reset, so a burst of recovery events
+  cannot turn into unlimited retries — a failed immediate retry resumes the
+  backoff where it left off
 
 ### UI During Reconnection
 
 When the connection enters `reconnecting` state, a non-intrusive banner is displayed at the top of the screen to inform users. The rest of the UI remains functional with cached data, avoiding disruptive full-page loading states.
+
+Because reconnection never gives up, the banner is the only thing that tells a
+blip apart from an outage: after the fifth drop (about 15 s of accumulated
+backoff) it escalates from "Reconnecting..." to "Can't reach the server" and
+offers a manual retry (`web/src/components/ui/ReconnectBanner.tsx`).
+
+The tunnel between pockode and the cloud has its own, separate backoff, whose
+ceiling is tied to the cloud's reconnect grace period — see the cloud
+repository's relay design document.
+
+### Compression
+
+`websocket.Accept` negotiates permessage-deflate with the browser
+(`clientCompression` in `server/ws/rpc.go`). Nothing on the client side has to
+opt in, and a client that does not offer the extension keeps working
+uncompressed.
+
+This is the last hop's only compression, and `/ws` carries most of what the
+phone downloads, so the mode is a real decision rather than a tuning knob — why
+context takeover, what it costs, and the measured numbers are in
+[websocket-rpc-design.md](../websocket-rpc-design.md#compression).
+
+The read limit is unaffected: it applies to decompressed bytes, so a compressed
+message cannot expand past it.
 
 ### Request Timeout
 
