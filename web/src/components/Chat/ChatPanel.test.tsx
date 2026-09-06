@@ -78,6 +78,7 @@ describe("ChatPanel", () => {
 	const defaultProps = {
 		sessionId: "test-session",
 		sessionTitle: "Test Chat",
+		isSessionResolved: true,
 		onUpdateTitle: vi.fn(),
 	};
 
@@ -106,9 +107,79 @@ describe("ChatPanel", () => {
 	// Helper to wait for history loading to complete
 	const waitForHistoryLoad = async () => {
 		await waitFor(() => {
-			expect(screen.getByRole("textbox")).not.toBeDisabled();
+			expect(
+				screen.queryByLabelText("Loading conversation"),
+			).not.toBeInTheDocument();
 		});
 	};
+
+	// A switch hands the panel the destination's id before anything else about the
+	// destination is known. Whatever is still on screen belongs to the session the
+	// user came from: showing it reads as having opened the wrong chat, and the
+	// input would send the next message into it.
+	describe("while the destination session is still resolving", () => {
+		it("drops the previous session's messages and refuses to send", async () => {
+			const user = userEvent.setup();
+			const { rerender } = render(
+				<ChatPanel {...defaultProps} sessionId="previous" />,
+			);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Hello");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			expect(screen.getByText("Hello")).toBeInTheDocument();
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					sessionId="destination"
+					sessionTitle=""
+					isSessionResolved={false}
+				/>,
+			);
+
+			expect(screen.queryByText("Hello")).not.toBeInTheDocument();
+			expect(screen.getByLabelText("Loading conversation")).toBeInTheDocument();
+			expect(screen.getByRole("textbox")).toBeDisabled();
+			expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+			// Subscribing now would target a session the connection can't see yet.
+			expect(mockState.chatMessagesSubscribe).not.toHaveBeenCalledWith(
+				"destination",
+				expect.anything(),
+			);
+			expect(mockState.sendMessage).toHaveBeenCalledTimes(1);
+			expect(mockState.sendMessage).not.toHaveBeenCalledWith(
+				"destination",
+				expect.anything(),
+			);
+		});
+
+		it("opens the destination once it resolves", async () => {
+			const { rerender } = render(
+				<ChatPanel
+					{...defaultProps}
+					sessionId="destination"
+					sessionTitle=""
+					isSessionResolved={false}
+				/>,
+			);
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					sessionId="destination"
+					sessionTitle="Destination"
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(mockState.chatMessagesSubscribe).toHaveBeenCalledWith(
+				"destination",
+				expect.anything(),
+			);
+			expect(screen.getByRole("textbox")).not.toBeDisabled();
+		});
+	});
 
 	describe("sending messages", () => {
 		it("sends message via RPC with session_id and content", async () => {

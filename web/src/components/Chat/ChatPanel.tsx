@@ -1,6 +1,7 @@
 import { ClipboardList, Square } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
+import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -20,6 +21,7 @@ import {
 } from "../Project";
 import { SettingsPage } from "../Settings";
 import AgentSelector from "./AgentSelector";
+import ChatSkeleton from "./ChatSkeleton";
 import DefaultInputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
@@ -63,8 +65,20 @@ function LinkedWorkButton({
 }
 
 interface Props {
+	/**
+	 * Destination session id, taken from the URL. It is known before the session
+	 * itself is, which is why it can be trusted while `isSessionResolved` is
+	 * false. Empty when the route names no session.
+	 */
 	sessionId: string;
 	sessionTitle: string;
+	/**
+	 * Whether `sessionId` has been found in the session list of the worktree the
+	 * connection is bound to. Until then nothing about the session is known but
+	 * its id, so the panel shows the destination as an empty shell rather than
+	 * anything belonging to the session the user came from.
+	 */
+	isSessionResolved: boolean;
 	onUpdateTitle: (title: string) => void;
 	onOpenSidebar?: () => void;
 	onOpenSettings?: () => void;
@@ -80,6 +94,7 @@ interface Props {
 function ChatPanel({
 	sessionId,
 	sessionTitle,
+	isSessionResolved,
 	onUpdateTitle,
 	onOpenSidebar,
 	onOpenSettings,
@@ -120,17 +135,24 @@ function ChatPanel({
 		updateQuestionStatus,
 	} = useChatMessages({
 		sessionId,
+		enabled: isSessionResolved,
 	});
+
+	// One continuous wait, deliberately: resolving the session and loading its
+	// history are two phases of the same gap. Timing them separately would let a
+	// fast resolve restart the delay and produce a longer blank than no delay.
+	const isChatPending = !isSessionResolved || isLoadingHistory;
+	const showSkeleton = useDelayedFlag(isChatPending, SKELETON_DELAY_MS);
 
 	const markSessionRead = useWSStore((s) => s.actions.markSessionRead);
 
 	// Subscribe already marks read server-side, but we also need to mark read
 	// when returning from an overlay (where new messages may have arrived).
 	useEffect(() => {
-		if (!overlay) {
+		if (!overlay && isSessionResolved) {
 			markSessionRead(sessionId).catch(() => {});
 		}
-	}, [sessionId, overlay, markSessionRead]);
+	}, [sessionId, isSessionResolved, overlay, markSessionRead]);
 
 	const handleSend = useCallback(
 		(content: string) => {
@@ -204,13 +226,11 @@ function ChatPanel({
 
 	const renderContent = () => {
 		if (!overlay) {
-			// Defer mounting until history loads so initial scroll-to-bottom works
-			if (isLoadingHistory) {
-				return (
-					<div className="flex min-h-0 flex-1 items-center justify-center">
-						<div className="h-5 w-5 animate-spin rounded-full border-2 border-th-text-muted border-t-transparent" />
-					</div>
-				);
+			// Defer mounting until history loads so initial scroll-to-bottom works.
+			// An unresolved session waits here too, so a switch shows the destination
+			// empty rather than the previous session's messages.
+			if (isChatPending) {
+				return <ChatSkeleton showRows={showSkeleton} />;
 			}
 			return (
 				<MessageList
@@ -299,13 +319,17 @@ function ChatPanel({
 							<CustomAgentSelector
 								agentType={agentType}
 								onAgentTypeChange={setAgentType}
-								disabled={isStreaming || isSessionActivated}
+								disabled={
+									!isSessionResolved || isStreaming || isSessionActivated
+								}
 							/>
 						) : (
 							<AgentSelector
 								agentType={agentType}
 								onAgentTypeChange={setAgentType}
-								disabled={isStreaming || isSessionActivated}
+								disabled={
+									!isSessionResolved || isStreaming || isSessionActivated
+								}
 							/>
 						)}
 						{CustomModeSelector === null ? null : CustomModeSelector ? (
@@ -313,14 +337,14 @@ function ChatPanel({
 								mode={mode}
 								agentType={agentType}
 								onModeChange={setMode}
-								disabled={isStreaming}
+								disabled={!isSessionResolved || isStreaming}
 							/>
 						) : (
 							<ModeSelector
 								mode={mode}
 								agentType={agentType}
 								onModeChange={setMode}
-								disabled={isStreaming}
+								disabled={!isSessionResolved || isStreaming}
 							/>
 						)}
 					</div>
@@ -350,7 +374,8 @@ function ChatPanel({
 				<InputBar
 					sessionId={sessionId}
 					onSend={handleSend}
-					canSend={status === "connected" && !isLoadingHistory}
+					canSend={status === "connected" && !isChatPending}
+					disabled={!isSessionResolved}
 					isStreaming={isStreaming}
 					onStop={handleInterrupt}
 				/>

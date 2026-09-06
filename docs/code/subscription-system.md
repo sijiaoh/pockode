@@ -243,9 +243,19 @@ The session list decides which chat `AppShell` renders, so "keep old data" is no
 beginReload: () => set({ isSuccess: false, isReloading: true }),
 ```
 
-`beginReload` keeps `sessions` and — deliberately — leaves `isLoading` false, so the sidebar keeps rendering the retained list instead of flashing a spinner. It only clears `isSuccess` (so redirect / new-session recovery waits for the new worktree's list) and raises `isReloading`.
+`beginReload` keeps `sessions` and — deliberately — leaves `isLoading` false, so the sidebar goes on rendering the retained list instead of dropping straight into a loading state. It only clears `isSuccess` (so redirect / new-session recovery waits for the new worktree's list) and raises `isReloading`.
 
-`AppShell` treats `isReloading` — together with `worktreeSwitchInFlight`, a pending `redirectSessionId`, or `needsNewSession` — as an "in transition" state and reuses the last resolved session as a placeholder (`displaySession`) instead of dropping to the loading blank. The same placeholder path smooths other transient renders, such as jumping to the next session after deleting the current one.
+`AppShell` treats `isReloading` — together with `worktreeSwitchInFlight`, a pending `redirectSessionId`, or `needsNewSession` — as an "in transition" state and, once a shell has been on screen, keeps it mounted through the transition instead of dropping to the loading blank. The same path smooths other transient renders, such as jumping to the next session after deleting the current one.
+
+**What the placeholder may and may not be.** Only the *shell* is retained; the previous session's content is not. The destination's id is known from the URL from the first frame of a switch, so `AppShell` hands `ChatPanel` that id straight away, along with `isSessionResolved` — false until the id is found in the session list of the worktree the connection is actually bound to (`!worktreeSwitchInFlight && !isReloading`, looked up in the unfiltered `sessions`, because a work's chat link points at a task session that `filteredSessions` may hide). While it is false the panel shows `ChatSkeleton` and disables the input.
+
+Retaining the previous *session* instead was the original implementation, and it meant a cross-worktree chat link showed the conversation the user had just left — including a send box wired to it — until the new list arrived. The retained sidebar list is stale in the same way, so for the duration it is barred from interaction — keyboard included, not just the pointer — then swapped for `SessionListSkeleton`, and its highlight follows the destination id rather than the list it is drawn from. Creating a session is blocked for the same stretch, since the connection is still bound to the worktree being left.
+
+Refreshing the list is barred there too, and that guard rests on something no single file shows: `isSuccess` is not merely a loading flag; it is the last gate standing in front of redirect recovery, and it does not lift at the same moment as `worktreeSwitchInFlight` — the store worktree catches up before the resubscription does, leaving a window in which `isSuccess` is the only thing still holding. Anything that raises it there hands recovery the list of the worktree being left, which is all it takes to navigate the user off the session they were heading for. A refresh is such a thing, and opening the sidebar onto the session list performs one.
+
+The previous session's messages can reach the screen with no worktree switch involved at all, which is why `useChatMessages` resets during render rather than in an effect: an effect would let them be committed for one frame under the new session's identity.
+
+During a switch both skeletons wait 150ms (`useDelayedFlag`), so one that lands quickly shows no indicator at all. What gets timed has to be the whole gap — resolving the session, then loading its history. `enabled` happens to make that a single flag: with no subscription allowed yet, `isLoadingHistory` is still true, so the second phase never starts the clock over. Timed as two waits they would each restart the delay and blank the screen for longer than no delay at all.
 
 ### Why App-Level Subscriptions Survive Worktree Switches
 

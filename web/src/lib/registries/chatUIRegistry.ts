@@ -9,6 +9,7 @@ export interface InputBarProps {
 	sessionId: string;
 	onSend: (content: string) => void;
 	canSend?: boolean;
+	disabled?: boolean;
 	isStreaming?: boolean;
 	onStop?: () => void;
 }

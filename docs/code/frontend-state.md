@@ -73,8 +73,9 @@ attempt count, because the connection may be a relay tunnel the server itself ta
 interface SessionState {
   sessions: SessionListItem[];
   isLoading: boolean;
-  // Set during a worktree switch: sessions are retained but marked stale so the
-  // UI shows them as a placeholder while the new worktree's list loads.
+  // Set during a worktree switch: sessions are retained but marked stale, so the
+  // sidebar can go on rendering them without letting the user act on a list that
+  // belongs to the worktree being left.
   isReloading: boolean;
 }
 interface SessionActions { setSessions(s: SessionListItem[]): void; }

@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "../lib/authStore";
 import { useSessionStore } from "../lib/sessionStore";
+import { useWorkStore } from "../lib/workStore";
 import {
 	resetWorktreeStore,
 	useWorktreeStore,
@@ -21,19 +22,34 @@ import type {
 	SessionListItem,
 } from "../types/message";
 
-// ChatPanel is the attach point; render only the active session id so the test
-// can assert the final landing session from the user's perspective.
+// ChatPanel is the attach point; render the session it was handed and whether
+// that session has resolved, which together are what the panel needs to show
+// the destination rather than the session left behind.
 vi.mock("./Chat", () => ({
-	ChatPanel: ({ sessionId }: { sessionId: string }) => (
-		<div data-testid="chat-panel">{sessionId}</div>
+	ChatPanel: ({
+		sessionId,
+		isSessionResolved,
+	}: {
+		sessionId: string;
+		isSessionResolved: boolean;
+	}) => (
+		<div data-testid="chat-panel" data-resolved={String(isSessionResolved)}>
+			{sessionId}
+		</div>
 	),
 }));
 
-// The sidebar's only role in these tests is to fire onCreateSession, the manual
-// "+" path.
+// The sidebar reports the row it would highlight, and fires onCreateSession for
+// the manual "+" path.
 vi.mock("./Session", () => ({
-	SessionSidebar: ({ onCreateSession }: { onCreateSession: () => void }) => (
-		<div data-testid="session-sidebar">
+	SessionSidebar: ({
+		currentSessionId,
+		onCreateSession,
+	}: {
+		currentSessionId: string | null;
+		onCreateSession: () => void;
+	}) => (
+		<div data-testid="session-sidebar" data-current-session={currentSessionId}>
 			<button type="button" onClick={onCreateSession}>
 				New Chat
 			</button>
@@ -230,7 +246,11 @@ describe("AppShell cross-worktree navigation", () => {
 			sessions: [],
 			isLoading: true,
 			isSuccess: false,
+			// The app default, restored between tests because the task-session
+			// filter is what one of them turns on.
+			showTaskSessions: false,
 		});
+		useWorkStore.setState({ works: [] });
 		useAuthStore.setState({ token: "test-token" });
 		// Mimic wsStore's worktree switch handling: once the switch RPC completes,
 		// the session list resubscribes against the new worktree.
@@ -265,7 +285,51 @@ describe("AppShell cross-worktree navigation", () => {
 		expect(router.state.location.pathname).toBe("/w/B/s/x");
 	});
 
-	it("keeps the previous session shell mounted during a worktree switch", async () => {
+	// The chat link on a work points at that work's own task session, and the
+	// task-session filter — on by default — hides exactly those from the sidebar
+	// list. Resolving the destination against that filtered list would leave it
+	// permanently unresolved and then redirect away from it, for the very links
+	// this navigation exists to serve.
+	it("opens a task session that the sidebar filter hides", async () => {
+		useWorkStore.setState({
+			works: [
+				{
+					id: "w1",
+					type: "task",
+					title: "a task",
+					status: "in_progress",
+					session_id: "x",
+					created_at: "2024-01-01T00:00:00Z",
+					updated_at: "2024-01-01T00:00:00Z",
+				},
+			],
+		});
+
+		const router = renderAppShell("/w/A/s/a1");
+
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1");
+		});
+
+		await router.navigate({
+			to: "/w/$worktree/s/$sessionId",
+			params: { worktree: "B", sessionId: "x" },
+		});
+
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-panel")).toHaveAttribute(
+				"data-resolved",
+				"true",
+			);
+		});
+		expect(screen.getByTestId("chat-panel")).toHaveTextContent("x");
+		expect(router.state.location.pathname).toBe("/w/B/s/x");
+	});
+
+	// The session being left is another conversation entirely. Showing it while
+	// the destination resolves reads as having opened the wrong chat, and — until
+	// the panel was handed the destination id — let a message be sent into it.
+	it("shows the destination, not the session left behind, during a worktree switch", async () => {
 		const router = renderAppShell("/w/A/s/a1");
 
 		await waitFor(() => {
@@ -288,18 +352,30 @@ describe("AppShell cross-worktree navigation", () => {
 			params: { worktree: "B", sessionId: "x" },
 		});
 
-		// Mid-switch: no full-screen "Loading..." blank — the previous session (a1)
-		// stays on screen as a placeholder until B's list resolves.
 		await waitFor(() => {
 			expect(useWorktreeStore.getState().current).toBe("B");
 		});
+
+		// Mid-switch: no full-screen "Loading..." blank, the panel already belongs
+		// to X and says X hasn't resolved yet, and the sidebar highlight has left
+		// a1 rather than lingering on it.
 		expect(screen.queryByLabelText("Loading")).not.toBeInTheDocument();
-		expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1");
+		const panel = screen.getByTestId("chat-panel");
+		expect(panel).toHaveTextContent("x");
+		expect(panel).toHaveAttribute("data-resolved", "false");
+		expect(screen.getByTestId("session-sidebar")).toHaveAttribute(
+			"data-current-session",
+			"x",
+		);
 
 		releaseSubscribe();
 
 		await waitFor(() => {
-			expect(screen.getByTestId("chat-panel")).toHaveTextContent("x");
+			expect(screen.getByTestId("chat-panel")).toHaveAttribute(
+				"data-resolved",
+				"true",
+			);
 		});
+		expect(screen.getByTestId("chat-panel")).toHaveTextContent("x");
 	});
 });

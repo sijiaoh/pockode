@@ -129,18 +129,26 @@ function AppShell() {
 		updateTitle,
 	} = useSession({ enabled: hasAuthToken, routeSessionId });
 
-	// Keep the last resolved session shell so a worktree switch (or the redirect
-	// to another session that follows it) can reuse it as a placeholder instead
-	// of dropping to a full-screen "Loading..." blank.
-	const lastRenderedSession = useRef<{
-		id: string;
-		session: (typeof filteredSessions)[number];
-	} | null>(null);
-	if (currentSessionId && currentSession) {
-		lastRenderedSession.current = {
-			id: currentSessionId,
-			session: currentSession,
-		};
+	// The destination is known from the URL the moment a switch starts; only its
+	// title and history are not. It counts as resolved once it is found in the
+	// session list of the worktree the connection is actually bound to —
+	// worktreeSwitchInFlight alone is not enough, because the store syncs before
+	// the list does. Looked up in the unfiltered list on purpose: a work's chat
+	// link points at a task session, which is missing from filteredSessions
+	// whenever the task-session filter is on.
+	const isSessionResolved =
+		!worktreeSwitchInFlight &&
+		!isReloading &&
+		currentSessionId !== null &&
+		currentSession !== undefined;
+
+	// Once the shell has been on screen, keep it there through a switch: falling
+	// back to the full-screen "Loading..." would blank the whole app between two
+	// sessions. Only the shell is kept — the previous session's content is not,
+	// which is what the panel below renders the destination's placeholder for.
+	const hasRenderedShell = useRef(false);
+	if (isSessionResolved) {
+		hasRenderedShell.current = true;
 	}
 
 	// filteredSessions/currentSessionId get a fresh identity on every session-store
@@ -420,22 +428,16 @@ function AppShell() {
 		return <TokenInput onSubmit={handleTokenSubmit} />;
 	}
 
-	// While a session is resolving (initial load or a worktree switch), reuse the
-	// previously rendered session as a placeholder so the shell doesn't blank.
-	const displaySession =
-		currentSessionId && currentSession
-			? { id: currentSessionId, session: currentSession }
-			: inTransition && wsStatus === "connected"
-				? lastRenderedSession.current
-				: null;
+	const showShell =
+		isSessionResolved ||
+		(hasRenderedShell.current && inTransition && wsStatus === "connected");
 
-	if (!displaySession) {
+	if (!showShell) {
 		// "reconnecting" belongs here only because there is nothing to show yet
 		// (the app was opened while the server was unreachable): retries now run for
 		// as long as the tab is open, so without this the user would sit on
-		// "Loading..." forever with no idea why. Once a session has rendered,
-		// displaySession keeps the shell mounted and a reconnect shows the banner
-		// below instead.
+		// "Loading..." forever with no idea why. Once a session has rendered, the
+		// shell stays mounted and a reconnect shows the banner below instead.
 		if (wsStatus === "error" || wsStatus === "reconnecting") {
 			return (
 				<div
@@ -537,7 +539,7 @@ function AppShell() {
 				<SessionSidebar
 					isOpen={sidebarOpen}
 					onClose={() => setSidebarOpen(false)}
-					currentSessionId={displaySession.id}
+					currentSessionId={currentSessionId}
 					onSelectSession={handleSelectSession}
 					onCreateSession={handleCreateSession}
 					onDeleteSession={handleDeleteSession}
@@ -550,11 +552,15 @@ function AppShell() {
 					onOpenWorkList={handleOpenWorkList}
 					onOpenAgentRoleList={handleOpenAgentRoleList}
 					isDesktop={isDesktop}
+					isSwitchingWorktree={worktreeSwitchInFlight}
 				/>
 				<ChatPanel
-					sessionId={displaySession.id}
-					sessionTitle={displaySession.session.title}
-					onUpdateTitle={(title) => updateTitle(displaySession.id, title)}
+					sessionId={currentSessionId ?? ""}
+					sessionTitle={currentSession?.title ?? ""}
+					isSessionResolved={isSessionResolved}
+					onUpdateTitle={(title) => {
+						if (currentSessionId) updateTitle(currentSessionId, title);
+					}}
 					onOpenSidebar={handleOpenSidebar}
 					onOpenSettings={handleOpenSettings}
 					overlay={overlay}

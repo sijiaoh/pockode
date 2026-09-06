@@ -35,6 +35,11 @@ interface Props {
 	onOpenWorkList: () => void;
 	onOpenAgentRoleList: () => void;
 	isDesktop: boolean;
+	/**
+	 * The URL already points at another worktree while the store, and therefore
+	 * the session list, still holds the previous one's.
+	 */
+	isSwitchingWorktree: boolean;
 }
 
 function SessionSidebar({
@@ -53,6 +58,7 @@ function SessionSidebar({
 	onOpenWorkList,
 	onOpenAgentRoleList,
 	isDesktop,
+	isSwitchingWorktree,
 }: Props) {
 	const { hasAnyUnread } = useSession();
 	const { SidebarContent } = useSidebarUIConfig();
@@ -154,6 +160,7 @@ function SessionSidebar({
 				onSelectSession={handleSelectSession}
 				onCreateSession={onCreateSession}
 				onDeleteSession={onDeleteSession}
+				isSwitchingWorktree={isSwitchingWorktree}
 			/>
 			<FilesTab
 				onSelectFile={handleSelectFile}

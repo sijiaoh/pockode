@@ -26,6 +26,12 @@ export type { ConnectionStatus } from "../lib/wsStore";
 
 interface UseChatMessagesOptions {
 	sessionId: string;
+	/**
+	 * Subscribe only once `sessionId` is known to belong to the worktree the
+	 * connection is bound to. Subscribing earlier (mid worktree switch) targets a
+	 * session the server can't see yet.
+	 */
+	enabled?: boolean;
 }
 
 interface UseChatMessagesReturn {
@@ -60,6 +66,7 @@ const { sendMessage, chatMessagesSubscribe, chatMessagesUnsubscribe } =
 
 export function useChatMessages({
 	sessionId,
+	enabled = true,
 }: UseChatMessagesOptions): UseChatMessagesReturn {
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -107,21 +114,29 @@ export function useChatMessages({
 		setMessages((prev) => applyServerEvent(prev, event));
 	}, []);
 
-	// Reset state when sessionId changes
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on sessionId change
-	useEffect(() => {
+	// Reset when the session changes. During render rather than in an effect: an
+	// effect runs after the render that already carries the new session id has
+	// been committed, so the previous session's messages would reach the DOM for
+	// a frame as if they belonged to the session just opened. React re-runs this
+	// component before committing anything, so no such frame exists.
+	const [renderedSessionId, setRenderedSessionId] = useState(sessionId);
+	if (renderedSessionId !== sessionId) {
+		setRenderedSessionId(sessionId);
 		setMessages([]);
 		setIsLoadingHistory(true);
 		setIsProcessRunning(false);
 		setModeState("default");
 		setAgentTypeState("claude");
-	}, [sessionId]);
+	}
 
 	// Subscribe to chat events when connected.
-	// Loading state is managed by the initial value and the reset effect above,
-	// so re-subscribe on reconnect won't flash the spinner.
+	// Loading state is managed by the initial value and the reset above, so
+	// re-subscribing on reconnect won't flash the spinner. It also stays true for
+	// as long as `enabled` is false, which is what makes "waiting for the session
+	// to resolve" and "waiting for its history" a single continuous wait for
+	// callers timing a loading indicator against it.
 	useEffect(() => {
-		if (status !== "connected") {
+		if (!enabled || status !== "connected") {
 			return;
 		}
 
@@ -172,7 +187,7 @@ export function useChatMessages({
 				subscriptionIdRef.current = null;
 			}
 		};
-	}, [status, sessionId, handleNotification]);
+	}, [enabled, status, sessionId, handleNotification]);
 
 	const sendUserMessageHandler = useCallback(
 		async (content: string): Promise<boolean> => {

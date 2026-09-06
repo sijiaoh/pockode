@@ -495,13 +495,17 @@ away from the target before the new worktree's list ever loads.
 
 Both recovery effects are therefore gated on a worktree-transition guard —
 `worktreeSwitchInFlight = urlWorktree !== storeWorktree` — and skip while a
-switch is in flight. Recovery only runs once `urlWorktree === storeWorktree`,
-i.e. after the store caught up and the new worktree's session list is
-subscribed and loaded; by then the target session resolves and no redirect
-fires, so the cross-worktree jump lands stably on its intended session. (The
-`ChatPanel` mounts only once `currentSession` resolves, which prevents
-*attaching* to a stale session, but that alone does not stop the redirect
-effect from rewriting the URL — the guard is what closes that gap.)
+switch is in flight. Recovery only runs once `urlWorktree === storeWorktree`.
+That on its own does not mean the new worktree's list has arrived — the store
+worktree catches up before the resubscription does — so recovery leans on a
+second condition, `isSuccess`, which stays cleared for the length of the switch.
+With both satisfied the target session resolves and no redirect fires, so the
+cross-worktree jump lands stably on its intended session. (The same in-flight
+signal also feeds the `isSessionResolved` check that keeps `ChatPanel` from
+subscribing to a session the new worktree has not listed yet, described in
+[subscription-system.md](subscription-system.md#why-the-session-list-keeps-a-placeholder-during-a-switch).
+Withholding the subscription does not stop the redirect effect from rewriting
+the URL, though; the gate on the effect itself is what closes that gap.)
 
 The new-session recovery effect carries a second gate for the same structural
 reason. `needsNewSession` stays true for as long as the worktree has no session,
