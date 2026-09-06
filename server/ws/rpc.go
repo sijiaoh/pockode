@@ -480,12 +480,28 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitAdd(ctx, conn, req, wt)
 	case "git.reset":
 		h.handleGitReset(ctx, conn, req, wt)
+	case "git.discard":
+		h.handleGitDiscard(ctx, conn, req, wt)
+	case "git.commit":
+		h.handleGitCommit(ctx, conn, req, wt)
 	case "git.log":
 		h.handleGitLog(ctx, conn, req, wt)
 	case "git.show":
 		h.handleGitShow(ctx, conn, req, wt)
 	case "git.show.diff":
 		h.handleGitShowDiff(ctx, conn, req, wt)
+	case "git.branches":
+		h.handleGitBranches(ctx, conn, req, wt)
+	case "git.checkout":
+		h.handleGitCheckout(ctx, conn, req, wt)
+	case "git.branch.create":
+		h.handleGitBranchCreate(ctx, conn, req, wt)
+	case "git.fetch":
+		h.handleGitFetch(ctx, conn, req, wt)
+	case "git.pull":
+		h.handleGitPull(ctx, conn, req, wt)
+	case "git.push":
+		h.handleGitPush(ctx, conn, req, wt)
 	// fs namespace
 	case "fs.subscribe":
 		h.handleFSSubscribe(ctx, conn, req, wt)

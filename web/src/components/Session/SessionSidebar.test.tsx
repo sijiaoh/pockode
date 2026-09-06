@@ -51,6 +51,7 @@ function renderSidebar(onClose: () => void) {
 			onCreateSession={vi.fn()}
 			onDeleteSession={vi.fn()}
 			onSelectDiffFile={vi.fn()}
+			onCloseDiffFile={vi.fn()}
 			activeDiffFile={null}
 			onSelectCommit={vi.fn()}
 			activeCommitHash={null}

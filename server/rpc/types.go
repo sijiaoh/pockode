@@ -149,9 +149,16 @@ type GitDiffUnsubscribeParams struct {
 	ID string `json:"id"`
 }
 
-// GitPathsParams is used for git.add and git.reset operations.
+// GitPathsParams is used for git.add, git.reset and git.discard operations.
 type GitPathsParams struct {
 	Paths []string `json:"paths"`
+}
+
+// GitCommitParams is the params for git.commit request.
+type GitCommitParams struct {
+	Message string `json:"message"`
+	// Amend replaces the previous commit rather than adding one.
+	Amend bool `json:"amend"`
 }
 
 // GitLogParams is the params for git.log request.
@@ -181,6 +188,33 @@ type GitShowDiffParams struct {
 
 // GitShowDiffResult is the result of git.show.diff request.
 type GitShowDiffResult = git.DiffResult
+
+// GitBranchesResult is the result of git.branches request.
+type GitBranchesResult = git.BranchList
+
+// GitCheckoutParams is the params for git.checkout request.
+type GitCheckoutParams struct {
+	Branch string `json:"branch"`
+}
+
+// GitBranchCreateParams is the params for git.branch.create request.
+type GitBranchCreateParams struct {
+	Name string `json:"name"`
+}
+
+// GitPullResult is the result of git.pull request.
+type GitPullResult struct {
+	// Commits is how many the fast-forward brought in, measured by the server:
+	// pull fetches first, so the panel's behind count can be out of date.
+	Commits int `json:"commits"`
+}
+
+// GitPushParams is the params for git.push request.
+type GitPushParams struct {
+	// Force pushes with --force-with-lease. The UI offers it only where a plain
+	// push cannot succeed, behind a confirmation.
+	Force bool `json:"force"`
+}
 
 // Command namespace
 

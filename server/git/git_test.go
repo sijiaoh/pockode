@@ -263,6 +263,27 @@ func TestStatus_UninitializedSubmodule(t *testing.T) {
 	}
 }
 
+// git explains a refusal on stderr and says nothing on stdout, so an error
+// built from the exit status alone reaches the panel as "exit status 128" —
+// hiding the only sentence the user could act on. The failures that actually
+// happen here are "detected dubious ownership" on a mounted volume and this
+// one.
+func TestStatus_FailureCarriesGitsOwnMessage(t *testing.T) {
+	dir, err := os.MkdirTemp("", "git-not-a-repo-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	_, err = Status(dir)
+	if err == nil {
+		t.Fatal("Status() succeeded outside a repository")
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error = %q, want git's own explanation", err)
+	}
+}
+
 func setupTestRepo(t *testing.T) (string, func()) {
 	t.Helper()
 	tempDir, err := os.MkdirTemp("", "git-test-*")
@@ -941,6 +962,83 @@ func TestAddReset_NonASCIIPath(t *testing.T) {
 		if !unstaged.HasFile(path, false) {
 			t.Errorf("expected %q back in unstaged after Reset, got %+v", path, unstaged.Unstaged)
 		}
+	}
+}
+
+// A path is still a pathspec after `--`, and pathspec magic is spelled in the
+// leading characters of the name itself — not in a shell, so exec'ing git
+// directly does not disarm it. Without :(literal), staging the one file named
+// ":!important.txt" reads as "everything except important.txt" and stages the
+// rest instead, exiting 0. Discard hit this first; Add and Reset share it.
+func TestAddReset_TreatsPathspecMagicInNamesAsLiteral(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Reset restores from HEAD, so the repository needs one.
+	writeTestFile(t, dir, "seed.txt", "seed\n")
+	runGit(t, dir, "add", "seed.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+
+	writeTestFile(t, dir, ":!important.txt", "picked\n")
+	writeTestFile(t, dir, "bystander.txt", "not picked\n")
+
+	if err := Add(dir, ":!important.txt"); err != nil {
+		t.Fatalf("Add() error: %v", err)
+	}
+
+	staged, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if !staged.HasFile(":!important.txt", true) {
+		t.Errorf("expected :!important.txt staged, got %+v", staged.Staged)
+	}
+	if staged.HasFile("bystander.txt", true) {
+		t.Errorf("Add staged bystander.txt as well, got %+v", staged.Staged)
+	}
+
+	if err := Add(dir, "bystander.txt"); err != nil {
+		t.Fatalf("Add(bystander.txt) error: %v", err)
+	}
+	if err := Reset(dir, ":!important.txt"); err != nil {
+		t.Fatalf("Reset() error: %v", err)
+	}
+
+	after, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if after.HasFile(":!important.txt", true) {
+		t.Errorf("expected :!important.txt unstaged, got %+v", after.Staged)
+	}
+	if !after.HasFile("bystander.txt", true) {
+		t.Errorf("Reset unstaged bystander.txt as well, got %+v", after.Staged)
+	}
+}
+
+// A path that is exactly a submodule's directory resolves to nothing inside it,
+// and ":(literal)" with no path behind it matches everything — where a bare
+// empty pathspec is one git rejects on its own. Refused rather than obeyed with
+// the whole submodule as the target.
+func TestAddReset_RejectSubmoduleRootAsPath(t *testing.T) {
+	dir, cleanup := setupTestRepoWithSubmodule(t)
+	defer cleanup()
+
+	writeTestFile(t, dir, "mysub/sub.txt", "edited\n")
+
+	if err := Add(dir, "mysub/"); err == nil {
+		t.Error("Add() accepted a submodule directory as a path")
+	}
+	if err := Reset(dir, "mysub/"); err == nil {
+		t.Error("Reset() accepted a submodule directory as a path")
+	}
+
+	status, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if sub := status.Submodules["mysub"]; sub == nil || len(sub.Staged) != 0 {
+		t.Errorf("expected nothing staged in the submodule, got %+v", sub)
 	}
 }
 

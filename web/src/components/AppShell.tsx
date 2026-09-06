@@ -544,6 +544,7 @@ function AppShell() {
 					onCreateSession={handleCreateSession}
 					onDeleteSession={handleDeleteSession}
 					onSelectDiffFile={handleSelectDiffFile}
+					onCloseDiffFile={handleCloseOverlay}
 					activeDiffFile={activeDiffFile}
 					onSelectCommit={handleSelectCommit}
 					activeCommitHash={activeCommitHash}
