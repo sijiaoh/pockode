@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	applyServerEvent,
+	closePreviousTurn,
 	expirePendingDialogs,
 	normalizeEvent,
 	replayHistory,
@@ -211,7 +212,15 @@ export function useChatMessages({
 				createdAt: new Date(),
 			};
 
-			setMessages((prev) => [...prev, userMessage, assistantMessage]);
+			// Same turn handling a broadcast message gets: a locally echoed message
+			// starts a new turn too, so whatever the agent was mid-way through is
+			// closed out and an unanswered placeholder does not linger as a blank
+			// bubble above the one just added.
+			setMessages((prev) => [
+				...closePreviousTurn(prev),
+				userMessage,
+				assistantMessage,
+			]);
 
 			try {
 				await sendMessage(sessionId, content);

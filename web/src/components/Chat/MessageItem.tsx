@@ -19,13 +19,20 @@ import type {
 	PermissionUpdate,
 	PermissionUpdateDestination,
 	SystemMessageMeta,
+	SystemMessageStep,
 	ToolCall,
 } from "../../types/message";
 import { formatFilePath } from "../../utils/path";
+import { systemActionLabel } from "../../utils/systemMessage";
+import {
+	formatStepProgress,
+	recordedStepProgress,
+} from "../../utils/workSteps";
 import { ScrollableContent, Spinner } from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
 import { MarkdownContent } from "./MarkdownContent";
 import ToolResultDisplay from "./ToolResultDisplay";
+import WorkCardItem from "./WorkCardItem";
 
 interface ToolCallItemProps {
 	tool: ToolCall;
@@ -147,25 +154,6 @@ function SystemItem({ content }: SystemItemProps) {
 	);
 }
 
-// subtype → collapsed-bar action label. Where values come from: the backend
-// system message subtypes in server/work/prompt.go (kickoff, restart, ...).
-const SYSTEM_MESSAGE_LABELS: Record<string, string> = {
-	kickoff: "Kickoff",
-	restart: "Restart",
-	auto_continue: "Auto-continue",
-	step_advance: "Next step",
-	reopen: "Reopen",
-	child_done: "Child task done",
-};
-
-function systemActionLabel(subtype?: string, meta?: SystemMessageMeta): string {
-	const base = (subtype && SYSTEM_MESSAGE_LABELS[subtype]) || "System Message";
-	if (subtype === "step_advance" && meta?.step) {
-		return `${base} (Step ${meta.step.current}/${meta.step.total})`;
-	}
-	return base;
-}
-
 interface SystemMessageItemProps {
 	content: string;
 	subtype?: string;
@@ -173,8 +161,9 @@ interface SystemMessageItemProps {
 }
 
 // SystemMessageItem renders a Pockode system-automation message as a collapsed,
-// low-contrast banner (not a chat bubble). It sits alongside the user/assistant
-// branches in MessageItem. Visual pattern mirrors SystemItem for consistency.
+// low-contrast banner (not a chat bubble). Only reachable for history recorded
+// before meta.work_id existed; anything newer is folded into a WorkCardItem.
+// Visual pattern mirrors SystemItem for consistency.
 function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
 	const [expanded, setExpanded] = useState(false);
 	const actionLabel = systemActionLabel(subtype, meta);
@@ -204,6 +193,25 @@ function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
 					<MarkdownContent content={content} />
 				</ScrollableContent>
 			)}
+		</div>
+	);
+}
+
+interface StepDividerItemProps {
+	step: SystemMessageStep;
+}
+
+// A hairline saying only "the work moved to a new step here". It keeps the
+// transcript's answer to "which output belongs to which step", which the old
+// per-step banner used to carry, without restating any status.
+function StepDividerItem({ step }: StepDividerItemProps) {
+	return (
+		<div className="flex items-center gap-2">
+			<span className="h-px flex-1 bg-th-border" />
+			<span className="shrink-0 text-xs text-th-text-muted">
+				{formatStepProgress(recordedStepProgress(step.current, step.total))}
+			</span>
+			<span className="h-px flex-1 bg-th-border" />
 		</div>
 	);
 }
@@ -553,6 +561,7 @@ interface Props {
 		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
+	onOpenWorkDetail?: (workId: string) => void;
 }
 
 const MessageItem = memo(function MessageItem({
@@ -562,12 +571,23 @@ const MessageItem = memo(function MessageItem({
 	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
+	onOpenWorkDetail,
 }: Props) {
 	const chatUIConfig = useChatUIConfig();
 	const UserAvatar = chatUIConfig.UserAvatar;
 	const AssistantAvatar = chatUIConfig.AssistantAvatar;
 	const userBubbleClass = chatUIConfig.userBubbleClass ?? "";
 	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
+
+	if (message.role === "work") {
+		return (
+			<WorkCardItem message={message} onOpenWorkDetail={onOpenWorkDetail} />
+		);
+	}
+
+	if (message.role === "step_divider") {
+		return <StepDividerItem step={message.step} />;
+	}
 
 	if (message.role === "user") {
 		// System-driven messages render as a collapsed banner instead of a bubble.

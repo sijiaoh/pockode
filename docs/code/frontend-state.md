@@ -147,6 +147,18 @@ ServerNotification (snake_case)
       → Component state (via useSubscription hook)
 ```
 
+### Message Variants
+
+`Message` is wider than the two roles a chat obviously needs. Alongside
+`UserMessage` and `AssistantMessage` it holds `WorkCardMessage` and
+`StepDividerMessage`, which render a work item's progress inline in the
+transcript rather than in a panel beside it (see
+[work-system.md](work-system.md#rendering-in-the-transcript) for why).
+
+The consequence to know before touching the reducer: **`status` is not a common
+field.** Only assistant messages carry one, so anything asking about it has to
+narrow on `role === "assistant"` first.
+
 ### Why Pure Function Instead of Store
 
 - **Reusable** — same reducer replays history and processes live events

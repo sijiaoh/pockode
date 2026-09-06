@@ -1613,7 +1613,7 @@ func TestAutoResumer_NotifyReopen_NoSessionNoMessage(t *testing.T) {
 	}
 }
 
-// --- Work-origin tagging: subtype + collapsed-bar meta ---
+// --- Work-origin tagging: subtype + card meta ---
 
 func TestAutoResumer_StepAdvance_TagsSubtypeAndStepMeta(t *testing.T) {
 	_, resumer, sender := setupResumerTest(t)
@@ -1680,9 +1680,59 @@ func TestAutoResumer_ChildCompletion_TagsSubtype(t *testing.T) {
 	}
 }
 
+// The message goes to the parent's session, so it must be filed under the
+// parent. Naming the child here would scatter the parent's card into orphans.
+func TestAutoResumer_ChildCompletion_MetaAddressesParent(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Parent story")
+	task := createTask(t, store, story.ID, "Task")
+	parentSid := "parent-session"
+	startWorkWithSession(t, store, story.ID, parentSid)
+	startWork(t, store, task.ID)
+
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+	got := sender.getMessages()[0]
+	if got.Meta == nil || got.Meta.WorkID != story.ID {
+		t.Fatalf("meta work id = %+v, want parent id %q", got.Meta, story.ID)
+	}
+	if got.Meta.WorkType != string(WorkTypeStory) {
+		t.Errorf("meta work type = %q, want %q", got.Meta.WorkType, WorkTypeStory)
+	}
+	if got.Meta.Child == nil || got.Meta.Child.ID != task.ID || got.Meta.Child.Title != "Task" {
+		t.Errorf("meta child = %+v, want the closed task", got.Meta.Child)
+	}
+}
+
+func TestAutoResumer_Reopen_CarriesStepMeta(t *testing.T) {
+	_, resumer, sender := setupResumerTest(t)
+	resumer.SetStepProvider(&mockStepProvider{steps: map[string][]string{
+		testRoleID: {"Plan the work", "Build the thing"},
+	}})
+
+	resumer.NotifyReopen(Work{ID: "w1", Type: WorkTypeTask, Status: StatusInProgress, SessionID: "s1", AgentRoleID: testRoleID, Title: "My work", CurrentStep: 1})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+	got := sender.getMessages()[0]
+	if got.Meta == nil || got.Meta.WorkID != "w1" || got.Meta.WorkType != string(WorkTypeTask) {
+		t.Fatalf("meta = %+v, want the reopened work identified", got.Meta)
+	}
+	if got.Meta.Step == nil || got.Meta.Step.Current != 2 || got.Meta.Step.Total != 2 {
+		t.Errorf("meta step = %+v, want current 2 total 2", got.Meta.Step)
+	}
+}
+
 func TestNewMessageMeta_OmitsStepWhenNoSteps(t *testing.T) {
-	meta := NewMessageMeta("T", 1, 0)
-	if meta.Title != "T" || meta.Step != nil {
-		t.Errorf("meta = %+v, want title-only with no step", meta)
+	meta := NewMessageMeta(Work{ID: "w1", Type: WorkTypeTask, Title: "T"}, 1, 0)
+	if meta.WorkID != "w1" || meta.WorkType != string(WorkTypeTask) || meta.Title != "T" {
+		t.Errorf("meta = %+v, want the work identified", meta)
+	}
+	if meta.Step != nil {
+		t.Errorf("meta step = %+v, want none for a stepless work", meta.Step)
 	}
 }
