@@ -87,6 +87,24 @@ source the user can edit, and the UI can render it from the text just as well.
 - Creates the file if it doesn't exist
 - Creates parent directories automatically
 - Updates existing files
+- Rejects content over `contents.MaxFileSize` (**2 MiB**) with `InvalidParams`
+
+The same ceiling as `file.get`, for the same reason, and one constant rather
+than two: the content travels as one JSON-RPC message either way. Reaching it
+from the editor takes work — a file it could open was one `file.get` agreed to
+read, so it starts under the ceiling and has to be grown past it — but the
+write side is where the ceiling has to hold, because there the client is the
+one deciding how many bytes to send.
+
+The refusal is a reply. Under it sits a second ceiling that is not: `/ws` caps
+a single inbound message at `ws.maxClientMessage` (**16 MiB**), and past that
+the WebSocket library closes the connection rather than answering. It is a
+backstop, placed so that a write the method would accept can never reach it:
+JSON escaping costs at most six bytes per source byte, and 16 MiB clears
+6 × 2 MiB. A refused write normally gets its reply too, since ordinary text
+escapes to about its own size. It was for a long time coder/websocket's 32 KiB
+default, which put the backstop *below* the method's own ceiling — so saving a
+moderately large file dropped the connection instead of failing the save.
 
 **`file.delete`** — Remove a file or directory from disk.
 - Directories are deleted recursively (all contents removed)

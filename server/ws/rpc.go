@@ -100,6 +100,31 @@ func (h *RPCHandler) Stop() {
 // Measurements and the trade-off: docs/websocket-rpc-design.md.
 const clientCompression = websocket.CompressionContextTakeover
 
+// maxClientMessage bounds a single message from the client. It is a backstop,
+// not the product limit: where a method sets a ceiling of its own, that is the
+// one a user is meant to meet and it answers with an error, and this only has
+// to sit far enough above it that an acceptable request never reaches it.
+//
+// Of those ceilings file.write's is by far the largest and the one this has to
+// clear: contents.MaxFileSize (2 MiB) of content carried as a JSON string,
+// where escaping costs at most six bytes per source byte (\u00XX for a control
+// character). 16 MiB clears that whole escaped range for any content at all,
+// not only the well-behaved kind. A request far past 2 MiB that also escapes
+// that badly can still land here and be closed on, which is what a backstop is
+// for.
+//
+// Nothing else that arrives comes near: paths, options, and typed text such as
+// a chat message or a work body. Those set no ceiling of their own, so for
+// them this is the one that applies. Being the whole connection's ceiling it
+// likewise bounds what an unauthenticated peer may send and what pockode holds
+// while reading one message; both cost bytes actually transmitted rather than
+// reserved, on a machine already running agent subprocesses that cost far more.
+//
+// Deleting the call does not fall back to something sane: coder/websocket's
+// default is 32 KiB, well under what file.write accepts, and a transport limit
+// does not reply — it closes the connection with StatusMessageTooBig.
+const maxClientMessage = 16 << 20 // 16 MiB
+
 func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: h.devMode,
@@ -109,6 +134,7 @@ func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Error("failed to accept websocket", "error", err)
 		return
 	}
+	conn.SetReadLimit(maxClientMessage)
 
 	h.handleConnection(r.Context(), conn)
 }

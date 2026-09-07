@@ -351,6 +351,29 @@ func TestWriteFile(t *testing.T) {
 			t.Errorf("got size %d, want 0", info.Size())
 		}
 	})
+
+	t.Run("refuses content over MaxFileSize", func(t *testing.T) {
+		workDir := t.TempDir()
+		// Nested, so the check is also shown to run before the parent
+		// directories are made: a refused write leaves nothing behind.
+		path := "nested/huge.txt"
+
+		err := WriteFile(workDir, path, strings.Repeat("a", MaxFileSize+1))
+		if !errors.Is(err, ErrTooLarge) {
+			t.Fatalf("got %v, want ErrTooLarge", err)
+		}
+		if _, err := os.Stat(filepath.Join(workDir, "nested")); !os.IsNotExist(err) {
+			t.Error("a refused write left a directory behind")
+		}
+	})
+
+	t.Run("accepts content at MaxFileSize", func(t *testing.T) {
+		workDir := t.TempDir()
+
+		if err := WriteFile(workDir, "atlimit.txt", strings.Repeat("a", MaxFileSize)); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+	})
 }
 
 func TestDeleteFile(t *testing.T) {

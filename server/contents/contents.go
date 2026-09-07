@@ -18,6 +18,7 @@ import (
 var (
 	ErrNotFound    = errors.New("not found")
 	ErrInvalidPath = errors.New("invalid path")
+	ErrTooLarge    = errors.New("content too large")
 )
 
 // ValidatePath checks if path is safe and within workDir.
@@ -48,12 +49,14 @@ const (
 )
 
 const (
-	// MaxFileSize is the ceiling on the content a single file.get may carry.
-	// Above it the file is described but never read: the whole file is held in
-	// memory, base64 inflates it by 4/3, and the JSON response leaves as one
-	// WebSocket message. A connection carries one message at a time, so a few
-	// megabytes stall every request already in flight on it — the ceiling is
-	// about that connection as much as about memory.
+	// MaxFileSize is the ceiling on the content a single JSON-RPC message may
+	// carry, in either direction: what file.get will read out and what
+	// file.write will take in. One number because it is one constraint — the
+	// whole content is held in memory and travels as one WebSocket message
+	// (base64 inflating it by a further 4/3 on the way out), and a connection
+	// carries one message at a time, so a few megabytes stall every request
+	// already in flight on it. The ceiling is about that connection as much as
+	// about memory.
 	//
 	// The blocking is this connection's own, not the relay's: over a tunnel
 	// /ws gets a yamux stream to itself and yamux frames what it writes, so
@@ -357,6 +360,7 @@ func trimIncompleteRune(data []byte) []byte {
 // WriteFile writes content to a file within workDir.
 // Creates the file and parent directories if they don't exist.
 // Returns ErrInvalidPath for path traversal attempts, absolute paths, or empty paths.
+// Returns ErrTooLarge for content over MaxFileSize.
 func WriteFile(workDir, path, content string) error {
 	if path == "" {
 		return fmt.Errorf("%w: empty path", ErrInvalidPath)
@@ -364,6 +368,12 @@ func WriteFile(workDir, path, content string) error {
 
 	if err := ValidatePath(workDir, path); err != nil {
 		return err
+	}
+
+	// Enforced here rather than in the RPC handler so that both directions
+	// check the same constant at the same layer and cannot drift apart.
+	if len(content) > MaxFileSize {
+		return fmt.Errorf("%w: %d bytes, limit %d", ErrTooLarge, len(content), MaxFileSize)
 	}
 
 	fullPath := filepath.Join(workDir, path)

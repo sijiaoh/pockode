@@ -62,6 +62,10 @@ func (h *rpcMethodHandler) handleFileWrite(ctx context.Context, conn *jsonrpc2.C
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid path")
 			return
 		}
+		if errors.Is(err, contents.ErrTooLarge) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+			return
+		}
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}

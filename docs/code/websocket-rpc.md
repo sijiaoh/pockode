@@ -426,6 +426,22 @@ The tunnel between pockode and the cloud has its own, separate backoff, whose
 ceiling is tied to the cloud's reconnect grace period — see the cloud
 repository's relay design document.
 
+### Inbound Message Size
+
+`maxClientMessage` (`server/ws/rpc.go`) caps one message from the client at
+16 MiB. It is a backstop rather than a limit anyone is meant to meet: the one
+method that carries bulk by design is `file.write`, which has a ceiling of its
+own and answers with an error, and this sits far enough above that ceiling to
+stay out of its way. Both, and the arithmetic between them, are in
+[file.md](../file.md#operations). For methods that set no ceiling — a chat
+message, a work body — this is the only one that applies.
+
+Setting it at all was a fix, not a tuning choice. Left at coder/websocket's
+32 KiB default the transport limit sat *below* what `file.write` accepted — and
+a transport limit does not reply, it closes the connection with
+`StatusMessageTooBig`. Any limit here has to stay above every method's own, or
+it silently takes over from it.
+
 ### Compression
 
 `websocket.Accept` negotiates permessage-deflate with the browser
