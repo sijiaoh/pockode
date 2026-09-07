@@ -1,0 +1,73 @@
+name: Frontend
+
+# Every frontend project shares one pnpm workspace, so a change to the shared
+# package or to the root lockfile can break any of them: the filters below
+# cover the whole workspace rather than a single project's directory.
+# (The list is repeated because GitHub Actions does not support YAML anchors.)
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "web-cluster/**"
+      - "packages/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - ".node-version"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "web-cluster/**"
+      - "packages/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - ".node-version"
+      - ".github/workflows/frontend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [web, web-cluster]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+        working-directory: ${{ matrix.project }}
+
+      - name: Test
+        run: pnpm run test
+        working-directory: ${{ matrix.project }}
+
+      - name: Build
+        run: pnpm run build
+        working-directory: ${{ matrix.project }}

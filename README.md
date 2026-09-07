@@ -1,7 +1,7 @@
 # Pockode
 
 [![Server](https://github.com/sijiaoh/pockode/actions/workflows/server.yml/badge.svg)](https://github.com/sijiaoh/pockode/actions/workflows/server.yml)
-[![Web](https://github.com/sijiaoh/pockode/actions/workflows/web.yml/badge.svg)](https://github.com/sijiaoh/pockode/actions/workflows/web.yml)
+[![Frontend](https://github.com/sijiaoh/pockode/actions/workflows/frontend.yml/badge.svg)](https://github.com/sijiaoh/pockode/actions/workflows/frontend.yml)
 
 **Your dev machine in your pocket.**
 
