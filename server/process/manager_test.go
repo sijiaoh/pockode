@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +22,9 @@ type mockAgent struct {
 	mu         sync.Mutex
 	startCalls []startCall
 	sessions   map[string]*mockSession
+	// startWaiting makes every session it creates start out waiting on
+	// background work, so a test never races the reaper to set the flag.
+	startWaiting bool
 }
 
 type startCall struct {
@@ -44,6 +48,7 @@ func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.S
 	sess := &mockSession{
 		events: make(chan agent.AgentEvent, 10),
 	}
+	sess.waitingForBackground.Store(m.startWaiting)
 	m.sessions[opts.SessionID] = sess
 	return sess, nil
 }
@@ -65,7 +70,13 @@ type mockSession struct {
 	events   chan agent.AgentEvent
 	closed   bool
 	closedMu sync.Mutex
+
+	// waitingForBackground makes the mock an agent.BackgroundWaiter that is
+	// currently holding a turn open.
+	waitingForBackground atomic.Bool
 }
+
+func (s *mockSession) WaitingForBackgroundWork() bool { return s.waitingForBackground.Load() }
 
 // emit delivers an event as the agent would. Holding closedMu keeps a test that
 // races the idle reaper from panicking on a closed channel, reporting the
@@ -448,6 +459,31 @@ func TestManager_IdleReaper(t *testing.T) {
 	if !mock.session(t, "sess-1").isClosed() {
 		t.Error("expected process to be closed")
 	}
+}
+
+// A background wait produces no events for as long as it lasts, so the reaper's
+// only measure of liveness says the process is abandoned exactly when killing it
+// would destroy the work being waited for.
+func TestManager_IdleReaper_SparesABackgroundWait(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{startWaiting: true}
+	idleTimeout := 50 * time.Millisecond
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleTimeout)
+	defer m.Shutdown()
+
+	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	sess := mock.session(t, "sess-1")
+
+	// Long enough for several reaper passes to look at it and leave it alone.
+	time.Sleep(4 * idleTimeout)
+	if m.GetProcess("sess-1") == nil {
+		t.Fatal("process reaped while it was waiting on background work")
+	}
+
+	// The exemption is not open-ended: once the agent stops waiting, the process
+	// is reaped on the same stale timestamp it was spared on.
+	sess.waitingForBackground.Store(false)
+	waitUntil(t, "process reaped", func() bool { return m.GetProcess("sess-1") == nil })
 }
 
 func TestManager_IdleReaper_EmitsProcessStateEnded(t *testing.T) {

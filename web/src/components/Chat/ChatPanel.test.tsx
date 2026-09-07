@@ -1,8 +1,11 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useSessionStore } from "../../lib/sessionStore";
+import { useWorkStore } from "../../lib/workStore";
 import type { ServerNotification } from "../../types/message";
+import type { Work } from "../../types/work";
 import ChatPanel from "./ChatPanel";
 
 // Mock scrollTo (not available in jsdom)
@@ -24,6 +27,7 @@ const mockState = vi.hoisted(() => ({
 	questionResponse: vi.fn(() => Promise.resolve()),
 	chatMessagesSubscribe: vi.fn(),
 	chatMessagesUnsubscribe: vi.fn(),
+	startWork: vi.fn(() => Promise.resolve()),
 	onNotification: null as ((notification: ServerNotification) => void) | null,
 	mockHistory: [] as unknown[],
 	uuidCounter: 0,
@@ -46,6 +50,7 @@ vi.mock("../../lib/wsStore", () => {
 		},
 		chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
 		markSessionRead: vi.fn(() => Promise.resolve()),
+		startWork: mockState.startWork,
 	});
 
 	const mockStore = ((selector: (state: unknown) => unknown) => {
@@ -102,6 +107,8 @@ describe("ChatPanel", () => {
 		);
 		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
 		useSessionStore.setState({ sessions: [] });
+		useWorkStore.getState().reset();
+		useAgentRoleStore.getState().reset();
 	});
 
 	// Helper to wait for history loading to complete
@@ -110,6 +117,43 @@ describe("ChatPanel", () => {
 			expect(
 				screen.queryByLabelText("Loading conversation"),
 			).not.toBeInTheDocument();
+		});
+	};
+
+	// The work this session runs, as the global subscription would have it.
+	const seedWork = (
+		overrides: Partial<Work> & Pick<Work, "status">,
+		steps?: string[],
+	) => {
+		useAgentRoleStore.getState().setRoles([
+			{
+				id: "role-1",
+				name: "Engineer",
+				role_prompt: "",
+				steps,
+				created_at: "2024-01-01T00:00:00Z",
+				updated_at: "2024-01-01T00:00:00Z",
+			},
+		]);
+		useWorkStore.getState().setWorks([
+			{
+				id: "work-1",
+				type: "task",
+				agent_role_id: "role-1",
+				title: "Ship the status bar",
+				session_id: "test-session",
+				created_at: "2024-01-01T00:00:00Z",
+				updated_at: "2024-01-01T00:00:00Z",
+				...overrides,
+			},
+		]);
+	};
+
+	const setWorkStatus = (status: Work["status"]) => {
+		act(() => {
+			useWorkStore
+				.getState()
+				.updateWorks((works) => works.map((w) => ({ ...w, status })));
 		});
 	};
 
@@ -668,6 +712,158 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			expect(screen.getByRole("button", { name: "Claude" })).toBeDisabled();
+		});
+	});
+
+	// The top bar is the authoritative view of whether the task is still alive:
+	// it reads the live work store, never the transcript, so an interrupt shows up
+	// here immediately even in a session the user never scrolled up in.
+	describe("linked work status", () => {
+		it("shows the work status and step alongside the title", async () => {
+			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByRole("button", {
+					name: "In Progress, Ship the status bar, Step 2/3",
+				}),
+			).toBeInTheDocument();
+		});
+
+		it("follows the work store when the work is stopped", async () => {
+			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			setWorkStatus("stopped");
+
+			expect(
+				screen.getByRole("button", { name: /^Stopped, Ship the status bar/ }),
+			).toBeInTheDocument();
+		});
+
+		it("omits the step when the role defines none", async () => {
+			seedWork({ status: "in_progress", current_step: 0 });
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const button = screen.getByRole("button", {
+				name: /Ship the status bar/,
+			});
+			expect(button).toBeInTheDocument();
+			expect(button).not.toHaveTextContent(/Step/);
+		});
+
+		it("opens the work detail when clicked", async () => {
+			const user = userEvent.setup();
+			const onOpenWorkDetail = vi.fn();
+			seedWork({ status: "waiting", current_step: 0 }, ["a", "b"]);
+
+			render(
+				<ChatPanel {...defaultProps} onOpenWorkDetail={onOpenWorkDetail} />,
+			);
+			await waitForHistoryLoad();
+
+			await user.click(
+				screen.getByRole("button", { name: /Ship the status bar/ }),
+			);
+
+			expect(onOpenWorkDetail).toHaveBeenCalledWith("work-1");
+		});
+
+		it("shows nothing when no work is linked to the session", async () => {
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.queryByRole("button", { name: /Ship the status bar/ }),
+			).not.toBeInTheDocument();
+		});
+	});
+
+	// A work's life and its chat process are two separate clocks. The bug this
+	// guards against is reading one off the other: an interrupt stops the work
+	// without emitting any message, so a transcript that infers "still going"
+	// from its last banner is lying, and it lies exactly when the user most needs
+	// the truth.
+	describe("when a work and its chat process end at different times", () => {
+		const emit = (...notifications: ServerNotification[]) => {
+			act(() => {
+				for (const n of notifications) mockState.onNotification?.(n);
+			});
+		};
+
+		const autoContinue: ServerNotification = {
+			type: "message",
+			content: "Your session went idle but the work is still in_progress.",
+			origin: "system",
+			subtype: "auto_continue",
+			meta: {
+				work_id: "work-1",
+				work_type: "task",
+				title: "Ship the status bar",
+				step: { current: 2, total: 3 },
+			},
+		};
+
+		const card = (name: RegExp) => screen.getByRole("button", { name });
+
+		it("states the interrupt on the card, the strip and the turn, each in its own terms", async () => {
+			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			// The nudge that used to be the last thing in the transcript, reading
+			// like "I just started it up again".
+			emit(autoContinue);
+			// The user interrupts before the agent writes a word.
+			emit({ type: "interrupted" });
+
+			// The turn speaks only for the agent's output.
+			expect(screen.getByText("Interrupted")).toBeInTheDocument();
+			// The server takes a settle delay before it stops the work, and until it
+			// does, neither card nor strip pretends to know. Nothing spins meanwhile:
+			// in_progress is a resting state here, not a turn in flight.
+			expect(card(/^Task, In Progress, Step 2\/3/)).toBeInTheDocument();
+			expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+			setWorkStatus("stopped");
+
+			expect(card(/^Task, Stopped, Step 2\/3/)).toBeInTheDocument();
+			expect(
+				screen.getByRole("button", { name: "Restart" }),
+			).toBeInTheDocument();
+			expect(
+				screen.getByRole("button", { name: /^Stopped, Ship the status bar/ }),
+			).toBeInTheDocument();
+			// The auto-continue is history now, folded into the card rather than
+			// left at the tail of the transcript speaking for the task.
+			expect(screen.getAllByRole("button", { name: /^Task, / })).toHaveLength(
+				1,
+			);
+			expect(screen.getByText("Interrupted")).toBeInTheDocument();
+		});
+
+		it("lets the chat keep streaming after the work has closed", async () => {
+			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			emit(autoContinue, { type: "text", content: "wrapping up" });
+
+			setWorkStatus("closed");
+
+			expect(card(/^Task, Closed, 3\/3/)).toBeInTheDocument();
+			// The turn is untouched by the work reaching its end: still streaming,
+			// still spinning, still showing what the agent wrote.
+			expect(screen.getByText("wrapping up")).toBeInTheDocument();
+			expect(
+				screen.getByRole("status", { name: "Loading" }),
+			).toBeInTheDocument();
 		});
 	});
 

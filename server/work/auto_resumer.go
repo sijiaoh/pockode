@@ -52,6 +52,12 @@ type StepProvider interface {
 //
 // Step advance / reopen follow-ups: NotifyStepDone and NotifyReopen send the
 // next-step and reopen prompts after the MCP API mutates a work item in-process.
+//
+// None of the message-driven senders (step advance, reopen, child closure) check
+// whether the session is holding a turn open for background work; they send
+// immediately, exactly as a user typing during that wait would. That is a
+// deliberate trade-off, not an oversight — see docs/code/work-system.md,
+// "Follow-ups During a Background Wait".
 type AutoResumer struct {
 	workStore    Store
 	resolver     atomic.Pointer[SenderResolver]
@@ -97,6 +103,13 @@ func (r *AutoResumer) Stop() {
 	r.cancel()
 }
 
+// orphanedWorkComment explains a stop nobody asked for. Background tasks are
+// called out because they are the part a user is least likely to expect to have
+// died: they were started to outlive a turn, and they do — but not the process.
+const orphanedWorkComment = "Stopped automatically: the Pockode server restarted while this work was still open. " +
+	"No agent process survives a restart, so anything that was running for this work — including background tasks — " +
+	"is gone and no result is coming from it. Reopen the work to continue it."
+
 // StopOrphanedWork transitions all in_progress, needs_input, and waiting work items to stopped.
 // Call this at server startup before any sessions are created, so that work
 // items left running from a previous server run are properly marked.
@@ -113,8 +126,13 @@ func (r *AutoResumer) StopOrphanedWork() {
 		}
 		if err := r.stopWork(w.ID); err != nil {
 			slog.Warn("failed to stop orphaned work", "workId", w.ID, "error", err)
-		} else {
-			slog.Info("stopped orphaned work on startup", "workId", w.ID, "sessionId", w.SessionID)
+			continue
+		}
+		slog.Info("stopped orphaned work on startup", "workId", w.ID, "sessionId", w.SessionID)
+		// Say why, or the work is simply found stopped with no explanation and
+		// no hint that whatever the agent had running is gone too.
+		if _, err := r.workStore.AddComment(r.ctx, w.ID, orphanedWorkComment); err != nil {
+			slog.Warn("failed to explain why orphaned work was stopped", "workId", w.ID, "error", err)
 		}
 	}
 }
@@ -176,6 +194,22 @@ func (r *AutoResumer) getStepProvider() StepProvider {
 		return *p
 	}
 	return nil
+}
+
+// stepCount is the number of steps the work's role defines, or 0 when that is
+// unknown. Unknown and stepless are deliberately the same answer: both mean
+// "no step context to report", and a missing provider must not block a message.
+func (r *AutoResumer) stepCount(w Work) int {
+	sp := r.getStepProvider()
+	if sp == nil {
+		return 0
+	}
+	steps, err := sp.GetSteps(w.AgentRoleID)
+	if err != nil {
+		slog.Warn("failed to get steps for message meta", "agentRoleId", w.AgentRoleID, "error", err)
+		return 0
+	}
+	return len(steps)
 }
 
 // HandleProcessStateChange syncs work status with process lifecycle:
@@ -314,7 +348,7 @@ func (r *AutoResumer) handleProcessRunning(sessionID string) {
 		return
 	}
 
-	if err := r.workStore.Reactivate(r.ctx, w.ID); err != nil {
+	if err := r.workStore.MarkRunning(r.ctx, w.ID); err != nil {
 		if r.ctx.Err() == nil {
 			slog.Warn("failed to reactivate stopped work on process running", "workId", w.ID, "error", err)
 		}
@@ -370,19 +404,17 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string, activation uint64
 
 	// Build message with step context if available.
 	var msg string
-	var meta *agent.MessageMeta
+	totalSteps := 0
 	if sp := r.getStepProvider(); sp != nil {
 		if steps, err := sp.GetSteps(w.AgentRoleID); err == nil && len(steps) > 0 {
 			msg = BuildAutoContinuationMessageWithSteps(*w, steps, w.CurrentStep)
-			meta = NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
+			totalSteps = len(steps)
 		}
 	}
 	if msg == "" {
 		msg = BuildAutoContinuationMessage(*w)
 	}
-	if meta == nil {
-		meta = NewMessageMeta(w.Title, 0, 0)
-	}
+	meta := NewMessageMeta(*w, w.CurrentStep+1, totalSteps)
 
 	if err := sender.SendSystemMessage(r.ctx, sessionID, msg, MessageSubtypeAutoContinue, meta); err != nil {
 		if r.ctx.Err() != nil {
@@ -478,7 +510,7 @@ func (r *AutoResumer) sendStepAdvance(w Work, sp StepProvider) {
 	r.retryMu.Unlock()
 
 	msg := BuildStepAdvanceMessage(w, steps[w.CurrentStep], w.CurrentStep+1, len(steps))
-	meta := NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
+	meta := NewMessageMeta(w, w.CurrentStep+1, len(steps))
 	if err := sender.SendSystemMessage(r.ctx, w.SessionID, msg, MessageSubtypeStepAdvance, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return
@@ -503,7 +535,8 @@ func (r *AutoResumer) sendReopen(w Work) {
 	r.retryMu.Unlock()
 
 	msg := BuildReopenMessage(w)
-	if err := sender.SendSystemMessage(r.ctx, w.SessionID, msg, MessageSubtypeReopen, NewMessageMeta(w.Title, 0, 0)); err != nil {
+	meta := NewMessageMeta(w, w.CurrentStep+1, r.stepCount(w))
+	if err := sender.SendSystemMessage(r.ctx, w.SessionID, msg, MessageSubtypeReopen, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
@@ -545,7 +578,7 @@ func (r *AutoResumer) handleParentReactivation(child Work) {
 
 	// Handle waiting parent: transition to in_progress
 	if parent.Status == StatusWaiting {
-		if err := r.workStore.ResumeFromWaiting(r.ctx, parent.ID); err != nil {
+		if err := r.workStore.MarkRunning(r.ctx, parent.ID); err != nil {
 			if r.ctx.Err() != nil {
 				return
 			}
@@ -561,7 +594,11 @@ func (r *AutoResumer) handleParentReactivation(child Work) {
 
 	// Send child completion message to parent (StatusInProgress, StatusNeedsInput, StatusWaiting->InProgress, StatusStopped)
 	msg := BuildChildCompletionMessage(parent, child.Title, child.ID)
-	if err := sender.SendSystemMessage(r.ctx, parent.SessionID, msg, MessageSubtypeChildDone, NewMessageMeta(parent.Title, 0, 0)); err != nil {
+	// Addressed to the parent's session, so the meta describes the parent; the
+	// child rides along in its own field.
+	meta := NewMessageMeta(parent, parent.CurrentStep+1, r.stepCount(parent))
+	meta.Child = &agent.ChildInfo{ID: child.ID, Title: child.Title}
+	if err := sender.SendSystemMessage(r.ctx, parent.SessionID, msg, MessageSubtypeChildDone, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}

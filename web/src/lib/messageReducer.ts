@@ -7,14 +7,17 @@ import type {
 	PermissionUpdate,
 	QuestionStatus,
 	ServerNotification,
+	StepDividerMessage,
 	SystemMessageMeta,
 	UserMessage,
+	WorkCardMessage,
+	WorkTimelineEntry,
 } from "../types/message";
 import { generateUUID } from "../utils/uuid";
 
 // Legacy history recorded system messages with origin "work" before the
 // concept was renamed to "system". Map the old value so old sessions still
-// render as collapsed system messages.
+// take the system path (a standalone banner, since they predate meta.work_id).
 function normalizeOrigin(raw: unknown): MessageOrigin | undefined {
 	if (raw === "system" || raw === "work") return "system";
 	if (raw === "user") return "user";
@@ -291,6 +294,19 @@ export function applyServerEvent(
 ): Message[] {
 	// User message or system-driven message (history replay or broadcast)
 	if (event.type === "message") {
+		// Aggregation lives here rather than on a history-only path so that replay
+		// and live streaming cannot drift apart: replayHistory feeds this same
+		// function. Messages predating meta.work_id fall through to the standalone
+		// banner they were recorded for.
+		if (event.origin === "system" && event.meta?.work_id) {
+			return applyWorkCardMessage(
+				messages,
+				event.content,
+				event.meta.work_id,
+				event.subtype,
+				event.meta,
+			);
+		}
 		return applyUserMessage(messages, event.content, {
 			source: event.origin,
 			subtype: event.subtype,
@@ -404,16 +420,15 @@ export function applyServerEvent(
 		updated = expirePendingDialogs(updated);
 	}
 
-	// After a terminal event, remove any orphan empty sending messages.
+	// A terminal event settles every bubble's fate, so this is where an empty one
+	// stops being a placeholder and becomes a blank box.
 	if (isTerminalEvent) {
-		updated = updated.filter(
-			(m) =>
-				!(
-					m.role === "assistant" &&
-					m.status === "sending" &&
-					m.parts.length === 0
-				),
-		);
+		updated = updated.filter((m) => {
+			if (m.role !== "assistant" || m.parts.length > 0) return true;
+			// Orphan sends and turns that ended having produced nothing: no content,
+			// and after this event none is coming.
+			return m.status !== "sending" && !isEmptyPlaceholder(m);
+		});
 	}
 
 	return updated;
@@ -575,21 +590,114 @@ interface UserMessageOptions {
 	meta?: SystemMessageMeta;
 }
 
+/**
+ * True for an assistant bubble that would render as an empty box: it holds no
+ * content, and its status has nothing to say either.
+ *
+ * `interrupted`, `error` and `process_ended` are deliberately excluded — those
+ * carry their whole message in the status line, so a missing body is exactly
+ * when they matter most. Dropping them would hide an aborted turn from the
+ * user.
+ */
+function isEmptyPlaceholder(message: Message): boolean {
+	return (
+		message.role === "assistant" &&
+		message.parts.length === 0 &&
+		message.status === "complete"
+	);
+}
+
+// Closes out whatever the agent was mid-way through, so an incoming message
+// starts a fresh turn instead of appending to the previous one. Every message
+// leaves a placeholder behind for the reply it provokes; the ones the agent
+// never wrote into are dropped here rather than left as blank bubbles.
+export function closePreviousTurn(messages: Message[]): Message[] {
+	return messages
+		.map((m): Message => {
+			if (
+				m.role === "assistant" &&
+				(m.status === "sending" || m.status === "streaming")
+			) {
+				return { ...m, status: "complete" };
+			}
+			return m;
+		})
+		.filter((m) => !isEmptyPlaceholder(m));
+}
+
+/**
+ * Folds a system message into its work's card, creating the card at this
+ * position the first time the work is seen.
+ *
+ * A system message drives the agent, so it keeps the surrounding turn handling
+ * of a user message: finalize the running assistant, then leave a placeholder
+ * for the reply it provokes.
+ */
+function applyWorkCardMessage(
+	messages: Message[],
+	content: string,
+	workId: string,
+	subtype: string | undefined,
+	meta: SystemMessageMeta,
+): Message[] {
+	const entry: WorkTimelineEntry = {
+		id: generateUUID(),
+		subtype,
+		content,
+		step: meta.step,
+		child: meta.child,
+	};
+
+	const updated = closePreviousTurn(messages);
+
+	let anchorIndex = -1;
+	let anchor: WorkCardMessage | undefined;
+	for (let i = updated.length - 1; i >= 0; i--) {
+		const m = updated[i];
+		if (m.role === "work" && m.workId === workId) {
+			anchorIndex = i;
+			anchor = m;
+			break;
+		}
+	}
+
+	if (anchor) {
+		// Reuse the card's id: MessageList keys on it and does not virtualize, so
+		// a fresh id would remount the card and throw away what the user expanded.
+		updated[anchorIndex] = { ...anchor, entries: [...anchor.entries, entry] };
+	} else {
+		updated.push({
+			id: generateUUID(),
+			role: "work",
+			workId,
+			workType: meta.work_type,
+			title: meta.title,
+			entries: [entry],
+			createdAt: new Date(),
+		});
+	}
+
+	if (subtype === "step_advance" && meta.step) {
+		const divider: StepDividerMessage = {
+			id: generateUUID(),
+			role: "step_divider",
+			workId,
+			step: meta.step,
+			createdAt: new Date(),
+		};
+		updated.push(divider);
+	}
+
+	return [...updated, createAssistantMessage()];
+}
+
 // Finalizes any streaming assistant before adding new user message
 export function applyUserMessage(
 	messages: Message[],
 	content: string,
 	options?: UserMessageOptions,
 ): Message[] {
-	const finalized = messages.map((m): Message => {
-		if (
-			m.role === "assistant" &&
-			(m.status === "sending" || m.status === "streaming")
-		) {
-			return { ...m, status: "complete" };
-		}
-		return m;
-	});
+	const finalized = closePreviousTurn(messages);
 
 	const userMessage: UserMessage = {
 		id: generateUUID(),

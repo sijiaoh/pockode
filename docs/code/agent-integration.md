@@ -456,6 +456,7 @@ has no counterpart because its threads cannot outlive the CLI process at all (se
 | `control_request` | anything else | `WarningEvent` + a `control_response` error (the CLI blocks until answered) |
 | `control_response` | — | `InterruptedEvent` (only for interrupts we sent) |
 | `control_cancel_request` | — | `RequestCancelledEvent` |
+| `system` | `background_tasks_changed` | (dropped — updates the live task set, see [Background Waits](#background-waits)) |
 | `system` | `local_command_output` | `CommandOutputEvent` |
 | `system` | allowlisted subtypes | `SystemEvent` |
 | `system` | other | (dropped — internal bookkeeping) |
@@ -509,7 +510,133 @@ The `result` message is classified in this order:
    predate the field fall back to matching `Request was aborted` in `errors`.
 2. `is_error` → `ErrorEvent` carrying `errors` (or `result`, which is where a
    `success` subtype flagged `is_error` puts its message).
-3. otherwise → `DoneEvent`.
+3. background tasks still running → nothing at all (see
+   [Background Waits](#background-waits)).
+4. otherwise → `DoneEvent`.
+
+### Background Waits
+
+A turn that started a background task (`run_in_background`) ends with an ordinary
+`result` frame, and the CLI then resumes output **on its own** when the task
+finishes — no input from the host. Both frames of such a turn are identical in
+every field (measured on claude 2.1.263: `subtype: success`, `is_error: false`,
+`terminal_reason: completed`), so nothing in the ending itself says whether it is
+the last one.
+
+Pockode treats that pause as one long thought rather than as a new state: the
+adapter swallows the pseudo-ending, no `AwaitsUserInput` event is produced, and
+everything downstream — process state, work status, the spinner and Stop button,
+unread marks — keeps behaving as it does mid-turn without knowing why. That is
+possible because the only thing that acts on a `DoneEvent` is the
+`AwaitsUserInput` branch of `Process.streamEvents`, and it is why no
+`ProcessState` or work state was added for waiting: the distinction is needed in
+exactly two places inside the server, the idle reaper and the fallback timer
+below. The `agent.Session` contract still holds — a turn ends
+with exactly one `AwaitsUserInput` event — it just says nothing about how long a
+turn may stay silent.
+
+**Tracking what is live.** The only usable signal is `system` /
+`background_tasks_changed`, whose payload is every live task after the change.
+It is a *level*, not an edge — the CLI's own guidance is to replace your set with
+each payload rather than pair `task_started` / `task_notification` bookends, so a
+missed bookend cannot wedge a stale indicator — and it is per-process: nothing is
+emitted at startup, so `backgroundTaskTracker` is created with the process and
+starts empty. Tasks flagged `ambient` (housekeeping, live-update watchers) are
+excluded, because the CLI tells hosts to keep them out of activity indicators and
+they must not hold a turn open either. The set is live state and never enters an
+event record or the history: a snapshot of it becomes a lie the moment a task
+finishes. A payload the parser cannot read **empties** the set — an empty set only
+costs the swallowing (the turn ends the way it did before this existed, noisily
+but recoverably), while a stale non-empty one would hold the turn open with
+nothing left to clear it.
+
+**What gets swallowed.** Only a normal ending. The abort and `is_error` branches
+run first and still produce `InterruptedEvent` / `ErrorEvent`, because both are
+real endings. Narrowing further — to `terminal_reason == "completed"` — would be
+wrong: besides `completed`, the reasons that survive both branches are
+`hook_stopped`, `tool_deferred`, `background_requested` and `stop_hook_prevented`,
+and the CLI itself describes turns ending via the first three as ones that "may
+only be answered on continuation/resume" — to-be-continued by construction, the
+same class the fourth belongs to. The reasons that really are failures
+(`max_turns`, `budget_exhausted`, the API and model errors) are all built with
+`is_error: true` and never reach the swallow.
+
+**The fallback timer** (`background_wait.go`) is what keeps swallowing from being
+open-ended: the ending is held, not discarded, and delivered anyway once a budget
+runs out. Two cases make an unbounded wait wrong — session-scoped monitors that
+never finish, and a model that started a task and is genuinely done. The budget
+is 30 minutes, doubling per extension to a cap of 120, mirroring the CLI's own
+background-task budget.
+
+- It bounds a **silent** wait, not a turn. Any event indicating agent activity
+  pushes the deadline out, because once the task finishes the CLI resumes and may
+  work for a long time before the next result frame; firing then would mark a
+  visibly streaming session idle, nudge it mid-turn, and end the same turn twice.
+- Any ending that does reach the user (`AwaitsUserInput`) disarms it, so a
+  held-back ending is never delivered on top of a real one. It is deliberately
+  *not* disarmed when the live set drains — that is exactly when the CLI is
+  supposed to resume by itself, and if it does not, this timer is the only thing
+  left that can end the turn.
+- Firing does **not** reset the extension count. Reaching the budget means nothing
+  was resolved, so if the agent goes back to waiting after the nudge that follows,
+  the next wait gets the longer budget instead of restarting the same 30-minute
+  cycle.
+- On expiry it emits a `WarningEvent` and then the `DoneEvent`, and everything
+  falls back to the behaviour it had before background waits existed: idle, then
+  the usual auto-continuation.
+
+**Telling the agent, not just the user.** A warning in the transcript is only half
+of "no silent failures": the agent is about to be nudged and would have no idea
+Pockode stopped waiting for its task. `cliSession.queueNote` holds a one-shot
+explanation that `SendMessage` prefixes to the **next** prompt inside a
+`<system-reminder>` block. The wrapping happens at the CLI boundary only, so the
+user's message is stored in history as written and the frontend needs no
+knowledge of it. The lost-task report below uses the same channel.
+
+**The idle reaper exemption.** A process waiting on background work looks exactly
+like an abandoned one, since the wait produces no events to refresh `lastActive`;
+reaping it would kill the very tasks being waited for, with no explanation
+anywhere. `agent.BackgroundWaiter` is the optional interface the reaper
+type-asserts for (Codex has no such concept and simply does not implement it).
+The predicate is **"is the fallback armed"**, not "is the live set non-empty": the
+live set only shrinks when the CLI sends another frame, so after a silent or dead
+process it would stay non-empty forever and the exemption would never expire.
+Armed means precisely "Pockode is holding an ending back", it clears itself when
+the budget runs out, and the `DoneEvent` delivered then refreshes `lastActive`,
+giving the process an ordinary new idle window.
+
+Stopping during a wait needed no compensation: the CLI answers an `interrupt`
+control request within about a second even with no active turn (measured), which
+produces an `InterruptedEvent` through the normal path and disarms the fallback.
+
+**Tasks lost with the process** (`background_loss.go`) are reported at the *next*
+start of that session, not when they die. Background tasks live inside the CLI
+process, so an idle reap, a stop, or a server restart takes them along — and at
+that moment there is nowhere to say so: the event channel and the history writer
+are closing behind the process, and on shutdown the whole write path is going
+away. So the count is persisted to the session directory and turned into a
+`WarningEvent` plus a queued note when the session next starts, which is both the
+one delivery that works for every way a process can die and the moment it matters
+— when the conversation that was waiting continues. Two details carry that
+guarantee: the record is written synchronously in `Close` (the last point a server
+shutdown waits for) with the streaming goroutine covering only deaths the process
+inflicted on itself, and reading is split into `peek` / `clear` so the record is
+dropped only after the explanation actually made it onto the event channel — a
+record consumed before delivery would be a silent failure about a silent failure.
+
+The CLI's own recovery path (`CLAUDE_CODE_RESUME_INTERRUPTED_TURN`, which reads
+`orphaned_background_tasks_pending_notification` on resume) was evaluated and not
+adopted: the same switch also replays or synthesizes a continuation prompt, which
+would collide with the AutoResumer's own nudge and corrupt its retry accounting,
+and its benefit — telling the agent — is already covered by the queued note, while
+the user side would still be unexplained.
+
+What this means on the work side is covered there: why the work item stays
+`in_progress` and why nothing nudges it
+([Background Waits and the Work Item](work-system.md#background-waits-and-the-work-item)),
+and why messages sent through the other, non-idle paths are *not* deferred until
+the wait ends
+([Follow-ups During a Background Wait](work-system.md#follow-ups-during-a-background-wait)).
 
 ### Stream Parsing Implementation
 
@@ -940,6 +1067,10 @@ func (m *Manager) runIdleReaper() {
 
 **Design Decision**: Check frequency is 1/4 of timeout duration, balancing response speed with CPU overhead.
 
+A process is spared while it is holding a turn open for background work, which is
+the one case where no events for hours does not mean abandoned; see
+[Background Waits](#background-waits).
+
 ## Session Management
 
 ### Session Metadata
@@ -1129,6 +1260,7 @@ The following conditions send an `ErrorEvent` and end the session:
 | Event types | `server/agent/event.go` |
 | Event serialization | `server/agent/history.go` |
 | Claude implementation | `server/agent/claude/claude.go` |
+| Claude background waits | `server/agent/claude/background_tasks.go`, `background_wait.go`, `background_loss.go` |
 | Codex implementation | `server/agent/codex/codex.go` |
 | Chat client | `server/chat/client.go` |
 | Process management | `server/process/manager.go` |

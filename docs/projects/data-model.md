@@ -182,16 +182,16 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 
 | Method        | Signature                              | Behavior                                                         |
 | ------------- | -------------------------------------- | ---------------------------------------------------------------- |
-| Start         | `(ctx, id, sessionID) → (Work, error)` | Transitions to `in_progress`, sets sessionID                    |
-| Stop          | `(ctx, id) → error`                    | Transitions `in_progress`/`needs_input` → `stopped`             |
-| StepDone      | `(ctx, id, totalSteps) → (bool, error)` | Work items advance to the next step or close when no steps remain |
-| MarkNeedsInput| `(ctx, id) → error`                    | Transitions `in_progress` → `needs_input`                       |
-| MarkWaiting   | `(ctx, id) → error`                    | Transitions `in_progress` → `waiting`                           |
-| Resume        | `(ctx, id) → error`                    | Transitions `needs_input` → `in_progress`                       |
-| ResumeFromWaiting | `(ctx, id) → error`                | Transitions `waiting` → `in_progress`                           |
-| Reactivate    | `(ctx, id) → error`                    | Transitions `stopped` → `in_progress` (preserves sessionID)     |
+| Start         | `(ctx, id, sessionID) → (Work, error)` | Transitions to `in_progress`, sets sessionID; rejected when already `in_progress` or `closed` |
+| Stop          | `(ctx, id) → error`                    | Transitions any live status → `stopped`                         |
+| StepDone      | `(ctx, id, totalSteps) → (bool, error)` | Work items advance to the next step or close when no steps remain; an advance also restores `in_progress` |
+| MarkNeedsInput| `(ctx, id) → error`                    | Transitions any live status → `needs_input`                     |
+| MarkWaiting   | `(ctx, id) → error`                    | Transitions any live status → `waiting`                         |
+| MarkRunning   | `(ctx, id) → error`                    | Transitions any live status → `in_progress` (preserves sessionID) |
 | Reopen        | `(ctx, id) → error`                    | Transitions `closed` → `in_progress` (reopens closed item)      |
-| RollbackStart | `(ctx, id, wasRestart) → error`        | Reverts a failed Start (fresh → `open`; restart → `stopped`)   |
+| RollbackStart | `(ctx, id, wasRestart) → error`        | Reverts a failed Start from `in_progress` (fresh → `open`; restart → `stopped`) |
+
+"live" is any of `in_progress` / `needs_input` / `waiting` / `stopped` — see [workflow-engine.md](workflow-engine.md#status-transitions).
 
 **Comments and events:**
 

@@ -9,38 +9,60 @@ var validParents = map[WorkType][]WorkType{
 	WorkTypeTask:  {WorkTypeStory},
 }
 
-// validTransitions defines the allowed status transitions.
-// closed → in_progress is handled exclusively by Reopen.
-var validTransitions = map[WorkStatus][]WorkStatus{
-	StatusOpen:       {StatusInProgress},
-	StatusInProgress: {StatusOpen, StatusNeedsInput, StatusWaiting, StatusStopped, StatusClosed}, // open: rollback on failed start
-	StatusNeedsInput: {StatusInProgress, StatusStopped},                                          // user confirms → resume; stop button
-	StatusWaiting:    {StatusInProgress, StatusStopped},                                          // child completes or user input → resume; stop button
-	StatusStopped:    {StatusInProgress},                                                         // restart from stopped
-	StatusClosed:     {},                                                                         // terminal (re-activation via Reopen)
+var (
+	errWorkNotStarted = fmt.Errorf("%w: work has not been started; start it first", ErrInvalidWork)
+	errWorkClosed     = fmt.Errorf("%w: work is closed; reopen it to continue", ErrInvalidWork)
+	errWorkRunning    = fmt.Errorf("%w: work is already running", ErrInvalidWork)
+)
+
+// A work's status answers two independent questions, and the two guards below
+// are split along that line.
+//
+// "Might an agent session be running?" — in_progress, needs_input, waiting and
+// stopped all say yes; they differ only in what the session is doing. All four
+// are derived from process events and go stale (a crashed CLI, an orphaned
+// session, a dropped event), and none of them says how far the work got — that
+// is CurrentStep. So they must never gate progress: an agent able to call
+// step_done is running whatever its status claims. Gating on them is how a work
+// that had merely gone stopped became impossible to advance or finish.
+//
+// "Is the work outside the agent lifecycle?" — open (no session was ever
+// created) and closed (deliberately finished) say yes, and each has its own way
+// back in, Start and Reopen respectively. These two are the only real gates.
+//
+// Both guards therefore name the statuses they reject and admit anything else.
+// That is deliberate: a status nobody recognises — a hand-edited or corrupted
+// index — must not be one more way to lock a work item out of its own agent.
+
+// ValidateProgress checks that a work item can be moved along by its agent:
+// step_done, work_wait, work_needs_input, stopping, or a liveness sync.
+func ValidateProgress(status WorkStatus) error {
+	switch status {
+	case StatusOpen:
+		return errWorkNotStarted
+	case StatusClosed:
+		return errWorkClosed
+	}
+	return nil
+}
+
+// ValidateStartable checks that an agent session can be started for a work
+// item. Unlike ValidateProgress it admits open — that is the fresh-start case —
+// and rejects in_progress, so a running work is never started a second time.
+// That rejection is also what resolves concurrent Claims to a single winner.
+func ValidateStartable(status WorkStatus) error {
+	switch status {
+	case StatusInProgress:
+		return errWorkRunning
+	case StatusClosed:
+		return errWorkClosed
+	}
+	return nil
 }
 
 func ValidateType(t WorkType) bool {
 	_, ok := validParents[t]
 	return ok
-}
-
-func ValidateTransition(from, to WorkStatus) bool {
-	for _, allowed := range validTransitions[from] {
-		if allowed == to {
-			return true
-		}
-	}
-	return false
-}
-
-// validNextStatuses returns the statuses that a work item can transition to
-// from the given status.
-func validNextStatuses(from WorkStatus) []WorkStatus {
-	next := validTransitions[from]
-	out := make([]WorkStatus, len(next))
-	copy(out, next)
-	return out
 }
 
 // ValidateParent checks that the parent is a valid type for the given child type.

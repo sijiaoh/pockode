@@ -61,9 +61,9 @@ The `message` event covers both messages a user types and the automatic prompts 
 |-------|---------|
 | `Origin` | `""`/`"user"` = user-typed; `"system"` = Pockode system automation (currently the Work system) |
 | `Subtype` | For system messages, which prompt produced it (`kickoff`, `restart`, …) |
-| `Meta` | For system messages, a `{title, step?}` summary for the collapsed UI bar |
+| `Meta` | For system messages, a `{work_id, work_type, title, step?, child?}` summary the UI renders from instead of the prompt body |
 
-**Why an origin field, not a new `EventType`**: user and system messages are the same kind of thing — text sent to the agent on stdin, replayed identically on resume. A distinct event type would fork the send/persist/replay path for no behavioral gain. All three fields are `omitempty`, so history written before they existed loads as a plain user message — backward compatible by omission. The producing side (subtype catalog, tagging call sites, frontend collapse rendering, and legacy-value normalization) is documented in [code/work-system.md](code/work-system.md#system-origin-message-tagging).
+**Why an origin field, not a new `EventType`**: user and system messages are the same kind of thing — text sent to the agent on stdin, replayed identically on resume. A distinct event type would fork the send/persist/replay path for no behavioral gain. All three fields are `omitempty`, so history written before they existed loads as a plain user message — backward compatible by omission. The producing side (subtype catalog, tagging call sites, and legacy-value normalization) and how the frontend renders the result are documented in [code/work-system.md](code/work-system.md#work-messages-in-chat).
 
 #### Question Answers (`question_response`)
 

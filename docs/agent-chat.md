@@ -38,7 +38,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 5. Events are broadcast to all WebSocket subscribers and persisted to session history
 6. On `Done` event, process transitions to `idle`
 
-Besides user-typed messages, the Work system pushes automatic prompts to the same session via `Client.SendSystemMessage`; these are tagged `origin: "system"` so the frontend renders them as a collapsed banner rather than a user bubble. See [agent-event.md](agent-event.md#message-origin-user-vs-system) and [code/work-system.md](code/work-system.md#system-origin-message-tagging).
+Besides user-typed messages, the Work system pushes automatic prompts to the same session via `Client.SendSystemMessage`; these are tagged `origin: "system"` with a `meta` summary naming the work, so the frontend can fold them into that work's progress card instead of rendering user bubbles. See [agent-event.md](agent-event.md#message-origin-user-vs-system) and [code/work-system.md](code/work-system.md#work-messages-in-chat).
 
 ## Agent Events
 

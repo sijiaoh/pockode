@@ -1,7 +1,11 @@
-import { render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { useLayoutEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ServerNotification } from "../types/message";
+import type {
+	AssistantMessage,
+	Message,
+	ServerNotification,
+} from "../types/message";
 import { useChatMessages } from "./useChatMessages";
 
 const mockState = vi.hoisted(() => ({
@@ -90,5 +94,44 @@ describe("useChatMessages", () => {
 		await waitFor(() => {
 			expect(committed.at(-1)?.messageCount).toBeGreaterThan(0);
 		});
+	});
+
+	// Sending locally is its own entry point — it appends straight to the list
+	// rather than going through applyServerEvent — so the rule that an unanswered
+	// placeholder is not left behind has to hold here too, or the plain user path
+	// would keep the blank bubbles the system-message path no longer has.
+	it("leaves no blank bubble behind when the previous turn was never answered", async () => {
+		// A session whose process died right after the message was persisted: the
+		// transcript ends on a placeholder the agent never wrote into.
+		mockState.chatMessagesSubscribe.mockImplementation(async () => ({
+			id: "sub-1",
+			initial: {
+				history: [{ type: "message", content: "Anyone there?" }],
+				state: "ended",
+				mode: "default",
+				agent_type: "claude",
+			},
+		}));
+
+		let latest: Message[] = [];
+		let send: (content: string) => Promise<boolean> = async () => false;
+		function SendProbe() {
+			const { messages, sendUserMessage } = useChatMessages({
+				sessionId: "s1",
+			});
+			latest = messages;
+			send = sendUserMessage;
+			return null;
+		}
+
+		render(<SendProbe />);
+		await waitFor(() => expect(latest).toHaveLength(2));
+
+		await act(async () => {
+			await send("Still there?");
+		});
+
+		expect(latest.map((m) => m.role)).toEqual(["user", "user", "assistant"]);
+		expect((latest.at(-1) as AssistantMessage).status).toBe("sending");
 	});
 });

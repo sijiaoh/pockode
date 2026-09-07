@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, UserMessage } from "../types/message";
+import type {
+	AssistantMessage,
+	ContentPart,
+	StepDividerMessage,
+	UserMessage,
+	WorkCardMessage,
+} from "../types/message";
 import {
 	applyEventToParts,
 	applyServerEvent,
@@ -9,10 +15,18 @@ import {
 	replayHistory,
 } from "./messageReducer";
 
-// Mock UUID for deterministic tests
-vi.mock("../utils/uuid", () => ({
-	generateUUID: () => "test-uuid",
-}));
+// Deterministic but distinct ids: whether a message keeps its id or gets a
+// fresh one is itself under test (a new id would remount the work card).
+const uuidMock = vi.hoisted(() => {
+	let counter = 0;
+	return {
+		generateUUID: () => `test-uuid-${++counter}`,
+		reset: () => {
+			counter = 0;
+		},
+	};
+});
+vi.mock("../utils/uuid", () => ({ generateUUID: uuidMock.generateUUID }));
 
 // Shared test fixtures
 const sampleQuestions = [
@@ -387,10 +401,12 @@ describe("messageReducer", () => {
 	});
 
 	describe("applyServerEvent", () => {
-		const createStreamingMessage = (): AssistantMessage => ({
+		const createStreamingMessage = (
+			parts: ContentPart[] = [],
+		): AssistantMessage => ({
 			id: "msg-1",
 			role: "assistant",
-			parts: [],
+			parts,
 			status: "streaming",
 			createdAt: new Date(),
 		});
@@ -428,9 +444,13 @@ describe("messageReducer", () => {
 			event,
 			expectedStatus,
 		}) => {
-			const initial = [createStreamingMessage()];
+			// With content: a turn that ends on `done` having written nothing is
+			// dropped rather than kept as a blank bubble, which is its own test.
+			const initial = [
+				createStreamingMessage([{ type: "text", content: "Answer" }]),
+			];
 			const messages = applyServerEvent(initial, event);
-			expect(messages[0].status).toBe(expectedStatus);
+			expect((messages[0] as AssistantMessage).status).toBe(expectedStatus);
 		});
 
 		it("marks message as error with error message", () => {
@@ -1033,7 +1053,7 @@ describe("messageReducer", () => {
 				const messages = applyServerEvent([a1, a2], { type: "done" });
 				expect(messages).toHaveLength(1); // a1 removed
 				expect(messages[0].id).toBe("a2");
-				expect(messages[0].status).toBe("complete");
+				expect((messages[0] as AssistantMessage).status).toBe("complete");
 			});
 
 			it("removes empty sending and creates new message when last is not active", () => {
@@ -1093,7 +1113,7 @@ describe("messageReducer", () => {
 				});
 				expect(messages).toHaveLength(3);
 				expect(messages[0].role).toBe("assistant");
-				expect(messages[0].status).toBe("complete"); // finalized
+				expect((messages[0] as AssistantMessage).status).toBe("complete"); // finalized
 				expect(messages[1].role).toBe("user");
 				expect((messages[1] as UserMessage).content).toBe(
 					"New message from another tab",
@@ -1159,6 +1179,309 @@ describe("messageReducer", () => {
 		});
 	});
 
+	describe("work card aggregation", () => {
+		const systemEvent = (
+			content: string,
+			subtype: string,
+			meta: Record<string, unknown>,
+		) =>
+			normalizeEvent({
+				type: "message",
+				content,
+				origin: "system",
+				subtype,
+				meta,
+			});
+
+		const kickoff = systemEvent("kickoff prompt", "kickoff", {
+			work_id: "work-1",
+			work_type: "task",
+			title: "Ship the card",
+			step: { current: 1, total: 3 },
+		});
+
+		const stepAdvance = systemEvent("next step prompt", "step_advance", {
+			work_id: "work-1",
+			work_type: "task",
+			title: "Ship the card",
+			step: { current: 2, total: 3 },
+		});
+
+		it("anchors a card at the work's first system message", () => {
+			const messages = applyServerEvent([], kickoff);
+
+			const card = messages[0] as WorkCardMessage;
+			expect(card.role).toBe("work");
+			expect(card.workId).toBe("work-1");
+			expect(card.workType).toBe("task");
+			expect(card.title).toBe("Ship the card");
+			expect(card.entries).toHaveLength(1);
+			expect(card.entries[0]).toMatchObject({
+				subtype: "kickoff",
+				content: "kickoff prompt",
+				step: { current: 1, total: 3 },
+			});
+			// The system message still drives the agent, so a reply placeholder
+			// follows it exactly as it would a user message.
+			expect(messages[1].role).toBe("assistant");
+		});
+
+		it("carries no status of its own", () => {
+			const card = applyServerEvent([], kickoff)[0] as WorkCardMessage;
+			expect(card).not.toHaveProperty("status");
+		});
+
+		it("folds later messages into the same card without moving or renaming it", () => {
+			const first = applyServerEvent([], kickoff);
+			const cardId = (first[0] as WorkCardMessage).id;
+
+			const second = applyServerEvent(first, stepAdvance);
+			const card = second[0] as WorkCardMessage;
+
+			expect(second.filter((m) => m.role === "work")).toHaveLength(1);
+			expect(card.id).toBe(cardId);
+			expect(card.entries.map((e) => e.subtype)).toEqual([
+				"kickoff",
+				"step_advance",
+			]);
+		});
+
+		it("keeps a card per work", () => {
+			const other = systemEvent("other kickoff", "kickoff", {
+				work_id: "work-2",
+				work_type: "story",
+				title: "Another",
+			});
+
+			const messages = applyServerEvent(applyServerEvent([], kickoff), other);
+			const cards = messages.filter(
+				(m): m is WorkCardMessage => m.role === "work",
+			);
+			expect(cards.map((c) => c.workId)).toEqual(["work-1", "work-2"]);
+		});
+
+		it("files child_done under the receiving parent, with the child named", () => {
+			const childDone = systemEvent("child done prompt", "child_done", {
+				work_id: "work-1",
+				work_type: "task",
+				title: "Ship the card",
+				child: { id: "child-9", title: "Sub task" },
+			});
+
+			const messages = applyServerEvent(
+				applyServerEvent([], kickoff),
+				childDone,
+			);
+			const cards = messages.filter(
+				(m): m is WorkCardMessage => m.role === "work",
+			);
+
+			expect(cards).toHaveLength(1);
+			expect(cards[0].entries[1].child).toEqual({
+				id: "child-9",
+				title: "Sub task",
+			});
+		});
+
+		it("marks a step advance with a divider in the stream", () => {
+			const messages = applyServerEvent(
+				applyServerEvent([], kickoff),
+				stepAdvance,
+			);
+			const divider = messages.find(
+				(m): m is StepDividerMessage => m.role === "step_divider",
+			);
+
+			expect(divider).toMatchObject({
+				workId: "work-1",
+				step: { current: 2, total: 3 },
+			});
+			// It sits after the card it belongs to, not at the end of the transcript.
+			expect(messages.indexOf(divider as StepDividerMessage)).toBeLessThan(
+				messages.length - 1,
+			);
+		});
+
+		it("finalizes a streaming assistant before the card", () => {
+			const streaming = applyServerEvent([], { type: "text", content: "hi" });
+			const messages = applyServerEvent(streaming, kickoff);
+
+			expect((messages[0] as AssistantMessage).status).toBe("complete");
+			expect(messages[1].role).toBe("work");
+		});
+
+		it("leaves pre-card history as standalone banners", () => {
+			const legacy = normalizeEvent({
+				type: "message",
+				content: "kickoff prompt",
+				origin: "system",
+				subtype: "kickoff",
+				meta: { title: "Ship the card" },
+			});
+
+			const messages = applyServerEvent([], legacy);
+			const banner = messages[0] as UserMessage;
+			expect(banner.role).toBe("user");
+			expect(banner.source).toBe("system");
+			expect(messages.some((m) => m.role === "work")).toBe(false);
+		});
+
+		it("replays history into the same cards live streaming builds", () => {
+			const records = [
+				{
+					type: "message",
+					content: "kickoff prompt",
+					origin: "system",
+					subtype: "kickoff",
+					meta: {
+						work_id: "work-1",
+						work_type: "task",
+						title: "Ship the card",
+						step: { current: 1, total: 3 },
+					},
+				},
+				{
+					type: "message",
+					content: "next step prompt",
+					origin: "system",
+					subtype: "step_advance",
+					meta: {
+						work_id: "work-1",
+						work_type: "task",
+						title: "Ship the card",
+						step: { current: 2, total: 3 },
+					},
+				},
+			];
+
+			uuidMock.reset();
+			const replayed = replayHistory(records);
+			uuidMock.reset();
+			const streamed = applyServerEvent(
+				applyServerEvent([], normalizeEvent(records[0])),
+				normalizeEvent(records[1]),
+			);
+
+			expect(replayed.map((m) => m.role)).toEqual(streamed.map((m) => m.role));
+			expect(
+				(replayed.find((m) => m.role === "work") as WorkCardMessage).entries,
+			).toEqual(
+				(streamed.find((m) => m.role === "work") as WorkCardMessage).entries,
+			);
+		});
+	});
+
+	// Every incoming message leaves a placeholder for the reply it provokes. When
+	// the agent answers with nothing at all, that placeholder renders as a blank
+	// bubble — visible on both message paths, and back to back once work cards
+	// removed the banners that used to sit between them.
+	describe("placeholders the agent never wrote into", () => {
+		const placeholder = (
+			status: AssistantMessage["status"],
+			extra: Partial<AssistantMessage> = {},
+		): AssistantMessage => ({
+			id: "placeholder-1",
+			role: "assistant",
+			parts: [],
+			status,
+			createdAt: new Date(),
+			...extra,
+		});
+
+		const systemMessage = normalizeEvent({
+			type: "message",
+			content: "auto continue",
+			origin: "system",
+			subtype: "auto_continue",
+			meta: { work_id: "work-1", work_type: "task", title: "Ship the card" },
+		});
+
+		it("drops the empty one preceding a user message", () => {
+			const messages = applyUserMessage([placeholder("complete")], "Follow up");
+
+			expect(messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+		});
+
+		it("drops the empty one preceding a system message", () => {
+			const messages = applyServerEvent(
+				[placeholder("complete")],
+				systemMessage,
+			);
+
+			expect(messages.map((m) => m.role)).toEqual(["work", "assistant"]);
+		});
+
+		it("drops one the agent left mid-turn without writing to", () => {
+			const messages = applyUserMessage(
+				[placeholder("streaming")],
+				"Follow up",
+			);
+
+			expect(messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+		});
+
+		it("keeps one the agent did write into", () => {
+			const answered = placeholder("complete", {
+				parts: [{ type: "text", content: "Done" }],
+			});
+
+			const messages = applyUserMessage([answered], "Follow up");
+
+			expect(messages.map((m) => m.role)).toEqual([
+				"assistant",
+				"user",
+				"assistant",
+			]);
+		});
+
+		// These three say everything they have to say in the status line, so an
+		// empty body is exactly when they matter. Dropping them would swallow an
+		// aborted turn — and an interrupt is the case that produces them most.
+		it.each([
+			"interrupted",
+			"error",
+			"process_ended",
+		] as const)("keeps an empty %s turn, whose status is the whole message", (status) => {
+			const messages = applyUserMessage([placeholder(status)], "Follow up");
+
+			expect(messages.map((m) => m.role)).toEqual([
+				"assistant",
+				"user",
+				"assistant",
+			]);
+			expect((messages[0] as AssistantMessage).status).toBe(status);
+		});
+
+		it("leaves no blank bubble between two system messages", () => {
+			let messages = applyServerEvent([], systemMessage);
+			messages = applyServerEvent(messages, systemMessage);
+
+			expect(messages.map((m) => m.role)).toEqual(["work", "assistant"]);
+		});
+
+		// A turn can also end at the tail of the transcript with nothing written:
+		// an auto-continue the agent answers with silence does exactly that, right
+		// before the retry limit stops the work.
+		it("drops a turn that ends on done having written nothing", () => {
+			const messages = applyServerEvent([placeholder("streaming")], {
+				type: "done",
+			});
+
+			expect(messages).toEqual([]);
+		});
+
+		it.each([
+			{ type: "interrupted" } as const,
+			{ type: "process_ended" } as const,
+			{ type: "error", error: "boom" } as const,
+		])("keeps a turn that ends as $type with nothing written", (event) => {
+			const messages = applyServerEvent([placeholder("streaming")], event);
+
+			expect(messages).toHaveLength(1);
+			expect((messages[0] as AssistantMessage).status).toBe(event.type);
+		});
+	});
+
 	describe("applyUserMessage", () => {
 		it("adds user message and empty assistant message", () => {
 			const messages = applyUserMessage([], "Hello AI");
@@ -1180,7 +1503,7 @@ describe("messageReducer", () => {
 				createdAt: new Date(),
 			};
 			const messages = applyUserMessage([streaming], "Follow up");
-			expect(messages[0].status).toBe("complete");
+			expect((messages[0] as AssistantMessage).status).toBe("complete");
 			expect(messages[1].role).toBe("user");
 			expect(messages[2].role).toBe("assistant");
 		});

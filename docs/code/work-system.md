@@ -84,16 +84,33 @@ On creation (`server/work/store.go:157-193`):
 ### Six States
 
 ```
-open ──────────────► in_progress
-                         │
-              ┌──────────┼──────────┬──────────┐
-              │          │          │          │
-              ▼          ▼          ▼          ▼
-        needs_input   waiting   stopped    closed ─────► in_progress
-              │          │          │                       (via Reopen)
-              │          │          │
-              └──────────┴──────────┴─────► (can return to in_progress)
+                    ┌──────── live cluster ────────┐
+                    │  in_progress   needs_input   │
+open ──────────────►│         (all four mutually   │──────► closed
+                    │          reachable)          │          │
+                    │  waiting       stopped       │          ▼
+                    └──────────────────────────────┘     in_progress
+                                                          (via Reopen)
 ```
+
+**Only `open` and `closed` are gates.** The four live states reach each other
+freely, in both directions. They answer "might an agent session be running, and
+what is it doing" — and that answer comes from process events that go stale: a
+crashed CLI, an orphaned session, a dropped event. None of them says how far the
+work got; that is `CurrentStep`. Gating progress on them was how a work item
+that had merely gone `stopped` became impossible to advance or finish, locked
+for good.
+
+Two guards in `server/work/validation.go` say this directly, and there is
+deliberately no edge table beside them to drift out of sync:
+
+- `ValidateProgress` — may the agent move this work along (`step_done`,
+  `work_wait`, `work_needs_input`, stop, liveness sync)? Every live status
+  qualifies; `open` and `closed` do not, and each names its way in.
+- `ValidateStartable` — may a session be started for this work? Also admits
+  `open` (the fresh-start case) and rejects `in_progress`, so a running work is
+  never started twice — which is also what resolves concurrent `Claim`s to a
+  single winner.
 
 | State | Meaning | SessionID | CurrentStep |
 |-------|---------|-----------|-------------|
@@ -110,16 +127,34 @@ The API exposes intent methods rather than raw status updates. Each method encap
 
 | Method | Transition | Purpose |
 |--------|------------|---------|
-| `Start(id, sessionID)` | open/stopped/needs_input → in_progress | Launch AI session |
-| `Stop(id)` | in_progress/needs_input/waiting → stopped | Terminate session |
-| `StepDone(id, totalSteps)` | in_progress → in_progress/closed | Advance work step or close work |
-| `MarkNeedsInput(id)` | in_progress → needs_input | Pause for user input |
-| `MarkWaiting(id)` | in_progress → waiting | Pause for child work completion |
-| `Resume(id)` | needs_input → in_progress | Continue after user input |
-| `ResumeFromWaiting(id)` | waiting → in_progress | Continue after child completes |
-| `Reactivate(id)` | stopped → in_progress | Sync with running session |
+| `Start(id, sessionID)` | startable → in_progress | Launch AI session |
+| `Claim(id)` | startable → in_progress | Start plus atomic sessionID decision (a work that already owns a session is a restart and keeps it) |
+| `Stop(id)` | live → stopped | Terminate session |
+| `StepDone(id, totalSteps)` | live → in_progress/closed | Advance work step or close work |
+| `MarkNeedsInput(id)` | live → needs_input | Pause for user input |
+| `MarkWaiting(id)` | live → waiting | Pause for child work completion |
+| `MarkRunning(id)` | live → in_progress | Session is live again (user input, child closed, process detected running) |
 | `Reopen(id)` | closed → in_progress | Reopen a closed item to add children or continue |
 | `RollbackStart(id, wasRestart)` | in_progress → open/stopped | Undo failed start |
+
+"live" is any of `in_progress` / `needs_input` / `waiting` / `stopped`;
+"startable" is what `ValidateStartable` admits — `open` plus every live status
+but `in_progress`.
+
+A `StepDone` from a stale live status also repairs it back to `in_progress`: the
+agent calling the tool is proof its session runs, and the next-step prompt only
+reaches `in_progress` work.
+
+Re-setting a live status a work already holds is a deliberate no-op rather than
+a redundant write. Liveness signals repeat — the same session is reported running
+more than once — and re-announcing an unchanged status would wake every
+subscriber with a change event that carries no news.
+
+`RollbackStart` is the one method inside the cluster that still names a single
+source status. It undoes the `in_progress` a failed start left behind, so if the
+agent has already moved the work on, the kickoff did not fail cleanly and rolling
+back would clobber live state — most visibly on a restart, where the rollback to
+`stopped` would erase a `needs_input` the agent had just set.
 
 ### Waiting vs NeedsInput
 
@@ -130,7 +165,7 @@ Both `waiting` and `needs_input` pause the agent's work, but serve different pur
 | `needs_input` | Agent needs user confirmation or clarification | User sending a message |
 | `waiting` | Agent waiting for child work to complete | Child work closure, or user message |
 
-**Key difference**: `waiting` is used when a coordinator agent has created child tasks and wants to pause until they complete, while `needs_input` is used when the agent genuinely needs user input to proceed.
+**Key difference**: `waiting` is used when a coordinator agent has created child tasks and wants to pause until they complete, while `needs_input` is used when the agent genuinely needs user input to proceed. Both are recorded through `MarkNeedsInput` / `MarkWaiting` and left through `MarkRunning`, which is one method rather than three because "the session is live again" is one fact regardless of what it was waiting on.
 
 Both states can be resumed by user messages, allowing users to interrupt the wait if needed.
 
@@ -285,8 +320,8 @@ When an AI session's state changes, sync the work status:
 | running | stopped → in_progress | User message to stopped session |
 | idle (first) | (ignored) | Initial process startup |
 | idle (normal) | in_progress → in_progress | Send auto-continuation |
-| interrupted | in_progress/waiting → stopped | Turn aborted (user interrupt, denied permission, replaced turn) |
-| ended | in_progress/waiting → stopped | Process exited |
+| interrupted | in_progress/needs_input/waiting → stopped | Turn aborted (user interrupt, denied permission, replaced turn) |
+| ended | in_progress/needs_input/waiting → stopped | Process exited |
 
 An aborted turn stops the work instead of continuing it, which is what makes a
 denied permission during an automated run end the run rather than nudge the agent
@@ -354,6 +389,79 @@ step_done ──► store.StepDone()
 ```
 
 The reopen message instructs the agent to review its previous work and determine what additional changes are needed, then call `step_done` when complete.
+
+### Background Waits and the Work Item
+
+A Claude turn that started a background task goes quiet for as long as the task
+runs, and the adapter swallows the ending the CLI emits meanwhile
+([agent-integration.md](agent-integration.md#background-waits)). Nothing about
+that reaches the work layer, and nothing should: the work item stays
+`in_progress` because that is simply true — the turn is still under way and the
+job is not done.
+
+Auto-continuation is not exempted from the wait; it is never triggered in the
+first place. Trigger A fires on process state changes, and with no
+`AwaitsUserInput` event the session never leaves `running`, so
+`handleAutoContinuation` does not run, no nudge is sent, and `retries` does not
+move. This is the same code path a long tool call already takes, which is why a
+wait of any length needs no work state of its own.
+
+The two ways a wait ends both land back on existing behaviour:
+
+- **The fallback budget runs out.** The adapter delivers the ending it held, the
+  session goes idle, and the AutoResumer runs the ordinary auto-continuation it
+  would have run when the wait began — except the agent also receives the
+  explanation queued by the adapter, so the nudge does not read as an unexplained
+  demand to continue.
+- **The process dies during the wait.** `ProcessEndedEvent` moves the work to
+  `stopped` through Trigger A, as for any other death. A death nobody is left to
+  observe — a server restart — reaches the same state by the other route,
+  `StopOrphanedWork` at startup, which leaves a comment on each work it stops:
+  otherwise the user comes back to a work stopped for no stated reason, with the
+  background tasks it was waiting for gone too.
+
+### Follow-ups During a Background Wait
+
+During a wait the CLI has no active turn of its own, so any message Pockode sends
+opens a new one immediately.
+
+Only `handleAutoContinuation` is gated by the swallowing, because it is driven by
+the session going idle. Every other send is message-driven and reaches the CLI
+regardless of process state; three of them can land on an agent's *own* waiting
+session: step advance, reopen, and child-closure reactivation. (The worktree
+starter's kickoff and restart are unconditional too, but they target a work being
+started rather than a session already mid-wait.)
+
+**These senders send immediately and do not wait for the background wait to
+finish.** The alternative — queueing them until the wait ends — was considered
+and rejected:
+
+- **It would not work for `step_done`, the most likely of the three.** The MCP
+  handler calls `NotifyStepDone` from inside the tool call, i.e. while the turn
+  that invoked `step_done` is still running. The ending has not been swallowed
+  yet and the wait is not armed, so a gate on "is a wait in progress" never sees
+  it. The CLI simply queues the message and starts it the moment the turn ends.
+- **The user is not gated either.** `chat.Client` has no state-based block, so a
+  user can type during the wait and get a new turn the same way. A system-origin
+  message travels the identical path; deferring only those would be an
+  inconsistency that buys nothing.
+- **The interleave is visible to the agent, not silent.** The CLI reports the
+  agent's own live background tasks and delivers the completion notification into
+  whatever turn is running, so the model can see it still has work pending and
+  check it with `BashOutput`.
+- **Nothing downstream breaks.** The injected turn's events push the fallback
+  deadline out, its ending is swallowed again while the task set is still
+  non-empty, and it ends the wait exactly when the set has drained. The session
+  stays `running`; no spurious idle, nudge, or retry accounting.
+- **Deferring costs more than it saves.** The queue would have to survive process
+  death and server restart or lose the message, and would hold it for up to the
+  fallback budget (30–120 minutes). A reopen or child-done that produces nothing
+  for two hours is a silent stall — exactly what "no silent failures" forbids —
+  traded against a context interleave the agent can see and handle.
+
+If the interleave ever does prove to confuse models, the fix belongs at the
+message itself (say that a background task is still pending) rather than in a
+host-side deferral queue.
 
 ### Per-Worktree Sender Routing
 
@@ -638,25 +746,6 @@ Check if you have completed the current step:
 - If NO: Continue working on this step.
 ```
 
-### System-Origin Message Tagging
-
-All of these work-driven prompts are byte-for-byte indistinguishable from a user-typed message once they reach the agent — same stdin, same `message` event. To let the frontend tell them apart, they are sent via `chat.Client.SendSystemMessage` (not the plain user path), which stamps the `MessageEvent` with `origin: "system"`, a `subtype`, and a `meta` summary. The origin is `"system"` rather than `"work"` because it marks a message produced by Pockode itself; the Work engine is today's only such producer, but the concept is source-agnostic. The user path leaves `origin` empty, so old history stays a normal user message — backward compatible by omission. (For why this reuses the `message` event rather than a new event type, see [agent-event.md](../agent-event.md#message-origin-user-vs-system).)
-
-**Subtypes** (`server/work/prompt.go`) — one per send site, so the frontend can pick a label without parsing the prompt:
-
-| Subtype | Sent from | Frontend label |
-|---------|-----------|----------------|
-| `kickoff` | `WorkStarter` fresh start | Kickoff |
-| `restart` | `WorkStarter` restart | Restart |
-| `auto_continue` | `AutoResumer` auto-continuation | Auto-continue |
-| `step_advance` | `AutoResumer.NotifyStepDone` | Next step (Step N/M) |
-| `reopen` | `AutoResumer.NotifyReopen` | Reopen |
-| `child_done` | `AutoResumer` parent reactivation | Child task done |
-
-**Meta summary** — `NewMessageMeta(title, step, total)` builds the collapsed-bar data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). `title` is the work title; `step` is included only when the send site has real step context (`total > 0` and `1 <= step <= total`), so a stepless work or an out-of-range auto-continuation omits it. This mirrors the prompt itself falling back to the stepless body in the same cases, keeping bar and body consistent.
-
-**Frontend collapse rendering** (`web/`) — the origin/subtype/meta ride through the reducer: `normalizeEvent` runs the raw `origin` through `normalizeOrigin`, which folds both the current `"system"` and the legacy stored `"work"` to `"system"` (so old persisted history and live events converge on the new name at this single wire boundary), passes `"user"` through, and drops anything else to `undefined`; it then copies origin/subtype/meta onto the normalized `message` event. `applyUserMessage` tags the resulting `UserMessage` with `source`/`subtype`/`meta` **only** when `origin === "system"` (plain user messages stay source-less, so optimistic local echoes and old history render as normal bubbles). `MessageItem` then branches on `message.source === "system"` to render `SystemMessageItem` — a low-contrast, default-collapsed banner (`Pockode · {label}` + truncated title) that expands to the full prompt via `MarkdownContent`, instead of a right-aligned user bubble. An unknown subtype degrades to the `System Message` label but still expands.
-
 ### Design Notes
 
 - **Steps apply to both Stories and Tasks**: Any work item with an agent role that has steps defined will display step progress.
@@ -666,6 +755,80 @@ All of these work-driven prompts are byte-for-byte indistinguishable from a user
 - **step_done completion flow**:
   - All work items: increments `CurrentStep` while more steps remain.
   - All work items: marks the work as `closed` on the final step or when the role has no steps.
+
+## Work Messages in Chat
+
+The prompts the Work engine sends land in the user's transcript alongside
+everything the agent itself writes, and a work's progress has to be readable
+there. One rule governs how, and the rest of this section follows from it:
+
+> **A message records an event; the work store holds the state.** Messages are
+> immutable history — they can say what happened, never what is true now.
+> Anything the UI presents as a work's *current* state is read live from
+> `workStore`, and no status is ever written into a message's `meta`.
+
+That rule is not academic. An interrupt stops a work through a pure state change
+(`AutoResumer`'s interrupted branch → `stopped`) and produces no message at all,
+so a transcript that inferred status from its last message would go on claiming
+the work was being nudged along after it had already stopped.
+
+### System-Origin Message Tagging
+
+A work-driven prompt is byte-for-byte indistinguishable from a user-typed message once it reaches the agent — same stdin, same `message` event. To let the frontend tell them apart, they are sent via `chat.Client.SendSystemMessage` (not the plain user path), which stamps the `MessageEvent` with `origin: "system"`, a `subtype`, and a `meta` summary. The origin is `"system"` rather than `"work"` because it marks a message produced by Pockode itself; the Work engine is today's only such producer, but the concept is source-agnostic. The user path leaves `origin` empty, so old history stays a normal user message — backward compatible by omission. (For why this reuses the `message` event rather than a new event type, see [agent-event.md](../agent-event.md#message-origin-user-vs-system).)
+
+**Subtypes** (`server/work/prompt.go`) — one per send site, so the frontend can pick a label without parsing the prompt. Both renderings below draw their labels from `web/src/utils/systemMessage.ts`; a card's timeline row says less than a standalone banner because the card header already names the work:
+
+| Subtype | Sent from | Banner label | Card timeline row |
+|---------|-----------|--------------|-------------------|
+| `kickoff` | `WorkStarter` fresh start | Kickoff | Kickoff |
+| `restart` | `WorkStarter` restart | Restart | Restart |
+| `auto_continue` | `AutoResumer` auto-continuation | Auto-continue | Auto-continue (`×N` when consecutive) |
+| `step_advance` | `AutoResumer.NotifyStepDone` | Next step (Step N/M) | Next step N |
+| `reopen` | `AutoResumer.NotifyReopen` | Reopen | Reopen |
+| `child_done` | `AutoResumer` parent reactivation | Child task done | Child task done: \<child title\> |
+
+**Meta summary** — `NewMessageMeta(w, step, total)` builds that data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). It carries `work_id` / `work_type` / `title` from `w`, plus `step` when the send site has real step context (`total > 0` and `1 <= step <= total`); `child_done` additionally carries `child: {id, title}`, so a timeline row can name the finished subtask without parsing the prompt.
+
+Every subtype fills `step`, including the three whose prompt body never restates one — `restart`, `reopen` and `child_done` append only their nudge (see *Prompt Format*). Summary and body answer different questions: the body says what the agent has to act on, the summary says where the work stood, and the UI needs the latter even when the prompt withholds it. `step` is omitted only when there is genuinely no position to report — a stepless role, a failed step lookup (`stepCount` answers 0 for both, since a missing step provider must not block a message), or a `current_step` left out of range by a role whose steps were shortened afterwards.
+
+`w` is the **receiving** work — the one whose session the message is delivered to, which is not always the one the message is about. `child_done` is delivered to the *parent's* session, so its `work_id` is the parent's; filing it under the child would shatter the parent's card into orphans. Taking the whole `Work` rather than a loose title and id is what makes that hard to get wrong: every field is derived from one value, so no call site can label one work while keying on another.
+
+`meta.step` is the field most easily mistaken for live state: it records where the work stood **when the message was sent**. It words timeline rows and stands in for a deleted work's position — never the work's current step.
+
+### Rendering in the Transcript
+
+Origin, subtype and meta ride through the reducer: `normalizeEvent` runs the raw `origin` through `normalizeOrigin`, which folds both the current `"system"` and the legacy stored `"work"` to `"system"` (so old persisted history and live events converge on the new name at this single wire boundary), passes `"user"` through, and drops anything else to `undefined`; it then copies origin/subtype/meta onto the normalized `message` event.
+
+`applyServerEvent` then splits on whether `meta.work_id` is present:
+
+- **With `work_id`** — `applyWorkCardMessage` folds the message into that work's card, and a `step_advance` additionally drops a step divider into the stream.
+- **Without `work_id`** — history recorded before the card existed falls through to `applyUserMessage`, which tags the `UserMessage` with `source`/`subtype`/`meta` and renders the original `SystemMessageItem` banner (`Pockode · {label}` + truncated title). Plain user messages stay source-less, so optimistic local echoes and ordinary history render as normal bubbles. There is no data migration; the two paths simply coexist.
+
+Aggregation lives in `applyServerEvent` rather than on a history-only path **on purpose**: `replayHistory` feeds the same function, so replay and live streaming cannot drift into two different renderings. Keep it that way.
+
+**The work card** (`WorkCardMessage` → `WorkCardItem`) is anchored where the work's *first* system message landed and updated in place from then on. It never moves and never changes its `id` — `MessageList` keys on `message.id` and does not virtualize, so a new id would remount the card and discard whatever the user had expanded. The messages themselves become collapsed timeline rows inside it, each still expandable to its full prompt body; a consecutive run of `auto_continue` collapses into one counted row, that being the only subtype which repeats in practice and the least informative when it does.
+
+Status, step and blocking subtasks come from the component's own `workStore` / `agentRoleStore` subscriptions, never from props: `MessageItem` is `memo`ised, so a prop-borne status would freeze at whatever it was when the card last re-rendered. Two consequences worth stating outright:
+
+- **Terminal cards stay in the stream.** A `stopped` or `closed` card is not hidden or collapsed away; that a work finished is exactly what a transcript should keep showing — and a `stopped` card is where the user restarts it.
+- **A work missing from the store** (deleted) leaves the card with only what its messages recorded — `meta`'s title and newest step — and it shows `—` for status rather than guessing one.
+
+**Step dividers** (`StepDividerMessage`) — a hairline reading `Step n/m`, inserted where the work moved on. It preserves the transcript's answer to "which output belongs to which step", which the old per-step banner carried, and because it states no status it cannot contradict the card.
+
+**The status strip** — the card is anchored, so a long transcript scrolls it out of sight, and "is my work still running?" is the question asked most often. `LinkedWorkButton` (`web/src/components/Chat/ChatPanel.tsx`) answers it from the top bar: a status dot plus `Step n/m` beside the linked work's title, from the same live subscriptions and never from the transcript.
+
+**One vocabulary for work status.** Every surface that paints a work status draws from the same sources, so they cannot disagree: labels and palette from `StatusBadge` (`statusLabels` / `statusDotStyles`), glyphs from `StatusIcon`, step arithmetic and wording from `web/src/utils/workSteps.ts` (`getStepProgress` / `formatStepProgress`), and the step list markup from `web/src/components/Project/StepList.tsx` — the last two shared with `WorkDetailOverlay`, so the chat card and the detail page cannot disagree about which step a work is on. Two notes on that shared vocabulary:
+
+- **Never a spinner for `in_progress`**, on the card or the strip. In this chat a spinner means "the agent is producing this turn", while a work that is `in_progress` with its process idle is an ordinary resting state — showing one would re-merge the two things this section exists to keep apart. It also spares a false alarm: `handleProcessEnded`'s settle delay leaves an interrupted work on `in_progress` for a couple of seconds, which a spinner would dramatize and a static glyph does not.
+- **`open` and `closed` share one muted color** in `StatusBadge`. That would be ambiguous on the strip's bare dot if both could appear there, and they cannot: `open` is the one status that always goes with an empty `SessionID` (creation, and the fresh-start rollback that clears it), so no chat is ever linked to an open work. On the card the question does not arise, since its glyph sits beside a text label.
+
+### Reply Placeholders
+
+Every message added to the transcript leaves an empty assistant message behind it — a system message drives the agent just as a user message does, and the placeholder is where the reply streams in. When the agent answers with nothing at all, that placeholder would render as a blank box, so it is dropped at either of the two moments its fate is settled: when the next message arrives (`closePreviousTurn`) and when a terminal event ends the turn. An agent that goes quiet under repeated auto-continuation produces a run of them, which is why this is worth doing at all.
+
+The condition (`isEmptyPlaceholder`) is `parts` empty **and** status `complete`, and the second half is not incidental: `interrupted`, `error` and `process_ended` say their whole message in the status line, so an empty body is exactly when they matter. Dropping those would hide an aborted turn from the user — and an interrupt is the case that produces them most. (The terminal sweep clears one more thing, older than this rule and unrelated to it: a bubble still `sending` when the turn ended, meaning the send never produced anything at all.)
+
+Three entry points add a message, and all three have to call `closePreviousTurn`. Two are in the reducer (`applyUserMessage` for broadcasts, `applyWorkCardMessage` for system messages); the third is `sendUserMessageHandler` in `useChatMessages`, which appends the local echo straight to the list without going through `applyServerEvent`. Missing it there is not hypothetical: a session whose process died right after a message was persisted replays as an unanswered placeholder, and the next thing the user sends would strand it as a blank box.
 
 ## Prompt Configuration
 
@@ -765,3 +928,5 @@ cached entry needs no additional locking.
 | MCP tool executor + HTTP API | `server/mcp/executor.go`, `server/mcp/handler.go` |
 | File I/O | `server/filestore/filestore.go`, `server/filestore/atomic.go` |
 | Frontend store | `web/src/lib/workStore.ts` |
+| Frontend step progress + list | `web/src/utils/workSteps.ts`, `web/src/components/Project/StepList.tsx` |
+| Frontend work-in-chat rendering | `web/src/lib/messageReducer.ts`, `web/src/components/Chat/WorkCardItem.tsx`, `web/src/utils/systemMessage.ts` |

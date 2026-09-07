@@ -363,17 +363,35 @@ const (
 	MessageOriginSystem MessageOrigin = "system"
 )
 
-// StepInfo is the step context shown in a system message's collapsed summary.
+// StepInfo is a 1-indexed step position carried by a system message's summary.
 type StepInfo struct {
 	Current int `json:"current"`
 	Total   int `json:"total"`
 }
 
+// ChildInfo identifies the child work whose completion triggered a child_done
+// system message.
+type ChildInfo struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
 // MessageMeta carries summary data for a system-origin message so the frontend
-// can render the collapsed bar without parsing the prompt body.
+// can render it without parsing the prompt body.
 type MessageMeta struct {
-	Title string    `json:"title,omitempty"`
-	Step  *StepInfo `json:"step,omitempty"`
+	// WorkID is the work that owns the session this message was delivered to —
+	// the receiver, never the subject. A child_done message is delivered to the
+	// parent's session, so its WorkID is the parent's. The frontend groups
+	// messages by this key into one card per work; a subject id here would
+	// shatter that card.
+	WorkID string `json:"work_id,omitempty"`
+	// WorkType is the receiving work's type ("story" or "task").
+	WorkType string `json:"work_type,omitempty"`
+	Title    string `json:"title,omitempty"`
+	// Step is where the work stood when this message was sent — a historical
+	// fact, not a live position. See docs/code/work-system.md.
+	Step  *StepInfo  `json:"step,omitempty"`
+	Child *ChildInfo `json:"child,omitempty"`
 }
 
 // MessageEvent represents a message sent to the agent. Used for:

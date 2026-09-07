@@ -129,9 +129,22 @@ Shows the detail view for a single work item (story or task). Sections:
 | Position | Action | Condition |
 |---|---|---|
 | Left (primary) | **Start/Restart** | `status === "open"` or `"stopped"` |
-| Left (primary) | **Stop** | `status === "in_progress"` or `"needs_input"` |
+| Left (primary) | **Stop** | `status === "in_progress"`, `"waiting"` or `"needs_input"` |
+| Left (primary) | **Reopen** | `status === "closed"` |
 | Left (primary) | **Open Chat** | `session_id` exists |
 | Right (secondary) | **Delete** (icon-only, 44x44px) | `status !== "closed"` |
+
+Every status therefore offers a way forward — `open` starts, the four live
+statuses either stop or restart, `closed` reopens — so no status leaves the bar
+empty. Keep it that way: a status with no button is a work item the user cannot
+act on at all.
+
+The conditions are deliberately narrower than what the server accepts
+(`Store.Stop` takes any live status, `ValidateStartable` additionally takes
+`waiting` and `needs_input`). Since Stop already covers every paused status,
+also offering Restart there would only ask the user to guess whether the session
+is still alive, and nothing would be reachable that Stop-then-Restart does not
+already reach.
 
 The delete button uses a subtle style (`text-th-text-muted`) to avoid accidental taps, switching to red (`text-th-error`) on hover to confirm intent. Confirmation dialog appears before deletion.
 

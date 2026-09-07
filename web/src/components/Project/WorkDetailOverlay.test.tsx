@@ -74,6 +74,53 @@ describe("WorkDetailOverlay", () => {
 		});
 	});
 
+	// The counter is shared with the chat top bar (utils/workSteps), so it has to
+	// stay pinned on this side too.
+	describe("step counter", () => {
+		const renderWithWork = (work: Work) => {
+			mockUseWorkDetailSubscription.mockReturnValue({
+				work,
+				comments: [],
+				loading: false,
+				error: null,
+			});
+			render(
+				<WorkDetailOverlay
+					workId="work-1"
+					onBack={vi.fn()}
+					onNavigateToSession={vi.fn()}
+					onOpenWorkDetail={vi.fn()}
+				/>,
+			);
+		};
+
+		it("counts the step an active work sits on", () => {
+			renderWithWork(createWork({ status: "in_progress", current_step: 1 }));
+
+			expect(
+				screen.getByRole("heading", { name: "Steps (2/2)" }),
+			).toBeInTheDocument();
+		});
+
+		it("counts every step once the work is closed", () => {
+			renderWithWork(createWork({ status: "closed", current_step: 0 }));
+
+			expect(
+				screen.getByRole("heading", { name: "Steps (2/2)" }),
+			).toBeInTheDocument();
+		});
+
+		// An open work sits on no step yet; the list still shows, the counter does not.
+		it("omits the counter before the work starts", () => {
+			renderWithWork(createWork({ status: "open", current_step: 0 }));
+
+			expect(
+				screen.getByRole("heading", { name: "Steps" }),
+			).toBeInTheDocument();
+			expect(screen.getByText("Implement")).toBeInTheDocument();
+		});
+	});
+
 	it("renders sections in the expected order", () => {
 		mockUseWorkDetailSubscription.mockReturnValue({
 			work: createWork(),

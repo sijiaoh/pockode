@@ -318,7 +318,19 @@ func (m *Manager) runIdleReaper() {
 func (m *Manager) reapIdle() {
 	now := time.Now()
 	procs := m.removeWhere(func(p *Process) bool {
-		return now.Sub(p.getLastActive()) > m.idleTimeout
+		if now.Sub(p.getLastActive()) <= m.idleTimeout {
+			return false
+		}
+		// A process waiting on background work looks exactly like an abandoned
+		// one — that is the whole problem, since the wait produces no events to
+		// refresh lastActive. Reaping it would kill the background tasks the
+		// session is waiting for, so it is spared until the agent gives up on
+		// them (see agent.BackgroundWaiter).
+		if p.waitingForBackgroundWork() {
+			slog.Debug("idle process spared, waiting on background work", "sessionId", p.sessionID)
+			return false
+		}
+		return true
 	})
 	for _, proc := range procs {
 		proc.closed.Store(true)
@@ -350,6 +362,11 @@ func (p *Process) SendQuestionResponse(data agent.QuestionRequestData, answers m
 // SendInterrupt sends an interrupt signal to the agent.
 func (p *Process) SendInterrupt() error {
 	return p.agentSession.SendInterrupt()
+}
+
+func (p *Process) waitingForBackgroundWork() bool {
+	waiter, ok := p.agentSession.(agent.BackgroundWaiter)
+	return ok && waiter.WaitingForBackgroundWork()
 }
 
 func (p *Process) touch() {

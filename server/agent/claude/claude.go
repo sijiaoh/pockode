@@ -152,12 +152,29 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	events := make(chan agent.AgentEvent)
 	pendingRequests := &sync.Map{}
 
+	// Per-process, so it starts empty on every (re)start — which is what the CLI
+	// requires, since it emits no background task level at startup.
+	backgroundTasks := &backgroundTaskTracker{}
+	lossStore := newBackgroundLossStore(opts)
+
 	sess := &cliSession{
 		log:             log,
 		events:          events,
 		stdin:           stdin,
 		pendingRequests: pendingRequests,
+		backgroundTasks: backgroundTasks,
+		lossStore:       lossStore,
 		cancel:          cancel,
+	}
+
+	backgroundTasks.wait.start(log, events, sess.queueNote, backgroundWaitBase)
+
+	// Background tasks the previous process took down with it. The agent is told
+	// on its next prompt; the user is told in the transcript, from the streaming
+	// goroutine below (the event channel has no consumer yet here).
+	lostBackgroundTasks := lossStore.peek(log)
+	if lostBackgroundTasks > 0 {
+		sess.queueNote(fmt.Sprintf(backgroundTasksLostNote, backgroundTaskCount(lostBackgroundTasks)))
 	}
 
 	// Stream events from the process.
@@ -170,6 +187,8 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			}
 		}()
 		defer close(events)
+		// Before close(events), which the fallback also writes to.
+		defer backgroundTasks.wait.stopWaiting()
 		defer cancel()
 		defer stdout.Close()
 		defer stderr.Close()
@@ -186,9 +205,32 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			}
 		}
 
-		streamOutput(procCtx, log, stdout, events, pendingRequests, resumeState, sess.declineControlRequest)
+		if lostBackgroundTasks > 0 {
+			select {
+			case events <- agent.WarningEvent{
+				Message: fmt.Sprintf(backgroundTasksLostWarning, backgroundTaskCount(lostBackgroundTasks)),
+				Code:    backgroundTasksLostCode,
+			}:
+				// Only now: a record dropped before the explanation was out would
+				// be a silent failure about a silent failure.
+				lossStore.clear(log)
+			case <-procCtx.Done():
+			}
+		}
+
+		streamOutput(procCtx, log, stdout, events, pendingRequests, resumeState, backgroundTasks, sess.declineControlRequest)
 		agent.WaitForProcess(procCtx, log, cmd, stderrCh, events)
 		resumeState.processExited(procCtx.Err() != nil)
+
+		// A process that died on its own — a crash, the CLI exiting — takes its
+		// background tasks with it just as a deliberate kill does, and nothing
+		// can be reported through a channel that is closing, so it is recorded
+		// for the next process to report. Deliberate kills are recorded in Close
+		// instead: this goroutine may never be scheduled again on the way out of
+		// a server shutdown.
+		if procCtx.Err() == nil {
+			lossStore.record(log, backgroundTasks.liveCount())
+		}
 
 		// Notify client that process has ended (abnormal: process should stay alive)
 		select {
@@ -207,8 +249,13 @@ type cliSession struct {
 	stdin           io.WriteCloser
 	stdinMu         sync.Mutex
 	pendingRequests *sync.Map // tracks sent control requests by requestID for response matching
+	backgroundTasks *backgroundTaskTracker
+	lossStore       backgroundLossStore
 	cancel          func()
 	closeOnce       sync.Once
+
+	noteMu sync.Mutex
+	note   string // pending explanation for the agent; see queueNote
 }
 
 // Events returns the event channel.
@@ -216,8 +263,39 @@ func (s *cliSession) Events() <-chan agent.AgentEvent {
 	return s.events
 }
 
+// queueNote leaves an explanation for the agent, delivered with the next prompt
+// Pockode sends it. Used by the background wait fallback: the user sees a
+// warning in the transcript, and this is the agent's copy of the same news —
+// without it the agent would be nudged to continue with no idea that Pockode
+// stopped waiting for its background task.
+func (s *cliSession) queueNote(note string) {
+	s.noteMu.Lock()
+	defer s.noteMu.Unlock()
+	s.note = note
+}
+
+func (s *cliSession) takeNote() string {
+	s.noteMu.Lock()
+	defer s.noteMu.Unlock()
+	note := s.note
+	s.note = ""
+	return note
+}
+
+// WaitingForBackgroundWork implements agent.BackgroundWaiter: it reports whether
+// this session is holding a turn open for background tasks, so the idle reaper
+// does not kill the process (and the tasks with it) during a wait that produces
+// no events by definition.
+func (s *cliSession) WaitingForBackgroundWork() bool {
+	return s.backgroundTasks.waitingForBackgroundWork()
+}
+
 // SendMessage sends a message to Claude.
 func (s *cliSession) SendMessage(prompt string) error {
+	if note := s.takeNote(); note != "" {
+		prompt = fmt.Sprintf("<system-reminder>%s</system-reminder>\n\n%s", note, prompt)
+	}
+
 	msg := userMessage{
 		Type: "user",
 		Message: userContent{
@@ -425,6 +503,11 @@ func generateRequestID() string {
 func (s *cliSession) Close() {
 	s.closeOnce.Do(func() {
 		s.log.Info("terminating claude process")
+		// Recorded here, synchronously, rather than only where the process is
+		// reaped: Close is the last point a server shutdown waits for, and the
+		// streaming goroutine that would otherwise record it may never run again
+		// before the process exits.
+		s.lossStore.record(s.log, s.backgroundTasks.liveCount())
 		s.cancel()
 		s.stdinMu.Lock()
 		s.stdin.Close()
@@ -440,7 +523,7 @@ func (s *cliSession) writeStdin(data []byte) error {
 	return err
 }
 
-func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, decline declineFunc) {
+func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, decline declineFunc) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
@@ -467,7 +550,7 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 			resumeState.observe(event)
 		}
 
-		for _, ev := range parseLine(log, line, event, pendingRequests, decline) {
+		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, decline) {
 			select {
 			case events <- ev:
 			case <-ctx.Done():
@@ -829,16 +912,40 @@ type declineFunc func(requestID, message string)
 // parseLine converts one already-decoded stream-json envelope into agent events.
 // line is retained for the cases (assistant, result, control_*) that decode a
 // superset struct.
-func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, decline declineFunc) []agent.AgentEvent {
+func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc) []agent.AgentEvent {
+	events := parseLineEvents(log, line, event, pendingRequests, backgroundTasks, decline)
+
+	// Keep the background wait fallback in step with what the user can see. Any
+	// ending that does reach them closes it, so the held-back ending is not
+	// delivered on top of it later; anything that shows the agent working pushes
+	// its deadline out, because the budget is for a silent wait and not for a
+	// turn that resumed and is busy.
+	for _, ev := range events {
+		if ev.EventType().AwaitsUserInput() {
+			backgroundTasks.wait.end()
+			break
+		}
+		if ev.EventType().IndicatesAgentActivity() {
+			backgroundTasks.wait.refresh()
+		}
+	}
+
+	return events
+}
+
+func parseLineEvents(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc) []agent.AgentEvent {
 	switch event.Type {
 	case "assistant":
 		return parseAssistantEvent(log, line, event)
 	case "user":
 		return parseUserEvent(log, event)
 	case "result":
-		return []agent.AgentEvent{parseResultEvent(line)}
+		if ev := parseResultEvent(log, line, backgroundTasks); ev != nil {
+			return []agent.AgentEvent{ev}
+		}
+		return nil
 	case "system":
-		return parseSystemEvent(log, line, event)
+		return parseSystemEvent(log, line, event, backgroundTasks)
 	case "control_request":
 		return parseControlRequest(log, line, pendingRequests, decline)
 	case "control_response":
@@ -894,7 +1001,14 @@ type systemContent struct {
 	Content string `json:"content"`
 }
 
-func parseSystemEvent(log *slog.Logger, line []byte, event cliEvent) []agent.AgentEvent {
+func parseSystemEvent(log *slog.Logger, line []byte, event cliEvent, backgroundTasks *backgroundTaskTracker) []agent.AgentEvent {
+	// A level signal about live state, not a transcript entry: it only updates
+	// the tracker parseResultEvent consults.
+	if event.Subtype == "background_tasks_changed" {
+		backgroundTasks.observe(log, line)
+		return nil
+	}
+
 	// Output of a local slash command (e.g. /usage). The legacy path delivers
 	// the same text inside a user message wrapped in <local-command-stdout>.
 	if event.Subtype == "local_command_output" {
@@ -1347,7 +1461,9 @@ const abortTerminalReasonPrefix = "aborted"
 // legacyAbortError is how CLIs without terminal_reason reported an abort.
 const legacyAbortError = "Request was aborted"
 
-func parseResultEvent(line []byte) agent.AgentEvent {
+// parseResultEvent turns the CLI's end-of-turn frame into an event, or into
+// nothing at all while background work is still running (see below).
+func parseResultEvent(log *slog.Logger, line []byte, backgroundTasks *backgroundTaskTracker) agent.AgentEvent {
 	var result resultEvent
 	if err := json.Unmarshal(line, &result); err != nil {
 		return agent.DoneEvent{}
@@ -1361,6 +1477,17 @@ func parseResultEvent(line []byte) agent.AgentEvent {
 	// only sees the response stop with no explanation.
 	if result.IsError {
 		return agent.ErrorEvent{Error: result.errorMessage()}
+	}
+
+	// A normal ending while background tasks are still live is not an ending:
+	// the CLI resumes output by itself once they finish, with no input from us.
+	// Swallowing the event keeps the whole turn — process state, work state,
+	// spinner, Stop button, unread — behaving as one long thought. Errors and
+	// aborts above are real endings and still go through.
+	if backgroundTasks.hasLive() {
+		log.Info("swallowing end of turn, background tasks are still running")
+		backgroundTasks.wait.extend()
+		return nil
 	}
 
 	return agent.DoneEvent{}
