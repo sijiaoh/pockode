@@ -10,12 +10,11 @@ import (
 const (
 	reconnectInitialBackoff = time.Second
 
-	// reconnectMaxBackoff is deliberately well under the cloud's grace period
-	// for a disconnected tunnel (tunnelGracePeriod, 30 s, in the cloud
-	// repository's server/relay/hub.go). A reconnect landing inside that window
-	// reclaims the subdomain's entry, so public requests waiting in the gap get
-	// served instead of answered 503. Raising this past the grace period would
-	// forfeit that; the two values must move together.
+	// reconnectMaxBackoff is deliberately well under the cloud relay's grace
+	// period for a disconnected tunnel (30 s). A reconnect landing inside that
+	// window reclaims the subdomain's entry, so public requests waiting in the
+	// gap get served instead of answered 503. Raising this past the grace
+	// period would forfeit that; the two values must move together.
 	reconnectMaxBackoff = 10 * time.Second
 
 	// reconnectJitter spreads each wait by ±20%. Without it every pockode that

@@ -423,8 +423,8 @@ backoff) it escalates from "Reconnecting..." to "Can't reach the server" and
 offers a manual retry (`web/src/components/ui/ReconnectBanner.tsx`).
 
 The tunnel between pockode and the cloud has its own, separate backoff, whose
-ceiling is tied to the cloud's reconnect grace period — see the cloud
-repository's relay design document.
+ceiling is tied to the cloud's reconnect grace period — see the cloud's relay
+design document.
 
 ### Inbound Message Size
 

@@ -15,9 +15,8 @@ import (
 // localResponseHeaderTimeout bounds how long a local backend may take to start
 // answering a relayed request. It deliberately is not a whole-request timeout:
 // the relayed WebSocket and streaming responses are open-ended by design.
-// Kept below the cloud's own header timeout (server/relay/tunnel.go in
-// pockode-cloud, 60 s) so a wedged backend surfaces as this 502 rather than an
-// opaque relay failure.
+// Kept below the cloud relay's own header timeout (60 s) so a wedged backend
+// surfaces as this 502 rather than an opaque relay failure.
 const localResponseHeaderTimeout = 30 * time.Second
 
 // maxIdleLocalConns keeps a connection pooled per concurrent relayed request.

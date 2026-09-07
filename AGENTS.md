@@ -99,6 +99,14 @@ import { Spinner, ConfirmDialog, useIsDesktop, createAuthStore, getWebSocketUrl 
 - **TODOs need context** — e.g., `// TODO: Remove after upstream API supports X`
 - **Design docs go in docs/** — System-level architecture explanations don't belong in code comments
 
+### Public Repository Boundary
+
+This repository is public; the cloud service it connects to is developed in a separate private repository. Everything written here — code, comments, docs, commit messages — is published.
+
+- **Never disclose the private repository's internals** — its file paths, file names, design document names, directory layout, or internal technology choices (which edge proxy, which database, ...). They are worthless to a reader who cannot open them, and they expose the closed-source layout.
+- **Do document the interoperability contract** — transport protocol, authentication scheme, timeout and grace-period values, compression negotiation. Anyone self-hosting the other side needs these facts, and they are the reason the constants here have the values they do.
+- **Refer to the other side neutrally** — "the cloud's relay implementation", "the cloud's relay design document", "the cloud's tunnel grace period". Keep the fact and the number, drop the path.
+
 ### Git Guidelines
 
 - **Do not use the `-C` option**

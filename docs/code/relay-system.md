@@ -46,7 +46,7 @@ That design had a failure mode that no amount of tuning could fix: a WebSocket m
 
 yamux fixes both structurally: it has per-stream sliding-window flow control and interleaves frames from different streams, so a stalled or slow stream cannot starve the others, and a body streams instead of being buffered.
 
-The full diagnosis lives in the cloud repository at `docs/design/relay-resilience.md`.
+The full diagnosis lives in the cloud's relay design document.
 
 ## Connection Lifecycle
 
@@ -86,7 +86,7 @@ Note that "register" here means the HTTP call that claims a subdomain, made only
 
 **There is no attempt limit.** The relay is this server's only route in from outside, so a client that stopped retrying would be indistinguishable from one that had crashed.
 
-**The 10s ceiling is not arbitrary**: it must stay below the cloud's tunnel grace period (30s). A reconnect that lands inside that window reclaims the subdomain's hub entry, so public requests that arrived during the gap are served instead of answered 503. The two values must move together — see the cloud repository's `server/relay/hub.go` and its `relay.md`.
+**The 10s ceiling is not arbitrary**: it must stay below the cloud's tunnel grace period (30s). A reconnect that lands inside that window reclaims the subdomain's entry, so public requests that arrived during the gap are served instead of answered 503. The two values must move together — the grace period is set by the cloud relay and documented in the cloud's relay design document.
 
 `connectAndRun` returns only when the session ends, so the tunnel's lifetime and one iteration of the reconnect loop are the same thing. It is injected into `reconnector` rather than called directly, which is what lets the backoff be tested by failing the uplink on demand against a fake clock.
 
@@ -111,7 +111,7 @@ The cloud verifies it (constant-time) *before* accepting the upgrade, so a bad t
 
 ### Compression
 
-The uplink negotiates permessage-deflate with **context takeover** (`tunnelCompression`), matching the cloud's `AcceptOptions`. Both ends must ask for the same mode: whichever side offers the weaker one decides the result for both directions.
+The uplink negotiates permessage-deflate with **context takeover** (`tunnelCompression`), matching the cloud relay's `AcceptOptions`. Both ends must ask for the same mode: whichever side offers the weaker one decides the result for both directions.
 
 Context takeover is what makes it worth doing here, and the reason is the transport. Every yamux write is its own WebSocket message — a frame's header and its body are two separate writes — so a stream of chat events crosses the wire as a stream of few-hundred-byte messages. No-context-takeover mode only compresses messages over 512 bytes, so most of those go out verbatim and that mode measures byte-for-byte the same as no compression at all. With a window shared across messages, a relayed JSON-RPC stream drops to 0.40x of its uncompressed size and text HTTP responses to 0.04x, while random binary grows 0.06%.
 

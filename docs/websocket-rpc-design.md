@@ -43,9 +43,9 @@ default, so there is nothing to do on the client — the `WebSocket` constructor
 has no way to turn it off either.
 
 This is the only compression the phone's own link gets. The relay tunnel
-compresses as well, but that hop ends at the cloud, and the edge proxy's `encode`
-stops at the 101. Everything expensive rides here: chat events, file contents,
-git diffs.
+compresses as well, but that hop ends at the cloud, and the edge proxy's own
+compression stops at the 101. Everything expensive rides here: chat events,
+file contents, git diffs.
 
 Measured against the real handler, a real repository and a recorded session
 (710 agent events), counting bytes on the TCP socket, server to client:
@@ -99,8 +99,7 @@ with "Too many message fragments" after 230 s, having crawled there at 8 KiB/s.
 The upgrade is kept because it is free, saves the per-frame header, and roughly
 halves the tunnel's bulk transfer time; not because users were losing anything.
 `rpc_compression_test.go` pins the single frame. Measurements, including the
-WebKit gap that could not be closed, are in the cloud repository's relay design
-document.
+WebKit gap that could not be closed, are in the cloud's relay design document.
 
 Costs:
 
@@ -135,13 +134,13 @@ connection; `rpc_compression_test.go` pins that. coder/websocket documents
 Safari as not implementing permessage-deflate; asking the engine itself says
 otherwise — WebKit and Chromium both offer `permessage-deflate;
 client_max_window_bits` and both decompress correctly, so the figures above hold
-for iOS as well. That probe lives in the cloud repository's e2e suite.
+for iOS as well. That probe lives in the cloud's end-to-end suite.
 
 The relay hop is unaffected: already-deflated frames reach it incompressible, so
 the tunnel's own deflate becomes a near no-op for `/ws` traffic (measured 414 KB
 to 412 KB for the same conversation) while the phone hop drops 2.45x. Tunnel
 compression stays on because HTTP responses still travel through it. Figures for
-the whole chain live in the cloud repository's relay design document.
+the whole chain live in the cloud's relay design document.
 
 ## Libraries
 

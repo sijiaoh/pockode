@@ -85,14 +85,13 @@ func TestBuildRelayWSURL(t *testing.T) {
 //
 // Offering no_context_takeover would let the cloud settle on it too, which
 // costs interactive traffic all of its compression while bulk responses go on
-// compressing normally. Nothing else in either repository would look broken.
+// compressing normally. Nothing else on either side would look broken.
 func TestUplinkDialOptionsNegotiateContextTakeover(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			// Mirrors the cloud's AcceptOptions (server/relay/ws.go in
-			// pockode-cloud).
+			// Mirrors the cloud relay's AcceptOptions.
 			CompressionMode: websocket.CompressionContextTakeover,
 		})
 		if err != nil {
