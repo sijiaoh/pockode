@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/settings"
@@ -36,13 +36,13 @@ type RPCHandler struct {
 	workStore            work.Store
 	workListWatcher      *watch.WorkListWatcher
 	workDetailWatcher    *watch.WorkDetailWatcher
-	workStarter          *worktree.WorkStarter
+	workOps              *work.Operations
 	workStopper          *worktree.WorkStopper
 	agentRoleStore       agentrole.Store
 	agentRoleListWatcher *watch.AgentRoleListWatcher
 }
 
-func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workStarter *worktree.WorkStarter, workStopper *worktree.WorkStopper, agentRoleStore agentrole.Store) *RPCHandler {
+func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workStopper *worktree.WorkStopper, agentRoleStore agentrole.Store) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -66,7 +66,7 @@ func NewRPCHandler(token, version string, devMode bool, commandStore *command.St
 		workStore:            workStore,
 		workListWatcher:      workListWatcher,
 		workDetailWatcher:    workDetailWatcher,
-		workStarter:          workStarter,
+		workOps:              workOps,
 		workStopper:          workStopper,
 		agentRoleStore:       agentRoleStore,
 		agentRoleListWatcher: agentRoleListWatcher,
@@ -114,12 +114,12 @@ func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RPCHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
-	stream := newWebSocketStream(wsConn)
+	stream := NewWebSocketStream(wsConn)
 	connID := uuid.Must(uuid.NewV7()).String()
-	h.HandleStream(ctx, stream, connID)
+	h.handleStream(ctx, stream, connID)
 }
 
-func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStream, connID string) {
+func (h *RPCHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStream, connID string) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.LogPanic(r, "websocket connection crashed", "connId", connID)
@@ -132,6 +132,7 @@ func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 	state := &rpcConnState{
 		connID: connID,
 		log:    log,
+		ready:  make(chan struct{}),
 		// worktree is set after auth
 	}
 
@@ -142,6 +143,10 @@ func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 		authenticated: false,
 	}
 
+	// NewConn starts its read loop before returning, so a request can be
+	// dispatched before setConn runs. That is not hypothetical on a relay
+	// stream: the cloud's first message is often already buffered by the time
+	// this goroutine gets here. state.ready makes handlers wait for the wiring.
 	rpcConn := jsonrpc2.NewConn(ctx, stream, jsonrpc2.AsyncHandler(handler))
 	state.setConn(rpcConn)
 
@@ -160,6 +165,42 @@ type rpcConnState struct {
 	log           *slog.Logger
 	worktree      *worktree.Worktree       // set after auth
 	subscriptions map[string]watch.Watcher // subID → watcher for cleanup
+	closed        bool                     // set by cleanup; guards against binds/subscribes racing disconnect
+	// ready is closed by setConn. Handlers must wait on it before touching the
+	// state: a handler that runs first would subscribe the still-nil notifier
+	// to the worktree — an entry cleanup can never find (it unsubscribes the
+	// real one), so it outlives the connection and panics the next watcher that
+	// notifies it — and would write to the still-nil subscriptions map.
+	ready chan struct{}
+}
+
+// bindWorktree atomically binds wt to the connection, subscribing the
+// connection's notifier so notifications and the state change happen under a
+// single lock. Callers pass a worktree reference already acquired via
+// Manager.Get and interpret the result:
+//   - ok=false: the connection was cleaned up (disconnected) first; the bind did
+//     not take effect and the caller must release wt to avoid leaking it.
+//   - noop=true: wt is already the bound worktree instance; the caller must
+//     release the extra reference. prev is the (unchanged) bound worktree.
+//   - otherwise: prev is the previously bound worktree (may be nil) which the
+//     caller must unsubscribe and release once outside the lock.
+//
+// Pointer (not name) equality drives the no-op check so a stale instance left
+// over from a force-shutdown/recreate is replaced by the live one rather than
+// silently kept.
+func (s *rpcConnState) bindWorktree(wt *worktree.Worktree) (prev *worktree.Worktree, noop, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, false, false
+	}
+	if s.worktree == wt {
+		return s.worktree, true, true
+	}
+	prev = s.worktree
+	s.worktree = wt
+	wt.Subscribe(s.notifier)
+	return prev, false, true
 }
 
 func (s *rpcConnState) getConnID() string {
@@ -178,6 +219,12 @@ func (s *rpcConnState) setConn(conn *jsonrpc2.Conn) {
 	s.notifier = NewJSONRPCNotifier(conn)
 	s.subscriptions = make(map[string]watch.Watcher)
 	s.mu.Unlock()
+	close(s.ready)
+}
+
+// waitReady blocks until the state is wired to its jsonrpc2 connection.
+func (s *rpcConnState) waitReady() {
+	<-s.ready
 }
 
 func (s *rpcConnState) getNotifier() watch.Notifier {
@@ -188,8 +235,15 @@ func (s *rpcConnState) getNotifier() watch.Notifier {
 
 func (s *rpcConnState) trackSubscription(id string, watcher watch.Watcher) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed {
+		s.mu.Unlock()
+		// Connection was cleaned up while this handler was subscribing; drop the
+		// just-created subscription so its watcher slot isn't leaked.
+		watcher.Unsubscribe(id)
+		return
+	}
 	s.subscriptions[id] = watcher
+	s.mu.Unlock()
 }
 
 func (s *rpcConnState) untrackSubscription(id string) {
@@ -225,6 +279,11 @@ func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Mark closed before releasing anything so in-flight handlers racing this
+	// cleanup (bindWorktree/trackSubscription) observe it and don't re-bind a
+	// worktree or re-track a subscription after we've torn everything down.
+	s.closed = true
+
 	// Unsubscribe all tracked subscriptions
 	for id, watcher := range s.subscriptions {
 		watcher.Unsubscribe(id)
@@ -256,6 +315,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 			logger.LogPanic(r, "rpc handler panic", "method", req.Method, "connId", h.state.connID)
 		}
 	}()
+
+	h.state.waitReady()
 
 	h.log.Debug("received request", "method", req.Method, "id", req.ID)
 
@@ -406,6 +467,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleFileWrite(ctx, conn, req, wt)
 	case "file.delete":
 		h.handleFileDelete(ctx, conn, req, wt)
+	case "file.search":
+		h.handleFileSearch(ctx, conn, req, wt)
 	// git namespace
 	case "git.status":
 		h.handleGitStatus(ctx, conn, req, wt)
@@ -421,12 +484,28 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitAdd(ctx, conn, req, wt)
 	case "git.reset":
 		h.handleGitReset(ctx, conn, req, wt)
+	case "git.discard":
+		h.handleGitDiscard(ctx, conn, req, wt)
+	case "git.commit":
+		h.handleGitCommit(ctx, conn, req, wt)
 	case "git.log":
 		h.handleGitLog(ctx, conn, req, wt)
 	case "git.show":
 		h.handleGitShow(ctx, conn, req, wt)
 	case "git.show.diff":
 		h.handleGitShowDiff(ctx, conn, req, wt)
+	case "git.branches":
+		h.handleGitBranches(ctx, conn, req, wt)
+	case "git.checkout":
+		h.handleGitCheckout(ctx, conn, req, wt)
+	case "git.branch.create":
+		h.handleGitBranchCreate(ctx, conn, req, wt)
+	case "git.fetch":
+		h.handleGitFetch(ctx, conn, req, wt)
+	case "git.pull":
+		h.handleGitPull(ctx, conn, req, wt)
+	case "git.push":
+		h.handleGitPush(ctx, conn, req, wt)
 	// fs namespace
 	case "fs.subscribe":
 		h.handleFSSubscribe(ctx, conn, req, wt)
@@ -472,25 +551,50 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 		return
 	}
 
-	h.state.mu.Lock()
-	h.state.worktree = wt
-	h.state.mu.Unlock()
-
-	wt.Subscribe(h.state.getNotifier())
+	prevWorktree, noop, ok := h.state.bindWorktree(wt)
+	if !ok {
+		// Connection was closed while resolving the worktree; release the
+		// reference so the worktree (and its watchers/processes) isn't leaked.
+		h.worktreeManager.Release(wt)
+		return
+	}
+	if noop {
+		// Already bound to this worktree (e.g. a duplicate concurrent auth);
+		// drop the extra reference we just acquired.
+		h.worktreeManager.Release(wt)
+	} else if prevWorktree != nil {
+		// Two concurrent auth frames can both pass the not-authenticated gate
+		// (AsyncHandler) and bind different worktrees; release the one we
+		// displaced so its reference and subscription aren't leaked.
+		h.state.unsubscribeWorktreeWatchers(prevWorktree)
+		prevWorktree.Unsubscribe(h.state.getNotifier())
+		h.worktreeManager.Release(prevWorktree)
+	}
 
 	h.setAuthenticated()
 	h.log.Info("authenticated", "worktree", wt.Name, "workDir", wt.WorkDir)
 
 	title := filepath.Base(h.worktreeManager.Registry().MainDir())
 	result := rpc.AuthResult{
-		Version:      h.version,
-		Title:        title,
-		WorkDir:      wt.WorkDir,
-		WorktreeName: wt.Name,
+		Version:       h.version,
+		Title:         title,
+		WorkDir:       wt.WorkDir,
+		WorktreeName:  wt.Name,
+		MaxUploadSize: filetransfer.MaxUploadSize,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send auth response", "error", err)
 	}
+}
+
+// replyInternalError reports a server-side failure to both the server log and
+// the client. Users here are developers working on their own machine, so the
+// underlying cause (disk full, unwritable data dir, ...) travels with the reply
+// rather than being dropped — a bare "failed to X" leaves a real failure
+// without a trace on either side. logArgs add locating context (session ID).
+func (h *rpcMethodHandler) replyInternalError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, message string, err error, logArgs ...any) {
+	h.log.With(logArgs...).Error(message, "error", err)
+	h.replyError(ctx, conn, id, jsonrpc2.CodeInternalError, message+": "+err.Error())
 }
 
 func (h *rpcMethodHandler) replyError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, code int64, message string) {
@@ -539,43 +643,3 @@ func (h *rpcMethodHandler) handleWatcherUnsubscribe(
 		h.log.Error("failed to send "+logName+" unsubscribe response", "error", err)
 	}
 }
-
-// webSocketStream adapts coder/websocket to jsonrpc2.ObjectStream.
-type webSocketStream struct {
-	conn *websocket.Conn
-	mu   sync.Mutex // protects writes
-}
-
-func newWebSocketStream(conn *websocket.Conn) *webSocketStream {
-	return &webSocketStream{conn: conn}
-}
-
-func (s *webSocketStream) ReadObject(v interface{}) error {
-	_, data, err := s.conn.Read(context.Background())
-	if err != nil {
-		// Treat normal close frames as EOF so jsonrpc2 shuts down gracefully
-		switch websocket.CloseStatus(err) {
-		case websocket.StatusNormalClosure, websocket.StatusGoingAway:
-			return io.EOF
-		}
-		return err
-	}
-	return json.Unmarshal(data, v)
-}
-
-func (s *webSocketStream) WriteObject(v interface{}) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.conn.Write(context.Background(), websocket.MessageText, data)
-}
-
-func (s *webSocketStream) Close() error {
-	return s.conn.Close(websocket.StatusNormalClosure, "")
-}
-
-// Ensure webSocketStream implements ObjectStream
-var _ jsonrpc2.ObjectStream = (*webSocketStream)(nil)

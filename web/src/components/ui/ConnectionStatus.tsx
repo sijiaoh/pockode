@@ -46,7 +46,10 @@ function ConnectionStatus() {
 		);
 	}
 
-	// connecting or disconnected - show unified connecting state
+	// connecting / reconnecting / disconnected - show unified connecting state.
+	// A relay outage stays here for as long as it lasts: the store retries with
+	// backoff instead of falling through to the terminal "error" state, so the
+	// page recovers without the user reaching for the retry button.
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: status indicator is not a form output
 		<div

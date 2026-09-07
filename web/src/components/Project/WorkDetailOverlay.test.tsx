@@ -26,6 +26,10 @@ vi.mock("./WorkListOverlay", () => ({
 	StartButton: () => <button type="button">Start</button>,
 }));
 
+vi.mock("../Worktree", () => ({
+	WorktreeBadge: () => null,
+}));
+
 const createWork = (overrides: Partial<Work> = {}): Work => ({
 	id: "work-1",
 	type: "story",

@@ -10,6 +10,8 @@ export interface SessionListItem {
 	updated_at: string;
 	mode: SessionMode;
 	agent_type: AgentType;
+	/** True once the agent has produced output in this session. */
+	activated: boolean;
 	state: ProcessState;
 	needs_input: boolean;
 	unread: boolean;
@@ -53,12 +55,32 @@ export type ContentPart =
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
 
+// Origin of a message: user-typed vs. Pockode's own system automation.
+// Absent/"user" = a normal user message (backward compatible with old history).
+export type MessageOrigin = "user" | "system";
+
+export interface SystemMessageStep {
+	current: number;
+	total: number;
+}
+
+// Summary data for a system-origin message, used to render the collapsed bar
+// without parsing the prompt body.
+export interface SystemMessageMeta {
+	title?: string;
+	step?: SystemMessageStep;
+}
+
 export interface UserMessage {
 	id: string;
 	role: "user";
 	content: string;
 	status: MessageStatus;
 	createdAt: Date;
+	// Present only for system-driven messages; absent means a user-typed message.
+	source?: MessageOrigin;
+	subtype?: string;
+	meta?: SystemMessageMeta;
 }
 
 export interface AssistantMessage {
@@ -182,6 +204,14 @@ export interface AuthResult {
 	version: string;
 	title: string;
 	work_dir: string;
+	/**
+	 * Ceiling on one upload request, in bytes, for the route this connection
+	 * came in on — not a property of the server. A relay connection is bounded
+	 * by what the tunnel can carry, well under what the endpoint would store,
+	 * and one server answers both kinds at once. Read it from this reply and
+	 * replace it on every reconnect (see docs/file.md#transfer).
+	 */
+	max_upload_size: number;
 }
 
 export interface MessageParams {
@@ -270,10 +300,18 @@ export type ServerMethod =
 	| "ask_user_question"
 	| "request_cancelled"
 	| "system"
+	| "message"
 	| "command_output";
 
 export type ServerNotification =
 	| { type: "text"; content: string }
+	| {
+			type: "message";
+			content: string;
+			origin?: MessageOrigin;
+			subtype?: string;
+			meta?: SystemMessageMeta;
+	  }
 	| {
 			type: "tool_call";
 			tool_name: string;

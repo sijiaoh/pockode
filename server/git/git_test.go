@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -259,6 +260,27 @@ func TestStatus_UninitializedSubmodule(t *testing.T) {
 	}
 	if len(subStatus.Unstaged) != 0 {
 		t.Errorf("expected empty unstaged, got %v", subStatus.Unstaged)
+	}
+}
+
+// git explains a refusal on stderr and says nothing on stdout, so an error
+// built from the exit status alone reaches the panel as "exit status 128" —
+// hiding the only sentence the user could act on. The failures that actually
+// happen here are "detected dubious ownership" on a mounted volume and this
+// one.
+func TestStatus_FailureCarriesGitsOwnMessage(t *testing.T) {
+	dir, err := os.MkdirTemp("", "git-not-a-repo-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	_, err = Status(dir)
+	if err == nil {
+		t.Fatal("Status() succeeded outside a repository")
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error = %q, want git's own explanation", err)
 	}
 }
 
@@ -667,4 +689,509 @@ func TestShowFileDiff_HideWhitespace(t *testing.T) {
 	if !strings.Contains(resultMixed.Diff, "+new line") {
 		t.Errorf("diff should contain content change, got: %q", resultMixed.Diff)
 	}
+}
+
+// TestShow_FileDiffRoundTrip pins the contract that ties the two commit-history
+// paths together: every file Show lists must yield a non-empty ShowFileDiff.
+// Merge commits used to break it, so all commit shapes are checked together.
+func TestShow_FileDiffRoundTrip(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	commitAll := func(msg string) string {
+		t.Helper()
+		runGit(t, dir, "add", "-A")
+		runGit(t, dir, "commit", "--no-gpg-sign", "-m", msg)
+		return gitHead(t, dir)
+	}
+
+	type commitCase struct {
+		name      string
+		hash      string
+		wantFiles map[string]string
+	}
+	var cases []commitCase
+
+	writeTestFile(t, dir, "a.txt", "a\n")
+	cases = append(cases, commitCase{"initial", commitAll("initial"), map[string]string{"a.txt": "A"}})
+
+	writeTestFile(t, dir, "a.txt", "a\nb\n")
+	cases = append(cases, commitCase{"ordinary", commitAll("ordinary"), map[string]string{"a.txt": "M"}})
+
+	runGit(t, dir, "commit", "--no-gpg-sign", "--allow-empty", "-m", "empty")
+	cases = append(cases, commitCase{"empty", gitHead(t, dir), map[string]string{}})
+
+	// Pinned on: with a globally disabled core.fileMode git sees no change here
+	// and the commit below would fail instead of exercising a mode change.
+	runGit(t, dir, "config", "core.fileMode", "true")
+	if err := os.Chmod(filepath.Join(dir, "a.txt"), 0755); err != nil {
+		t.Fatalf("failed to chmod a.txt: %v", err)
+	}
+	cases = append(cases, commitCase{"mode change", commitAll("mode change"), map[string]string{"a.txt": "M"}})
+
+	runGit(t, dir, "mv", "a.txt", "renamed.txt")
+	cases = append(cases, commitCase{"rename", commitAll("rename"), map[string]string{"renamed.txt": "R"}})
+
+	// The branch file is identical in the merge and in the second parent, so a
+	// combined diff would render it empty.
+	base := gitOutput(t, dir, "rev-parse", "--abbrev-ref", "HEAD")
+	runGit(t, dir, "checkout", "-b", "feature")
+	writeTestFile(t, dir, "feature.txt", "feature\n")
+	commitAll("add feature file")
+	runGit(t, dir, "checkout", base)
+	writeTestFile(t, dir, "base.txt", "base\n")
+	commitAll("add base file")
+	runGit(t, dir, "merge", "--no-ff", "--no-gpg-sign", "-m", "merge feature", "feature")
+	cases = append(cases, commitCase{"merge", gitHead(t, dir), map[string]string{"feature.txt": "A"}})
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := Show(dir, tc.hash)
+			if err != nil {
+				t.Fatalf("Show() error: %v", err)
+			}
+
+			got := make(map[string]string, len(result.Files))
+			for _, f := range result.Files {
+				got[f.Path] = f.Status
+
+				diff, err := ShowFileDiff(dir, tc.hash, f.Path, false)
+				if err != nil {
+					t.Fatalf("ShowFileDiff(%q) error: %v", f.Path, err)
+				}
+				if diff.Diff == "" {
+					t.Errorf("ShowFileDiff(%q) is empty although Show listed the file", f.Path)
+				}
+			}
+			if !reflect.DeepEqual(got, tc.wantFiles) {
+				t.Errorf("files = %v, want %v", got, tc.wantFiles)
+			}
+		})
+	}
+}
+
+// TestShowFileDiff_MergeCommit checks the merge diff is taken against the first
+// parent, matching the file list and the OldContent/NewContent pair.
+func TestShowFileDiff_MergeCommit(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	writeTestFile(t, dir, "shared.txt", "base\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+
+	base := gitOutput(t, dir, "rev-parse", "--abbrev-ref", "HEAD")
+	runGit(t, dir, "checkout", "-b", "feature")
+	writeTestFile(t, dir, "shared.txt", "base\nfeature\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "extend on feature")
+
+	runGit(t, dir, "checkout", base)
+	writeTestFile(t, dir, "other.txt", "other\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "unrelated change")
+	runGit(t, dir, "merge", "--no-ff", "--no-gpg-sign", "-m", "merge feature", "feature")
+
+	hash := gitHead(t, dir)
+	result, err := ShowFileDiff(dir, hash, "shared.txt", false)
+	if err != nil {
+		t.Fatalf("ShowFileDiff() error: %v", err)
+	}
+
+	if !strings.Contains(result.Diff, "+feature") {
+		t.Errorf("diff should contain '+feature', got: %q", result.Diff)
+	}
+	if result.OldContent != "base\n" {
+		t.Errorf("OldContent = %q, want %q", result.OldContent, "base\n")
+	}
+	if result.NewContent != "base\nfeature\n" {
+		t.Errorf("NewContent = %q, want %q", result.NewContent, "base\nfeature\n")
+	}
+}
+
+func TestParseStatusZ(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []statusEntry
+	}{
+		{
+			name:  "modified and untracked",
+			input: " M file.go\x00?? new.go\x00",
+			expected: []statusEntry{
+				{staged: ' ', unstaged: 'M', path: "file.go"},
+				{staged: '?', unstaged: '?', path: "new.go"},
+			},
+		},
+		{
+			name:  "rename reports new path and skips source field",
+			input: "RM new.go\x00old.go\x00 M other.go\x00",
+			expected: []statusEntry{
+				{staged: 'R', unstaged: 'M', path: "new.go"},
+				{staged: ' ', unstaged: 'M', path: "other.go"},
+			},
+		},
+		{
+			name:  "non-ASCII path is kept verbatim",
+			input: " M 中文文件.txt\x00?? 目录/子文件.md\x00",
+			expected: []statusEntry{
+				{staged: ' ', unstaged: 'M', path: "中文文件.txt"},
+				{staged: '?', unstaged: '?', path: "目录/子文件.md"},
+			},
+		},
+		{
+			name:  "path containing spaces and arrow",
+			input: " M a -> b.txt\x00",
+			expected: []statusEntry{
+				{staged: ' ', unstaged: 'M', path: "a -> b.txt"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseStatusZ(tt.input)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("expected %d entries, got %d (%+v)", len(tt.expected), len(got), got)
+			}
+			for i, entry := range got {
+				if entry != tt.expected[i] {
+					t.Errorf("entry[%d] = %+v, want %+v", i, entry, tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+// nonASCIIPaths covers CJK plus names that git's line-based output would make
+// ambiguous even without escaping.
+var nonASCIIPaths = []string{"中文文件.txt", "目录/子文件.md", "带 空格 的 文件.txt", "箭头 -> 文件.txt"}
+
+// setupQuotedTestRepo is setupTestRepo with git's default path quoting pinned on,
+// so these tests still exercise escaped output when the host disables it globally.
+func setupQuotedTestRepo(t *testing.T) (string, func()) {
+	t.Helper()
+	dir, cleanup := setupTestRepo(t)
+	runGit(t, dir, "config", "core.quotePath", "true")
+	return dir, cleanup
+}
+
+func TestStatus_NonASCIIPaths(t *testing.T) {
+	dir, cleanup := setupQuotedTestRepo(t)
+	defer cleanup()
+
+	for _, path := range nonASCIIPaths {
+		writeTestFile(t, dir, path, "original\n")
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+
+	for _, path := range nonASCIIPaths {
+		writeTestFile(t, dir, path, "modified\n")
+	}
+	writeTestFile(t, dir, "未跟踪的文件.txt", "untracked\n")
+
+	status, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+
+	for _, path := range nonASCIIPaths {
+		if !status.HasFile(path, false) {
+			t.Errorf("expected %q in unstaged status, got %+v", path, status.Unstaged)
+		}
+	}
+	if !status.IsUntracked("未跟踪的文件.txt") {
+		t.Errorf("expected 未跟踪的文件.txt to be untracked, got %+v", status.Unstaged)
+	}
+}
+
+// TestAddReset_NonASCIIPath verifies the other half of the round trip: the path
+// reported by Status must also work as-is as a pathspec for staging commands,
+// which fail loudly (rather than silently) when it doesn't match.
+func TestAddReset_NonASCIIPath(t *testing.T) {
+	dir, cleanup := setupQuotedTestRepo(t)
+	defer cleanup()
+
+	for _, path := range nonASCIIPaths {
+		writeTestFile(t, dir, path, "original\n")
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+	for _, path := range nonASCIIPaths {
+		writeTestFile(t, dir, path, "modified\n")
+	}
+
+	status, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	for _, file := range status.Unstaged {
+		if err := Add(dir, file.Path); err != nil {
+			t.Fatalf("Add(%q) error: %v", file.Path, err)
+		}
+	}
+
+	staged, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if len(staged.Unstaged) != 0 {
+		t.Errorf("expected nothing left unstaged, got %+v", staged.Unstaged)
+	}
+	for _, path := range nonASCIIPaths {
+		if !staged.HasFile(path, true) {
+			t.Errorf("expected %q to be staged, got %+v", path, staged.Staged)
+		}
+	}
+
+	for _, file := range staged.Staged {
+		if err := Reset(dir, file.Path); err != nil {
+			t.Fatalf("Reset(%q) error: %v", file.Path, err)
+		}
+	}
+
+	unstaged, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if len(unstaged.Staged) != 0 {
+		t.Errorf("expected nothing left staged, got %+v", unstaged.Staged)
+	}
+	for _, path := range nonASCIIPaths {
+		if !unstaged.HasFile(path, false) {
+			t.Errorf("expected %q back in unstaged after Reset, got %+v", path, unstaged.Unstaged)
+		}
+	}
+}
+
+// A path is still a pathspec after `--`, and pathspec magic is spelled in the
+// leading characters of the name itself — not in a shell, so exec'ing git
+// directly does not disarm it. Without :(literal), staging the one file named
+// ":!important.txt" reads as "everything except important.txt" and stages the
+// rest instead, exiting 0. Discard hit this first; Add and Reset share it.
+func TestAddReset_TreatsPathspecMagicInNamesAsLiteral(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Reset restores from HEAD, so the repository needs one.
+	writeTestFile(t, dir, "seed.txt", "seed\n")
+	runGit(t, dir, "add", "seed.txt")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+
+	writeTestFile(t, dir, ":!important.txt", "picked\n")
+	writeTestFile(t, dir, "bystander.txt", "not picked\n")
+
+	if err := Add(dir, ":!important.txt"); err != nil {
+		t.Fatalf("Add() error: %v", err)
+	}
+
+	staged, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if !staged.HasFile(":!important.txt", true) {
+		t.Errorf("expected :!important.txt staged, got %+v", staged.Staged)
+	}
+	if staged.HasFile("bystander.txt", true) {
+		t.Errorf("Add staged bystander.txt as well, got %+v", staged.Staged)
+	}
+
+	if err := Add(dir, "bystander.txt"); err != nil {
+		t.Fatalf("Add(bystander.txt) error: %v", err)
+	}
+	if err := Reset(dir, ":!important.txt"); err != nil {
+		t.Fatalf("Reset() error: %v", err)
+	}
+
+	after, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if after.HasFile(":!important.txt", true) {
+		t.Errorf("expected :!important.txt unstaged, got %+v", after.Staged)
+	}
+	if !after.HasFile("bystander.txt", true) {
+		t.Errorf("Reset unstaged bystander.txt as well, got %+v", after.Staged)
+	}
+}
+
+// A path that is exactly a submodule's directory resolves to nothing inside it,
+// and ":(literal)" with no path behind it matches everything — where a bare
+// empty pathspec is one git rejects on its own. Refused rather than obeyed with
+// the whole submodule as the target.
+func TestAddReset_RejectSubmoduleRootAsPath(t *testing.T) {
+	dir, cleanup := setupTestRepoWithSubmodule(t)
+	defer cleanup()
+
+	writeTestFile(t, dir, "mysub/sub.txt", "edited\n")
+
+	if err := Add(dir, "mysub/"); err == nil {
+		t.Error("Add() accepted a submodule directory as a path")
+	}
+	if err := Reset(dir, "mysub/"); err == nil {
+		t.Error("Reset() accepted a submodule directory as a path")
+	}
+
+	status, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if sub := status.Submodules["mysub"]; sub == nil || len(sub.Staged) != 0 {
+		t.Errorf("expected nothing staged in the submodule, got %+v", sub)
+	}
+}
+
+// TestGetSubmodulePaths pins that a submodule path is read as a whole value:
+// splitting the line on whitespace used to truncate paths containing spaces.
+func TestGetSubmodulePaths(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	writeTestFile(t, dir, ".gitmodules", `[submodule "plain"]
+	path = vendor/plain
+	url = ./plain
+[submodule "spaced"]
+	path = vendor/with spaces
+	url = ./spaced
+[submodule "cjk"]
+	path = vendor/中文子模块
+	url = ./cjk
+`)
+
+	got := getSubmodulePaths(dir)
+	want := []string{"vendor/plain", "vendor/with spaces", "vendor/中文子模块"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("getSubmodulePaths() = %q, want %q", got, want)
+	}
+}
+
+// TestDiffWithContent_NonASCIIPath verifies the full round trip: the path
+// reported by Status must be usable as-is to fetch that file's diff.
+func TestDiffWithContent_NonASCIIPath(t *testing.T) {
+	dir, cleanup := setupQuotedTestRepo(t)
+	defer cleanup()
+
+	const path = "中文文件.txt"
+	writeTestFile(t, dir, path, "original\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+	writeTestFile(t, dir, path, "modified\n")
+
+	status, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if len(status.Unstaged) != 1 {
+		t.Fatalf("expected 1 unstaged file, got %+v", status.Unstaged)
+	}
+
+	result, err := DiffWithContent(dir, status.Unstaged[0].Path, DiffOptions{})
+	if err != nil {
+		t.Fatalf("DiffWithContent() error: %v", err)
+	}
+	if !strings.Contains(result.Diff, "-original") || !strings.Contains(result.Diff, "+modified") {
+		t.Errorf("diff doesn't contain expected changes:\n%s", result.Diff)
+	}
+	if !strings.Contains(result.Diff, path) {
+		t.Errorf("diff header should carry the unescaped path %q:\n%s", path, result.Diff)
+	}
+	if result.OldContent != "original\n" {
+		t.Errorf("OldContent = %q, want %q", result.OldContent, "original\n")
+	}
+	if result.NewContent != "modified\n" {
+		t.Errorf("NewContent = %q, want %q", result.NewContent, "modified\n")
+	}
+}
+
+func TestShow_NonASCIIPaths(t *testing.T) {
+	dir, cleanup := setupQuotedTestRepo(t)
+	defer cleanup()
+
+	writeTestFile(t, dir, "seed.txt", "seed\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "seed")
+
+	for _, path := range nonASCIIPaths {
+		writeTestFile(t, dir, path, "content\n")
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "add non-ASCII files")
+
+	hash := gitHead(t, dir)
+	result, err := Show(dir, hash)
+	if err != nil {
+		t.Fatalf("Show() error: %v", err)
+	}
+
+	got := make(map[string]string, len(result.Files))
+	for _, f := range result.Files {
+		got[f.Path] = f.Status
+	}
+	for _, path := range nonASCIIPaths {
+		if got[path] != "A" {
+			t.Errorf("expected %q with status A, got %+v", path, result.Files)
+		}
+	}
+
+	// The reported path must be usable as-is to fetch the file's diff
+	diff, err := ShowFileDiff(dir, hash, nonASCIIPaths[0], false)
+	if err != nil {
+		t.Fatalf("ShowFileDiff() error: %v", err)
+	}
+	if !strings.Contains(diff.Diff, "+content") {
+		t.Errorf("diff doesn't contain expected content:\n%s", diff.Diff)
+	}
+	if diff.NewContent != "content\n" {
+		t.Errorf("NewContent = %q, want %q", diff.NewContent, "content\n")
+	}
+}
+
+func TestStatus_NonASCIIRename(t *testing.T) {
+	dir, cleanup := setupQuotedTestRepo(t)
+	defer cleanup()
+
+	writeTestFile(t, dir, "旧名.txt", "content\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+	runGit(t, dir, "mv", "旧名.txt", "新名.txt")
+
+	status, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+
+	if len(status.Staged) != 1 {
+		t.Fatalf("expected 1 staged entry, got %+v", status.Staged)
+	}
+	if status.Staged[0].Path != "新名.txt" || status.Staged[0].Status != "R" {
+		t.Errorf("staged entry = %+v, want {Path: 新名.txt, Status: R}", status.Staged[0])
+	}
+}
+
+func writeTestFile(t *testing.T, dir, path, content string) {
+	t.Helper()
+	fullPath := filepath.Join(dir, path)
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		t.Fatalf("failed to create dir for %q: %v", path, err)
+	}
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write %q: %v", path, err)
+	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v failed: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func gitHead(t *testing.T, dir string) string {
+	t.Helper()
+	return gitOutput(t, dir, "rev-parse", "HEAD")
 }

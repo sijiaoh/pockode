@@ -40,12 +40,12 @@ func (s *WorkStopper) HandleWorkStop(ctx context.Context, id string) error {
 	// Best-effort: the work is already stopped, so we log but don't fail
 	// if the process can't be reached (e.g. worktree already closed).
 	if w.SessionID != "" {
-		mainWt, err := s.worktreeManager.Get("")
+		wt, err := s.worktreeManager.Get(w.Worktree)
 		if err != nil {
-			slog.Warn("could not get worktree to terminate process", "workId", id, "sessionId", w.SessionID, "error", err)
+			slog.Warn("could not get worktree to terminate process", "workId", id, "worktree", w.Worktree, "sessionId", w.SessionID, "error", err)
 		} else {
-			mainWt.ProcessManager.Close(w.SessionID)
-			s.worktreeManager.Release(mainWt)
+			wt.ProcessManager.Close(w.SessionID)
+			s.worktreeManager.Release(wt)
 		}
 	}
 

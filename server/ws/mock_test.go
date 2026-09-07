@@ -12,6 +12,8 @@ import (
 )
 
 type mockSession struct {
+	agent         *mockAgent
+	sessionID     string
 	events        chan agent.AgentEvent
 	messageQueue  chan string
 	ctx           context.Context
@@ -28,6 +30,10 @@ func (s *mockSession) Events() <-chan agent.AgentEvent {
 func (s *mockSession) SendMessage(prompt string) error {
 	select {
 	case s.messageQueue <- prompt:
+		// Record here rather than where the queue is drained. A caller that has
+		// returned from SendMessage has sent the message, so a test inspecting
+		// what was sent must not have to race the mock's own goroutine for it.
+		s.agent.recordMessage(s.sessionID, prompt)
 		return nil
 	case <-s.ctx.Done():
 		return s.ctx.Err()
@@ -77,6 +83,16 @@ type mockAgent struct {
 	startCalls        []startCall
 }
 
+func (m *mockAgent) recordMessage(sessionID, prompt string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, prompt)
+	if m.messagesBySession == nil {
+		m.messagesBySession = make(map[string][]string)
+	}
+	m.messagesBySession[sessionID] = append(m.messagesBySession[sessionID], prompt)
+}
+
 func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	m.mu.Lock()
 	m.startCalls = append(m.startCalls, startCall{sessionID: opts.SessionID, resume: opts.Resume, mode: opts.Mode})
@@ -98,6 +114,8 @@ func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.S
 	}
 
 	sess := &mockSession{
+		agent:        m,
+		sessionID:    effectiveSessionID,
 		events:       eventsChan,
 		messageQueue: messageQueue,
 		ctx:          ctx,
@@ -116,18 +134,10 @@ func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.S
 
 		for {
 			select {
-			case prompt, ok := <-messageQueue:
+			case _, ok := <-messageQueue:
 				if !ok {
 					return
 				}
-
-				m.mu.Lock()
-				m.messages = append(m.messages, prompt)
-				if m.messagesBySession == nil {
-					m.messagesBySession = make(map[string][]string)
-				}
-				m.messagesBySession[effectiveSessionID] = append(m.messagesBySession[effectiveSessionID], prompt)
-				m.mu.Unlock()
 
 				for _, event := range m.events {
 					select {

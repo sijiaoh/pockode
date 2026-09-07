@@ -1,3 +1,4 @@
+import { ConfirmDialog } from "@pockode/shared";
 import {
 	AlertCircle,
 	Loader2,
@@ -10,7 +11,6 @@ import { useCallback, useState } from "react";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useSettingsStore } from "../../lib/settingsStore";
 import { useWSStore } from "../../lib/wsStore";
-import ConfirmDialog from "../common/ConfirmDialog";
 import BackToChatButton from "../ui/BackToChatButton";
 
 interface Props {

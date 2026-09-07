@@ -2,14 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
-	"mime"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,14 +23,20 @@ import (
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/apiroute"
+	"github.com/pockode/server/authtoken"
+	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/relay"
+	"github.com/pockode/server/serverinfo"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/spa"
 	"github.com/pockode/server/startup"
 	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
@@ -43,7 +48,7 @@ var version = "dev"
 //go:embed static/*
 var staticFS embed.FS
 
-func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler) http.Handler {
+func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +62,16 @@ func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler) http.Handl
 	})
 
 	mux.Handle("GET /ws", wsHandler)
+
+	// Whole-file transfer stays off the WebSocket connection; see the
+	// filetransfer package for why.
+	mux.HandleFunc("GET /api/files/download", transferHandler.Download)
+	mux.HandleFunc("POST /api/files/upload", transferHandler.Upload)
+
+	// Local MCP API. middleware.Auth bypasses this exact route; mcpHandler
+	// self-auths with the locally-generated MCP token instead of the user
+	// --auth-token. The relay also refuses to forward it (loopback-only).
+	mux.Handle("POST "+mcp.APIPath, mcpHandler)
 
 	authedMux := middleware.Auth(token)(mux)
 
@@ -89,77 +104,23 @@ func newSPAHandler(apiHandler http.Handler) http.Handler {
 		}
 
 		// Check if file exists (including .br version), otherwise fall back to index.html for SPA routing
-		if !fileExists(subFS, cleanPath) && !fileExists(subFS, cleanPath+".br") {
+		if !spa.FileExists(subFS, cleanPath) && !spa.FileExists(subFS, cleanPath+".br") {
 			cleanPath = "index.html"
 		}
 
-		serveFileWithBrotli(w, r, subFS, cleanPath)
+		spa.ServeFileWithBrotli(w, r, subFS, cleanPath)
 	})
-}
-
-func fileExists(fsys fs.FS, path string) bool {
-	f, err := fsys.Open(path)
-	if err != nil {
-		return false
-	}
-	f.Close()
-	return true
-}
-
-// serveFileWithBrotli serves a file, using pre-compressed .br version if available and client accepts brotli.
-func serveFileWithBrotli(w http.ResponseWriter, r *http.Request, fsys fs.FS, filePath string) {
-	// Hashed assets (in /assets/) can be cached indefinitely
-	if strings.HasPrefix(filePath, "assets/") {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	}
-
-	w.Header().Set("Vary", "Accept-Encoding")
-
-	acceptsBr := strings.Contains(r.Header.Get("Accept-Encoding"), "br")
-	if acceptsBr {
-		brPath := filePath + ".br"
-		if brFile, err := fsys.Open(brPath); err == nil {
-			defer brFile.Close()
-
-			w.Header().Set("Content-Encoding", "br")
-			w.Header().Set("Content-Type", getContentType(filePath))
-			http.ServeContent(w, r, filePath, time.Time{}, brFile.(io.ReadSeeker))
-			return
-		}
-	}
-
-	// Serve uncompressed file
-	file, err := fsys.Open(filePath)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	defer file.Close()
-
-	w.Header().Set("Content-Type", getContentType(filePath))
-	http.ServeContent(w, r, filePath, time.Time{}, file.(io.ReadSeeker))
-}
-
-func getContentType(filePath string) string {
-	ext := filepath.Ext(filePath)
-	if mimeType := mime.TypeByExtension(ext); mimeType != "" {
-		return mimeType
-	}
-	return "application/octet-stream"
 }
 
 const defaultPort = 9870
 
-func findAvailablePort(startPort int) int {
-	const maxAttempts = 100
-	for port := startPort; port < startPort+maxAttempts; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-		if err == nil {
-			ln.Close()
-			return port
-		}
+// generateToken returns a random 256-bit token as a hex string.
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
 	}
-	return startPort
+	return hex.EncodeToString(b), nil
 }
 
 func main() {
@@ -169,14 +130,45 @@ func main() {
 		case "mcp":
 			runMCP()
 			return
+		case "cluster":
+			runCluster()
+			return
 		}
 	}
 
-	portFlag := flag.Int("port", 0, fmt.Sprintf("server port (default %d)", defaultPort))
-	tokenFlag := flag.String("auth-token", "", "authentication token (required)")
+	portFlag := flag.Int("port", defaultPort, "server port")
+	tokenFlag := flag.String("auth-token", "", "authentication token (required; or set "+authtoken.EnvVar+")")
+	workDirFlag := flag.String("work", ".", "working directory")
+	dataDirFlag := flag.String("data", "", "data directory (default: <work>/.pockode)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
+	idleTimeoutFlag := flag.Duration("idle-timeout", 8*time.Hour, "idle timeout before stopping")
 	relayFlag := flag.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
+	relayFrontendPortFlag := flag.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
+	cloudURLFlag := flag.String("cloud-url", "https://cloud.pockode.com", "cloud server URL")
+	gitEnabledFlag := flag.Bool("git", false, "enable git integration")
+	gitRepoURLFlag := flag.String("git-repo-url", "", "git repository URL")
+	gitRepoTokenFlag := flag.String("git-repo-token", "", "git repository token")
+	gitUserNameFlag := flag.String("git-user-name", "", "git user name")
+	gitUserEmailFlag := flag.String("git-user-email", "", "git user email")
+	logLevelFlag := flag.String("log-level", "", "log level: debug, info, warn, error (default info)")
+	logFormatFlag := flag.String("log-format", "", "log format: text, json (default text)")
+	logFileFlag := flag.String("log-file", "", "log file path (default: dataDir/server.log in production)")
 	versionFlag := flag.Bool("version", false, "print version and exit")
+	flag.Usage = func() {
+		out := flag.CommandLine.Output()
+		fmt.Fprint(out, `Pockode — your dev machine in your pocket.
+
+Usage:
+  pockode [flags]           Start the server (default)
+  pockode cluster [flags]   Orchestrator for multiple project nodes (see docs/cluster.md)
+  pockode mcp [flags]       MCP stdio proxy (spawned internally by AI CLIs)
+
+Run "pockode cluster -help" for cluster-mode flags.
+
+Flags:
+`)
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	if *versionFlag {
@@ -184,64 +176,52 @@ func main() {
 		os.Exit(0)
 	}
 
-	port := defaultPort
-	if *portFlag != 0 {
-		port = *portFlag
-	} else if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
-		if p, err := strconv.Atoi(envPort); err == nil {
-			port = p
-		}
-	}
-	port = findAvailablePort(port)
+	port := netutil.FindAvailablePort(*portFlag)
 
-	token := *tokenFlag
+	token := authtoken.Load(*tokenFlag)
 	if token == "" {
-		token = os.Getenv("AUTH_TOKEN")
-	}
-	if token == "" {
-		slog.Error("AUTH_TOKEN is required (use --auth-token flag or AUTH_TOKEN env)")
+		slog.Error("auth token is required: set --auth-token or the " + authtoken.EnvVar + " environment variable")
 		os.Exit(1)
 	}
 
-	workDir := "."
-	if envWorkDir := os.Getenv("WORK_DIR"); envWorkDir != "" {
-		workDir = envWorkDir
-	}
-	absWorkDir, err := filepath.Abs(workDir)
+	absWorkDir, err := filepath.Abs(*workDirFlag)
 	if err != nil {
 		slog.Error("failed to resolve work directory", "error", err)
 		os.Exit(1)
 	}
-	workDir = absWorkDir
+	workDir := absWorkDir
 
-	devMode := *devModeFlag || os.Getenv("DEV_MODE") == "true"
+	devMode := *devModeFlag
 
-	dataDir := filepath.Join(workDir, ".pockode")
-	if envDataDir := os.Getenv("DATA_DIR"); envDataDir != "" {
-		dataDir = envDataDir
+	dataDirStr := *dataDirFlag
+	if dataDirStr == "" {
+		dataDirStr = filepath.Join(workDir, ".pockode")
 	}
-	absDataDir, err := filepath.Abs(dataDir)
+	absDataDir, err := filepath.Abs(dataDirStr)
 	if err != nil {
 		slog.Error("failed to resolve data directory", "error", err)
 		os.Exit(1)
 	}
-	dataDir = absDataDir
+	dataDir := absDataDir
 
 	logger.Init(logger.Config{
-		DataDir: dataDir,
-		DevMode: devMode,
+		DataDir:   dataDir,
+		DevMode:   devMode,
+		LogLevel:  *logLevelFlag,
+		LogFormat: *logFormatFlag,
+		LogFile:   *logFileFlag,
 	})
 
-	if os.Getenv("GIT_ENABLED") == "true" {
+	if *gitEnabledFlag {
 		gitCfg := git.Config{
-			RepoURL:   os.Getenv("REPOSITORY_URL"),
-			RepoToken: os.Getenv("REPOSITORY_TOKEN"),
-			UserName:  os.Getenv("GIT_USER_NAME"),
-			UserEmail: os.Getenv("GIT_USER_EMAIL"),
+			RepoURL:   *gitRepoURLFlag,
+			RepoToken: *gitRepoTokenFlag,
+			UserName:  *gitUserNameFlag,
+			UserEmail: *gitUserEmailFlag,
 			WorkDir:   workDir,
 		}
 		if gitCfg.RepoURL == "" || gitCfg.RepoToken == "" || gitCfg.UserName == "" || gitCfg.UserEmail == "" {
-			slog.Error("GIT_ENABLED=true requires REPOSITORY_URL, REPOSITORY_TOKEN, GIT_USER_NAME, GIT_USER_EMAIL")
+			slog.Error("-git flag requires -git-repo-url, -git-repo-token, -git-user-name, -git-user-email")
 			os.Exit(1)
 		}
 		if err := git.Init(gitCfg); err != nil {
@@ -257,15 +237,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize process manager with idle timeout
-	idleTimeout := 8 * time.Hour
-	if env := os.Getenv("IDLE_TIMEOUT"); env != "" {
-		if d, err := time.ParseDuration(env); err == nil {
-			idleTimeout = d
-		} else {
-			slog.Warn("invalid IDLE_TIMEOUT, using default", "value", env, "default", idleTimeout)
-		}
-	}
+	idleTimeout := *idleTimeoutFlag
 
 	// Initialize settings store
 	settingsStore, err := settings.NewStore(dataDir)
@@ -291,13 +263,15 @@ func main() {
 	}
 	workStore := s.work
 	agentRoleStore := s.agentRole
+	if err := agentRoleStore.StartWatching(); err != nil {
+		slog.Warn("failed to start agent role store file watcher", "error", err)
+	}
 
 	workAutoResumer := work.NewAutoResumer(workStore, 3)
 	workAutoResumer.StopOrphanedWork()
 	workAutoResumer.SetStepProvider(&agentRoleStepAdapter{store: agentRoleStore})
 	session.ClearOrphanedNeedsInput(dataDir)
 	workStore.AddOnChangeListener(workAutoResumer)
-	s.StartWatching()
 
 	// Set PM as default agent role on first launch
 	if pmID := agentRoleStore.SeededPMRoleID(); pmID != "" {
@@ -315,18 +289,36 @@ func main() {
 
 	// Initialize worktree registry and manager
 	registry := worktree.NewRegistry(workDir, dataDir)
+	registry.SetBaseDirProvider(func() string {
+		return settingsStore.Get().WorktreeBaseDir
+	})
 	worktreeManager := worktree.NewManager(registry, agents, dataDir, idleTimeout)
 	worktreeManager.SetWorkAutoResumer(workAutoResumer)
+	// Route AutoResumer follow-up messages to each work's own worktree.
+	workAutoResumer.SetSenderResolver(worktreeManager)
 	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
-	workAutoResumer.SetStartHandler(workStarter)
+	// Single implementation of the start/reopen transitions, shared by both the
+	// WebSocket handler (user actions) and the MCP Executor (AI actions).
+	workOps := work.NewOperations(workStore, workStarter, workAutoResumer)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
 
-	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
-	handler := newHandler(token, devMode, wsHandler)
+	// Local API token for the MCP subprocess. Randomly generated per startup and
+	// published to server.json, so it never outlives the process and is distinct
+	// from the user-facing --auth-token.
+	mcpToken, err := generateToken()
+	if err != nil {
+		slog.Error("failed to generate MCP token", "error", err)
+		os.Exit(1)
+	}
+	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, workAutoResumer, settingsStore), mcpToken)
+
+	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
+	transferHandler := filetransfer.NewHandler(registry, slog.Default())
+	handler := newHandler(token, devMode, wsHandler, mcpHandler, transferHandler)
 
 	portStr := strconv.Itoa(port)
 	srv := &http.Server{
@@ -334,15 +326,12 @@ func main() {
 		Handler: handler,
 	}
 
-	cloudURL := os.Getenv("CLOUD_URL")
-	if cloudURL == "" {
-		cloudURL = "https://cloud.pockode.com"
-	}
+	cloudURL := *cloudURLFlag
 
 	// Initialize relay if enabled
 	var relayManager *relay.Manager
 	var remoteURL string
-	relayEnabled := *relayFlag && os.Getenv("RELAY_ENABLED") != "false"
+	relayEnabled := *relayFlag
 	if relayEnabled {
 		relayCfg := relay.Config{
 			CloudURL:      cloudURL,
@@ -350,9 +339,9 @@ func main() {
 			ClientVersion: version,
 		}
 
-		frontendPort := port
-		if envFrontendPort := os.Getenv("RELAY_FRONTEND_PORT"); envFrontendPort != "" {
-			frontendPort, _ = strconv.Atoi(envFrontendPort)
+		frontendPort := *relayFrontendPortFlag
+		if frontendPort == 0 {
+			frontendPort = port
 		}
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, slog.Default())
 
@@ -367,12 +356,20 @@ func main() {
 		slog.Info("remote access enabled", "url", remoteURL)
 	}
 
+	// Write server.json for orchestration programs to discover the running server
+	localURL := "http://localhost:" + portStr
+	if err := serverinfo.Write(dataDir, port, localURL, remoteURL, mcpToken); err != nil {
+		slog.Error("failed to write server.json", "error", err)
+		os.Exit(1)
+	}
+
 	// Graceful shutdown
 	shutdownDone := make(chan struct{})
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
+		signal.Stop(sigCh)
 
 		slog.Info("shutting down server")
 		// Close the relay before draining srv, not after: every relayed request
@@ -391,7 +388,10 @@ func main() {
 		workAutoResumer.Stop()
 		worktreeManager.Shutdown()
 		settingsStore.StopWatching()
-		s.StopWatching()
+		agentRoleStore.StopWatching()
+		if err := serverinfo.Delete(dataDir); err != nil {
+			slog.Error("failed to delete server.json", "error", err)
+		}
 		close(shutdownDone)
 	}()
 
@@ -444,20 +444,6 @@ func initStores(dataDir string) (*stores, error) {
 	return &stores{work: workStore, agentRole: agentRoleStore}, nil
 }
 
-func (s *stores) StartWatching() {
-	if err := s.work.StartWatching(); err != nil {
-		slog.Warn("failed to start work store file watcher", "error", err)
-	}
-	if err := s.agentRole.StartWatching(); err != nil {
-		slog.Warn("failed to start agent role store file watcher", "error", err)
-	}
-}
-
-func (s *stores) StopWatching() {
-	s.work.StopWatching()
-	s.agentRole.StopWatching()
-}
-
 // agentRoleStepAdapter adapts agentrole.Store to work.StepProvider.
 type agentRoleStepAdapter struct {
 	store agentrole.Store
@@ -485,17 +471,65 @@ func runMCP() {
 		os.Exit(1)
 	}
 
-	s, err := initStores(dataDir)
+	// Client mode: discover the running server from server.json and forward tool
+	// calls over its local API. The MCP process owns no stores and no watcher.
+	client, err := mcp.NewClientFromServerInfo(dataDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	s.StartWatching()
-	defer s.StopWatching()
 
-	server := mcp.NewServer(s.work, s.agentRole)
+	server := mcp.NewServer(client, version)
 	if err := server.Run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runCluster() {
+	clusterFlags := flag.NewFlagSet("cluster", flag.ExitOnError)
+	portFlag := clusterFlags.Int("port", cluster.DefaultPort, "server port")
+	tokenFlag := clusterFlags.String("auth-token", "", "authentication token (required; or set "+authtoken.EnvVar+")")
+	dataDirFlag := clusterFlags.String("data", "", "data directory (default: ~/.pockode-cluster)")
+	relayFlag := clusterFlags.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
+	relayFrontendPortFlag := clusterFlags.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
+	cloudURLFlag := clusterFlags.String("cloud-url", "https://cloud.pockode.com", "cloud server URL")
+	devModeFlag := clusterFlags.Bool("dev", false, "enable development mode")
+	clusterFlags.Parse(os.Args[2:])
+
+	token := authtoken.Load(*tokenFlag)
+	if token == "" {
+		fmt.Fprintln(os.Stderr, "Error: auth token is required: set --auth-token or the "+authtoken.EnvVar+" environment variable")
+		os.Exit(1)
+	}
+
+	dataDir := *dataDirFlag
+	if dataDir == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: failed to get home directory: %v\n", err)
+			os.Exit(1)
+		}
+		dataDir = filepath.Join(homeDir, ".pockode-cluster")
+	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to create data directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg := cluster.Config{
+		Port:              *portFlag,
+		AuthToken:         token,
+		DataDir:           dataDir,
+		RelayEnabled:      *relayFlag,
+		RelayFrontendPort: *relayFrontendPortFlag,
+		CloudURL:          *cloudURLFlag,
+		Version:           version,
+		DevMode:           *devModeFlag,
+	}
+
+	if err := cluster.Run(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: cluster mode failed: %v\n", err)
 		os.Exit(1)
 	}
 }

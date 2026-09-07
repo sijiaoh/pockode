@@ -16,9 +16,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
+
+	"github.com/google/uuid"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/filestore"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
@@ -58,8 +60,11 @@ func ensureMCPConfig(dataDir string) (string, error) {
 		return "", err
 	}
 
+	// Written atomically because every session start rewrites this shared file:
+	// a plain write truncates it, and a CLI that another session is spawning at
+	// that instant would read the truncated JSON and lose its MCP tools.
 	configPath := filepath.Join(dataDir, "mcp-config.json")
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := filestore.WriteFileAtomic(configPath, data, 0644); err != nil {
 		return "", err
 	}
 
@@ -84,18 +89,23 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	}
 
 	resumeState := newClaudeResumeStateManager(opts, slog.With("sessionId", opts.SessionID))
-	providerSessionID, shouldResume := resumeState.resolve()
-	if providerSessionID != "" {
-		if shouldResume {
-			claudeArgs = append(claudeArgs, "--resume", providerSessionID)
+	launch := resumeState.resolve()
+	if launch.sessionID != "" {
+		if launch.resume {
+			claudeArgs = append(claudeArgs, "--resume", launch.sessionID)
+			if launch.fork {
+				claudeArgs = append(claudeArgs, "--fork-session")
+			}
 		} else {
-			claudeArgs = append(claudeArgs, "--session-id", providerSessionID)
+			claudeArgs = append(claudeArgs, "--session-id", launch.sessionID)
 		}
 	}
 
-	// Add MCP config for work management tools (unless disabled for testing)
+	// Add MCP config for work management tools (unless disabled for testing).
+	// The proxy must reach the single running server, whose server.json lives in
+	// the main data dir — not this session's per-worktree DataDir.
 	if !opts.DisableMCP {
-		mcpConfigPath, err := ensureMCPConfig(opts.DataDir)
+		mcpConfigPath, err := ensureMCPConfig(opts.MCPDir())
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("failed to create MCP config: %w", err)
@@ -164,9 +174,21 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		defer stdout.Close()
 		defer stderr.Close()
 
+		// Drain stderr before anything can block on the event channel: the
+		// warning below waits for a consumer, and a CLI that fills the stderr
+		// pipe meanwhile would wedge instead of starting up.
 		stderrCh := agent.ReadStderr(stderr, "claude")
-		streamOutput(procCtx, log, stdout, events, pendingRequests, resumeState)
+
+		if warning, ok := resumeState.pendingWarning(); ok {
+			select {
+			case events <- warning:
+			case <-procCtx.Done():
+			}
+		}
+
+		streamOutput(procCtx, log, stdout, events, pendingRequests, resumeState, sess.declineControlRequest)
 		agent.WaitForProcess(procCtx, log, cmd, stderrCh, events)
+		resumeState.processExited(procCtx.Err() != nil)
 
 		// Notify client that process has ended (abnormal: process should stay alive)
 		select {
@@ -239,7 +261,16 @@ func (s *cliSession) SendPermissionResponse(data agent.PermissionRequestData, ch
 
 // SendQuestionResponse sends answers to user questions.
 // If answers is nil, sends a cancel (deny) response.
+//
+// The Claude SDK's AskUserQuestion tool expects the updatedInput to retain
+// the original input fields (notably `questions`) and add `answers`. Sending
+// just `{"answers": ...}` causes the SDK to crash internally with
+// "Cannot destructure property 'answers' from null or undefined value" and
+// then retry the tool call — re-asking the same question.
 func (s *cliSession) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
+	// Always consume the stored input — even on cancel — so the map doesn't leak.
+	originalInput := s.takePendingQuestionInput(data.RequestID)
+
 	var content controlResponseContent
 
 	if answers == nil {
@@ -250,9 +281,9 @@ func (s *cliSession) SendQuestionResponse(data agent.QuestionRequestData, answer
 			ToolUseID: data.ToolUseID,
 		}
 	} else {
-		updatedInput, err := json.Marshal(questionAnswerInput{Answers: answers})
+		updatedInput, err := buildQuestionUpdatedInput(originalInput, answers)
 		if err != nil {
-			return fmt.Errorf("failed to marshal updated input: %w", err)
+			return err
 		}
 		content = controlResponseContent{
 			Behavior:     "allow",
@@ -262,6 +293,41 @@ func (s *cliSession) SendQuestionResponse(data agent.QuestionRequestData, answer
 	}
 
 	return s.sendControlResponse(data.RequestID, content)
+}
+
+// takePendingQuestionInput removes and returns the original input stored for
+// the given question request. Returns nil if no input was stored (e.g. after a
+// control_cancel_request raced ahead of the user's response).
+func (s *cliSession) takePendingQuestionInput(requestID string) json.RawMessage {
+	v, ok := s.pendingRequests.LoadAndDelete(requestID)
+	if !ok {
+		return nil
+	}
+	return v.(pendingQuestionMarker).Input
+}
+
+// buildQuestionUpdatedInput merges user-provided answers into the original
+// AskUserQuestion tool input. The SDK requires the full original input
+// (including `questions`) plus the `answers` field; missing fields cause the
+// tool to fail and re-ask.
+func buildQuestionUpdatedInput(originalInput json.RawMessage, answers map[string]string) (json.RawMessage, error) {
+	var merged map[string]interface{}
+	if len(originalInput) > 0 {
+		if err := json.Unmarshal(originalInput, &merged); err != nil {
+			return nil, fmt.Errorf("failed to parse pending question input: %w", err)
+		}
+	}
+	// Unmarshaling a JSON `null` (or missing input) leaves merged nil; ensure
+	// we have a writable map before assigning the answers field.
+	if merged == nil {
+		merged = map[string]interface{}{}
+	}
+	merged["answers"] = answers
+	data, err := json.Marshal(merged)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal updated input: %w", err)
+	}
+	return data, nil
 }
 
 func (s *cliSession) sendControlResponse(requestID string, content controlResponseContent) error {
@@ -283,9 +349,40 @@ func (s *cliSession) sendControlResponse(requestID string, content controlRespon
 	return s.writeStdin(data)
 }
 
+// declineControlRequest answers a control request we cannot service with a
+// protocol-level error. The CLI blocks the turn until every request it
+// originates gets a reply, so staying silent would hang the session.
+func (s *cliSession) declineControlRequest(requestID, message string) {
+	response := controlErrorResponse{
+		Type: "control_response",
+		Response: controlErrorPayload{
+			Subtype:   "error",
+			RequestID: requestID,
+			Error:     message,
+		},
+	}
+
+	data, err := json.Marshal(response)
+	if err != nil {
+		s.log.Error("failed to marshal control error response", "error", err)
+		return
+	}
+
+	if err := s.writeStdin(data); err != nil {
+		s.log.Error("failed to send control error response", "error", err, "requestId", requestID)
+	}
+}
+
 // interruptMarker is stored in pendingRequests to identify interrupt responses.
 // Needed because control_response only contains request_id, not the request type.
 type interruptMarker struct{}
+
+// pendingQuestionMarker is stored in pendingRequests so we can echo the
+// original AskUserQuestion tool input back when responding. The SDK requires
+// the full original input plus an `answers` field.
+type pendingQuestionMarker struct {
+	Input json.RawMessage
+}
 
 // SendInterrupt sends an interrupt signal to stop the current task.
 func (s *cliSession) SendInterrupt() error {
@@ -343,7 +440,7 @@ func (s *cliSession) writeStdin(data []byte) error {
 	return err
 }
 
-func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager) {
+func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, decline declineFunc) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
@@ -353,13 +450,26 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 			continue
 		}
 
-		if resumeState != nil {
-			resumeState.observeLine(line)
+		// Decode the envelope once and share it with both the resume-state
+		// observer and the parser; both only need Type/Subtype/SessionID/Message.
+		var event cliEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			log.Warn("failed to parse JSON from CLI", "error", err, "lineLength", len(line))
+			select {
+			case events <- agent.TextEvent{Content: string(line)}:
+				continue
+			case <-ctx.Done():
+				return
+			}
 		}
 
-		for _, event := range parseLine(log, line, pendingRequests) {
+		if resumeState != nil {
+			resumeState.observe(event)
+		}
+
+		for _, ev := range parseLine(log, line, event, pendingRequests, decline) {
 			select {
-			case events <- event:
+			case events <- ev:
 			case <-ctx.Done():
 				return
 			}
@@ -386,54 +496,137 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 
 // --- Resume state ---
 
+// Recovery stages of the resume ladder, persisted in claude_resume.json. A stage
+// says how the *next* launch should be attempted: processExited() escalates it
+// one rung when a launch fails, observe() resets it as soon as one works.
+const (
+	// recoveryNone is the healthy state: resume the recorded provider session.
+	recoveryNone = ""
+	// recoveryFork resumes the recorded session but lets the CLI mint a new ID
+	// for it, which sidesteps an ID that the CLI already owns while still
+	// carrying the agent-side context over.
+	recoveryFork = "fork"
+	// recoveryFresh gives up on the recorded session and starts a brand new one.
+	// Terminal stage: it never escalates further, so the ladder cannot loop.
+	recoveryFresh = "fresh"
+)
+
 type claudeResumeState struct {
 	SessionID string `json:"sessionId"`
+	Recovery  string `json:"recovery,omitempty"`
 }
 
+// claudeLaunch is how the CLI should be started for this session.
+type claudeLaunch struct {
+	sessionID string
+	// resume selects --resume over --session-id.
+	resume bool
+	// fork adds --fork-session, which only applies together with resume.
+	fork bool
+}
+
+// claudeResumeStateManager owns claude_resume.json: it picks how to launch the
+// CLI, records the provider session ID the CLI reports back, and walks a
+// recovery ladder when a launch turns out to be unusable.
 type claudeResumeStateManager struct {
 	opts agent.StartOptions
 	log  *slog.Logger
 
-	sessionID atomic.Value // string
-	saved     atomic.Bool
+	mu sync.Mutex
+	// persisted mirrors what we believe is on disk, so repeated observations
+	// don't rewrite an unchanged file.
+	persisted claudeResumeState
+	// anchorID is the provider session the ladder is trying to recover.
+	anchorID  string
+	stage     string
+	sawInit   bool
+	warnFresh bool
 }
 
 func newClaudeResumeStateManager(opts agent.StartOptions, log *slog.Logger) *claudeResumeStateManager {
-	m := &claudeResumeStateManager{opts: opts, log: log}
-	if opts.SessionID != "" {
-		m.sessionID.Store(opts.SessionID)
-	}
-	return m
+	return &claudeResumeStateManager{opts: opts, log: log}
 }
 
 func (m *claudeResumeStateManager) path() string {
 	return filepath.Join(m.opts.DataDir, "sessions", m.opts.SessionID, resumeStateFile)
 }
 
-func (m *claudeResumeStateManager) resolve() (providerSessionID string, resume bool) {
+// resolve decides how to launch the CLI, based on the recovery stage left
+// behind by the previous launch.
+//
+//	| state file            | launch                                      |
+//	|-----------------------|---------------------------------------------|
+//	| none, never activated | --session-id <pockodeID>                    |
+//	| none, activated       | --resume <pockodeID> --fork-session         |
+//	| recovery ""           | --resume <sessionId>                        |
+//	| recovery "fork"       | --resume <sessionId> --fork-session         |
+//	| recovery "fresh"      | --session-id <new UUID> (+ user warning)    |
+func (m *claudeResumeStateManager) resolve() claudeLaunch {
 	if m.opts.SessionID == "" {
-		return "", false
-	}
-	if !m.opts.Resume {
-		return m.opts.SessionID, false
+		return claudeLaunch{}
 	}
 
-	state, ok := m.load()
-	if ok && state.SessionID != "" {
-		m.sessionID.Store(state.SessionID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, _ := m.load()
+	m.persisted = state
+
+	if state.SessionID == "" {
+		m.anchorID = m.opts.SessionID
+		if !m.opts.Resume {
+			m.stage = recoveryNone
+			return claudeLaunch{sessionID: m.opts.SessionID}
+		}
+		// Activated but no provider ID recorded: a legacy session from before we
+		// persisted the mapping, or one whose state file was lost. Activation
+		// means the agent has answered here before, so the CLI already owns
+		// <pockodeID> — the init that carried that answer is what claims it —
+		// and reusing it as --session-id is fatal ("Session ID ... is already in
+		// use"). Forking resumes the transcript *and* mints a new ID, so the
+		// agent-side context survives instead of being thrown away.
+		m.stage = recoveryFork
+		m.log.Info("forking claude session with no recorded provider id")
+		return claudeLaunch{sessionID: m.opts.SessionID, resume: true, fork: true}
+	}
+
+	m.anchorID = state.SessionID
+	switch state.Recovery {
+	case recoveryFork:
+		m.stage = recoveryFork
+		m.log.Info("forking claude session after a failed resume", "claudeSessionId", state.SessionID)
+		return claudeLaunch{sessionID: state.SessionID, resume: true, fork: true}
+	case recoveryFresh:
+		m.stage = recoveryFresh
+		m.warnFresh = true
+		// The CLI rejects anything that is not a UUID, so mint a real one.
+		newID := uuid.Must(uuid.NewV7()).String()
+		m.log.Warn("starting a new claude session after resume attempts failed",
+			"unusableSessionId", state.SessionID, "claudeSessionId", newID)
+		return claudeLaunch{sessionID: newID}
+	default:
+		m.stage = recoveryNone
 		m.log.Info("resuming claude session", "claudeSessionId", state.SessionID)
-		return state.SessionID, true
+		return claudeLaunch{sessionID: state.SessionID, resume: true}
 	}
+}
 
-	if m.hasAssistantHistory() {
-		m.sessionID.Store(m.opts.SessionID)
-		m.save(m.opts.SessionID)
-		m.log.Info("migrated legacy claude session", "claudeSessionId", m.opts.SessionID)
-		return m.opts.SessionID, true
+// pendingWarning reports the warning owed to the user when the ladder had to
+// abandon the previous provider session.
+//
+// The caller must emit it from the streaming goroutine: the event channel is
+// unbuffered, so sending from Start() would deadlock before a consumer exists.
+func (m *claudeResumeStateManager) pendingWarning() (agent.WarningEvent, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.warnFresh {
+		return agent.WarningEvent{}, false
 	}
-
-	m.log.Info("starting new claude session because resume state is missing")
-	return m.opts.SessionID, false
+	m.warnFresh = false
+	return agent.WarningEvent{
+		Message: "Claude could not reopen this session's earlier conversation, so it is starting over without those messages. The transcript above is unaffected.",
+		Code:    "session_not_resumable",
+	}, true
 }
 
 func (m *claudeResumeStateManager) load() (claudeResumeState, bool) {
@@ -449,72 +642,83 @@ func (m *claudeResumeStateManager) load() (claudeResumeState, bool) {
 	return state, true
 }
 
-func (m *claudeResumeStateManager) save(sessionID string) {
-	if sessionID == "" {
+// save persists state unless it already matches what is on disk. Callers must
+// hold m.mu.
+func (m *claudeResumeStateManager) save(state claudeResumeState) {
+	// Without a Pockode session there is nothing to resume later, and path()
+	// would point at a stray file shared by every anonymous session.
+	if m.opts.SessionID == "" || state == m.persisted {
 		return
 	}
-	data, err := json.Marshal(claudeResumeState{SessionID: sessionID})
+	data, err := json.Marshal(state)
 	if err != nil {
 		m.log.Error("failed to marshal claude resume state", "error", err)
 		return
 	}
-	path := m.path()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		m.log.Error("failed to create claude resume state directory", "error", err)
-		return
-	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := filestore.WriteFileAtomic(m.path(), data, 0644); err != nil {
 		m.log.Error("failed to write claude resume state", "error", err)
+		return
 	}
+	m.persisted = state
 }
 
-func (m *claudeResumeStateManager) observeLine(line []byte) {
-	var event cliEvent
-	if err := json.Unmarshal(line, &event); err != nil {
+// observe records the provider session ID as soon as the CLI reports it.
+//
+// The init event is the earliest point at which the ID exists, and it is also
+// the point at which the CLI creates <id>.jsonl and owns that ID forever. Any
+// later checkpoint (the first assistant message, say) leaves a window where a
+// failed turn burns an ID we never wrote down. The CLI repeats init at the start
+// of every turn, so save() deduplicates against what is already on disk.
+func (m *claudeResumeStateManager) observe(event cliEvent) {
+	if event.Type != "system" || event.Subtype != "init" || event.SessionID == "" {
 		return
 	}
-	if event.SessionID != "" {
-		m.sessionID.Store(event.SessionID)
-	}
-	if event.Type != "assistant" || m.saved.Load() {
-		return
-	}
-	sessionID, _ := m.sessionID.Load().(string)
-	if sessionID == "" {
-		return
-	}
-	m.save(sessionID)
-	m.saved.Store(true)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.sawInit = true
+	m.anchorID = event.SessionID
+	m.stage = recoveryNone
+	// Reaching init means the launch worked, so the ladder resets.
+	m.save(claudeResumeState{SessionID: event.SessionID})
 }
 
-func (m *claudeResumeStateManager) hasAssistantHistory() bool {
-	path := filepath.Join(m.opts.DataDir, "sessions", m.opts.SessionID, "history.jsonl")
-	file, err := os.Open(path)
-	if err != nil {
-		return false
+// processExited walks the recovery ladder one step when the CLI died without
+// ever reporting a session.
+//
+// Never seeing init means the launch itself failed: both "Session ID ... is
+// already in use" and "No conversation found with session ID ..." abort before
+// the first turn. This is only a valid failure signal because a process is
+// always created to carry a message — chat.Client.sendEvent is the sole caller
+// of GetOrCreateProcess and sends immediately after. A CLI started with nothing
+// to do exits cleanly without emitting init, and would be misread as a failure.
+//
+// cancelled means we killed the process ourselves (Close, shutdown), which says
+// nothing about whether the session is usable.
+func (m *claudeResumeStateManager) processExited(cancelled bool) {
+	if m.opts.SessionID == "" || cancelled {
+		return
 	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-	for scanner.Scan() {
-		var record struct {
-			Type agent.EventType `json:"type"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			continue
-		}
-		switch record.Type {
-		case agent.EventTypeText, agent.EventTypeToolCall, agent.EventTypeToolResult,
-			agent.EventTypeDone, agent.EventTypeInterrupted, agent.EventTypePermissionRequest,
-			agent.EventTypeAskUserQuestion:
-			return true
-		}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.sawInit {
+		return
 	}
-	if err := scanner.Err(); err != nil {
-		m.log.Warn("failed to scan claude history for legacy migration", "error", err)
+	next := nextRecovery(m.stage)
+	m.log.Warn("claude exited before reporting a session; escalating recovery",
+		"claudeSessionId", m.anchorID, "recovery", next)
+	m.save(claudeResumeState{SessionID: m.anchorID, Recovery: next})
+}
+
+func nextRecovery(stage string) string {
+	if stage == recoveryNone {
+		return recoveryFork
 	}
-	return false
+	// fork and the terminal fresh stage both go to fresh.
+	return recoveryFresh
 }
 
 // --- Types ---
@@ -568,6 +772,17 @@ type controlResponseContent struct {
 	UpdatedPermissions []agent.PermissionUpdate `json:"updatedPermissions,omitempty"`
 }
 
+type controlErrorResponse struct {
+	Type     string              `json:"type"`
+	Response controlErrorPayload `json:"response"`
+}
+
+type controlErrorPayload struct {
+	Subtype   string `json:"subtype"`
+	RequestID string `json:"request_id"`
+	Error     string `json:"error"`
+}
+
 type interruptRequest struct {
 	Type      string               `json:"type"`
 	RequestID string               `json:"request_id"`
@@ -576,11 +791,6 @@ type interruptRequest struct {
 
 type interruptRequestData struct {
 	Subtype string `json:"subtype"`
-}
-
-// questionAnswerInput is the UpdatedInput format for question responses.
-type questionAnswerInput struct {
-	Answers map[string]string `json:"answers"`
 }
 
 // --- Parsing ---
@@ -593,6 +803,7 @@ type cliEvent struct {
 }
 
 type cliMessage struct {
+	Model   string            `json:"model"`
 	Content []cliContentBlock `json:"content"`
 }
 
@@ -611,39 +822,38 @@ type cliContentBlock struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 }
 
-func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
-	if len(line) == 0 {
-		return nil
-	}
+// declineFunc answers a control request the CLI is blocking on with a
+// protocol-level error. Injected so parsing stays independent of the session.
+type declineFunc func(requestID, message string)
 
-	var event cliEvent
-	if err := json.Unmarshal(line, &event); err != nil {
-		log.Warn("failed to parse JSON from CLI", "error", err, "lineLength", len(line))
-		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
-	}
-
+// parseLine converts one already-decoded stream-json envelope into agent events.
+// line is retained for the cases (assistant, result, control_*) that decode a
+// superset struct.
+func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, decline declineFunc) []agent.AgentEvent {
 	switch event.Type {
 	case "assistant":
-		return parseAssistantEvent(log, event)
+		return parseAssistantEvent(log, line, event)
 	case "user":
 		return parseUserEvent(log, event)
 	case "result":
 		return []agent.AgentEvent{parseResultEvent(line)}
 	case "system":
-		// Skip init event (noise at session start)
-		if event.Subtype == "init" {
-			return nil
-		}
-		return []agent.AgentEvent{agent.SystemEvent{Content: string(line)}}
+		return parseSystemEvent(log, line, event)
 	case "control_request":
-		return parseControlRequest(log, line)
+		return parseControlRequest(log, line, pendingRequests, decline)
 	case "control_response":
 		return parseControlResponse(log, line, pendingRequests)
 	case "control_cancel_request":
-		return parseControlCancelRequest(log, line)
-	case "progress":
-		// Undocumented event (e.g., bash_progress) not in official SDK docs.
-		// Other CLI wrappers also ignore it.
+		return parseControlCancelRequest(log, line, pendingRequests)
+	case "progress", "tool_progress", "tool_use_summary", "rate_limit_event",
+		"auth_status", "prompt_suggestion", "command_lifecycle":
+		// Telemetry and host-control frames that carry nothing for the transcript;
+		// the CLI's own SDK adapter drops the same set. "progress" is the pre-2.1
+		// name of "tool_progress" and is kept for older CLIs.
+		//
+		// Deliberately absent: "conversation_reset", which does carry meaning (the
+		// CLI dropped its history, e.g. after /clear) but has no Pockode handling
+		// yet, so it stays on the unhandled path where the debug log records it.
 		return nil
 	default:
 		log.Debug("unhandled event type from CLI", "type", event.Type)
@@ -651,16 +861,95 @@ func parseLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent
 	}
 }
 
-func parseControlRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
-	var req controlRequest
-	if err := json.Unmarshal(line, &req); err != nil {
-		log.Warn("failed to parse control request from CLI", "error", err)
+// userVisibleSystemSubtypes lists the `system` subtypes worth putting in the
+// transcript. Everything else is internal bookkeeping.
+//
+// Why an allowlist: the CLI emits dozens of internal system subtypes (task_*,
+// hook_*, session_state_changed, turn_duration, ...) and keeps adding more, so
+// forwarding unknown subtypes by default turns every tool call into transcript
+// noise — a plain `echo hi` alone emits task_started and task_notification.
+//
+// This mirrors the CLI's own SDK message adapter, which renders exactly this set
+// and ignores unknown subtypes. Two deliberate additions: the adapter drops
+// api_retry and permission_denied because the interactive REPL has its own
+// surfaces for a retry banner and a denial dialog — Pockode has neither, so
+// without these a stalled turn or an auto-denied tool would go unexplained.
+//
+// Two notable exclusions: `init` is session-start metadata that the CLI re-emits
+// at the start of every turn, and `thinking_tokens` is a per-delta token
+// estimate — both are pure noise in a transcript.
+var userVisibleSystemSubtypes = map[string]bool{
+	"compact_boundary":          true, // conversation was compacted
+	"informational":             true, // loop text banner, e.g. hook feedback
+	"api_retry":                 true, // API call failed and is being retried
+	"permission_denied":         true, // tool auto-denied without an interactive prompt
+	"model_fallback":            true, // switched to a fallback model
+	"model_consent_fallback":    true,
+	"model_refusal_fallback":    true,
+	"model_refusal_no_fallback": true, // model refused and no fallback ran
+}
+
+// systemContent extracts the display text of a system event.
+type systemContent struct {
+	Content string `json:"content"`
+}
+
+func parseSystemEvent(log *slog.Logger, line []byte, event cliEvent) []agent.AgentEvent {
+	// Output of a local slash command (e.g. /usage). The legacy path delivers
+	// the same text inside a user message wrapped in <local-command-stdout>.
+	if event.Subtype == "local_command_output" {
+		var payload systemContent
+		if err := json.Unmarshal(line, &payload); err != nil {
+			log.Warn("failed to parse local command output from CLI", "error", err)
+			return []agent.AgentEvent{agent.SystemEvent{Content: string(line)}}
+		}
+		if payload.Content == "" {
+			return nil
+		}
+		return []agent.AgentEvent{agent.CommandOutputEvent{Content: payload.Content}}
+	}
+
+	if !userVisibleSystemSubtypes[event.Subtype] {
+		log.Debug("ignoring internal system event from CLI", "subtype", event.Subtype)
 		return nil
 	}
 
+	return []agent.AgentEvent{agent.SystemEvent{Content: string(line)}}
+}
+
+// unsupportedControlSubtypes names the requests the CLI originates that Pockode
+// has no way to service (we register neither SDK hooks nor in-process MCP
+// servers, and have no UI for CLI-driven dialogs), so that the decline can say
+// what was asked for. Only the wording depends on this map: every subtype other
+// than can_use_tool is declined, named or not.
+var unsupportedControlSubtypes = map[string]string{
+	"hook_callback":           "hook callbacks",
+	"mcp_message":             "in-process MCP servers",
+	"elicitation":             "MCP elicitation",
+	"request_user_dialog":     "CLI-driven dialogs",
+	"oauth_token_refresh":     "OAuth token refresh",
+	"host_auth_token_refresh": "host auth token refresh",
+}
+
+func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Map, decline declineFunc) []agent.AgentEvent {
+	var req controlRequest
+	if err := json.Unmarshal(line, &req); err != nil {
+		// The line is valid JSON — streamOutput decoded it already — so this is a
+		// field of an unexpected shape. The request id is usually still readable,
+		// and answering matters more than understanding what was asked.
+		log.Warn("failed to parse control request from CLI", "error", err)
+		var partial struct {
+			RequestID string `json:"request_id"`
+		}
+		if err := json.Unmarshal(line, &partial); err != nil || partial.RequestID == "" {
+			log.Warn("cannot answer an unreadable control request, the turn may hang")
+			return nil
+		}
+		return declineUnservable(log, decline, partial.RequestID, "", "a request Pockode could not read")
+	}
+
 	if req.Request == nil {
-		log.Debug("ignoring request with nil request data")
-		return nil
+		return declineUnservable(log, decline, req.RequestID, "", "a request with no request data")
 	}
 
 	switch req.Request.Subtype {
@@ -671,9 +960,18 @@ func parseControlRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
 				Questions []agent.AskUserQuestion `json:"questions"`
 			}
 			if err := json.Unmarshal(req.Request.Input, &input); err != nil {
+				// A question we cannot render is still a question the CLI waits
+				// on, and the shape of `input` is exactly the kind of thing a new
+				// CLI changes. Declining costs the user this one question;
+				// returning nil costs them the conversation.
 				log.Warn("failed to parse AskUserQuestion input from CLI", "error", err)
-				return nil
+				return declineUnservable(log, decline, req.RequestID, req.Request.Subtype, "a question Pockode could not read")
 			}
+
+			// Remember the original input so SendQuestionResponse can echo it
+			// back merged with user answers — the SDK rejects a response that
+			// drops the original `questions` field.
+			pendingRequests.Store(req.RequestID, pendingQuestionMarker{Input: req.Request.Input})
 
 			log.Info("AskUserQuestion received", "requestId", req.RequestID)
 			return []agent.AgentEvent{agent.AskUserQuestionEvent{
@@ -693,9 +991,33 @@ func parseControlRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
 		}}
 
 	default:
-		log.Debug("ignoring unknown subtype", "subtype", req.Request.Subtype)
-		return nil
+		capability, named := unsupportedControlSubtypes[req.Request.Subtype]
+		if !named {
+			capability = req.Request.Subtype
+		}
+		return declineUnservable(log, decline, req.RequestID, req.Request.Subtype, capability)
 	}
+}
+
+// declineUnservable answers a control request Pockode cannot serve and tells the
+// user why the CLI just failed something.
+//
+// Every control_request is an RPC the CLI blocks the turn on until it is
+// answered, and can_use_tool is the only one Pockode can serve. Everything that
+// reaches here is answered — an unreadable request, a request missing its body, a
+// subtype added by a CLI newer than this code — because the two ways of being
+// wrong are not comparable: staying silent hangs the conversation with nothing to
+// recover it, while an error answer to a request that turned out not to need one
+// costs a spurious warning and the turn goes on.
+// subtype is empty for the requests that never got far enough to have one.
+func declineUnservable(log *slog.Logger, decline declineFunc, requestID, subtype, capability string) []agent.AgentEvent {
+	log.Warn("declining control request Pockode cannot serve",
+		"subtype", subtype, "requestId", requestID, "reason", capability)
+	decline(requestID, fmt.Sprintf("Pockode does not support %s", capability))
+	return []agent.AgentEvent{agent.WarningEvent{
+		Message: fmt.Sprintf("Claude requested %s, which Pockode does not support", capability),
+		Code:    "unsupported_control_request",
+	}}
 }
 
 // cliControlResponse represents a control_response from Claude CLI.
@@ -733,18 +1055,95 @@ type controlCancelRequest struct {
 	RequestID string `json:"request_id"`
 }
 
-func parseControlCancelRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
+func parseControlCancelRequest(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
 	var req controlCancelRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		log.Warn("failed to parse control cancel request from CLI", "error", err)
 		return nil
 	}
 
+	// Drop any stored question input — the SDK no longer expects a response.
+	// Cancel only matches request IDs the CLI sent us; interrupt IDs are
+	// generated on our side and live in a disjoint namespace.
+	pendingRequests.Delete(req.RequestID)
+
 	log.Debug("control cancel request received", "requestId", req.RequestID)
 	return []agent.AgentEvent{agent.RequestCancelledEvent{RequestID: req.RequestID}}
 }
 
-func parseAssistantEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
+// syntheticModel is what the CLI puts in an assistant message it wrote itself
+// instead of receiving from a model. Where: `message.model` on the assistant
+// frame, as spelled by claude 2.1.259.
+const syntheticModel = "<synthetic>"
+
+// syntheticNoticeCode labels a synthetic message the CLI did not attribute to a
+// specific failure. Where: the assistant frame's own `error` field supplies the
+// label when there is one ("authentication_failed", "server_error", ...).
+const syntheticNoticeCode = "synthetic_message"
+
+// assistantEnvelope holds the assistant frame fields that sit beside `message`
+// rather than inside it. Decoded here rather than added to cliEvent so that a
+// CLI spelling one of them differently costs this one label instead of the
+// envelope of every frame — a failed cliEvent decode turns the whole line into
+// raw text, which does start the session.
+type assistantEnvelope struct {
+	Error string `json:"error"`
+}
+
+// syntheticNotice converts an assistant message the CLI generated itself into a
+// warning instead of agent output.
+//
+// These are the CLI's announcement surface, not the agent answering: an expired
+// login ends a turn with "Invalid API key · Fix external API key", a provider
+// outage with "API Error: 529 Overloaded". Measured on claude 2.1.259 against a
+// local endpoint that always answers 401: the turn emits init, ten
+// system/api_retry banners, then this message, then its result.
+//
+// Why it must not be a TextEvent: text starts the session
+// (agent.EventType.ActivatesSession), which locks it to the current agent type.
+// A first turn that never reached the model would then be stuck on the agent
+// that just failed — the one situation where switching agents is the only way
+// out. Warnings do not start a session, and they render as their own banner, so
+// the user still reads the same words.
+//
+// Applied to every synthetic message, including the benign ones (the CLI answers
+// its own resume continuation prompt with "No response requested."). Keeping a
+// second class on the text path would restore the same bug for whichever notice
+// fell into it, and a message with no model behind it is never the agent
+// contributing to the conversation regardless of what it says.
+func syntheticNotice(log *slog.Logger, line []byte, msg cliMessage) []agent.AgentEvent {
+	var textParts []string
+	for _, block := range msg.Content {
+		if block.Type != "text" {
+			// Nothing wrote these but the CLI itself, and it has no model to call
+			// a tool with — every synthetic message on record carries one text
+			// block and nothing else. Say so out loud rather than drop it, so a
+			// CLI that breaks the assumption is visible instead of silent.
+			log.Warn("ignoring non-text block in a synthetic assistant message",
+				"blockType", block.Type)
+			continue
+		}
+		if block.Text != "" {
+			textParts = append(textParts, block.Text)
+		}
+	}
+	if len(textParts) == 0 {
+		return nil
+	}
+
+	code := syntheticNoticeCode
+	var envelope assistantEnvelope
+	if err := json.Unmarshal(line, &envelope); err == nil && envelope.Error != "" {
+		code = envelope.Error
+	}
+
+	return []agent.AgentEvent{agent.WarningEvent{
+		Message: strings.Join(textParts, ""),
+		Code:    code,
+	}}
+}
+
+func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent) []agent.AgentEvent {
 	if event.Message == nil {
 		log.Warn("assistant event message is nil", "subtype", event.Subtype)
 		return nil
@@ -754,6 +1153,10 @@ func parseAssistantEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 	if err := json.Unmarshal(event.Message, &msg); err != nil {
 		log.Warn("failed to parse assistant message from CLI", "error", err)
 		return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message)}}
+	}
+
+	if msg.Model == syntheticModel {
+		return syntheticNotice(log, line, msg)
 	}
 
 	var events []agent.AgentEvent
@@ -919,10 +1322,30 @@ func hasImageContent(content json.RawMessage) bool {
 }
 
 type resultEvent struct {
-	Subtype   string   `json:"subtype"`
-	SessionID string   `json:"session_id"`
-	Errors    []string `json:"errors"`
+	Subtype        string   `json:"subtype"`
+	SessionID      string   `json:"session_id"`
+	IsError        bool     `json:"is_error"`
+	TerminalReason string   `json:"terminal_reason"`
+	Result         string   `json:"result"`
+	Errors         []string `json:"errors"`
 }
+
+// abortTerminalReasonPrefix identifies the terminal reasons that mean the turn
+// was stopped (a user interrupt, a denied tool) rather than having failed.
+// Where: `terminal_reason` on the result message; older CLIs omit the field.
+// 2.1.222 spells them aborted_streaming and aborted_tools; every other reason it
+// defines — the failures (model_error, api_error, ...) and the normal endings
+// (completed, max_turns, ...) — is named without the prefix.
+//
+// Matched by prefix rather than against those two values because the distinction
+// reaches further than the transcript: an interrupted turn stops the running work
+// item, while a completed or failed one lets the work engine auto-continue (see
+// work.AutoResumer.HandleProcessStateChange). A new abort reason read as a
+// failure would carry on with a turn the user stopped.
+const abortTerminalReasonPrefix = "aborted"
+
+// legacyAbortError is how CLIs without terminal_reason reported an abort.
+const legacyAbortError = "Request was aborted"
 
 func parseResultEvent(line []byte) agent.AgentEvent {
 	var result resultEvent
@@ -930,14 +1353,51 @@ func parseResultEvent(line []byte) agent.AgentEvent {
 		return agent.DoneEvent{}
 	}
 
-	// Check if this was an interrupt (aborted request)
-	if result.Subtype == "error_during_execution" {
-		for _, e := range result.Errors {
-			if strings.Contains(e, "Request was aborted") {
-				return agent.InterruptedEvent{}
-			}
-		}
+	if result.aborted() {
+		return agent.InterruptedEvent{}
+	}
+
+	// A failed turn must not look like a completed one; without this the user
+	// only sees the response stop with no explanation.
+	if result.IsError {
+		return agent.ErrorEvent{Error: result.errorMessage()}
 	}
 
 	return agent.DoneEvent{}
+}
+
+func (r resultEvent) aborted() bool {
+	if r.TerminalReason != "" {
+		return strings.HasPrefix(r.TerminalReason, abortTerminalReasonPrefix)
+	}
+	if r.Subtype != "error_during_execution" {
+		return false
+	}
+	for _, e := range r.Errors {
+		if strings.Contains(e, legacyAbortError) {
+			return true
+		}
+	}
+	return false
+}
+
+// errorMessage picks the CLI's own description of the failure. Error subtypes
+// report it in `errors`; a `success` result flagged is_error puts it in `result`.
+func (r resultEvent) errorMessage() string {
+	var reported []string
+	for _, e := range r.Errors {
+		if e := strings.TrimSpace(e); e != "" {
+			reported = append(reported, e)
+		}
+	}
+	if len(reported) > 0 {
+		return strings.Join(reported, "; ")
+	}
+	if msg := strings.TrimSpace(r.Result); msg != "" {
+		return msg
+	}
+	if r.Subtype != "" {
+		return fmt.Sprintf("Claude ended the turn with an error (%s)", r.Subtype)
+	}
+	return "Claude ended the turn with an error"
 }

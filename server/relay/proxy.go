@@ -31,15 +31,16 @@ const maxIdleLocalConns = 32
 var forwardedHeaders = []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"}
 
 // newLocalProxy builds the handler served on every relay stream: a reverse
-// proxy onto this machine's own HTTP servers. Routing is by path because in dev
-// mode the SPA is served by a separate frontend dev server; in production both
-// ports are the same and the split is a no-op. The split itself lives in
-// apiroute, which the SPA handler shares.
+// proxy onto this machine's own HTTP servers, minus the routes that must not
+// leave the machine. Routing is by path because in dev mode the SPA is served
+// by a separate frontend dev server; in production both ports are the same and
+// the split is a no-op. Both path questions are answered by apiroute, which the
+// SPA handler shares.
 func newLocalProxy(backendPort, frontendPort int, log *slog.Logger) http.Handler {
 	backend := localAuthority(backendPort)
 	frontend := localAuthority(frontendPort)
 
-	return &httputil.ReverseProxy{
+	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			authority := frontend
 			if apiroute.IsAPI(pr.In.URL.Path) {
@@ -77,6 +78,19 @@ func newLocalProxy(backendPort, frontendPort int, log *slog.Logger) http.Handler
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 		},
 	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The relay is the only thing that could make a local-only route
+		// remotely reachable, so it is the only thing that can refuse it — and
+		// it has to do so before a port is chosen, since in the default
+		// single-port setup routing alone would not keep it out of reach.
+		// 404 because from the outside the route does not exist.
+		if apiroute.IsLocalOnly(r.URL.Path) {
+			http.NotFound(w, r)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	})
 }
 
 func localAuthority(port int) string {

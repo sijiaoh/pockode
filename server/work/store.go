@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"sync"
 	"time"
@@ -27,10 +26,19 @@ type Store interface {
 	// These are the preferred way to change work status. Each method
 	// encapsulates validation, sessionID management, and side effects.
 
-	// Start transitions a work item to in_progress and assigns a sessionID.
-	// Allowed from: open, stopped, needs_input. Use Reactivate for
-	// process-running detection.
+	// Start transitions a work item to in_progress and assigns an explicit
+	// sessionID. Allowed from: open, stopped, needs_input. Use Reactivate for
+	// process-running detection. To start an agent session use Claim, which
+	// decides the sessionID atomically; Start is the lower-level primitive.
 	Start(ctx context.Context, id string, sessionID string) (Work, error)
+
+	// Claim atomically transitions a work item to in_progress for starting an
+	// agent session. The restart decision and sessionID assignment happen under
+	// the store lock so concurrent claims cannot race: on restart (current status
+	// stopped/needs_input) the existing sessionID is reused to preserve chat
+	// history; otherwise a fresh sessionID is generated. The returned restart
+	// flag tells the caller how to RollbackStart if the kickoff later fails.
+	Claim(ctx context.Context, id string) (w Work, restart bool, err error)
 
 	// Stop transitions in_progress/needs_input → stopped.
 	Stop(ctx context.Context, id string) error
@@ -66,16 +74,20 @@ type Store interface {
 	// This allows users to add more child work items or continue working.
 	Reopen(ctx context.Context, id string) error
 
+	// SetWorktree records the worktree a top-level work will run in and pins its
+	// whole subtree to that worktree. Only permitted before the work has started
+	// (status open); once started the worktree is immutable. Children normally
+	// inherit their worktree at create time, but any open descendant created
+	// before the parent started still holds the empty default, so this also
+	// propagates the worktree down to those descendants.
+	SetWorktree(ctx context.Context, id string, worktree string) error
+
 	AddComment(ctx context.Context, workID, body string) (Comment, error)
 	UpdateComment(ctx context.Context, commentID, body string) (Comment, error)
 	ListComments(workID string) ([]Comment, error)
 
 	AddOnChangeListener(listener OnChangeListener)
 	AddOnCommentChangeListener(listener OnCommentChangeListener)
-
-	// StartWatching begins monitoring the index file for external changes (e.g. from MCP).
-	StartWatching() error
-	StopWatching()
 }
 
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
@@ -106,9 +118,8 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	store := &FileStore{}
 
 	f, err := filestore.New(filestore.Config{
-		Path:     filepath.Join(dataDir, "works", "index.json"),
-		Label:    "work",
-		OnReload: store.reloadFromDisk,
+		Path:  filepath.Join(dataDir, "works", "index.json"),
+		Label: "work",
 	})
 	if err != nil {
 		return nil, err
@@ -199,6 +210,13 @@ func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
 		return Work{}, fmt.Errorf("%w: agent_role_id is required", ErrInvalidWork)
 	}
 
+	// Child work inherits its parent's worktree. Since children are created by
+	// the parent's running agent, the parent already has its worktree fixed.
+	worktree := w.Worktree
+	if parent != nil {
+		worktree = parent.Worktree
+	}
+
 	now := time.Now()
 	work := Work{
 		ID:          uuid.Must(uuid.NewV7()).String(),
@@ -208,6 +226,7 @@ func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
 		Title:       w.Title,
 		Body:        w.Body,
 		Status:      StatusOpen,
+		Worktree:    worktree,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -327,6 +346,45 @@ func (s *FileStore) Start(_ context.Context, id string, sessionID string) (Work,
 	}
 
 	return result, nil
+}
+
+func (s *FileStore) Claim(_ context.Context, id string) (Work, bool, error) {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return Work{}, false, ErrWorkNotFound
+	}
+
+	w := &s.works[idx]
+	if !ValidateTransition(w.Status, StatusInProgress) {
+		s.worksMu.Unlock()
+		return Work{}, false, fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusInProgress)
+	}
+
+	// Decide restart and sessionID under the lock from the current status, so a
+	// concurrent transition cannot make us reuse a stale snapshot's decision.
+	restart := w.Status == StatusStopped || w.Status == StatusNeedsInput
+	sessionID := w.SessionID
+	if !restart || sessionID == "" {
+		sessionID = uuid.Must(uuid.NewV7()).String()
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Status = StatusInProgress
+	w.SessionID = sessionID
+	w.UpdatedAt = time.Now()
+
+	result := *w // copy before persistAndNotifyUpdates releases the lock
+
+	modified := map[string]bool{id: true}
+	if err := s.persistAndNotifyUpdates(prev, modified); err != nil {
+		return Work{}, false, err
+	}
+
+	return result, restart, nil
 }
 
 func (s *FileStore) Stop(_ context.Context, id string) error {
@@ -569,6 +627,52 @@ func (s *FileStore) Reopen(_ context.Context, id string) error {
 	return s.persistAndNotifyUpdates(prev, modified)
 }
 
+func (s *FileStore) SetWorktree(_ context.Context, id string, worktree string) error {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return ErrWorkNotFound
+	}
+
+	root := &s.works[idx]
+	// A work's worktree is fixed the moment it starts; only an unstarted (open)
+	// work may still change it. Re-assigning the same worktree is a harmless
+	// no-op even after start, which keeps a main story's open→start→stop→start
+	// cycle idempotent.
+	if root.Worktree != worktree && root.Status != StatusOpen {
+		s.worksMu.Unlock()
+		return fmt.Errorf("%w: worktree is immutable once work %s has started (status %s)", ErrInvalidWork, id, root.Status)
+	}
+
+	// Pin the whole subtree to one worktree. Children normally inherit at create
+	// time, but an open descendant created before this top-level work started
+	// still holds the empty default; bring those along so "a subtree shares one
+	// worktree" holds regardless of create ordering. Started descendants keep
+	// their fixed worktree and are left untouched.
+	descendants := CollectDescendantIDs(s.works, id)
+
+	prev := s.snapshotWorks()
+	now := time.Now()
+	modified := map[string]bool{}
+	for i := range s.works {
+		w := &s.works[i]
+		if !descendants[w.ID] || w.Worktree == worktree || w.Status != StatusOpen {
+			continue
+		}
+		w.Worktree = worktree
+		w.UpdatedAt = now
+		modified[w.ID] = true
+	}
+
+	if len(modified) == 0 {
+		s.worksMu.Unlock()
+		return nil
+	}
+	return s.persistAndNotifyUpdates(prev, modified)
+}
+
 // persistAndNotifyUpdates persists and fires update events for all modified
 // work IDs. prev is the pre-mutation snapshot used for rollback on persist
 // failure. Caller must hold s.worksMu write lock; it is released here.
@@ -756,88 +860,20 @@ func (s *FileStore) persistIndex() error {
 	return s.file.Write(data)
 }
 
-// --- fsnotify ---
+// --- Helpers ---
 
-func (s *FileStore) StartWatching() error { return s.file.StartWatching() }
-func (s *FileStore) StopWatching()        { s.file.StopWatching() }
-
-func (s *FileStore) reloadFromDisk() {
-	genBefore := s.file.SnapshotGen()
-
-	idx, err := s.readIndexFromDisk()
-	if err != nil {
-		slog.Error("failed to reload work index", "error", err)
-		return
-	}
-
-	s.worksMu.Lock()
-
-	if s.file.IsStale(genBefore) {
-		s.worksMu.Unlock()
-		return
-	}
-
-	old := s.works
-	oldComments := s.comments
-	s.works = idx.Works
-	s.comments = idx.Comments
-	listeners := s.copyListeners()
-	commentListeners := s.copyCommentListeners()
-	s.worksMu.Unlock()
-
-	events := diffWorks(old, idx.Works)
-	for i := range events {
-		events[i].External = true
-	}
-	for _, e := range events {
-		notify(listeners, e)
-	}
-
-	commentEvents := diffComments(oldComments, idx.Comments)
-	for _, e := range commentEvents {
-		notifyComment(commentListeners, e)
-	}
-}
-
-func diffWorks(old, updated []Work) []ChangeEvent {
-	return filestore.Diff(old, updated,
-		func(w Work) string { return w.ID },
-		workChanged,
-		func(op filestore.Operation, w Work) ChangeEvent {
-			return ChangeEvent{Op: Operation(op), Work: w}
-		},
-	)
-}
-
-// diffComments detects newly added comments.
-// Comments are append-only, so only creates need to be detected.
-func diffComments(old, updated []Comment) []CommentEvent {
-	oldIDs := make(map[string]struct{}, len(old))
-	for _, c := range old {
-		oldIDs[c.ID] = struct{}{}
-	}
-
-	var events []CommentEvent
-	for _, c := range updated {
-		if _, exists := oldIDs[c.ID]; !exists {
-			events = append(events, CommentEvent{Comment: c})
+// UnclosedWorkByWorktree returns the works assigned to the given worktree whose
+// status is not closed, preserving list order. A worktree with any such work
+// must not be deleted, since its sessions are still live or resumable.
+func UnclosedWorkByWorktree(works []Work, worktree string) []Work {
+	var unclosed []Work
+	for _, w := range works {
+		if w.Worktree == worktree && w.Status != StatusClosed {
+			unclosed = append(unclosed, w)
 		}
 	}
-	return events
+	return unclosed
 }
-
-func workChanged(a, b Work) bool {
-	return a.Title != b.Title ||
-		a.Body != b.Body ||
-		a.AgentRoleID != b.AgentRoleID ||
-		a.Status != b.Status ||
-		a.SessionID != b.SessionID ||
-		a.ParentID != b.ParentID ||
-		a.CurrentStep != b.CurrentStep ||
-		!a.UpdatedAt.Equal(b.UpdatedAt)
-}
-
-// --- Helpers ---
 
 // CollectDescendantIDs returns a set containing rootID and all transitive descendants.
 func CollectDescendantIDs(works []Work, rootID string) map[string]bool {

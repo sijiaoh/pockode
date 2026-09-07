@@ -26,6 +26,12 @@ export type { ConnectionStatus } from "../lib/wsStore";
 
 interface UseChatMessagesOptions {
 	sessionId: string;
+	/**
+	 * Subscribe only once `sessionId` is known to belong to the worktree the
+	 * connection is bound to. Subscribing earlier (mid worktree switch) targets a
+	 * session the server can't see yet.
+	 */
+	enabled?: boolean;
 }
 
 interface UseChatMessagesReturn {
@@ -35,6 +41,7 @@ interface UseChatMessagesReturn {
 	isProcessRunning: boolean;
 	mode: SessionMode;
 	agentType: AgentType;
+	isSessionActivated: boolean;
 	status: ConnectionStatus;
 	sendUserMessage: (content: string) => Promise<boolean>;
 	interrupt: () => Promise<void>;
@@ -59,6 +66,7 @@ const { sendMessage, chatMessagesSubscribe, chatMessagesUnsubscribe } =
 
 export function useChatMessages({
 	sessionId,
+	enabled = true,
 }: UseChatMessagesOptions): UseChatMessagesReturn {
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -84,6 +92,15 @@ export function useChatMessages({
 	const sessionAgentTypeFromStore = useSessionStore(
 		(state) => state.sessions.find((s) => s.id === sessionId)?.agent_type,
 	);
+	// The server refuses to change agent type once the agent has answered here,
+	// and says so through this flag. The transcript is not a substitute for it: a
+	// first turn that failed before the agent said anything leaves messages behind
+	// in a session that never started, and that is exactly when switching agents
+	// is the only way out.
+	const isSessionActivated = useSessionStore(
+		(state) =>
+			state.sessions.find((s) => s.id === sessionId)?.activated ?? false,
+	);
 	useEffect(() => {
 		if (sessionAgentTypeFromStore !== undefined) {
 			setAgentTypeState(sessionAgentTypeFromStore);
@@ -97,21 +114,29 @@ export function useChatMessages({
 		setMessages((prev) => applyServerEvent(prev, event));
 	}, []);
 
-	// Reset state when sessionId changes
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on sessionId change
-	useEffect(() => {
+	// Reset when the session changes. During render rather than in an effect: an
+	// effect runs after the render that already carries the new session id has
+	// been committed, so the previous session's messages would reach the DOM for
+	// a frame as if they belonged to the session just opened. React re-runs this
+	// component before committing anything, so no such frame exists.
+	const [renderedSessionId, setRenderedSessionId] = useState(sessionId);
+	if (renderedSessionId !== sessionId) {
+		setRenderedSessionId(sessionId);
 		setMessages([]);
 		setIsLoadingHistory(true);
 		setIsProcessRunning(false);
 		setModeState("default");
 		setAgentTypeState("claude");
-	}, [sessionId]);
+	}
 
 	// Subscribe to chat events when connected.
-	// Loading state is managed by the initial value and the reset effect above,
-	// so re-subscribe on reconnect won't flash the spinner.
+	// Loading state is managed by the initial value and the reset above, so
+	// re-subscribing on reconnect won't flash the spinner. It also stays true for
+	// as long as `enabled` is false, which is what makes "waiting for the session
+	// to resolve" and "waiting for its history" a single continuous wait for
+	// callers timing a loading indicator against it.
 	useEffect(() => {
-		if (status !== "connected") {
+		if (!enabled || status !== "connected") {
 			return;
 		}
 
@@ -162,7 +187,7 @@ export function useChatMessages({
 				subscriptionIdRef.current = null;
 			}
 		};
-	}, [status, sessionId, handleNotification]);
+	}, [enabled, status, sessionId, handleNotification]);
 
 	const sendUserMessageHandler = useCallback(
 		async (content: string): Promise<boolean> => {
@@ -193,10 +218,20 @@ export function useChatMessages({
 				return true;
 			} catch (error) {
 				console.error("Failed to send message:", error);
+				// The server's reason is what tells a missing CLI apart from a dropped
+				// connection; without it every failure reads the same.
+				const reason =
+					error instanceof Error && error.message
+						? error.message
+						: "Unknown error";
 				setMessages((prev) =>
 					prev.map((m): Message => {
 						if (m.role === "assistant" && m.id === assistantMessageId) {
-							return { ...m, status: "error", error: "Failed to send message" };
+							return {
+								...m,
+								status: "error",
+								error: `Failed to send message: ${reason}`,
+							};
 						}
 						return m;
 					}),
@@ -276,6 +311,7 @@ export function useChatMessages({
 		isProcessRunning,
 		mode,
 		agentType,
+		isSessionActivated,
 		status,
 		sendUserMessage: sendUserMessageHandler,
 		interrupt: useCallback(

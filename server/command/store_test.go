@@ -198,14 +198,38 @@ func TestNewStore_DeduplicatesOnLoad(t *testing.T) {
 	}
 }
 
-func TestNewStore_InvalidJSON(t *testing.T) {
+// A commands.json truncated by a crash must not block server startup: NewStore
+// quarantines it and starts from empty.
+func TestNewStore_CorruptFileIsQuarantined(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "commands.json")
-	os.WriteFile(filePath, []byte("invalid json"), 0644)
+	os.WriteFile(filePath, []byte(`[{"name": "help", "used`), 0644)
 
-	_, err := NewStore(dir)
-	if err == nil {
-		t.Error("expected error for invalid JSON")
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore on corrupt file: %v", err)
+	}
+
+	for _, cmd := range store.List() {
+		if !cmd.IsBuiltin {
+			t.Errorf("expected only builtins after corruption, got %s", cmd.Name)
+		}
+	}
+
+	if _, err := os.Stat(filePath + ".corrupt"); err != nil {
+		t.Errorf("corrupt file was not quarantined: %v", err)
+	}
+
+	// The store must still be usable afterwards.
+	if _, err := store.Use("model"); err != nil {
+		t.Fatalf("Use after recovery: %v", err)
+	}
+	reloaded, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.List()[0].Name != "model" {
+		t.Errorf("expected 'model' first after recovery, got %s", reloaded.List()[0].Name)
 	}
 }
 

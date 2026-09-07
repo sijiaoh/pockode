@@ -30,10 +30,45 @@ type Work struct {
     Status      WorkStatus
     SessionID   string     // Active AI session, empty when not running
     CurrentStep int        // 0-indexed; used only when agent role has Steps
+    Worktree    string     // Worktree the session runs in; empty = main
     CreatedAt   time.Time
     UpdatedAt   time.Time
 }
 ```
+
+### Worktree Binding
+
+Every work runs its AI session inside exactly one worktree, recorded in
+`Worktree` (empty means the main worktree). The binding is decided once and then
+frozen:
+
+- **Top-level work** captures the frontend's *current* worktree the first time
+  it starts (`handleWorkStart` → `store.SetWorktree`). It is not captured at
+  create time, because a story may be created long before the user picks the
+  worktree they want it to run in.
+- **Child work** inherits its parent's worktree at create time (`store.Create`).
+  Children are usually created by the parent's already-running agent, so the
+  parent's worktree is fixed by then. A child pre-created under a still-open
+  story would inherit the empty default instead, so `SetWorktree` also propagates
+  the captured worktree down to any open descendant when the story starts. Either
+  way an entire story subtree normally shares one worktree — the coordinator and
+  all its tasks stay together. The one gap is a task started *before* its story
+  (nothing forbids it): it is no longer open by then, so propagation skips it and
+  it keeps whatever it inherited at create time.
+- **Immutable once started** — `SetWorktree` only mutates a work while its status
+  is still `open`; any later call is rejected. Assigning the *same* value is a
+  no-op, so a main-worktree story that goes open → start → stop → start does not
+  trip the immutability guard on restart.
+
+**Why immutable**: a session's process, cwd, and session files live in a
+specific worktree. Moving a work mid-flight would strand its running session and
+its history, so the worktree is pinned for the work's whole life. Restart and
+reopen therefore reuse the recorded worktree rather than re-reading the
+frontend's current one.
+
+This binding is what lets `WorkStarter`/`WorkStopper` and session cleanup act on
+`worktreeManager.Get(w.Worktree)` instead of always the main worktree, and it is
+the ownership signal behind worktree-deletion protection (below).
 
 ### Validation Rules
 
@@ -109,77 +144,44 @@ Work items transition through `StepDone`; there is no intermediate `done` state.
 
 The Work system uses atomic file I/O instead of a database:
 
-1. **Multi-process support** — MCP servers (spawned by AI CLI) and the main server both need access
-2. **No single point of failure** — No database process to manage
-3. **Simple deployment** — Just files in a directory
+1. **No single point of failure** — No database process to manage
+2. **Simple deployment** — Just files in a directory
+3. **Inspectable** — Plain JSON on disk
 
-### Concurrency Control
+The main server is the **sole writer** of work data: the frontend goes through
+the WebSocket layer and the AI goes through the MCP API (see *MCP Server
+Architecture*), and both mutate the in-memory store directly. Mutations are
+serialized by a mutex and persisted atomically.
+
+> Because the server is the sole writer of work data, the work store does not
+> run a file watcher: its change events are emitted directly from in-process
+> mutations rather than reloaded after a cross-process write. (The agent-role
+> store does watch its file, since users may edit it directly on disk.)
+
+### Atomic Persistence
 
 ```
-server/filestore/filestore.go
+server/filestore/atomic.go
 ```
 
-**Read path** (shared lock):
+Writes take an exclusive flock and do write-temp → fsync → rename, so a crash or
+a concurrent reader never sees a torn file; reads take a shared flock:
+
 ```go
 lockFile := OpenFile(".lock", CREATE|RDWR)
-Flock(lockFile, LOCK_SH)  // Allows concurrent reads
-defer Flock(lockFile, LOCK_UN)
-return ReadFile(path)
-```
-
-**Write path** (exclusive lock + atomic rename):
-```go
-lockFile := OpenFile(".lock", CREATE|RDWR)
-Flock(lockFile, LOCK_EX)  // Blocks other writers and readers
+Flock(lockFile, LOCK_EX)
 defer Flock(lockFile, LOCK_UN)
 
-tmpFile := CreateTemp(path + ".tmp")
+tmpFile := OpenFile(path+".tmp", CREATE|WRONLY|TRUNC, perm)
 tmpFile.Write(data)
-tmpFile.Sync()  // fsync ensures durability
-Rename(tmpFile, path)  // POSIX atomic operation
-
-writeGen.Add(1)  // Increment version for stale detection
+tmpFile.Sync()        // fsync: bytes on disk before anything points at them
+Rename(tmpFile, path) // POSIX atomic operation
 ```
 
-### Cross-Process Notification
-
-When one process writes, others detect changes via fsnotify:
-
-```
-Process A (MCP)              Process B (Main Server)
-     │                              │
-     │ Write to works.json          │
-     │ ─────────────────────────►   │
-     │                              │ fsnotify: WRITE event
-     │                              │ ─────────────────────►
-     │                              │ debounce 100ms
-     │                              │ reloadFromDisk()
-     │                              │ notify listeners
-```
-
-### Stale Reload Prevention
-
-A write-generation counter prevents TOCTOU races:
-
-```go
-// Before reload
-genBefore := file.SnapshotGen()
-
-// Read from disk (potentially slow)
-data := readFromDisk()
-
-// Before applying to memory
-file.mu.Lock()
-if file.IsStale(genBefore) {
-    // Another write happened between our read and now
-    // Discard this reload, wait for next fsnotify event
-    file.mu.Unlock()
-    return
-}
-// Safe to update in-memory state
-applyData(data)
-file.mu.Unlock()
-```
+The filestore primitive also offers fsnotify-based reload for callers that need
+cross-process change detection (the settings and agent-role stores use it, as
+both are user-editable on disk); the work store does not enable it, since the
+server is its only writer.
 
 ## MCP Tools
 
@@ -214,46 +216,65 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 ### MCP Server Architecture
 
 ```
-server/mcp/server.go
+server/mcp/server.go    — stdio proxy (Server) + Client
+server/mcp/executor.go  — server-side tool logic (Executor)
+server/mcp/handler.go   — local HTTP API (APIHandler)
 ```
 
-The MCP server runs as a stdio subprocess spawned by the AI CLI:
+The MCP subprocess is a **thin client**. It opens no store and starts no
+watcher; instead it forwards every tool call over HTTP to the running main
+server, which executes it in-process against the same stores the WebSocket
+layer uses:
 
 ```
-AI CLI (claude)
-    │ spawn
+AI CLI (claude / codex)
+    │ spawn: `pockode mcp --data-dir <dir>`
     ▼
-MCP Server (pockode mcp)
-    │ stdio JSON-RPC 2.0
+MCP stdio proxy (Server)
+    │ reads <dir>/server.json → { local_url, token }
+    │ tools/call ──HTTP POST /api/mcp/tools/call (Bearer token)──►
     ▼
-FileStore (shared with main server)
+Main server: APIHandler → Executor → work.Store / WorkStarter
 ```
 
-All tool results are JSON (not formatted text) to prevent prompt injection and ensure stable parsing:
+The `<dir>` passed to the proxy is always the **main** data dir, because that is
+the only place `server.json` is written — there is one server per process, even
+when a work runs in a named worktree. A worktree has its own data dir for session
+state, but pointing the proxy there would find no `server.json` and leave the
+agent unable to reach the `work_*` tools (see `StartOptions.MCPServerDir` in
+[agent-integration.md](agent-integration.md)).
 
-```go
-func handleToolCall(ctx, w, req) {
-    result, err := tool.Execute(ctx, params)
-    if err != nil {
-        writeJSONRPCResult(w, req.ID, toolCallResult{
-            Content: []content{{Type: "text", Text: err.Error()}},
-            IsError: true,
-        })
-        return
-    }
+**Why client mode** (rather than letting the subprocess write the store files
+itself):
 
-    jsonResult, _ := json.Marshal(result)
-    writeJSONRPCResult(w, req.ID, toolCallResult{
-        Content: []content{{Type: "text", Text: string(jsonResult)}},
-    })
-}
-```
+- **Single writer** — only the main server mutates work data, so there is no
+  two-writer fsnotify sync to coordinate.
+- **Direct side effects** — `work_start`/`work_reopen` run through the shared
+  `work.Operations` (claim + kickoff, or reopen + nudge) and `step_done` sends its
+  follow-up via the AutoResumer (`NotifyStepDone`), so a transition takes effect
+  immediately instead of waiting for the main server to notice a file change.
+- **One implementation per transport** — the WebSocket handler (user actions) and
+  the MCP Executor (AI actions) call the same `work.Operations`, so a user start/
+  reopen and an AI start/reopen behave identically.
+
+**Authentication**: the server generates a random token at startup and writes
+it to `server.json` (mode `0600`, since it is a credential) alongside the port.
+It is distinct from the user-facing `--auth-token` (which is never written to
+disk) and lives only for the lifetime of the process. `middleware.Auth` bypasses
+the exact `/api/mcp/tools/call` route; the `APIHandler` verifies the local token
+itself. The endpoint is loopback-only in practice — the relay explicitly refuses
+to forward `/api/mcp/*`, so it is never reachable remotely.
+
+All tool results are JSON (not formatted text) where structured data is
+returned, to prevent prompt injection and ensure stable parsing. A tool whose
+handler fails comes back as an `isError` result (the AI sees it); transport or
+auth failures are surfaced to the AI rather than failing silently.
 
 ## AutoResumer
 
 The AutoResumer watches for state changes and automatically manages work lifecycle.
 
-### Five Triggers
+### Triggers
 
 **Trigger A: Process State Changes**
 
@@ -264,8 +285,12 @@ When an AI session's state changes, sync the work status:
 | running | stopped → in_progress | User message to stopped session |
 | idle (first) | (ignored) | Initial process startup |
 | idle (normal) | in_progress → in_progress | Send auto-continuation |
-| interrupted | in_progress/waiting → stopped | User interrupt |
+| interrupted | in_progress/waiting → stopped | Turn aborted (user interrupt, denied permission, replaced turn) |
 | ended | in_progress/waiting → stopped | Process exited |
+
+An aborted turn stops the work instead of continuing it, which is what makes a
+denied permission during an automated run end the run rather than nudge the agent
+to try again.
 
 **Trigger B: Child Closure**
 
@@ -296,76 +321,108 @@ Task: closed ──► Parent (open/closed) → (no message)
 
 **Key distinction**: Only `waiting` parents undergo a state transition. Other active parents (`in_progress`, `needs_input`, `stopped`) receive the notification without changing status. This enables coordinators to receive multiple child completion messages when running with parallel subtasks.
 
-**Trigger C: External Work Start**
+### Step-Advance and Reopen Follow-ups
 
-When MCP `work_start` is called from an external process:
+`work_start`, `step_done`, and `work_reopen` are driven in-process rather than by
+the AutoResumer reacting to a file change. `work_start` and `work_reopen` live in
+the shared `work.Operations`, called by both the WebSocket handler and the MCP
+`Executor`:
 
-```
-MCP: work_start ──► fsnotify ──► AutoResumer
-                                     │
-                    handleExternalWorkStart()
-                                     │
-                    Call WorkStartHandler
-```
-
-**Trigger D: Reserved**
-
-(Removed — step advance is now handled by Trigger E)
-
-**Trigger E: External Step Done**
-
-When MCP `step_done` is called from an external process and the step advances:
+- **work_start** — `Operations.StartWork` claims the work (`store.Claim`, which
+  decides restart/session reuse atomically under the store lock) and calls
+  `WorkStartHandler` to create the session and send the kickoff, rolling back the
+  claim on failure. Runs detached from the caller's context.
+- **work_reopen** — `Operations.ReopenWork` calls `store.Reopen`, then
+  `AutoResumer.NotifyReopen` to send the reopen nudge.
+- **step_done** (MCP-only) — after `store.StepDone` advances the step, the
+  `Executor` calls `AutoResumer.NotifyStepDone`, which sends the next-step prompt
+  (only while the work is still `in_progress`).
 
 ```
-MCP: step_done ──► store.StepDone()
-                        │
-                        ▼
-                 hasMoreSteps?
-                   │        │
-                 yes       no
-                   │        │
-                   ▼        ▼
-            CurrentStep++   Close work
+step_done ──► store.StepDone()
                    │
                    ▼
-            fsnotify ──► AutoResumer
-                              │
-                              ▼
-                  Detect CurrentStep change
-                              │
-                              ▼
-                  handleExternalStepDone()
-                              │
-                              ▼
-                  Send next step prompt
-```
-
-Unlike Trigger B (child closure waking a waiting parent), step advancement is agent-initiated via `step_done` rather than automatic upon completion.
-
-**Trigger F: External Work Reopen**
-
-When MCP `work_reopen` is called from an external process:
-
-```
-MCP: work_reopen ──► fsnotify ──► AutoResumer
-                                       │
-                      detect closed → in_progress
-                                       │
-                      handleExternalReopen()
-                                       │
-                      Send reopen message
+            hasMoreSteps?
+              │        │
+            yes        no
+              │        │
+              ▼        ▼
+       CurrentStep++   Close work ──► Trigger B (parent reactivation, if any)
+              │
+              ▼
+       Executor.NotifyStepDone() ──► send next-step prompt
 ```
 
 The reopen message instructs the agent to review its previous work and determine what additional changes are needed, then call `step_done` when complete.
+
+### Per-Worktree Sender Routing
+
+Every follow-up the AutoResumer sends (auto-continuation, step-advance, reopen,
+child-done) must reach the worktree the target work runs in — not a single
+global sender. It therefore holds a `SenderResolver` rather than one
+`MessageSender`, and resolves per send from the work's `Worktree`:
+
+```
+resolver.ResolveSender(work.Worktree) → (sender, release, err)
+```
+
+Production wires the worktree `Manager` as the resolver (`main.go`), so each
+message goes to that worktree's chat client. Because worktrees are
+reference-counted, `ResolveSender` returns a `release` func the AutoResumer
+**must** call once the send completes (always via `defer`) to drop the reference.
+
+- **Child-done routes to the parent's worktree**, not the child's. The subtree
+  shares one worktree so they usually match, but the parent owns the session
+  being nudged, making it authoritative.
+- **Resolve before mutating state** in parent reactivation: a waiting parent is
+  only transitioned to `in_progress` after its sender resolves, so a resolve
+  failure can't leave the parent resumed but un-nudged (all-or-nothing).
+- `SetSender` remains for tests and callers that don't need routing — it installs
+  a static resolver that maps every worktree to one sender. When no resolver is
+  installed the AutoResumer stays inert, the same gate as before.
 
 ### Retry and Settle Delay
 
 ```go
 maxRetries = 3        // Stop work after 3 auto-continuation failures
-settleDelay = 2s      // Wait for MCP writes to propagate via fsnotify
+settleDelay = 2s      // Let an in-flight step_done's retry reset land first
 ```
 
-The settle delay ensures that when checking retry counts, any pending `step_done` calls have propagated through fsnotify and reset the counter.
+An agent typically calls `step_done` right before its turn ends. The settle
+delay gives that in-process transition's retry reset time to land before
+`handleAutoContinuation` reads the retry count, so the stop-after-N accounting
+stays correct (it does not by itself suppress a redundant continuation message —
+that remains a rare worst case).
+
+Both delayed follow-ups (stop after interrupt/end, and auto-continuation) drop
+their decision if the session started running again during the delay. A session
+comes back inside those two seconds more easily than it looks: Codex aborts the
+running turn the moment a second message replaces it, which arrives as an
+interrupt immediately followed by the replacement turn, and answering a prompt on
+a reaped session builds a new process. Acting on the older event would stop work
+whose agent is running right now, and nothing would restart it — `running` only
+reactivates work that is already `stopped`, so it fires before the stop lands and
+leaves the work stopped for good.
+
+## Worktree Deletion Protection
+
+Deleting a worktree that still owns unclosed work would orphan sessions that are
+live or resumable, so `worktree.delete` refuses it. `handleWorktreeDelete`
+checks `work.UnclosedWorkByWorktree(works, name)` — every work whose `Worktree`
+matches and whose status is not `closed` — *before* touching git or runtime
+state, and returns a client error (`CodeInvalidRequest`) if any exist.
+
+**Why in the work layer**: ownership is a Work concept (the `Worktree` field),
+so the predicate lives in `server/work/store.go` as a pure, testable helper; the
+WS handler only wires it into the delete flow and formats the rejection.
+
+The error message names how many and *which* works block the delete (`<id>
+"<title>" (<status>)`), because the developer needs to know what to close or move
+before retrying — a bare refusal would not be actionable.
+
+**main is unaffected**: the main worktree's name is `""`, and the delete handler
+rejects an empty name earlier (and `registry.Delete("")` returns
+`ErrMainWorktree`), so this check never governs main.
 
 ## Frontend Integration
 
@@ -393,6 +450,75 @@ export function collectWorkSessionIds(works: Work[]): Set<string> {
 ```
 
 The frontend subscribes to work changes via WebSocket and updates the Zustand store. Session IDs are collected to route chat messages to the correct work context.
+
+### Displaying a Work's Worktree
+
+The work list is **global — it spans every worktree** (its subscription sets `resubscribeOnWorktreeChange: false` and survives switches, see [subscription-system.md](subscription-system.md#why-app-level-subscriptions-survive-worktree-switches)). So a single list mixes works from different worktrees, and the user cannot tell where each one runs without a per-work label. Both the list and the detail page therefore surface the work's `Worktree` (below) via a shared `WorktreeBadge` component and a `useWorktreeDisplay` hook.
+
+Design decisions specific to this display:
+
+- **A work whose worktree is not decided yet shows no badge at all**, since a badge would assert a binding that can still change. What counts as decided follows from *Worktree Binding* above: a work that is no longer `open` is already frozen, and an `open` one is decided the moment its **root** starts and propagates the captured worktree down. So an open work is judged by its root, not by itself — that is what keeps the badge on an open task under a running story while hiding it for the same task under a story that has not started.
+- **The badge resolves that verdict itself rather than being told it.** `isWorktreeBound` (`workStore.ts`) owns the rule and `WorktreeBadge` reads it through a `useWorkStore` selector, so no call site can forget it. Reaching the root needs the whole work list, which is why the badge subscribes to the store instead of taking the verdict as a prop. When an ancestor is missing from that list (subscription not synced yet), the walk stops at the deepest known one and *its* status decides — with the two-level hierarchy `validParents` enforces, that means falling back to the work's own status, which errs toward hiding.
+- **The binding is read-only, but the badge is a navigation link.** The worktree binding is frozen once a work starts (see *Worktree Binding*), so — unlike the editable role — the badge never *reassigns* a work's worktree. It is, however, a clickable `<Link>` (target from `buildNavigation({ type: "home", worktree })`) that jumps to that worktree's root URL (main → `/`, feature → `/w/<worktree>/`), letting the user pivot from the mixed global list straight into the context of any work's worktree. It carries no work/chat context — just the worktree switch — and uses real anchor semantics (middle-click / open-in-new-tab) rather than a button.
+- **List page shows the badge on story rows only.** A story subtree normally shares one worktree (the same invariant that lets `SetWorktree` propagate to descendants), so a badge on every task row would almost always restate the story badge already sitting above it — noise in an already dense row.
+- **Detail page shows it on both stories and tasks**, because a task detail can be opened directly, without its story on screen — and because a task started ahead of its story (see *Worktree Binding*) is the one case where it differs from the story's.
+- **Feature name comes straight from the stored `Worktree` string**, so a work still shows its original worktree name even after that worktree is deleted — no lookup against the live worktree list is needed.
+- **Empty `Worktree` (main) resolves to the main branch name**, matching `WorktreeSwitcher`, and falls back to a neutral `Default` until the worktree list loads (never a guessed `main`/`master` literal). Only this main path reads the worktree list, and it reuses the existing `["worktrees"]` react-query cache read-only rather than opening a new subscription. On non-git projects the main badge renders nothing, since there is no worktree concept to show.
+- **Visual hierarchy encodes the exception.** A feature worktree is accented (it is the noteworthy case, and accent doubles as the app's interactive/link color, so the chip also reads as clickable); the main worktree is muted, matching that it is the silent default.
+
+### Cross-Worktree Chat Navigation
+
+Because the work list is global (above), a work's **Chat** shortcut can point at a
+session that lives in a *different* worktree than the one currently active.
+Sessions are worktree-scoped, so `onNavigateToSession` carries the work's own
+`Worktree` alongside the session id, and `AppShell` builds the URL from that
+value — `/w/<worktree>/s/<sessionId>` (or `/s/<sessionId>` for the main
+worktree) — never from the current URL's worktree. Opening the work therefore
+switches into its worktree, which rebinds the WebSocket and resubscribes the
+worktree-scoped watchers (see
+[subscription-system.md](subscription-system.md#why-worktree-switch-is-a-soft-refresh-not-a-reset)).
+
+`AppShell` deliberately does **not** redirect to home when the URL's worktree
+changes: a cross-worktree session URL is legitimate and must open.
+
+The subtle part is `useSession`'s recovery effects (`redirectSessionId` /
+`needsNewSession`). They are *not* a safe fallback during the switch itself.
+A worktree switch happens across renders: the URL's worktree updates first, but
+the store worktree and the session-list subscription only catch up afterward
+(the sync effect runs after the render, and the session list resubscribes only
+once the switch lands). In that in-flight window the session store still holds
+the *previous* worktree's list, so `redirectSessionId` / `needsNewSession` are
+computed against stale data — and the target session (which lives in the new
+worktree) looks absent. Left unguarded, the redirect effect would then
+`navigate(replace)` the URL to some *old*-worktree session, hijacking the URL
+away from the target before the new worktree's list ever loads.
+
+Both recovery effects are therefore gated on a worktree-transition guard —
+`worktreeSwitchInFlight = urlWorktree !== storeWorktree` — and skip while a
+switch is in flight. Recovery only runs once `urlWorktree === storeWorktree`.
+That on its own does not mean the new worktree's list has arrived — the store
+worktree catches up before the resubscription does — so recovery leans on a
+second condition, `isSuccess`, which stays cleared for the length of the switch.
+With both satisfied the target session resolves and no redirect fires, so the
+cross-worktree jump lands stably on its intended session. (The same in-flight
+signal also feeds the `isSessionResolved` check that keeps `ChatPanel` from
+subscribing to a session the new worktree has not listed yet, described in
+[subscription-system.md](subscription-system.md#why-the-session-list-keeps-a-placeholder-during-a-switch).
+Withholding the subscription does not stop the redirect effect from rewriting
+the URL, though; the gate on the effect itself is what closes that gap.)
+
+The new-session recovery effect carries a second gate for the same structural
+reason. `needsNewSession` stays true for as long as the worktree has no session,
+so a create that fails re-arms the effect on the very render its failure caused —
+measured at over 11,000 `session.create` calls in 45 seconds, behind a permanent
+"Loading..." that never said why. The effect therefore also skips while
+`useSession` holds an unacknowledged `createError`: one attempt, then the failure
+reaches the screen with the server's own wording — which carries the underlying
+cause, see [Error Replies](websocket-rpc.md#error-replies) — and a Retry that
+clears the error (which is what lets the effect run again). Retries are never
+automatic: a `session.create` that merely timed out may well have succeeded
+([Request Timeout](websocket-rpc.md#request-timeout)), so each silent retry
+risks leaving an orphan session behind.
 
 ## Multi-Step Execution
 
@@ -436,6 +562,21 @@ Start (step 0)
 ### Prompt Format
 
 Base prompts tell the agent to fetch its agent role and use that role's instructions. They also state the lifecycle rule in one place: call `step_done` when a step is complete, or when the work is done if the work item has no steps. Tasks with a parent story report results to that parent with `work_comment_add`. Story prompts tell coordinators to call `work_wait` after starting child tasks so the story waits for task completion reports.
+
+Every follow-up repeats this base rather than assuming the agent remembers an
+earlier turn, which is why a nudge still works when the agent has no memory of the
+work at all. That is not hypothetical: a Codex session cannot carry its
+conversation across a process restart (see
+[agent-integration.md](agent-integration.md#no-session-recovery)), so a follow-up
+can land in a thread that has never seen this work and must be able to pick it up
+from the prompt alone.
+
+Auto-continuation additionally restates the current step, so a stepped work
+survives the memory loss. **Restart does not**: `BuildRestartMessage` appends only the
+restart nudge, which tells the agent to review what it has done so far — and the
+step number is reachable from neither the prompt nor `work_get`. An agent that
+still has its history re-reads it; a fresh Codex thread has to re-derive its
+position from the work item and the worktree.
 
 **Initial kickoff with steps:**
 ```
@@ -496,6 +637,25 @@ Check if you have completed the current step:
 - If YES and this IS the last step: Call step_done with ID xxx to close the work item.
 - If NO: Continue working on this step.
 ```
+
+### System-Origin Message Tagging
+
+All of these work-driven prompts are byte-for-byte indistinguishable from a user-typed message once they reach the agent — same stdin, same `message` event. To let the frontend tell them apart, they are sent via `chat.Client.SendSystemMessage` (not the plain user path), which stamps the `MessageEvent` with `origin: "system"`, a `subtype`, and a `meta` summary. The origin is `"system"` rather than `"work"` because it marks a message produced by Pockode itself; the Work engine is today's only such producer, but the concept is source-agnostic. The user path leaves `origin` empty, so old history stays a normal user message — backward compatible by omission. (For why this reuses the `message` event rather than a new event type, see [agent-event.md](../agent-event.md#message-origin-user-vs-system).)
+
+**Subtypes** (`server/work/prompt.go`) — one per send site, so the frontend can pick a label without parsing the prompt:
+
+| Subtype | Sent from | Frontend label |
+|---------|-----------|----------------|
+| `kickoff` | `WorkStarter` fresh start | Kickoff |
+| `restart` | `WorkStarter` restart | Restart |
+| `auto_continue` | `AutoResumer` auto-continuation | Auto-continue |
+| `step_advance` | `AutoResumer.NotifyStepDone` | Next step (Step N/M) |
+| `reopen` | `AutoResumer.NotifyReopen` | Reopen |
+| `child_done` | `AutoResumer` parent reactivation | Child task done |
+
+**Meta summary** — `NewMessageMeta(title, step, total)` builds the collapsed-bar data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). `title` is the work title; `step` is included only when the send site has real step context (`total > 0` and `1 <= step <= total`), so a stepless work or an out-of-range auto-continuation omits it. This mirrors the prompt itself falling back to the stepless body in the same cases, keeping bar and body consistent.
+
+**Frontend collapse rendering** (`web/`) — the origin/subtype/meta ride through the reducer: `normalizeEvent` runs the raw `origin` through `normalizeOrigin`, which folds both the current `"system"` and the legacy stored `"work"` to `"system"` (so old persisted history and live events converge on the new name at this single wire boundary), passes `"user"` through, and drops anything else to `undefined`; it then copies origin/subtype/meta onto the normalized `message` event. `applyUserMessage` tags the resulting `UserMessage` with `source`/`subtype`/`meta` **only** when `origin === "system"` (plain user messages stay source-less, so optimistic local echoes and old history render as normal bubbles). `MessageItem` then branches on `message.source === "system"` to render `SystemMessageItem` — a low-contrast, default-collapsed banner (`Pockode · {label}` + truncated title) that expands to the full prompt via `MarkdownContent`, instead of a right-aligned user bubble. An unknown subtype degrades to the `System Message` label but still expands.
 
 ### Design Notes
 
@@ -562,13 +722,30 @@ work_context: |
 //go:embed prompts.yaml
 var promptsYAML []byte
 
+// compiledTemplates caches parsed templates keyed by their source string.
+// Prompt strings are compile-time constants (from embedded prompts.yaml), so each
+// is parsed once and reused across the many messages built per session.
+var compiledTemplates sync.Map // map[string]*template.Template
+
 func render(tmplStr string, data any) string {
-    tmpl := template.New("").Parse(tmplStr)
+    compiled, ok := compiledTemplates.Load(tmplStr)
+    if !ok {
+        tmpl, err := template.New("").Parse(tmplStr)
+        if err != nil {
+            panic("invalid template: " + err.Error())
+        }
+        compiled, _ = compiledTemplates.LoadOrStore(tmplStr, tmpl)
+    }
     var buf bytes.Buffer
-    tmpl.Execute(&buf, data)
+    compiled.(*template.Template).Execute(&buf, data)
     return strings.TrimSuffix(buf.String(), "\n")
 }
 ```
+
+Templates are compiled lazily and cached because the same handful of prompt
+templates is rendered repeatedly (once per kickoff/restart/step message across
+every session); `*template.Template.Execute` is safe for concurrent use, so the
+cached entry needs no additional locking.
 
 ## Code Paths
 
@@ -578,9 +755,13 @@ func render(tmplStr string, data any) string {
 | File store | `server/work/store.go` |
 | State validation | `server/work/validation.go` |
 | Auto resumer | `server/work/auto_resumer.go` |
+| Worktree start/stop handlers | `server/worktree/work_starter.go`, `server/worktree/work_stopper.go` |
+| Worktree manager (sender resolver) | `server/worktree/manager.go` |
+| Worktree delete protection | `server/ws/rpc_worktree.go` |
 | Prompt builder | `server/work/prompt.go` |
 | Prompt templates | `server/work/prompts.yaml` |
-| MCP server | `server/mcp/server.go` |
-| MCP tools | `server/mcp/tools.go` |
-| File I/O | `server/filestore/filestore.go` |
+| MCP stdio proxy + client | `server/mcp/server.go`, `server/mcp/client.go` |
+| MCP tool definitions | `server/mcp/tools.go` |
+| MCP tool executor + HTTP API | `server/mcp/executor.go`, `server/mcp/handler.go` |
+| File I/O | `server/filestore/filestore.go`, `server/filestore/atomic.go` |
 | Frontend store | `web/src/lib/workStore.ts` |

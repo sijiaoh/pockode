@@ -32,12 +32,32 @@ type QuestionRequestData struct {
 
 // StartOptions contains options for starting an agent session.
 type StartOptions struct {
-	WorkDir    string
-	DataDir    string // data directory for MCP config
-	SessionID  string
-	Resume     bool
-	Mode       session.Mode
-	DisableMCP bool // skip MCP config (for testing)
+	WorkDir string
+	// DataDir is this session's own data directory (per-worktree). Agent
+	// session-scoped state — resume mapping, history migration lookups — lives
+	// under DataDir/sessions/<id>, co-located with the session store that owns
+	// the session. For a named worktree this is the worktree's data dir, not the
+	// main one.
+	DataDir string
+	// MCPServerDir is the directory holding the running server's server.json, which
+	// the MCP stdio proxy reads to discover and forward to the local API. There is
+	// a single server per process, so this is always the main data dir regardless
+	// of worktree — a worktree's DataDir has no server.json. Empty falls back to
+	// DataDir (single-dir setups and tests that don't split the two).
+	MCPServerDir string
+	SessionID    string
+	Resume       bool
+	Mode         session.Mode
+	DisableMCP   bool // skip MCP config (for testing)
+}
+
+// MCPDir returns the directory to point the MCP proxy at (where server.json
+// lives), falling back to DataDir when MCPServerDir is unset.
+func (o StartOptions) MCPDir() string {
+	if o.MCPServerDir != "" {
+		return o.MCPServerDir
+	}
+	return o.DataDir
 }
 
 // Agent defines the interface for an AI agent.
@@ -52,11 +72,14 @@ type Agent interface {
 type Session interface {
 	// Events returns the channel that streams all events from the agent process.
 	// The channel remains open until the process terminates.
-	// EventTypeDone signals the current message response is complete.
+	// A turn ends with exactly one event whose type AwaitsUserInput: done when it
+	// completed, error when it failed, interrupted when it was aborted, or a
+	// permission/question request when it is blocked on the user.
 	Events() <-chan AgentEvent
 
-	// SendMessage sends a new message to the agent.
-	// It should only be called after the previous message is complete (received EventTypeDone).
+	// SendMessage sends a new message to the agent. Callers may send before the
+	// current turn has ended; what happens then is up to the CLI (Claude queues
+	// the message, Codex aborts the running turn and replaces it).
 	SendMessage(prompt string) error
 
 	// SendPermissionResponse sends a permission response to the agent.

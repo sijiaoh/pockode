@@ -13,6 +13,16 @@ import (
 
 var ErrSessionNotFound = errors.New("session not found")
 
+// ErrSessionNotRunning is returned when a request only makes sense to a live
+// agent process and the session has none.
+//
+// Answers belong to the process that asked the question, so a prompt whose
+// process is gone — reaped after an idle timeout, or replayed from history after
+// a server restart — cannot be answered at all. Starting a process to receive the
+// answer sends it nowhere and leaves that process marked running with nothing to
+// run, which is worse than saying so.
+var ErrSessionNotRunning = errors.New("session is no longer running, send a message to continue")
+
 // MessageBroadcastFunc broadcasts a user message to all session subscribers,
 // optionally excluding one notifier. The exclude parameter is typed as any
 // to avoid importing the watch package; the wiring code casts it.
@@ -48,19 +58,36 @@ func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content st
 	return c.sendMessage(ctx, sessionID, content, exclude)
 }
 
+// SendSystemMessage sends a system-driven automatic message (kickoff, restart,
+// auto-continue, etc.). It is tagged with origin "system" plus a subtype and
+// optional meta so the frontend can render it as a collapsed system message
+// rather than a user bubble.
+func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error {
+	event := agent.MessageEvent{
+		Content: content,
+		Origin:  agent.MessageOriginSystem,
+		Subtype: subtype,
+		Meta:    meta,
+	}
+	return c.sendEvent(ctx, sessionID, event, nil)
+}
+
 func (c *Client) sendMessage(ctx context.Context, sessionID, content string, exclude any) error {
+	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content}, exclude)
+}
+
+func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, exclude any) error {
 	proc, err := c.getOrCreateProcess(ctx, sessionID)
 	if err != nil {
 		return err
 	}
 
-	// Persist user message to history
-	event := agent.MessageEvent{Content: content}
+	// Persist message to history
 	if err := c.store.AppendToHistory(ctx, sessionID, agent.NewEventRecord(event)); err != nil {
-		slog.Error("failed to persist user message", "sessionId", sessionID, "error", err)
+		slog.Error("failed to persist message", "sessionId", sessionID, "error", err)
 	}
 
-	if err := proc.SendMessage(content); err != nil {
+	if err := proc.SendMessage(event.Content); err != nil {
 		return err
 	}
 
@@ -72,7 +99,7 @@ func (c *Client) sendMessage(ctx context.Context, sessionID, content string, exc
 }
 
 func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, data agent.PermissionRequestData, choice agent.PermissionChoice) error {
-	proc, err := c.getOrCreateProcess(ctx, sessionID)
+	proc, err := c.liveProcess(sessionID)
 	if err != nil {
 		return err
 	}
@@ -94,7 +121,7 @@ func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, d
 }
 
 func (c *Client) SendQuestionResponse(ctx context.Context, sessionID string, data agent.QuestionRequestData, answers map[string]string) error {
-	proc, err := c.getOrCreateProcess(ctx, sessionID)
+	proc, err := c.liveProcess(sessionID)
 	if err != nil {
 		return err
 	}
@@ -115,15 +142,49 @@ func (c *Client) SendQuestionResponse(ctx context.Context, sessionID string, dat
 	return nil
 }
 
-func (c *Client) Interrupt(ctx context.Context, sessionID string) error {
-	proc, err := c.getOrCreateProcess(ctx, sessionID)
+// Interrupt stops the turn a session is running. A session with no process has
+// nothing to stop, which counts as success — starting one would spawn the CLI the
+// user just asked to stop.
+func (c *Client) Interrupt(_ context.Context, sessionID string) error {
+	proc, err := c.liveProcess(sessionID)
+	if errors.Is(err, ErrSessionNotRunning) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	return proc.SendInterrupt()
 }
 
-// getOrCreateProcess handles session validation, process creation, and activation.
+// liveProcess returns the session's running process. Unlike getOrCreateProcess it
+// never starts one, for requests that are only meaningful to a process already
+// there.
+func (c *Client) liveProcess(sessionID string) (*process.Process, error) {
+	_, found, err := c.store.Get(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("get session: %w", err)
+	}
+	if !found {
+		return nil, ErrSessionNotFound
+	}
+
+	proc := c.pm.GetProcess(sessionID)
+	if proc == nil {
+		return nil, ErrSessionNotRunning
+	}
+	// Answering counts as activity, the same way GetOrCreateProcess treats a
+	// message, so the reaper does not collect a session the user is using.
+	c.pm.Touch(sessionID)
+	return proc, nil
+}
+
+// getOrCreateProcess handles session validation and process creation.
+//
+// Activation is not decided here: a session counts as started once the agent
+// produces output, which the process manager sees and records. Marking it here
+// would claim a session had started whenever the CLI merely spawned, and a first
+// turn that failed outright would then be resumed — and locked to its agent
+// type — as if it had run.
 func (c *Client) getOrCreateProcess(ctx context.Context, sessionID string) (*process.Process, error) {
 	meta, found, err := c.store.Get(sessionID)
 	if err != nil {
@@ -133,17 +194,9 @@ func (c *Client) getOrCreateProcess(ctx context.Context, sessionID string) (*pro
 		return nil, ErrSessionNotFound
 	}
 
-	resume := meta.Activated
-	proc, created, err := c.pm.GetOrCreateProcess(ctx, sessionID, resume, meta.AgentType, meta.Mode)
+	proc, _, err := c.pm.GetOrCreateProcess(ctx, sessionID, meta.Activated, meta.AgentType, meta.Mode)
 	if err != nil {
 		return nil, err
-	}
-
-	// Activate session on first process creation
-	if created && !resume {
-		if err := c.store.Activate(ctx, sessionID); err != nil {
-			slog.Error("failed to activate session", "sessionId", sessionID, "error", err)
-		}
 	}
 
 	return proc, nil

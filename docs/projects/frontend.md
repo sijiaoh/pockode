@@ -46,9 +46,14 @@ Incoming notifications are routed by method name in `handleNotification()`:
 - `work.detail.changed` → same pattern
 - `agent_role.list.changed` → same pattern
 
-On WebSocket close, `clearWatchSubscriptions()` clears all callback maps (including Work and AgentRole). When the connection is re-established, `useSubscription` detects the `connected` status change and resubscribes automatically.
+wsStore splits its watch callbacks into two groups, mirroring where the server keeps the matching watchers:
 
-Work and AgentRole subscriptions set `resubscribeOnWorktreeChange: false`. Their callback maps are cleared by `clearWatchSubscriptions()` on worktree switch, but since the server preserves these subscriptions across switches, the hooks resubscribe only on reconnect.
+- **Worktree-scoped** (file, git, git-diff, session list, chat messages) — the server tears down these watchers when the connection switches worktree.
+- **App-level / global** (work list, work detail, agent role list, settings, worktree list) — these watchers are Manager-level and keep pushing across worktree switches.
+
+On worktree switch, `switchWorktreeRPC()` calls `clearWorktreeWatchSubscriptions()`, which clears only the worktree-scoped maps. App-level callbacks are deliberately preserved: Work and AgentRole subscriptions set `resubscribeOnWorktreeChange: false` (they never resubscribe on switch), so clearing their callbacks would leave the server pushing `work.list.changed` and similar notifications into a connection with no local handler — silently dropping updates.
+
+On WebSocket close, `clearAllWatchSubscriptions()` clears every callback map (including app-level), since the connection and all its server-side subscriptions are gone. When the connection is re-established, `useSubscription` detects the `connected` status change and resubscribes automatically.
 
 ## Real-Time Sync
 
@@ -79,7 +84,7 @@ Both `useWorkSubscription` and `useAgentRoleSubscription` follow the same update
 
 ```
 ProjectTab
-  ├── "Stories"         → WorkListOverlay
+  ├── "Project"         → WorkListOverlay
   │                         └── (tap task) → WorkDetailOverlay
   │                                            └── (tap task) → WorkDetailOverlay
   │                                            └── "Open Chat" → Chat session
@@ -88,6 +93,8 @@ ProjectTab
 ```
 
 `ProjectTab` is the sidebar entry point. It renders two buttons that open their respective overlay screens via callbacks (`onOpenWorkList`, `onOpenAgentRoleList`).
+
+Opening a work's chat (the `Chat` / `Open Chat` shortcuts) navigates to the session URL of **the work's own worktree** (`/w/<worktree>/s/<sessionId>`), not the currently active one — the list is global across worktrees, so a shortcut may switch worktrees. See [work-system.md](../code/work-system.md#cross-worktree-chat-navigation) for the rationale.
 
 ### WorkListOverlay
 
@@ -99,7 +106,7 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 2. Stories are grouped by status in this order: **in_progress → waiting → needs_input → stopped → open → closed**
 3. Each group is a collapsible section (`StatusGroup`); `closed` group is collapsed by default
 4. Each group header shows: collapse toggle, status icon, status label, count badge
-5. Each story row shows: status icon, title, task progress (`closedTasks/totalTasks tasks`)
+5. Each story row shows: status icon, title, task progress (`closedTasks/totalTasks tasks`), and a `WorktreeBadge` marking which worktree the story (and its whole subtree) runs in — the list is global across worktrees, so the badge is what tells rows apart. Tasks normally share their story's worktree, so repeating the badge on every task row would only add noise. Stories still in `open` status show no badge, since their worktree is only fixed once they start.
 6. A "New Story" button at the top opens an inline creation form (title + role selector)
 
 **Task progress:** Tasks are indexed by `parent_id` into a `Map<string, Work[]>`. For each story, closed count is tasks with status `closed`.
@@ -110,7 +117,7 @@ Shows the detail view for a single work item (story or task). Sections:
 
 - **Parent link** — If the item is a task, shows a tappable link to the parent story
 - **Title** — Inline-editable (tap pencil icon to enter edit mode)
-- **Status** — Read-only badge
+- **Status** — Read-only badge, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly; hidden while neither the work nor its root story has started, because only then can the worktree still change)
 - **Role** — Inline-editable select (tap to switch role)
 - **Description** — Inline-editable textarea with Markdown rendering
 - **Steps** — Step progress indicator showing current step position (if agent role has steps defined)

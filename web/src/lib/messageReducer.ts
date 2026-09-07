@@ -3,12 +3,31 @@ import type {
 	AssistantMessage,
 	ContentPart,
 	Message,
+	MessageOrigin,
 	PermissionUpdate,
 	QuestionStatus,
 	ServerNotification,
+	SystemMessageMeta,
 	UserMessage,
 } from "../types/message";
 import { generateUUID } from "../utils/uuid";
+
+// Legacy history recorded system messages with origin "work" before the
+// concept was renamed to "system". Map the old value so old sessions still
+// render as collapsed system messages.
+function normalizeOrigin(raw: unknown): MessageOrigin | undefined {
+	if (raw === "system" || raw === "work") return "system";
+	if (raw === "user") return "user";
+	return undefined;
+}
+
+// A cancelled question is stored with a nil answers map, and `omitempty` on the
+// Go side then drops the key from the record entirely — so cancellation reaches
+// the client as an absent field, not as null. Both mean cancelled.
+function normalizeAnswers(raw: unknown): Record<string, string> | null {
+	if (raw === null || typeof raw !== "object") return null;
+	return raw as Record<string, string>;
+}
 
 // Normalized event with camelCase (internal representation)
 export type NormalizedEvent =
@@ -26,7 +45,14 @@ export type NormalizedEvent =
 	| { type: "interrupted" }
 	| { type: "process_ended" }
 	| { type: "system"; content: string }
-	| { type: "message"; content: string } // User message (history replay or broadcast)
+	| {
+			// User message or system-driven message (history replay or broadcast)
+			type: "message";
+			content: string;
+			origin?: MessageOrigin;
+			subtype?: string;
+			meta?: SystemMessageMeta;
+	  }
 	| {
 			type: "permission_request";
 			requestId: string;
@@ -98,7 +124,13 @@ export function normalizeEvent(
 		case "system":
 			return { type: "system", content: (record.content as string) ?? "" };
 		case "message":
-			return { type: "message", content: (record.content as string) ?? "" };
+			return {
+				type: "message",
+				content: (record.content as string) ?? "",
+				origin: normalizeOrigin(record.origin),
+				subtype: record.subtype as string | undefined,
+				meta: record.meta as SystemMessageMeta | undefined,
+			};
 		case "permission_request":
 			return {
 				type: "permission_request",
@@ -126,13 +158,19 @@ export function normalizeEvent(
 				type: "ask_user_question",
 				requestId: record.request_id as string,
 				toolUseId: record.tool_use_id as string,
-				questions: record.questions as AskUserQuestion[],
+				// Boundary defense for shape drift across the WS contract: the
+				// Go encoder omits empty `questions` and emits `null` for a nil
+				// `options` slice. Coerce to the non-nullable TS shape here so
+				// downstream code can trust the types.
+				questions: (
+					(record.questions as AskUserQuestion[] | undefined) ?? []
+				).map((q) => ({ ...q, options: q.options ?? [] })),
 			};
 		case "question_response":
 			return {
 				type: "question_response",
 				requestId: record.request_id as string,
-				answers: record.answers as Record<string, string> | null,
+				answers: normalizeAnswers(record.answers),
 			};
 		case "raw":
 			return { type: "raw", content: (record.content as string) ?? "" };
@@ -189,19 +227,35 @@ export function applyEventToParts(
 					status: "pending",
 				},
 			];
-		case "ask_user_question":
-			return [
-				...parts,
-				{
-					type: "ask_user_question",
-					request: {
-						requestId: event.requestId,
-						toolUseId: event.toolUseId,
-						questions: event.questions,
-					},
-					status: "pending",
+		case "ask_user_question": {
+			const questionPart: ContentPart = {
+				type: "ask_user_question",
+				request: {
+					requestId: event.requestId,
+					toolUseId: event.toolUseId,
+					questions: event.questions,
 				},
-			];
+				status: "pending",
+			};
+			// Claude asks through a regular AskUserQuestion tool call: the CLI
+			// emits tool_call for it immediately before the question, and a
+			// tool_result echoing the answers after. All three describe one tool
+			// use, and the question card already renders the whole interaction, so
+			// take the tool_call's place rather than sit beside a card duplicating
+			// it. The trailing tool_result then matches no tool_call and is
+			// dropped as an orphan.
+			const toolCallIndex = event.toolUseId
+				? parts.findIndex(
+						(part) =>
+							part.type === "tool_call" && part.tool.id === event.toolUseId,
+					)
+				: -1;
+			if (toolCallIndex === -1) return [...parts, questionPart];
+
+			const updated = [...parts];
+			updated[toolCallIndex] = questionPart;
+			return updated;
+		}
 		case "system":
 			return [...parts, { type: "system", content: event.content }];
 		case "warning":
@@ -235,9 +289,13 @@ export function applyServerEvent(
 	messages: Message[],
 	event: NormalizedEvent,
 ): Message[] {
-	// User message (history replay or broadcast from another client)
+	// User message or system-driven message (history replay or broadcast)
 	if (event.type === "message") {
-		return applyUserMessage(messages, event.content);
+		return applyUserMessage(messages, event.content, {
+			source: event.origin,
+			subtype: event.subtype,
+			meta: event.meta,
+		});
 	}
 
 	// Permission response updates existing permission_request across all messages
@@ -482,32 +540,46 @@ function updateToolResult(
 	toolUseId: string,
 	toolResult: string,
 ): Message[] {
-	let found = false;
-	const updated = messages.map((msg) => {
-		if (msg.role !== "assistant") return msg;
+	// A tool_result almost always targets a tool_call in the most recent
+	// assistant message, and tool IDs are unique — scan from the end and stop
+	// at the first match instead of re-walking the whole transcript per result.
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role !== "assistant") continue;
 
-		let changed = false;
-		const updatedParts = msg.parts.map((part) => {
-			if (part.type === "tool_call" && part.tool.id === toolUseId) {
-				changed = true;
-				found = true;
-				return { ...part, tool: { ...part.tool, result: toolResult } };
-			}
-			return part;
-		});
+		const partIndex = msg.parts.findIndex(
+			(part) => part.type === "tool_call" && part.tool.id === toolUseId,
+		);
+		if (partIndex === -1) continue;
 
-		if (!changed) return msg;
-		return { ...msg, parts: updatedParts };
-	});
+		const part = msg.parts[partIndex];
+		if (part.type !== "tool_call") continue;
+
+		const updatedParts = [...msg.parts];
+		updatedParts[partIndex] = {
+			...part,
+			tool: { ...part.tool, result: toolResult },
+		};
+		const updated = [...messages];
+		updated[i] = { ...msg, parts: updatedParts };
+		return updated;
+	}
 
 	// If no matching tool_call found, ignore the orphan result
-	return found ? updated : messages;
+	return messages;
+}
+
+interface UserMessageOptions {
+	source?: MessageOrigin;
+	subtype?: string;
+	meta?: SystemMessageMeta;
 }
 
 // Finalizes any streaming assistant before adding new user message
 export function applyUserMessage(
 	messages: Message[],
 	content: string,
+	options?: UserMessageOptions,
 ): Message[] {
 	const finalized = messages.map((m): Message => {
 		if (
@@ -525,6 +597,10 @@ export function applyUserMessage(
 		content,
 		status: "complete",
 		createdAt: new Date(),
+		// Only tag system-driven messages; a plain user message stays source-less.
+		...(options?.source === "system"
+			? { source: options.source, subtype: options.subtype, meta: options.meta }
+			: {}),
 	};
 
 	return [...finalized, userMessage, createAssistantMessage()];

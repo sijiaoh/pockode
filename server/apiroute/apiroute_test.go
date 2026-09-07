@@ -27,3 +27,25 @@ func TestIsAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestIsLocalOnly(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		// Where: mcp.APIPath. Spelled out rather than imported so that
+		// package mcp is free to depend on routing and not the reverse;
+		// mcp's own TestAPIPathStaysLocalOnly pins the two together.
+		{"/api/mcp/tools/call", true},
+		{"/api/mcp/", true},
+		{"/api/ping", false},
+		{"/api", false},
+		{"/", false},
+	}
+
+	for _, tt := range tests {
+		if got := IsLocalOnly(tt.path); got != tt.want {
+			t.Errorf("IsLocalOnly(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}

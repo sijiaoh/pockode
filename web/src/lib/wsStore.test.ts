@@ -75,6 +75,24 @@ class MockWebSocket {
 		this.readyState = MockWebSocket.CLOSED;
 		this.onclose?.();
 	}
+	// The socket is up but nothing ever answers: what a browser sees when the
+	// cloud accepts its connection while the relay tunnel behind it is dead.
+	mockNoResponse() {
+		this.send = vi.fn();
+	}
+	// close() is not instant in a browser: it starts a handshake, and against a
+	// dead relay onclose lands seconds later. The default mock fires it
+	// synchronously, which hides every bug that needs a socket to outlive its
+	// own close() call.
+	mockSlowClose() {
+		this.close = vi.fn(() => {
+			this.readyState = MockWebSocket.CLOSING;
+		});
+	}
+	finishClose() {
+		this.readyState = MockWebSocket.CLOSED;
+		this.onclose?.();
+	}
 	mockAuthFailure() {
 		this.send = vi.fn((data: string) => {
 			const parsed = JSON.parse(data);
@@ -154,7 +172,10 @@ async function connectAndAuth(token = TEST_TOKEN) {
 	expect(useWSStore.getState().status).toBe("connected");
 }
 
-describe("wsStore", () => {
+// The first case in the file pays for importing the store and its dependencies,
+// which on a loaded machine outruns the 5s default and fails a test that does no
+// waiting of its own.
+describe("wsStore", { timeout: 20_000 }, () => {
 	describe("connect", () => {
 		it("sets status to connecting then connected after auth", async () => {
 			const wsActions = await getWsActions();
@@ -323,6 +344,85 @@ describe("wsStore", () => {
 			await expect(wsActions.sendMessage("test", "hello")).rejects.toThrow(
 				"Not connected",
 			);
+		});
+	});
+
+	describe("unanswered requests", () => {
+		it("fails them as soon as the socket closes", async () => {
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+			getMockWs()?.mockNoResponse();
+
+			const pending = wsActions.getFile("big.png");
+			const rejection = expect(pending).rejects.toThrow("Connection lost");
+			// The agent-start requests wait on their own, much longer clock, so they
+			// have the most to lose from being left to time out — and they only escape
+			// that because they share the underlying client whose pending requests are
+			// rejected here.
+			const pendingSend = wsActions.sendMessage("session-1", "hello");
+			const sendRejection =
+				expect(pendingSend).rejects.toThrow("Connection lost");
+			const pendingStart = wsActions.startWork("work-1");
+			const startRejection =
+				expect(pendingStart).rejects.toThrow("Connection lost");
+
+			// Their answer could only have come down this socket, so waiting out the
+			// timeout would just be a slower way of failing.
+			getMockWs()?.simulateClose();
+			await rejection;
+			await sendRejection;
+			await startRejection;
+		});
+
+		it("marks a request the client gave up on as a timeout", async () => {
+			const { isRPCTimeout } = await import("./wsStore");
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+			getMockWs()?.mockNoResponse();
+
+			const caught = wsActions.getFile("big.png").catch((error) => error);
+			await vi.advanceTimersByTimeAsync(30_000);
+
+			// Callers use this to tell "we stopped waiting" — where the server may
+			// still be working and a retry would duplicate it — from a real failure.
+			expect(isRPCTimeout(await caught)).toBe(true);
+		});
+
+		it("waits longer on agent-starting requests than on other requests", async () => {
+			const { isRPCTimeout } = await import("./wsStore");
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+			getMockWs()?.mockNoResponse();
+
+			const otherRequest = wsActions.getFile("big.png").catch((error) => error);
+			const agentStarters = [
+				wsActions.sendMessage("session-1", "hello"),
+				wsActions.startWork("work-1"),
+			].map((pending) => {
+				const settled = { done: false };
+				const caught = pending.catch((error) => error);
+				void caught.then(() => {
+					settled.done = true;
+				});
+				return { caught, settled };
+			});
+
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(isRPCTimeout(await otherRequest)).toBe(true);
+			// An agent CLI starts on these requests' path, and the server spends up
+			// to 40s on that before answering. Giving up here would throw away the
+			// reply that says which startup step stalled.
+			for (const { settled } of agentStarters) {
+				expect(settled.done).toBe(false);
+			}
+
+			await vi.advanceTimersByTimeAsync(30_000);
+			for (const { caught } of agentStarters) {
+				expect(isRPCTimeout(await caught)).toBe(true);
+			}
 		});
 	});
 
@@ -646,6 +746,26 @@ describe("wsStore", () => {
 			expect(mockWsInstances.length).toBe(1);
 		});
 
+		// The cloud can accept the browser's socket while the tunnel behind it is
+		// dead, so auth is sent and never answered. That is a network problem, not
+		// a credential problem: classifying it as auth_failed would strand the
+		// user on a terminal error screen that only a refresh clears.
+		it("retries when auth is never answered instead of failing auth", async () => {
+			const wsActions = await getWsActions();
+			const useWSStore = await getUseWSStore();
+
+			wsActions.connect(TEST_TOKEN);
+			getMockWs()?.mockNoResponse();
+			getMockWs()?.simulateOpen();
+
+			// Past the RPC timeout.
+			await vi.advanceTimersByTimeAsync(30000);
+
+			expect(useWSStore.getState().status).toBe("reconnecting");
+			await vi.advanceTimersByTimeAsync(RECONNECT_MAX_DELAY);
+			expect(mockWsInstances.length).toBe(2);
+		});
+
 		it("handles socket error by letting onclose manage state", async () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
@@ -658,6 +778,36 @@ describe("wsStore", () => {
 			// onclose triggers reconnection attempt
 			getMockWs()?.simulateClose();
 			expect(useWSStore.getState().status).toBe("reconnecting");
+		});
+
+		// reconnectWebSocket() — the fallback when worktree.switch fails, which is
+		// exactly when the tunnel is sick — closes the socket and opens its
+		// replacement 100ms later, while a close handshake against a dead relay
+		// drags on for seconds. The superseded socket must not take the live
+		// connection down with it when it finally lands.
+		it("ignores the close of a socket that has already been replaced", async () => {
+			const useWSStore = await getUseWSStore();
+			const { reconnectWebSocket } = await import("./wsStore");
+			await connectAndAuth();
+
+			const superseded = getMockWs();
+			superseded?.mockSlowClose();
+
+			reconnectWebSocket();
+			await vi.advanceTimersByTimeAsync(100);
+			const replacement = getMockWs();
+			expect(replacement).not.toBe(superseded);
+
+			replacement?.simulateOpen();
+			await vi.runAllTimersAsync();
+			expect(useWSStore.getState().status).toBe("connected");
+
+			superseded?.finishClose();
+			await vi.runAllTimersAsync();
+
+			expect(useWSStore.getState().status).toBe("connected");
+			// No reconnect was scheduled on top of the healthy connection.
+			expect(mockWsInstances.length).toBe(2);
 		});
 
 		it("does not reconnect on auth failure", async () => {

@@ -205,14 +205,16 @@ const doSubscribe = useCallback(async () => {
 
 The generation counter ensures only the latest subscription attempt succeeds. Stale subscriptions are immediately cleaned up.
 
-### Why Worktree Switch Handlers?
+### Why Worktree Switch Is a Soft Refresh, Not a Reset
 
 ```typescript
-// web/src/hooks/useSubscription.ts:133-142
+// web/src/hooks/useSubscription.ts:153-164
 const cleanupSwitchStart = resubscribeOnWorktreeChange
     ? worktreeActions.onWorktreeSwitchStart(() => {
+        // Soft refresh: drop the old subscription but keep data on screen.
+        // onSubscribed replaces it once the new worktree's data arrives.
         invalidate();
-        onResetRef.current?.();
+        onWorktreeSwitchRef.current?.();
     })
     : undefined;
 
@@ -221,10 +223,45 @@ const cleanupSwitchEnd = resubscribeOnWorktreeChange
     : undefined;
 ```
 
-**Rationale:** Server-side worktree-scoped subscriptions (file, git, session) are invalidated when the client switches worktrees. The hook listens to worktree events to:
+**Rationale:** Server-side worktree-scoped subscriptions (file, git, session) are invalidated when the client switches worktrees, so the hook must resubscribe. The naive teardown — `invalidate()` + `onReset` on switch start, resubscribe on switch end — made the switch feel heavy: clearing worktree-scoped data mid-switch dropped every affected view to a loading state until the new worktree's snapshot arrived.
 
-1. **onSwitchStart**: Immediately invalidate to prevent processing stale notifications
-2. **onSwitchEnd**: Re-subscribe to the new worktree
+The most damaging case was the session list. Clearing it made `currentSession` disappear, which sent the whole `AppShell` into its full-screen "Loading..." branch — so every switch flashed the app blank and re-rendered from scratch.
+
+So switch start no longer calls `onReset`. Instead:
+
+1. **onSwitchStart**: `invalidate()` cancels the stale subscription (bumps the generation counter so late notifications are ignored) but leaves the previous data on screen. The optional `onWorktreeSwitch` callback lets a consumer mark that data as "reloading" without clearing it.
+2. **onSwitchEnd**: `doSubscribe()` resubscribes; `onSubscribed` swaps in the new worktree's snapshot when it arrives.
+
+`onReset` is now reserved for teardown where the data is genuinely untrustworthy — disable, disconnect, or a failed (re)subscribe. Consumers that don't pass `onWorktreeSwitch` (git, git-diff, fs) simply keep their previous data until the new snapshot replaces it, turning the switch into a seamless refresh. This is a `keepPreviousData`-style trade-off: the placeholder briefly shows the old worktree's data, but it is data already on the client — no cross-worktree request is issued during the transition, so the security boundary (server-side `worktree.switch` validation) is untouched.
+
+### Why the Session List Keeps a Placeholder During a Switch
+
+The session list decides which chat `AppShell` renders, so "keep old data" is not enough on its own: the redirect / new-session recovery logic must also be prevented from acting on the stale list (which would hijack the URL toward a session that belongs to the old worktree). `useSessionSubscription` passes `onWorktreeSwitch: beginReload`:
+
+```typescript
+// web/src/lib/sessionStore.ts:49
+beginReload: () => set({ isSuccess: false, isReloading: true }),
+```
+
+`beginReload` keeps `sessions` and — deliberately — leaves `isLoading` false, so the sidebar goes on rendering the retained list instead of dropping straight into a loading state. It only clears `isSuccess` (so redirect / new-session recovery waits for the new worktree's list) and raises `isReloading`.
+
+`AppShell` treats `isReloading` — together with `worktreeSwitchInFlight`, a pending `redirectSessionId`, or `needsNewSession` — as an "in transition" state and, once a shell has been on screen, keeps it mounted through the transition instead of dropping to the loading blank. The same path smooths other transient renders, such as jumping to the next session after deleting the current one.
+
+**What the placeholder may and may not be.** Only the *shell* is retained; the previous session's content is not. The destination's id is known from the URL from the first frame of a switch, so `AppShell` hands `ChatPanel` that id straight away, along with `isSessionResolved` — false until the id is found in the session list of the worktree the connection is actually bound to (`!worktreeSwitchInFlight && !isReloading`, looked up in the unfiltered `sessions`, because a work's chat link points at a task session that `filteredSessions` may hide). While it is false the panel shows `ChatSkeleton` and disables the input.
+
+Retaining the previous *session* instead was the original implementation, and it meant a cross-worktree chat link showed the conversation the user had just left — including a send box wired to it — until the new list arrived. The retained sidebar list is stale in the same way, so for the duration it is barred from interaction — keyboard included, not just the pointer — then swapped for `SessionListSkeleton`, and its highlight follows the destination id rather than the list it is drawn from. Creating a session is blocked for the same stretch, since the connection is still bound to the worktree being left.
+
+Refreshing the list is barred there too, and that guard rests on something no single file shows: `isSuccess` is not merely a loading flag; it is the last gate standing in front of redirect recovery, and it does not lift at the same moment as `worktreeSwitchInFlight` — the store worktree catches up before the resubscription does, leaving a window in which `isSuccess` is the only thing still holding. Anything that raises it there hands recovery the list of the worktree being left, which is all it takes to navigate the user off the session they were heading for. A refresh is such a thing, and opening the sidebar onto the session list performs one.
+
+The previous session's messages can reach the screen with no worktree switch involved at all, which is why `useChatMessages` resets during render rather than in an effect: an effect would let them be committed for one frame under the new session's identity.
+
+During a switch both skeletons wait 150ms (`useDelayedFlag`), so one that lands quickly shows no indicator at all. What gets timed has to be the whole gap — resolving the session, then loading its history. `enabled` happens to make that a single flag: with no subscription allowed yet, `isLoadingHistory` is still true, so the second phase never starts the clock over. Timed as two waits they would each restart the delay and blank the screen for longer than no delay at all.
+
+### Why App-Level Subscriptions Survive Worktree Switches
+
+Not every subscription is worktree-scoped. Work list/detail, agent role list, settings, and the worktree list are backed by Manager-level watchers that keep pushing across worktree switches. Their hooks set `resubscribeOnWorktreeChange: false`, so they never re-subscribe on switch — and they don't need to.
+
+This is why wsStore separates its callback maps into two groups and, on switch, clears only the worktree-scoped ones (`clearWorktreeWatchSubscriptions`), reserving the full clear (`clearAllWatchSubscriptions`) for disconnect. Clearing app-level callbacks on switch would leave the server pushing to a connection whose local handlers are gone, silently dropping `work.list.changed` and similar notifications. Keeping the local teardown aligned with the server's watcher lifetime is what keeps the global work list live after a worktree switch.
 
 ## Buffer Size Tuning
 

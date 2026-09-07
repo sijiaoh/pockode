@@ -30,7 +30,11 @@ type Mode string
 
 const (
 	ModeDefault Mode = "default" // Normal mode with permission prompts
-	ModeYolo    Mode = "yolo"    // Skip all permission prompts (--dangerously-skip-permissions)
+	// Each agent gives up its own gate: Claude runs with
+	// --permission-mode bypassPermissions, Codex with approval-policy "never"
+	// and its sandbox at danger-full-access. See agent/claude/claude.go and
+	// agent/codex/codex.go buildStartConfig.
+	ModeYolo Mode = "yolo"
 	// ModePlan Mode = "plan"    // Planning mode (future)
 )
 
@@ -53,7 +57,7 @@ type SessionMeta struct {
 	Title      string    `json:"title"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
-	Activated  bool      `json:"activated"`   // true after first message sent
+	Activated  bool      `json:"activated"`   // true once the agent has produced output
 	AgentType  AgentType `json:"agent_type"`  // which AI backend (claude, codex)
 	Mode       Mode      `json:"mode"`        // agent mode (default, yolo, plan)
 	NeedsInput bool      `json:"needs_input"` // true when waiting for user input (permission/question)

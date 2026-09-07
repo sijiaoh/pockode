@@ -42,6 +42,8 @@ pockode -auth-token YOUR_PASSWORD
 
 Scan the QR code with your phone. Done.
 
+> Need to manage multiple projects? Use [cluster mode](docs/cluster.md) — an orchestrator that registers project nodes and starts/stops their servers on demand.
+
 ## Status
 
 Early-stage. Actively developed. APIs may change.

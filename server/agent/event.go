@@ -42,6 +42,65 @@ func (e EventType) AwaitsUserInput() bool {
 	}
 }
 
+// IndicatesAgentActivity returns true for the events that only arrive while a
+// turn is under way. These move the process state to running.
+//
+// It is a whitelist because being wrong is not symmetric. An event wrongly
+// counted as activity marks a session running with nothing running, and nothing
+// corrects that until the idle reaper collects the process hours later — the
+// startup warning Codex emits for a session it cannot resume did exactly that.
+// An event wrongly left out costs at most one missed transition, because the
+// send that started the turn has already set running.
+//
+// Excluded, and why they are not oversights: AwaitsUserInput events end or pause
+// the turn, so they drive idle instead (the two predicates never overlap);
+// warning is how a session-level problem is reported, which can happen before the
+// first message; request_cancelled withdraws a prompt the user may never have
+// answered, so the process is likely idle already; process_ended is an obituary.
+// The remaining types are only ever replayed from history, never streamed.
+//
+// System events belong here but not in ActivatesSession: they only appear once a
+// turn is running, yet they are not the agent contributing anything to it.
+func (e EventType) IndicatesAgentActivity() bool {
+	return e == EventTypeSystem || e.ActivatesSession()
+}
+
+// ActivatesSession returns true for the events that put something on the agent's
+// side of the conversation, which is what makes a session "started": there is now
+// context that switching backends would throw away.
+//
+// Narrower than IndicatesAgentActivity on purpose. That predicate answers "is a
+// turn under way", and a turn can be under way from start to finish without the
+// agent ever contributing to it: a first message sent through an expired login or
+// a dead endpoint gets an init, a stream of system/api_retry, the CLI's own
+// account of the failure, and a result flagged as an error — every one of them
+// produced without the model being reached (measured on claude 2.1.259 against a
+// refused port and against a local endpoint answering 401). Note the result frame
+// carries subtype "success" and reports the failure through is_error, so look at
+// the flag rather than the subtype when reproducing this. Treating the turn as a
+// started session would lock it to the agent that just failed, which is the one
+// situation where being able to switch agents is the only way out.
+//
+// That the CLI's account of the failure lands outside this set is not automatic.
+// Claude delivers it as an assistant message, and only claude.syntheticNotice
+// keeping those off the text path stops it from starting the session here.
+//
+// The bias here is the opposite of IndicatesAgentActivity's: counting an event
+// too eagerly costs the user their escape hatch, while missing one only leaves a
+// session switchable slightly longer than it should be, until the agent's next
+// output. The borderline cases (a local command's output, output we could not
+// parse) are in anyway, despite that bias: neither can come from a turn that
+// failed to start, so including them cannot cost anyone the escape hatch.
+func (e EventType) ActivatesSession() bool {
+	switch e {
+	case EventTypeText, EventTypeToolCall, EventTypeToolResult,
+		EventTypeCommandOutput, EventTypeRaw:
+		return true
+	default:
+		return false
+	}
+}
+
 // PermissionBehavior represents the permission action.
 type PermissionBehavior string
 
@@ -291,18 +350,56 @@ func (e ProcessEndedEvent) ToRecord() EventRecord {
 	return EventRecord{Type: e.EventType()}
 }
 
-// MessageEvent represents a user message. Used for:
+// MessageOrigin distinguishes who produced a message event.
+// An empty value (default) means a user-typed message, kept empty for
+// backward compatibility with history recorded before this field existed.
+type MessageOrigin string
+
+const (
+	MessageOriginUser MessageOrigin = "user"
+	// MessageOriginSystem marks a message produced by Pockode itself rather
+	// than typed by the user. The work engine is the current producer; other
+	// system sources may emit these in the future.
+	MessageOriginSystem MessageOrigin = "system"
+)
+
+// StepInfo is the step context shown in a system message's collapsed summary.
+type StepInfo struct {
+	Current int `json:"current"`
+	Total   int `json:"total"`
+}
+
+// MessageMeta carries summary data for a system-origin message so the frontend
+// can render the collapsed bar without parsing the prompt body.
+type MessageMeta struct {
+	Title string    `json:"title,omitempty"`
+	Step  *StepInfo `json:"step,omitempty"`
+}
+
+// MessageEvent represents a message sent to the agent. Used for:
 // - History replay: reconstructing past messages
-// - Broadcast: notifying other clients when a user sends a message
+// - Broadcast: notifying other clients when a message is sent
+//
+// Origin distinguishes user-typed messages (empty/"user") from system-driven
+// automatic messages ("system"); Subtype and Meta describe the latter.
 type MessageEvent struct {
 	Content string
+	Origin  MessageOrigin
+	Subtype string
+	Meta    *MessageMeta
 }
 
 func (MessageEvent) EventType() EventType { return EventTypeMessage }
 func (MessageEvent) isAgentEvent()        {}
 
 func (e MessageEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Content: e.Content}
+	return EventRecord{
+		Type:    e.EventType(),
+		Content: e.Content,
+		Origin:  e.Origin,
+		Subtype: e.Subtype,
+		Meta:    e.Meta,
+	}
 }
 
 // PermissionResponseEvent is for history replay only, not sent as RPC notification.

@@ -78,6 +78,14 @@ func (w *WorkDetailWatcher) notifyChange(event detailEvent) {
 
 // notifyForWorkID fetches the latest work + comments and sends to subscribers of this work_id.
 func (w *WorkDetailWatcher) notifyForWorkID(workID string) {
+	// This watcher receives every work/comment change in the app, but detail
+	// subscriptions normally exist only for the one work item a client has open.
+	// Skip the store reads (two linear scans + allocation) when nobody is
+	// watching this work_id.
+	if !w.HasSubscriptionForWorkID(workID) {
+		return
+	}
+
 	item, found, err := w.store.Get(workID)
 	if err != nil {
 		slog.Error("failed to get work for detail notification", "error", err, "workId", workID)

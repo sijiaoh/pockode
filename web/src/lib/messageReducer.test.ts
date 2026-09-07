@@ -154,6 +154,51 @@ describe("messageReducer", () => {
 			});
 		});
 
+		it("defaults missing questions to [] to keep renderers safe", () => {
+			const event = normalizeEvent({
+				type: "ask_user_question",
+				request_id: "q-1",
+				tool_use_id: "toolu_q_1",
+			});
+			expect(event).toEqual({
+				type: "ask_user_question",
+				requestId: "q-1",
+				toolUseId: "toolu_q_1",
+				questions: [],
+			});
+		});
+
+		it("normalizes null question options to [] to keep renderers safe", () => {
+			// Simulates the wire shape when Go marshals a nil `Options` slice.
+			const payload: Record<string, unknown> = {
+				type: "ask_user_question",
+				request_id: "q-1",
+				tool_use_id: "toolu_q_1",
+				questions: [
+					{
+						question: "Pick one?",
+						header: "Pick",
+						options: null,
+						multiSelect: false,
+					},
+				],
+			};
+			const event = normalizeEvent(payload);
+			expect(event).toEqual({
+				type: "ask_user_question",
+				requestId: "q-1",
+				toolUseId: "toolu_q_1",
+				questions: [
+					{
+						question: "Pick one?",
+						header: "Pick",
+						options: [],
+						multiSelect: false,
+					},
+				],
+			});
+		});
+
 		it("normalizes question_response event with answers", () => {
 			const event = normalizeEvent({
 				type: "question_response",
@@ -172,6 +217,18 @@ describe("messageReducer", () => {
 				type: "question_response",
 				request_id: "q-1",
 				answers: null,
+			});
+			expect(event).toEqual({
+				type: "question_response",
+				requestId: "q-1",
+				answers: null,
+			});
+		});
+
+		it("normalizes question_response event without answers key (cancelled)", () => {
+			const event = normalizeEvent({
+				type: "question_response",
+				request_id: "q-1",
 			});
 			expect(event).toEqual({
 				type: "question_response",
@@ -264,6 +321,52 @@ describe("messageReducer", () => {
 					status: "pending",
 				},
 			]);
+		});
+
+		it("replaces the AskUserQuestion tool_call with the question part", () => {
+			const withToolCall = applyEventToParts([], {
+				type: "tool_call",
+				toolUseId: "toolu_q_1",
+				toolName: "AskUserQuestion",
+				toolInput: { questions: sampleQuestions },
+			});
+			const parts = applyEventToParts(withToolCall, {
+				type: "ask_user_question",
+				requestId: "q-1",
+				toolUseId: "toolu_q_1",
+				questions: sampleQuestions,
+			});
+			expect(parts).toEqual([
+				{
+					type: "ask_user_question",
+					request: {
+						requestId: "q-1",
+						toolUseId: "toolu_q_1",
+						questions: sampleQuestions,
+					},
+					status: "pending",
+				},
+			]);
+		});
+
+		it("keeps unrelated tool_calls when the question part is added", () => {
+			const parts = applyEventToParts(
+				[
+					{
+						type: "tool_call",
+						tool: { id: "tool-1", name: "Bash", input: { command: "ls" } },
+					},
+				],
+				{
+					type: "ask_user_question",
+					requestId: "q-1",
+					toolUseId: "toolu_q_1",
+					questions: sampleQuestions,
+				},
+			);
+			expect(parts).toHaveLength(2);
+			expect(parts[0]).toMatchObject({ type: "tool_call" });
+			expect(parts[1]).toMatchObject({ type: "ask_user_question" });
 		});
 
 		it("adds warning as new part", () => {
@@ -998,6 +1101,62 @@ describe("messageReducer", () => {
 				expect(messages[2].role).toBe("assistant");
 			});
 		});
+
+		describe("system message", () => {
+			it("normalizes message event with system origin, subtype and meta", () => {
+				const event = normalizeEvent({
+					type: "message",
+					content: "kickoff prompt",
+					origin: "system",
+					subtype: "kickoff",
+					meta: { title: "My work", step: { current: 1, total: 3 } },
+				});
+				expect(event).toEqual({
+					type: "message",
+					content: "kickoff prompt",
+					origin: "system",
+					subtype: "kickoff",
+					meta: { title: "My work", step: { current: 1, total: 3 } },
+				});
+			});
+
+			it("normalizes legacy 'work' origin to 'system' (backward compat)", () => {
+				// Legacy wire data predating the rename, so it is an untyped record.
+				const event = normalizeEvent({
+					type: "message",
+					content: "kickoff prompt",
+					origin: "work",
+					subtype: "kickoff",
+				} as Record<string, unknown>);
+				expect(event).toMatchObject({ type: "message", origin: "system" });
+			});
+
+			it("tags user message with system source and meta", () => {
+				const messages = applyServerEvent([], {
+					type: "message",
+					content: "kickoff prompt",
+					origin: "system",
+					subtype: "kickoff",
+					meta: { title: "My work" },
+				});
+				const user = messages[0] as UserMessage;
+				expect(user.role).toBe("user");
+				expect(user.source).toBe("system");
+				expect(user.subtype).toBe("kickoff");
+				expect(user.meta).toEqual({ title: "My work" });
+			});
+
+			it("leaves plain user messages without a system source (backward compat)", () => {
+				const messages = applyServerEvent([], {
+					type: "message",
+					content: "plain user message",
+				});
+				const user = messages[0] as UserMessage;
+				expect(user.source).toBeUndefined();
+				expect(user.subtype).toBeUndefined();
+				expect(user.meta).toBeUndefined();
+			});
+		});
 	});
 
 	describe("applyUserMessage", () => {
@@ -1195,6 +1354,44 @@ describe("messageReducer", () => {
 			});
 		});
 
+		it("replays the full AskUserQuestion tool sequence as a single part", () => {
+			const history = [
+				{ type: "message", content: "Help me choose" },
+				{
+					type: "tool_call",
+					tool_name: "AskUserQuestion",
+					tool_input: { questions: sampleQuestions },
+					tool_use_id: "toolu_q_1",
+				},
+				{
+					type: "ask_user_question",
+					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
+					questions: sampleQuestions,
+				},
+				{
+					type: "question_response",
+					request_id: "q-1",
+					answers: { "Which library?": "React" },
+				},
+				{
+					type: "tool_result",
+					tool_use_id: "toolu_q_1",
+					tool_result:
+						'Your questions have been answered: "Which library?"="React".',
+				},
+				{ type: "done" },
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts).toHaveLength(1);
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "answered",
+				answers: { "Which library?": "React" },
+			});
+		});
+
 		it("replays ask_user_question with cancelled response", () => {
 			const history = [
 				{ type: "message", content: "Help me choose" },
@@ -1205,6 +1402,28 @@ describe("messageReducer", () => {
 					questions: sampleQuestions,
 				},
 				{ type: "question_response", request_id: "q-1", answers: null },
+				{ type: "interrupted" },
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "cancelled",
+			});
+		});
+
+		// What the server actually persists on cancel: a nil answers map, which
+		// `omitempty` then strips from the record.
+		it("replays ask_user_question as cancelled when answers key is absent", () => {
+			const history = [
+				{ type: "message", content: "Help me choose" },
+				{
+					type: "ask_user_question",
+					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
+					questions: sampleQuestions,
+				},
+				{ type: "question_response", request_id: "q-1" },
 				{ type: "interrupted" },
 			];
 			const messages = replayHistory(history);

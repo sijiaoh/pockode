@@ -18,10 +18,17 @@ export interface WorkActions {
 	updateComment: (params: CommentUpdateParams) => Promise<Comment>;
 }
 
+/**
+ * @param getAgentStartClient Requester for `work.start` alone, whose kickoff (or
+ * restart) message may have to wait out an agent CLI cold start. See
+ * AGENT_START_RPC_TIMEOUT_MS in wsStore.
+ */
 export function createWorkActions(
 	getClient: () => JSONRPCRequester<void> | null,
+	getAgentStartClient: () => JSONRPCRequester<void> | null,
 ): WorkActions {
-	const client = () => requireClient(getClient);
+	const client = (get: () => JSONRPCRequester<void> | null = getClient) =>
+		requireClient(get);
 
 	return {
 		createWork: async (params: WorkCreateParams): Promise<Work> => {
@@ -37,7 +44,7 @@ export function createWorkActions(
 		},
 
 		startWork: async (id: string): Promise<Work> => {
-			return client().request("work.start", { id });
+			return client(getAgentStartClient).request("work.start", { id });
 		},
 
 		stopWork: async (id: string): Promise<void> => {

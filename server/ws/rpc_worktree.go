@@ -3,11 +3,25 @@ package ws
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
 )
+
+// formatWorktreeBlockedError builds a locatable error listing every work item
+// that blocks deleting the worktree, so the developer knows which and how many.
+func formatWorktreeBlockedError(name string, blocking []work.Work) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "cannot delete worktree %q: %d work item(s) not closed", name, len(blocking))
+	for _, w := range blocking {
+		fmt.Fprintf(&b, "; %s %q (%s)", w.ID, w.Title, w.Status)
+	}
+	return b.String()
+}
 
 func (h *rpcMethodHandler) handleWorktreeList(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	registry := h.worktreeManager.Registry()
@@ -87,6 +101,19 @@ func (h *rpcMethodHandler) handleWorktreeDelete(ctx context.Context, conn *jsonr
 		return
 	}
 
+	// Refuse to delete a worktree that still owns work which has not closed;
+	// deleting it would orphan live or resumable sessions. main (name "") is
+	// rejected earlier by the empty-name guard, so its behavior is unchanged.
+	works, err := h.workStore.List()
+	if err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to list work: "+err.Error())
+		return
+	}
+	if blocking := work.UnclosedWorkByWorktree(works, params.Name); len(blocking) > 0 {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, formatWorktreeBlockedError(params.Name, blocking))
+		return
+	}
+
 	registry := h.worktreeManager.Registry()
 	if err := registry.Delete(params.Name); err != nil {
 		switch {
@@ -124,19 +151,21 @@ func (h *rpcMethodHandler) handleWorktreeSwitch(ctx context.Context, conn *jsonr
 		return
 	}
 
-	// Atomically check, switch worktree, and get values for cleanup
-	h.state.mu.Lock()
-	currentWorktree := h.state.worktree
-	notifier := h.state.notifier
-
-	// No-op if switching to same worktree
-	if currentWorktree != nil && currentWorktree.Name == params.Name {
-		h.state.mu.Unlock()
-		// Release the extra ref we acquired above
+	// Atomically swap the connection's bound worktree, subscribing the notifier
+	// under the same lock so a concurrent disconnect can't leave the reference
+	// leaked or the new worktree unsubscribed.
+	prevWorktree, noop, ok := h.state.bindWorktree(newWorktree)
+	if !ok {
+		// Connection was closed mid-switch; drop the reference we just acquired.
+		h.worktreeManager.Release(newWorktree)
+		return
+	}
+	if noop {
+		// Already bound to this exact worktree; drop the extra ref.
 		h.worktreeManager.Release(newWorktree)
 		result := rpc.WorktreeSwitchResult{
-			WorkDir:      currentWorktree.WorkDir,
-			WorktreeName: currentWorktree.Name,
+			WorkDir:      newWorktree.WorkDir,
+			WorktreeName: newWorktree.Name,
 		}
 		if err := conn.Reply(ctx, req.ID, result); err != nil {
 			h.log.Error("failed to send worktree switch response", "error", err)
@@ -144,16 +173,12 @@ func (h *rpcMethodHandler) handleWorktreeSwitch(ctx context.Context, conn *jsonr
 		return
 	}
 
-	// Update state atomically first, then cleanup old worktree outside lock
-	h.state.worktree = newWorktree
-	newWorktree.Subscribe(notifier)
-	h.state.mu.Unlock()
-
 	// Cleanup old worktree (outside lock to avoid deadlock)
-	if currentWorktree != nil {
-		h.state.unsubscribeWorktreeWatchers(currentWorktree)
-		currentWorktree.Unsubscribe(notifier)
-		h.worktreeManager.Release(currentWorktree)
+	if prevWorktree != nil {
+		notifier := h.state.getNotifier()
+		h.state.unsubscribeWorktreeWatchers(prevWorktree)
+		prevWorktree.Unsubscribe(notifier)
+		h.worktreeManager.Release(prevWorktree)
 	}
 
 	h.log.Info("worktree switched", "to", newWorktree.Name)

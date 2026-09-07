@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 
-// Tailwind md breakpoint (768px)
-const MD_BREAKPOINT = 768;
+const DESKTOP_BREAKPOINT = 768;
 
 /**
  * Returns true if viewport width >= md breakpoint (768px).
@@ -10,18 +9,18 @@ const MD_BREAKPOINT = 768;
 export function useIsDesktop(): boolean {
 	const [isDesktop, setIsDesktop] = useState(() => {
 		if (typeof window === "undefined") return false;
-		return window.matchMedia(`(min-width: ${MD_BREAKPOINT}px)`).matches;
+		return window.matchMedia(`(min-width: ${DESKTOP_BREAKPOINT}px)`).matches;
 	});
 
 	useEffect(() => {
-		const mediaQuery = window.matchMedia(`(min-width: ${MD_BREAKPOINT}px)`);
+		const mql = window.matchMedia(`(min-width: ${DESKTOP_BREAKPOINT}px)`);
 
 		const handleChange = (e: MediaQueryListEvent) => {
 			setIsDesktop(e.matches);
 		};
 
-		mediaQuery.addEventListener("change", handleChange);
-		return () => mediaQuery.removeEventListener("change", handleChange);
+		mql.addEventListener("change", handleChange);
+		return () => mql.removeEventListener("change", handleChange);
 	}, []);
 
 	return isDesktop;

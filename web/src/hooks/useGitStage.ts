@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useWSStore } from "../lib/wsStore";
-import { gitStatusQueryKey } from "./useGitStatus";
+import { gitStatusQueryKey } from "./gitQueries";
 
 export function useGitStage() {
 	const queryClient = useQueryClient();

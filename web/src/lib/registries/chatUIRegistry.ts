@@ -9,12 +9,14 @@ export interface InputBarProps {
 	sessionId: string;
 	onSend: (content: string) => void;
 	canSend?: boolean;
+	disabled?: boolean;
 	isStreaming?: boolean;
 	onStop?: () => void;
 }
 
 export interface ModeSelectorProps {
 	mode: "default" | "yolo";
+	agentType: "claude" | "codex";
 	onModeChange: (mode: "default" | "yolo") => Promise<void>;
 	disabled?: boolean;
 }

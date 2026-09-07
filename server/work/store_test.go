@@ -2,8 +2,8 @@ package work
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 )
@@ -45,8 +45,8 @@ func startWork(t *testing.T, s *FileStore, id string) {
 	}
 }
 
-// startWorkWithSession transitions to in_progress and links a session atomically,
-// matching the real handleWorkStart pattern.
+// startWorkWithSession transitions to in_progress with a known sessionID, for
+// tests that need a deterministic session to assert against.
 func startWorkWithSession(t *testing.T, s *FileStore, id, sessionID string) {
 	t.Helper()
 	if _, err := s.Start(context.Background(), id, sessionID); err != nil {
@@ -232,6 +232,68 @@ func TestStart_SetsSessionID(t *testing.T) {
 	}
 	if w.Status != StatusInProgress {
 		t.Errorf("status = %q, want %q", w.Status, StatusInProgress)
+	}
+}
+
+func TestClaim_FreshStartGeneratesSession(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+
+	w, restart, err := s.Claim(context.Background(), story.ID)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if restart {
+		t.Error("restart = true, want false for open → in_progress")
+	}
+	if w.Status != StatusInProgress {
+		t.Errorf("status = %q, want in_progress", w.Status)
+	}
+	if w.SessionID == "" {
+		t.Error("want a fresh sessionID")
+	}
+}
+
+func TestClaim_RestartReusesSession(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+
+	first, _, err := s.Claim(context.Background(), story.ID)
+	if err != nil {
+		t.Fatalf("first Claim: %v", err)
+	}
+	if err := s.Stop(context.Background(), story.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	again, restart, err := s.Claim(context.Background(), story.ID)
+	if err != nil {
+		t.Fatalf("restart Claim: %v", err)
+	}
+	if !restart {
+		t.Error("restart = false, want true for stopped → in_progress")
+	}
+	if again.SessionID != first.SessionID {
+		t.Errorf("session = %q, want reuse of %q", again.SessionID, first.SessionID)
+	}
+}
+
+func TestClaim_RejectsAlreadyInProgress(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	if _, _, err := s.Claim(context.Background(), story.ID); err != nil {
+		t.Fatalf("first Claim: %v", err)
+	}
+
+	if _, _, err := s.Claim(context.Background(), story.ID); !errors.Is(err, ErrInvalidWork) {
+		t.Errorf("err = %v, want ErrInvalidWork", err)
+	}
+}
+
+func TestClaim_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	if _, _, err := s.Claim(context.Background(), "missing"); !errors.Is(err, ErrWorkNotFound) {
+		t.Errorf("err = %v, want ErrWorkNotFound", err)
 	}
 }
 
@@ -1113,85 +1175,43 @@ func TestConcurrent_StartSameWork(t *testing.T) {
 	}
 }
 
-// --- diffWorks ---
+// Claim is the production claim path: the restart/session decision happens under
+// the store lock, so concurrent claims on the same work must yield exactly one
+// winner (no double-claim, no clobbered session).
+func TestConcurrent_ClaimSameWork(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "Race")
+	const n = 10
 
-func TestDiffWorks_NoChanges(t *testing.T) {
-	works := []Work{
-		{ID: "1", Title: "A", Status: StatusOpen},
-		{ID: "2", Title: "B", Status: StatusOpen},
+	type outcome struct {
+		w   Work
+		err error
 	}
-	events := diffWorks(works, works)
-	if len(events) != 0 {
-		t.Errorf("expected 0 events, got %d", len(events))
-	}
-}
-
-func TestDiffWorks_Create(t *testing.T) {
-	old := []Work{{ID: "1", Title: "A", Status: StatusOpen}}
-	updated := []Work{
-		{ID: "1", Title: "A", Status: StatusOpen},
-		{ID: "2", Title: "B", Status: StatusOpen},
-	}
-	events := diffWorks(old, updated)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Op != OperationCreate || events[0].Work.ID != "2" {
-		t.Errorf("expected create event for ID 2, got %+v", events[0])
-	}
-}
-
-func TestDiffWorks_Delete(t *testing.T) {
-	old := []Work{
-		{ID: "1", Title: "A", Status: StatusOpen},
-		{ID: "2", Title: "B", Status: StatusOpen},
-	}
-	updated := []Work{{ID: "1", Title: "A", Status: StatusOpen}}
-	events := diffWorks(old, updated)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Op != OperationDelete || events[0].Work.ID != "2" {
-		t.Errorf("expected delete event for ID 2, got %+v", events[0])
-	}
-}
-
-func TestDiffWorks_Update(t *testing.T) {
-	old := []Work{{ID: "1", Title: "A", Status: StatusOpen}}
-	updated := []Work{{ID: "1", Title: "A Updated", Status: StatusOpen}}
-	events := diffWorks(old, updated)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Op != OperationUpdate || events[0].Work.Title != "A Updated" {
-		t.Errorf("expected update event with new title, got %+v", events[0])
-	}
-}
-
-func TestDiffWorks_Mixed(t *testing.T) {
-	old := []Work{
-		{ID: "1", Title: "Keep", Status: StatusOpen},
-		{ID: "2", Title: "Delete", Status: StatusOpen},
-		{ID: "3", Title: "Update Me", Status: StatusOpen},
-	}
-	updated := []Work{
-		{ID: "1", Title: "Keep", Status: StatusOpen},
-		{ID: "3", Title: "Updated", Status: StatusInProgress},
-		{ID: "4", Title: "New", Status: StatusOpen},
-	}
-	events := diffWorks(old, updated)
-
-	// Should have: 1 delete (ID 2), 1 update (ID 3), 1 create (ID 4)
-	if len(events) != 3 {
-		t.Fatalf("expected 3 events, got %d", len(events))
+	results := make(chan outcome, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			w, _, err := s.Claim(context.Background(), story.ID)
+			results <- outcome{w: w, err: err}
+		}()
 	}
 
-	ops := make(map[Operation]int)
-	for _, e := range events {
-		ops[e.Op]++
+	var successes int
+	var winningSession string
+	for i := 0; i < n; i++ {
+		o := <-results
+		if o.err != nil {
+			continue
+		}
+		successes++
+		winningSession = o.w.SessionID
 	}
-	if ops[OperationDelete] != 1 || ops[OperationUpdate] != 1 || ops[OperationCreate] != 1 {
-		t.Errorf("expected 1 of each op type, got %v", ops)
+
+	if successes != 1 {
+		t.Errorf("expected exactly 1 successful claim, got %d", successes)
+	}
+	final := getWork(t, s, story.ID)
+	if final.SessionID != winningSession {
+		t.Errorf("final session = %q, want the winning claim's %q (no clobber)", final.SessionID, winningSession)
 	}
 }
 
@@ -1330,74 +1350,6 @@ func TestUpdateComment_Persistence(t *testing.T) {
 	}
 }
 
-// --- diffComments ---
-
-func TestDiffComments_NoChanges(t *testing.T) {
-	comments := []Comment{
-		{ID: "c1", WorkID: "w1", Body: "hello"},
-	}
-	events := diffComments(comments, comments)
-	if len(events) != 0 {
-		t.Errorf("expected 0 events, got %d", len(events))
-	}
-}
-
-func TestDiffComments_NewComment(t *testing.T) {
-	old := []Comment{{ID: "c1", WorkID: "w1", Body: "first"}}
-	updated := []Comment{
-		{ID: "c1", WorkID: "w1", Body: "first"},
-		{ID: "c2", WorkID: "w1", Body: "second"},
-	}
-	events := diffComments(old, updated)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Comment.ID != "c2" {
-		t.Errorf("expected comment c2, got %s", events[0].Comment.ID)
-	}
-}
-
-func TestDiffComments_Empty(t *testing.T) {
-	events := diffComments(nil, nil)
-	if len(events) != 0 {
-		t.Errorf("expected 0 events, got %d", len(events))
-	}
-}
-
-// --- Reload notifies comment listeners ---
-
-func TestReload_NotifiesCommentListeners(t *testing.T) {
-	dir := t.TempDir()
-
-	// s1: main server store with listeners
-	s1, _ := NewFileStore(dir)
-	story := createStory(t, s1, "S")
-
-	var mu sync.Mutex
-	var received []CommentEvent
-	s1.AddOnCommentChangeListener(commentListenerFunc(func(e CommentEvent) {
-		mu.Lock()
-		received = append(received, e)
-		mu.Unlock()
-	}))
-
-	// s2: simulates MCP process writing a comment
-	s2, _ := NewFileStore(dir)
-	s2.AddComment(context.Background(), story.ID, "from MCP")
-
-	// Trigger reload on s1 (simulates fsnotify)
-	s1.reloadFromDisk()
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(received) != 1 {
-		t.Fatalf("expected 1 comment event, got %d", len(received))
-	}
-	if received[0].Comment.Body != "from MCP" {
-		t.Errorf("expected body 'from MCP', got %q", received[0].Comment.Body)
-	}
-}
-
 // --- FindBySessionID ---
 
 func TestFindBySessionID_Found(t *testing.T) {
@@ -1436,10 +1388,6 @@ func TestFindBySessionID_NotFound(t *testing.T) {
 type listenerFunc func(ChangeEvent)
 
 func (f listenerFunc) OnWorkChange(e ChangeEvent) { f(e) }
-
-type commentListenerFunc func(CommentEvent)
-
-func (f commentListenerFunc) OnCommentChange(e CommentEvent) { f(e) }
 
 func findEvent(events []ChangeEvent, workID string) *ChangeEvent {
 	for i := range events {

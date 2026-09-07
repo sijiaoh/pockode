@@ -1,0 +1,137 @@
+package cluster
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/pockode/server/cluster/node"
+	"github.com/pockode/server/internal/netutil"
+	"github.com/pockode/server/logger"
+	"github.com/pockode/server/relay"
+	"github.com/pockode/server/startup"
+)
+
+const DefaultPort = 9871
+
+type Config struct {
+	Port              int
+	AuthToken         string
+	DataDir           string
+	RelayEnabled      bool
+	RelayFrontendPort int
+	CloudURL          string
+	Version           string
+	DevMode           bool
+}
+
+func Run(cfg Config) error {
+	if cfg.AuthToken == "" {
+		return fmt.Errorf("AuthToken is required")
+	}
+
+	logger.Init(logger.Config{
+		DataDir: cfg.DataDir,
+		DevMode: cfg.DevMode,
+	})
+
+	port := netutil.FindAvailablePort(cfg.Port)
+
+	log := slog.Default().With("mode", "cluster")
+	log.Info("starting cluster mode", "port", port, "dataDir", cfg.DataDir, "relayEnabled", cfg.RelayEnabled, "devMode", cfg.DevMode)
+
+	nodeStore, err := node.NewFileStore(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("failed to create node store: %w", err)
+	}
+
+	processManager := node.NewProcessManager()
+
+	wsHandler := newWSHandler(cfg.AuthToken, cfg.Version, cfg.DevMode, nodeStore, processManager, log)
+	handler := newHandler(cfg.AuthToken, cfg.DevMode, wsHandler)
+
+	srv := &http.Server{
+		Addr:    ":" + strconv.Itoa(port),
+		Handler: handler,
+	}
+
+	var relayManager *relay.Manager
+	var remoteURL string
+	if cfg.RelayEnabled {
+		relayCfg := relay.Config{
+			CloudURL:      cfg.CloudURL,
+			DataDir:       cfg.DataDir,
+			ClientVersion: cfg.Version,
+		}
+
+		frontendPort := port
+		if cfg.RelayFrontendPort != 0 {
+			frontendPort = cfg.RelayFrontendPort
+		}
+		relayManager = relay.NewManager(relayCfg, port, frontendPort, log)
+
+		var err error
+		remoteURL, err = relayManager.Start(context.Background())
+		if err != nil {
+			return fmt.Errorf("failed to start relay: %w", err)
+		}
+		log.Info("remote access enabled", "url", remoteURL)
+	}
+
+	// Fetch announcement from cloud
+	announcement := relay.NewClient(cfg.CloudURL).GetAnnouncement(context.Background())
+
+	// Display startup banner
+	localURL := fmt.Sprintf("http://localhost:%d", port)
+	startup.PrintBanner(startup.BannerOptions{
+		Version:      cfg.Version,
+		LocalURL:     localURL,
+		RemoteURL:    remoteURL,
+		Announcement: announcement,
+	})
+
+	// Print QR code if relay is enabled
+	if remoteURL != "" {
+		startup.PrintQRCode(remoteURL)
+		fmt.Println()
+	}
+
+	startup.PrintFooter()
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		signal.Stop(sigCh)
+
+		log.Info("shutting down cluster server")
+		// Close the relay before draining srv, not after: every relayed request
+		// is served by srv, so a tunnel still delivering traffic into a server
+		// that has stopped accepting would turn those requests into errors, and
+		// long-lived relayed WebSockets would hold Shutdown until its deadline.
+		if relayManager != nil {
+			relayManager.Stop()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Error("server shutdown error", "error", err)
+		}
+		close(shutdownDone)
+	}()
+
+	log.Info("cluster server started", "addr", srv.Addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("server error: %w", err)
+	}
+	<-shutdownDone
+	log.Info("cluster server stopped")
+	return nil
+}

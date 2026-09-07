@@ -19,7 +19,10 @@ Pockode is a mobile programming platform with the core philosophy of "AI editing
 
 ```
 pockode/
+├── packages/       # Shared frontend packages (pnpm workspace)
+│   └── shared/     # Shared components, hooks, stores, and utilities
 ├── web/            # React frontend (see web/AGENTS.md)
+├── web-cluster/    # Cluster mode frontend (lightweight, see docs/cluster.md)
 ├── server/         # Go backend (see server/AGENTS.md)
 ├── site/           # pockode.com website (Hugo)
 └── docs/           # Design documents (entry: docs/concept.md)
@@ -44,6 +47,37 @@ React SPA (Frontend)
 
 - **Locate before you code** — Determine where code belongs before writing it; especially for reusable logic, proper placement enables discovery and reuse
 - **Everything in its place** — Utility functions go in utility modules, business logic goes in business modules, follow the existing project structure
+
+### Shared Code (`@pockode/shared`)
+
+The `packages/shared` package contains UI components, hooks, stores, and utilities shared between `web` and `web-cluster` projects via pnpm workspace.
+
+**When to add code to shared**:
+- Component or hook is **identical or near-identical** in both projects
+- Code is **stable** (not under active experimentation)
+- Code has **no project-specific dependencies** (peer dependencies: React, ReactDOM, Zustand)
+
+**When NOT to share**:
+- Code has **significant behavioral differences** between projects
+- Code is **tightly coupled** to project-specific features
+- Code is **experimental** or likely to diverge
+
+**Available exports**:
+- Components: `Spinner`, `ConfirmDialog`
+- Hooks: `useIsDesktop`
+- Stores: `createAuthStore` (factory function for auth store with configurable token key)
+- Utils: `getWebSocketUrl`
+
+**Usage**:
+```typescript
+import { Spinner, ConfirmDialog, useIsDesktop, createAuthStore, getWebSocketUrl } from "@pockode/shared";
+```
+
+**Workflow**:
+1. Add shared code to `packages/shared/src/`
+2. Export from appropriate index file
+3. Run `pnpm install` to link workspace
+4. Import in consumer projects
 
 ### Code Style
 

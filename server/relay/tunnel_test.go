@@ -173,3 +173,20 @@ func TestServeTunnelReturnsWhenSessionEnds(t *testing.T) {
 		t.Fatal("serveTunnel did not return after the session ended")
 	}
 }
+
+// yamux's own default ConnectionWriteTimeout is 10 s, which on a mobile uplink
+// is short enough that a merely slow link reads as a dead one — mistaking
+// congestion for death is the bug the envelope transport had. Our override is a
+// single assignment that would look inert to anyone tidying up, and dropping it
+// fails nowhere: it only shows up as tunnels that flap under load on a real
+// phone. So the relationship to the default is pinned rather than the number.
+func TestYamuxConfigRaisesTheLivenessBudgetAboveTheDefault(t *testing.T) {
+	cfg := yamuxConfig(testLogger())
+
+	if def := yamux.DefaultConfig().ConnectionWriteTimeout; cfg.ConnectionWriteTimeout <= def {
+		t.Errorf("ConnectionWriteTimeout = %v, want more than yamux's default %v", cfg.ConnectionWriteTimeout, def)
+	}
+	if cfg.KeepAliveInterval <= 0 || !cfg.EnableKeepAlive {
+		t.Error("keepalive is off; a half-open tunnel would never end and the reconnect loop would never fire")
+	}
+}

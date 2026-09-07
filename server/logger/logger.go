@@ -13,21 +13,24 @@ import (
 )
 
 type Config struct {
-	DataDir string
-	DevMode bool
+	DataDir   string
+	DevMode   bool
+	LogLevel  string
+	LogFormat string
+	LogFile   string
 }
 
 // Init initializes the global slog logger.
 // In production (DevMode=false), logs are written to dataDir/server.log.
 // In development (DevMode=true), logs are written to stdout.
-// LOG_FILE env overrides the default file path.
+// Config.LogFile overrides the default file path.
 func Init(cfg Config) {
-	level := parseLevel(os.Getenv("LOG_LEVEL"))
+	level := parseLevel(cfg.LogLevel)
 	opts := &slog.HandlerOptions{Level: level}
 
 	var w io.Writer = os.Stdout
 
-	logFile := os.Getenv("LOG_FILE")
+	logFile := cfg.LogFile
 	if logFile == "" && !cfg.DevMode && cfg.DataDir != "" {
 		logFile = filepath.Join(cfg.DataDir, "server.log")
 	}
@@ -46,7 +49,7 @@ func Init(cfg Config) {
 	}
 
 	var handler slog.Handler
-	if os.Getenv("LOG_FORMAT") == "json" {
+	if cfg.LogFormat == "json" {
 		handler = slog.NewJSONHandler(w, opts)
 	} else {
 		handler = slog.NewTextHandler(w, opts)

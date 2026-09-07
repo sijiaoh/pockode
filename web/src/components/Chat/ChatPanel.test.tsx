@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStore } from "../../lib/sessionStore";
 import type { ServerNotification } from "../../types/message";
 import ChatPanel from "./ChatPanel";
 
@@ -77,6 +78,7 @@ describe("ChatPanel", () => {
 	const defaultProps = {
 		sessionId: "test-session",
 		sessionTitle: "Test Chat",
+		isSessionResolved: true,
 		onUpdateTitle: vi.fn(),
 	};
 
@@ -90,18 +92,94 @@ describe("ChatPanel", () => {
 		mockState.chatMessagesSubscribe.mockImplementation(() =>
 			Promise.resolve({
 				id: "sub-1",
-				initial: { history: mockState.mockHistory, state: "ended" },
+				initial: {
+					history: mockState.mockHistory,
+					state: "ended",
+					mode: "default",
+					agent_type: "claude",
+				},
 			}),
 		);
 		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
+		useSessionStore.setState({ sessions: [] });
 	});
 
 	// Helper to wait for history loading to complete
 	const waitForHistoryLoad = async () => {
 		await waitFor(() => {
-			expect(screen.getByRole("textbox")).not.toBeDisabled();
+			expect(
+				screen.queryByLabelText("Loading conversation"),
+			).not.toBeInTheDocument();
 		});
 	};
+
+	// A switch hands the panel the destination's id before anything else about the
+	// destination is known. Whatever is still on screen belongs to the session the
+	// user came from: showing it reads as having opened the wrong chat, and the
+	// input would send the next message into it.
+	describe("while the destination session is still resolving", () => {
+		it("drops the previous session's messages and refuses to send", async () => {
+			const user = userEvent.setup();
+			const { rerender } = render(
+				<ChatPanel {...defaultProps} sessionId="previous" />,
+			);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Hello");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			expect(screen.getByText("Hello")).toBeInTheDocument();
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					sessionId="destination"
+					sessionTitle=""
+					isSessionResolved={false}
+				/>,
+			);
+
+			expect(screen.queryByText("Hello")).not.toBeInTheDocument();
+			expect(screen.getByLabelText("Loading conversation")).toBeInTheDocument();
+			expect(screen.getByRole("textbox")).toBeDisabled();
+			expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+			// Subscribing now would target a session the connection can't see yet.
+			expect(mockState.chatMessagesSubscribe).not.toHaveBeenCalledWith(
+				"destination",
+				expect.anything(),
+			);
+			expect(mockState.sendMessage).toHaveBeenCalledTimes(1);
+			expect(mockState.sendMessage).not.toHaveBeenCalledWith(
+				"destination",
+				expect.anything(),
+			);
+		});
+
+		it("opens the destination once it resolves", async () => {
+			const { rerender } = render(
+				<ChatPanel
+					{...defaultProps}
+					sessionId="destination"
+					sessionTitle=""
+					isSessionResolved={false}
+				/>,
+			);
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					sessionId="destination"
+					sessionTitle="Destination"
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(mockState.chatMessagesSubscribe).toHaveBeenCalledWith(
+				"destination",
+				expect.anything(),
+			);
+			expect(screen.getByRole("textbox")).not.toBeDisabled();
+		});
+	});
 
 	describe("sending messages", () => {
 		it("sends message via RPC with session_id and content", async () => {
@@ -139,8 +217,12 @@ describe("ChatPanel", () => {
 			expect(onUpdateTitle).toHaveBeenCalledWith("My first message");
 		});
 
-		it("shows error when send fails", async () => {
-			mockState.sendMessage.mockRejectedValueOnce(new Error("Network error"));
+		// The generic wording alone made "the CLI isn't installed" and "the network
+		// dropped" indistinguishable; the server's own reason has to reach the user.
+		it("shows the server's reason when send fails", async () => {
+			mockState.sendMessage.mockRejectedValueOnce(
+				new Error('failed to start claude: exec: "claude": not found in $PATH'),
+			);
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -150,7 +232,7 @@ describe("ChatPanel", () => {
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
 			await waitFor(() => {
-				expect(screen.getByText("Failed to send message")).toBeInTheDocument();
+				expect(screen.getByText(/not found in \$PATH/)).toBeInTheDocument();
 			});
 		});
 	});
@@ -268,6 +350,7 @@ describe("ChatPanel", () => {
 					initial: {
 						history: [],
 						state: "ended",
+						mode: "default",
 						agent_type: "codex",
 					},
 				}),
@@ -469,6 +552,122 @@ describe("ChatPanel", () => {
 				tool_use_id: "toolu_q_1",
 				answers: { "Which library?": "React" },
 			});
+		});
+
+		it("restores the answered form when replaying history", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = [
+				{
+					type: "ask_user_question",
+					request_id: "q-2",
+					tool_use_id: "toolu_q_2",
+					questions: [
+						{
+							question: "Which library?",
+							header: "Library",
+							options: [
+								{ label: "React", description: "UI library" },
+								{ label: "Vue", description: "Progressive framework" },
+							],
+							multiSelect: false,
+						},
+					],
+				},
+				{
+					type: "question_response",
+					request_id: "q-2",
+					answers: { "Which library?": "Vue" },
+				},
+				{ type: "done" },
+			];
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByRole("button", { name: /Library/ }));
+
+			const chosen = screen.getByRole("radio", {
+				name: /Progressive framework/,
+			});
+			expect(chosen).toBeChecked();
+			expect(chosen).toBeDisabled();
+		});
+
+		// A cancelled question is persisted with a nil answers map, which the Go
+		// encoder strips entirely — so the key is absent, not null.
+		it("shows a cancelled question as cancelled when replaying history", async () => {
+			mockState.mockHistory = [
+				{
+					type: "ask_user_question",
+					request_id: "q-3",
+					tool_use_id: "toolu_q_3",
+					questions: [
+						{
+							question: "Which library?",
+							header: "Library",
+							options: [
+								{ label: "React", description: "UI library" },
+								{ label: "Vue", description: "Progressive framework" },
+							],
+							multiSelect: false,
+						},
+					],
+				},
+				{ type: "question_response", request_id: "q-3" },
+				{ type: "done" },
+			];
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByText("Cancelled")).toBeInTheDocument();
+			expect(screen.queryByText("Answered")).not.toBeInTheDocument();
+		});
+	});
+
+	describe("agent selector", () => {
+		const seedSession = (activated: boolean) => {
+			useSessionStore.setState({
+				sessions: [
+					{
+						id: "test-session",
+						title: "Test Chat",
+						created_at: "2024-01-01T00:00:00Z",
+						updated_at: "2024-01-01T00:00:00Z",
+						mode: "default",
+						agent_type: "claude",
+						activated,
+						state: "ended",
+						needs_input: false,
+						unread: false,
+					},
+				],
+			});
+		};
+
+		// A first turn that failed before the agent said anything leaves messages
+		// in the transcript but never started the session, and switching agents is
+		// the only way out of it — so the transcript must not be what locks it.
+		it("stays enabled when a failed first turn left messages behind", async () => {
+			seedSession(false);
+			mockState.mockHistory = [
+				{ type: "message", content: "Hello" },
+				{ type: "error", error: "Invalid API key" },
+			];
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByRole("button", { name: "Claude" })).not.toBeDisabled();
+		});
+
+		it("locks once the agent has answered in this session", async () => {
+			seedSession(true);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByRole("button", { name: "Claude" })).toBeDisabled();
 		});
 	});
 

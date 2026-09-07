@@ -30,9 +30,15 @@ type StateChangeEvent struct {
 
 // Manager manages agent processes.
 type Manager struct {
-	agents       *agent.Registry
-	workDir      string
-	dataDir      string
+	agents  *agent.Registry
+	workDir string
+	// dataDir is this worktree's own data dir; agent session-scoped state (resume
+	// mapping, history) lives here, alongside sessionStore.
+	dataDir string
+	// mcpServerDir is where the running server publishes server.json for the MCP
+	// proxy to discover. Single server per process, so this is always the main
+	// data dir, even for a named worktree whose dataDir differs.
+	mcpServerDir string
 	sessionStore session.Store
 	idleTimeout  time.Duration
 
@@ -62,19 +68,29 @@ type Process struct {
 	mu         sync.Mutex
 	lastActive time.Time
 	state      ProcessState
+	// turnEnded says whether the last idle this process reported ended a turn,
+	// as opposed to pausing it for a permission or question answer. Only
+	// meaningful while state is idle. Guarded by mu; see setIdle.
+	turnEnded bool
 	// closed is set when the process is explicitly terminated (Close/Shutdown/reap).
 	// Prevents stale buffered events from emitting state changes (e.g. running/idle)
 	// that would incorrectly interact with the AutoResumer.
 	closed atomic.Bool
+	// activated mirrors the session's Activated flag so the store is written once,
+	// on the transition, rather than on every event the agent produces.
+	activated atomic.Bool
 }
 
-// NewManager creates a new manager with the given idle timeout.
-func NewManager(agents *agent.Registry, workDir, dataDir string, store session.Store, idleTimeout time.Duration) *Manager {
+// NewManager creates a new manager with the given idle timeout. dataDir is this
+// worktree's own data dir (session-scoped agent state); mcpServerDir is where the
+// server publishes server.json for the MCP proxy (the main data dir).
+func NewManager(agents *agent.Registry, workDir, dataDir, mcpServerDir string, store session.Store, idleTimeout time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		agents:       agents,
 		workDir:      workDir,
 		dataDir:      dataDir,
+		mcpServerDir: mcpServerDir,
 		sessionStore: store,
 		idleTimeout:  idleTimeout,
 		processes:    make(map[string]*Process),
@@ -134,11 +150,12 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 
 	// Use manager's context for process lifecycle, not request context
 	opts := agent.StartOptions{
-		WorkDir:   m.workDir,
-		DataDir:   m.dataDir,
-		SessionID: sessionID,
-		Resume:    resume,
-		Mode:      mode,
+		WorkDir:      m.workDir,
+		DataDir:      m.dataDir,
+		MCPServerDir: m.mcpServerDir,
+		SessionID:    sessionID,
+		Resume:       resume,
+		Mode:         mode,
 	}
 	sess, err := ag.Start(m.ctx, opts)
 	if err != nil {
@@ -153,7 +170,11 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 		manager:      m,
 		lastActive:   time.Now(),
 		state:        ProcessStateIdle,
+		turnEnded:    true, // no turn has started yet
 	}
+	// resume is the session's Activated flag, so an already activated session
+	// starts out knowing it has nothing to record.
+	proc.activated.Store(resume)
 	m.processes[sessionID] = proc
 
 	go func() {
@@ -349,18 +370,20 @@ func (p *Process) State() ProcessState {
 	return p.state
 }
 
-func (p *Process) setState(state ProcessState) {
-	p.mu.Lock()
-	p.state = state
-	p.mu.Unlock()
-}
-
 // SetRunning transitions the process to running state and notifies subscribers.
 func (p *Process) SetRunning() {
-	if p.closed.Load() || p.State() == ProcessStateRunning {
+	if p.closed.Load() {
 		return
 	}
-	p.setState(ProcessStateRunning)
+
+	p.mu.Lock()
+	if p.state == ProcessStateRunning {
+		p.mu.Unlock()
+		return
+	}
+	p.state = ProcessStateRunning
+	p.mu.Unlock()
+
 	p.manager.emitStateChange(p.sessionID, ProcessStateRunning, false)
 }
 
@@ -375,17 +398,54 @@ func (p *Process) SetIdleInterrupted() {
 	p.setIdle(false, true)
 }
 
+// setIdle emits a state change unless this idle says nothing the last one didn't.
+//
+// Being idle already is not enough to skip it: a turn that paused for a
+// permission answer is idle, and the interrupt or error that then ends it has to
+// be reported, or the session stays marked as waiting for an answer that no
+// longer exists and work.AutoResumer never hears the turn stopped.
+//
+// The end of a turn is reported once. Agents can announce it twice — Codex
+// answers an aborted call itself while Pockode synthesizes a response for the
+// same call — and a second idle reads downstream as a second stop.
 func (p *Process) setIdle(needsInput, interrupted bool) {
-	if p.closed.Load() || p.State() == ProcessStateIdle {
+	if p.closed.Load() {
 		return
 	}
-	p.setState(ProcessStateIdle)
+
+	p.mu.Lock()
+	if p.state == ProcessStateIdle && (p.turnEnded || needsInput) {
+		p.mu.Unlock()
+		return
+	}
+	p.state = ProcessStateIdle
+	p.turnEnded = !needsInput
+	p.mu.Unlock()
+
 	p.manager.emitStateChangeEvent(StateChangeEvent{
 		SessionID:   p.sessionID,
 		State:       ProcessStateIdle,
 		NeedsInput:  needsInput,
 		Interrupted: interrupted,
 	})
+}
+
+// markActivated records that the agent has contributed to this session.
+//
+// Activation is deliberately tied to agent output rather than to process
+// creation: spawning the CLI proves nothing about the session behind it. A first
+// message that dies before the agent says anything — expired login, provider
+// outage — leaves a session that never really started, and it should still be
+// possible to point it at a different agent type instead of retrying the broken
+// one forever. See EventType.ActivatesSession for why "says anything" is
+// narrower than "a turn is under way".
+func (p *Process) markActivated(ctx context.Context, log *slog.Logger) {
+	if p.activated.Swap(true) {
+		return
+	}
+	if err := p.sessionStore.Activate(ctx, p.sessionID); err != nil {
+		log.Error("failed to activate session", "error", err)
+	}
 }
 
 // streamEvents routes events to history and emits to the event listener.
@@ -398,8 +458,14 @@ func (p *Process) streamEvents(ctx context.Context) {
 		eventType := event.EventType()
 		log.Debug("streaming event", "type", eventType)
 
-		// Ensure running state on event (handles edge cases like resumed sessions)
-		p.SetRunning()
+		// Agent output means a turn is under way even if nothing on the send path
+		// said so — output queued behind an interrupt resumes on its own.
+		if eventType.IndicatesAgentActivity() {
+			p.SetRunning()
+		}
+		if eventType.ActivatesSession() {
+			p.markActivated(ctx, log)
+		}
 
 		// Persist to history
 		if err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event)); err != nil {

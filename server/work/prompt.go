@@ -4,10 +4,33 @@ import (
 	"bytes"
 	_ "embed"
 	"strings"
+	"sync"
 	"text/template"
 
+	"github.com/pockode/server/agent"
 	"gopkg.in/yaml.v3"
 )
+
+// Message subtypes identify which system-driven prompt produced a message.
+// The frontend maps these to display labels (Kickoff, Restart, ...).
+const (
+	MessageSubtypeKickoff      = "kickoff"
+	MessageSubtypeRestart      = "restart"
+	MessageSubtypeAutoContinue = "auto_continue"
+	MessageSubtypeStepAdvance  = "step_advance"
+	MessageSubtypeReopen       = "reopen"
+	MessageSubtypeChildDone    = "child_done"
+)
+
+// NewMessageMeta builds the collapsed-bar summary metadata for a system message.
+// step is 1-indexed; pass total <= 0 to omit step info (e.g. stepless works).
+func NewMessageMeta(title string, step, total int) *agent.MessageMeta {
+	meta := &agent.MessageMeta{Title: title}
+	if total > 0 && step >= 1 && step <= total {
+		meta.Step = &agent.StepInfo{Current: step, Total: total}
+	}
+	return meta
+}
 
 //go:embed prompts.yaml
 var promptsYAML []byte
@@ -41,15 +64,26 @@ func init() {
 	}
 }
 
+// compiledTemplates caches parsed templates keyed by their source string.
+// The prompt strings are compile-time constants (from embedded prompts.yaml),
+// so each is parsed once and reused across the many messages built per session.
+// *template.Template.Execute is safe for concurrent use.
+var compiledTemplates sync.Map // map[string]*template.Template
+
 // render executes a template string with the given data.
 func render(tmplStr string, data any) string {
-	tmpl, err := template.New("").Parse(tmplStr)
-	if err != nil {
-		// Template parse errors should be caught during development
-		panic("invalid template: " + err.Error())
+	compiled, ok := compiledTemplates.Load(tmplStr)
+	if !ok {
+		tmpl, err := template.New("").Parse(tmplStr)
+		if err != nil {
+			// Template parse errors should be caught during development
+			panic("invalid template: " + err.Error())
+		}
+		compiled, _ = compiledTemplates.LoadOrStore(tmplStr, tmpl)
 	}
+
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
+	if err := compiled.(*template.Template).Execute(&buf, data); err != nil {
 		panic("template execution failed: " + err.Error())
 	}
 	return strings.TrimSuffix(buf.String(), "\n")

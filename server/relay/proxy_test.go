@@ -180,6 +180,32 @@ func TestLocalProxyReturnsBadGatewayWhenBackendIsDown(t *testing.T) {
 	}
 }
 
+// Forwarding a local-only path would put this machine's own tools behind
+// nothing but the public URL. Which paths those are is apiroute's contract and
+// is tested there; that mcp's endpoint stays among them is pinned by
+// mcp.TestAPIPathStaysLocalOnly. What matters here is that the proxy refuses
+// one rather than forwarding it.
+func TestLocalProxyRefusesLocalOnlyPaths(t *testing.T) {
+	reached := false
+	port := startLocalServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}))
+	proxy := serveProxy(t, port, port)
+
+	resp, err := http.Post(proxy.URL+"/api/mcp/tools/call", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
+	if reached {
+		t.Error("the local MCP API was forwarded to the backend")
+	}
+}
+
 // closedPort returns a port nothing is listening on: bind one, then release it.
 func closedPort(t *testing.T) int {
 	t.Helper()

@@ -1,3 +1,4 @@
+import { ConfirmDialog } from "@pockode/shared";
 import {
 	AlertCircle,
 	Check,
@@ -24,18 +25,18 @@ import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import type { Comment, Work, WorkStatus, WorkType } from "../../types/work";
 import { MarkdownContent } from "../Chat/MarkdownContent";
-import ConfirmDialog from "../common/ConfirmDialog";
 import BackButton from "../ui/BackButton";
 import BottomActionBar from "../ui/BottomActionBar";
 import StatusBadge from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
+import { WorktreeBadge } from "../Worktree";
 import CreateWorkForm from "./CreateWorkForm";
 import { StartButton } from "./WorkListOverlay";
 
 interface Props {
 	workId: string;
 	onBack: () => void;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 	onOpenWorkDetail: (workId: string) => void;
 }
 
@@ -110,8 +111,9 @@ export default function WorkDetailOverlay({
 							</button>
 						)}
 						<InlineEditableTitle work={work} />
-						<div className="mt-2">
+						<div className="mt-2 flex flex-wrap items-center gap-2">
 							<StatusBadge status={work.status} />
+							<WorktreeBadge work={work} className="max-w-[16rem]" />
 						</div>
 					</div>
 
@@ -177,7 +179,7 @@ function ActionBar({
 }: {
 	work: Work;
 	childCount: number;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 	onBack: () => void;
 }) {
 	const startWork = useWSStore((s) => s.actions.startWork);
@@ -318,7 +320,9 @@ function ActionBar({
 					{showChat && (
 						<button
 							type="button"
-							onClick={() => onNavigateToSession(work.session_id ?? "")}
+							onClick={() =>
+								onNavigateToSession(work.session_id ?? "", work.worktree ?? "")
+							}
 							className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg border border-th-border text-sm font-medium text-th-text-primary hover:bg-th-bg-tertiary"
 						>
 							<MessageSquare className="size-4" />
@@ -635,7 +639,7 @@ function ChildrenSection({
 	tasks: Work[];
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }) {
 	const closedTasks = tasks.filter((t) => t.status === "closed").length;
 
@@ -680,7 +684,7 @@ function ChildRow({
 	work: Work;
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }) {
 	const roleName = work.agent_role_id
 		? (roleNameMap.get(work.agent_role_id) ?? null)
@@ -706,7 +710,9 @@ function ChildRow({
 			{work.session_id && (
 				<button
 					type="button"
-					onClick={() => onNavigateToSession(work.session_id ?? "")}
+					onClick={() =>
+						onNavigateToSession(work.session_id ?? "", work.worktree ?? "")
+					}
 					className="flex min-h-[44px] shrink-0 items-center rounded-lg px-2 text-xs text-th-accent hover:bg-th-bg-tertiary"
 				>
 					Chat

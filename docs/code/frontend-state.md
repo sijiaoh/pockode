@@ -16,6 +16,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  UI State Layer                                                 │
 │  ├─ themeStore ◀─────── subscribeThemeRegistry              │   │
 │  ├─ inputStore (localStorage)                               │   │
+│  ├─ filesSearchStore (localStorage)                         │   │
 │  └─ worktreeStore + listeners                               │   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Domain Data Layer                                              │
@@ -46,6 +47,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | settingsStore | App settings | State/Actions interface split |
 | authStore | Auth token | localStorage init |
 | inputStore | Draft text | persist middleware |
+| filesSearchStore | File search options | localStorage init |
 | worktreeStore | Current worktree | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |
 
@@ -59,12 +61,24 @@ wsStore manages WebSocket connection, JSON-RPC channels, and subscription callba
 
 The alternative (each store managing its own connection) would lead to duplicate connections and lifecycle conflicts.
 
+Reconnect policy lives here too — an unbounded backoff retry rather than a fixed
+attempt count, because the connection may be a relay tunnel the server itself
+takes the better part of a minute to notice is dead. See
+[websocket-rpc.md](websocket-rpc.md#auto-reconnect).
+
 ### Store Patterns
 
 **Pattern A: State/Actions Interface Split** — Most domain stores use this pattern for type safety:
 
 ```typescript
-interface SessionState { sessions: SessionListItem[]; isLoading: boolean; }
+interface SessionState {
+  sessions: SessionListItem[];
+  isLoading: boolean;
+  // Set during a worktree switch: sessions are retained but marked stale, so the
+  // sidebar can go on rendering them without letting the user act on a list that
+  // belongs to the worktree being left.
+  isReloading: boolean;
+}
 interface SessionActions { setSessions(s: SessionListItem[]): void; }
 export type SessionStore = SessionState & SessionActions;
 ```
@@ -87,7 +101,7 @@ export const worktreeActions = {
 };
 ```
 
-wsStore subscribes to these listeners to clean up subscriptions before worktree switch completes — React's async rendering would be too late.
+wsStore subscribes to these listeners to clean up worktree-scoped subscriptions before worktree switch completes — React's async rendering would be too late. App-level subscriptions (work list/detail, agent role list, settings, worktree list) are preserved across switches because the server keeps pushing to them.
 
 **Pattern C: Registry Subscription** — themeStore subscribes to themeRegistry changes:
 
@@ -104,6 +118,22 @@ subscribeThemeRegistry(() => {
   useThemeStore.setState({ theme: "abyss" });
 });
 ```
+
+## Server Cache vs Store
+
+Not every piece of server data belongs in a store. Data the client fetches
+request/response — directory contents, git status, commit diffs, file search
+results — lives in the react-query cache instead, so staleness, in-flight state
+and deduplication come with it rather than being re-implemented per store.
+Stores hold what the app itself owns (UI preferences) and what arrives as a
+stream of subscription notifications. A watcher notification and a cached query
+compose: `*.changed` says something moved, and the query refetches.
+
+The catch is scope: those caches are keyed by query key, not by worktree, so
+`queryClient.ts` invalidates every key in `WORKTREE_DEPENDENT_QUERY_KEYS` once a
+switch completes. A worktree-scoped query missing from that list keeps serving
+the previous worktree's data — paths that look fine until they 404 on open —
+and it is the easy step to forget when adding a query.
 
 ## Message Reducer
 
@@ -251,7 +281,7 @@ Built-in themes are typed (`ThemeName`), custom themes are runtime-registered.
 Allows extensions to replace UI components:
 
 ```typescript
-// web/src/lib/registries/chatUIRegistry.ts:40-67
+// web/src/lib/registries/chatUIRegistry.ts:41-68
 export interface ChatUIConfig {
   UserAvatar?: ComponentType<AvatarProps>;
   AssistantAvatar?: ComponentType<AvatarProps>;
@@ -285,14 +315,15 @@ export function useSubscription<TNotification, TInitial>(
 Key features:
 
 1. **Generation counter** — prevents race conditions when multiple subscribes overlap
-2. **Worktree switch handling** — server resets worktree-scoped subscriptions on switch, hook resubscribes automatically
-3. **Connection state** — triggers reset on disconnect, resubscribes on reconnect
+2. **Worktree switch handling** — the server invalidates worktree-scoped subscriptions on switch, so the hook resubscribes. Rather than clearing data (`onReset`), a switch is a soft refresh: previous data stays on screen and is swapped out by `onSubscribed` when the new worktree's snapshot arrives (see [subscription-system.md](subscription-system.md#why-worktree-switch-is-a-soft-refresh-not-a-reset))
+3. **Connection state** — resets on disconnect, but deliberately keeps data during `reconnecting` and resubscribes once the connection is back
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `web/src/lib/wsStore.ts` | WebSocket + RPC + subscription management |
+| `web/src/lib/queryClient.ts` | react-query setup + worktree-dependent invalidation |
 | `web/src/lib/messageReducer.ts` | Event → Message state transformation |
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |

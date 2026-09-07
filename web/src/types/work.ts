@@ -17,6 +17,8 @@ export interface Work {
 	body?: string;
 	status: WorkStatus;
 	session_id?: string;
+	/** Worktree the work runs in (empty/undefined = main). Read-only, captured by backend. */
+	worktree?: string;
 	current_step?: number;
 	created_at: string;
 	updated_at: string;

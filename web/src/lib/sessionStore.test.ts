@@ -9,6 +9,7 @@ const mockSession = (id: string, title = "Test"): SessionListItem => ({
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default",
 	agent_type: "codex",
+	activated: false,
 	state: "ended",
 	needs_input: false,
 	unread: false,
@@ -75,6 +76,27 @@ describe("useSessionStore", () => {
 				.updateSessions((old) => [...old, mockSession("2")]);
 
 			expect(useSessionStore.getState().sessions.length).toBe(2);
+		});
+	});
+
+	describe("beginReload", () => {
+		it("keeps sessions and isLoading but marks the list as reloading", () => {
+			useSessionStore.setState({
+				sessions: [mockSession("1")],
+				isLoading: false,
+				isSuccess: true,
+				isReloading: false,
+			});
+
+			useSessionStore.getState().beginReload();
+
+			const state = useSessionStore.getState();
+			// Data is retained (shown as placeholder) and no spinner (isLoading stays
+			// false), but isSuccess is cleared so redirect logic waits for new data.
+			expect(state.sessions.length).toBe(1);
+			expect(state.isLoading).toBe(false);
+			expect(state.isSuccess).toBe(false);
+			expect(state.isReloading).toBe(true);
 		});
 	});
 

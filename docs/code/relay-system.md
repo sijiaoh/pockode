@@ -61,6 +61,8 @@ Manager.Start()
     │   │         └─ Receive subdomain + relay_token
     │   │         └─ Save to relay.json
     │   │
+    │   ├─ corrupt → quarantined as relay.json.corrupt, treated as nil
+    │   │
     │   └─ exists → Refresh token
     │                └─ Invalid? → Delete config, re-register
     │
@@ -69,6 +71,10 @@ Manager.Start()
 ```
 
 On first run the PC registers with the cloud to obtain a unique subdomain and token. Later startups refresh the token to verify it is still valid. Configuration is persisted so a restart does not consume a new subdomain.
+
+A config file damaged by an interrupted write takes the same recovery path as an invalid token: it is set aside and the server registers again. That costs the user their subdomain, which is not free — but the file is unreadable either way, and a relay that comes back at a new address beats one that refuses to start at all. The damaged copy is kept at `relay.json.corrupt` in case the old subdomain is worth recovering by hand.
+
+Note that "register" here means the HTTP call that claims a subdomain, made only when there is no stored config yet. A tunnel does not register: it presents the stored relay token on the upgrade request — see [Authentication](#authentication).
 
 ### Reconnection Mechanism
 
@@ -83,6 +89,15 @@ On first run the PC registers with the cloud to obtain a unique subdomain and to
 **The 10s ceiling is not arbitrary**: it must stay below the cloud's tunnel grace period (30s). A reconnect that lands inside that window reclaims the subdomain's hub entry, so public requests that arrived during the gap are served instead of answered 503. The two values must move together — see the cloud repository's `server/relay/hub.go` and its `relay.md`.
 
 `connectAndRun` returns only when the session ends, so the tunnel's lifetime and one iteration of the reconnect loop are the same thing. It is injected into `reconnector` rather than called directly, which is what lets the backoff be tested by failing the uplink on demand against a fake clock.
+
+### Bounding the Connect Path
+
+The loop only makes progress if `connectAndRun` always returns, and during the handshake there is no keepalive yet to guard it. `http.DefaultTransport` bounds the TCP dial and the TLS handshake, so an unreachable host still fails on its own — but nothing bounds the wait for the 101 response. Against a peer that accepts the connection and then answers nothing, the dial blocks forever, and one stalled attempt parks the loop for good. From the outside that is exactly what "the tunnel never comes back after the network drops" looks like: no reconnect, and no log line after `connecting to relay`.
+
+Two bounds close it:
+
+- **Handshake** — `connectTimeout` (15s), applied through `DialOptions.HTTPClient.Timeout`. The library turns that into a context and cancels it the moment `Dial` returns, so it bounds the wait for the 101 without ever truncating the tunnel that follows — a distinction worth a test (`TestUplinkDialOptionsDoNotTruncateTheTunnel`), because getting it wrong would drop every tunnel on a 15s timer rather than fail visibly. 15s is far above any plausible healthy handshake and the same order as the 10s backoff ceiling, so a stalled peer settles into roughly one attempt every 25s.
+- **Teardown** — `CloseNow`, not a graceful `Close`. The tunnel is torn down precisely when the peer has stopped answering, and a close handshake nobody completes costs up to 25s of the library's internal timeouts before the next attempt can start. yamux closes the connection itself when the session ends, so the `net.Conn` it is handed wraps `Close` to hang up rather than negotiate.
 
 ### Authentication
 
@@ -153,6 +168,8 @@ return strings.HasPrefix(path, "/api") || path == "/ws" || path == "/health"
 The split exists for dev mode, where the Vite dev server owns the UI. In production both ports are the same and the split is a no-op.
 
 The predicate lives in `server/apiroute` rather than here because `main.go`'s SPA handler needs exactly the same rule to decide what to serve from the embedded static files. Two copies would silently diverge: add a backend endpoint, forget the relay's list, and the endpoint becomes unreachable through the relay in dev mode only.
+
+`/api/mcp/*` is refused outright, with a 404, before any port is chosen. It is the local MCP API: it drives this machine's tools on behalf of an agent CLI running here, and it authenticates with a token of its own rather than the user's. Nothing that reaches this machine from outside has a reason to call it. The refusal has to come first because in the default single-port setup `frontendPort == backendPort`, so routing alone would not keep it out of reach. `apiroute.IsLocalOnly` holds the predicate and `mcp.TestAPIPathStaysLocalOnly` pins the endpoint to it.
 
 ### Preserving the Public Request
 

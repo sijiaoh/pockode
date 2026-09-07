@@ -1,17 +1,16 @@
 // Package filestore provides infrastructure for JSON-file-backed stores:
-// atomic file I/O (flock + write-temp-fsync-rename), fsnotify-based external
-// change detection with debounce, and writeGen-based stale reload prevention.
+// atomic file I/O (flock + write-temp-fsync-rename), crash-tolerant JSONL
+// append and read, fsnotify-based external change detection with debounce, and
+// writeGen-based stale reload prevention.
 package filestore
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -65,72 +64,18 @@ func New(cfg Config) (*File, error) {
 
 // --- File I/O ---
 
-func (f *File) lockPath() string {
-	return f.path + ".lock"
-}
-
 // Read reads the index file under a shared flock and returns the raw bytes.
 // Returns nil, nil if the file does not exist.
 func (f *File) Read() ([]byte, error) {
-	lockF, err := os.OpenFile(f.lockPath(), os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("open lock file: %w", err)
-	}
-	defer lockF.Close()
-
-	if err := syscall.Flock(int(lockF.Fd()), syscall.LOCK_SH); err != nil {
-		return nil, fmt.Errorf("flock shared: %w", err)
-	}
-	defer syscall.Flock(int(lockF.Fd()), syscall.LOCK_UN)
-
-	data, err := os.ReadFile(f.path)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	return data, err
+	return ReadFileLocked(f.path)
 }
 
 // Write atomically writes data using write-temp-fsync-rename under an
 // exclusive flock. Increments writeGen on success.
 func (f *File) Write(data []byte) error {
-	lockF, err := os.OpenFile(f.lockPath(), os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return fmt.Errorf("open lock file: %w", err)
+	if err := WriteFileAtomic(f.path, data, filePerm); err != nil {
+		return err
 	}
-	defer lockF.Close()
-
-	if err := syscall.Flock(int(lockF.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("flock exclusive: %w", err)
-	}
-	defer syscall.Flock(int(lockF.Fd()), syscall.LOCK_UN)
-
-	tmpPath := f.path + ".tmp"
-
-	tmpF, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-
-	if _, err := tmpF.Write(data); err != nil {
-		tmpF.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := tmpF.Sync(); err != nil {
-		tmpF.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("fsync temp file: %w", err)
-	}
-	if err := tmpF.Close(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("close temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, f.path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("rename temp to index: %w", err)
-	}
-
 	f.writeGen.Add(1)
 	return nil
 }

@@ -417,11 +417,15 @@ describe("useSubscription", () => {
 			expect(switchEndCallbacks.length).toBe(0);
 		});
 
-		it("calls onReset on switchStart, resubscribes on switchEnd", async () => {
+		it("keeps data on switchStart (soft reload), resubscribes on switchEnd", async () => {
+			// A worktree switch is a soft refresh: the hard onReset must NOT fire
+			// (that would blank the UI); onWorktreeSwitch fires instead so callers
+			// can mark data as reloading while keeping it on screen.
 			const onReset = vi.fn();
+			const onWorktreeSwitch = vi.fn();
 			const callOrder: string[] = [];
 
-			onReset.mockImplementation(() => callOrder.push("reset"));
+			onWorktreeSwitch.mockImplementation(() => callOrder.push("switch"));
 			mockSubscribe.mockImplementation(() => {
 				callOrder.push("subscribe");
 				return Promise.resolve({ id: `sub-${callOrder.length}` });
@@ -430,6 +434,7 @@ describe("useSubscription", () => {
 			renderHook(() =>
 				useSubscription(mockSubscribe, mockUnsubscribe, mockOnNotification, {
 					onReset,
+					onWorktreeSwitch,
 				}),
 			);
 
@@ -440,7 +445,8 @@ describe("useSubscription", () => {
 			await act(async () => {
 				switchStartCallbacks[0]?.();
 			});
-			expect(callOrder).toEqual(["subscribe", "reset"]);
+			expect(onReset).not.toHaveBeenCalled();
+			expect(callOrder).toEqual(["subscribe", "switch"]);
 
 			await act(async () => {
 				switchEndCallbacks[0]?.();
@@ -450,7 +456,8 @@ describe("useSubscription", () => {
 				expect(mockSubscribe).toHaveBeenCalledTimes(2);
 			});
 
-			expect(callOrder).toEqual(["subscribe", "reset", "subscribe"]);
+			expect(onReset).not.toHaveBeenCalled();
+			expect(callOrder).toEqual(["subscribe", "switch", "subscribe"]);
 		});
 	});
 

@@ -2,6 +2,7 @@
 package git
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -96,6 +97,10 @@ func setupLocalCredential(dir, host, token string) error {
 
 	// x-access-token is GitHub's required username for PAT authentication
 	credContent := fmt.Sprintf("https://x-access-token:%s@%s\n", token, host)
+	// Deliberately a plain write, not filestore.WriteFileAtomic: git's own
+	// credential-store helper locks this path with "<file>.lock", the same name
+	// WriteFileAtomic leaves behind, and git then dies with "unable to get
+	// credential storage lock". A one-shot write of one line is the smaller risk.
 	if err := os.WriteFile(credFile, []byte(credContent), 0600); err != nil {
 		return fmt.Errorf("failed to write credentials file: %w", err)
 	}
@@ -255,19 +260,31 @@ func (s *GitStatus) IsUntracked(path string) bool {
 // Combined with ignoring CHMOD events in watcher.go, this prevents an infinite loop
 // when watching .git/index. If issues persist, consider switching to periodic polling.
 func Status(dir string) (*GitStatus, error) {
-	cmd := exec.Command("git", "--no-optional-locks", "status", "--porcelain=v1", "-uall", "--ignore-submodules=none")
-	cmd.Dir = dir
+	return statusWithSubmodules(dir, getSubmodulePaths(dir))
+}
+
+// statusWithSubmodules is Status with the directory's submodule paths already
+// computed, letting callers that also need the paths (Diff) avoid re-forking
+// `git config --file .gitmodules` for the same directory.
+func statusWithSubmodules(dir string, submodules []string) (*GitStatus, error) {
+	// Not execGit: it trims the output, and a leading space is significant here
+	// (" M file" is an unstaged modification). stderr is captured by hand for the
+	// same reason — without it a refusal like "detected dubious ownership in
+	// repository at ..." reaches the panel as "exit status 128".
+	args := []string{"--no-optional-locks", "status", "--porcelain=v1", "-z", "-uall", "--ignore-submodules=none"}
+	cmd := gitCommand(dir, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("git status failed: %w", err)
+		return nil, newCommandError(args, stderr.String(), err)
 	}
 
 	result := &GitStatus{
 		Staged:   []FileStatus{},
 		Unstaged: []FileStatus{},
 	}
-
-	submodules := getSubmodulePaths(dir)
 
 	// Initialize all submodules (even if empty) so clients know they exist
 	if len(submodules) > 0 {
@@ -288,35 +305,61 @@ func Status(dir string) (*GitStatus, error) {
 		}
 	}
 
-	for _, line := range strings.Split(string(output), "\n") {
-		if len(line) < 3 {
-			continue
-		}
-
-		// Porcelain v1: XY PATH where X=staged, Y=unstaged
-		stagedStatus := line[0]
-		unstagedStatus := line[1]
-		path := strings.TrimSpace(line[3:])
-
-		// Handle renames: "old -> new"
-		if idx := strings.Index(path, " -> "); idx != -1 {
-			path = path[idx+4:]
-		}
-
+	for _, entry := range parseStatusZ(string(output)) {
 		// Skip submodule entries (already handled recursively)
-		if contains(submodules, path) {
+		if contains(submodules, entry.path) {
 			continue
 		}
 
-		if stagedStatus != ' ' && stagedStatus != '?' {
-			result.Staged = append(result.Staged, FileStatus{Path: path, Status: string(stagedStatus)})
+		if entry.staged != ' ' && entry.staged != '?' {
+			result.Staged = append(result.Staged, FileStatus{Path: entry.path, Status: string(entry.staged)})
 		}
-		if unstagedStatus != ' ' {
-			result.Unstaged = append(result.Unstaged, FileStatus{Path: path, Status: string(unstagedStatus)})
+		if entry.unstaged != ' ' {
+			result.Unstaged = append(result.Unstaged, FileStatus{Path: entry.path, Status: string(entry.unstaged)})
 		}
 	}
 
 	return result, nil
+}
+
+// statusEntry is one parsed record of `git status --porcelain=v1 -z`.
+type statusEntry struct {
+	staged   byte
+	unstaged byte
+	path     string
+}
+
+// parseStatusZ parses `git status --porcelain=v1 -z` output.
+//
+// The -z format is used instead of the line-based one because git C-escapes
+// paths that contain non-ASCII bytes or whitespace ("\344\270\255" instead of
+// "中"), and because the line format renders renames as "old -> new", which is
+// ambiguous for a file actually named "a -> b". With -z the path is emitted
+// verbatim and the rename source follows in its own NUL-terminated field.
+func parseStatusZ(output string) []statusEntry {
+	var entries []statusEntry
+
+	fields := strings.Split(output, "\x00")
+	for i := 0; i < len(fields); i++ {
+		field := fields[i]
+		// "XY PATH": two status bytes, a space, then at least one path byte.
+		if len(field) < 4 {
+			continue
+		}
+
+		entry := statusEntry{staged: field[0], unstaged: field[1], path: field[3:]}
+		if isRenameOrCopy(entry.staged) || isRenameOrCopy(entry.unstaged) {
+			i++ // consume the source path field
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return entries
+}
+
+func isRenameOrCopy(status byte) bool {
+	return status == 'R' || status == 'C'
 }
 
 func contains(slice []string, item string) bool {
@@ -337,21 +380,22 @@ func isGitRepository(dir string) bool {
 }
 
 func getSubmodulePaths(dir string) []string {
-	cmd := exec.Command("git", "config", "--file", ".gitmodules", "--get-regexp", "path")
-	cmd.Dir = dir
+	// -z terminates each entry with NUL and separates key from value with a
+	// newline, so submodule paths containing spaces stay intact.
+	cmd := gitCommand(dir, "config", "-z", "--file", ".gitmodules", "--get-regexp", "path")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
 
 	var paths []string
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		// Format: "submodule.<name>.path <path>"
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			paths = append(paths, parts[1])
+	for _, entry := range strings.Split(string(output), "\x00") {
+		// Format: "submodule.<name>.path\n<path>"
+		_, path, ok := strings.Cut(entry, "\n")
+		if !ok || path == "" {
+			continue
 		}
+		paths = append(paths, path)
 	}
 	return paths
 }
@@ -369,7 +413,14 @@ type DiffOptions struct {
 // Returns empty string if file is not in git status (no changes).
 // For submodule paths (e.g., "submodule/path/to/file"), it runs diff inside the submodule.
 func Diff(dir, path string, opts DiffOptions) (string, error) {
-	status, err := Status(dir)
+	return diffWith(dir, path, opts, getSubmodulePaths(dir))
+}
+
+// diffWith is Diff with the directory's submodule paths already computed, so a
+// single DiffWithContent call resolves them once instead of forking git for
+// Status, the diff-side path resolution, and the content-side path resolution.
+func diffWith(dir, path string, opts DiffOptions, submodules []string) (string, error) {
+	status, err := statusWithSubmodules(dir, submodules)
 	if err != nil {
 		return "", err
 	}
@@ -379,12 +430,12 @@ func Diff(dir, path string, opts DiffOptions) (string, error) {
 
 	// Untracked files don't have a diff against index, generate synthetic diff
 	if !opts.Staged && status.IsUntracked(path) {
-		actualDir, relativePath := resolveSubmodulePath(dir, path)
+		actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
 		return showUntrackedFile(actualDir, relativePath)
 	}
 
 	// Resolve submodule path if needed
-	actualDir, relativePath := resolveSubmodulePath(dir, path)
+	actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
 
 	var args []string
 	if opts.Staged {
@@ -395,10 +446,13 @@ func Diff(dir, path string, opts DiffOptions) (string, error) {
 	if opts.HideWhitespace {
 		args = append(args, "-w")
 	}
-	args = append(args, "--", relativePath)
+	pathspec, err := literalPathspec(relativePath)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, path)
+	}
+	args = append(args, "--", pathspec)
 
-	cmd := exec.Command("git", args...)
-	cmd.Dir = actualDir
+	cmd := gitCommand(actualDir, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git diff failed: %w (output: %s)", err, string(output))
@@ -409,8 +463,11 @@ func Diff(dir, path string, opts DiffOptions) (string, error) {
 
 // resolveSubmodulePath resolves "submodule/path/to/file" to (dir/submodule, "path/to/file").
 func resolveSubmodulePath(dir, path string) (string, string) {
-	submodules := getSubmodulePaths(dir)
+	return resolveSubmodulePathWith(getSubmodulePaths(dir), dir, path)
+}
 
+// resolveSubmodulePathWith is resolveSubmodulePath with submodule paths precomputed.
+func resolveSubmodulePathWith(submodules []string, dir, path string) (string, string) {
 	for _, sub := range submodules {
 		prefix := sub + "/"
 		if strings.HasPrefix(path, prefix) {
@@ -476,7 +533,9 @@ type DiffResult struct {
 // For unstaged changes: old = index, new = worktree
 // Supports submodule paths (e.g., "submodule/path/to/file").
 func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
-	diff, err := Diff(dir, path, opts)
+	submodules := getSubmodulePaths(dir)
+
+	diff, err := diffWith(dir, path, opts, submodules)
 	if err != nil {
 		return nil, err
 	}
@@ -485,7 +544,7 @@ func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
 	}
 
 	// Resolve submodule path for content retrieval
-	actualDir, relativePath := resolveSubmodulePath(dir, path)
+	actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
 
 	var oldContent, newContent string
 
@@ -570,14 +629,13 @@ func Add(dir, path string) error {
 	}
 
 	actualDir, relativePath := resolveSubmodulePath(dir, path)
-
-	cmd := exec.Command("git", "add", "--", relativePath)
-	cmd.Dir = actualDir
-	output, err := cmd.CombinedOutput()
+	pathspec, err := literalPathspec(relativePath)
 	if err != nil {
-		return fmt.Errorf("git add failed: %w (output: %s)", err, string(output))
+		return fmt.Errorf("%w: %s", err, path)
 	}
-	return nil
+
+	_, err = execGit(actualDir, "add", "--", pathspec)
+	return err
 }
 
 // Reset unstages a file from the git index.
@@ -589,14 +647,13 @@ func Reset(dir, path string) error {
 	}
 
 	actualDir, relativePath := resolveSubmodulePath(dir, path)
-
-	cmd := exec.Command("git", "restore", "--staged", "--", relativePath)
-	cmd.Dir = actualDir
-	output, err := cmd.CombinedOutput()
+	pathspec, err := literalPathspec(relativePath)
 	if err != nil {
-		return fmt.Errorf("git restore --staged failed: %w (output: %s)", err, string(output))
+		return fmt.Errorf("%w: %s", err, path)
 	}
-	return nil
+
+	_, err = execGit(actualDir, "restore", "--staged", "--", pathspec)
+	return err
 }
 
 // validatePath checks for path traversal attacks.
@@ -738,6 +795,17 @@ func parseLogOutput(output string) []Commit {
 	return commits
 }
 
+// firstParentShowArgs builds `git show` arguments that render a merge commit as
+// an ordinary diff against its first parent (a no-op on non-merge commits).
+//
+// Show (the file list) and ShowFileDiff (a file's contents) must both go through
+// it: plain `git show` on a merge produces a combined diff, which omits every
+// file whose content matches one of the parents, so the files the list reports
+// would open with an empty diff. hash^ in ShowFileDiff is that same parent.
+func firstParentShowArgs(extra ...string) []string {
+	return append([]string{"show", "-m", "--first-parent"}, extra...)
+}
+
 // Show returns detailed commit information including changed files.
 func Show(dir, hash string) (*ShowResult, error) {
 	if err := validateCommitHash(hash); err != nil {
@@ -767,19 +835,8 @@ func Show(dir, hash string) (*ShowResult, error) {
 	commit := commits[0]
 
 	// Get changed files with status
-	// -m: for merge commits, show diff against each parent (we take first)
-	// --first-parent: follow only the first parent
-	filesArgs := []string{
-		"show",
-		"-m",
-		"--first-parent",
-		"--name-status",
-		"--format=",
-		hash,
-	}
-
-	filesCmd := exec.Command("git", filesArgs...)
-	filesCmd.Dir = dir
+	filesArgs := firstParentShowArgs("--name-status", "-z", "--format=", hash)
+	filesCmd := gitCommand(dir, filesArgs...)
 	filesOutput, err := filesCmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git show --name-status failed: %w", err)
@@ -793,39 +850,38 @@ func Show(dir, hash string) (*ShowResult, error) {
 	}, nil
 }
 
-// parseNameStatus parses git's --name-status output.
+// parseNameStatus parses git's `--name-status -z` output.
+//
+// Fields are NUL-terminated: "M\0path\0" for ordinary changes and
+// "R100\0old\0new\0" for renames/copies. The tab-separated form is not used
+// because git C-escapes non-ASCII paths there (see gitCommand).
 func parseNameStatus(output string) []FileChange {
 	var files []FileChange
 
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	fields := strings.Split(output, "\x00")
+	for i := 0; i < len(fields); {
+		status := fields[i]
+		i++
+		if status == "" {
 			continue
 		}
-
-		// Format: "M\tfilename" or "R100\told\tnew"
-		parts := strings.Split(line, "\t")
-		if len(parts) < 2 {
-			continue
+		if i >= len(fields) {
+			break
 		}
 
-		status := parts[0]
-		path := parts[1]
+		path := fields[i]
+		i++
 
 		// For renames/copies, use the new filename and normalize to "R"
-		if len(parts) > 2 && (status[0] == 'R' || status[0] == 'C') {
-			path = parts[2]
+		if isRenameOrCopy(status[0]) && i < len(fields) {
+			path = fields[i]
+			i++
 			status = "R"
-		}
-
-		// Normalize status to single character
-		if len(status) > 1 {
-			status = string(status[0])
 		}
 
 		files = append(files, FileChange{
 			Path:   path,
-			Status: status,
+			Status: status[:1],
 		})
 	}
 
@@ -843,14 +899,17 @@ func ShowFileDiff(dir, hash, path string, hideWhitespace bool) (*DiffResult, err
 	}
 
 	// Get the diff using git show
-	args := []string{"show", "--format=", hash}
+	args := firstParentShowArgs("--format=", hash)
 	if hideWhitespace {
 		args = append(args, "-w")
 	}
-	args = append(args, "--", path)
+	pathspec, err := literalPathspec(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, path)
+	}
+	args = append(args, "--", pathspec)
 
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	cmd := gitCommand(dir, args...)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git show failed: %w", err)

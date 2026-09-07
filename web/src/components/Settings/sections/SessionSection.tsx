@@ -1,5 +1,5 @@
 import { AGENT_TYPE_INFO, AGENT_TYPES } from "../../../lib/agentType";
-import { SESSION_MODE_INFO, SESSION_MODES } from "../../../lib/sessionMode";
+import { getSessionModeInfo, SESSION_MODES } from "../../../lib/sessionMode";
 import { useSettingsStore } from "../../../lib/settingsStore";
 import { useWSStore } from "../../../lib/wsStore";
 import type { SessionMode } from "../../../types/message";
@@ -11,6 +11,7 @@ function ToggleGroup<T extends string>({
 	selected,
 	onSelect,
 	getInfo,
+	hint,
 }: {
 	label: string;
 	items: readonly T[];
@@ -20,6 +21,7 @@ function ToggleGroup<T extends string>({
 		label: string;
 		icon: React.ComponentType<{ className?: string }>;
 	};
+	hint?: string;
 }) {
 	return (
 		<div className="space-y-1.5">
@@ -51,6 +53,9 @@ function ToggleGroup<T extends string>({
 					);
 				})}
 			</div>
+			{hint && (
+				<p className="whitespace-pre-line text-xs text-th-text-muted">{hint}</p>
+			)}
 		</div>
 	);
 }
@@ -78,7 +83,8 @@ export default function SessionSection() {
 				items={SESSION_MODES}
 				selected={defaultMode}
 				onSelect={(mode) => updateSettings({ default_mode: mode })}
-				getInfo={(mode) => SESSION_MODE_INFO[mode]}
+				getInfo={(mode) => getSessionModeInfo(mode, agentType)}
+				hint={getSessionModeInfo(defaultMode, agentType).description}
 			/>
 		</div>
 	);

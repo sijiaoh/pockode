@@ -2,8 +2,13 @@ package agentrole
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func newTestStore(t *testing.T) *FileStore {
@@ -241,6 +246,53 @@ func TestListener_Events(t *testing.T) {
 	s.Delete(context.Background(), role.ID)
 	if len(events) != 3 || events[2].Op != OperationDelete {
 		t.Fatalf("expected delete event, got %d events", len(events))
+	}
+}
+
+// The agent-role file is user-editable, so a direct edit on disk must
+// notify listeners without a server restart.
+func TestExternalChange_NotifiesListener(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	var mu sync.Mutex
+	var events []ChangeEvent
+	s.AddOnChangeListener(listenerFunc(func(e ChangeEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, e)
+	}))
+
+	if err := s.StartWatching(); err != nil {
+		t.Fatalf("StartWatching: %v", err)
+	}
+	defer s.StopWatching()
+
+	// Simulate an external editor adding a role directly to the index file.
+	existing, _ := s.List()
+	added := AgentRole{ID: "ext-role", Name: "External", RolePrompt: "edited on disk"}
+	data, err := json.Marshal(indexData{Roles: append(existing, added)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "agent-roles", "index.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Wait for fsnotify debounce (100ms) + processing time.
+	time.Sleep(300 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 1 || events[0].Op != OperationCreate || events[0].Role.ID != "ext-role" {
+		t.Fatalf("expected 1 create event for ext-role, got %+v", events)
+	}
+	if _, found, _ := s.Get("ext-role"); !found {
+		t.Error("expected in-memory store to reflect external role")
 	}
 }
 

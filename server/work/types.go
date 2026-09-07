@@ -1,6 +1,7 @@
 package work
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -46,8 +47,12 @@ type Work struct {
 	Status      WorkStatus `json:"status"`
 	SessionID   string     `json:"session_id,omitempty"`
 	CurrentStep int        `json:"current_step,omitempty"` // 0-indexed; used only when agent role has Steps
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	// Worktree the work's session runs in (empty = main). Captured from the
+	// frontend's current worktree when a top-level work first starts, or
+	// inherited from the parent at create time; immutable once the work starts.
+	Worktree  string    `json:"worktree,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Operation string
@@ -59,9 +64,8 @@ const (
 )
 
 type ChangeEvent struct {
-	Op       Operation
-	Work     Work
-	External bool // true when the change originated from another process (fsnotify)
+	Op   Operation
+	Work Work
 }
 
 // OnChangeListener receives notifications when Work items change.
@@ -82,4 +86,13 @@ type CommentEvent struct {
 // Same mutex contract as OnChangeListener applies.
 type OnCommentChangeListener interface {
 	OnCommentChange(event CommentEvent)
+}
+
+// WorkStartHandler handles the full lifecycle of starting a work session
+// (create session, set title, send kickoff message).
+// For restarts (reused sessionID), the implementation should detect the
+// existing session and send a restart message instead.
+// Satisfied by worktree integration code in the main server.
+type WorkStartHandler interface {
+	HandleWorkStart(ctx context.Context, w Work) error
 }

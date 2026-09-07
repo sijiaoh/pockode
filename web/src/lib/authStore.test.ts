@@ -6,7 +6,9 @@ vi.mock("./wsStore", () => ({
 	},
 }));
 
-describe("authStore", () => {
+// Same as wsStore/queryClient: the dynamic import of the module under test is
+// what outruns the 5s default under load, not anything these cases wait for.
+describe("authStore", { timeout: 20_000 }, () => {
 	beforeEach(() => {
 		vi.resetModules();
 		localStorage.clear();

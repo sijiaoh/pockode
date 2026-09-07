@@ -21,7 +21,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Layer | Path | Role |
 |-------|------|------|
 | RPC handlers | `server/ws/rpc_chat.go` | `chat.message`, `chat.interrupt`, `chat.messages.subscribe`, permission/question responses |
-| Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast |
+| Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessage` (user) and `SendSystemMessage` (system automation) share one persist+broadcast path |
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
 | Process manager | `server/process/manager.go` | Process lifecycle, state machine, idle reaper |
@@ -38,10 +38,12 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 5. Events are broadcast to all WebSocket subscribers and persisted to session history
 6. On `Done` event, process transitions to `idle`
 
+Besides user-typed messages, the Work system pushes automatic prompts to the same session via `Client.SendSystemMessage`; these are tagged `origin: "system"` so the frontend renders them as a collapsed banner rather than a user bubble. See [agent-event.md](agent-event.md#message-origin-user-vs-system) and [code/work-system.md](code/work-system.md#system-origin-message-tagging).
+
 ## Agent Events
 
 See [agent-event.md](agent-event.md) for the full event type catalog, data flow, and frontend processing pipeline.
 
 ## Session Persistence
 
-Session metadata and chat history are stored under the session data directory. History is JSON Lines of `EventRecord`s appended on each event. Claude resumes only when `claude_resume.json` contains a provider-side session ID; otherwise the next process starts a new Claude session for the same Pockode session.
+Session metadata and chat history are stored under the session data directory. History is JSON Lines of `EventRecord`s appended on each event. Claude records its provider-side session ID in `claude_resume.json` as soon as the CLI reports it, and falls back through a recovery ladder (plain resume → fork → new session) when a launch turns out to be unresumable, so a session cannot be permanently stuck by a first turn that failed ([code/agent-integration.md](code/agent-integration.md#session-recovery-ladder)). Codex never resumes — its CLI keeps a thread only in the memory of the process that created it, so a restarted session gets a new thread and a warning that the agent no longer has the earlier turns ([code/agent-integration.md](code/agent-integration.md#no-session-recovery)). Pockode's own transcript survives either way; what a resume decides is whether the *agent* still has the context.

@@ -3,6 +3,8 @@ package ws
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -479,6 +481,123 @@ func TestHandler_WorkStart_RollbackAllowsRetry(t *testing.T) {
 	json.Unmarshal(resp.Result, &result)
 	if result.Status != work.StatusInProgress {
 		t.Errorf("expected status in_progress after retry, got %s", result.Status)
+	}
+}
+
+func TestHandler_WorkStart_CapturesMainWorktree(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	storyResp := env.call("work.create", rpc.WorkCreateParams{
+		Type:        work.WorkTypeStory,
+		AgentRoleID: env.testRoleID,
+		Title:       "Main story",
+	})
+	var story work.Work
+	json.Unmarshal(storyResp.Result, &story)
+
+	resp := env.call("work.start", rpc.WorkStartParams{ID: story.ID})
+	if resp.Error != nil {
+		t.Fatalf("start failed: %s", resp.Error.Message)
+	}
+
+	got, found, err := env.workStore.Get(story.ID)
+	if err != nil || !found {
+		t.Fatalf("get story: found=%v err=%v", found, err)
+	}
+	if got.Worktree != "" {
+		t.Errorf("worktree = %q, want empty (main)", got.Worktree)
+	}
+}
+
+func TestHandler_WorkStart_CapturesFrontendWorktree(t *testing.T) {
+	dir := setupGitRepo(t)
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0644)
+	runGitIn(t, dir, "add", ".")
+	runGitIn(t, dir, "commit", "-m", "initial")
+
+	env := newWorkDirTestEnv(t, dir)
+
+	if resp := env.call("worktree.create", rpc.WorktreeCreateParams{Name: "feature", Branch: "feature-branch"}); resp.Error != nil {
+		t.Fatalf("worktree create failed: %s", resp.Error.Message)
+	}
+	if resp := env.call("worktree.switch", rpc.WorktreeSwitchParams{Name: "feature"}); resp.Error != nil {
+		t.Fatalf("worktree switch failed: %s", resp.Error.Message)
+	}
+
+	// A story started while the frontend sits on "feature" pins to it.
+	storyResp := env.call("work.create", rpc.WorkCreateParams{
+		Type:        work.WorkTypeStory,
+		AgentRoleID: env.testRoleID,
+		Title:       "Feature story",
+	})
+	var story work.Work
+	json.Unmarshal(storyResp.Result, &story)
+
+	if resp := env.call("work.start", rpc.WorkStartParams{ID: story.ID}); resp.Error != nil {
+		t.Fatalf("start failed: %s", resp.Error.Message)
+	}
+
+	got, _, _ := env.workStore.Get(story.ID)
+	if got.Worktree != "feature" {
+		t.Errorf("story worktree = %q, want %q", got.Worktree, "feature")
+	}
+
+	// A child created under the started story inherits its worktree.
+	taskResp := env.call("work.create", rpc.WorkCreateParams{
+		Type:        work.WorkTypeTask,
+		ParentID:    story.ID,
+		AgentRoleID: env.testRoleID,
+		Title:       "Feature task",
+	})
+	var task work.Work
+	json.Unmarshal(taskResp.Result, &task)
+	if task.Worktree != "feature" {
+		t.Errorf("child worktree = %q, want inherited %q", task.Worktree, "feature")
+	}
+}
+
+func TestHandler_WorkStart_WorktreeImmutableOnRestart(t *testing.T) {
+	dir := setupGitRepo(t)
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0644)
+	runGitIn(t, dir, "add", ".")
+	runGitIn(t, dir, "commit", "-m", "initial")
+
+	env := newWorkDirTestEnv(t, dir)
+
+	if resp := env.call("worktree.create", rpc.WorktreeCreateParams{Name: "feature", Branch: "feature-branch"}); resp.Error != nil {
+		t.Fatalf("worktree create failed: %s", resp.Error.Message)
+	}
+	if resp := env.call("worktree.switch", rpc.WorktreeSwitchParams{Name: "feature"}); resp.Error != nil {
+		t.Fatalf("worktree switch failed: %s", resp.Error.Message)
+	}
+
+	storyResp := env.call("work.create", rpc.WorkCreateParams{
+		Type:        work.WorkTypeStory,
+		AgentRoleID: env.testRoleID,
+		Title:       "Feature story",
+	})
+	var story work.Work
+	json.Unmarshal(storyResp.Result, &story)
+
+	if resp := env.call("work.start", rpc.WorkStartParams{ID: story.ID}); resp.Error != nil {
+		t.Fatalf("start failed: %s", resp.Error.Message)
+	}
+
+	// Stop, switch the frontend back to main, and restart. The work keeps its
+	// original worktree — it is not re-captured.
+	if resp := env.call("work.stop", rpc.WorkStopParams{ID: story.ID}); resp.Error != nil {
+		t.Fatalf("stop failed: %s", resp.Error.Message)
+	}
+	if resp := env.call("worktree.switch", rpc.WorktreeSwitchParams{Name: ""}); resp.Error != nil {
+		t.Fatalf("switch to main failed: %s", resp.Error.Message)
+	}
+	if resp := env.call("work.start", rpc.WorkStartParams{ID: story.ID}); resp.Error != nil {
+		t.Fatalf("restart failed: %s", resp.Error.Message)
+	}
+
+	got, _, _ := env.workStore.Get(story.ID)
+	if got.Worktree != "feature" {
+		t.Errorf("worktree = %q, want unchanged %q after restart from main", got.Worktree, "feature")
 	}
 }
 

@@ -48,6 +48,9 @@ func InitSetupHook(dataDir string) error {
 		return err
 	}
 
+	// A plain write is enough: the template is entirely comments after `set -eu`,
+	// so any prefix a crash could leave behind is still a valid no-op script, and
+	// the hook is run via `bash <path>` rather than its shebang.
 	return os.WriteFile(hookPath, []byte(defaultSetupHookContent), 0644)
 }
 

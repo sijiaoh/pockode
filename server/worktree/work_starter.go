@@ -43,27 +43,28 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 		return fmt.Errorf("agent role %q not found", w.AgentRoleID)
 	}
 
-	mainWt, err := s.worktreeManager.Get("")
+	wt, err := s.worktreeManager.Get(w.Worktree)
 	if err != nil {
-		return fmt.Errorf("get main worktree: %w", err)
+		return fmt.Errorf("get worktree %q: %w", w.Worktree, err)
 	}
-	defer s.worktreeManager.Release(mainWt)
+	defer s.worktreeManager.Release(wt)
 
 	// Check if session already exists to distinguish restart from fresh start.
-	_, sessionExists, err := mainWt.SessionStore.Get(w.SessionID)
+	_, sessionExists, err := wt.SessionStore.Get(w.SessionID)
 	if err != nil {
 		return fmt.Errorf("check session: %w", err)
 	}
 
 	if sessionExists {
-		return s.sendRestart(ctx, mainWt, w)
+		return s.sendRestart(ctx, wt, w)
 	}
-	return s.createAndSendKickoff(ctx, mainWt, w, role.Steps)
+	return s.createAndSendKickoff(ctx, wt, w, role.Steps)
 }
 
 func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work) error {
 	msg := work.BuildRestartMessage(w)
-	if err := wt.ChatClient.SendMessage(ctx, w.SessionID, msg); err != nil {
+	meta := work.NewMessageMeta(w.Title, 0, 0)
+	if err := wt.ChatClient.SendSystemMessage(ctx, w.SessionID, msg, work.MessageSubtypeRestart, meta); err != nil {
 		return fmt.Errorf("send restart message: %w", err)
 	}
 	return nil
@@ -81,7 +82,8 @@ func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w 
 
 	// Include first step in kickoff message if agent role has steps
 	msg := work.BuildKickoffMessageWithSteps(w, steps, w.CurrentStep)
-	if err := wt.ChatClient.SendMessage(ctx, w.SessionID, msg); err != nil {
+	meta := work.NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
+	if err := wt.ChatClient.SendSystemMessage(ctx, w.SessionID, msg, work.MessageSubtypeKickoff, meta); err != nil {
 		if delErr := wt.SessionStore.Delete(ctx, w.SessionID); delErr != nil {
 			slog.Error("failed to clean up session after kickoff failure", "sessionId", w.SessionID, "error", delErr)
 		}

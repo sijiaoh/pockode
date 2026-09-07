@@ -3,6 +3,7 @@ import {
 	Check,
 	ChevronRight,
 	CircleHelp,
+	Workflow,
 	X,
 } from "lucide-react";
 import { memo, useMemo, useState } from "react";
@@ -17,8 +18,10 @@ import type {
 	PermissionStatus,
 	PermissionUpdate,
 	PermissionUpdateDestination,
+	SystemMessageMeta,
 	ToolCall,
 } from "../../types/message";
+import { formatFilePath } from "../../utils/path";
 import { ScrollableContent, Spinner } from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
 import { MarkdownContent } from "./MarkdownContent";
@@ -26,28 +29,6 @@ import ToolResultDisplay from "./ToolResultDisplay";
 
 interface ToolCallItemProps {
 	tool: ToolCall;
-}
-
-/** Format file path as "filename (relative/dir)" for display */
-function formatFilePath(filePath: string, workDir: string): string {
-	const parts = filePath.split("/").filter(Boolean);
-	if (parts.length === 0) return filePath;
-
-	const fileName = parts[parts.length - 1];
-	if (parts.length === 1) return fileName;
-
-	// If path is within workDir, show relative path
-	if (workDir && filePath.startsWith(workDir)) {
-		const relativePath = filePath.slice(workDir.length).replace(/^\//, "");
-		const relativeParts = relativePath.split("/").filter(Boolean);
-		relativeParts.pop();
-		if (relativeParts.length === 0) return fileName;
-		return `${fileName} (${relativeParts.join("/")})`;
-	}
-
-	// For paths outside workDir, show only parent directory
-	const parentDir = parts[parts.length - 2];
-	return `${fileName} (${parentDir})`;
 }
 
 /** Extract a short summary from tool input for display */
@@ -160,6 +141,67 @@ function SystemItem({ content }: SystemItemProps) {
 			{expanded && (
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					<pre className="text-th-text-muted">{content}</pre>
+				</ScrollableContent>
+			)}
+		</div>
+	);
+}
+
+// subtype → collapsed-bar action label. Where values come from: the backend
+// system message subtypes in server/work/prompt.go (kickoff, restart, ...).
+const SYSTEM_MESSAGE_LABELS: Record<string, string> = {
+	kickoff: "Kickoff",
+	restart: "Restart",
+	auto_continue: "Auto-continue",
+	step_advance: "Next step",
+	reopen: "Reopen",
+	child_done: "Child task done",
+};
+
+function systemActionLabel(subtype?: string, meta?: SystemMessageMeta): string {
+	const base = (subtype && SYSTEM_MESSAGE_LABELS[subtype]) || "System Message";
+	if (subtype === "step_advance" && meta?.step) {
+		return `${base} (Step ${meta.step.current}/${meta.step.total})`;
+	}
+	return base;
+}
+
+interface SystemMessageItemProps {
+	content: string;
+	subtype?: string;
+	meta?: SystemMessageMeta;
+}
+
+// SystemMessageItem renders a Pockode system-automation message as a collapsed,
+// low-contrast banner (not a chat bubble). It sits alongside the user/assistant
+// branches in MessageItem. Visual pattern mirrors SystemItem for consistency.
+function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
+	const [expanded, setExpanded] = useState(false);
+	const actionLabel = systemActionLabel(subtype, meta);
+	const summary = meta?.title;
+
+	return (
+		<div className="rounded bg-th-bg-secondary text-xs">
+			<button
+				type="button"
+				onClick={() => setExpanded(!expanded)}
+				aria-expanded={expanded}
+				className="flex w-full items-center gap-1.5 rounded p-2 text-left hover:bg-th-overlay-hover"
+			>
+				<ChevronRight
+					className={`size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
+				/>
+				<Workflow className="size-3 shrink-0 text-th-text-muted" />
+				<span className="shrink-0 text-th-text-muted">{`Pockode · ${actionLabel}`}</span>
+				{summary && (
+					<span className="min-w-0 truncate text-th-text-muted opacity-70">
+						{summary}
+					</span>
+				)}
+			</button>
+			{expanded && (
+				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+					<MarkdownContent content={content} />
 				</ScrollableContent>
 			)}
 		</div>
@@ -528,6 +570,16 @@ const MessageItem = memo(function MessageItem({
 	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
 
 	if (message.role === "user") {
+		// System-driven messages render as a collapsed banner instead of a bubble.
+		if (message.source === "system") {
+			return (
+				<SystemMessageItem
+					content={message.content}
+					subtype={message.subtype}
+					meta={message.meta}
+				/>
+			);
+		}
 		return (
 			<div className="flex items-end justify-end gap-2">
 				<div
@@ -573,9 +625,11 @@ const MessageItem = memo(function MessageItem({
 				)}
 
 				{/* Status indicator */}
-				{message.status === "sending" && <Spinner className="mt-2" />}
+				{message.status === "sending" && (
+					<Spinner variant="current" className="mt-2" />
+				)}
 				{message.status === "streaming" && isLast && isProcessRunning && (
-					<Spinner className="mt-2" />
+					<Spinner variant="current" className="mt-2" />
 				)}
 				{message.status === "error" && (
 					<p className="mt-2 text-sm text-th-error">{message.error}</p>

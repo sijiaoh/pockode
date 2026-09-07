@@ -19,13 +19,24 @@ interface Props {
 	sessionId: string;
 	onSend: (content: string) => void;
 	canSend?: boolean;
+	/**
+	 * Session not resolved yet (mid switch). Unlike `canSend={false}`, which only
+	 * blocks sending while the current session's history loads, this closes the
+	 * bar entirely: there is no session to type at yet.
+	 */
+	disabled?: boolean;
 }
 
 // Slash command pattern per Claude Code naming conventions.
 // Keep in sync with server/command/store.go namePattern.
 const COMMAND_PATTERN = /^\/([a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)?)?$/;
 
-function InputBar({ sessionId, onSend, canSend = true }: Props) {
+function InputBar({
+	sessionId,
+	onSend,
+	canSend = true,
+	disabled = false,
+}: Props) {
 	const input = useInputStore((state) => state.inputs[sessionId] ?? "");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -57,11 +68,14 @@ function InputBar({ sessionId, onSend, canSend = true }: Props) {
 		setSelectedIndex(0);
 	}, [filter]);
 
-	// Focus input on session change (desktop only)
+	// Focus input on session change (desktop only). Also re-runs when the bar is
+	// re-enabled: a switch disables it before this effect can focus, and without
+	// the second pass the input would stay unfocused on the session just opened.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when sessionId changes
 	useEffect(() => {
+		if (disabled) return;
 		if (!isMobile()) textareaRef.current?.focus();
-	}, [sessionId]);
+	}, [sessionId, disabled]);
 
 	useEffect(() => {
 		if (!isPaletteOpen) return;
@@ -296,7 +310,11 @@ function InputBar({ sessionId, onSend, canSend = true }: Props) {
 				/>
 			)}
 			<div className="flex items-end gap-2">
-				<CommandTrigger onClick={handleTriggerClick} isActive={isPaletteOpen} />
+				<CommandTrigger
+					onClick={handleTriggerClick}
+					isActive={isPaletteOpen}
+					disabled={disabled}
+				/>
 				<TextareaAutosize
 					ref={textareaRef}
 					value={input}
@@ -308,6 +326,7 @@ function InputBar({ sessionId, onSend, canSend = true }: Props) {
 							? "Type a message..."
 							: "Type a message... (Shift+Enter for newline)"
 					}
+					disabled={disabled}
 					spellCheck={false}
 					autoComplete="off"
 					autoCorrect="off"
@@ -317,7 +336,7 @@ function InputBar({ sessionId, onSend, canSend = true }: Props) {
 				<button
 					type="button"
 					onClick={handleSend}
-					disabled={!canSend || !input.trim()}
+					disabled={disabled || !canSend || !input.trim()}
 					className="h-9 rounded-lg bg-th-accent px-3 text-th-accent-text hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
 				>
 					Send

@@ -7,14 +7,16 @@ The Project system lets users manage development stories through AI agents. User
 ```
 React SPA                          Go Server                         AI CLI
 ─────────                          ─────────                         ──────
-Zustand stores ◄─── WebSocket ───► RPC handlers ──► work.Store ◄──► MCP (stdio)
-                    (JSON-RPC)                      (JSON file,      (per-session
-                    + subscriptions                  flock, fsnotify)  subprocess)
-                                                        │
-                                                   AutoResumer
-                                                   (process lifecycle sync,
-                                                    parent reactivation,
-                                                    external work start)
+Zustand stores ◄─── WebSocket ───► RPC handlers ──┐                 MCP (stdio,
+                    (JSON-RPC,                     ├─► work.Store      per-session
+                    subscriptions)                 │   (JSON file,     subprocess)
+                                   MCP HTTP API ───┘    flock)            │
+                                        ▲                                 │
+                                        └──────────── /api/mcp ───────────┘
+                                   AutoResumer
+                                   (process lifecycle sync,
+                                    parent reactivation,
+                                    step/reopen follow-ups)
 ```
 
 ## Documents

@@ -16,6 +16,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/contents"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -45,15 +46,18 @@ func mockRegistry(mock *mockAgent) *agent.Registry {
 
 type testEnv struct {
 	t               *testing.T
+	dataDir         string
 	mock            *mockAgent
 	worktreeManager *worktree.Manager
 	workStore       work.Store
 	testRoleID      string // pre-created agent role ID for tests
+	handler         *RPCHandler
 	server          *httptest.Server
 	conn            *websocket.Conn
 	ctx             context.Context
 	cancel          context.CancelFunc
 	reqID           int
+	authResult      rpc.AuthResult
 }
 
 func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
@@ -94,11 +98,17 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 	worktreeManager := worktree.NewManager(registry, mockRegistry(mock), dataDir, 10*time.Minute)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
+	workOps := work.NewOperations(workStore, workStarter, nil)
 
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
 	server := httptest.NewServer(h)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// One deadline covers every read and write the test makes, so it has to
+	// outlast the whole test rather than any single exchange. It is here only so
+	// a message that never arrives fails with a message instead of hanging until
+	// the package timeout; sized to what a test does, it turned the suite flaky
+	// whenever another package's git or process work loaded the machine.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 
 	conn, err := dialTestClient(ctx, server.URL)
 	if err != nil {
@@ -109,10 +119,12 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 
 	env := &testEnv{
 		t:               t,
+		dataDir:         dataDir,
 		mock:            mock,
 		worktreeManager: worktreeManager,
 		workStore:       workStore,
 		testRoleID:      testRole.ID,
+		handler:         h,
 		server:          server,
 		conn:            conn,
 		ctx:             ctx,
@@ -124,6 +136,9 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 	resp := env.call("auth", rpc.AuthParams{Token: "test-token"})
 	if resp.Error != nil {
 		t.Fatalf("auth failed: %s", resp.Error.Message)
+	}
+	if err := json.Unmarshal(resp.Result, &env.authResult); err != nil {
+		t.Fatalf("unmarshal auth result: %v", err)
 	}
 
 	t.Cleanup(func() {
@@ -256,7 +271,8 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
-	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
+	workOps := work.NewOperations(workStore, workStarter, nil)
+	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -306,7 +322,8 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workStarter, workStopper, agentRoleStore)
+	workOps := work.NewOperations(workStore, workStarter, nil)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -566,6 +583,86 @@ func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 	}
 }
 
+// TestHandler_FailedFirstTurn_KeepsAgentTypeSwitchable covers the escape hatch a
+// session needs when its very first turn fails before the agent says anything.
+// Nothing was started, so the session must not be treated as started: the user
+// can still move it to another agent instead of being stuck retrying the one
+// whose login expired.
+func TestHandler_FailedFirstTurn_KeepsAgentTypeSwitchable(t *testing.T) {
+	mock := &mockAgent{
+		// What Claude emits for a first message it cannot deliver, measured on
+		// 2.1.259 against an endpoint answering 401: retry banners (system events),
+		// the CLI's own account of the failure, then a result flagged as an error
+		// (subtype "success", is_error set — the flag is what counts). The account
+		// comes over the wire as an assistant message and only reaches this layer
+		// as a warning because the Claude parser keeps synthetic messages off the
+		// text path — read as agent output it would start the session and take the
+		// escape hatch away in precisely this scenario.
+		events: []agent.AgentEvent{
+			agent.SystemEvent{Content: `{"subtype":"api_retry"}`},
+			agent.WarningEvent{
+				Message: "Invalid API key \u00b7 Fix external API key",
+				Code:    "authentication_failed",
+			},
+			agent.ErrorEvent{Error: "Invalid API key \u00b7 Fix external API key"},
+		},
+	}
+	env := newTestEnv(t, mock)
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "failed-session", session.AgentTypeClaude, "")
+
+	env.subscribeChatMessages("failed-session")
+	env.sendMessage("failed-session", "hello")
+	env.skipN(4) // api_retry, warning, error, done
+
+	sess, _, _ := store.Get("failed-session")
+	if sess.Activated {
+		t.Error("expected session to stay unactivated after a turn with no agent output")
+	}
+
+	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
+		SessionID: "failed-session",
+		AgentType: session.AgentTypeCodex,
+	})
+	if resp.Error != nil {
+		t.Errorf("expected agent type change to be allowed, got %s", resp.Error.Message)
+	}
+
+	// The failed turn's process can still be alive — Codex's mcp-server outlives
+	// a turn it could not run. Reusing it would send the next message to the
+	// agent the user just switched away from.
+	if env.getMainWorktree().ProcessManager.HasProcess("failed-session") {
+		t.Error("expected the old agent's process to be closed by the switch")
+	}
+}
+
+// TestHandler_SessionWithAgentOutput_LocksAgentType is the other half: once the
+// agent has actually produced output there is a conversation on the agent's side,
+// and switching backends would silently abandon it.
+func TestHandler_SessionWithAgentOutput_LocksAgentType(t *testing.T) {
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			agent.TextEvent{Content: "Response"},
+			agent.DoneEvent{},
+		},
+	}
+	env := newTestEnv(t, mock)
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "started-session", session.AgentTypeClaude, "")
+
+	env.subscribeChatMessages("started-session")
+	env.sendMessage("started-session", "hello")
+	env.skipN(2) // text, done
+
+	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
+		SessionID: "started-session",
+		AgentType: session.AgentTypeCodex,
+	})
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "cannot change agent type after session has started") {
+		t.Errorf("expected rejection for a session the agent has answered in, got %+v", resp)
+	}
+}
+
 func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
@@ -707,6 +804,36 @@ func TestHandler_SessionCreate(t *testing.T) {
 	}
 	if result.Activated {
 		t.Error("expected activated=false for new session")
+	}
+}
+
+// A create that fails on disk (full disk, unwritable .pockode) used to reply
+// with a bare "failed to create session" and log nothing, leaving the failure
+// without a trace on either side of the connection.
+func TestHandler_SessionCreate_ReportsUnderlyingCause(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	env := newTestEnv(t, &mockAgent{})
+
+	// A read-only sessions dir stands in for any I/O failure the store hits.
+	sessionsDir := filepath.Join(env.dataDir, "sessions")
+	if err := os.Chmod(sessionsDir, 0500); err != nil {
+		t.Fatalf("chmod sessions dir: %v", err)
+	}
+	defer os.Chmod(sessionsDir, 0700) // let t.TempDir clean up
+
+	resp := env.call("session.create", nil)
+
+	if resp.Error == nil {
+		t.Fatal("expected an error when the sessions dir is not writable")
+	}
+	if !strings.Contains(resp.Error.Message, "failed to create session") {
+		t.Errorf("expected the message to say what failed, got %q", resp.Error.Message)
+	}
+	if !strings.Contains(resp.Error.Message, "permission denied") {
+		t.Errorf("expected the message to carry the underlying cause, got %q", resp.Error.Message)
 	}
 }
 
@@ -939,6 +1066,38 @@ func TestHandler_FileGet_ReadFile(t *testing.T) {
 	}
 	if result.File.Content != "world" {
 		t.Errorf("expected content 'world', got %q", result.File.Content)
+	}
+	if result.File.Size != 5 || result.File.MIME == "" {
+		t.Errorf("expected size and mime, got size %d mime %q", result.File.Size, result.File.MIME)
+	}
+}
+
+func TestHandler_FileGet_BinaryFileReturnsMetadataOnly(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	os.WriteFile(filepath.Join(workDir, "app.wasm"), []byte("\x00asm\x01\x00\x00\x00"), 0644)
+
+	resp := env.call("file.get", rpc.FileGetParams{Path: "app.wasm"})
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result rpc.FileGetResult
+	json.Unmarshal(resp.Result, &result)
+
+	if result.File == nil {
+		t.Fatal("expected file metadata")
+	}
+	if result.File.Encoding != contents.EncodingNone || result.File.Omitted != contents.OmitBinary {
+		t.Errorf("got encoding %q omitted %q, want %q/%q",
+			result.File.Encoding, result.File.Omitted, contents.EncodingNone, contents.OmitBinary)
+	}
+	if result.File.Content != "" {
+		t.Errorf("expected no content, got %q", result.File.Content)
+	}
+	if result.File.MIME != "application/wasm" {
+		t.Errorf("got mime %q, want application/wasm", result.File.MIME)
 	}
 }
 

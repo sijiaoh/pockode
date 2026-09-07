@@ -22,6 +22,7 @@ export function useSessionSubscription(enabled: boolean) {
 	const setSessions = useSessionStore((s) => s.setSessions);
 	const updateSessions = useSessionStore((s) => s.updateSessions);
 	const reset = useSessionStore((s) => s.reset);
+	const beginReload = useSessionStore((s) => s.beginReload);
 
 	const handleNotification = useCallback(
 		(params: SessionListChangedNotification) => {
@@ -52,6 +53,9 @@ export function useSessionSubscription(enabled: boolean) {
 		enabled,
 		onSubscribed: setSessions,
 		onReset: reset,
+		// Keep the previous worktree's sessions visible during a switch; the new
+		// list swaps in via onSubscribed. Avoids blanking the whole app shell.
+		onWorktreeSwitch: beginReload,
 	});
 
 	return { refresh };

@@ -155,7 +155,6 @@ function WorktreeSwitcher({ onClose, isDesktop = true }: Props) {
 					onClose={() => setIsCreateOpen(false)}
 					onCreate={handleCreate}
 					isCreating={isCreating}
-					isDesktop={isDesktop}
 				/>
 			)}
 		</div>

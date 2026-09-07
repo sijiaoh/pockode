@@ -13,12 +13,13 @@ import type { Work, WorkStatus } from "../../types/work";
 import BackToChatButton from "../ui/BackToChatButton";
 import { statusLabels } from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
+import { WorktreeBadge } from "../Worktree";
 import CreateWorkForm from "./CreateWorkForm";
 
 interface Props {
 	onBack: () => void;
 	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }
 
 export default function WorkListOverlay({
@@ -134,7 +135,7 @@ interface StatusGroupProps {
 	tasksByParentId: Map<string, Work[]>;
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }
 
 function StatusGroup({
@@ -198,7 +199,7 @@ function StoryRow({
 	tasks: Work[] | undefined;
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }) {
 	const storySessionId = story.session_id;
 	const totalTasks = tasks?.length ?? 0;
@@ -266,7 +267,8 @@ function StoryRow({
 
 			{/* Meta info row — always visible */}
 			<div className="flex items-center gap-2 px-3 pb-1 pl-[4.375rem] text-xs text-th-text-muted">
-				<span>{roleName ?? "—"}</span>
+				<WorktreeBadge work={story} className="max-w-[8rem] shrink" />
+				<span className="min-w-0 shrink truncate">{roleName ?? "—"}</span>
 				{totalTasks > 0 && (
 					<>
 						<span aria-hidden="true">&middot;</span>
@@ -280,7 +282,9 @@ function StoryRow({
 						<span aria-hidden="true">&middot;</span>
 						<button
 							type="button"
-							onClick={() => onNavigateToSession(storySessionId)}
+							onClick={() =>
+								onNavigateToSession(storySessionId, story.worktree ?? "")
+							}
 							className="-my-2 py-2 text-th-accent"
 						>
 							Chat
@@ -319,7 +323,7 @@ function TaskRow({
 	task: Work;
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }) {
 	const taskSessionId = task.session_id;
 	const roleName = task.agent_role_id
@@ -347,7 +351,9 @@ function TaskRow({
 			{taskSessionId && (
 				<button
 					type="button"
-					onClick={() => onNavigateToSession(taskSessionId)}
+					onClick={() =>
+						onNavigateToSession(taskSessionId, task.worktree ?? "")
+					}
 					className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-xs text-th-accent"
 				>
 					Chat

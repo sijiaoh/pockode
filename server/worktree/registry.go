@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,11 @@ type Info struct {
 type Registry struct {
 	mainDir string
 	dataDir string
+
+	// baseDirProvider returns the configured worktree base directory, or "" to
+	// use the default alongside the repository. It is read on every worktree
+	// operation so runtime settings changes take effect without a restart.
+	baseDirProvider func() string
 
 	cacheMu   sync.RWMutex
 	cache     map[string]Info
@@ -63,9 +69,63 @@ func (r *Registry) MainDir() string {
 	return r.mainDir
 }
 
+// SetBaseDirProvider wires a source for the configurable worktree base
+// directory. The provider returns a value validated at the settings boundary:
+// absolute, `./`/`../` (repo-relative), `~`/`~/...` (home-relative), or "" for
+// the default. expandBaseDir turns it into an absolute path.
+func (r *Registry) SetBaseDirProvider(provider func() string) {
+	r.baseDirProvider = provider
+}
+
 func (r *Registry) worktreesDir() string {
+	if r.baseDirProvider != nil {
+		if base := r.baseDirProvider(); base != "" {
+			return resolveExistingPrefix(r.expandBaseDir(base))
+		}
+	}
 	dirname := filepath.Base(r.mainDir)
 	return filepath.Join(filepath.Dir(r.mainDir), dirname+"-worktrees")
+}
+
+// expandBaseDir turns a configured base directory into an absolute path.
+// It mirrors the prefixes accepted by settings.ValidateWorktreeBaseDir:
+//   - `~`/`~/...`  → relative to the user's home directory
+//   - absolute     → used as-is
+//   - `./`/`../`   → relative to the repository root (main worktree)
+func (r *Registry) expandBaseDir(base string) string {
+	switch {
+	case base == "~" || strings.HasPrefix(base, "~/"):
+		home, err := os.UserHomeDir()
+		if err != nil {
+			// Home directory is unknown; fall back to a cleaned literal so the
+			// path stays deterministic rather than silently using the default.
+			return filepath.Clean(base)
+		}
+		return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(base, "~"), "/"))
+	case filepath.IsAbs(base):
+		return filepath.Clean(base)
+	default:
+		return filepath.Join(r.mainDir, base)
+	}
+}
+
+// resolveExistingPrefix resolves symlinks in the longest existing prefix of
+// path and re-appends the not-yet-created remainder. The configured base dir
+// may not exist yet (git creates it on first worktree add), yet
+// `git worktree list` reports fully symlink-resolved paths — so discovery must
+// compare against a resolved base, otherwise managed worktrees created under a
+// symlinked base (e.g. macOS /var -> /private/var) are mistaken for external
+// ones and silently disappear.
+func resolveExistingPrefix(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		// Reached the filesystem root without finding an existing ancestor.
+		return path
+	}
+	return filepath.Join(resolveExistingPrefix(parent), filepath.Base(path))
 }
 
 // Resolve returns the full path for a worktree name (empty string = main worktree).
