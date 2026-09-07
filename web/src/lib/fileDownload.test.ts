@@ -37,27 +37,15 @@ function jsonError(status: number, code: string, message: string) {
 	});
 }
 
-/**
- * jsdom's Blob predates the spec: it has no `text()` and stringifies Blob parts
- * instead of concatenating them, which would make assembled chunks unreadable
- * here. The runtime's own Blob — the one `Response.blob()` hands back, and the
- * one a browser would use — does both, so it is borrowed from there.
- */
-async function useNativeBlob() {
-	const native = (await new Response("").blob()).constructor;
-	vi.stubGlobal("Blob", native);
-}
-
 function requestHeaders(call: number): Headers {
 	const [, init] = vi.mocked(fetch).mock.calls[call];
 	return new Headers(init?.headers);
 }
 
 describe("fetchFileBlob", () => {
-	beforeEach(async () => {
+	beforeEach(() => {
 		logout.mockClear();
 		vi.stubGlobal("fetch", vi.fn());
-		await useNativeBlob();
 	});
 
 	afterEach(() => {
@@ -326,12 +314,11 @@ describe("downloadFile", () => {
 	const originalCreate = URL.createObjectURL;
 	const originalRevoke = URL.revokeObjectURL;
 
-	beforeEach(async () => {
+	beforeEach(() => {
 		clicks.length = 0;
 		createObjectURL.mockClear();
 		revokeObjectURL.mockClear();
 		vi.stubGlobal("fetch", vi.fn());
-		await useNativeBlob();
 		URL.createObjectURL = createObjectURL;
 		URL.revokeObjectURL = revokeObjectURL;
 		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
