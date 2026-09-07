@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -577,6 +578,55 @@ func TestManager_Shutdown_ClosesAllProcesses(t *testing.T) {
 	}
 	if m.GetProcess("sess-2") != nil {
 		t.Error("expected process for sess-2 to be removed from manager")
+	}
+}
+
+// The store writes an ending process makes do not happen on the goroutine that
+// calls Shutdown: SessionListWatcher writes needs_input and unread from the
+// ended state change, which runs on the event stream's own goroutine. Shutdown
+// has to outlast that, or a caller that tears the data directory down the moment
+// it returns — every test using t.TempDir() — races those writes.
+func TestManager_Shutdown_WaitsForTheEndedStateChange(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
+
+	var handled atomic.Bool
+	m.SetOnStateChange(func(e StateChangeEvent) {
+		if e.State != ProcessStateEnded {
+			return
+		}
+		// Stands in for the writes the real listener makes here; without it the
+		// assertion would hold whether or not Shutdown actually waits.
+		time.Sleep(20 * time.Millisecond)
+		handled.Store(true)
+	})
+
+	if _, _, err := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault); err != nil {
+		t.Fatalf("failed to create process: %v", err)
+	}
+
+	m.Shutdown()
+
+	if !handled.Load() {
+		t.Error("Shutdown returned while the ended state change was still running")
+	}
+}
+
+// A manager that has been shut down has already stopped waiting for event
+// streams, so it must not start another one.
+func TestManager_GetOrCreateProcess_AfterShutdown(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
+	m.Shutdown()
+
+	_, _, err := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	if !errors.Is(err, ErrManagerClosed) {
+		t.Errorf("expected ErrManagerClosed, got %v", err)
+	}
+	if m.HasProcess("sess-1") {
+		t.Error("expected no process to be created after shutdown")
 	}
 }
 

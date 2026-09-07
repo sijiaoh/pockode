@@ -76,6 +76,11 @@ func (w *Worktree) Start() error {
 	return nil
 }
 
+// Stop blocks until nothing under this worktree is still running: both halves
+// wait for their own background goroutines to return, so a returned Stop means
+// the data directory and the work tree are free to be torn down. Watchers go
+// first because they are the half that polls the work tree; the processes then
+// get however long they need to drain.
 func (w *Worktree) Stop() {
 	for _, watcher := range w.watchers {
 		watcher.Stop()

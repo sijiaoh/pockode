@@ -97,19 +97,23 @@ func (m *Manager) Get(name string) (*Worktree, error) {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Another goroutine may have created it while we were creating
 	if existing, ok := m.worktrees[name]; ok {
-		wt.Stop()
 		existing.refCount++
 		slog.Debug("worktree ref incremented (race)", "name", name, "refCount", existing.refCount)
+		m.mu.Unlock()
+		// Discarded outside the lock for the same reason it was created outside
+		// it: Stop waits for the worktree's goroutines, and no other caller of
+		// this manager should have to queue behind that.
+		wt.Stop()
 		return existing, nil
 	}
 
 	m.worktrees[name] = wt
 	wt.refCount = 1
 	slog.Info("worktree created", "name", name, "workDir", workDir)
+	m.mu.Unlock()
 
 	return wt, nil
 }

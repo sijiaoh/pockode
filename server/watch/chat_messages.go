@@ -38,13 +38,13 @@ func NewChatMessagesWatcher(store session.Store) *ChatMessagesWatcher {
 }
 
 func (w *ChatMessagesWatcher) Start() error {
-	go w.messageLoop()
+	w.Go(w.messageLoop)
 	slog.Info("ChatMessagesWatcher started")
 	return nil
 }
 
 func (w *ChatMessagesWatcher) Stop() {
-	w.Cancel()
+	w.CancelAndWait()
 	slog.Info("ChatMessagesWatcher stopped")
 }
 

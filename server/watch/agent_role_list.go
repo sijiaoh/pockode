@@ -26,13 +26,13 @@ func NewAgentRoleListWatcher(store agentrole.Store) *AgentRoleListWatcher {
 }
 
 func (w *AgentRoleListWatcher) Start() error {
-	go w.eventLoop()
+	w.Go(w.eventLoop)
 	slog.Info("AgentRoleListWatcher started")
 	return nil
 }
 
 func (w *AgentRoleListWatcher) Stop() {
-	w.Cancel()
+	w.CancelAndWait()
 	slog.Info("AgentRoleListWatcher stopped")
 }
 

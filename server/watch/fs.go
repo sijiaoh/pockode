@@ -46,13 +46,13 @@ func (w *FSWatcher) Start() error {
 	}
 	w.watcher = watcher
 
-	go w.eventLoop()
+	w.Go(w.eventLoop)
 	slog.Info("FSWatcher started", "workDir", w.workDir)
 	return nil
 }
 
 func (w *FSWatcher) Stop() {
-	w.Cancel()
+	w.CancelAndWait()
 	if w.watcher != nil {
 		w.watcher.Close()
 	}

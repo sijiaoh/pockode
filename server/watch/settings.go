@@ -28,13 +28,13 @@ func NewSettingsWatcher(store *settings.Store) *SettingsWatcher {
 }
 
 func (w *SettingsWatcher) Start() error {
-	go w.eventLoop()
+	w.Go(w.eventLoop)
 	slog.Info("SettingsWatcher started")
 	return nil
 }
 
 func (w *SettingsWatcher) Stop() {
-	w.Cancel()
+	w.CancelAndWait()
 	slog.Info("SettingsWatcher stopped")
 }
 

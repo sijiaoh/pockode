@@ -36,13 +36,13 @@ func NewWorkDetailWatcher(store work.Store) *WorkDetailWatcher {
 }
 
 func (w *WorkDetailWatcher) Start() error {
-	go w.eventLoop()
+	w.Go(w.eventLoop)
 	slog.Info("WorkDetailWatcher started")
 	return nil
 }
 
 func (w *WorkDetailWatcher) Stop() {
-	w.Cancel()
+	w.CancelAndWait()
 	slog.Info("WorkDetailWatcher stopped")
 }
 

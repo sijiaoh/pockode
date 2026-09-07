@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -56,7 +57,13 @@ type Manager struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	// Tracks the reaper and every event stream, so Shutdown can return only once
+	// nothing is still writing to the session store.
+	wg sync.WaitGroup
 }
+
+// ErrManagerClosed is returned when a process is requested after shutdown.
+var ErrManagerClosed = errors.New("process manager is shut down")
 
 // Process holds a running agent process. Do not cache references.
 type Process struct {
@@ -64,6 +71,9 @@ type Process struct {
 	agentSession agent.Session
 	sessionStore session.Store
 	manager      *Manager // back-reference for broadcasting to subscribers
+	// Closed when the event stream goroutine has returned, i.e. when the process
+	// has finished persisting everything it will ever persist.
+	done chan struct{}
 
 	mu         sync.Mutex
 	lastActive time.Time
@@ -97,7 +107,11 @@ func NewManager(agents *agent.Registry, workDir, dataDir, mcpServerDir string, s
 		ctx:          ctx,
 		cancel:       cancel,
 	}
-	go m.runIdleReaper()
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.runIdleReaper()
+	}()
 	return m
 }
 
@@ -136,6 +150,13 @@ func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent) {
 func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resume bool, agentType session.AgentType, mode session.Mode) (*Process, bool, error) {
 	m.processesMu.Lock()
 
+	// Checked under processesMu, which Shutdown also holds while cancelling, so a
+	// process can never be registered after Shutdown stopped waiting for it.
+	if m.ctx.Err() != nil {
+		m.processesMu.Unlock()
+		return nil, false, ErrManagerClosed
+	}
+
 	if proc, exists := m.processes[sessionID]; exists {
 		proc.touch()
 		m.processesMu.Unlock()
@@ -171,13 +192,17 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 		lastActive:   time.Now(),
 		state:        ProcessStateIdle,
 		turnEnded:    true, // no turn has started yet
+		done:         make(chan struct{}),
 	}
 	// resume is the session's Activated flag, so an already activated session
 	// starts out knowing it has nothing to record.
 	proc.activated.Store(resume)
 	m.processes[sessionID] = proc
 
+	m.wg.Add(1)
 	go func() {
+		defer m.wg.Done()
+		defer close(proc.done)
 		defer func() {
 			if r := recover(); r != nil {
 				logger.LogPanic(r, "session crashed", "sessionId", sessionID)
@@ -275,23 +300,39 @@ func (m *Manager) removeWhere(predicate func(*Process) bool) []*Process {
 	return removed
 }
 
-// Close terminates a specific process.
+// Close terminates a specific process and waits for its event stream to drain.
+// Waiting is what makes closing safe to build on: callers close a process
+// precisely because they are about to invalidate what it writes to (deleting the
+// session, tearing down the data directory), and a stream still running would
+// race them.
 func (m *Manager) Close(sessionID string) {
 	if proc := m.remove(sessionID); proc != nil {
 		proc.closed.Store(true)
 		proc.agentSession.Close()
+		<-proc.done
 		slog.Info("process closed", "sessionId", sessionID)
 	}
 }
 
-// Shutdown closes all processes gracefully.
+// Shutdown closes all processes and waits for their event streams to finish.
 func (m *Manager) Shutdown() {
+	m.processesMu.Lock()
 	m.cancel()
-	procs := m.removeWhere(func(*Process) bool { return true })
+	procs := make([]*Process, 0, len(m.processes))
+	for sessionID, p := range m.processes {
+		procs = append(procs, p)
+		delete(m.processes, sessionID)
+	}
+	m.processesMu.Unlock()
+
 	for _, p := range procs {
 		p.closed.Store(true)
 		p.agentSession.Close()
 	}
+	// Only after every agent session is closed: a stream ends when its events
+	// channel does, and that channel closes with the agent behind it.
+	m.wg.Wait()
+
 	slog.Info("manager shutdown complete", "processesClosed", len(procs))
 }
 

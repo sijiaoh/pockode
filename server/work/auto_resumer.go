@@ -75,6 +75,11 @@ type AutoResumer struct {
 	activationSeq uint64
 	maxRetries    int
 	settleDelay   time.Duration // delay before checking work status after process stop
+	// Tracks every follow-up goroutine so Stop can wait for the writes they make.
+	// spawnMu orders registration against cancellation: without it a follow-up
+	// scheduled just as Stop runs could add to wg after Stop began waiting.
+	spawnMu sync.Mutex
+	wg      sync.WaitGroup
 }
 
 // defaultSettleDelay is the time to wait after a process goes idle/ends before
@@ -98,9 +103,30 @@ func NewAutoResumer(workStore Store, maxRetries int) *AutoResumer {
 	}
 }
 
-// Stop cancels all pending goroutines (settle delays and in-flight sends).
+// Stop cancels all pending goroutines (settle delays and in-flight sends) and
+// waits for them to return, so that a stopped resumer is no longer writing to
+// the work store or sending messages into agent sessions.
 func (r *AutoResumer) Stop() {
+	r.spawnMu.Lock()
 	r.cancel()
+	r.spawnMu.Unlock()
+
+	r.wg.Wait()
+}
+
+// goFollowUp runs a delayed follow-up as a goroutine tracked by Stop.
+func (r *AutoResumer) goFollowUp(fn func()) {
+	r.spawnMu.Lock()
+	defer r.spawnMu.Unlock()
+	if r.ctx.Err() != nil {
+		return
+	}
+
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		fn()
+	}()
 }
 
 // orphanedWorkComment explains a stop nobody asked for. Background tasks are
@@ -228,7 +254,7 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 		activation := r.activations[sessionID]
 		r.retryMu.Unlock()
 		if !pending {
-			go r.handleProcessEnded(sessionID, activation)
+			r.goFollowUp(func() { r.handleProcessEnded(sessionID, activation) })
 		}
 		return
 	}
@@ -252,7 +278,7 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 		r.retryMu.Lock()
 		activation := r.activations[sessionID]
 		r.retryMu.Unlock()
-		go r.handleProcessEnded(sessionID, activation)
+		r.goFollowUp(func() { r.handleProcessEnded(sessionID, activation) })
 		return
 	}
 
@@ -271,7 +297,7 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 	activation := r.activations[sessionID]
 	r.retryMu.Unlock()
 
-	go r.handleAutoContinuation(sessionID, activation)
+	r.goFollowUp(func() { r.handleAutoContinuation(sessionID, activation) })
 }
 
 // settled waits out the settle delay and reports whether the lifecycle event
@@ -456,7 +482,7 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 		return
 	}
 
-	go r.handleParentReactivation(event.Work)
+	r.goFollowUp(func() { r.handleParentReactivation(event.Work) })
 }
 
 // NotifyStepDone sends the next-step prompt after an in-process step advance.
@@ -471,7 +497,7 @@ func (r *AutoResumer) NotifyStepDone(w Work) {
 	if r.getResolver() == nil || sp == nil || w.SessionID == "" || w.Status != StatusInProgress {
 		return
 	}
-	go r.sendStepAdvance(w, sp)
+	r.goFollowUp(func() { r.sendStepAdvance(w, sp) })
 }
 
 // NotifyReopen sends the reopen message after an in-process work_reopen.
@@ -479,7 +505,7 @@ func (r *AutoResumer) NotifyReopen(w Work) {
 	if r.getResolver() == nil || w.SessionID == "" {
 		return
 	}
-	go r.sendReopen(w)
+	r.goFollowUp(func() { r.sendReopen(w) })
 }
 
 // sendStepAdvance sends the next-step prompt to the agent session after a step

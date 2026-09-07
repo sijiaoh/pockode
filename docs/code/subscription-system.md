@@ -168,6 +168,14 @@ if changedPath != "" {
 
 **Rationale:** Directory listings need to update when files inside them change. Instead of requiring separate watches on both file and directory, FSWatcher automatically notifies parent directory subscribers.
 
+### Why Stop Waits Instead of Just Cancelling?
+
+Every watcher's `Stop` goes through `BaseWatcher.CancelAndWait`, which cancels the context *and* blocks until each loop started through `Go` has returned. Cancelling alone is the smaller implementation, and it is what the watchers did originally — as did `ProcessManager` and `AutoResumer`, both of which returned from teardown while their own goroutines were still running.
+
+The shortcut is hard to see as wrong from inside any one of those files: a cancelled context does stop the loop, just not before the caller moves on. It only reads as a bug once you look at what the caller does next. Stopping a worktree, deleting a session, or ending a test means the directory those goroutines write into is about to disappear, so anything outliving `Stop` writes into a tree already being torn down. That is how this surfaced — never as something a user could see, but as CI failing intermittently, when the event stream of a process that `Shutdown` had cancelled without waiting for wrote the session index into a `t.TempDir()` mid-cleanup.
+
+So teardown is synchronous on all three sides: watchers wait on their loops, the process manager on its event streams, the `AutoResumer` on its follow-ups. FSWatcher's debounce timers are the one deliberate exception — `time.AfterFunc` callbacks are not tracked, so `Stop` can return with one still in flight. They are exempt because of what they do rather than for convenience: they only notify subscribers, never write to a store, and `notifyPath` re-checks the context before it does even that.
+
 ## Frontend: useSubscription Hook
 
 ### Why Generation Counter?

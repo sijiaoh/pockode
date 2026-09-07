@@ -27,13 +27,13 @@ func NewWorkListWatcher(store work.Store) *WorkListWatcher {
 }
 
 func (w *WorkListWatcher) Start() error {
-	go w.eventLoop()
+	w.Go(w.eventLoop)
 	slog.Info("WorkListWatcher started")
 	return nil
 }
 
 func (w *WorkListWatcher) Stop() {
-	w.Cancel()
+	w.CancelAndWait()
 	slog.Info("WorkListWatcher stopped")
 }
 
