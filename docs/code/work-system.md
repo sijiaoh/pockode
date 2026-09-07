@@ -84,16 +84,33 @@ On creation (`server/work/store.go:157-193`):
 ### Six States
 
 ```
-open ──────────────► in_progress
-                         │
-              ┌──────────┼──────────┬──────────┐
-              │          │          │          │
-              ▼          ▼          ▼          ▼
-        needs_input   waiting   stopped    closed ─────► in_progress
-              │          │          │                       (via Reopen)
-              │          │          │
-              └──────────┴──────────┴─────► (can return to in_progress)
+                    ┌──────── live cluster ────────┐
+                    │  in_progress   needs_input   │
+open ──────────────►│         (all four mutually   │──────► closed
+                    │          reachable)          │          │
+                    │  waiting       stopped       │          ▼
+                    └──────────────────────────────┘     in_progress
+                                                          (via Reopen)
 ```
+
+**Only `open` and `closed` are gates.** The four live states reach each other
+freely, in both directions. They answer "might an agent session be running, and
+what is it doing" — and that answer comes from process events that go stale: a
+crashed CLI, an orphaned session, a dropped event. None of them says how far the
+work got; that is `CurrentStep`. Gating progress on them was how a work item
+that had merely gone `stopped` became impossible to advance or finish, locked
+for good.
+
+Two guards in `server/work/validation.go` say this directly, and there is
+deliberately no edge table beside them to drift out of sync:
+
+- `ValidateProgress` — may the agent move this work along (`step_done`,
+  `work_wait`, `work_needs_input`, stop, liveness sync)? Every live status
+  qualifies; `open` and `closed` do not, and each names its way in.
+- `ValidateStartable` — may a session be started for this work? Also admits
+  `open` (the fresh-start case) and rejects `in_progress`, so a running work is
+  never started twice — which is also what resolves concurrent `Claim`s to a
+  single winner.
 
 | State | Meaning | SessionID | CurrentStep |
 |-------|---------|-----------|-------------|
@@ -110,16 +127,34 @@ The API exposes intent methods rather than raw status updates. Each method encap
 
 | Method | Transition | Purpose |
 |--------|------------|---------|
-| `Start(id, sessionID)` | open/stopped/needs_input → in_progress | Launch AI session |
-| `Stop(id)` | in_progress/needs_input/waiting → stopped | Terminate session |
-| `StepDone(id, totalSteps)` | in_progress → in_progress/closed | Advance work step or close work |
-| `MarkNeedsInput(id)` | in_progress → needs_input | Pause for user input |
-| `MarkWaiting(id)` | in_progress → waiting | Pause for child work completion |
-| `Resume(id)` | needs_input → in_progress | Continue after user input |
-| `ResumeFromWaiting(id)` | waiting → in_progress | Continue after child completes |
-| `Reactivate(id)` | stopped → in_progress | Sync with running session |
+| `Start(id, sessionID)` | startable → in_progress | Launch AI session |
+| `Claim(id)` | startable → in_progress | Start plus atomic sessionID decision (a work that already owns a session is a restart and keeps it) |
+| `Stop(id)` | live → stopped | Terminate session |
+| `StepDone(id, totalSteps)` | live → in_progress/closed | Advance work step or close work |
+| `MarkNeedsInput(id)` | live → needs_input | Pause for user input |
+| `MarkWaiting(id)` | live → waiting | Pause for child work completion |
+| `MarkRunning(id)` | live → in_progress | Session is live again (user input, child closed, process detected running) |
 | `Reopen(id)` | closed → in_progress | Reopen a closed item to add children or continue |
 | `RollbackStart(id, wasRestart)` | in_progress → open/stopped | Undo failed start |
+
+"live" is any of `in_progress` / `needs_input` / `waiting` / `stopped`;
+"startable" is what `ValidateStartable` admits — `open` plus every live status
+but `in_progress`.
+
+A `StepDone` from a stale live status also repairs it back to `in_progress`: the
+agent calling the tool is proof its session runs, and the next-step prompt only
+reaches `in_progress` work.
+
+Re-setting a live status a work already holds is a deliberate no-op rather than
+a redundant write. Liveness signals repeat — the same session is reported running
+more than once — and re-announcing an unchanged status would wake every
+subscriber with a change event that carries no news.
+
+`RollbackStart` is the one method inside the cluster that still names a single
+source status. It undoes the `in_progress` a failed start left behind, so if the
+agent has already moved the work on, the kickoff did not fail cleanly and rolling
+back would clobber live state — most visibly on a restart, where the rollback to
+`stopped` would erase a `needs_input` the agent had just set.
 
 ### Waiting vs NeedsInput
 
@@ -130,7 +165,7 @@ Both `waiting` and `needs_input` pause the agent's work, but serve different pur
 | `needs_input` | Agent needs user confirmation or clarification | User sending a message |
 | `waiting` | Agent waiting for child work to complete | Child work closure, or user message |
 
-**Key difference**: `waiting` is used when a coordinator agent has created child tasks and wants to pause until they complete, while `needs_input` is used when the agent genuinely needs user input to proceed.
+**Key difference**: `waiting` is used when a coordinator agent has created child tasks and wants to pause until they complete, while `needs_input` is used when the agent genuinely needs user input to proceed. Both are recorded through `MarkNeedsInput` / `MarkWaiting` and left through `MarkRunning`, which is one method rather than three because "the session is live again" is one fact regardless of what it was waiting on.
 
 Both states can be resumed by user messages, allowing users to interrupt the wait if needed.
 
@@ -285,8 +320,8 @@ When an AI session's state changes, sync the work status:
 | running | stopped → in_progress | User message to stopped session |
 | idle (first) | (ignored) | Initial process startup |
 | idle (normal) | in_progress → in_progress | Send auto-continuation |
-| interrupted | in_progress/waiting → stopped | Turn aborted (user interrupt, denied permission, replaced turn) |
-| ended | in_progress/waiting → stopped | Process exited |
+| interrupted | in_progress/needs_input/waiting → stopped | Turn aborted (user interrupt, denied permission, replaced turn) |
+| ended | in_progress/needs_input/waiting → stopped | Process exited |
 
 An aborted turn stops the work instead of continuing it, which is what makes a
 denied permission during an automated run end the run rather than nudge the agent

@@ -86,7 +86,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "work_start",
-		Description: "Start a work item. Transitions it from open (or stopped) to in_progress and launches an agent session.",
+		Description: "Start a work item: launches an agent session and transitions the item to in_progress. A work item that already has a session is restarted and keeps its chat history.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
@@ -97,7 +97,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "work_needs_input",
-		Description: "Pause a work item to wait for user input. Transitions from in_progress to needs_input. Use when the agent needs user confirmation or clarification before continuing.",
+		Description: "Pause a work item to wait for user input, moving it to needs_input. Use when the agent needs user confirmation or clarification before continuing.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
@@ -120,7 +120,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "work_wait",
-		Description: "Pause a work item to wait for child work to complete. Transitions from in_progress to waiting. Use when the agent has started child tasks and needs to wait for them to finish before continuing.",
+		Description: "Pause a work item to wait for child work to complete, moving it to waiting. Use when the agent has started child tasks and needs to wait for them to finish before continuing.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
@@ -131,7 +131,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "step_done",
-		Description: "Mark current work progress as complete. The work item must be in_progress status. Work items advance CurrentStep when more steps remain, otherwise close. Use work_wait, not step_done, to wait for child work.",
+		Description: "Mark current work progress as complete. Work items advance CurrentStep when more steps remain, otherwise close. Use work_wait, not step_done, to wait for child work.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{

@@ -330,7 +330,7 @@ func (r *AutoResumer) handleProcessRunning(sessionID string) {
 		return
 	}
 
-	if err := r.workStore.Reactivate(r.ctx, w.ID); err != nil {
+	if err := r.workStore.MarkRunning(r.ctx, w.ID); err != nil {
 		if r.ctx.Err() == nil {
 			slog.Warn("failed to reactivate stopped work on process running", "workId", w.ID, "error", err)
 		}
@@ -560,7 +560,7 @@ func (r *AutoResumer) handleParentReactivation(child Work) {
 
 	// Handle waiting parent: transition to in_progress
 	if parent.Status == StatusWaiting {
-		if err := r.workStore.ResumeFromWaiting(r.ctx, parent.ID); err != nil {
+		if err := r.workStore.MarkRunning(r.ctx, parent.ID); err != nil {
 			if r.ctx.Err() != nil {
 				return
 			}

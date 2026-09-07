@@ -15,40 +15,34 @@ The workflow engine manages work item lifecycles through status transitions and 
 
 ## Status Transitions
 
-```
-                    ┌──────────────┐
-          ┌────────►│  in_progress │◄───────────┐
-          │         └┬───┬───┬──┬─┘             │
-          │          │   │   │  │                │
-          │          ▼   │   ▼  ▼                │
-       ┌──┴──┐ ┌───────┐ │ ┌────────────┐ ┌─────┴──┐
-       │open │ │waiting│ │ │needs_input │ │stopped │
-       └─────┘ └───────┘ │ └────────────┘ └────────┘
-                         │
-                         ▼
-                    ┌────────┐
-                    │closed  │
-                    └────────┘
-```
+`in_progress`, `needs_input`, `waiting` and `stopped` — the **live** statuses —
+form one mutually reachable cluster: they describe process liveness, not
+progress (progress is `CurrentStep`). Only `open` and `closed` gate anything, so
+a stale liveness status can never lock a work item out of being advanced or
+finished. See [work-system.md](../code/work-system.md#state-machine) for the
+state diagram and for why the cluster is shaped that way.
 
 ### Transition Table
 
 | From           | To             | Trigger                                    |
 | -------------- | -------------- | ------------------------------------------ |
-| `open`         | `in_progress`  | `Store.Claim` (fresh start)                |
+| `open`         | `in_progress`  | `Store.Claim` (fresh start — no session yet) |
 | `in_progress`  | `open`         | `Store.RollbackStart` (fresh start failed) |
-| `in_progress`  | `needs_input`  | `Store.MarkNeedsInput`                     |
-| `in_progress`  | `waiting`      | `Store.MarkWaiting`                         |
-| `in_progress`  | `stopped`      | `Store.Stop` (process ended/interrupted)   |
-| `in_progress`  | `closed`       | `Store.StepDone`                           |
-| `needs_input`  | `in_progress`  | `Store.Resume` (user confirms)             |
-| `needs_input`  | `stopped`      | `Store.Stop` (process ended while paused)  |
-| `waiting`      | `in_progress`  | `Store.ResumeFromWaiting` (child completes or user message) |
-| `waiting`      | `stopped`      | `Store.Stop` (process ended while waiting) |
-| `stopped`      | `in_progress`  | `Store.Claim` (restart) or `Store.Reactivate` |
-| `closed`       | `in_progress`  | `Store.Reopen` (reopen closed item) |
+| `in_progress`  | `stopped`      | `Store.RollbackStart` (restart failed)     |
+| live           | `needs_input`  | `Store.MarkNeedsInput`                     |
+| live           | `waiting`      | `Store.MarkWaiting`                        |
+| live           | `stopped`      | `Store.Stop` (process ended/interrupted)   |
+| live           | `in_progress`  | `Store.MarkRunning` (user confirms, child completes, or process detected running) |
+| paused         | `in_progress`  | `Store.Claim` (restart — the work already owns a session, which is reused) |
+| live           | `in_progress`  | `Store.StepDone` (steps remain — the advance also repairs a stale status) |
+| live           | `closed`       | `Store.StepDone` (no steps remain)         |
+| `closed`       | `in_progress`  | `Store.Reopen` (reopen closed item)        |
 
-> Source: `server/work/validation.go` — `validTransitions` map.
+"paused" is live minus `in_progress`: a work that is already running must not be
+started a second time, which is what makes concurrent `Claim`s resolve to one
+winner.
+
+> Source: `server/work/validation.go` — `ValidateProgress` (may the agent move this work along?) and `ValidateStartable` (may a session be started for it?). The code holds no transition table of its own: with the live statuses mutually reachable, those two predicates say everything an edge list would, and a second copy would only be one more thing to keep in sync. The table above enumerates the *triggers*, which the predicates do not name.
 
 ### SessionID Management
 
@@ -56,7 +50,8 @@ SessionID changes are encapsulated in intent-based Store methods:
 
 - **`Start`** — sets a new sessionID (fresh start or restart)
 - **`RollbackStart`** — clears sessionID on fresh-start failure; preserves on restart failure (→ `stopped`)
-- **`Reactivate`** — preserves existing sessionID (used for process-running detection)
+- **`Claim`** — reuses the work's existing sessionID when it has one (a restart preserves chat history); generates a fresh one otherwise
+- **`MarkRunning`** — preserves existing sessionID (used for process-running detection and resume-from-pause)
 - All other transitions leave sessionID unchanged
 
 > Source: `server/work/store.go` — intent-based transition methods.
@@ -77,12 +72,11 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 
 `HandleProcessStateChange` syncs work status with process lifecycle:
 
-| Process State | Work Action |
-|---|---|
-| `running` | Reactivate `stopped` work → `in_progress` (handles user sending a message directly to a stopped session) |
-| `idle` (not initial, not interrupted) | After settle delay, send auto-continuation if still `in_progress` |
-| `idle` (interrupted) | After settle delay, stop work → `stopped` |
-| `ended` | After settle delay, stop `in_progress`/`needs_input` work → `stopped` |
+The per-state mapping is tabulated in
+[work-system.md](../code/work-system.md#triggers). It used to be repeated here
+too, which is how the two copies came to disagree with each other and with the
+code; what follows is only the auto-continuation policy, which this document
+owns.
 
 **Auto-continuation details:**
 1. Wait **2 seconds** (settle delay) — lets an in-flight `step_done`'s in-process retry reset land first.
@@ -98,7 +92,7 @@ The `AutoResumer` listens to work change events and process state changes. It ha
 **Flow:**
 1. Child transitions to `closed`.
 2. Look up parent. If parent is `waiting` with a non-empty `sessionID`:
-   - `ResumeFromWaiting` transitions parent to `in_progress` and sends a child completion message.
+   - `MarkRunning` transitions parent to `in_progress` and sends a child completion message.
 
 **Purpose:** Stories (coordinators) are automatically woken up when a child task completes, so they can review results and continue orchestration.
 

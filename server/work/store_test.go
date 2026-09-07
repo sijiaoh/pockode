@@ -254,27 +254,42 @@ func TestClaim_FreshStartGeneratesSession(t *testing.T) {
 	}
 }
 
+// A work that already owns a session is a restart from whichever live status it
+// happens to sit in, so its chat history survives.
 func TestClaim_RestartReusesSession(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-
-	first, _, err := s.Claim(context.Background(), story.ID)
-	if err != nil {
-		t.Fatalf("first Claim: %v", err)
-	}
-	if err := s.Stop(context.Background(), story.ID); err != nil {
-		t.Fatalf("Stop: %v", err)
+	tests := []struct {
+		name  string
+		pause func(*FileStore, string) error
+	}{
+		{"stopped", func(s *FileStore, id string) error { return s.Stop(context.Background(), id) }},
+		{"needs_input", func(s *FileStore, id string) error { return s.MarkNeedsInput(context.Background(), id) }},
+		{"waiting", func(s *FileStore, id string) error { return s.MarkWaiting(context.Background(), id) }},
 	}
 
-	again, restart, err := s.Claim(context.Background(), story.ID)
-	if err != nil {
-		t.Fatalf("restart Claim: %v", err)
-	}
-	if !restart {
-		t.Error("restart = false, want true for stopped → in_progress")
-	}
-	if again.SessionID != first.SessionID {
-		t.Errorf("session = %q, want reuse of %q", again.SessionID, first.SessionID)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			story := createStory(t, s, "S")
+
+			first, _, err := s.Claim(context.Background(), story.ID)
+			if err != nil {
+				t.Fatalf("first Claim: %v", err)
+			}
+			if err := tt.pause(s, story.ID); err != nil {
+				t.Fatalf("pause to %s: %v", tt.name, err)
+			}
+
+			again, restart, err := s.Claim(context.Background(), story.ID)
+			if err != nil {
+				t.Fatalf("restart Claim: %v", err)
+			}
+			if !restart {
+				t.Errorf("restart = false, want true for %s → in_progress", tt.name)
+			}
+			if again.SessionID != first.SessionID {
+				t.Errorf("session = %q, want reuse of %q", again.SessionID, first.SessionID)
+			}
+		})
 	}
 }
 
@@ -501,7 +516,7 @@ func TestRollbackStart_FreshStartRollsBackToOpen(t *testing.T) {
 	}
 }
 
-func TestReactivate_ClosedRejected(t *testing.T) {
+func TestMarkRunning_ClosedRejected(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -512,31 +527,43 @@ func TestReactivate_ClosedRejected(t *testing.T) {
 		t.Fatalf("status = %q, want %q", got.Status, StatusClosed)
 	}
 
-	// Reactivate rejects closed work (must use Reopen instead)
-	if err := s.Reactivate(context.Background(), story.ID); err == nil {
-		t.Fatal("expected error for Reactivate on closed work")
+	// MarkRunning rejects closed work (must use Reopen instead)
+	if err := s.MarkRunning(context.Background(), story.ID); err == nil {
+		t.Fatal("expected error for MarkRunning on closed work")
 	}
 }
 
 // --- stopped / closed restart transitions ---
 
-func TestTransition_StoppedToInProgress(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	startWork(t, s, story.ID)
-
-	// in_progress → stopped
-	if err := s.Stop(context.Background(), story.ID); err != nil {
-		t.Fatalf("in_progress → stopped: %v", err)
+// "The session is live again" is one fact however the work was paused, so one
+// method covers all three sources.
+func TestMarkRunning_FromAnyLiveStatus(t *testing.T) {
+	tests := []struct {
+		name  string
+		pause func(*FileStore, string) error
+	}{
+		{"stopped", func(s *FileStore, id string) error { return s.Stop(context.Background(), id) }},
+		{"needs_input", func(s *FileStore, id string) error { return s.MarkNeedsInput(context.Background(), id) }},
+		{"waiting", func(s *FileStore, id string) error { return s.MarkWaiting(context.Background(), id) }},
+		{"in_progress", func(*FileStore, string) error { return nil }},
 	}
 
-	// stopped → in_progress (restart via Reactivate)
-	if err := s.Reactivate(context.Background(), story.ID); err != nil {
-		t.Fatalf("stopped → in_progress: %v", err)
-	}
-	got := getWork(t, s, story.ID)
-	if got.Status != StatusInProgress {
-		t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			story := createStory(t, s, "S")
+			startWork(t, s, story.ID)
+			if err := tt.pause(s, story.ID); err != nil {
+				t.Fatalf("pause to %s: %v", tt.name, err)
+			}
+
+			if err := s.MarkRunning(context.Background(), story.ID); err != nil {
+				t.Fatalf("%s → in_progress: %v", tt.name, err)
+			}
+			if got := getWork(t, s, story.ID); got.Status != StatusInProgress {
+				t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
+			}
+		})
 	}
 }
 
@@ -633,22 +660,6 @@ func TestTransition_InProgressToNeedsInput(t *testing.T) {
 	}
 }
 
-func TestTransition_NeedsInputToInProgress(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	startWork(t, s, story.ID)
-
-	s.MarkNeedsInput(context.Background(), story.ID)
-
-	if err := s.Resume(context.Background(), story.ID); err != nil {
-		t.Fatalf("needs_input → in_progress: %v", err)
-	}
-	got := getWork(t, s, story.ID)
-	if got.Status != StatusInProgress {
-		t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
-	}
-}
-
 func TestTransition_NeedsInputToStopped(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
@@ -685,22 +696,6 @@ func TestTransition_InProgressToWaiting(t *testing.T) {
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusWaiting {
 		t.Errorf("status = %q, want %q", got.Status, StatusWaiting)
-	}
-}
-
-func TestTransition_WaitingToInProgress(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	startWork(t, s, story.ID)
-
-	s.MarkWaiting(context.Background(), story.ID)
-
-	if err := s.ResumeFromWaiting(context.Background(), story.ID); err != nil {
-		t.Fatalf("waiting → in_progress: %v", err)
-	}
-	got := getWork(t, s, story.ID)
-	if got.Status != StatusInProgress {
-		t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
 	}
 }
 
@@ -1586,24 +1581,12 @@ func TestStepDone_StoryWithPendingChildrenClosesWhenNoSteps(t *testing.T) {
 	}
 }
 
-func TestStepDone_RejectsNonInProgressStatus(t *testing.T) {
+func TestStepDone_RejectsUnstartedAndClosedStatus(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(*FileStore, string)
 	}{
 		{"open", func(*FileStore, string) {}},
-		{"stopped", func(s *FileStore, id string) {
-			startWork(t, s, id)
-			s.Stop(context.Background(), id)
-		}},
-		{"needs_input", func(s *FileStore, id string) {
-			startWork(t, s, id)
-			s.MarkNeedsInput(context.Background(), id)
-		}},
-		{"waiting", func(s *FileStore, id string) {
-			startWork(t, s, id)
-			s.MarkWaiting(context.Background(), id)
-		}},
 		{"closed", func(s *FileStore, id string) {
 			doneWork(t, s, id)
 		}},
@@ -1620,6 +1603,137 @@ func TestStepDone_RejectsNonInProgressStatus(t *testing.T) {
 				t.Fatalf("expected error for StepDone on %s work", tt.name)
 			}
 		})
+	}
+}
+
+// A live status is only a claim about the agent process, and it goes stale
+// (crashed process, missed event). It must never lock a work item: the agent
+// reporting progress proves it is running, so the advance also repairs status.
+func TestStepDone_AdvancesFromStaleLiveStatus(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*FileStore, string)
+	}{
+		{"stopped", func(s *FileStore, id string) {
+			if err := s.Stop(context.Background(), id); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+		}},
+		{"needs_input", func(s *FileStore, id string) {
+			if err := s.MarkNeedsInput(context.Background(), id); err != nil {
+				t.Fatalf("MarkNeedsInput: %v", err)
+			}
+		}},
+		{"waiting", func(s *FileStore, id string) {
+			if err := s.MarkWaiting(context.Background(), id); err != nil {
+				t.Fatalf("MarkWaiting: %v", err)
+			}
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			story := createStory(t, s, "S")
+			startWork(t, s, story.ID)
+			tt.setup(s, story.ID)
+
+			hasMore, err := s.StepDone(context.Background(), story.ID, 3)
+			if err != nil {
+				t.Fatalf("StepDone from %s: %v", tt.name, err)
+			}
+			if !hasMore {
+				t.Fatal("hasMoreSteps = false, want true")
+			}
+
+			got := getWork(t, s, story.ID)
+			if got.CurrentStep != 1 {
+				t.Errorf("CurrentStep = %d, want 1", got.CurrentStep)
+			}
+			if got.Status != StatusInProgress {
+				t.Errorf("status = %q, want %q", got.Status, StatusInProgress)
+			}
+		})
+	}
+}
+
+func TestStepDone_ClosesFromStaleLiveStatus(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+	if err := s.Stop(context.Background(), story.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	hasMore, err := s.StepDone(context.Background(), story.ID, 1)
+	if err != nil {
+		t.Fatalf("StepDone from stopped: %v", err)
+	}
+	if hasMore {
+		t.Fatal("hasMoreSteps = true, want false")
+	}
+
+	got := getWork(t, s, story.ID)
+	if got.Status != StatusClosed {
+		t.Errorf("status = %q, want %q", got.Status, StatusClosed)
+	}
+}
+
+// work_wait / work_needs_input must not be lockable by a stale stopped either:
+// the agent reporting what it is waiting on is running, whatever status says.
+func TestLiveStatusSetters_AcceptStoppedSource(t *testing.T) {
+	tests := []struct {
+		name string
+		mark func(*FileStore, string) error
+		want WorkStatus
+	}{
+		{"needs_input", func(s *FileStore, id string) error { return s.MarkNeedsInput(context.Background(), id) }, StatusNeedsInput},
+		{"waiting", func(s *FileStore, id string) error { return s.MarkWaiting(context.Background(), id) }, StatusWaiting},
+		{"running", func(s *FileStore, id string) error { return s.MarkRunning(context.Background(), id) }, StatusInProgress},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			story := createStory(t, s, "S")
+			startWork(t, s, story.ID)
+			if err := s.Stop(context.Background(), story.ID); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+
+			if err := tt.mark(s, story.ID); err != nil {
+				t.Fatalf("stopped → %s: %v", tt.want, err)
+			}
+			if got := getWork(t, s, story.ID); got.Status != tt.want {
+				t.Errorf("status = %q, want %q", got.Status, tt.want)
+			}
+		})
+	}
+}
+
+// Liveness signals repeat, so re-asserting the status a work already has must
+// succeed without emitting a change event listeners would treat as news.
+func TestLiveStatusSetters_RepeatIsSilentNoop(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	startWork(t, s, story.ID)
+	if err := s.Stop(context.Background(), story.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	var events []ChangeEvent
+	s.AddOnChangeListener(listenerFunc(func(e ChangeEvent) {
+		events = append(events, e)
+	}))
+
+	if err := s.Stop(context.Background(), story.ID); err != nil {
+		t.Fatalf("repeated Stop: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("got %d change events, want 0", len(events))
+	}
+	if got := getWork(t, s, story.ID); got.Status != StatusStopped {
+		t.Errorf("status = %q, want %q", got.Status, StatusStopped)
 	}
 }
 
