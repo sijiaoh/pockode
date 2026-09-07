@@ -75,6 +75,11 @@ type Session interface {
 	// A turn ends with exactly one event whose type AwaitsUserInput: done when it
 	// completed, error when it failed, interrupted when it was aborted, or a
 	// permission/question request when it is blocked on the user.
+	//
+	// Nothing is promised about how long a turn takes or how often it produces
+	// events. A turn can span a wait for background work, over which no event
+	// arrives at all for as long as that work runs — so silence must never be
+	// read as an ending (see BackgroundWaiter).
 	Events() <-chan AgentEvent
 
 	// SendMessage sends a new message to the agent. Callers may send before the
@@ -95,4 +100,22 @@ type Session interface {
 
 	// Close terminates the agent process and releases resources.
 	Close()
+}
+
+// BackgroundWaiter is implemented by sessions whose turn can be held open while
+// no events flow at all.
+//
+// A Claude turn that started a background task ends with a result frame the CLI
+// later continues from on its own; Pockode swallows that ending so the turn
+// reads as one long thought. Nothing is emitted for the length of the wait, so
+// anything that measures liveness by events alone — the idle reaper — would
+// conclude the process is abandoned and kill it, taking the background tasks
+// with it.
+//
+// Optional: agents without the concept simply do not implement it.
+type BackgroundWaiter interface {
+	// WaitingForBackgroundWork reports whether the session is currently holding
+	// a turn open for background work. It is always eventually false: the wait
+	// has a budget, after which the turn ends the ordinary way.
+	WaitingForBackgroundWork() bool
 }

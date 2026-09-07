@@ -52,6 +52,12 @@ type StepProvider interface {
 //
 // Step advance / reopen follow-ups: NotifyStepDone and NotifyReopen send the
 // next-step and reopen prompts after the MCP API mutates a work item in-process.
+//
+// None of the message-driven senders (step advance, reopen, child closure) check
+// whether the session is holding a turn open for background work; they send
+// immediately, exactly as a user typing during that wait would. That is a
+// deliberate trade-off, not an oversight — see docs/code/work-system.md,
+// "Follow-ups During a Background Wait".
 type AutoResumer struct {
 	workStore    Store
 	resolver     atomic.Pointer[SenderResolver]
@@ -97,6 +103,13 @@ func (r *AutoResumer) Stop() {
 	r.cancel()
 }
 
+// orphanedWorkComment explains a stop nobody asked for. Background tasks are
+// called out because they are the part a user is least likely to expect to have
+// died: they were started to outlive a turn, and they do — but not the process.
+const orphanedWorkComment = "Stopped automatically: the Pockode server restarted while this work was still open. " +
+	"No agent process survives a restart, so anything that was running for this work — including background tasks — " +
+	"is gone and no result is coming from it. Reopen the work to continue it."
+
 // StopOrphanedWork transitions all in_progress, needs_input, and waiting work items to stopped.
 // Call this at server startup before any sessions are created, so that work
 // items left running from a previous server run are properly marked.
@@ -113,8 +126,13 @@ func (r *AutoResumer) StopOrphanedWork() {
 		}
 		if err := r.stopWork(w.ID); err != nil {
 			slog.Warn("failed to stop orphaned work", "workId", w.ID, "error", err)
-		} else {
-			slog.Info("stopped orphaned work on startup", "workId", w.ID, "sessionId", w.SessionID)
+			continue
+		}
+		slog.Info("stopped orphaned work on startup", "workId", w.ID, "sessionId", w.SessionID)
+		// Say why, or the work is simply found stopped with no explanation and
+		// no hint that whatever the agent had running is gone too.
+		if _, err := r.workStore.AddComment(r.ctx, w.ID, orphanedWorkComment); err != nil {
+			slog.Warn("failed to explain why orphaned work was stopped", "workId", w.ID, "error", err)
 		}
 	}
 }

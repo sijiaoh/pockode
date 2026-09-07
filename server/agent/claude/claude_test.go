@@ -24,6 +24,16 @@ func parseTestLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []a
 }
 
 func parseTestLineWithDecline(log *slog.Logger, line []byte, pendingRequests *sync.Map, decline declineFunc) []agent.AgentEvent {
+	return parseTestLineFull(log, line, pendingRequests, &backgroundTaskTracker{}, decline)
+}
+
+// parseTestLineWithTracker feeds lines through a caller-owned background task
+// tracker, so a test can replay a whole sequence against one CLI process.
+func parseTestLineWithTracker(log *slog.Logger, line []byte, backgroundTasks *backgroundTaskTracker) []agent.AgentEvent {
+	return parseTestLineFull(log, line, &sync.Map{}, backgroundTasks, func(string, string) {})
+}
+
+func parseTestLineFull(log *slog.Logger, line []byte, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc) []agent.AgentEvent {
 	if len(line) == 0 {
 		return nil
 	}
@@ -31,7 +41,7 @@ func parseTestLineWithDecline(log *slog.Logger, line []byte, pendingRequests *sy
 	if err := json.Unmarshal(line, &event); err != nil {
 		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
 	}
-	return parseLine(log, line, event, pendingRequests, decline)
+	return parseLine(log, line, event, pendingRequests, backgroundTasks, decline)
 }
 
 // observeLine decodes a raw line and forwards it to observe (test helper).

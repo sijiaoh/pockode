@@ -390,6 +390,79 @@ step_done ──► store.StepDone()
 
 The reopen message instructs the agent to review its previous work and determine what additional changes are needed, then call `step_done` when complete.
 
+### Background Waits and the Work Item
+
+A Claude turn that started a background task goes quiet for as long as the task
+runs, and the adapter swallows the ending the CLI emits meanwhile
+([agent-integration.md](agent-integration.md#background-waits)). Nothing about
+that reaches the work layer, and nothing should: the work item stays
+`in_progress` because that is simply true — the turn is still under way and the
+job is not done.
+
+Auto-continuation is not exempted from the wait; it is never triggered in the
+first place. Trigger A fires on process state changes, and with no
+`AwaitsUserInput` event the session never leaves `running`, so
+`handleAutoContinuation` does not run, no nudge is sent, and `retries` does not
+move. This is the same code path a long tool call already takes, which is why a
+wait of any length needs no work state of its own.
+
+The two ways a wait ends both land back on existing behaviour:
+
+- **The fallback budget runs out.** The adapter delivers the ending it held, the
+  session goes idle, and the AutoResumer runs the ordinary auto-continuation it
+  would have run when the wait began — except the agent also receives the
+  explanation queued by the adapter, so the nudge does not read as an unexplained
+  demand to continue.
+- **The process dies during the wait.** `ProcessEndedEvent` moves the work to
+  `stopped` through Trigger A, as for any other death. A death nobody is left to
+  observe — a server restart — reaches the same state by the other route,
+  `StopOrphanedWork` at startup, which leaves a comment on each work it stops:
+  otherwise the user comes back to a work stopped for no stated reason, with the
+  background tasks it was waiting for gone too.
+
+### Follow-ups During a Background Wait
+
+During a wait the CLI has no active turn of its own, so any message Pockode sends
+opens a new one immediately.
+
+Only `handleAutoContinuation` is gated by the swallowing, because it is driven by
+the session going idle. Every other send is message-driven and reaches the CLI
+regardless of process state; three of them can land on an agent's *own* waiting
+session: step advance, reopen, and child-closure reactivation. (The worktree
+starter's kickoff and restart are unconditional too, but they target a work being
+started rather than a session already mid-wait.)
+
+**These senders send immediately and do not wait for the background wait to
+finish.** The alternative — queueing them until the wait ends — was considered
+and rejected:
+
+- **It would not work for `step_done`, the most likely of the three.** The MCP
+  handler calls `NotifyStepDone` from inside the tool call, i.e. while the turn
+  that invoked `step_done` is still running. The ending has not been swallowed
+  yet and the wait is not armed, so a gate on "is a wait in progress" never sees
+  it. The CLI simply queues the message and starts it the moment the turn ends.
+- **The user is not gated either.** `chat.Client` has no state-based block, so a
+  user can type during the wait and get a new turn the same way. A system-origin
+  message travels the identical path; deferring only those would be an
+  inconsistency that buys nothing.
+- **The interleave is visible to the agent, not silent.** The CLI reports the
+  agent's own live background tasks and delivers the completion notification into
+  whatever turn is running, so the model can see it still has work pending and
+  check it with `BashOutput`.
+- **Nothing downstream breaks.** The injected turn's events push the fallback
+  deadline out, its ending is swallowed again while the task set is still
+  non-empty, and it ends the wait exactly when the set has drained. The session
+  stays `running`; no spurious idle, nudge, or retry accounting.
+- **Deferring costs more than it saves.** The queue would have to survive process
+  death and server restart or lose the message, and would hold it for up to the
+  fallback budget (30–120 minutes). A reopen or child-done that produces nothing
+  for two hours is a silent stall — exactly what "no silent failures" forbids —
+  traded against a context interleave the agent can see and handle.
+
+If the interleave ever does prove to confuse models, the fix belongs at the
+message itself (say that a background task is still pending) rather than in a
+host-side deferral queue.
+
 ### Per-Worktree Sender Routing
 
 Every follow-up the AutoResumer sends (auto-continuation, step-advance, reopen,
