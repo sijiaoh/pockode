@@ -2,7 +2,5 @@ packages:
   - "packages/*"
   - "web"
   - "web-cluster"
-allowBuilds:
-  esbuild: set this to true or false
 onlyBuiltDependencies:
   - esbuild
