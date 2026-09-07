@@ -15,9 +15,9 @@ const (
 	// WebSocket, and also the window a keepalive ping has to be answered. It
 	// must stay well above the time needed to drain the frames already queued
 	// ahead of a ping, otherwise a merely slow uplink reads as a dead one.
-	// The cloud sets the same budget for its own direction
-	// (server/relay/tunnel.go in pockode-cloud); the two are independent, each
-	// side only probes the liveness of the link as it sees it.
+	// The cloud relay sets the same budget for its own direction; the two are
+	// independent, each side only probes the liveness of the link as it sees
+	// it.
 	tunnelWriteTimeout      = 30 * time.Second
 	tunnelKeepAliveInterval = 30 * time.Second
 

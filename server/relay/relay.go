@@ -15,9 +15,8 @@ import (
 )
 
 // tunnelCompression negotiates permessage-deflate on the relay uplink. It must
-// match the cloud's AcceptOptions (server/relay/ws.go in pockode-cloud), which
-// is where the reasoning for context takeover lives: the weaker of the two
-// offers wins, and it wins for both directions.
+// match the cloud relay's AcceptOptions: the weaker of the two offers wins,
+// and it wins for both directions.
 //
 // Context takeover retains a flate.Writer for the life of the connection —
 // one per pockode process here, but one per connected server on the cloud,

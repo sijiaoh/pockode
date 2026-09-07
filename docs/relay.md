@@ -37,7 +37,7 @@ Relay Server (cloud)    ◀── outbound WSS (yamux) ──  User PC
 2. PC opens an outbound WebSocket to `wss://<subdomain>.<relay_server>/relay` (NAT-friendly), carrying `Authorization: Bearer <relay_token>`. The cloud verifies the token before accepting the upgrade
 3. Past the 101 the connection is nothing but a yamux session. The PC runs `http.Server.Serve(session)` — `*yamux.Session` is a `net.Listener`
 4. Mobile sends an HTTPS request to `<subdomain>.relay.example.com`
-5. The cloud's `httputil.ReverseProxy` opens **one yamux stream** for that request and forwards it
+5. The cloud's reverse proxy opens **one yamux stream** for that request and forwards it
 6. The PC serves the stream as an ordinary HTTP connection and reverse-proxies it to the local backend (`/api`, `/ws`, `/health`) or frontend (everything else, `RELAY_FRONTEND_PORT` in dev)
 7. The response streams back over the same stream
 
