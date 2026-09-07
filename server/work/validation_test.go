@@ -2,31 +2,52 @@ package work
 
 import "testing"
 
-// --- validNextStatuses ---
+// --- status guards ---
 
-func Test_validNextStatuses(t *testing.T) {
+func TestValidateProgress(t *testing.T) {
 	tests := []struct {
-		from     WorkStatus
-		expected []WorkStatus
+		status  WorkStatus
+		allowed bool
 	}{
-		{StatusOpen, []WorkStatus{StatusInProgress}},
-		{StatusInProgress, []WorkStatus{StatusOpen, StatusNeedsInput, StatusWaiting, StatusStopped, StatusClosed}},
-		{StatusNeedsInput, []WorkStatus{StatusInProgress, StatusStopped}},
-		{StatusWaiting, []WorkStatus{StatusInProgress, StatusStopped}},
-		{StatusStopped, []WorkStatus{StatusInProgress}},
-		{StatusClosed, []WorkStatus{}},
+		{StatusOpen, false},
+		{StatusInProgress, true},
+		{StatusNeedsInput, true},
+		{StatusWaiting, true},
+		{StatusStopped, true},
+		{StatusClosed, false},
 	}
 
 	for _, tt := range tests {
-		next := validNextStatuses(tt.from)
-		if len(next) != len(tt.expected) {
-			t.Errorf("validNextStatuses(%s) = %v, want %v", tt.from, next, tt.expected)
-			continue
+		err := ValidateProgress(tt.status)
+		if tt.allowed && err != nil {
+			t.Errorf("ValidateProgress(%s) = %v, want nil", tt.status, err)
 		}
-		for i, s := range next {
-			if s != tt.expected[i] {
-				t.Errorf("validNextStatuses(%s)[%d] = %s, want %s", tt.from, i, s, tt.expected[i])
-			}
+		if !tt.allowed && err == nil {
+			t.Errorf("ValidateProgress(%s) = nil, want error", tt.status)
+		}
+	}
+}
+
+func TestValidateStartable(t *testing.T) {
+	tests := []struct {
+		status  WorkStatus
+		allowed bool
+	}{
+		{StatusOpen, true},
+		{StatusInProgress, false}, // already running; must not start twice
+		{StatusNeedsInput, true},
+		{StatusWaiting, true},
+		{StatusStopped, true},
+		{StatusClosed, false},
+	}
+
+	for _, tt := range tests {
+		err := ValidateStartable(tt.status)
+		if tt.allowed && err != nil {
+			t.Errorf("ValidateStartable(%s) = %v, want nil", tt.status, err)
+		}
+		if !tt.allowed && err == nil {
+			t.Errorf("ValidateStartable(%s) = nil, want error", tt.status)
 		}
 	}
 }
