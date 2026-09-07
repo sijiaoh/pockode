@@ -51,10 +51,13 @@ const (
 	// MaxFileSize is the ceiling on the content a single file.get may carry.
 	// Above it the file is described but never read: the whole file is held in
 	// memory, base64 inflates it by 4/3, and the JSON response leaves as one
-	// WebSocket message. Over a relay tunnel that write holds the shared
-	// connection lock until it finishes, so a few megabytes stall every other
-	// stream and can outlast the keepalive — the ceiling is about the transport
-	// as much as about memory.
+	// WebSocket message. A connection carries one message at a time, so a few
+	// megabytes stall every request already in flight on it — the ceiling is
+	// about that connection as much as about memory.
+	//
+	// The blocking is this connection's own, not the relay's: over a tunnel
+	// /ws gets a yamux stream to itself and yamux frames what it writes, so
+	// other streams keep moving. Whole files go over HTTP; see docs/file.md.
 	MaxFileSize = 2 << 20 // 2 MiB
 
 	// http.DetectContentType inspects no more than this many bytes.

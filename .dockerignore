@@ -1,10 +1,10 @@
 .git/
 .pnpm-store/
-# Every workspace member has its own, and pnpm's are trees of symlinks into a
-# store that does not exist in the image: copying one over the install the
-# frontend stage just did would break it.
-**/node_modules/
 **/dist/
+# Globbed, not just web/: every workspace member has its own, and pnpm's are
+# trees of symlinks into a store that does not exist in the image, so copying
+# one over the install the frontend stage just did would break it.
+**/node_modules/
 tmp/
 
 server/tmp/
