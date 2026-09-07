@@ -1,15 +1,27 @@
 # Stage 1: Build frontend
 FROM node:22.13.0-alpine AS frontend-builder
 
-WORKDIR /app/web
+WORKDIR /app
 RUN npm install -g pnpm@10
-COPY web/package.json web/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
-COPY web/ ./
+
+# Installed from the workspace root, not from web/: web depends on
+# @pockode/shared through pnpm-workspace.yaml, and only the root lockfile
+# describes how that resolves. Every member's manifest has to be present or
+# --frozen-lockfile calls the lockfile stale for the ones it cannot find, so the
+# manifests are copied on their own first and the sources only afterwards —
+# editing a component must not invalidate the install layer.
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY packages/shared/package.json ./packages/shared/
+COPY web/package.json ./web/
+COPY web-cluster/package.json ./web-cluster/
+RUN pnpm install --frozen-lockfile --filter web...
+
+COPY packages/shared/ ./packages/shared/
+COPY web/ ./web/
 # The local favicon is a symlink outside web/, so copy the target into the image.
-RUN rm -f public/favicon.svg
-COPY site/static/images/logo.svg ./public/favicon.svg
-RUN pnpm run build
+RUN rm -f web/public/favicon.svg
+COPY site/static/images/logo.svg ./web/public/favicon.svg
+RUN pnpm --filter web run build
 
 # Stage 2: Build backend
 FROM golang:1.25.4-alpine AS backend-builder
