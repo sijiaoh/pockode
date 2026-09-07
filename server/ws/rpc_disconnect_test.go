@@ -68,17 +68,20 @@ func (c *killedClient) kill() {
 // network blip — and on a phone there are many — strands a goroutine holding a
 // worktree and its watcher subscriptions for the rest of the process's life.
 //
-// What is observable from here is what cleanup unsubscribes. The Manager
-// reference it releases on the next line is not: refCount is unexported and has
-// no accessor, so a leak of the reference alone would pass this.
+// Cleanup gives back three things on three separate lines: the watcher
+// subscriptions, the worktree's notifier, and the worktree reference. All
+// three are asserted, because leaking the reference alone pins the worktree
+// past idle cleanup — the manager will not reclaim one that still has holders
+// — while the other two look clean.
 func TestConnection_ReleasesResourcesWhenClientVanishes(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	wt := env.getMainWorktree()
 	defer env.worktreeManager.Release(wt)
 
-	// env's own connection is already bound, so compare against its count
-	// rather than zero.
-	baseline := wt.SubscriberCount()
+	// env's own connection is already bound, and so is the reference this test
+	// holds, so compare against the current counts rather than zero.
+	baseSubscribers := wt.SubscriberCount()
+	baseRefs := env.worktreeManager.RefCount(wt)
 	if env.handler.workListWatcher.HasSubscriptions() {
 		t.Fatal("work list watcher has subscriptions before the test subscribed")
 	}
@@ -92,8 +95,11 @@ func TestConnection_ReleasesResourcesWhenClientVanishes(t *testing.T) {
 		if resp := client.call("work.list.subscribe", struct{}{}); resp.Error != nil {
 			t.Fatalf("cycle %d: work.list.subscribe failed: %s", cycle, resp.Error.Message)
 		}
-		if got := wt.SubscriberCount(); got != baseline+1 {
-			t.Fatalf("cycle %d: connection did not bind the worktree: subscribers=%d, want %d", cycle, got, baseline+1)
+		if got := wt.SubscriberCount(); got != baseSubscribers+1 {
+			t.Fatalf("cycle %d: connection did not bind the worktree: subscribers=%d, want %d", cycle, got, baseSubscribers+1)
+		}
+		if got := env.worktreeManager.RefCount(wt); got != baseRefs+1 {
+			t.Fatalf("cycle %d: connection did not take a worktree reference: refs=%d, want %d", cycle, got, baseRefs+1)
 		}
 		if !env.handler.workListWatcher.HasSubscriptions() {
 			t.Fatalf("cycle %d: work.list.subscribe did not register a watcher subscription", cycle)
@@ -101,14 +107,19 @@ func TestConnection_ReleasesResourcesWhenClientVanishes(t *testing.T) {
 
 		client.kill()
 
-		// Asserted apart so a failure names which half leaked: they are released
-		// by different lines of cleanup and have failed independently before.
+		// Asserted apart so a failure names which one leaked: they are released
+		// by different lines of cleanup, and the first two have failed
+		// independently before.
 		if !waitForCleanup(func() bool { return !env.handler.workListWatcher.HasSubscriptions() }) {
 			t.Fatalf("cycle %d: the watcher subscription outlived the connection that made it", cycle)
 		}
-		if !waitForCleanup(func() bool { return wt.SubscriberCount() == baseline }) {
+		if !waitForCleanup(func() bool { return wt.SubscriberCount() == baseSubscribers }) {
 			t.Fatalf("cycle %d: worktree still has %d subscribers, want %d; cleanup never reached it",
-				cycle, wt.SubscriberCount(), baseline)
+				cycle, wt.SubscriberCount(), baseSubscribers)
+		}
+		if !waitForCleanup(func() bool { return env.worktreeManager.RefCount(wt) == baseRefs }) {
+			t.Fatalf("cycle %d: worktree still has %d references, want %d; the connection never gave its reference back",
+				cycle, env.worktreeManager.RefCount(wt), baseRefs)
 		}
 	}
 }

@@ -4,9 +4,11 @@ import { apiUrl, authHeaders, logoutIfUnauthorized } from "./api";
 /**
  * Bytes requested per `Range` request.
  *
- * Downloads are chunked unconditionally: the assembly holds one chunk at a time
- * rather than a response of unknown size, and a transfer can be given up on
- * partway. One extra round trip per 4 MiB is what that costs.
+ * Downloads are chunked unconditionally so that no response is unbounded — the
+ * same reason a stale chunk is refused with 412 rather than `If-Range`, below.
+ * It does not bound what the download holds: the chunks already collected are
+ * kept until the file is whole, which is LARGE_DOWNLOAD_WARNING_SIZE's problem,
+ * not this one's. One extra round trip per 4 MiB is what it costs.
  */
 export const DOWNLOAD_CHUNK_SIZE = 4 * 1024 * 1024;
 

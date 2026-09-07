@@ -114,6 +114,15 @@ func (m *Manager) Get(name string) (*Worktree, error) {
 	return wt, nil
 }
 
+// RefCount reports how many holders wt currently has. The counter is the only
+// record that a Get was matched by a Release, so without an accessor a leaked
+// reference is invisible from outside this package.
+func (m *Manager) RefCount(wt *Worktree) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return wt.refCount
+}
+
 // Release decrements the reference count and schedules cleanup after idleReleaseDelay.
 func (m *Manager) Release(wt *Worktree) {
 	m.mu.Lock()
