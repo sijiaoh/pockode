@@ -563,6 +563,30 @@ func TestAutoResumer_StopOrphanedWork_IncludesWaiting(t *testing.T) {
 	}
 }
 
+// A stop nobody asked for has to say so somewhere the user will find it: the
+// work is left stopped mid-flight, and whatever the agent had running in the
+// background died with the server that was running it.
+func TestAutoResumer_StopOrphanedWork_ExplainsItself(t *testing.T) {
+	store := newTestStore(t)
+	resumer := NewAutoResumer(store, 3)
+
+	story := createStory(t, store, "S")
+	startWorkWithSession(t, store, story.ID, "s1")
+
+	resumer.StopOrphanedWork()
+
+	comments, err := store.ListComments(story.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 {
+		t.Fatalf("expected exactly one comment explaining the stop, got %d", len(comments))
+	}
+	if comments[0].Body != orphanedWorkComment {
+		t.Errorf("unexpected comment body: %q", comments[0].Body)
+	}
+}
+
 func TestAutoResumer_SendsMessageWhenLastChildCompletes(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 	store.AddOnChangeListener(resumer)
