@@ -797,3 +797,47 @@ samp {
 	/* biome-ignore lint/complexity/noImportantStyles: Override library's default focus ring */
 	outline: none !important;
 }
+
+/* =============================================================================
+ * PENDING QUESTION PILL
+ *
+ * Entrance animation for the pill, and the transient highlight applied to a
+ * question card after jumping to it.
+ * ============================================================================= */
+
+@theme {
+	--animate-question-pill-in: question-pill-in 150ms ease-out;
+
+	@keyframes question-pill-in {
+		from {
+			opacity: 0;
+			transform: translateY(-8px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+}
+
+/* The transition belongs on the card, not on .question-highlight: a transition
+ * declared by the class itself is already gone at the moment the class is
+ * removed (transitions read the after-change style), so the ring would snap out
+ * instead of fading. */
+[data-question-request-id] {
+	transition: box-shadow 300ms ease-out;
+}
+
+.question-highlight {
+	box-shadow: 0 0 0 2px var(--th-warning);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.animate-question-pill-in {
+		animation: none;
+	}
+
+	[data-question-request-id] {
+		transition: none;
+	}
+}
