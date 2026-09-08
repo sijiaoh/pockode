@@ -3,6 +3,7 @@ import { useId, useMemo, useState } from "react";
 import type { GitBranches } from "../../types/git";
 import { Sheet, Spinner } from "../ui";
 import BranchName from "./BranchName";
+import GitOutput from "./GitOutput";
 
 interface Props {
 	branches: GitBranches;
@@ -87,35 +88,43 @@ function BranchSheet({ branches, onClose, onCheckout, onNewBranch }: Props) {
 				</button>
 			}
 		>
-			{showFilter && (
-				<div className="p-3">
-					<label htmlFor={filterId} className="sr-only">
-						Filter branches
-					</label>
-					<input
-						id={filterId}
-						type="text"
-						value={filter}
-						onChange={(e) => setFilter(e.target.value)}
-						placeholder="Filter branches…"
-						className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
-						autoComplete="off"
-					/>
-				</div>
-			)}
+			{/*
+			 * Pinned above the rows: the list is taller than the sheet whenever
+			 * either of these matters. A filter that scrolls away is the way out of
+			 * a long list that the user cannot reach, and a refusal that scrolls
+			 * away turns a failed switch into a row that simply did nothing — the
+			 * user taps a branch from halfway down, and the message lands off the
+			 * top of the sheet.
+			 */}
+			<div className="sticky top-0 z-10 bg-th-bg-secondary">
+				{showFilter && (
+					<div className="p-3">
+						<label htmlFor={filterId} className="sr-only">
+							Filter branches
+						</label>
+						<input
+							id={filterId}
+							type="text"
+							value={filter}
+							onChange={(e) => setFilter(e.target.value)}
+							placeholder="Filter branches…"
+							className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+							autoComplete="off"
+						/>
+					</div>
+				)}
 
-			{error && (
-				<div className="space-y-1 px-4 py-3" role="alert">
-					<p className="text-sm text-th-error">
-						Could not switch to {error.branch}.
-						{OVERWRITE_REFUSAL.test(error.message) &&
-							" Commit or discard these changes first."}
-					</p>
-					<pre className="overflow-x-auto whitespace-pre-wrap rounded bg-th-bg-tertiary p-2 font-mono text-xs text-th-text-secondary">
-						{error.message}
-					</pre>
-				</div>
-			)}
+				{error && (
+					<div className="space-y-1 px-4 py-3" role="alert">
+						<p className="text-sm text-th-error">
+							Could not switch to {error.branch}.
+							{OVERWRITE_REFUSAL.test(error.message) &&
+								" Commit or discard these changes first."}
+						</p>
+						<GitOutput>{error.message}</GitOutput>
+					</div>
+				)}
+			</div>
 
 			{local.map((branch) => {
 				const occupied = Boolean(branch.worktree);

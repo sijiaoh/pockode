@@ -1,6 +1,5 @@
 import { ConfirmDialog } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { invalidateGitQueries } from "../../hooks/gitQueries";
 import { useGitDiscard } from "../../hooks/useGitDiscard";
@@ -8,6 +7,7 @@ import { useGitLog } from "../../hooks/useGitLog";
 import { useGitStage } from "../../hooks/useGitStage";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useGitWatch } from "../../hooks/useGitWatch";
+import { gitPanelActions, useHistoryExpanded } from "../../lib/gitPanelStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import {
 	describeDiscard,
@@ -20,6 +20,8 @@ import BranchBar from "./BranchBar";
 import CommitBar from "./CommitBar";
 import DiffFileList from "./DiffFileList";
 import ErrorBanner from "./ErrorBanner";
+import GitCommitSheet from "./GitCommitSheet";
+import GroupHeader from "./GroupHeader";
 import LogList from "./LogList";
 
 interface Props {
@@ -29,37 +31,6 @@ interface Props {
 	onCloseFile: () => void;
 	activeFile: { path: string; staged: boolean } | null;
 	activeCommitHash: string | null;
-}
-
-function SectionHeader({
-	title,
-	count,
-	isExpanded,
-	onToggle,
-}: {
-	title: string;
-	count?: number;
-	isExpanded: boolean;
-	onToggle: () => void;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onToggle}
-			className="flex min-h-[44px] w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset"
-			aria-expanded={isExpanded}
-		>
-			{isExpanded ? (
-				<ChevronDown className="h-4 w-4 shrink-0 text-th-text-muted" />
-			) : (
-				<ChevronRight className="h-4 w-4 shrink-0 text-th-text-muted" />
-			)}
-			<span className="text-sm font-medium text-th-text-primary">{title}</span>
-			{count !== undefined && !isExpanded && (
-				<span className="text-xs text-th-text-muted">({count})</span>
-			)}
-		</button>
-	);
 }
 
 function DiffTab({
@@ -107,8 +78,9 @@ function DiffTab({
 		setDiscardError(null);
 	}
 
-	const [changesExpanded, setChangesExpanded] = useState(true);
-	const [historyExpanded, setHistoryExpanded] = useState(true);
+	// Opened from the HEAD row's amend action; the commit bar owns its own.
+	const [isAmending, setIsAmending] = useState(false);
+	const handleAmend = useCallback(() => setIsAmending(true), []);
 
 	useGitWatch({ onChanged: refreshAll, enabled: isActive });
 
@@ -120,6 +92,7 @@ function DiffTab({
 	const changeCount = flatStatus
 		? flatStatus.staged.length + flatStatus.unstaged.length
 		: 0;
+	const historyExpanded = useHistoryExpanded(changeCount);
 
 	const togglePaths = useCallback(
 		async (paths: string[], staged: boolean) => {
@@ -238,69 +211,71 @@ function DiffTab({
 						</div>
 					</div>
 				) : (
-					<div className="flex flex-1 flex-col">
-						{/* Changes Section */}
-						<SectionHeader
-							title="Changes"
-							count={changeCount}
-							isExpanded={changesExpanded}
-							onToggle={() => setChangesExpanded(!changesExpanded)}
-						/>
-						{changesExpanded && (
-							<div className="flex flex-col gap-2 pb-2">
-								{changeCount === 0 ? (
-									<div className="px-3 py-2 text-sm text-th-text-muted">
-										No changes
-									</div>
-								) : (
-									<>
-										<DiffFileList
-											title="Staged"
-											files={flatStatus?.staged ?? []}
-											staged={true}
-											onSelectFile={onSelectFile}
-											onToggleStage={handleToggleStage}
-											onToggleAll={handleToggleAllStaged}
-											activeFile={activeFile}
-											togglingPaths={togglingPaths}
-										/>
-										<DiffFileList
-											title="Unstaged"
-											files={flatStatus?.unstaged ?? []}
-											staged={false}
-											onSelectFile={onSelectFile}
-											onToggleStage={handleToggleStage}
-											onToggleAll={handleToggleAllUnstaged}
-											onDiscard={handleDiscard}
-											onDiscardAll={handleDiscardAll}
-											activeFile={activeFile}
-											togglingPaths={togglingPaths}
-											discardingPaths={discardingPaths}
-										/>
-									</>
-								)}
+					<div className="flex flex-1 flex-col pt-2 pb-2">
+						{changeCount === 0 ? (
+							<div className="px-3 py-2 text-sm text-th-text-muted">
+								No changes
 							</div>
+						) : (
+							<>
+								<DiffFileList
+									title="Staged"
+									files={flatStatus?.staged ?? []}
+									staged={true}
+									onSelectFile={onSelectFile}
+									onToggleStage={handleToggleStage}
+									onToggleAll={handleToggleAllStaged}
+									activeFile={activeFile}
+									togglingPaths={togglingPaths}
+								/>
+								<DiffFileList
+									title="Changes"
+									files={flatStatus?.unstaged ?? []}
+									staged={false}
+									onSelectFile={onSelectFile}
+									onToggleStage={handleToggleStage}
+									onToggleAll={handleToggleAllUnstaged}
+									onDiscard={handleDiscard}
+									onDiscardAll={handleDiscardAll}
+									activeFile={activeFile}
+									togglingPaths={togglingPaths}
+									discardingPaths={discardingPaths}
+								/>
+							</>
 						)}
 
-						{/* History Section */}
-						<SectionHeader
-							title="History"
-							count={logData?.commits.length}
-							isExpanded={historyExpanded}
-							onToggle={() => setHistoryExpanded(!historyExpanded)}
-						/>
-						{historyExpanded && (
-							<LogList
-								commits={logData?.commits ?? []}
-								activeHash={activeCommitHash}
-								onSelectCommit={onSelectCommit}
+						{/* Its own box, so its header stops being sticky once the
+						    section it labels has scrolled past — the same way each
+						    file group's header behaves. */}
+						<div className="mt-2 flex flex-col">
+							<GroupHeader
+								label="History"
+								isExpanded={historyExpanded}
+								onToggle={() =>
+									gitPanelActions.setHistoryExpanded(!historyExpanded)
+								}
 							/>
-						)}
+							{historyExpanded && (
+								<LogList
+									commits={logData?.commits ?? []}
+									activeHash={activeCommitHash}
+									onSelectCommit={onSelectCommit}
+									onAmend={handleAmend}
+								/>
+							)}
+						</div>
 					</div>
 				)}
 			</PullToRefresh>
 
 			<CommitBar />
+
+			{isAmending && (
+				<GitCommitSheet
+					amendInitially={true}
+					onClose={() => setIsAmending(false)}
+				/>
+			)}
 
 			{pendingDiscard && (
 				<DiscardConfirm

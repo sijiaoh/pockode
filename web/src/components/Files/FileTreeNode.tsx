@@ -98,17 +98,19 @@ const FileTreeNode = memo(function FileTreeNode({
 				type="button"
 				onClick={handleClick}
 				style={{ paddingLeft }}
-				className={`flex w-full min-h-[36px] items-center gap-1.5 pr-3 py-1.5 text-left text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset ${
+				// The border is on every row, transparent unless the row is the
+				// destination, so turning it on cannot nudge the tree sideways.
+				className={`flex w-full min-h-[36px] items-center gap-1.5 border-l-2 pr-3 py-1.5 text-left text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset ${
+					isUploadDest ? "border-th-accent" : "border-transparent"
+				} ${
 					isDropTarget
-						? // Louder than the standing destination tint below: this one is
+						? // A fill, unlike the destination's bar, because this one is
 							// answering a cursor that is moving right now.
 							"bg-th-accent/10 text-th-text-primary"
 						: isActive
 							? "bg-th-bg-tertiary text-th-text-primary"
 							: isUploadDest
-								? // Tinted rather than grey, so "uploads land here" never reads
-									// as "this is the file you are looking at".
-									"bg-th-accent/5 text-th-text-primary"
+								? "text-th-text-primary"
 								: "text-th-text-secondary hover:bg-th-bg-tertiary hover:text-th-text-primary"
 				}`}
 				aria-label={

@@ -8,12 +8,15 @@ interface Props {
 }
 
 /**
- * Opens a file picker, and shows where what it picks will land.
+ * Opens a file picker.
  *
- * The button doubles as the destination indicator so the Files tab does not
- * grow a second row for it. It is also the only upload entry point a touch
- * screen has — drag and drop does not exist there — and the only one a keyboard
- * or screen reader can use anywhere.
+ * Icon-only and monochrome because uploading happens a few times a week, next
+ * to a tree the user touches constantly; the destination is shown by the accent
+ * bar on the folder row instead, and the dot here only says "not the root", so
+ * the user knows to look for it. It is still the only upload entry point a
+ * touch screen has — drag and drop does not exist there — and the only one a
+ * keyboard or screen reader can use anywhere, which is why the whole path lives
+ * in the accessible name.
  */
 function UploadButton({ destPath, onFiles }: Props) {
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -25,8 +28,6 @@ function UploadButton({ destPath, onFiles }: Props) {
 		if (files.length > 0) onFiles(files);
 	};
 
-	const folderName = destPath.slice(destPath.lastIndexOf("/") + 1);
-	// The visible name is truncated, so the accessible one carries the whole path.
 	const label = destPath ? `Upload to ${destPath}` : "Upload to project root";
 
 	return (
@@ -45,15 +46,14 @@ function UploadButton({ destPath, onFiles }: Props) {
 				onClick={() => inputRef.current?.click()}
 				aria-label={label}
 				title={label}
-				className={`flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
-					destPath
-						? "border-th-accent bg-th-accent/10 text-th-accent"
-						: "border-th-border text-th-text-secondary hover:text-th-text-primary"
-				}`}
+				className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-th-text-muted transition-colors hover:bg-th-bg-tertiary hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95"
 			>
 				<Upload className="h-4 w-4 shrink-0" aria-hidden="true" />
-				{folderName && (
-					<span className="max-w-[7rem] truncate">{folderName}</span>
+				{destPath && (
+					<span
+						className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-th-accent"
+						aria-hidden="true"
+					/>
 				)}
 			</button>
 		</>

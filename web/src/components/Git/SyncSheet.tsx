@@ -4,6 +4,7 @@ import { type ReactNode, useState } from "react";
 import { describeGitSync, type GitSync } from "../../types/git";
 import { formatRelativeDate } from "../../utils/relativeTime";
 import { Sheet, Spinner } from "../ui";
+import GitOutput from "./GitOutput";
 
 type Operation = "fetch" | "pull" | "push";
 
@@ -107,6 +108,48 @@ function SyncSheet({ sync, onClose, onFetch, onPull, onPush }: Props) {
 		);
 	};
 
+	const order = operationOrder(state.needsPublish, sync.upstream_gone);
+	const buttons: Record<Operation, ReactNode> = {
+		fetch: (
+			<SyncButton
+				key="fetch"
+				icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
+				label="Fetch"
+				runningLabel="Fetching…"
+				isRunning={running === "fetch"}
+				// Never touches the working tree, so it is the one action that is
+				// always safe — and the repair action for stale counts.
+				disabled={busy}
+				onClick={handleFetch}
+			/>
+		),
+		pull: (
+			<SyncButton
+				key="pull"
+				icon={<ArrowDown className="h-4 w-4" aria-hidden="true" />}
+				label={sync.behind > 0 ? `Pull (${sync.behind})` : "Pull"}
+				runningLabel="Pulling…"
+				isRunning={running === "pull"}
+				disabled={busy || !state.canPull}
+				onClick={handlePull}
+			/>
+		),
+		push: (
+			<SyncButton
+				key="push"
+				icon={<ArrowUp className="h-4 w-4" aria-hidden="true" />}
+				label={pushLabel(sync, state.needsPublish, state.diverged)}
+				runningLabel="Pushing…"
+				isRunning={running === "push"}
+				disabled={busy || !state.canPush}
+				danger={state.diverged}
+				onClick={() =>
+					state.diverged ? setConfirmingForce(true) : handlePush(false)
+				}
+			/>
+		),
+	};
+
 	// Not dismissible behind the force-push confirmation either: both listen for
 	// Escape on document, and a key press meant for the dialog would otherwise
 	// take the sheet down with it.
@@ -136,9 +179,7 @@ function SyncSheet({ sync, onClose, onFetch, onPull, onPush }: Props) {
 				{error && (
 					<div className="space-y-1" role="alert">
 						<p className="text-sm text-th-error">{error.summary}</p>
-						<pre className="overflow-x-auto whitespace-pre-wrap rounded bg-th-bg-tertiary p-2 font-mono text-xs text-th-text-secondary">
-							{error.detail}
-						</pre>
+						<GitOutput>{error.detail}</GitOutput>
 					</div>
 				)}
 
@@ -146,37 +187,7 @@ function SyncSheet({ sync, onClose, onFetch, onPull, onPush }: Props) {
 					<output className="block text-sm text-th-success">{result}</output>
 				)}
 
-				<div className="space-y-2">
-					<SyncButton
-						icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
-						label="Fetch"
-						runningLabel="Fetching…"
-						isRunning={running === "fetch"}
-						// Never touches the working tree, so it is the one action that is
-						// always safe — and the repair action for stale counts.
-						disabled={busy}
-						onClick={handleFetch}
-					/>
-					<SyncButton
-						icon={<ArrowDown className="h-4 w-4" aria-hidden="true" />}
-						label={sync.behind > 0 ? `Pull (${sync.behind})` : "Pull"}
-						runningLabel="Pulling…"
-						isRunning={running === "pull"}
-						disabled={busy || !state.canPull}
-						onClick={handlePull}
-					/>
-					<SyncButton
-						icon={<ArrowUp className="h-4 w-4" aria-hidden="true" />}
-						label={pushLabel(sync, state.needsPublish, state.diverged)}
-						runningLabel="Pushing…"
-						isRunning={running === "push"}
-						disabled={busy || !state.canPush}
-						danger={state.diverged}
-						onClick={() =>
-							state.diverged ? setConfirmingForce(true) : handlePush(false)
-						}
-					/>
-				</div>
+				<div className="space-y-2">{order.map((op) => buttons[op])}</div>
 			</div>
 
 			{confirmingForce && (
@@ -228,6 +239,24 @@ function SyncButton({
 			{isRunning ? runningLabel : label}
 		</button>
 	);
+}
+
+/**
+ * Which operations the sheet offers, in the order the current state makes
+ * sensible.
+ *
+ * An unpublished branch has nothing to pull *from*, so pull is left out rather
+ * than shown disabled: a greyed button teaches the user nothing about what to
+ * do next, while publishing is the whole reason they opened the sheet. When the
+ * upstream is configured but its ref is gone, fetching is the more likely fix —
+ * the ref is usually missing here, not missing on the remote — so it leads.
+ */
+function operationOrder(
+	needsPublish: boolean,
+	upstreamGone: boolean,
+): Operation[] {
+	if (!needsPublish) return ["fetch", "pull", "push"];
+	return upstreamGone ? ["fetch", "push"] : ["push", "fetch"];
 }
 
 /**

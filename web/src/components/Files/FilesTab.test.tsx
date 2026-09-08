@@ -192,9 +192,10 @@ describe("FilesTab search", { timeout: 20_000 }, () => {
 			"aria-pressed",
 			"true",
 		);
-		expect(
-			screen.getByRole("button", { name: /File contents/ }),
-		).toHaveAttribute("aria-pressed", "false");
+		expect(screen.getByRole("button", { name: /Contents/ })).toHaveAttribute(
+			"aria-pressed",
+			"false",
+		);
 	});
 
 	it("re-runs the search with the new option when a chip is toggled", async () => {
@@ -205,7 +206,7 @@ describe("FilesTab search", { timeout: 20_000 }, () => {
 		await user.type(screen.getByLabelText("Search files"), "app");
 		await waitFor(() => expect(searchFiles).toHaveBeenCalled(), SLOW);
 
-		await user.click(screen.getByRole("button", { name: /File contents/ }));
+		await user.click(screen.getByRole("button", { name: /Contents/ }));
 
 		await waitFor(
 			() => expect(lastSearchParams()).toMatchObject({ mode: "content" }),
@@ -317,6 +318,54 @@ describe("FilesTab uploads", () => {
 		expect(
 			screen.getByRole("button", { name: "Upload to src/assets" }),
 		).toBeInTheDocument();
+	});
+
+	it("says where uploads land without spending a word of the row on it", async () => {
+		const user = userEvent.setup();
+		renderFilesTab();
+
+		const atRoot = screen.getByRole("button", {
+			name: "Upload to project root",
+		});
+		expect(atRoot).toHaveTextContent("");
+		// The dot is the whole visible answer to "somewhere other than the root";
+		// the folder itself is named only in the accessible name and on its row.
+		expect(atRoot.querySelector(".bg-th-accent")).toBeNull();
+
+		await user.click(screen.getByRole("button", { name: "pick src/assets" }));
+
+		const atFolder = screen.getByRole("button", {
+			name: "Upload to src/assets",
+		});
+		expect(atFolder).toHaveTextContent("");
+		expect(atFolder.querySelector(".bg-th-accent")).not.toBeNull();
+	});
+
+	// jsdom lays nothing out, so what is checked is the rule the row overflowed
+	// by breaking: at 240px only the field may shrink, and everything beside it
+	// has to hold a fixed, icon-sized width.
+	it("leaves the search field as the only element of its row that shrinks", () => {
+		renderFilesTab();
+
+		const field = screen.getByLabelText("Search files");
+		const uploadButton = screen.getByRole("button", {
+			name: "Upload to project root",
+		});
+		const row = field.closest("div")?.parentElement as HTMLElement;
+		expect(row).toContainElement(uploadButton);
+
+		// A hidden element is out of the layout, so it owes the row nothing.
+		const laidOut = Array.from(row.children).filter(
+			(el) => !el.classList.contains("hidden"),
+		);
+		const shrinking = laidOut.filter((el) => el.classList.contains("flex-1"));
+
+		expect(shrinking).toHaveLength(1);
+		expect(shrinking[0]).toContainElement(field);
+		expect(shrinking[0]).toHaveClass("min-w-0");
+		for (const el of laidOut) {
+			if (el !== shrinking[0]) expect(el).toHaveClass("shrink-0");
+		}
 	});
 
 	it("sends a file that has nothing in its way without asking", async () => {

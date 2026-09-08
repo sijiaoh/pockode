@@ -54,7 +54,10 @@ function FileSearchBar({
 	return (
 		<>
 			<div className="flex shrink-0 items-center gap-2 p-2">
-				<div className="flex min-h-[44px] flex-1 items-center gap-2 rounded-lg border border-th-border bg-th-bg-primary px-3 focus-within:border-th-border-focus focus-within:ring-2 focus-within:ring-th-accent/20">
+				{/* min-w-0 makes the field the one element in the row that shrinks;
+				    without it the row's floor is the sum of its parts and overflows
+				    the 240px panel. */}
+				<div className="flex min-h-[44px] min-w-0 flex-1 items-center gap-2 rounded-lg border border-th-border bg-th-bg-primary px-3 focus-within:border-th-border-focus focus-within:ring-2 focus-within:ring-th-accent/20">
 					{isSearching ? (
 						<Spinner
 							size="h-4 w-4"
@@ -99,8 +102,10 @@ function FileSearchBar({
 				{actions}
 			</div>
 
+			{/* The chips size to their own text and cannot shrink, so at 240px they
+			    wrap instead of overflowing a narrow panel. */}
 			{showOptions && (
-				<div className="flex shrink-0 items-center gap-2 px-2 pb-2">
+				<div className="flex shrink-0 flex-wrap items-center gap-2 px-2 pb-2">
 					<ToggleChip
 						icon={EyeOff}
 						label=".gitignore"
@@ -110,7 +115,7 @@ function FileSearchBar({
 					/>
 					<ToggleChip
 						icon={FileText}
-						label="File contents"
+						label="Contents"
 						title="Search inside file contents"
 						pressed={searchContent}
 						onToggle={toggleSearchContent}

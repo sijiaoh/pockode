@@ -3,6 +3,7 @@ import { memo } from "react";
 import { type FileStatus, GIT_STATUS_INFO } from "../../types/git";
 import { splitPath } from "../../utils/path";
 import SidebarListItem from "../common/SidebarListItem";
+import { iconButtonClass } from "./iconButtonClass";
 
 interface Props {
 	file: FileStatus;
@@ -33,12 +34,6 @@ const DiffFileItem = memo(function DiffFileItem({
 	const actionLabel = staged ? "Unstage file" : "Stage file";
 	// Either action leaves the other with a stale idea of the file.
 	const isBusy = Boolean(isToggling || isDiscarding);
-	const buttonClass = (busy: boolean) =>
-		`flex items-center justify-center min-h-[36px] min-w-[36px] rounded-md transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
-			busy
-				? "opacity-50 cursor-not-allowed text-th-text-muted"
-				: "text-th-text-secondary hover:text-th-text-primary active:scale-95"
-		}`;
 
 	return (
 		<SidebarListItem
@@ -70,7 +65,7 @@ const DiffFileItem = memo(function DiffFileItem({
 								onDiscard(file);
 							}}
 							disabled={isBusy}
-							className={buttonClass(isBusy)}
+							className={iconButtonClass(isBusy)}
 							aria-label={
 								file.status === "?" ? "Delete file" : "Discard changes"
 							}
@@ -89,7 +84,7 @@ const DiffFileItem = memo(function DiffFileItem({
 							onToggleStage(file.path, staged);
 						}}
 						disabled={isBusy}
-						className={buttonClass(isBusy)}
+						className={iconButtonClass(isBusy)}
 						aria-label={actionLabel}
 					>
 						{isToggling ? (

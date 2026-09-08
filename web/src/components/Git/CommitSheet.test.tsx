@@ -67,6 +67,17 @@ describe("CommitSheet", () => {
 		).toBeInTheDocument();
 	});
 
+	it("agrees with itself about a single excluded file", () => {
+		renderSheet({
+			stagedCount: 1,
+			submodules: [{ path: "vendor/sdk", count: 1 }],
+		});
+
+		expect(
+			screen.getByText("1 staged file in vendor/sdk is not included"),
+		).toBeInTheDocument();
+	});
+
 	it("has no amend toggle before the first commit", () => {
 		renderSheet({ lastCommit: null });
 

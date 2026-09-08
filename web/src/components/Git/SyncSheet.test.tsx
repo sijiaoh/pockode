@@ -24,6 +24,17 @@ function renderSheet(sync: Partial<GitSync> = {}) {
 	return { onFetch, onPull, onPush, onClose };
 }
 
+/** The sync operations on offer, in the order they are rendered. */
+function operations(): string[] {
+	return (
+		screen
+			.getAllByRole("button")
+			.map((b) => b.textContent ?? "")
+			// The close button is icon-only, so an empty label is not an operation.
+			.filter((label) => label !== "")
+	);
+}
+
 describe("SyncSheet", () => {
 	it("states the counts in words and when they were last refreshed", () => {
 		renderSheet({ ahead: 1, behind: 2 });
@@ -66,13 +77,37 @@ describe("SyncSheet", () => {
 		expect(await screen.findByText("Pulled 3 commits.")).toBeInTheDocument();
 	});
 
-	it("disables pull with nothing to pull and push with nothing to push", () => {
-		renderSheet();
+	// The counts are only as fresh as the last fetch, so "0 behind" is not a
+	// reason to take pulling away — it is exactly when someone reaches for it.
+	it("keeps pull available with nothing known to pull", () => {
+		renderSheet({ last_fetch: null });
 
-		expect(screen.getByRole("button", { name: "Pull" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Pull" })).toBeEnabled();
 		expect(screen.getByRole("button", { name: "Push" })).toBeDisabled();
 		// Fetch is the repair action for stale counts, so it stays available.
 		expect(screen.getByRole("button", { name: "Fetch" })).toBeEnabled();
+	});
+
+	it("offers fetch, pull and push while an upstream is tracked", () => {
+		renderSheet({ behind: 2, ahead: 1, head_pushed: false });
+
+		expect(operations()).toEqual(["Fetch", "Pull (2)", "Push (force)"]);
+	});
+
+	// Pull is not "unavailable" without an upstream, it is inapplicable: a greyed
+	// button would only take up the room the answer needs.
+	it("drops pull entirely from an unpublished branch", () => {
+		renderSheet({ upstream: "", head_pushed: false });
+
+		expect(operations()).toEqual(["Publish branch", "Fetch"]);
+	});
+
+	// A configured upstream whose ref is missing here is more often a stale local
+	// copy than a deleted remote branch, so repair leads.
+	it("leads with fetch when the upstream ref is gone", () => {
+		renderSheet({ upstream_gone: true });
+
+		expect(operations()).toEqual(["Fetch", "Publish branch"]);
 	});
 
 	it("offers to publish a branch that has no upstream", async () => {
@@ -97,7 +132,7 @@ describe("SyncSheet", () => {
 		expect(
 			screen.getByText(/origin\/main is missing here/),
 		).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Pull" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Pull" })).toBeNull();
 		expect(
 			screen.getByRole("button", { name: "Publish branch" }),
 		).toBeEnabled();
