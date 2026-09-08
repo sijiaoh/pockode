@@ -11,6 +11,7 @@ type EventRecord struct {
 	ToolInput             json.RawMessage    `json:"tool_input,omitempty"`
 	ToolUseID             string             `json:"tool_use_id,omitempty"`
 	ToolResult            string             `json:"tool_result,omitempty"`
+	IsError               bool               `json:"is_error,omitempty"`
 	Error                 string             `json:"error,omitempty"`
 	Message               string             `json:"message,omitempty"`
 	Code                  string             `json:"code,omitempty"`

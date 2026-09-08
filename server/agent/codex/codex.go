@@ -742,6 +742,7 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage, requestID *int64) {
 		s.emitEvent(agent.ToolResultEvent{
 			ToolUseID:  ev.CallID,
 			ToolResult: result,
+			IsError:    ev.ExitCode != 0,
 		})
 
 	case "patch_apply_begin":
@@ -777,6 +778,7 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage, requestID *int64) {
 		s.emitEvent(agent.ToolResultEvent{
 			ToolUseID:  ev.CallID,
 			ToolResult: result,
+			IsError:    !ev.Success,
 		})
 
 	case "mcp_tool_call_begin":
@@ -835,6 +837,7 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage, requestID *int64) {
 		s.emitEvent(agent.ToolResultEvent{
 			ToolUseID:  ev.CallID,
 			ToolResult: result,
+			IsError:    ev.Result.Err != "" || (ev.Result.Ok != nil && ev.Result.Ok.IsError),
 		})
 
 	case "mcp_startup_complete":

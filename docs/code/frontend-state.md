@@ -160,6 +160,71 @@ The consequence to know before touching the reducer: **`status` is not a common
 field.** Only assistant messages carry one, so anything asking about it has to
 narrow on `role === "assistant"` first.
 
+### Turn Boundaries and Late Events
+
+A turn starts from a `message` event and ends on `done` / `interrupted` /
+`error` / `process_ended`, leaving its message at the matching status
+(`complete` for `done`). Every prompt is persisted and broadcast by the
+server, so the client always sees the `message` that opens a turn — and a turn
+cut short takes its pending permission and question dialogs down with it, so no
+answer can resume it either. That makes the rule for content arriving after an
+ending unambiguous: it belongs to the turn that just ended.
+
+That matters because the CLI keeps talking for a moment after a turn is cut
+short — a Task subagent's last output is the usual source. Such content is
+appended to the ended message and leaves its status alone; without that it
+would open a fresh `streaming` bubble, and `isStreaming` — read off the last
+message's status, gated on the process still being alive — would report the
+stopped turn as running and keep the input blocked. An interrupt is exactly
+the case that gate does not catch: it ends the turn, not the process.
+
+`complete` is deliberately excluded from that rule: when a background wait runs
+out of budget Pockode delivers the `done` itself
+([agent-integration.md](agent-integration.md#background-waits)), and output
+resuming afterwards is a genuinely live turn.
+
+### Task Groups
+
+The subagent tool (named `Agent` today, `Task` in older CLIs and in history
+recorded by them) is the one tool whose calls do not each get their own part.
+Every Task of one turn folds into a single `task_group` part, anchored where the
+first of them landed, because a turn can spawn a dozen and one strip per call
+buries the conversation they belong to.
+
+The part holds each Task's **current state** — `running` / `done` / `failed` /
+`interrupted` — and the reducer is its only author; the UI renders that state
+and infers nothing of its own. Four rules keep it honest:
+
+- The same `toolUseId` can arrive twice (Claude Code resends a `tool_call` after
+  permission approval). The second call refreshes the input it describes and
+  leaves the Task's state alone.
+- A turn that ended as `interrupted` / `error` / `process_ended` settles the
+  Tasks still running in it: nothing can report back on them, and a spinner
+  that never stops is a lie. The rule keys on the turn's resulting **status**,
+  not on the event, so a Task whose call trails in after the ending is settled
+  too rather than born spinning forever. `complete` is deliberately excluded —
+  a background Task outlives the turn that started it
+  ([agent-integration.md](agent-integration.md#background-waits)) and reports
+  back later.
+- Replay adds no settling of its own — it feeds history through this same
+  reducer — so a Task still running at the end of a history stays running,
+  which is right while the session is live. What history cannot show is a
+  process killed while Pockode was down, since no `process_ended` was ever
+  recorded for it: `useChatMessages` settles once on load when the server
+  reports the session already ended, next to the call that expires the dialogs
+  orphaned the same way.
+- An interrupted Task whose result finally arrives keeps its `interrupted`
+  status and records `resultAfterInterrupt`. The content is kept and readable;
+  what it cannot do is make the UI claim the Task finished normally. This is the
+  "events are events, state is state" rule applied to a single part.
+
+Failure comes from the CLI's `is_error` flag
+([agent-integration.md](agent-integration.md#eventrecord-unified-event-format)),
+never from the report text. So `failed` means the Task *call* failed — an
+unknown `subagent_type`, say. A subagent that ran fine and reported that it
+could not do the job is `done`, and the report says the rest; the UI does not
+get to grade it.
+
 ### Why Pure Function Instead of Store
 
 - **Reusable** — same reducer replays history and processes live events

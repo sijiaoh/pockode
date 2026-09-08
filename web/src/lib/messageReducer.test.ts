@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type {
 	AssistantMessage,
 	ContentPart,
+	Message,
 	StepDividerMessage,
+	TaskRun,
 	UserMessage,
 	WorkCardMessage,
 } from "../types/message";
@@ -13,6 +15,7 @@ import {
 	expirePendingDialogs,
 	normalizeEvent,
 	replayHistory,
+	settleRunningTasks,
 } from "./messageReducer";
 
 // Deterministic but distinct ids: whether a message keeps its id or gets a
@@ -68,6 +71,7 @@ describe("messageReducer", () => {
 				type: "tool_result",
 				toolUseId: "tool-1",
 				toolResult: "file.txt",
+				isError: false,
 			});
 		});
 
@@ -982,6 +986,7 @@ describe("messageReducer", () => {
 				type: "tool_result",
 				toolUseId: "tool-1",
 				toolResult: "file.txt",
+				isError: false,
 			});
 			expect(messages).toHaveLength(1);
 			const updated = messages[0] as AssistantMessage;
@@ -1003,9 +1008,88 @@ describe("messageReducer", () => {
 				type: "tool_result",
 				toolUseId: "nonexistent",
 				toolResult: "result",
+				isError: false,
 			});
 			expect(messages).toHaveLength(1);
 			expect(messages[0]).toBe(completed);
+		});
+
+		describe("late events after an ended turn", () => {
+			const endedMessage = (
+				status: AssistantMessage["status"],
+			): AssistantMessage => ({
+				id: "msg-1",
+				role: "assistant",
+				parts: [{ type: "text", content: "Working..." }],
+				status,
+				createdAt: new Date(),
+			});
+
+			it.each([
+				"interrupted",
+				"error",
+				"process_ended",
+			] as const)("keeps a %s turn ended when a Task's closing text arrives late", (status) => {
+				const ended = endedMessage(status);
+				const messages = applyServerEvent([ended], {
+					type: "text",
+					content: "Task done",
+				});
+				expect(messages).toHaveLength(1);
+				const updated = messages[0] as AssistantMessage;
+				expect(updated.status).toBe(status);
+				expect(updated.parts).toEqual([
+					{ type: "text", content: "Working...Task done" },
+				]);
+			});
+
+			it("folds a late tool_call into the interrupted message", () => {
+				const messages = applyServerEvent([endedMessage("interrupted")], {
+					type: "tool_call",
+					toolUseId: "tool-1",
+					toolName: "Task",
+					toolInput: {},
+				});
+				expect(messages).toHaveLength(1);
+				const updated = messages[0] as AssistantMessage;
+				expect(updated.status).toBe("interrupted");
+				expect(updated.parts).toHaveLength(2);
+			});
+
+			it("starts a live turn again once a new message arrives", () => {
+				let messages = applyServerEvent([endedMessage("interrupted")], {
+					type: "text",
+					content: "Task done",
+				});
+				messages = applyServerEvent(messages, {
+					type: "message",
+					content: "carry on",
+				});
+				messages = applyServerEvent(messages, {
+					type: "text",
+					content: "Sure",
+				});
+				const last = messages[messages.length - 1] as AssistantMessage;
+				expect(last.status).toBe("streaming");
+			});
+
+			// Pockode ends the turn itself when a background wait runs out of
+			// budget; output resuming after that is a live turn, not late output.
+			it("opens a live turn for output after a completed turn", () => {
+				const completed: AssistantMessage = {
+					id: "msg-1",
+					role: "assistant",
+					parts: [{ type: "text", content: "Done" }],
+					status: "complete",
+					createdAt: new Date(),
+				};
+				const messages = applyServerEvent([completed], {
+					type: "text",
+					content: "Back from the background task",
+				});
+				expect(messages).toHaveLength(2);
+				expect((messages[1] as AssistantMessage).status).toBe("streaming");
+			});
 		});
 
 		describe("consecutive sends", () => {
@@ -1839,6 +1923,283 @@ describe("messageReducer", () => {
 				type: "ask_user_question",
 				status: "expired",
 			});
+		});
+
+		// Reopening the session must not resurrect the turn the user stopped:
+		// history ends on the Task's late output, and the last message's status
+		// is what tells the UI whether the agent is still going.
+		it("replays a turn interrupted before its Task finished as interrupted", () => {
+			const history = [
+				{ type: "message", content: "Do something" },
+				{ type: "text", content: "Working" },
+				{ type: "interrupted" },
+				{ type: "text", content: "Task done" },
+			];
+			const messages = replayHistory(history);
+			expect(messages).toHaveLength(2);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.status).toBe("interrupted");
+		});
+	});
+
+	// The Task (subagent) tool is the one tool whose calls collapse into a
+	// single part: a turn can spawn a dozen, and one strip per call buries the
+	// conversation they belong to.
+	describe("Task grouping", () => {
+		const streaming = (parts: ContentPart[] = []): AssistantMessage => ({
+			id: "msg-1",
+			role: "assistant",
+			parts,
+			status: "streaming",
+			createdAt: new Date(),
+		});
+
+		const taskCall = (
+			toolUseId: string,
+			description: string,
+			subagentType = "Explore",
+			toolName = "Agent",
+		) => ({
+			type: "tool_call" as const,
+			toolUseId,
+			toolName,
+			toolInput: { description, subagent_type: subagentType, prompt: "go" },
+		});
+
+		const taskResult = (
+			toolUseId: string,
+			toolResult: string,
+			isError = false,
+		) => ({ type: "tool_result" as const, toolUseId, toolResult, isError });
+
+		const tasksOf = (message: Message): TaskRun[] => {
+			const assistant = message as AssistantMessage;
+			const group = assistant.parts.find((part) => part.type === "task_group");
+			if (group?.type !== "task_group") throw new Error("no task_group part");
+			return group.tasks;
+		};
+
+		it("folds every Task of one turn into a single group", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "find usages"));
+			messages = applyServerEvent(messages, taskCall("t2", "write plan"));
+
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.parts).toHaveLength(1);
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "t1", description: "find usages", status: "running" },
+				{ toolUseId: "t2", description: "write plan", status: "running" },
+			]);
+		});
+
+		// Older CLIs named the subagent tool "Task"; stored history still holds
+		// that name and has to land in the same group.
+		it("groups the legacy Task tool name alongside Agent", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(
+				messages,
+				taskCall("t1", "old name", "Explore", "Task"),
+			);
+			messages = applyServerEvent(messages, taskCall("t2", "new name"));
+			expect(tasksOf(messages[0])).toHaveLength(2);
+		});
+
+		it("keeps a resent tool_call from duplicating or resetting the Task", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "find usages"));
+			messages = applyServerEvent(messages, taskResult("t1", "report"));
+			messages = applyServerEvent(messages, taskCall("t1", "find usages"));
+
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "t1", status: "done", result: "report" },
+			]);
+		});
+
+		it("settles only the Task its result names", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(messages, taskCall("t2", "second"));
+			messages = applyServerEvent(messages, taskResult("t2", "second report"));
+
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "t1", status: "running" },
+				{ toolUseId: "t2", status: "done", result: "second report" },
+			]);
+		});
+
+		it("marks a Task the CLI flagged as an error failed", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(
+				messages,
+				taskResult("t1", "Agent type not found", true),
+			);
+
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "t1", status: "failed", result: "Agent type not found" },
+			]);
+		});
+
+		// An interrupt is a fact about what the user did; the result that shows up
+		// afterwards is kept, but it cannot make the UI claim the Task finished.
+		it("keeps an interrupted Task interrupted when its result arrives late", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(messages, { type: "interrupted" });
+			expect(tasksOf(messages[0])).toMatchObject([{ status: "interrupted" }]);
+
+			messages = applyServerEvent(messages, taskResult("t1", "late report"));
+			expect(tasksOf(messages[0])).toMatchObject([
+				{
+					status: "interrupted",
+					result: "late report",
+					resultAfterInterrupt: true,
+				},
+			]);
+		});
+
+		it("settles a running Task when the turn ends in an error", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(messages, { type: "error", error: "boom" });
+
+			expect(tasksOf(messages[0])).toMatchObject([{ status: "interrupted" }]);
+		});
+
+		// The CLI keeps talking for a moment after a turn is cut short, and that
+		// can include a whole Task call. Born running inside a turn that already
+		// ended, it would spin forever: nothing is left to deliver its result.
+		it("never adds a running Task to a turn that already ended", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, { type: "interrupted" });
+			messages = applyServerEvent(messages, taskCall("late", "trailing"));
+
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.status).toBe("interrupted");
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "late", status: "interrupted" },
+			]);
+		});
+
+		// A background Task reports back in a later turn, so a turn ending
+		// normally must leave it alone.
+		it("leaves a Task running when the turn merely completes", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "background"));
+			messages = applyServerEvent(messages, { type: "done" });
+
+			expect(tasksOf(messages[0])).toMatchObject([{ status: "running" }]);
+
+			messages = applyServerEvent(messages, taskResult("t1", "report"));
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ status: "done", result: "report" },
+			]);
+		});
+
+		// The whole reason `complete` cannot settle a Task: a background one
+		// reports back turns later, and its result has to find the group it was
+		// started in rather than the turn that happens to be open.
+		it("lands a background Task's result back in the turn that started it", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("bg", "background"));
+			messages = applyServerEvent(messages, { type: "done" });
+			messages = applyServerEvent(messages, {
+				type: "message",
+				content: "meanwhile",
+			});
+			messages = applyServerEvent(messages, taskCall("t2", "foreground"));
+			messages = applyServerEvent(
+				messages,
+				taskResult("bg", "background report"),
+			);
+
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "bg", status: "done", result: "background report" },
+			]);
+			const last = messages[messages.length - 1] as AssistantMessage;
+			expect(tasksOf(last)).toMatchObject([
+				{ toolUseId: "t2", status: "running" },
+			]);
+		});
+
+		it("settles Tasks still running in older turns when the process ends", () => {
+			const stale: AssistantMessage = {
+				id: "msg-0",
+				role: "assistant",
+				parts: [
+					{
+						type: "task_group",
+						tasks: [
+							{ toolUseId: "old", description: "stale", status: "running" },
+						],
+					},
+				],
+				status: "complete",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent(
+				[stale, streaming([{ type: "text", content: "hi" }])],
+				{ type: "process_ended" },
+			);
+
+			expect(tasksOf(messages[0])).toMatchObject([{ status: "interrupted" }]);
+		});
+
+		it("starts a fresh group for the next turn", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(messages, { type: "done" });
+			messages = applyServerEvent(messages, {
+				type: "message",
+				content: "next",
+			});
+			messages = applyServerEvent(messages, taskCall("t2", "second"));
+
+			const last = messages[messages.length - 1] as AssistantMessage;
+			expect(tasksOf(last)).toMatchObject([{ toolUseId: "t2" }]);
+			expect(tasksOf(messages[0])).toMatchObject([{ toolUseId: "t1" }]);
+		});
+
+		// Replay is the same path, so a history that ends mid-Task replays as a
+		// running Task. The caller settles it only when the process is known to
+		// be gone — see useChatMessages.
+		it("replays an unfinished Task as running until it is settled", () => {
+			const history = [
+				{ type: "message", content: "Do something" },
+				{
+					type: "tool_call",
+					tool_use_id: "t1",
+					tool_name: "Agent",
+					tool_input: { description: "explore", subagent_type: "Explore" },
+				},
+			];
+			const replayed = replayHistory(history);
+			expect(tasksOf(replayed[replayed.length - 1])).toMatchObject([
+				{ status: "running" },
+			]);
+
+			const settled = settleRunningTasks(replayed);
+			expect(tasksOf(settled[settled.length - 1])).toMatchObject([
+				{ status: "interrupted" },
+			]);
+		});
+
+		it("carries a Task's report through history replay", () => {
+			const history = [
+				{ type: "message", content: "Do something" },
+				{
+					type: "tool_call",
+					tool_use_id: "t1",
+					tool_name: "Agent",
+					tool_input: { description: "explore", subagent_type: "Explore" },
+				},
+				{ type: "tool_result", tool_use_id: "t1", tool_result: "# Report" },
+				{ type: "done" },
+			];
+			const replayed = replayHistory(history);
+			expect(tasksOf(replayed[replayed.length - 1])).toMatchObject([
+				{ status: "done", result: "# Report" },
+			]);
 		});
 	});
 });
