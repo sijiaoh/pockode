@@ -2,6 +2,7 @@ import { TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { StagedSubmodule } from "../../types/git";
 import { Sheet, Spinner } from "../ui";
+import GitOutput from "./GitOutput";
 
 /** The commit amend would replace. */
 export interface LastCommit {
@@ -21,7 +22,7 @@ interface Props {
 	submodules: StagedSubmodule[];
 	/** null before the first commit, where there is nothing to amend. */
 	lastCommit: LastCommit | null;
-	/** Opened from the `Amend last commit` button rather than from `Commit (n)`. */
+	/** Opened from the HEAD row's amend action rather than from `Commit (n)`. */
 	amendInitially: boolean;
 	onClose: () => void;
 	onCommit: (message: string, amend: boolean) => Promise<void>;
@@ -151,9 +152,7 @@ function CommitSheet({
 				{error && (
 					<div className="space-y-1" role="alert">
 						<p className="text-sm text-th-error">{summarize(error)}</p>
-						<pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-th-bg-tertiary p-2 font-mono text-xs text-th-text-secondary">
-							{error}
-						</pre>
+						<GitOutput>{error}</GitOutput>
 					</div>
 				)}
 
@@ -166,7 +165,8 @@ function CommitSheet({
 					</p>
 					{submodules.map((sub) => (
 						<p key={sub.path} className="text-xs text-th-text-muted">
-							{files(sub.count, "staged")} in {sub.path} are not included
+							{files(sub.count, "staged")} in {sub.path}{" "}
+							{sub.count === 1 ? "is" : "are"} not included
 						</p>
 					))}
 					<textarea

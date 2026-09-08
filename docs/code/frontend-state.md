@@ -17,6 +17,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ themeStore ◀─────── subscribeThemeRegistry              │   │
 │  ├─ inputStore (localStorage)                               │   │
 │  ├─ filesSearchStore (localStorage)                         │   │
+│  ├─ gitPanelStore                                           │   │
 │  └─ worktreeStore + listeners                               │   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Domain Data Layer                                              │
@@ -48,6 +49,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | authStore | Auth token | localStorage init |
 | inputStore | Draft text | persist middleware |
 | filesSearchStore | File search options | localStorage init |
+| gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
 | worktreeStore | Current worktree | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |
 
@@ -118,6 +120,37 @@ subscribeThemeRegistry(() => {
   useThemeStore.setState({ theme: "abyss" });
 });
 ```
+
+### Why a Store for Panel UI State
+
+`gitPanelStore` holds one field — whether the Git panel's `History` group is
+expanded — which looks like a case for `useState` in `DiffTab`. It is in the
+store instead, because **the decision has to outlive the component, and how long
+the component lives is not this panel's to decide.**
+
+Today it usually survives: `TabbedSidebar` renders all four tabs at once and
+each hides itself with a class, and the mobile drawer does the same (`Sidebar`
+says why — CSS hiding preserves scroll position). But that is a layout
+implementation detail, not a contract, and it does not hold everywhere:
+crossing the desktop breakpoint swaps `Sidebar` between two structurally
+different trees and remounts everything inside, and an extension that registers
+`SidebarContent` replaces the tabbed sidebar outright. Component state would
+quietly revert the user's explicit choice in exactly those cases, and would
+break the moment someone changes a tab from `hidden` to conditional
+rendering.
+
+The field is `boolean | null`, not `boolean`. `null` means "still following the
+change count" and a boolean means "the user has decided"; `useHistoryExpanded`
+resolves it as `override ?? changeCount === 0`. Storing the resolved boolean
+instead would erase the difference between a default that happens to be
+collapsed and a user who chose collapsed — and a section that keeps re-deciding
+for someone who has already decided is worse than one occasionally in the wrong
+state.
+
+It is deliberately **not** persisted. The default is derived from the working
+tree, which is where the answer usually comes from; a stale choice restored
+across restarts would outlive the situation that produced it. See
+[git-ui.md](../git-ui.md#history).
 
 ## Server Cache vs Store
 
@@ -405,4 +438,5 @@ Key features:
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |
+| `web/src/lib/gitPanelStore.ts` | Git panel UI state that must outlive remounts |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |

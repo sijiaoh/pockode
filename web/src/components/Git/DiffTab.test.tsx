@@ -2,17 +2,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitStatus } from "../../types/git";
+import { gitPanelActions } from "../../lib/gitPanelStore";
+import type { GitCommit, GitStatus } from "../../types/git";
 import DiffTab from "./DiffTab";
 
 const discard = vi.fn();
 let status: GitStatus | undefined;
+let commits: GitCommit[] = [];
 
 vi.mock("../../hooks/useGitStatus", () => ({
 	useGitStatus: () => ({ data: status, isLoading: false, error: null }),
 }));
 vi.mock("../../hooks/useGitLog", () => ({
-	useGitLog: () => ({ data: { commits: [] } }),
+	useGitLog: () => ({ data: { commits } }),
 }));
 vi.mock("../../hooks/useGitWatch", () => ({ useGitWatch: () => undefined }));
 vi.mock("../../hooks/useGitStage", () => ({
@@ -28,6 +30,11 @@ vi.mock("../Layout", () => ({ useSidebarRefresh: () => ({ isActive: true }) }));
 // Both read queries this test does not stand up; neither takes part in discard.
 vi.mock("./BranchBar", () => ({ default: () => null }));
 vi.mock("./CommitBar", () => ({ default: () => null }));
+vi.mock("./GitCommitSheet", () => ({
+	default: ({ amendInitially }: { amendInitially: boolean }) => (
+		<div role="dialog">{amendInitially ? "amending" : "committing"}</div>
+	),
+}));
 
 const STATUS: GitStatus = {
 	staged: [{ path: "staged.ts", status: "M" }],
@@ -44,7 +51,7 @@ function renderTab(
 	} = {},
 ) {
 	const onCloseFile = props.onCloseFile ?? vi.fn();
-	render(
+	const { unmount } = render(
 		<QueryClientProvider client={new QueryClient()}>
 			<DiffTab
 				onSelectFile={vi.fn()}
@@ -55,7 +62,7 @@ function renderTab(
 			/>
 		</QueryClientProvider>,
 	);
-	return { onCloseFile };
+	return { onCloseFile, unmount };
 }
 
 const confirmButton = (name: string) =>
@@ -64,6 +71,8 @@ const confirmButton = (name: string) =>
 describe("DiffTab discard", () => {
 	beforeEach(() => {
 		status = STATUS;
+		commits = [];
+		gitPanelActions.reset();
 		discard.mockReset();
 		discard.mockResolvedValue(undefined);
 	});
@@ -80,14 +89,15 @@ describe("DiffTab discard", () => {
 			screen.getByRole("button", { name: "Delete file" }),
 		).toBeInTheDocument();
 		expect(
-			screen.getByRole("button", { name: "Discard all unstaged changes" }),
+			screen.getByRole("button", { name: "Discard all changes" }),
+		).toBeInTheDocument();
+		// One per group, and only the Changes group has a discard-all beside it.
+		expect(
+			screen.getByRole("button", { name: "Unstage all files" }),
 		).toBeInTheDocument();
 		expect(
-			screen.queryByRole("button", { name: "Unstage All" }),
+			screen.getByRole("button", { name: "Stage all files" }),
 		).toBeInTheDocument();
-		expect(
-			screen.queryByRole("button", { name: "Discard all staged changes" }),
-		).not.toBeInTheDocument();
 	});
 
 	it("discards a tracked file only after the warning is confirmed", async () => {
@@ -143,7 +153,7 @@ describe("DiffTab discard", () => {
 		renderTab();
 
 		await user.click(
-			screen.getByRole("button", { name: "Discard all unstaged changes" }),
+			screen.getByRole("button", { name: "Discard all changes" }),
 		);
 
 		expect(
@@ -233,5 +243,94 @@ describe("DiffTab discard", () => {
 
 		await waitFor(() => expect(discard).toHaveBeenCalled());
 		expect(onCloseFile).not.toHaveBeenCalled();
+	});
+});
+
+const COMMITS: GitCommit[] = [
+	{
+		hash: "9692fc9aaaaaaaa",
+		subject: "Add branch bar to git panel",
+		author: "sijiaoh",
+		date: new Date().toISOString(),
+	},
+	{
+		hash: "1c4b8e0bbbbbbbb",
+		subject: "Render every codex_changes event",
+		author: "sijiaoh",
+		date: new Date().toISOString(),
+	},
+];
+
+const historyToggle = () => screen.getByRole("button", { name: /History/i });
+
+describe("DiffTab history", () => {
+	beforeEach(() => {
+		commits = COMMITS;
+		gitPanelActions.reset();
+	});
+
+	// The diff is the subject whenever there is one; history is what is left to
+	// look at when there is not.
+	it("collapses while there are changes and expands on a clean tree", () => {
+		status = STATUS;
+		const { unmount } = renderTab();
+		expect(historyToggle()).toHaveAttribute("aria-expanded", "false");
+		unmount();
+
+		status = { staged: [], unstaged: [] };
+		renderTab();
+		expect(historyToggle()).toHaveAttribute("aria-expanded", "true");
+	});
+
+	// A section that keeps re-deciding for the user is worse than one that is
+	// occasionally in the wrong state.
+	it("keeps the user's choice once they have made one", async () => {
+		const user = userEvent.setup();
+		status = STATUS;
+		const { unmount } = renderTab();
+
+		await user.click(historyToggle());
+		expect(historyToggle()).toHaveAttribute("aria-expanded", "true");
+		unmount();
+
+		status = { staged: [], unstaged: [] };
+		renderTab();
+		expect(historyToggle()).toHaveAttribute("aria-expanded", "true");
+	});
+});
+
+describe("DiffTab amend", () => {
+	beforeEach(() => {
+		status = { staged: [], unstaged: [] };
+		commits = COMMITS;
+		gitPanelActions.reset();
+	});
+
+	// Amend belongs to the commit it replaces, and that commit is HEAD — the
+	// first row of the log, and only that row.
+	it("offers amend on the HEAD row only", () => {
+		renderTab();
+
+		expect(
+			screen.getAllByRole("button", { name: "Amend this commit" }),
+		).toHaveLength(1);
+	});
+
+	it("opens the commit sheet with amend pre-toggled", async () => {
+		const user = userEvent.setup();
+		renderTab();
+
+		await user.click(screen.getByRole("button", { name: "Amend this commit" }));
+
+		expect(screen.getByRole("dialog")).toHaveTextContent("amending");
+	});
+
+	it("has nothing to amend in a repository without commits", () => {
+		commits = [];
+		renderTab();
+
+		expect(
+			screen.queryByRole("button", { name: "Amend this commit" }),
+		).not.toBeInTheDocument();
 	});
 });

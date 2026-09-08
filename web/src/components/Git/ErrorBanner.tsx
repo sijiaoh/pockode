@@ -1,5 +1,7 @@
 import { AlertTriangle, X } from "lucide-react";
 import { useState } from "react";
+import GitOutput from "./GitOutput";
+import { iconButtonClass } from "./iconButtonClass";
 
 interface Props {
 	/** One line of plain language: what failed. */
@@ -44,19 +46,16 @@ function ErrorBanner({ summary, details, onDismiss }: Props) {
 					)}
 				</div>
 				{showDetails && details && (
-					// Capped and scrollable: a hook or a long git refusal can run to
-					// dozens of lines, and the banner must not push the file list off
-					// the screen it is reporting about.
-					<pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded bg-th-bg-tertiary p-2 font-mono text-xs text-th-text-secondary">
-						{details}
-					</pre>
+					<div className="mt-1">
+						<GitOutput>{details}</GitOutput>
+					</div>
 				)}
 			</div>
 			<button
 				type="button"
 				onClick={onDismiss}
 				aria-label="Dismiss error"
-				className="flex min-h-[36px] min-w-[36px] shrink-0 items-center justify-center rounded-md text-th-text-secondary transition-colors hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+				className={iconButtonClass()}
 			>
 				<X className="h-4 w-4" aria-hidden="true" />
 			</button>

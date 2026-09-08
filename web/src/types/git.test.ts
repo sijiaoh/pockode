@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makeSync } from "../test/gitFixtures";
-import type { FileStatus, GitSync, GitSyncState } from "./git";
+import type { FileStatus, GitStatus, GitSync, GitSyncState } from "./git";
 import {
 	describeCommitAction,
 	describeDiscard,
@@ -15,12 +15,26 @@ describe("describeGitSync", () => {
 		want: GitSyncState;
 	}[] = [
 		{
+			// Pulling stays available with nothing known to pull: behind is only as
+			// fresh as the last fetch, and the pull fetches first.
 			name: "up to date",
 			sync: {},
 			want: {
 				needsPublish: false,
 				diverged: false,
-				canPull: false,
+				canPull: true,
+				canPush: false,
+			},
+		},
+		{
+			// The regression this rule exists for: a worktree that has never
+			// fetched reads as 0 behind, which used to disable pull outright.
+			name: "never fetched",
+			sync: { last_fetch: null },
+			want: {
+				needsPublish: false,
+				diverged: false,
+				canPull: true,
 				canPush: false,
 			},
 		},
@@ -40,7 +54,7 @@ describe("describeGitSync", () => {
 			want: {
 				needsPublish: false,
 				diverged: false,
-				canPull: false,
+				canPull: true,
 				canPush: true,
 			},
 		},
@@ -100,68 +114,75 @@ describe("describeGitSync", () => {
 });
 
 describe("describeCommitAction", () => {
-	const cases: {
-		name: string;
-		staged: number | null;
-		hasCommits: boolean;
-		label: string;
-		enabled: boolean;
-		amend: boolean;
-	}[] = [
-		{
-			name: "staged files",
-			staged: 2,
-			hasCommits: true,
+	const status = (staged: string[], unstaged: string[]): GitStatus => ({
+		staged: staged.map((path) => ({ path, status: "M" as const })),
+		unstaged: unstaged.map((path) => ({ path, status: "M" as const })),
+	});
+
+	it("offers the staged count", () => {
+		expect(describeCommitAction(status(["a.ts", "b.ts"], []))).toEqual({
 			label: "Commit (2)",
 			enabled: true,
-			amend: false,
-		},
-		{
-			name: "nothing staged, with history",
-			staged: 0,
-			hasCommits: true,
-			label: "Amend last commit",
-			enabled: true,
-			amend: true,
-		},
-		{
-			name: "nothing staged, no commits yet",
-			staged: 0,
-			hasCommits: false,
-			label: "Commit",
-			enabled: false,
-			amend: false,
-		},
-		{
-			// An unreadable status is not an empty one: offering to amend here
-			// would be a guess about a repository nothing is known about.
-			name: "status unavailable",
-			staged: null,
-			hasCommits: true,
-			label: "Commit",
-			enabled: false,
-			amend: false,
-		},
-		{
-			// The first commit of a repository, which has nothing to amend.
-			name: "staged files, no commits yet",
-			staged: 1,
-			hasCommits: false,
-			label: "Commit (1)",
-			enabled: true,
-			amend: false,
-		},
-	];
-
-	for (const c of cases) {
-		it(c.name, () => {
-			expect(describeCommitAction(c.staged, c.hasCommits)).toEqual({
-				label: c.label,
-				enabled: c.enabled,
-				amend: c.amend,
-			});
+			hint: null,
 		});
-	}
+	});
+
+	// The user is on their way to committing: a target that only appears once the
+	// first file is staged is worse than one that is visibly not ready yet.
+	it("keeps a disabled button while there is something to stage", () => {
+		expect(describeCommitAction(status([], ["a.ts"]))).toEqual({
+			label: "Commit",
+			enabled: false,
+			// The stage buttons it names are on screen right above the bar, so it
+			// is worth saying to a screen reader and not worth a line of text.
+			hint: { text: "Stage a file to commit", alreadyOnScreen: true },
+		});
+	});
+
+	// The file groups above the bar list submodule files too, so a bar that
+	// vanishes there would leave staged rows on screen with no commit button and
+	// no account of why.
+	it("explains itself when only a submodule has something staged", () => {
+		expect(
+			describeCommitAction({
+				...status([], []),
+				submodules: { "vendor/sdk": status(["sub.ts"], []) },
+			}),
+		).toEqual({
+			label: "Commit",
+			enabled: false,
+			// Nothing else on the panel accounts for this one: the rows read as
+			// staged like any other, so the bar has to spend a line saying it.
+			hint: {
+				text: "Only submodule files are staged; ask the agent in chat to commit them.",
+				alreadyOnScreen: false,
+			},
+		});
+	});
+
+	it("counts a submodule's unstaged files as something to stage", () => {
+		expect(
+			describeCommitAction({
+				...status([], []),
+				submodules: { "vendor/sdk": status([], ["sub.ts"]) },
+			}),
+		).toMatchObject({
+			enabled: false,
+			hint: { text: "Stage a file to commit" },
+		});
+	});
+
+	// Nothing to commit and nothing on its way to being committed: the bar itself
+	// is what goes away, not just its button.
+	it("renders no bar on a clean tree", () => {
+		expect(describeCommitAction(status([], []))).toBeNull();
+	});
+
+	// An unreadable status is not an empty one, and the panel is already showing
+	// why it could not be read.
+	it("renders no bar without a status", () => {
+		expect(describeCommitAction(undefined)).toBeNull();
+	});
 });
 
 describe("stagedSubmodules", () => {

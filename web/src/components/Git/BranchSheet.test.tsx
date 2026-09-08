@@ -65,6 +65,55 @@ describe("BranchSheet", () => {
 		expect(onCheckout).toHaveBeenCalledWith("colleague");
 	});
 
+	// Sheet caps its own height (Sheet.test.tsx); what belongs here is that the
+	// branch list is what scrolls inside that cap, and that the way out of a long
+	// list does not scroll away with it.
+	describe("with more branches than fit on screen", () => {
+		const many = {
+			...branches,
+			local: Array.from({ length: 60 }, (_, i) => ({
+				name: `topic/${i}`,
+				current: i === 0,
+			})),
+		};
+
+		it("scrolls the rows and leaves the footer out of it", () => {
+			renderSheet({ branches: many });
+
+			const scroller = screen.getByRole("button", { name: /topic\/59/ })
+				.parentElement as HTMLElement;
+			expect(scroller).toHaveClass("overflow-y-auto");
+			// The footer is the way out when none of these branches are right;
+			// inside the scroller it would sit below 60 rows.
+			expect(scroller).not.toContainElement(
+				screen.getByRole("button", { name: /New branch/ }),
+			);
+		});
+
+		it("pins the filter above the rows", () => {
+			renderSheet({ branches: many });
+
+			expect(
+				screen.getByLabelText("Filter branches").closest(".sticky"),
+			).not.toBeNull();
+		});
+
+		// A refusal that lands off the top of the sheet is indistinguishable from
+		// a row that did nothing, and the user tapped that row from halfway down.
+		it("pins a failed switch above the rows", async () => {
+			const user = userEvent.setup();
+			renderSheet({
+				branches: many,
+				onCheckout: vi.fn().mockRejectedValue(new Error("boom")),
+			});
+
+			await user.click(screen.getByRole("button", { name: /topic\/59/ }));
+
+			const alert = await screen.findByRole("alert");
+			expect(alert.closest(".sticky")).not.toBeNull();
+		});
+	});
+
 	// Uncommitted changes are never stashed, so the user has to be able to read
 	// which files got in the way without the sheet closing on them.
 	it("keeps git's refusal on screen when a switch fails", async () => {

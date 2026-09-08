@@ -362,13 +362,25 @@ focus — tapping an option chip blurs the input, which would otherwise flash th
 tree back on screen. The box and the result count sit outside the scrolling
 list, so they stay visible above the mobile keyboard.
 
+The box shares its row with the upload button, and its wrapper is the row's one
+`flex-1 min-w-0` element while every sibling is `shrink-0` — the narrow-width
+rule in [sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule). Without the
+`min-w-0` the wrapper could not shrink below its own icons, which is what made
+this the row that visibly broke when the panel was narrowed.
+
 Two chips, shown only while a search is running, expose the options the UI
 varies; both persist in `localStorage`:
 
 | Chip | Key | Default | Effect |
 |------|-----|---------|--------|
 | `.gitignore` | `files-search-respect-gitignore` | on | Sets `respect_gitignore` |
-| `File contents` | `files-search-content` | off | Switches `mode` to `content` |
+| `Contents` | `files-search-content` | off | Switches `mode` to `content` |
+
+The chip reads `Contents` rather than `File contents`; the long form stays in
+its `title`. Side by side the two chips carry no `overflow-hidden`, so their
+floor is their own text — at the long label they needed ~245px and overflowed a
+240px panel — and the row wraps (`flex-wrap`) rather than scrolling sideways
+inside a panel that narrow.
 
 Since respecting `.gitignore` defaults to **on**, an absent entry has to read as
 true and only an explicit `"false"` turns it off. `path` and `case_sensitive`
@@ -570,14 +582,36 @@ does not turn on it.
 
 ## Uploading
 
-The entry point is a button in the Files tab's search row that doubles as the
-destination indicator: it reads `Upload to <folder>` and shows that folder's
-name, or nothing when uploads go to the project root. Tapping any folder in the
-tree sets it — expanding or collapsing, since either is the nearest thing to a
-statement about where the user is working — and that folder carries a faint
-accent tint, distinct in hue from the grey of the file being viewed. The button
+The entry point is a 36×36 icon-only button in the Files tab's search row,
+monochrome and unlabelled: uploading happens a few times a week beside a tree
+the user touches constantly, so it takes the weight of an inline utility rather
+than of an action the panel is about (L5 in [sidebar-ui.md](sidebar-ui.md)). It
 is not a convenience next to drag and drop: a touch screen has no HTML5 drag,
 and drag is unreachable from a keyboard or a screen reader anywhere.
+
+Tapping any folder in the tree sets the destination — expanding or collapsing,
+since either is the nearest thing to a statement about where the user is
+working. Three things say where the upload will land, and none of them is a
+label on the button:
+
+- **The tree**, the only surface that can actually point at a folder. The
+  destination row takes a 2px `bg-th-accent` left bar and an accent folder
+  icon, and keeps its normal background. The bar alone would be the stricter
+  reading of "a standing state is a bar, not a fill", but the bar sits at the
+  panel's left edge and the row it marks can be four indents away from it; the
+  icon is the only cue that lands at the row's own depth, and it costs no
+  pixels. It used to take a `bg-th-accent/5` fill, which was a second kind
+  of row highlight competing with the `bg-th-bg-tertiary` of the file being
+  read; a left bar annotates the row instead of appearing to select it. The
+  border is on every row and transparent when unused, so turning it on cannot
+  nudge the tree sideways.
+- **The button's accessible name and tooltip**, which carry the whole path
+  (`Upload to src/components`, `Upload to project root`). This is the only
+  channel a screen reader has, and it is unchanged.
+- **A 6px accent dot** in the button's corner, shown only when the destination
+  is not the workspace root. It says "aimed somewhere other than the root" in
+  6px where the folder name spent up to 112px, and it is what sends the user
+  looking at the tree for the bar.
 
 A destination that has since been deleted or renamed falls back to the root
 silently, checked against the parent's cached listing at the moment files are
@@ -621,7 +655,8 @@ Three things about drag and drop are not optional:
   would leave the panel lit up.
 - **The drop bar, the queue and the error banner are `pointer-events-none` while
   a drag is up.** The cursor crossing one would otherwise resolve the
-  destination back to the root while the bar still read `Upload to src`.
+  destination back to the root while the tree still marked `src` as the
+  destination.
 
 Two affordances exist because a drag cannot click or scroll. **Hovering a folder
 for 700 ms opens it** — otherwise a collapsed folder could never receive a drop
@@ -669,8 +704,10 @@ says what was left behind.
 
 Visually the panel takes a **ring**, not a border — a border takes a pixel from
 the layout and would nudge the whole tree sideways the moment a drag arrives —
-and the folder under the cursor is tinted more strongly than the standing
-destination tint, since it is answering a cursor that is moving right now.
+and the folder under the cursor takes an accent *fill*, where the standing
+destination takes only its left bar. The difference in kind is the point: the
+fill is answering a cursor that is moving right now, the bar is a state that
+holds until it is changed.
 
 **One request per file** (`lib/fileUpload.ts`), though the endpoint accepts any
 number of parts. Progress is reported for a request as a whole and could not be

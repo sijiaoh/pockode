@@ -137,41 +137,87 @@ export function describeGitSync(sync: GitSync): GitSyncState {
 	return {
 		needsPublish,
 		diverged: !needsPublish && sync.ahead > 0 && sync.behind > 0,
-		canPull: !needsPublish && sync.behind > 0,
+		// Not gated on behind: that count is only as fresh as the last fetch, and
+		// the server's pull fetches first anyway (server/git/remote.go), so a
+		// worktree that has never fetched would have pulling disabled at exactly
+		// the moment it is needed. behind only shapes the label.
+		canPull: sync.has_remote && !needsPublish,
 		// Without a remote there is nowhere to publish to, however unpublished
 		// the branch looks.
 		canPush: sync.has_remote && (needsPublish || sync.ahead > 0),
 	};
 }
 
-/** What the panel's commit button offers, given what is staged and what HEAD is. */
+/** What the panel's commit bar offers. */
 export interface GitCommitAction {
 	label: string;
 	enabled: boolean;
-	/** Open the sheet with amend pre-toggled: there is nothing else to commit. */
-	amend: boolean;
+	hint: GitCommitHint | null;
+}
+
+/** Why the commit button is disabled. */
+export interface GitCommitHint {
+	text: string;
+	/**
+	 * Whether the panel already shows the reason — the stage buttons the usual
+	 * hint points at sit right above the bar. The bar keeps such a hint for a
+	 * screen reader and spends no pixels repeating on screen what the screen
+	 * already says; a reason nothing else accounts for has to be visible.
+	 */
+	alreadyOnScreen: boolean;
 }
 
 /**
- * stagedCount is null when the status could not be read — the button then says
- * nothing about what is committable rather than guessing "nothing staged".
+ * What the commit bar offers, or null where the bar does not render at all.
+ *
+ * A clean tree has nothing to commit and nothing on its way to being committed,
+ * so a permanently dead primary button would be the loudest thing on a panel
+ * that has nothing to say. An unreadable status is not an empty one either —
+ * undefined covers both, and the panel is already showing why.
+ *
+ * The disabled button, where there are changes but nothing this commit can
+ * record, is deliberate: the user is on their way to committing, and a target
+ * that appears as they stage the first file is worse than one that is visibly
+ * not ready yet.
  */
 export function describeCommitAction(
-	stagedCount: number | null,
-	hasCommits: boolean,
-): GitCommitAction {
-	if (stagedCount === null) {
-		return { label: "Commit", enabled: false, amend: false };
+	status: GitStatus | undefined,
+): GitCommitAction | null {
+	if (!status) return null;
+
+	// Root repository only: git.add stages a submodule's file in that
+	// submodule's index, which a root commit does not touch.
+	const staged = status.staged.length;
+	if (staged > 0) {
+		return { label: `Commit (${staged})`, enabled: true, hint: null };
 	}
-	if (stagedCount > 0) {
-		return { label: `Commit (${stagedCount})`, enabled: true, amend: false };
+
+	// Whether the bar exists at all follows the flattened counts, which is what
+	// the file groups above it show: with a submodule's files listed as staged
+	// and no bar under them, the panel would offer no account of where the
+	// commit button went.
+	const flat = flattenGitStatus(status);
+	if (flat.staged.length + flat.unstaged.length === 0) return null;
+
+	// Staged, but somewhere this commit cannot reach. Nothing else on the panel
+	// says so — the rows read as staged like any other — so this is the one hint
+	// the bar has to spend a line on.
+	if (flat.staged.length > 0) {
+		return {
+			label: "Commit",
+			enabled: false,
+			hint: {
+				text: "Only submodule files are staged; ask the agent in chat to commit them.",
+				alreadyOnScreen: false,
+			},
+		};
 	}
-	// Nothing staged leaves amending as the only thing to commit, and before the
-	// first commit there is not even that.
-	if (hasCommits) {
-		return { label: "Amend last commit", enabled: true, amend: true };
-	}
-	return { label: "Commit", enabled: false, amend: false };
+
+	return {
+		label: "Commit",
+		enabled: false,
+		hint: { text: "Stage a file to commit", alreadyOnScreen: true },
+	};
 }
 
 /** One submodule's staged files, which a root-repository commit leaves behind. */

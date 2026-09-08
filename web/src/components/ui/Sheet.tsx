@@ -55,6 +55,11 @@ function useLockBodyScroll(): void {
  *
  * The body scrolls between a fixed header and footer; it has no padding of its
  * own so a sheet can put full-bleed rows in it.
+ *
+ * Both layouts cap the content box against the viewport. Without a cap the
+ * column is as tall as its content, so the body's overflow never has anything
+ * to scroll and a long list (dozens of branches) runs off both edges of a
+ * centered modal, taking the footer with it.
  */
 function Sheet({
 	title,
@@ -109,7 +114,9 @@ function Sheet({
 			{/* Content */}
 			<div
 				className={`relative flex w-full flex-col bg-th-bg-secondary shadow-xl ${
-					mobile ? "max-h-[90dvh] rounded-t-2xl" : "mx-4 max-w-md rounded-xl"
+					mobile
+						? "max-h-[90dvh] rounded-t-2xl"
+						: "mx-4 max-h-[85dvh] max-w-md rounded-xl"
 				}`}
 			>
 				{/* Drag handle - mobile only */}

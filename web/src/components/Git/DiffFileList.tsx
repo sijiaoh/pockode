@@ -1,6 +1,8 @@
-import { Loader2, Undo2 } from "lucide-react";
+import { Loader2, Minus, Plus, Undo2 } from "lucide-react";
 import type { FileStatus } from "../../types/git";
 import DiffFileItem from "./DiffFileItem";
+import GroupHeader from "./GroupHeader";
+import { iconButtonClass } from "./iconButtonClass";
 
 interface Props {
 	title: string;
@@ -39,53 +41,51 @@ function DiffFileList({
 	const isTogglingAny = files.some((f) => togglingPaths.has(f.path));
 	const isDiscardingAny = files.some((f) => isDiscarding(f.path));
 	const isBusy = isTogglingAny || isDiscardingAny;
-	const toggleAllLabel = staged ? "Unstage All" : "Stage All";
+	const ToggleAllIcon = staged ? Minus : Plus;
+	const toggleAllLabel = staged ? "Unstage all files" : "Stage all files";
 
 	return (
 		<div className="flex flex-col">
-			<div className="flex items-center justify-between px-3 py-2">
-				<span className="text-xs uppercase text-th-text-muted">
-					{title} ({files.length})
-				</span>
-				{/* Gapped rather than flush, so the destructive button is not a
-				    neighbour of the one used all day. */}
-				<div className="flex items-center gap-3">
-					{onDiscardAll && (
+			<GroupHeader
+				label={`${title} ${files.length}`}
+				actions={
+					/* Gapped rather than flush, so the destructive button is not a
+					   neighbour of the one used all day. */
+					<div className="flex shrink-0 items-center gap-3">
+						{onDiscardAll && (
+							<button
+								type="button"
+								onClick={onDiscardAll}
+								disabled={isBusy}
+								aria-label="Discard all changes"
+								className={iconButtonClass(isBusy)}
+							>
+								{isDiscardingAny ? (
+									<Loader2
+										className="h-4 w-4 animate-spin"
+										aria-hidden="true"
+									/>
+								) : (
+									<Undo2 className="h-4 w-4" aria-hidden="true" />
+								)}
+							</button>
+						)}
 						<button
 							type="button"
-							onClick={onDiscardAll}
+							onClick={onToggleAll}
 							disabled={isBusy}
-							aria-label={`Discard all ${title.toLowerCase()} changes`}
-							className={`flex min-h-[36px] min-w-[36px] items-center justify-center rounded-md transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
-								isBusy
-									? "opacity-50 cursor-not-allowed text-th-text-muted"
-									: "text-th-text-secondary hover:text-th-text-primary active:scale-95"
-							}`}
+							aria-label={toggleAllLabel}
+							className={iconButtonClass(isBusy)}
 						>
-							{isDiscardingAny ? (
+							{isTogglingAll ? (
 								<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
 							) : (
-								<Undo2 className="h-4 w-4" aria-hidden="true" />
+								<ToggleAllIcon className="h-4 w-4" aria-hidden="true" />
 							)}
 						</button>
-					)}
-					<button
-						type="button"
-						onClick={onToggleAll}
-						disabled={isBusy}
-						className={`flex items-center gap-1 rounded px-2 py-1 text-xs transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
-							isBusy
-								? "opacity-50 cursor-not-allowed text-th-text-muted"
-								: "text-th-text-secondary hover:text-th-text-primary active:scale-95"
-						}`}
-					>
-						{isTogglingAll && (
-							<Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
-						)}
-						{toggleAllLabel}
-					</button>
-				</div>
-			</div>
+					</div>
+				}
+			/>
 			<div className="flex flex-col gap-1 px-2 pb-1">
 				{files.map((file) => (
 					<DiffFileItem

@@ -1,65 +1,64 @@
-import { useState } from "react";
-import { useGitBranches } from "../../hooks/useGitBranches";
-import { useGitCreateCommit } from "../../hooks/useGitCreateCommit";
+import { useId, useState } from "react";
 import { useGitStatus } from "../../hooks/useGitStatus";
-import { describeCommitAction, stagedSubmodules } from "../../types/git";
+import { describeCommitAction } from "../../types/git";
 import { BottomActionBar } from "../ui";
-import CommitSheet, { type LastCommit } from "./CommitSheet";
+import GitCommitSheet from "./GitCommitSheet";
 
 /**
- * The panel's fixed bottom row: one button, whatever there is to commit.
+ * The panel's fixed bottom row: one button, for as long as there is something to
+ * commit or something on its way to being committed.
  *
- * It reads the same two queries the rest of the panel does — react-query serves
- * both from cache — and renders outside DiffTab's loading/error branch, so the
- * action stays reachable however far the user has scrolled into History.
+ * It renders outside DiffTab's loading/error branch, so the action stays
+ * reachable however far the user has scrolled into History.
  */
 function CommitBar() {
 	const { data: status } = useGitStatus();
-	const { data: branches } = useGitBranches();
-	const commitMutation = useGitCreateCommit();
 	const [isOpen, setIsOpen] = useState(false);
+	const hintId = useId();
 
-	// Root repository only: git.add stages a submodule's file in that
-	// submodule's index, which a root commit does not touch.
-	const stagedCount = status ? status.staged.length : null;
-	const head = branches?.head;
-	const lastCommit: LastCommit | null = head?.hash
-		? {
-				message: head.message,
-				pushedTo: branches?.sync.head_pushed ? branches.sync.upstream : null,
-			}
-		: null;
-
-	const action = describeCommitAction(stagedCount, lastCommit !== null);
+	const action = describeCommitAction(status);
 
 	return (
-		<BottomActionBar>
-			<button
-				type="button"
-				onClick={() => setIsOpen(true)}
-				disabled={!action.enabled}
-				className="flex min-h-[44px] w-full items-center justify-center rounded-lg bg-th-accent text-sm font-medium text-th-accent-text transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-			>
-				{action.label}
-			</button>
+		<>
+			{/* The bar comes and goes with what is committable; the sheet does not.
+			    Unmounting it along with the bar would throw away a half-written
+			    message the moment a background refresh found the tree clean. */}
+			{action && (
+				<BottomActionBar>
+					{/* Above the button, on the same rule the sheets follow: the bar
+					    already sits at the bottom edge, so a line under the button is the
+					    first thing an on-screen keyboard covers. */}
+					{action.hint && (
+						<span
+							id={hintId}
+							className={
+								action.hint.alreadyOnScreen
+									? "sr-only"
+									: "mb-1.5 block text-xs text-th-text-muted"
+							}
+						>
+							{action.hint.text}
+						</span>
+					)}
+					<button
+						type="button"
+						onClick={() => setIsOpen(true)}
+						disabled={!action.enabled}
+						aria-describedby={action.hint ? hintId : undefined}
+						className="flex min-h-[44px] w-full items-center justify-center rounded-lg bg-th-accent text-sm font-medium text-th-accent-text transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+					>
+						{action.label}
+					</button>
+				</BottomActionBar>
+			)}
 
 			{isOpen && (
-				<CommitSheet
-					stagedCount={stagedCount ?? 0}
-					submodules={status ? stagedSubmodules(status) : []}
-					lastCommit={lastCommit}
-					amendInitially={action.amend}
+				<GitCommitSheet
+					amendInitially={false}
 					onClose={() => setIsOpen(false)}
-					// The sheet reports the outcome itself and stays open on failure,
-					// so the error stops there rather than becoming an unhandled
-					// rejection here.
-					onCommit={async (message, amend) => {
-						await commitMutation.mutateAsync({ message, amend });
-						setIsOpen(false);
-					}}
 				/>
 			)}
-		</BottomActionBar>
+		</>
 	);
 }
 

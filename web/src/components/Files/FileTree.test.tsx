@@ -35,7 +35,7 @@ let scrollContainer: HTMLElement | null = null;
  * whatever the cursor is over, and the tree is the only thing that puts those
  * there. Testing either against a stand-in would let them drift apart.
  */
-function Panel() {
+function Panel({ uploadDestPath = "" }: { uploadDestPath?: string }) {
 	const drop = useFileDrop({
 		enabled: true,
 		onDrop,
@@ -48,7 +48,7 @@ function Panel() {
 				activeFilePath={null}
 				expandSignal={0}
 				watchEnabled={false}
-				uploadDestPath=""
+				uploadDestPath={uploadDestPath}
 				onSelectDir={vi.fn()}
 				dropTargetPath={drop.destPath}
 				springOpenPath={drop.springOpenPath}
@@ -61,7 +61,7 @@ function entry(name: string, type: "file" | "dir", dir = ""): Entry {
 	return { name, type, path: dir ? `${dir}/${name}` : name };
 }
 
-function renderTree(listings: Record<string, Entry[]>) {
+function renderTree(listings: Record<string, Entry[]>, uploadDestPath = "") {
 	const queryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
@@ -70,7 +70,7 @@ function renderTree(listings: Record<string, Entry[]>) {
 	}
 	return render(
 		<QueryClientProvider client={queryClient}>
-			<Panel />
+			<Panel uploadDestPath={uploadDestPath} />
 		</QueryClientProvider>,
 	);
 }
@@ -160,6 +160,15 @@ describe("FileTree as a drop target", () => {
 		dragOver(row);
 
 		expect(row).toHaveClass("bg-th-accent/10");
+	});
+
+	it("annotates the upload destination without a second row highlight", () => {
+		renderTree({ "": [entry("src", "dir")] }, "src");
+		const row = screen.getByRole("button", { name: "Expand folder: src" });
+
+		expect(row).toHaveClass("border-th-accent");
+		// A fill here would compete with the row of the file being read.
+		expect(row.className).not.toContain("bg-th-accent");
 	});
 
 	it("opens a closed folder held under the cursor, and then drops into it", () => {
