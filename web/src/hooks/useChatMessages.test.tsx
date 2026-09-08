@@ -134,4 +134,52 @@ describe("useChatMessages", () => {
 		expect(latest.map((m) => m.role)).toEqual(["user", "user", "assistant"]);
 		expect((latest.at(-1) as AssistantMessage).status).toBe("sending");
 	});
+
+	// A Task subagent keeps talking for a moment after the user stops the turn.
+	// isStreaming is what blocks the composer and shows the Stop button, so a
+	// late message reviving it makes a stopped session look like a running one.
+	it("stays out of streaming when a late message follows an interrupt", async () => {
+		let notify: ((notification: ServerNotification) => void) | undefined;
+		mockState.chatMessagesSubscribe.mockImplementation(
+			async (
+				_sessionId: string,
+				onNotification: (notification: ServerNotification) => void,
+			) => {
+				notify = onNotification;
+				return {
+					id: "sub-1",
+					initial: {
+						history: [
+							{ type: "message", content: "Do the thing" },
+							{ type: "text", content: "Working" },
+						],
+						state: "running",
+						mode: "default",
+						agent_type: "claude",
+					},
+				};
+			},
+		);
+
+		let streaming = false;
+		function StreamProbe() {
+			const { isStreaming } = useChatMessages({ sessionId: "s1" });
+			streaming = isStreaming;
+			return null;
+		}
+
+		render(<StreamProbe />);
+		await waitFor(() => expect(streaming).toBe(true));
+
+		act(() => notify?.({ type: "interrupted" } as ServerNotification));
+		expect(streaming).toBe(false);
+
+		act(() =>
+			notify?.({
+				type: "text",
+				content: "Task finished",
+			} as ServerNotification),
+		);
+		expect(streaming).toBe(false);
+	});
 });

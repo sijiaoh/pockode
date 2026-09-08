@@ -236,11 +236,32 @@ func TestParseLine(t *testing.T) {
 			}},
 		},
 		{
-			name:  "user tool_result with non-image array content",
+			// The Agent (subagent) tool reports this way and its report is
+			// Markdown: the UI has to receive the text, not the JSON around it.
+			name:  "user tool_result with text array content is joined",
 			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_arr","content":[{"type":"text","text":"line 1"},{"type":"text","text":"line 2"}]}]}}`,
 			expected: []agent.AgentEvent{agent.ToolResultEvent{
 				ToolUseID:  "toolu_arr",
-				ToolResult: `[{"type":"text","text":"line 1"},{"type":"text","text":"line 2"}]`,
+				ToolResult: "line 1\nline 2",
+			}},
+		},
+		{
+			// Anything that is not a pure text array stays raw rather than being
+			// silently reduced to the parts we happen to understand.
+			name:  "user tool_result with mixed array content stays raw",
+			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_mix","content":[{"type":"text","text":"line 1"},{"type":"other","text":"line 2"}]}]}}`,
+			expected: []agent.AgentEvent{agent.ToolResultEvent{
+				ToolUseID:  "toolu_mix",
+				ToolResult: `[{"type":"text","text":"line 1"},{"type":"other","text":"line 2"}]`,
+			}},
+		},
+		{
+			name:  "user tool_result carries the CLI's error flag",
+			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_err","content":"Agent type not found","is_error":true}]}}`,
+			expected: []agent.AgentEvent{agent.ToolResultEvent{
+				ToolUseID:  "toolu_err",
+				ToolResult: "Agent type not found",
+				IsError:    true,
 			}},
 		},
 		{

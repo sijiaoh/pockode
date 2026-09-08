@@ -219,6 +219,9 @@ func (e ToolCallEvent) ToRecord() EventRecord {
 type ToolResultEvent struct {
 	ToolUseID  string
 	ToolResult string
+	// IsError reports that the tool call failed. Best-effort: only set when the
+	// agent CLI says so, never inferred from the result text.
+	IsError bool
 }
 
 func (ToolResultEvent) EventType() EventType { return EventTypeToolResult }
@@ -229,6 +232,7 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 		Type:       e.EventType(),
 		ToolUseID:  e.ToolUseID,
 		ToolResult: e.ToolResult,
+		IsError:    e.IsError,
 	}
 }
 

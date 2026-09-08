@@ -5,6 +5,7 @@ import {
 	expirePendingDialogs,
 	normalizeEvent,
 	replayHistory,
+	settleRunningTasks,
 	updatePermissionRequestStatus,
 	updateQuestionStatus as updateQuestionStatusReducer,
 } from "../lib/messageReducer";
@@ -162,9 +163,11 @@ export function useChatMessages({
 					let messages = replayHistory(result.initial.history);
 					// After server restart, history won't contain process_ended events
 					// for processes that were killed. Use the authoritative process state
-					// to expire any orphaned pending dialogs.
+					// to expire any orphaned pending dialogs and settle Tasks that were
+					// still running — nothing is left to report back on them.
 					if (result.initial.state === "ended") {
 						messages = expirePendingDialogs(messages);
+						messages = settleRunningTasks(messages);
 					}
 					setMessages(messages);
 				}

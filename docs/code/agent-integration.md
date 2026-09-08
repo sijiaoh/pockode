@@ -241,6 +241,7 @@ type EventRecord struct {
     ToolInput             json.RawMessage    `json:"tool_input,omitempty"`
     ToolUseID             string             `json:"tool_use_id,omitempty"`
     ToolResult            string             `json:"tool_result,omitempty"`
+    IsError               bool               `json:"is_error,omitempty"`
     Error                 string             `json:"error,omitempty"`
     Message               string             `json:"message,omitempty"`
     Code                  string             `json:"code,omitempty"`
@@ -256,6 +257,12 @@ type EventRecord struct {
 ```
 
 **Design Decision**: A single format avoids type conversion errors during serialization/deserialization.
+
+`IsError` is best-effort and is only ever set from what the CLI itself reports —
+Claude's `is_error` on a `tool_result` block, Codex's command exit code, patch
+`success`, and MCP call error. It is never inferred from the result text: a
+wrong "failed" badge is worse than no badge, so a CLI that stays silent leaves
+the call looking successful.
 
 ## Protocol Baselines
 
@@ -276,6 +283,14 @@ read at 0.130.0, but the approval path — policy values, elicitation payloads,
 response shapes, and where begin events fall around an approval — was re-checked
 live against **0.153.0**, which is where the captured approval fixtures in
 `agent/codex/mcp_test.go` come from.
+
+Claude has a smaller exception. The mapping was read at 2.1.222, but the
+`tool_result` content shapes and the subagent tool's name were checked live
+against **2.1.263**: that is where the text-block array below was observed, and
+where the subagent tool answers to `Agent`. Which version renamed it from
+`Task` was not established and does not matter — history recorded by older CLIs
+still says `Task`, so both names have to keep working
+([frontend-state.md](frontend-state.md#task-groups)).
 
 The versions are written down because these findings expire. When a mapping stops
 working, the useful question is which version changed what, and the way to answer
@@ -461,6 +476,16 @@ has no counterpart because its threads cannot outlive the CLI process at all (se
 | `system` | allowlisted subtypes | `SystemEvent` |
 | `system` | other | (dropped — internal bookkeeping) |
 | `progress`, `tool_progress`, `tool_use_summary`, `rate_limit_event`, `auth_status`, `prompt_suggestion`, `command_lifecycle` | — | (dropped — telemetry / host control) |
+
+A `user` message carries tool results, whose `content` arrives in three shapes.
+A JSON string is the result text as-is. An array of nothing but `text` blocks is
+joined into one string (`textBlocksContent`) — the subagent tool reports this
+way and its report is Markdown, so forwarding the array verbatim would show the
+user a wall of escaped JSON instead. Anything else — a mixed array, an object —
+is forwarded as raw JSON rather than reduced to the parts Pockode happens to
+recognize. Images are the exception that yields no result at all: an array
+holding an `image` block becomes an `image_not_supported` warning instead,
+which is why the `user` row above is not quite unconditional.
 
 `system` subtypes are **allowlisted**, not denylisted: the CLI emits dozens of
 internal subtypes (`task_started`, `task_notification`, `session_state_changed`,

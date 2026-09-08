@@ -31,6 +31,7 @@ import {
 import { ScrollableContent, Spinner } from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
 import { MarkdownContent } from "./MarkdownContent";
+import TaskGroupItem from "./TaskGroupItem";
 import ToolResultDisplay from "./ToolResultDisplay";
 import WorkCardItem from "./WorkCardItem";
 
@@ -545,6 +546,9 @@ function ContentPartItem({
 	if (part.type === "command_output") {
 		return <CommandOutputItem content={part.content} />;
 	}
+	if (part.type === "task_group") {
+		return <TaskGroupItem tasks={part.tasks} />;
+	}
 	return <ToolCallItem tool={part.tool} />;
 }
 
@@ -630,7 +634,12 @@ const MessageItem = memo(function MessageItem({
 										: part.type === "tool_call"
 											? // Index suffix: Claude Code resends tool_call after permission approval
 												`${part.tool.id}-${index}`
-											: `${part.type}-${index}`;
+											: part.type === "task_group"
+												? // Keyed on the anchor Task so a newly spawned one grows
+													// the group instead of remounting it and dropping what
+													// the user had expanded.
+													part.tasks[0].toolUseId
+												: `${part.type}-${index}`;
 							return (
 								<ContentPartItem
 									key={key}

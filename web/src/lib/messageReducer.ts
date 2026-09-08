@@ -9,6 +9,7 @@ import type {
 	ServerNotification,
 	StepDividerMessage,
 	SystemMessageMeta,
+	TaskRun,
 	UserMessage,
 	WorkCardMessage,
 	WorkTimelineEntry,
@@ -41,7 +42,12 @@ export type NormalizedEvent =
 			toolName: string;
 			toolInput: unknown;
 	  }
-	| { type: "tool_result"; toolUseId: string; toolResult: string }
+	| {
+			type: "tool_result";
+			toolUseId: string;
+			toolResult: string;
+			isError: boolean;
+	  }
 	| { type: "warning"; message: string; code: string }
 	| { type: "error"; error: string }
 	| { type: "done" }
@@ -109,6 +115,7 @@ export function normalizeEvent(
 				type: "tool_result",
 				toolUseId: record.tool_use_id as string,
 				toolResult: (record.tool_result as string) ?? "",
+				isError: record.is_error === true,
 			};
 		case "warning":
 			return {
@@ -188,6 +195,76 @@ export function normalizeEvent(
 	}
 }
 
+/**
+ * The subagent tool goes by two names: the CLI renamed `Task` to `Agent`
+ * (2.1.x emits `Agent`), and stored history holds whichever name was current
+ * when it was recorded. Both fold into the same group.
+ */
+function isTaskTool(toolName: string): boolean {
+	return toolName === "Task" || toolName === "Agent";
+}
+
+function parseTaskInput(input: unknown): Omit<TaskRun, "toolUseId" | "status"> {
+	const obj =
+		input && typeof input === "object"
+			? (input as Record<string, unknown>)
+			: {};
+	const subagentType =
+		typeof obj.subagent_type === "string" ? obj.subagent_type : undefined;
+	const description =
+		typeof obj.description === "string" && obj.description.length > 0
+			? obj.description
+			: (subagentType ?? "Task");
+	return {
+		description,
+		subagentType,
+		prompt: typeof obj.prompt === "string" ? obj.prompt : undefined,
+	};
+}
+
+/**
+ * Folds a Task call into the turn's single task_group, creating the group at
+ * this position the first time the turn spawns one.
+ *
+ * Claude Code resends a tool_call after permission approval, so the same
+ * toolUseId can arrive twice: the second one refreshes the input it describes
+ * and leaves the Task's own state alone.
+ */
+function applyTaskCall(
+	parts: ContentPart[],
+	toolUseId: string,
+	toolInput: unknown,
+): ContentPart[] {
+	const input = parseTaskInput(toolInput);
+	const groupIndex = parts.findIndex((part) => part.type === "task_group");
+	if (groupIndex === -1) {
+		return [
+			...parts,
+			{
+				type: "task_group",
+				tasks: [{ toolUseId, status: "running", ...input }],
+			},
+		];
+	}
+
+	const group = parts[groupIndex];
+	if (group.type !== "task_group") return parts; // Type guard - never happens
+
+	const existing = group.tasks.findIndex(
+		(task) => task.toolUseId === toolUseId,
+	);
+	const tasks =
+		existing === -1
+			? [...group.tasks, { toolUseId, status: "running" as const, ...input }]
+			: group.tasks.map((task, i) =>
+					i === existing ? { ...task, ...input } : task,
+				);
+
+	const updated = [...parts];
+	updated[groupIndex] = { ...group, tasks };
+	return updated;
+}
+
 export function applyEventToParts(
 	parts: ContentPart[],
 	event: NormalizedEvent,
@@ -204,6 +281,9 @@ export function applyEventToParts(
 			return [...parts, { type: "text", content: event.content }];
 		}
 		case "tool_call":
+			if (isTaskTool(event.toolName)) {
+				return applyTaskCall(parts, event.toolUseId, event.toolInput);
+			}
 			return [
 				...parts,
 				{
@@ -342,7 +422,12 @@ export function applyServerEvent(
 
 	// Tool result updates existing tool_call across all messages (may arrive after interrupt)
 	if (event.type === "tool_result") {
-		return updateToolResult(messages, event.toolUseId, event.toolResult);
+		return updateToolResult(
+			messages,
+			event.toolUseId,
+			event.toolResult,
+			event.isError,
+		);
 	}
 
 	// Terminal events only make sense for active (sending/streaming) messages
@@ -360,16 +445,36 @@ export function applyServerEvent(
 		last?.role === "assistant" &&
 		(last.status === "sending" || last.status === "streaming");
 
+	// Output the CLI was already producing when the turn was cut short still
+	// arrives afterwards — a Task subagent's last words are the common case.
+	// Once a turn has ended, the next one starts from a `message` event, which
+	// leaves its own placeholder to stream into (the agent also resumes on a
+	// permission or question answer, but a turn cut short takes its pending
+	// dialogs down with it, so there is nothing left to answer). Content with
+	// no such message before it therefore belongs to the turn that just ended:
+	// it is appended there, and the ended status stands.
+	//
+	// `complete` is deliberately not an ended turn here: when a background wait
+	// runs out of budget Pockode delivers the end of turn itself, and the CLI
+	// may genuinely resume output afterwards — that output is a live turn and
+	// must still light up the spinner.
+	const turnEnded =
+		last?.role === "assistant" &&
+		(last.status === "interrupted" ||
+			last.status === "error" ||
+			last.status === "process_ended");
+	const isLateContent = !hasActiveAssistant && turnEnded && !isTerminalEvent;
+
 	let updated: Message[];
 	let index: number;
-	if (hasActiveAssistant) {
+	if (hasActiveAssistant || isLateContent) {
 		updated = [...messages];
 		index = updated.length - 1;
 	} else {
 		if (isTerminalEvent) {
 			// No active message to terminate — but still expire pending dialogs on process end
 			if (event.type === "process_ended") {
-				return expirePendingDialogs(messages);
+				return settleRunningTasks(expirePendingDialogs(messages));
 			}
 			return messages;
 		}
@@ -400,17 +505,37 @@ export function applyServerEvent(
 		parts: applyEventToParts(current.parts, event),
 	};
 
-	if (event.type === "text") {
-		message.status = "streaming";
-	} else if (event.type === "done") {
-		message.status = "complete";
-	} else if (event.type === "interrupted") {
-		message.status = "interrupted";
-	} else if (event.type === "error") {
-		message.status = "error";
-		message.error = event.error;
-	} else if (event.type === "process_ended") {
-		message.status = "process_ended";
+	// An ended turn keeps the status it ended with: output trailing it cannot
+	// reopen it.
+	if (!isLateContent) {
+		if (event.type === "text") {
+			message.status = "streaming";
+		} else if (event.type === "done") {
+			message.status = "complete";
+		} else if (event.type === "interrupted") {
+			message.status = "interrupted";
+		} else if (event.type === "error") {
+			message.status = "error";
+			message.error = event.error;
+		} else if (event.type === "process_ended") {
+			message.status = "process_ended";
+		}
+	}
+
+	// A turn that ended this way has no Task left running: not the one it was
+	// cut off in the middle of, and not one whose call trails in afterwards
+	// either. Keyed on the resulting status rather than on the event so that
+	// late content lands under the same rule.
+	//
+	// `complete` is deliberately absent: a background Task outlives the turn
+	// that started it and reports back later
+	// (agent-integration.md#background-waits).
+	if (
+		message.status === "interrupted" ||
+		message.status === "error" ||
+		message.status === "process_ended"
+	) {
+		message.parts = settleRunningTaskParts(message.parts);
 	}
 
 	updated[index] = message;
@@ -418,6 +543,7 @@ export function applyServerEvent(
 	// Expire all pending dialogs when process ends
 	if (event.type === "process_ended") {
 		updated = expirePendingDialogs(updated);
+		updated = settleRunningTasks(updated);
 	}
 
 	// A terminal event settles every bubble's fate, so this is where an empty one
@@ -550,31 +676,64 @@ export function updateQuestionStatus(
 	return anyChanged ? updated : messages;
 }
 
+/**
+ * Records a Task's outcome. An interrupted Task keeps that status even though
+ * its result finally showed up: the interrupt is a fact the result cannot undo.
+ * The content is still kept, flagged as having landed after the fact.
+ */
+function settleTaskRun(
+	task: TaskRun,
+	toolResult: string,
+	isError: boolean,
+): TaskRun {
+	if (task.status === "interrupted") {
+		return { ...task, result: toolResult, resultAfterInterrupt: true };
+	}
+	return { ...task, result: toolResult, status: isError ? "failed" : "done" };
+}
+
 function updateToolResult(
 	messages: Message[],
 	toolUseId: string,
 	toolResult: string,
+	isError: boolean,
 ): Message[] {
 	// A tool_result almost always targets a tool_call in the most recent
 	// assistant message, and tool IDs are unique — scan from the end and stop
 	// at the first match instead of re-walking the whole transcript per result.
+	// Scanning every message is also what lets a result arriving after an
+	// interrupt land back in the turn that started it.
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role !== "assistant") continue;
 
 		const partIndex = msg.parts.findIndex(
-			(part) => part.type === "tool_call" && part.tool.id === toolUseId,
+			(part) =>
+				(part.type === "tool_call" && part.tool.id === toolUseId) ||
+				(part.type === "task_group" &&
+					part.tasks.some((task) => task.toolUseId === toolUseId)),
 		);
 		if (partIndex === -1) continue;
 
 		const part = msg.parts[partIndex];
-		if (part.type !== "tool_call") continue;
+		let settled: ContentPart;
+		if (part.type === "tool_call") {
+			settled = { ...part, tool: { ...part.tool, result: toolResult } };
+		} else if (part.type === "task_group") {
+			settled = {
+				...part,
+				tasks: part.tasks.map((task) =>
+					task.toolUseId === toolUseId
+						? settleTaskRun(task, toolResult, isError)
+						: task,
+				),
+			};
+		} else {
+			continue; // Type guard - never happens
+		}
 
 		const updatedParts = [...msg.parts];
-		updatedParts[partIndex] = {
-			...part,
-			tool: { ...part.tool, result: toolResult },
-		};
+		updatedParts[partIndex] = settled;
 		const updated = [...messages];
 		updated[i] = { ...msg, parts: updatedParts };
 		return updated;
@@ -582,6 +741,41 @@ function updateToolResult(
 
 	// If no matching tool_call found, ignore the orphan result
 	return messages;
+}
+
+/**
+ * Marks Tasks still running as interrupted, for use when nothing can report
+ * back on them any more (the turn was cut short, or the process is gone).
+ * Leaving them running would spin a Spinner that never stops.
+ */
+function settleRunningTaskParts(parts: ContentPart[]): ContentPart[] {
+	let changed = false;
+	const updated = parts.map((part) => {
+		if (part.type !== "task_group") return part;
+		if (!part.tasks.some((task) => task.status === "running")) return part;
+		changed = true;
+		return {
+			...part,
+			tasks: part.tasks.map((task) =>
+				task.status === "running"
+					? { ...task, status: "interrupted" as const }
+					: task,
+			),
+		};
+	});
+	return changed ? updated : parts;
+}
+
+export function settleRunningTasks(messages: Message[]): Message[] {
+	let anyChanged = false;
+	const updated = messages.map((msg) => {
+		if (msg.role !== "assistant") return msg;
+		const parts = settleRunningTaskParts(msg.parts);
+		if (parts === msg.parts) return msg;
+		anyChanged = true;
+		return { ...msg, parts };
+	});
+	return anyChanged ? updated : messages;
 }
 
 interface UserMessageOptions {

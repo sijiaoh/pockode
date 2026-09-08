@@ -903,6 +903,7 @@ type cliContentBlock struct {
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
 }
 
 // declineFunc answers a control request the CLI is blocking on with a
@@ -1339,11 +1340,16 @@ func parseUserEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 			// Unmarshal extracts the string value; for non-strings, use raw JSON.
 			var content string
 			if err := json.Unmarshal(block.Content, &content); err != nil {
-				content = string(block.Content)
+				if text, ok := textBlocksContent(block.Content); ok {
+					content = text
+				} else {
+					content = string(block.Content)
+				}
 			}
 			events = append(events, agent.ToolResultEvent{
 				ToolUseID:  block.ToolUseID,
 				ToolResult: content,
+				IsError:    block.IsError,
 			})
 
 		default:
@@ -1411,6 +1417,33 @@ func extractEventsFromText(log *slog.Logger, text string) []agent.AgentEvent {
 	logIgnored(remaining)
 
 	return events
+}
+
+// textBlocksContent joins an all-text content block array into the text the
+// model itself saw. The Agent (subagent) tool reports this way, and its report
+// is Markdown: handing the raw JSON array to the UI would render the report as
+// a wall of escaped JSON. Anything but a pure text array is left alone.
+func textBlocksContent(content json.RawMessage) (string, bool) {
+	if len(content) == 0 || content[0] != '[' {
+		return "", false
+	}
+
+	var items []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(content, &items); err != nil || len(items) == 0 {
+		return "", false
+	}
+
+	texts := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Type != "text" {
+			return "", false
+		}
+		texts = append(texts, item.Text)
+	}
+	return strings.Join(texts, "\n"), true
 }
 
 // hasImageContent checks if JSON content contains image type elements.

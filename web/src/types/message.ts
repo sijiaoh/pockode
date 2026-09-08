@@ -37,6 +37,30 @@ export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
 
 export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired";
 
+export type TaskRunStatus = "running" | "done" | "failed" | "interrupted";
+
+/**
+ * The current state of one Claude Task (subagent) call. Maintained solely by
+ * the message reducer, so the UI never has to infer a Task's state from the
+ * events that produced it.
+ */
+export interface TaskRun {
+	toolUseId: string;
+	/** Task input.description, falling back to subagentType, then "Task". */
+	description: string;
+	subagentType?: string;
+	/** Task input.prompt — the only place the subagent's brief is visible. */
+	prompt?: string;
+	status: TaskRunStatus;
+	result?: string;
+	/**
+	 * A result that arrived after the turn was cut short. The content is kept,
+	 * but the status stays interrupted: a late result cannot make the UI claim
+	 * the Task finished normally.
+	 */
+	resultAfterInterrupt?: boolean;
+}
+
 export type ContentPart =
 	| { type: "text"; content: string }
 	| { type: "tool_call"; tool: ToolCall }
@@ -52,6 +76,14 @@ export type ContentPart =
 			request: AskUserQuestionRequest;
 			status: QuestionStatus;
 			answers?: Record<string, string>;
+	  }
+	| {
+			/**
+			 * Every Task of one turn, folded into a single part anchored where the
+			 * first of them landed.
+			 */
+			type: "task_group";
+			tasks: TaskRun[];
 	  }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
@@ -384,6 +416,8 @@ export type ServerNotification =
 			type: "tool_result";
 			tool_use_id: string;
 			tool_result: string;
+			/** Absent unless the agent CLI reported the tool call as failed. */
+			is_error?: boolean;
 	  }
 	| {
 			type: "warning";
