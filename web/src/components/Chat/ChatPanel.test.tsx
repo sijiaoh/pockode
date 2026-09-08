@@ -829,7 +829,9 @@ describe("ChatPanel", () => {
 			// does, neither card nor strip pretends to know. Nothing spins meanwhile:
 			// in_progress is a resting state here, not a turn in flight.
 			expect(card(/^Task, In Progress, Step 2\/3/)).toBeInTheDocument();
-			expect(screen.queryByRole("status")).not.toBeInTheDocument();
+			expect(
+				screen.queryByRole("status", { name: "Loading" }),
+			).not.toBeInTheDocument();
 
 			setWorkStatus("stopped");
 

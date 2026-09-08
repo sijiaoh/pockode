@@ -288,11 +288,18 @@ function AskUserQuestionItem({
 	);
 
 	return (
+		// The data attributes are how MessageList finds this card: the root is the
+		// scroll/highlight target, the header row is what it observes and focuses.
+		// scroll-mt-14 (56px) clears the pending-question pill, which floats at the
+		// top of the list and can outlive the jump when more questions are waiting —
+		// without it the pill would land on top of the card it just scrolled to.
 		<div
-			className={`rounded text-xs ${isPending ? "border border-th-warning bg-th-warning/10" : "bg-th-bg-secondary"}`}
+			data-question-request-id={request.requestId}
+			className={`scroll-mt-14 rounded text-xs ${isPending ? "border border-th-warning bg-th-warning/10" : "bg-th-bg-secondary"}`}
 		>
 			<button
 				type="button"
+				data-question-header=""
 				onClick={() => setExpanded(!expanded)}
 				aria-expanded={expanded}
 				className="flex w-full items-center gap-1.5 rounded p-2 text-left hover:bg-th-overlay-hover"
