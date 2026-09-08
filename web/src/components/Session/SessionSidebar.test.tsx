@@ -57,6 +57,7 @@ function renderSidebar(onClose: () => void) {
 			activeCommitHash={null}
 			onSelectFile={vi.fn()}
 			activeFilePath={null}
+			onCloseFile={vi.fn()}
 			onOpenWorkList={vi.fn()}
 			onOpenAgentRoleList={vi.fn()}
 			isSwitchingWorktree={false}

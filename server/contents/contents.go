@@ -19,6 +19,7 @@ var (
 	ErrNotFound    = errors.New("not found")
 	ErrInvalidPath = errors.New("invalid path")
 	ErrTooLarge    = errors.New("content too large")
+	ErrExists      = errors.New("already exists")
 )
 
 // ValidatePath checks if path is safe and within workDir.
@@ -389,6 +390,56 @@ func WriteFile(workDir, path, content string) error {
 	// anything watching it, and litter the working tree with .tmp/.lock files
 	// that show up in git status. In-place writing keeps the file the user's.
 	return os.WriteFile(fullPath, []byte(content), 0644)
+}
+
+// Create makes an empty file or an empty directory at path within workDir.
+// Missing parent directories are created, as WriteFile does, so a client can
+// pass "docs/api/index.md" without creating each level first.
+//
+// Unlike WriteFile it refuses an existing path with ErrExists: this backs the
+// UI's "new file" / "new folder" actions, where quietly reusing whatever
+// already sits at that name is indistinguishable from having created it.
+func Create(workDir, path string, isDir bool) error {
+	if path == "" {
+		return fmt.Errorf("%w: empty path", ErrInvalidPath)
+	}
+
+	if err := ValidatePath(workDir, path); err != nil {
+		return err
+	}
+
+	fullPath := filepath.Join(workDir, path)
+
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		return fmt.Errorf("failed to create parent directories: %w", err)
+	}
+
+	// Refusing a taken name is left to the creating syscall rather than a stat
+	// before it: a check-then-create can be overtaken by an agent writing the
+	// same path, and both O_EXCL and Mkdir already refuse a symlink sitting on
+	// the name instead of creating through it to wherever it points.
+	var err error
+	if isDir {
+		err = os.Mkdir(fullPath, 0755)
+	} else {
+		err = createEmptyFile(fullPath)
+	}
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%s %w", path, ErrExists)
+		}
+		return fmt.Errorf("failed to create %s: %w", path, err)
+	}
+
+	return nil
+}
+
+func createEmptyFile(fullPath string) error {
+	f, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // Delete removes a file or directory within workDir.

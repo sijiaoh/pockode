@@ -10,10 +10,10 @@ This document holds what the two panels have to agree on: the principles behind
 the redesign that fixed that, the visual weight ladder, what `th-accent` is
 allowed to mean, and the narrow-width rule every fixed row obeys. It does **not**
 describe either panel's own shape — [file.md](file.md) owns the Files panel
-(backend, search behaviour, the upload button and destination display, the upload
-queue) and [git-ui.md](git-ui.md) owns the Git panel (layout, group headers,
-commit bar, amend, the sheets). A rule stated here is referenced from there, not
-copied.
+(backend, search behaviour, the entry `…` menu and everything that hangs off it,
+the upload queue) and [git-ui.md](git-ui.md) owns the Git panel (layout, group
+headers, commit bar, amend, the sheets). A rule stated here is referenced from
+there, not copied.
 
 ## What went wrong, and what it teaches
 
@@ -48,8 +48,9 @@ author had. Two of them broke; the search row broke visibly.
    in that order, and nothing skips a rung because it was implemented last.
 3. **Accent is for "the one action" and "right now".** The single primary button,
    the active tab, the focus ring, a drag under the cursor, a progress bar.
-   Standing state gets a 2px bar, not a fill. A control never wears accent merely
-   to announce that it exists.
+   A standing state **on a row** gets a 2px bar, not a fill — see
+   [Visual weight](#visual-weight) for why that clause is load-bearing. A control
+   never wears accent merely to announce that it exists.
 4. **One hierarchy level per panel.** Groups have headers; groups do not live
    inside a section that also has a header.
 5. **Every fixed row survives 240px.** Stated as a rule in
@@ -104,7 +105,8 @@ was `shrink-0` and carried a folder name up to `max-w-[7rem]` (112px). At 240px
 the row's minimum was ~266px: the field was crushed to 84px first, then the row
 overflowed the panel and the button left the screen. On the 288px drawer the
 field was left ~106px, which is the "the search box disappeared" report. With the
-`min-w-0` added and the button icon-only, the floor is ~144px and the field takes
+`min-w-0` added and the row's one other element icon-only — today the project
+root's `…`, which replaced that button — the floor is ~144px and the field takes
 every pixel above it.
 
 The branch bar, by contrast, already obeyed the rule — one truncating branch name,
@@ -120,8 +122,8 @@ Five rungs. Existing Tailwind and `th-*` tokens only; nothing here is a new toke
 | **L1** Primary action | At most one per panel, and only while it applies | `min-h-[44px] w-full rounded-lg bg-th-accent text-sm font-medium text-th-accent-text` |
 | **L2** Panel header row | Branch bar, search row | `min-h-[44px]`, label `text-sm text-th-text-primary`, icons `text-th-text-muted`, bottom border `border-th-border` where the row is the whole header — the Files search row omits it, since the option chips render directly beneath it and a border would cut the header block in half |
 | **L3** Group header | `Staged`, `Changes`, `History` | `min-h-[32px] px-3 text-xs uppercase tracking-wide text-th-text-muted`, no hover fill. A header carrying L5 actions grows to their 36px — the touch target wins over the nominal height |
-| **L4** List row | Tree node, changed file, commit | `min-h-[36px]` (tree) / `min-h-[44px]` (file, commit), `text-sm text-th-text-secondary`; active `bg-th-bg-tertiary text-th-text-primary` |
-| **L5** Inline icon action | Upload, stage, unstage, discard, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square inside a list row or group header (`rounded-md text-th-text-secondary`, defined once in `Git/iconButtonClass.ts`), round where it floats over content instead of belonging to a row — the upload button, the search field's clear button (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`) |
+| **L4** List row | Tree node, changed file, commit | `min-h-[44px]`, `text-sm text-th-text-secondary`; active `bg-th-bg-tertiary text-th-text-primary` |
+| **L5** Inline icon action | Entry menu, stage, unstage, discard, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `Git/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`) |
 
 The two rungs that matter most are L3 and L5, because that is where the panels
 had it wrong: the old `▾ Changes` header was L2-weight text on an L2-height row,
@@ -129,28 +131,64 @@ so it read as a second panel header stacked under the branch bar; the old upload
 button was L1 colour on an L2 height, so the rarest control in the Files panel
 was its loudest.
 
+**The rung has two heights, and that is an open divergence rather than a
+principled exception.** Every L5 is 36 except one: the `…` on a file tree row is
+44×44, the touch floor its menu was specified to. It cannot be told apart by
+where it sits — it and the Git rows' stage and discard buttons are the same
+construction, a `shrink-0` sibling of the row button inside a 44px list row,
+each calling `stopPropagation` on its way out — so the tree's `…` is not an
+exception the rule provides for, it is the rule not holding.
+
+Neither height is obviously the wrong one, which is why this is still open.
+Dropping the tree's to 36 gives up the thumb floor on the panel's densest and
+most indented list. Raising the others to 44 carries every L3 group header
+holding actions up with them, since a header grows to its actions, landing a
+group header at the height of the panel header row — which is the shape
+[What went wrong](#what-went-wrong-and-what-it-teaches) started from. Flagged
+here rather than settled by whichever panel is edited next.
+
+One consequence to know before merging them: `FileTreeNode` writes its own
+`menuButtonClass` instead of appending a height to `iconButtonClass()`, because
+the two floors are single utility classes at the same specificity, so which one
+won would come down to stylesheet order rather than to call order.
+
 Colour, restated as rules rather than as a list of places:
 
 | Token | Means |
 |-------|-------|
 | `th-accent` | The one primary action, the active tab, the focus ring, a drag under the cursor right now, a progress bar |
-| `th-accent` as a 2px left bar | A row singled out: the selected row in `SidebarListItem`, and "uploads land here" on a folder in the tree |
+| `th-accent` as a 2px left bar | A row singled out: the selected row in `SidebarListItem` |
 | `th-bg-tertiary` | The row you are looking at (selected file, selected commit), and the fill of secondary buttons inside sheets |
-| `th-text-muted` | Group headers, metadata, and icons that are not asking to be pressed — decoration, or an action rare enough to sit below the row it lives on (the upload button) |
+| `th-text-muted` | Group headers, metadata, and icons that are not asking to be pressed — decoration, or an action rare enough to sit below the row it lives on (a tree row's `…`) |
 | `th-error` / `th-success` | A failure / a completed outcome. Never a state that is merely unusual |
 
-Selection is the bar **and** the `th-bg-tertiary` fill together; a standing
-annotation such as the upload destination is the bar **without the fill**. The
-row background is what the rule is about, and that is what keeps the destination
-from reading as a second selection — it was a `bg-th-accent/5` fill before,
-which is to say a third kind of row background competing with the file the user
-was actually reading.
+Selection is the bar **and** the `th-bg-tertiary` fill together. The rule is
+about **row backgrounds** and only about them, which is the clause to keep in
+mind before reading it as a ban on standing accent generally: a pressed search
+option chip is `border-th-accent bg-th-accent/10 text-th-accent` and persists
+across sessions, and no row rule reaches it, because a chip is not a row and
+cannot be mistaken for a selected one.
 
-Tinting an icon *inside* the row is not a row background and is allowed where
-the bar alone cannot be read: the upload destination's folder icon is accent
-because the bar sits at the panel's left edge while the row it marks can be four
-indents away from it, and the icon is the only cue that lands at the row's own
-depth.
+**On rows, though, neither panel has a standing annotation any more, and that is
+the resolution of "accent meant too many things" rather than a gap in it.** The
+rule was written for one: "uploads land here", marking the folder a later upload
+would go to. It was first demoted from a `bg-th-accent/5` fill — a third kind
+of row background, competing with the file the user was reading — to a bar
+without a fill, and then removed outright together with the state behind it,
+because a destination chosen before it is used answers the question far from the
+moment it is asked ([file.md](file.md#uploading)). Principle 3 stands unchanged
+for whatever needs it next: a standing state on a row is a bar, never a fill.
+The lesson underneath it is the one worth carrying, and it is not about the
+bar — before asking which weight a standing accent should take, ask whether the
+state it announces should exist.
+
+Tinting an icon *inside* the row is not a row background, and is allowed where
+the row's own treatment cannot be read at the row's depth — the bar sits at the
+panel's left edge while the row it marks can be four indents away. The tree's
+drop target is the one instance left: the folder under the cursor swaps to an
+open-folder glyph in accent. It answers a cursor that is moving right now, so it
+takes a row fill as well — the allowance above is what lets the icon join in,
+not what carries the state alone.
 
 Spacing, so the two panels stop disagreeing: rows are `px-3`, row containers are
 `px-2`, the search row is `p-2`, controls within a row are `gap-2`, and a group
@@ -163,7 +201,7 @@ The rules above are general; each panel's shape is documented with the panel.
 
 | Panel | Document | What it now covers that this file does not |
 |-------|----------|--------------------------------------------|
-| Files | [file.md](file.md) | The L5 upload button, and the three places the destination is shown — the tree row's 2px accent bar, the button's dot, its accessible name. The search row's narrow-width fix and the wrapping option chips |
+| Files | [file.md](file.md) | The row's [`…` menu](file.md#entry-actions) and the create / delete flows it opens, the [two upload paths](file.md#uploading) and why neither leaves a destination behind. The search row's narrow-width fix and the wrapping option chips |
 | Git | [git-ui.md](git-ui.md) | The layout and its L3 group headers (sticky, `Staged` / `Changes` / `History`), the commit bar's render conditions, amend on HEAD's row, History's default, `canPull`, the sync sheet's state-dependent button list, and the branch sheet's overflow root cause |
 
 Two of the redesign's outcomes reach past the panel they were found in, so they

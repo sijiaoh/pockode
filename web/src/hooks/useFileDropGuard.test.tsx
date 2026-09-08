@@ -5,7 +5,7 @@ import { useFileDropGuard } from "./useFileDropGuard";
 function Guarded() {
 	useFileDropGuard();
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: a drop zone has no role that carries drag semantics, and keyboard users reach uploading through the upload button instead
+		// biome-ignore lint/a11y/noStaticElementInteractions: a drop zone has no role that carries drag semantics, and keyboard users reach uploading through a folder's `…` menu instead
 		<div
 			data-testid="zone"
 			onDragOver={(event) => {

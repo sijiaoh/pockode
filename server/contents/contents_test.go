@@ -564,3 +564,108 @@ func TestDelete(t *testing.T) {
 		}
 	})
 }
+
+func TestCreate(t *testing.T) {
+	t.Run("creates empty file", func(t *testing.T) {
+		workDir := t.TempDir()
+
+		if err := Create(workDir, "notes.md", false); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		info, err := os.Stat(filepath.Join(workDir, "notes.md"))
+		if err != nil {
+			t.Fatalf("failed to stat created file: %v", err)
+		}
+		if info.IsDir() {
+			t.Error("expected a file, got a directory")
+		}
+		if info.Size() != 0 {
+			t.Errorf("got size %d, want 0", info.Size())
+		}
+	})
+
+	t.Run("creates directory", func(t *testing.T) {
+		workDir := t.TempDir()
+
+		if err := Create(workDir, "pkg", true); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		info, err := os.Stat(filepath.Join(workDir, "pkg"))
+		if err != nil {
+			t.Fatalf("failed to stat created directory: %v", err)
+		}
+		if !info.IsDir() {
+			t.Error("expected a directory, got a file")
+		}
+	})
+
+	t.Run("creates missing parent directories", func(t *testing.T) {
+		workDir := t.TempDir()
+
+		if err := Create(workDir, "docs/api/index.md", false); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		if _, err := os.Stat(filepath.Join(workDir, "docs/api/index.md")); err != nil {
+			t.Fatalf("failed to stat created file: %v", err)
+		}
+	})
+
+	t.Run("refuses existing path", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(workDir, "taken.txt"), []byte("keep me"), 0644); err != nil {
+			t.Fatalf("failed to create existing file: %v", err)
+		}
+
+		err := Create(workDir, "taken.txt", false)
+		if !errors.Is(err, ErrExists) {
+			t.Fatalf("got error %v, want ErrExists", err)
+		}
+
+		data, err := os.ReadFile(filepath.Join(workDir, "taken.txt"))
+		if err != nil {
+			t.Fatalf("failed to read file: %v", err)
+		}
+		if string(data) != "keep me" {
+			t.Errorf("existing file was overwritten: got %q", string(data))
+		}
+	})
+
+	t.Run("refuses existing path of the other type", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(workDir, "src"), 0755); err != nil {
+			t.Fatalf("failed to create existing directory: %v", err)
+		}
+
+		if err := Create(workDir, "src", false); !errors.Is(err, ErrExists) {
+			t.Fatalf("got error %v, want ErrExists", err)
+		}
+	})
+
+	t.Run("refuses a name held by a symlink", func(t *testing.T) {
+		workDir := t.TempDir()
+		outside := filepath.Join(t.TempDir(), "target.txt")
+		if err := os.Symlink(outside, filepath.Join(workDir, "link.txt")); err != nil {
+			t.Fatalf("failed to create symlink: %v", err)
+		}
+
+		if err := Create(workDir, "link.txt", false); !errors.Is(err, ErrExists) {
+			t.Fatalf("got error %v, want ErrExists", err)
+		}
+		if _, err := os.Stat(outside); !os.IsNotExist(err) {
+			t.Error("created through the symlink, outside the work directory")
+		}
+	})
+
+	t.Run("rejects invalid paths", func(t *testing.T) {
+		workDir := t.TempDir()
+
+		for _, path := range []string{"", "../escape.txt", "/etc/passwd"} {
+			if err := Create(workDir, path, false); !errors.Is(err, ErrInvalidPath) {
+				t.Errorf("path %q: got error %v, want ErrInvalidPath", path, err)
+			}
+		}
+	})
+}

@@ -128,7 +128,10 @@ function Sheet({
 
 				{/* Header */}
 				<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
-					<h2 id={titleId} className="text-base font-bold text-th-text-primary">
+					<h2
+						id={titleId}
+						className="min-w-0 truncate text-base font-bold text-th-text-primary"
+					>
 						{title}
 					</h2>
 					<button

@@ -9,6 +9,11 @@ export function parentDir(fullPath: string): string {
 	return lastSlash === -1 ? "" : fullPath.slice(0, lastSlash);
 }
 
+/** Whether `path` is `root` itself or something inside it. */
+export function isAtOrUnder(path: string, root: string): boolean {
+	return path === root || path.startsWith(`${root}/`);
+}
+
 export function splitPath(fullPath: string): {
 	fileName: string;
 	directory: string;

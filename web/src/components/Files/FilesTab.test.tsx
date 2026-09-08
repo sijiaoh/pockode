@@ -19,13 +19,20 @@ import { SidebarContext } from "../Layout/SidebarContext";
 import FilesTab from "./FilesTab";
 
 const searchFiles = vi.fn();
-const wsState = { actions: { searchFiles }, maxUploadSize: 0 };
+const createFile = vi.fn();
+const deleteFile = vi.fn();
+const getFile = vi.fn();
+const wsState = {
+	actions: { searchFiles, createFile, deleteFile, getFile },
+	maxUploadSize: 0,
+};
 
 vi.mock("../../lib/wsStore", () => ({
 	useWSStore: Object.assign(
 		(selector: (state: unknown) => unknown) => selector(wsState),
 		{ getState: () => wsState },
 	),
+	isRPCTimeout: () => false,
 }));
 
 vi.mock("../../lib/fileUpload", async (importOriginal) => ({
@@ -35,24 +42,42 @@ vi.mock("../../lib/fileUpload", async (importOriginal) => ({
 
 /**
  * Stands in for the tree, carrying only what the tab reads back from it: the
- * folder a tap chose, the `data-entry-*` rows a drop is resolved against, and
- * the two drag props echoed as text so they can be asserted.
+ * rows a menu can be opened from, the `data-entry-*` rows a drop is resolved
+ * against, and the drag props echoed as text so they can be asserted.
  */
 vi.mock("./FileTree", () => ({
 	default: ({
-		onSelectDir,
+		onOpenMenu,
 		dropTargetPath,
 		springOpenPath,
+		forceOpenPath,
 	}: {
-		onSelectDir: (path: string) => void;
+		onOpenMenu: (entry: Entry) => void;
 		dropTargetPath: string | null;
 		springOpenPath: string | null;
+		forceOpenPath: string | null;
 	}) => (
 		<div>
 			file tree
-			<button type="button" onClick={() => onSelectDir("src/assets")}>
-				pick src/assets
+			<button
+				type="button"
+				onClick={() => onOpenMenu({ name: "src", type: "dir", path: "src" })}
+			>
+				menu for src
 			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onOpenMenu({
+						name: "main.tsx",
+						type: "file",
+						path: "src/main.tsx",
+					})
+				}
+			>
+				menu for src/main.tsx
+			</button>
+			<div>{`force open: ${forceOpenPath ?? "none"}`}</div>
 			<div data-entry-path="src" data-entry-type="dir">
 				src
 				<div data-entry-path="src/main.tsx" data-entry-type="file">
@@ -75,7 +100,13 @@ function lastSearchParams(): SearchParams {
 	return searchFiles.mock.calls[searchFiles.mock.calls.length - 1][0];
 }
 
-function renderFilesTab(listings: Record<string, Entry[]> = {}) {
+function renderFilesTab(
+	listings: Record<string, Entry[]> = {},
+	{
+		activeFilePath = null,
+		onCloseFile = vi.fn(),
+	}: { activeFilePath?: string | null; onCloseFile?: () => void } = {},
+) {
 	const queryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
@@ -90,9 +121,14 @@ function renderFilesTab(listings: Record<string, Entry[]> = {}) {
 		</QueryClientProvider>
 	);
 
-	return render(<FilesTab onSelectFile={vi.fn()} activeFilePath={null} />, {
-		wrapper,
-	});
+	return render(
+		<FilesTab
+			onSelectFile={vi.fn()}
+			activeFilePath={activeFilePath}
+			onCloseFile={onCloseFile}
+		/>,
+		{ wrapper },
+	);
 }
 
 function result(paths: string[], truncated = false): FileSearchResult {
@@ -305,42 +341,6 @@ describe("FilesTab uploads", () => {
 		vi.mocked(uploadFile).mockImplementation(() => new Promise(() => {}));
 	});
 
-	it("aims uploads at the folder that was tapped", async () => {
-		const user = userEvent.setup();
-		renderFilesTab();
-
-		expect(
-			screen.getByRole("button", { name: "Upload to project root" }),
-		).toBeInTheDocument();
-
-		await user.click(screen.getByRole("button", { name: "pick src/assets" }));
-
-		expect(
-			screen.getByRole("button", { name: "Upload to src/assets" }),
-		).toBeInTheDocument();
-	});
-
-	it("says where uploads land without spending a word of the row on it", async () => {
-		const user = userEvent.setup();
-		renderFilesTab();
-
-		const atRoot = screen.getByRole("button", {
-			name: "Upload to project root",
-		});
-		expect(atRoot).toHaveTextContent("");
-		// The dot is the whole visible answer to "somewhere other than the root";
-		// the folder itself is named only in the accessible name and on its row.
-		expect(atRoot.querySelector(".bg-th-accent")).toBeNull();
-
-		await user.click(screen.getByRole("button", { name: "pick src/assets" }));
-
-		const atFolder = screen.getByRole("button", {
-			name: "Upload to src/assets",
-		});
-		expect(atFolder).toHaveTextContent("");
-		expect(atFolder.querySelector(".bg-th-accent")).not.toBeNull();
-	});
-
 	// jsdom lays nothing out, so what is checked is the rule the row overflowed
 	// by breaking: at 240px only the field may shrink, and everything beside it
 	// has to hold a fixed, icon-sized width.
@@ -348,11 +348,11 @@ describe("FilesTab uploads", () => {
 		renderFilesTab();
 
 		const field = screen.getByLabelText("Search files");
-		const uploadButton = screen.getByRole("button", {
-			name: "Upload to project root",
+		const rootMenuButton = screen.getByRole("button", {
+			name: "Project root actions",
 		});
 		const row = field.closest("div")?.parentElement as HTMLElement;
-		expect(row).toContainElement(uploadButton);
+		expect(row).toContainElement(rootMenuButton);
 
 		// A hidden element is out of the layout, so it owes the row nothing.
 		const laidOut = Array.from(row.children).filter(
@@ -507,7 +507,7 @@ describe("FilesTab uploads", () => {
 		await screen.findByText("Files already exist");
 
 		// The dialog's overlay stops clicks but not the keyboard: a few tabs reach
-		// the upload button behind it, and picking there would reach this code.
+		// the root's `…` behind it, and the picker it opens reaches this code.
 		await user.upload(fileInput(container), [new File(["x"], "icon.svg")]);
 
 		expect(
@@ -764,9 +764,10 @@ describe("FilesTab drag and drop", () => {
 		fireEvent.drop(panel(), { dataTransfer });
 
 		expect(uploadFile).not.toHaveBeenCalled();
-		// The button is unaffected: it aims at the destination already chosen.
+		// The root's menu is unaffected: its target is the root, not a row of a
+		// tree that search has hidden.
 		expect(
-			screen.getByRole("button", { name: "Upload to project root" }),
+			screen.getByRole("button", { name: "Project root actions" }),
 		).toBeInTheDocument();
 	});
 
@@ -814,5 +815,232 @@ describe("FilesTab drag and drop", () => {
 
 		expect(await screen.findByText("Files already exist")).toBeInTheDocument();
 		expect(uploadFile).not.toHaveBeenCalled();
+	});
+});
+
+describe("FilesTab entry menu", () => {
+	beforeEach(() => {
+		searchFiles.mockResolvedValue(result([]));
+		uploadActions.reset();
+		wsState.maxUploadSize = 0;
+		createFile.mockReset();
+		deleteFile.mockReset();
+		getFile.mockReset();
+		createFile.mockResolvedValue(undefined);
+		deleteFile.mockResolvedValue(undefined);
+		vi.mocked(uploadFile).mockReset();
+		vi.mocked(uploadFile).mockImplementation(() => new Promise(() => {}));
+	});
+
+	it("offers everything a folder can do, and only deleting on a file", async () => {
+		const user = userEvent.setup();
+		renderFilesTab();
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+
+		for (const label of ["Upload files", "New file", "New folder", "Delete"]) {
+			expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+		}
+
+		await user.click(screen.getByRole("button", { name: "Close" }));
+		await user.click(
+			screen.getByRole("button", { name: "menu for src/main.tsx" }),
+		);
+
+		// Nothing is created inside a file, and nothing is uploaded into one.
+		expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "New file" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("leaves the project root with nothing to delete", async () => {
+		const user = userEvent.setup();
+		// The tree has already read the root, so its listing is there to check a
+		// new name against without waiting.
+		renderFilesTab({ "": [] });
+
+		await user.click(
+			screen.getByRole("button", { name: "Project root actions" }),
+		);
+
+		// Deleting the workspace itself is not one of the choices.
+		expect(
+			screen.queryByRole("button", { name: "Delete" }),
+		).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "New file" }));
+		await user.type(screen.getByLabelText("Name"), "notes.md");
+		await user.click(screen.getByRole("button", { name: "Create" }));
+
+		// Not "/notes.md": the root is the empty path, so there is no directory to
+		// join to the name.
+		expect(createFile).toHaveBeenCalledWith("notes.md", "file");
+	});
+
+	it("aims a menu upload at the folder the menu was opened from", async () => {
+		const user = userEvent.setup();
+		const { container } = renderFilesTab({ src: [] });
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "Upload files" }));
+
+		// The picker the menu opens is the tab's own: the sheet holding the item
+		// unmounts the moment it is chosen from, taking any input of its own.
+		await user.upload(fileInput(container), [new File(["x"], "hero.png")]);
+
+		expect(lastUpload()).toMatchObject({ name: "hero.png", destPath: "src" });
+	});
+
+	it("aims an upload from the root's menu at the root", async () => {
+		const user = userEvent.setup();
+		const { container } = renderFilesTab();
+
+		await user.click(
+			screen.getByRole("button", { name: "Project root actions" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Upload files" }));
+		await user.upload(fileInput(container), [new File(["x"], "hero.png")]);
+
+		expect(lastUpload()).toMatchObject({ name: "hero.png", destPath: "" });
+	});
+
+	it("creates an entry in the folder the menu came from and opens it", async () => {
+		const user = userEvent.setup();
+		renderFilesTab({ src: [entry("main.tsx", "file", "src")] });
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "New folder" }));
+		await user.type(screen.getByLabelText("Name"), "utils");
+		await user.click(screen.getByRole("button", { name: "Create" }));
+
+		expect(createFile).toHaveBeenCalledWith("src/utils", "dir");
+		await waitFor(() =>
+			expect(screen.queryByLabelText("Name")).not.toBeInTheDocument(),
+		);
+		// A folder that stays closed over what was just made in it is the same as
+		// the creation having done nothing.
+		expect(screen.getByText("force open: src")).toBeInTheDocument();
+	});
+
+	it("asks for the same folder to open again on the next creation", async () => {
+		const user = userEvent.setup();
+		renderFilesTab({ src: [] });
+
+		const create = async (name: string) => {
+			await user.click(screen.getByRole("button", { name: "menu for src" }));
+			await user.click(screen.getByRole("button", { name: "New file" }));
+			await user.type(screen.getByLabelText("Name"), name);
+			await user.click(screen.getByRole("button", { name: "Create" }));
+			await waitFor(() =>
+				expect(screen.queryByLabelText("Name")).not.toBeInTheDocument(),
+			);
+		};
+
+		await create("a.md");
+		expect(screen.getByText("force open: src")).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "New file" }));
+		// Retired while the next name is being typed. Left standing, assigning the
+		// same path again would not re-run the tree's effect, and a folder the user
+		// collapsed in between would stay shut over what was just made in it.
+		expect(screen.getByText("force open: none")).toBeInTheDocument();
+
+		await user.type(screen.getByLabelText("Name"), "b.md");
+		await user.click(screen.getByRole("button", { name: "Create" }));
+
+		await waitFor(() =>
+			expect(screen.getByText("force open: src")).toBeInTheDocument(),
+		);
+	});
+
+	it("refuses a name the listing already holds without asking the server", async () => {
+		const user = userEvent.setup();
+		renderFilesTab({ src: [entry("main.tsx", "file", "src")] });
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "New file" }));
+		await user.type(screen.getByLabelText("Name"), "main.tsx");
+
+		expect(screen.getByRole("alert")).toHaveTextContent("already exists here");
+		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+		expect(createFile).not.toHaveBeenCalled();
+	});
+
+	it("keeps the dialog up when the server is the one that finds the clash", async () => {
+		const user = userEvent.setup();
+		// A folder that has never been expanded has no listing to check against,
+		// so the local pre-check passes and the server's refusal is the first news
+		// of the name being taken.
+		getFile.mockResolvedValue({ type: "directory", entries: [] });
+		createFile.mockRejectedValue(new Error("src/notes.md already exists"));
+		renderFilesTab();
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "New file" }));
+		await user.type(await screen.findByLabelText("Name"), "notes.md");
+		await user.click(screen.getByRole("button", { name: "Create" }));
+
+		// Dropped into the tab's error bar instead, the message would arrive with
+		// the dialog gone and the name the user typed with it.
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"src/notes.md already exists",
+		);
+		expect(screen.getByLabelText("Name")).toHaveValue("notes.md");
+
+		await user.clear(screen.getByLabelText("Name"));
+		await user.type(screen.getByLabelText("Name"), "other.md");
+
+		// The refusal was about the name that has just been replaced.
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("says a folder is deleted with everything in it before doing so", async () => {
+		const user = userEvent.setup();
+		renderFilesTab();
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+
+		// The endpoint removes the subtree, so the subtree has to be in the words.
+		expect(
+			screen.getByText(
+				'This will delete "src" and everything inside it. This action cannot be undone.',
+			),
+		).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+
+		expect(deleteFile).toHaveBeenCalledWith("src");
+	});
+
+	it("closes the file being read when the folder holding it is deleted", async () => {
+		const user = userEvent.setup();
+		const onCloseFile = vi.fn();
+		renderFilesTab({}, { activeFilePath: "src/main.tsx", onCloseFile });
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+
+		// The overlay reads the file's own path, which invalidating the folder
+		// around it does not touch: left open it would go on showing a file that
+		// is no longer there.
+		await waitFor(() => expect(onCloseFile).toHaveBeenCalled());
+	});
+
+	it("reports a failed delete without leaving the row looking gone", async () => {
+		const user = userEvent.setup();
+		deleteFile.mockRejectedValue(new Error("permission denied"));
+		renderFilesTab();
+
+		await user.click(
+			screen.getByRole("button", { name: "menu for src/main.tsx" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+
+		expect(await screen.findByText("permission denied")).toBeInTheDocument();
 	});
 });

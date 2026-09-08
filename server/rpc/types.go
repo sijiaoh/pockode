@@ -103,6 +103,14 @@ type FileWriteParams struct {
 	Content string `json:"content"`
 }
 
+// FileCreateParams creates an empty file or directory. Kept apart from
+// FileWrite because creation must fail on an existing path where a write must
+// not.
+type FileCreateParams struct {
+	Path string             `json:"path"`
+	Type contents.EntryType `json:"type"`
+}
+
 type FileDeleteParams struct {
 	Path string `json:"path"`
 }
