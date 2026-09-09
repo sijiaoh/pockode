@@ -1177,6 +1177,79 @@ func TestHandler_FileWrite_InvalidPath(t *testing.T) {
 	}
 }
 
+func TestHandler_FileCreate(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+
+	if resp := env.call("file.create", rpc.FileCreateParams{Path: "docs/notes.md", Type: contents.TypeFile}); resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+	if resp := env.call("file.create", rpc.FileCreateParams{Path: "pkg", Type: contents.TypeDir}); resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	info, err := os.Stat(filepath.Join(workDir, "docs/notes.md"))
+	if err != nil {
+		t.Fatalf("failed to stat created file: %v", err)
+	}
+	if info.IsDir() {
+		t.Error("expected docs/notes.md to be a file")
+	}
+
+	info, err = os.Stat(filepath.Join(workDir, "pkg"))
+	if err != nil {
+		t.Fatalf("failed to stat created directory: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("expected pkg to be a directory")
+	}
+}
+
+func TestHandler_FileCreate_Exists(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	os.WriteFile(filepath.Join(workDir, "taken.txt"), []byte("content"), 0644)
+
+	resp := env.call("file.create", rpc.FileCreateParams{Path: "taken.txt", Type: contents.TypeFile})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "already exists") {
+		t.Errorf("expected 'already exists' error, got %q", resp.Error.Message)
+	}
+}
+
+func TestHandler_FileCreate_InvalidPath(t *testing.T) {
+	env := newWorkDirTestEnv(t, t.TempDir())
+
+	resp := env.call("file.create", rpc.FileCreateParams{Path: "../escape", Type: contents.TypeDir})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "invalid path") {
+		t.Errorf("expected 'invalid path' error, got %q", resp.Error.Message)
+	}
+}
+
+func TestHandler_FileCreate_InvalidType(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+
+	resp := env.call("file.create", rpc.FileCreateParams{Path: "thing", Type: "symlink"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "type must be") {
+		t.Errorf("expected type error, got %q", resp.Error.Message)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "thing")); !os.IsNotExist(err) {
+		t.Error("expected nothing to be created")
+	}
+}
+
 func TestHandler_FileDelete(t *testing.T) {
 	workDir := t.TempDir()
 	env := newWorkDirTestEnv(t, workDir)

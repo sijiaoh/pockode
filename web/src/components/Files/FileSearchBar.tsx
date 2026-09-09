@@ -11,7 +11,7 @@ interface Props {
 	showOptions: boolean;
 	isSearching: boolean;
 	inputRef: RefObject<HTMLInputElement | null>;
-	/** Controls sharing the search row, e.g. the upload button. */
+	/** Controls sharing the search row, e.g. the project root's `…`. */
 	actions?: ReactNode;
 }
 

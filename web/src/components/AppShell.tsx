@@ -542,6 +542,7 @@ function AppShell() {
 					activeCommitHash={activeCommitHash}
 					onSelectFile={handleSelectFile}
 					activeFilePath={activeFilePath}
+					onCloseFile={handleCloseOverlay}
 					onOpenWorkList={handleOpenWorkList}
 					onOpenAgentRoleList={handleOpenAgentRoleList}
 					isDesktop={isDesktop}

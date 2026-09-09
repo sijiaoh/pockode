@@ -1,5 +1,5 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
-import type { Entry, FileContent } from "../../types/contents";
+import type { Entry, EntryType, FileContent } from "../../types/contents";
 import type { FileSearchMode, FileSearchResult } from "../../types/search";
 
 interface FileGetParams {
@@ -15,6 +15,12 @@ interface FileGetResult {
 interface FileWriteParams {
 	path: string;
 	content: string;
+}
+
+/** Kept apart from `file.write`, which upserts; creation fails on a taken path. */
+interface FileCreateParams {
+	path: string;
+	type: EntryType;
 }
 
 interface FileDeleteParams {
@@ -38,6 +44,8 @@ export interface FileSearchParams {
 export interface FileActions {
 	getFile: (path?: string) => Promise<FileGetResult>;
 	writeFile: (path: string, content: string) => Promise<void>;
+	/** Creates an empty file or directory; rejects if the path is taken. */
+	createFile: (path: string, type: EntryType) => Promise<void>;
 	deleteFile: (path: string) => Promise<void>;
 	searchFiles: (params: FileSearchParams) => Promise<FileSearchResult>;
 }
@@ -64,6 +72,12 @@ export function createFileActions(
 				path,
 				content,
 			} as FileWriteParams);
+		},
+		createFile: async (path: string, type: EntryType): Promise<void> => {
+			await requireClient().request("file.create", {
+				path,
+				type,
+			} as FileCreateParams);
 		},
 		deleteFile: async (path: string): Promise<void> => {
 			await requireClient().request("file.delete", {

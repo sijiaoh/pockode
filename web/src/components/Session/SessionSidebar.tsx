@@ -34,6 +34,8 @@ interface Props {
 	activeCommitHash: string | null;
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
+	/** Closes the content area when the file it shows is deleted from the tree. */
+	onCloseFile: () => void;
 	onOpenWorkList: () => void;
 	onOpenAgentRoleList: () => void;
 	isDesktop: boolean;
@@ -58,6 +60,7 @@ function SessionSidebar({
 	activeCommitHash,
 	onSelectFile,
 	activeFilePath,
+	onCloseFile,
 	onOpenWorkList,
 	onOpenAgentRoleList,
 	isDesktop,
@@ -168,6 +171,7 @@ function SessionSidebar({
 			<FilesTab
 				onSelectFile={handleSelectFile}
 				activeFilePath={activeFilePath}
+				onCloseFile={onCloseFile}
 			/>
 			<DiffTab
 				onSelectFile={handleSelectDiffFile}

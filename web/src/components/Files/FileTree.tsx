@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFSWatch } from "../../hooks/useFSWatch";
+import type { Entry } from "../../types/contents";
 import { Spinner } from "../ui";
 import FileTreeNode from "./FileTreeNode";
 
@@ -10,13 +11,15 @@ interface Props {
 	activeFilePath: string | null;
 	expandSignal: number;
 	watchEnabled: boolean;
-	/** Folder uploads currently land in; empty is the workspace root. */
-	uploadDestPath: string;
-	onSelectDir: (path: string) => void;
+	onOpenMenu: (entry: Entry) => void;
+	/** Row whose menu is open, so it can keep its button showing. */
+	menuPath: string | null;
 	/** Where a drop would land right now; null while nothing is being dragged. */
 	dropTargetPath: string | null;
 	/** Folder a drag has hovered long enough to open. */
 	springOpenPath: string | null;
+	/** Folder something outside the tree — a new entry — needs open. */
+	forceOpenPath: string | null;
 }
 
 function FileTree({
@@ -24,10 +27,11 @@ function FileTree({
 	activeFilePath,
 	expandSignal,
 	watchEnabled,
-	uploadDestPath,
-	onSelectDir,
+	onOpenMenu,
+	menuPath,
 	dropTargetPath,
 	springOpenPath,
+	forceOpenPath,
 }: Props) {
 	const queryClient = useQueryClient();
 	const { data, isLoading, error } = useContents();
@@ -80,10 +84,11 @@ function FileTree({
 					activeFilePath={activeFilePath}
 					expandSignal={expandSignal}
 					watchEnabled={watchEnabled}
-					uploadDestPath={uploadDestPath}
-					onSelectDir={onSelectDir}
+					onOpenMenu={onOpenMenu}
+					menuPath={menuPath}
 					dropTargetPath={dropTargetPath}
 					springOpenPath={springOpenPath}
+					forceOpenPath={forceOpenPath}
 				/>
 			))}
 		</div>

@@ -75,6 +75,40 @@ func (h *rpcMethodHandler) handleFileWrite(ctx context.Context, conn *jsonrpc2.C
 	}
 }
 
+func (h *rpcMethodHandler) handleFileCreate(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.FileCreateParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	var isDir bool
+	switch params.Type {
+	case contents.TypeFile:
+	case contents.TypeDir:
+		isDir = true
+	default:
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, `type must be "file" or "dir"`)
+		return
+	}
+
+	if err := contents.Create(wt.WorkDir, params.Path, isDir); err != nil {
+		switch {
+		case errors.Is(err, contents.ErrInvalidPath):
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid path")
+		case errors.Is(err, contents.ErrExists):
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+		default:
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		}
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, nil); err != nil {
+		h.log.Error("failed to send file create response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleFileDelete(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
 	var params rpc.FileDeleteParams
 	if err := unmarshalParams(req, &params); err != nil {

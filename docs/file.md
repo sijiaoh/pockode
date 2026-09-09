@@ -20,13 +20,13 @@ for the reasons in [Transfer](#transfer).
 
 | Layer | Path | Role |
 |-------|------|------|
-| RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.delete`, `file.search` |
-| File operations | `server/contents/contents.go` | Path validation, read, write (upsert), delete |
+| RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.create`, `file.delete`, `file.search` |
+| File operations | `server/contents/contents.go` | Path validation, read, write (upsert), create, delete |
 | HTTP transfer | `server/filetransfer/filetransfer.go` | Upload / download of whole files (see [Transfer](#transfer)) |
 | Search | `server/search/` | Candidate listing (`list.go`), content grep (`scan.go`) |
-| Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode, FileSearchBar, FileSearchResults, UploadButton, UploadQueue, UploadConflictDialog |
+| Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode, FileSearchBar, FileSearchResults, FileEntryMenu, NewEntryDialog, UploadQueue, UploadConflictDialog |
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
-| RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `deleteFile`, `searchFiles` |
+| RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `searchFiles` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/fileUpload.ts` | Authenticated download / upload (see [Downloading](#downloading), [Uploading](#uploading)) |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
 | Drag and drop | `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | Drop target resolution and drag state, window-level drop backstop |
@@ -105,6 +105,21 @@ JSON escaping costs at most six bytes per source byte, and 16 MiB clears
 escapes to about its own size. It was for a long time coder/websocket's 32 KiB
 default, which put the backstop *below* the method's own ceiling — so saving a
 moderately large file dropped the connection instead of failing the save.
+
+**`file.create`** — Create an empty file or an empty directory.
+- `type` is `"file"` or `"dir"`, the same `EntryType` a listing returns; anything
+  else is `InvalidParams`
+- Creates missing parent directories, as `file.write` does
+- Rejects an existing path with `InvalidParams` and `"<path> already exists"`
+
+Separate from `file.write` because of that last line, which is the whole point
+of the method: a write upserts, and the sidebar's "new file" action must not.
+Silently handing back whatever already sits at that name is indistinguishable to
+the user from having created it, and for a file it would look like the old
+content survived a creation. Whether the name is taken is decided by the creating
+syscall itself (`O_EXCL` for files, `os.Mkdir` for directories) rather than by a
+stat before it, which an agent writing the same path can overtake. That choice
+also decides how it treats a symlink on the name; see [Security](#security).
 
 **`file.delete`** — Remove a file or directory from disk.
 - Directories are deleted recursively (all contents removed)
@@ -362,8 +377,8 @@ focus — tapping an option chip blurs the input, which would otherwise flash th
 tree back on screen. The box and the result count sit outside the scrolling
 list, so they stay visible above the mobile keyboard.
 
-The box shares its row with the upload button, and its wrapper is the row's one
-`flex-1 min-w-0` element while every sibling is `shrink-0` — the narrow-width
+The box shares its row with the project root's `…`, and its wrapper is the row's
+one `flex-1 min-w-0` element while every sibling is `shrink-0` — the narrow-width
 rule in [sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule). Without the
 `min-w-0` the wrapper could not shrink below its own icons, which is what made
 this the row that visibly broke when the panel was narrowed.
@@ -580,43 +595,132 @@ first byte again. It deliberately stops short of saying the browser holds it all
 in memory: where a Blob is kept is the browser's own business, and the answer
 does not turn on it.
 
+## Entry actions
+
+Every row of the tree keeps its one obvious gesture — a folder expands or
+collapses, a file opens — and everything else hangs off a `…` button at the end
+of the row. The project root has no row, so its `…` sits in the search bar; it
+stays usable under search, where the tree is hidden but the target is not in
+doubt.
+
+The `…` is a **sibling** of the row button, never nested in it: nested, every
+tap on it would also open the file or toggle the folder. That split is why the
+row's highlight, hover and indentation live on the wrapping `div` rather than on
+the row button — on the button they would stop short of the `…` and leave a
+notch out of the active row and the drop target. `data-entry-path` stays one
+level further out still, on the node's own wrapper, so a folder answers for its
+whole subtree (see [Dropping files onto the
+tree](#dropping-files-onto-the-tree)). The button is drawn at all times on a
+touch screen, which has no hover to reveal it with; from `md:` up only its
+opacity changes, so the file name beside it never reflows.
+
+Both `…` buttons are monochrome inline icon actions — L5 in
+[sidebar-ui.md](sidebar-ui.md#visual-weight), which also records the one place
+that rung is inconsistent: the row's `…` is 44px where every other L5 is 36.
+
+The menu itself is a `Sheet` — a bottom drawer on a phone, a centered modal on a
+desktop — and there is exactly one, mounted by `FilesTab` for whichever entry is
+current, rather than a portal per row. The project has no popover to build a
+dropdown on, and one anchored to a row of a scrolling tree would mean
+positioning, flipping and scroll tracking for a menu opened a few times a day; a
+sheet is anchored to the viewport instead, so none of that arises. A folder
+offers upload, new file, new folder and delete, a file offers only delete, and
+the root offers everything but delete. Delete is last, `text-th-error`, and
+separated by a rule.
+
+What a sheet does not bring with it is focus. `Sheet` sets `aria-modal` but
+moves no focus of its own — unlike `ConfirmDialog` and the conflict dialog,
+which at least focus a button — so opening the menu by keyboard leaves focus on
+the `…` behind it, and Tab walks the page rather than the menu. That is a gap in
+`Sheet` shared by every sheet in the app, of a piece with the missing focus trap
+recorded under [Uploading](#uploading); it is inherited here rather than patched
+in one menu. `NewEntryDialog` is unaffected because it focuses its own field.
+
+The upload item opens the tab's own hidden `<input type="file">`, not one inside
+the menu: the sheet unmounts the moment an item is chosen from it. `click()` is
+called in the same synchronous stack as the tap, before anything is awaited, or
+iOS Safari refuses to open the picker.
+
+### Creating
+
+`NewEntryDialog` names the entry in a sheet rather than inline in the tree. An
+inline row means a ghost entry threaded through the recursive tree, its own
+indentation and scroll-into-view handling, and on a phone the keyboard tends to
+come up over exactly the row being typed into.
+
+**A name already taken is refused twice, and the server is the real defence.**
+The client checks the destination's cached listing plus the names queued
+uploads have claimed, and disables Create with the reason under the field. That
+check is for the immediate answer only: a folder that has never been expanded
+has no listing, so the dialog fetches one when it opens and holds Create with a
+spinner until it arrives — and even then the listing can be stale. `file.create`
+refuses an existing path outright, which is what makes the guarantee.
+
+The server's refusal is shown **inside the dialog, under the field**, with the
+typed name still in it, so the user renames and retries; dropped into the tab's
+error bar it would arrive with the dialog and the name gone. Only
+already-exists is handled that way — any other failure is about the request
+rather than the name, and leaves with the dialog for the error bar. Empty
+names, `/`, `.` and `..` are refused client-side.
+
+On success the destination's listing is invalidated and the folder is forced
+open through `forceOpenPath`, consumed by the same effect as the drag's
+`springOpenPath`. It cannot reuse `expandSignal`, which only opens the ancestors
+of the file currently being read. Opening the dialog clears `forceOpenPath`
+first: assigning the same path twice does not re-run the effect, so a folder the
+user collapsed between two creations would otherwise stay shut over the second.
+A new file is **not** opened automatically: on a phone that would replace the
+sidebar the user is still working in.
+
+### Deleting
+
+`ConfirmDialog` (`variant="danger"`) asks first, naming the full path. A
+folder's message says "and everything inside it" — `file.delete` is
+`os.RemoveAll`, and recursion has to be in the words rather than only in the
+handler.
+
+Afterwards the parent's listing is invalidated so the row disappears, and every
+`contents` query at or under the deleted path is **removed** rather than
+invalidated: those listings are about something that is gone, and refetching
+them would collect one "not found" per folder. If the file being read was the
+one deleted — or sat inside the deleted folder — `FilesTab` calls `onCloseFile`,
+threaded down from `AppShell` through `SessionSidebar`. `FileView` reads the
+cache under the file's *own* path, which invalidating the folder around it does
+not touch, and the overlay belongs to `AppShell`; without that call the viewer
+would go on showing a file that no longer exists.
+
+Apart from the already-exists case above, failures from either action land in
+the Files tab's single error bar (`actionError`, shared with uploads).
+
 ## Uploading
 
-The entry point is a 36×36 icon-only button in the Files tab's search row,
-monochrome and unlabelled: uploading happens a few times a week beside a tree
-the user touches constantly, so it takes the weight of an inline utility rather
-than of an action the panel is about (L5 in [sidebar-ui.md](sidebar-ui.md)). It
-is not a convenience next to drag and drop: a touch screen has no HTML5 drag,
-and drag is unreachable from a keyboard or a screen reader anywhere.
+**The destination is decided at the moment the upload is asked for, and never
+before.** There are two ways to ask, and each carries its own answer to "into
+which folder":
 
-Tapping any folder in the tree sets the destination — expanding or collapsing,
-since either is the nearest thing to a statement about where the user is
-working. Three things say where the upload will land, and none of them is a
-label on the button:
+- **A folder's `…` → Upload files** (the project root's `…` for the top level).
+  The destination is the entry the menu was opened from, handed straight to
+  `uploadInto`; the picker it opens is the tab's own hidden input, for the
+  reasons in [Entry actions](#entry-actions). This is the only entry point a
+  touch screen has — there is no HTML5 drag there — and the only one reachable
+  from a keyboard or a screen reader anywhere.
+- **Dropping files on the tree**, where the destination is whatever the cursor
+  was over (see below).
 
-- **The tree**, the only surface that can actually point at a folder. The
-  destination row takes a 2px `bg-th-accent` left bar and an accent folder
-  icon, and keeps its normal background. The bar alone would be the stricter
-  reading of "a standing state is a bar, not a fill", but the bar sits at the
-  panel's left edge and the row it marks can be four indents away from it; the
-  icon is the only cue that lands at the row's own depth, and it costs no
-  pixels. It used to take a `bg-th-accent/5` fill, which was a second kind
-  of row highlight competing with the `bg-th-bg-tertiary` of the file being
-  read; a left bar annotates the row instead of appearing to select it. The
-  border is on every row and transparent when unused, so turning it on cannot
-  nudge the tree sideways.
-- **The button's accessible name and tooltip**, which carry the whole path
-  (`Upload to src/components`, `Upload to project root`). This is the only
-  channel a screen reader has, and it is unchanged.
-- **A 6px accent dot** in the button's corner, shown only when the destination
-  is not the workspace root. It says "aimed somewhere other than the root" in
-  6px where the folder name spent up to 112px, and it is what sends the user
-  looking at the tree for the bar.
+Neither one leaves anything behind. There is no selected folder, no upload
+button carrying a target, and nothing in the tree marks a folder as "where
+uploads go" — the only accent a row can take during an upload is the drop-target
+fill, which lasts exactly as long as the cursor is held over it.
 
-A destination that has since been deleted or renamed falls back to the root
-silently, checked against the parent's cached listing at the moment files are
-picked. Reporting it only when the user finally presses upload would be too
-late to be useful, and the endpoint does not create the folder.
+This replaced a `uploadDestPath` that a folder tap set and a button then aimed
+at. That state had to be shown (a left bar and an accent icon on the row, a dot
+on the button), had to survive a worktree switch and a deleted folder, and still
+told the user nothing at the moment it mattered — the destination was chosen far
+from the tap that sent the files. A menu item that says `Upload files` inside a
+sheet titled with the folder's name answers the same question at the point of
+asking, and costs no persistent state, no second row highlight competing with
+the file being read, and no icon whose meaning was "look elsewhere for the real
+answer".
 
 Each stored file invalidates its destination's cached listing. The FS watch
 covers a folder only while it is expanded, so a file uploaded into a collapsed
@@ -632,9 +736,7 @@ subtree — including the spinner while its contents load — belongs to that
 folder, and everything else, the search row and the blank tree included, is the
 project root. Resolution walks up from whatever the cursor is over to the
 nearest `data-entry-path`, which `FileTreeNode` puts on each row's **wrapper**
-rather than the row itself, so a folder answers for its whole subtree. A drop
-also sets the button's destination, being at least as clear a statement of where
-the user is working as tapping a folder.
+rather than the row itself, so a folder answers for its whole subtree.
 
 Three things about drag and drop are not optional:
 
@@ -655,8 +757,7 @@ Three things about drag and drop are not optional:
   would leave the panel lit up.
 - **The drop bar, the queue and the error banner are `pointer-events-none` while
   a drag is up.** The cursor crossing one would otherwise resolve the
-  destination back to the root while the tree still marked `src` as the
-  destination.
+  destination back to the root while the bar still read `Upload to src`.
 
 Two affordances exist because a drag cannot click or scroll. **Hovering a folder
 for 700 ms opens it** — otherwise a collapsed folder could never receive a drop
@@ -674,15 +775,14 @@ it somewhere:
 - **An open conflict dialog.** It is a portal, and a portal's events still
   travel the React tree, so its overlay stops clicks but not drops.
 
-Under search the upload button keeps working: it aims at the destination already
-chosen, which a list of matches says nothing about. **An unanswered dialog turns
-away every batch, whatever it arrived through.** A drag has already been turned
-away on the bar; every other way in is refused inside `uploadInto` and answered
-by the banner. There is one place to hold a batch awaiting an answer, so a
-second one would take the first's place without a word and drop the files it was
-holding — and refusing it where every batch passes through covers the entry
-points a modal cannot stand in front of. The upload button is one of them: a few
-presses of Tab reach it from behind the overlay. The dialog has no focus trap,
+**An unanswered dialog turns away every batch, whatever it arrived through.** A
+drag has already been turned away on the bar; every other way in is refused
+inside `uploadInto` and answered by the banner. There is one place to hold a
+batch awaiting an answer, so a second one would take the first's place without a
+word and drop the files it was holding. Refusing it where every batch passes
+through is what covers the entry points a modal cannot stand in front of: the
+root's `…` is behind the overlay, but a few presses of Tab reach it, and the
+picker it opens has no overlay in its way at all. The dialog has no focus trap,
 and neither does the shared `ConfirmDialog` the rest of the app confirms with,
 so escaping a modal by keyboard is long-standing behavior across `web` and
 `web-cluster` alike rather than anything this path introduced. It is known and
@@ -838,9 +938,9 @@ no symlink resolution. It rejects:
 
 An empty path passes: it names the work directory itself, which is what the
 file tree lists and what an unscoped search covers. Rejecting it is the job of
-the operations for which it makes no sense — `WriteFile` and `Delete` refuse it
-on their own, so an empty path can never become an operation on the workspace
-root.
+the operations for which it makes no sense — `WriteFile`, `Create` and `Delete`
+refuse it on their own, so an empty path can never become an operation on the
+workspace root.
 
 Search applies the same validation to its `path` scope, and never follows
 symlinks (checked with `Lstat`) — following one could return content from
@@ -859,6 +959,15 @@ That covers the file being written, not the directory it goes in: the upload's
 followed just as `file.write` follows one on the way to its target. It is the
 same long-standing trade-off as above, not a new one — closing it belongs with
 the decision that closes it for `file.get` and `file.write`.
+
+`file.create` will not create *through* a symlink on the name it is given.
+`O_EXCL` and `os.Mkdir` both fail on a name that is already taken, and a
+symlink takes the name whether or not it points anywhere — so the same syscall
+that makes "already exists" atomic is what keeps a link from being followed out
+of the workspace. Nothing stats first; adding a check would not strengthen this,
+only add a window. The parents it creates along the way are `MkdirAll`, so a
+symlinked *directory* on the path is followed exactly as it is for `file.write`
+and for an upload.
 
 `file.get` does follow them: it stats with `Stat`, so a symlink pointing outside
 the workspace reads the target. This is long-standing behavior, not a property

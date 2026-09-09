@@ -5,6 +5,7 @@ import {
 	File,
 	Folder,
 	FolderOpen,
+	MoreHorizontal,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
@@ -19,14 +20,28 @@ interface Props {
 	activeFilePath: string | null;
 	expandSignal: number;
 	watchEnabled: boolean;
-	/** Folder uploads currently land in; empty is the workspace root. */
-	uploadDestPath: string;
-	onSelectDir: (path: string) => void;
+	onOpenMenu: (entry: Entry) => void;
+	/** Row whose menu is open, so it can keep its button showing. */
+	menuPath: string | null;
 	/** Where a drop would land right now; null while nothing is being dragged. */
 	dropTargetPath: string | null;
 	/** Folder a drag has hovered long enough to open. */
 	springOpenPath: string | null;
+	/** Folder something outside the tree — a new entry — needs open. */
+	forceOpenPath: string | null;
 }
+
+/**
+ * Not `iconButtonClass()`: that rung is fixed at 36px and this button takes the
+ * 44px touch floor. Appending a height to it would not settle that — both are
+ * single utility classes at the same specificity, so stylesheet order would
+ * decide which won, not call order.
+ *
+ * The rung having two heights at all is a known divergence, not a rule this
+ * button is the exception to; it is flagged in docs/sidebar-ui.md#visual-weight.
+ */
+const menuButtonClass =
+	"flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-md text-th-text-muted transition-all hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset active:scale-95";
 
 const FileTreeNode = memo(function FileTreeNode({
 	entry,
@@ -35,10 +50,11 @@ const FileTreeNode = memo(function FileTreeNode({
 	activeFilePath,
 	expandSignal,
 	watchEnabled,
-	uploadDestPath,
-	onSelectDir,
+	onOpenMenu,
+	menuPath,
 	dropTargetPath,
 	springOpenPath,
+	forceOpenPath,
 }: Props) {
 	const queryClient = useQueryClient();
 	const isDirectory = entry.type === "dir";
@@ -60,6 +76,12 @@ const FileTreeNode = memo(function FileTreeNode({
 		if (isDirectory && springOpenPath === entry.path) setIsExpanded(true);
 	}, [isDirectory, springOpenPath, entry.path]);
 
+	// Something was just created in this folder, and a folder that stays closed
+	// over it is the same as the creation having done nothing.
+	useEffect(() => {
+		if (isDirectory && forceOpenPath === entry.path) setIsExpanded(true);
+	}, [isDirectory, forceOpenPath, entry.path]);
+
 	const { data, isLoading, error } = useContents(
 		entry.path,
 		isDirectory && isExpanded,
@@ -76,16 +98,13 @@ const FileTreeNode = memo(function FileTreeNode({
 	const handleClick = () => {
 		if (isDirectory) {
 			setIsExpanded(!isExpanded);
-			// Collapsing counts too: tapping a folder is the nearest thing to a
-			// statement about where the user is working right now.
-			onSelectDir(entry.path);
 		} else {
 			onSelectFile(entry.path);
 		}
 	};
 
-	const isUploadDest = isDirectory && entry.path === uploadDestPath;
 	const isDropTarget = isDirectory && entry.path === dropTargetPath;
+	const isMenuOpen = entry.path === menuPath;
 
 	const paddingLeft = 12 + depth * 16;
 
@@ -94,55 +113,76 @@ const FileTreeNode = memo(function FileTreeNode({
 		// then answers for that folder, so the gaps around its children — the
 		// loading spinner, the failure line — are aimed somewhere too.
 		<div data-entry-path={entry.path} data-entry-type={entry.type}>
-			<button
-				type="button"
-				onClick={handleClick}
+			{/* Highlight, hover and indentation sit here rather than on the row
+			    button, which no longer spans the row: on the button they would stop
+			    short of the menu, leaving a notch out of the drop target. */}
+			<div
 				style={{ paddingLeft }}
-				// The border is on every row, transparent unless the row is the
-				// destination, so turning it on cannot nudge the tree sideways.
-				className={`flex w-full min-h-[36px] items-center gap-1.5 border-l-2 pr-3 py-1.5 text-left text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset ${
-					isUploadDest ? "border-th-accent" : "border-transparent"
-				} ${
+				className={`group flex min-h-[44px] items-center gap-1.5 pr-1 text-sm transition-colors ${
 					isDropTarget
-						? // A fill, unlike the destination's bar, because this one is
+						? // A fill rather than a tint of the row, because this one is
 							// answering a cursor that is moving right now.
 							"bg-th-accent/10 text-th-text-primary"
 						: isActive
 							? "bg-th-bg-tertiary text-th-text-primary"
-							: isUploadDest
-								? "text-th-text-primary"
-								: "text-th-text-secondary hover:bg-th-bg-tertiary hover:text-th-text-primary"
+							: "text-th-text-secondary hover:bg-th-bg-tertiary hover:text-th-text-primary"
 				}`}
-				aria-label={
-					isDirectory
-						? `${isExpanded ? "Collapse" : "Expand"} folder: ${entry.name}`
-						: `Open file: ${entry.name}`
-				}
-				aria-expanded={isDirectory ? isExpanded : undefined}
 			>
-				{isDirectory ? (
-					<>
-						{isExpanded ? (
-							<ChevronDown className="h-4 w-4 shrink-0 text-th-text-muted" />
-						) : (
-							<ChevronRight className="h-4 w-4 shrink-0 text-th-text-muted" />
-						)}
-						{isDropTarget ? (
-							<FolderOpen className="h-4 w-4 shrink-0 text-th-accent" />
-						) : (
-							<Folder
-								className={`h-4 w-4 shrink-0 ${isUploadDest ? "text-th-accent" : "text-th-text-muted"}`}
-							/>
-						)}
-					</>
-				) : (
-					<>
-						<span className="w-4" />
-						<File className="h-4 w-4 shrink-0 text-th-text-muted" />
-					</>
-				)}
-				<span className="truncate">{entry.name}</span>
-			</button>
+				<button
+					type="button"
+					onClick={handleClick}
+					className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset"
+					aria-label={
+						isDirectory
+							? `${isExpanded ? "Collapse" : "Expand"} folder: ${entry.name}`
+							: `Open file: ${entry.name}`
+					}
+					aria-expanded={isDirectory ? isExpanded : undefined}
+				>
+					{isDirectory ? (
+						<>
+							{isExpanded ? (
+								<ChevronDown className="h-4 w-4 shrink-0 text-th-text-muted" />
+							) : (
+								<ChevronRight className="h-4 w-4 shrink-0 text-th-text-muted" />
+							)}
+							{isDropTarget ? (
+								<FolderOpen className="h-4 w-4 shrink-0 text-th-accent" />
+							) : (
+								<Folder className="h-4 w-4 shrink-0 text-th-text-muted" />
+							)}
+						</>
+					) : (
+						<>
+							<span className="w-4" />
+							<File className="h-4 w-4 shrink-0 text-th-text-muted" />
+						</>
+					)}
+					<span className="truncate">{entry.name}</span>
+				</button>
+
+				{/* A sibling of the row, never inside it: nested, every tap on it
+				    would also open the file or toggle the folder. Always drawn on a
+				    touch screen, which has no hover to reveal it with; on a pointer
+				    only its opacity changes, so the name beside it never reflows. */}
+				<button
+					type="button"
+					onClick={(e) => {
+						e.stopPropagation();
+						onOpenMenu(entry);
+					}}
+					className={`${menuButtonClass} ${
+						isMenuOpen
+							? ""
+							: "md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+					}`}
+					aria-label={`More actions for ${entry.path}`}
+					aria-haspopup="dialog"
+					aria-expanded={isMenuOpen}
+				>
+					<MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+				</button>
+			</div>
 
 			{isDirectory && isExpanded && (
 				<div>
@@ -170,10 +210,11 @@ const FileTreeNode = memo(function FileTreeNode({
 								activeFilePath={activeFilePath}
 								expandSignal={expandSignal}
 								watchEnabled={watchEnabled}
-								uploadDestPath={uploadDestPath}
-								onSelectDir={onSelectDir}
+								onOpenMenu={onOpenMenu}
+								menuPath={menuPath}
 								dropTargetPath={dropTargetPath}
 								springOpenPath={springOpenPath}
+								forceOpenPath={forceOpenPath}
 							/>
 						))
 					) : null}

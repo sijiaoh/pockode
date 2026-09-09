@@ -35,7 +35,11 @@ let scrollContainer: HTMLElement | null = null;
  * whatever the cursor is over, and the tree is the only thing that puts those
  * there. Testing either against a stand-in would let them drift apart.
  */
-function Panel({ uploadDestPath = "" }: { uploadDestPath?: string }) {
+function Panel({
+	onOpenMenu = vi.fn(),
+}: {
+	onOpenMenu?: (entry: Entry) => void;
+}) {
 	const drop = useFileDrop({
 		enabled: true,
 		onDrop,
@@ -48,10 +52,11 @@ function Panel({ uploadDestPath = "" }: { uploadDestPath?: string }) {
 				activeFilePath={null}
 				expandSignal={0}
 				watchEnabled={false}
-				uploadDestPath={uploadDestPath}
-				onSelectDir={vi.fn()}
+				onOpenMenu={onOpenMenu}
+				menuPath={null}
 				dropTargetPath={drop.destPath}
 				springOpenPath={drop.springOpenPath}
+				forceOpenPath={null}
 			/>
 		</div>
 	);
@@ -61,7 +66,10 @@ function entry(name: string, type: "file" | "dir", dir = ""): Entry {
 	return { name, type, path: dir ? `${dir}/${name}` : name };
 }
 
-function renderTree(listings: Record<string, Entry[]>, uploadDestPath = "") {
+function renderTree(
+	listings: Record<string, Entry[]>,
+	onOpenMenu?: (entry: Entry) => void,
+) {
 	const queryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
@@ -70,7 +78,7 @@ function renderTree(listings: Record<string, Entry[]>, uploadDestPath = "") {
 	}
 	return render(
 		<QueryClientProvider client={queryClient}>
-			<Panel uploadDestPath={uploadDestPath} />
+			<Panel onOpenMenu={onOpenMenu} />
 		</QueryClientProvider>,
 	);
 }
@@ -108,6 +116,13 @@ function dragOver(target: Element, clientY = 0) {
 function dropOn(target: Element) {
 	dragOver(target);
 	fireDrag(target, "drop");
+}
+
+/** The element carrying the row's highlight, now that the row is two nodes. */
+function rowOf(button: HTMLElement): HTMLElement {
+	const row = button.parentElement;
+	if (!row) throw new Error("row button is not inside a row");
+	return row;
 }
 
 function lastDestPath(): string {
@@ -153,22 +168,15 @@ describe("FileTree as a drop target", () => {
 
 	it("marks the folder a drop would land in", () => {
 		renderTree({ "": [entry("src", "dir")] });
-		const row = screen.getByRole("button", { name: "Expand folder: src" });
+		const button = screen.getByRole("button", { name: "Expand folder: src" });
 
-		expect(row).not.toHaveClass("bg-th-accent/10");
+		expect(rowOf(button)).not.toHaveClass("bg-th-accent/10");
 
-		dragOver(row);
+		dragOver(button);
 
-		expect(row).toHaveClass("bg-th-accent/10");
-	});
-
-	it("annotates the upload destination without a second row highlight", () => {
-		renderTree({ "": [entry("src", "dir")] }, "src");
-		const row = screen.getByRole("button", { name: "Expand folder: src" });
-
-		expect(row).toHaveClass("border-th-accent");
-		// A fill here would compete with the row of the file being read.
-		expect(row.className).not.toContain("bg-th-accent");
+		// On the row rather than the button: the button stops short of the menu,
+		// so a highlight there would leave a notch out of the drop target.
+		expect(rowOf(button)).toHaveClass("bg-th-accent/10");
 	});
 
 	it("opens a closed folder held under the cursor, and then drops into it", () => {
@@ -231,5 +239,42 @@ describe("FileTree as a drop target", () => {
 		dropOn(screen.getByRole("status"));
 
 		expect(lastDestPath()).toBe("src");
+	});
+});
+
+describe("FileTree row actions", () => {
+	beforeEach(() => {
+		getFile.mockReset();
+		getFile.mockReturnValue(new Promise(() => {}));
+	});
+
+	it("offers a menu on every row, files included", () => {
+		renderTree({ "": [entry("src", "dir"), entry("readme.md", "file")] });
+
+		expect(
+			screen.getByRole("button", { name: "More actions for src" }),
+		).toBeInTheDocument();
+		// A file has a menu too: deleting is reachable from nowhere else.
+		expect(
+			screen.getByRole("button", { name: "More actions for readme.md" }),
+		).toBeInTheDocument();
+	});
+
+	it("opens the menu without opening the folder it belongs to", () => {
+		const onOpenMenu = vi.fn();
+		renderTree({ "": [entry("src", "dir")] }, onOpenMenu);
+
+		fireEvent.click(
+			screen.getByRole("button", { name: "More actions for src" }),
+		);
+
+		expect(onOpenMenu).toHaveBeenCalledWith(
+			expect.objectContaining({ path: "src" }),
+		);
+		// The button is a sibling of the row, not inside it: nested, this tap
+		// would have toggled the folder on its way out.
+		expect(
+			screen.getByRole("button", { name: "Expand folder: src" }),
+		).toHaveAttribute("aria-expanded", "false");
 	});
 });
