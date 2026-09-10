@@ -611,12 +611,15 @@ notch out of the active row and the drop target. `data-entry-path` stays one
 level further out still, on the node's own wrapper, so a folder answers for its
 whole subtree (see [Dropping files onto the
 tree](#dropping-files-onto-the-tree)). The button is drawn at all times on a
-touch screen, which has no hover to reveal it with; from `md:` up only its
-opacity changes, so the file name beside it never reflows.
+touch screen, which has no hover to reveal it with; where a pointer can hover
+(`pointer-fine:`) only its opacity changes, so the file name beside it never
+reflows. That gate used to be `md:` — a viewport width, which says nothing about
+hovering, so the button was invisible on a tablet and the menu unreachable
+([responsive-ui.md](responsive-ui.md#progressive-disclosure-hover-reveal)).
 
 Both `…` buttons are monochrome inline icon actions — L5 in
-[sidebar-ui.md](sidebar-ui.md#visual-weight), which also records the one place
-that rung is inconsistent: the row's `…` is 44px where every other L5 is 36.
+[sidebar-ui.md](sidebar-ui.md#visual-weight): 36px of box, grown to a 44px hit
+area where a finger might land.
 
 The menu itself is a `Sheet` — a bottom drawer on a phone, a centered modal on a
 desktop — and there is exactly one, mounted by `FilesTab` for whichever entry is

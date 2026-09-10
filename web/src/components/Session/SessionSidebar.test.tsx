@@ -61,7 +61,7 @@ function renderSidebar(onClose: () => void) {
 			onOpenWorkList={vi.fn()}
 			onOpenAgentRoleList={vi.fn()}
 			isSwitchingWorktree={false}
-			isDesktop={false}
+			isExpanded={false}
 		/>,
 	);
 }

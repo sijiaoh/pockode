@@ -240,7 +240,7 @@ function UploadQueue({ items, onReplace, onKeepBoth }: Props) {
 					aria-label={
 						isExpanded ? "Collapse upload queue" : "Expand upload queue"
 					}
-					className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-th-text-muted transition-colors hover:bg-th-bg-tertiary hover:text-th-text-primary"
+					className="flex size-9 shrink-0 items-center justify-center rounded-full text-th-text-muted pointer-coarse:size-11 transition-colors hover:bg-th-bg-tertiary hover:text-th-text-primary"
 				>
 					{isExpanded ? (
 						<ChevronDown className="h-4 w-4" aria-hidden="true" />
@@ -257,7 +257,7 @@ function UploadQueue({ items, onReplace, onKeepBoth }: Props) {
 					}
 					aria-label={closeLabel}
 					title={closeLabel}
-					className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-th-text-muted transition-colors hover:bg-th-bg-tertiary hover:text-th-text-primary"
+					className="flex size-9 shrink-0 items-center justify-center rounded-full text-th-text-muted pointer-coarse:size-11 transition-colors hover:bg-th-bg-tertiary hover:text-th-text-primary"
 				>
 					<X className="h-4 w-4" aria-hidden="true" />
 				</button>

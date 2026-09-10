@@ -24,16 +24,24 @@ import type {
 
 // ChatPanel is the attach point; render the session it was handed and whether
 // that session has resolved, which together are what the panel needs to show
-// the destination rather than the session left behind.
+// the destination rather than the session left behind. `onOpenSidebar` is
+// reported as well: whether the header gets a hamburger is decided here, not in
+// the header (see MainContainer's Props).
 vi.mock("./Chat", () => ({
 	ChatPanel: ({
 		sessionId,
 		isSessionResolved,
+		onOpenSidebar,
 	}: {
 		sessionId: string;
 		isSessionResolved: boolean;
+		onOpenSidebar?: () => void;
 	}) => (
-		<div data-testid="chat-panel" data-resolved={String(isSessionResolved)}>
+		<div
+			data-testid="chat-panel"
+			data-resolved={String(isSessionResolved)}
+			data-can-open-sidebar={String(Boolean(onOpenSidebar))}
+		>
 			{sessionId}
 		</div>
 	),
@@ -45,11 +53,17 @@ vi.mock("./Session", () => ({
 	SessionSidebar: ({
 		currentSessionId,
 		onCreateSession,
+		isExpanded,
 	}: {
 		currentSessionId: string | null;
 		onCreateSession: () => void;
+		isExpanded: boolean;
 	}) => (
-		<div data-testid="session-sidebar" data-current-session={currentSessionId}>
+		<div
+			data-testid="session-sidebar"
+			data-current-session={currentSessionId}
+			data-expanded={String(isExpanded)}
+		>
 			<button type="button" onClick={onCreateSession}>
 				New Chat
 			</button>
@@ -377,5 +391,70 @@ describe("AppShell cross-worktree navigation", () => {
 			);
 		});
 		expect(screen.getByTestId("chat-panel")).toHaveTextContent("x");
+	});
+});
+
+// #7 in docs/responsive-ui.md: the hamburger used to be hidden by `md:hidden`
+// while the sidebar chose its form from a hook. Two copies of one decision, in
+// two components — edit either and you get a sidebar with no switch, or a
+// switch with no sidebar. The tier is now read once, here, and the header is
+// simply not handed an opener when there is no drawer to open.
+describe("AppShell sidebar form and its switch", () => {
+	const originalMatchMedia = window.matchMedia;
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+			showTaskSessions: false,
+		});
+		useWorkStore.setState({ works: [] });
+		useAuthStore.setState({ token: "test-token" });
+		ws.status = "connected";
+	});
+
+	afterEach(() => {
+		Object.defineProperty(window, "matchMedia", {
+			writable: true,
+			value: originalMatchMedia,
+		});
+	});
+
+	// Every width query answers the same way, so the stub describes one viewport
+	// rather than an impossible one that is both expanded and compact. Only the
+	// three members useMediaQuery actually reads are modelled; anything else
+	// would imply coverage that is not here.
+	const setExpanded = (expanded: boolean) =>
+		Object.defineProperty(window, "matchMedia", {
+			writable: true,
+			value: (query: string) => ({
+				matches: expanded && query.includes("min-width"),
+				addEventListener: () => {},
+				removeEventListener: () => {},
+			}),
+		});
+
+	it.each([
+		["a drawer", false],
+		["a persistent column", true],
+	])("gives the header an opener only while the sidebar is %s", async (_form, expanded) => {
+		setExpanded(expanded);
+		renderAppShell("/w/A/s/a1");
+
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1");
+		});
+
+		expect(screen.getByTestId("session-sidebar")).toHaveAttribute(
+			"data-expanded",
+			String(expanded),
+		);
+		expect(screen.getByTestId("chat-panel")).toHaveAttribute(
+			"data-can-open-sidebar",
+			String(!expanded),
+		);
 	});
 });

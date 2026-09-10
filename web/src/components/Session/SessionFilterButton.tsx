@@ -1,4 +1,4 @@
-import { useIsDesktop } from "@pockode/shared";
+import { useIsExpanded } from "@pockode/shared";
 import { ListFilter } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useSessionStore } from "../../lib/sessionStore";
@@ -12,7 +12,7 @@ interface Props {
 export default function SessionFilterButton({ disabled }: Props) {
 	const [isOpen, setIsOpen] = useState(false);
 	const triggerRef = useRef<HTMLButtonElement>(null);
-	const isDesktop = useIsDesktop();
+	const isExpanded = useIsExpanded();
 
 	const showTaskSessions = useSessionStore((s) => s.showTaskSessions);
 	const toggleShow = useSessionStore((s) => s.toggleShowTaskSessions);
@@ -39,7 +39,7 @@ export default function SessionFilterButton({ disabled }: Props) {
 				onClose={handleClose}
 				title="Filter sessions"
 				triggerRef={triggerRef}
-				isDesktop={isDesktop}
+				isExpanded={isExpanded}
 				desktopPosition="right"
 				mobileMaxHeight="50dvh"
 			>

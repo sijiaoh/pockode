@@ -3,7 +3,7 @@ import { memo } from "react";
 import type { GitCommit } from "../../types/git";
 import { formatRelativeDate } from "../../utils/relativeTime";
 import SidebarListItem from "../common/SidebarListItem";
-import { iconButtonClass } from "./iconButtonClass";
+import { iconButtonClass } from "../ui/iconButtonClass";
 
 interface Props {
 	commits: GitCommit[];

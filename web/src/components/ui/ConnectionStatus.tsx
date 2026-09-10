@@ -36,7 +36,12 @@ function ConnectionStatus() {
 			<button
 				type="button"
 				onClick={() => window.location.reload()}
-				className="flex items-center gap-1 rounded-md bg-red-500/10 px-2 py-1 text-xs text-red-500 hover:bg-red-500/20 active:bg-red-500/25"
+				// Below `sm:` the label folds away and this is a 14px icon in `py-1`,
+				// well under the floor. Reconnection has already given up by the time
+				// this renders, so the retry is the only way back from this screen.
+				// The overlay form rather than a bigger box: the header is a fixed
+				// `h-11 sm:h-12`, so a 44px box would leave it no room.
+				className="touch-target flex items-center gap-1 rounded-md bg-red-500/10 px-2 py-1 text-xs text-red-500 hover:bg-red-500/20 active:bg-red-500/25"
 				aria-label="Connection failed. Click to retry"
 			>
 				<WifiOff className="h-3.5 w-3.5" aria-hidden="true" />

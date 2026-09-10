@@ -1,4 +1,4 @@
-import { useIsDesktop } from "@pockode/shared";
+import { useIsExpanded } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Check, Eye, Loader2 } from "lucide-react";
@@ -30,7 +30,7 @@ function FileEditor({ path, onBack }: Props) {
 	const { sessionId } = useRouteState();
 	const { data, isLoading, error } = useContents(path);
 	const writeFile = useWSStore((s) => s.actions.writeFile);
-	const isDesktop = useIsDesktop();
+	const isExpanded = useIsExpanded();
 
 	const [content, setContent] = useState("");
 	const [isSaving, setIsSaving] = useState(false);
@@ -94,7 +94,7 @@ function FileEditor({ path, onBack }: Props) {
 		}
 	}, [path, content, writeFile, queryClient, navigateToView]);
 
-	const fontSize = isDesktop ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
+	const fontSize = isExpanded ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
 	const canSave = isInitialized && !isSaving;
 
 	const displayError = error instanceof Error ? error : null;
@@ -141,7 +141,7 @@ function FileEditor({ path, onBack }: Props) {
 						type="button"
 						onClick={handleSave}
 						disabled={!canSave}
-						className={`flex items-center gap-1.5 rounded border border-th-border bg-th-bg-tertiary h-8 px-3 text-xs transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
+						className={`flex items-center gap-1.5 rounded border border-th-border bg-th-bg-tertiary h-9 px-3 text-xs transition-all pointer-coarse:h-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
 							canSave
 								? "text-th-success hover:border-th-border-focus"
 								: "opacity-50 cursor-not-allowed text-th-text-muted"

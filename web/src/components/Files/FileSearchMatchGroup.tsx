@@ -50,7 +50,7 @@ const FileSearchMatchGroup = memo(function FileSearchMatchGroup({
 					key={line.number}
 					type="button"
 					onClick={() => onSelect(match.path)}
-					className="flex min-h-[36px] w-full items-start gap-2 rounded-md py-1 pr-2 pl-8 text-left transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset"
+					className="flex min-h-[36px] w-full items-center gap-2 rounded-md py-1 pr-2 pl-8 pointer-coarse:min-h-11 text-left transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset"
 					aria-label={`Open ${match.path}, match on line ${line.number}`}
 				>
 					<span className="w-8 shrink-0 text-right font-mono text-[11px] leading-5 text-th-text-muted">

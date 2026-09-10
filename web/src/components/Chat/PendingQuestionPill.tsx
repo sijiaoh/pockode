@@ -21,9 +21,9 @@ function PendingQuestionPill({ count, direction, onClick }: Props) {
 			type="button"
 			onClick={onClick}
 			aria-label={label}
-			// after:-inset-1 grows the hit area to the 44px mobile touch target
-			// without changing the pill's visual height.
-			className="pointer-events-auto relative flex h-9 animate-question-pill-in items-center gap-1.5 rounded-full border border-th-warning bg-th-bg-primary px-3 text-th-text-primary text-xs shadow-xl after:absolute after:-inset-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent sm:h-10 sm:text-sm"
+			// The pill floats over the message list, so its height is the layout;
+			// `touch-target` lays the floor over it instead of growing it.
+			className="touch-target pointer-events-auto flex h-9 animate-question-pill-in items-center gap-1.5 rounded-full border border-th-warning bg-th-bg-primary px-3 text-th-text-primary text-xs shadow-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent sm:h-10 sm:text-sm"
 		>
 			<CircleHelp
 				className="size-4 shrink-0 text-th-warning"

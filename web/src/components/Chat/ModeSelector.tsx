@@ -66,7 +66,7 @@ function ModeSelector({
 				type="button"
 				onClick={() => setIsOpen(!isOpen)}
 				disabled={disabled}
-				className="group flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary h-8 w-8 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50"
+				className="group flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary size-9 pointer-coarse:size-11 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50"
 				aria-label={currentInfo.label}
 			>
 				<currentInfo.icon

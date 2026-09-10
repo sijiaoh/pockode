@@ -17,8 +17,9 @@ function ToggleChip({ icon: Icon, label, title, pressed, onToggle }: Props) {
 			// Keep focus (and the mobile keyboard) on whatever input is active.
 			onMouseDown={(e) => e.preventDefault()}
 			onClick={onToggle}
-			// 36px is the floor for compact controls everywhere else in the sidebar.
-			className={`flex min-h-[36px] items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
+			// Visual weight is the 36px compact rung; the hit area follows the
+			// pointer instead, so under a thumb the box grows to the 44px floor.
+			className={`flex min-h-[36px] items-center gap-1.5 rounded-full border px-3 py-1.5 pointer-coarse:min-h-11 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
 				pressed
 					? "border-th-accent bg-th-accent/10 text-th-accent"
 					: "border-th-border bg-transparent text-th-text-secondary hover:text-th-text-primary"

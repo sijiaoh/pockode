@@ -129,10 +129,10 @@ store instead, because **the decision has to outlive the component, and how long
 the component lives is not this panel's to decide.**
 
 Today it usually survives: `TabbedSidebar` renders all four tabs at once and
-each hides itself with a class, and the mobile drawer does the same (`Sidebar`
+each hides itself with a class, and the drawer form does the same (`Sidebar`
 says why — CSS hiding preserves scroll position). But that is a layout
 implementation detail, not a contract, and it does not hold everywhere:
-crossing the desktop breakpoint swaps `Sidebar` between two structurally
+crossing the `expanded` breakpoint (1024) swaps `Sidebar` between two structurally
 different trees and remounts everything inside, and an extension that registers
 `SidebarContent` replaces the tabbed sidebar outright. Component state would
 quietly revert the user's explicit choice in exactly those cases, and would

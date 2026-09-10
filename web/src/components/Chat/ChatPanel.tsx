@@ -390,7 +390,7 @@ function ChatPanel({
 								type="button"
 								onClick={handleInterrupt}
 								aria-label="Stop"
-								className="flex size-8 shrink-0 items-center justify-center rounded bg-th-error text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
+								className="flex size-9 shrink-0 items-center justify-center rounded bg-th-error pointer-coarse:size-11 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
 							>
 								<Square className="size-3.5 fill-current" />
 							</button>

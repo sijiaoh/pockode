@@ -20,6 +20,7 @@ export interface HeaderUIConfig {
 }
 
 export interface HeaderContentProps {
+	/** Absent when the sidebar is a persistent column: render no menu button. */
 	onOpenSidebar?: () => void;
 	onOpenSettings?: () => void;
 	title?: string;

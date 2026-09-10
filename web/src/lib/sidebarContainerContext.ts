@@ -1,5 +1,5 @@
 // Container-level context for custom SidebarContent registered via extensions.
-// Provides onClose and isDesktop so deeply nested extension components can
+// Provides onClose and isExpanded so deeply nested extension components can
 // control the sidebar without prop drilling.
 // Separate from Layout/SidebarContext which manages TabbedSidebar tab state.
 import { createContext, useContext } from "react";
@@ -7,7 +7,7 @@ import { createContext, useContext } from "react";
 export interface SidebarContainerContextValue {
 	isOpen: boolean;
 	onClose: () => void;
-	isDesktop: boolean;
+	isExpanded: boolean;
 }
 
 export const SidebarContainerContext =

@@ -65,13 +65,18 @@ The `packages/shared` package contains UI components, hooks, stores, and utiliti
 
 **Available exports**:
 - Components: `Spinner`, `ConfirmDialog`
-- Hooks: `useIsDesktop`
+- Hooks: `useMediaQuery`, `useOutsideClick`, `useIsExpanded`, `useHasCoarsePointer`, `useHasFinePointer`
 - Stores: `createAuthStore` (factory function for auth store with configurable token key)
-- Utils: `getWebSocketUrl`
+- Utils: `getWebSocketUrl`, `BREAKPOINTS`, `MEDIA_QUERIES`, `hasCoarsePointer`
+
+The responsive exports are the single source for the width ladder and the two
+pointer gates; both stylesheets are checked against them. Width decides where
+things go, pointer decides whether they can be reached — see
+`packages/shared/src/utils/responsive.ts`.
 
 **Usage**:
 ```typescript
-import { Spinner, ConfirmDialog, useIsDesktop, createAuthStore, getWebSocketUrl } from "@pockode/shared";
+import { Spinner, ConfirmDialog, useIsExpanded, createAuthStore, getWebSocketUrl } from "@pockode/shared";
 ```
 
 **Workflow**:

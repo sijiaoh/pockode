@@ -13,7 +13,10 @@ describe either panel's own shape — [file.md](file.md) owns the Files panel
 (backend, search behaviour, the entry `…` menu and everything that hangs off it,
 the upload queue) and [git-ui.md](git-ui.md) owns the Git panel (layout, group
 headers, commit bar, amend, the sheets). A rule stated here is referenced from
-there, not copied.
+there, not copied. Nor does it describe how either panel answers the *viewport*:
+the width ladder, the pointer gates and the hit-area floors are
+[responsive-ui.md](responsive-ui.md)'s. The 240px below is a **container** width,
+which is why it lives here.
 
 ## What went wrong, and what it teaches
 
@@ -121,9 +124,9 @@ Five rungs. Existing Tailwind and `th-*` tokens only; nothing here is a new toke
 |------|----------|---------|
 | **L1** Primary action | At most one per panel, and only while it applies | `min-h-[44px] w-full rounded-lg bg-th-accent text-sm font-medium text-th-accent-text` |
 | **L2** Panel header row | Branch bar, search row | `min-h-[44px]`, label `text-sm text-th-text-primary`, icons `text-th-text-muted`, bottom border `border-th-border` where the row is the whole header — the Files search row omits it, since the option chips render directly beneath it and a border would cut the header block in half |
-| **L3** Group header | `Staged`, `Changes`, `History` | `min-h-[32px] px-3 text-xs uppercase tracking-wide text-th-text-muted`, no hover fill. A header carrying L5 actions grows to their 36px — the touch target wins over the nominal height |
+| **L3** Group header | `Staged`, `Changes`, `History` | `min-h-[32px] px-3 text-xs uppercase tracking-wide text-th-text-muted`, no hover fill. A header carrying L5 actions grows to their 36px — the touch target wins over the nominal height — and grows again where a finger may land ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) |
 | **L4** List row | Tree node, changed file, commit | `min-h-[44px]`, `text-sm text-th-text-secondary`; active `bg-th-bg-tertiary text-th-text-primary` |
-| **L5** Inline icon action | Entry menu, stage, unstage, discard, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `Git/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`) |
+| **L5** Inline icon action | Entry menu, stage, unstage, discard, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `ui/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`). 36 is the visual size only; the hit area a coarse pointer gets on top of it is [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s |
 
 The two rungs that matter most are L3 and L5, because that is where the panels
 had it wrong: the old `▾ Changes` header was L2-weight text on an L2-height row,
@@ -131,26 +134,16 @@ so it read as a second panel header stacked under the branch bar; the old upload
 button was L1 colour on an L2 height, so the rarest control in the Files panel
 was its loudest.
 
-**The rung has two heights, and that is an open divergence rather than a
-principled exception.** Every L5 is 36 except one: the `…` on a file tree row is
-44×44, the touch floor its menu was specified to. It cannot be told apart by
-where it sits — it and the Git rows' stage and discard buttons are the same
-construction, a `shrink-0` sibling of the row button inside a 44px list row,
-each calling `stopPropagation` on its way out — so the tree's `…` is not an
-exception the rule provides for, it is the rule not holding.
-
-Neither height is obviously the wrong one, which is why this is still open.
-Dropping the tree's to 36 gives up the thumb floor on the panel's densest and
-most indented list. Raising the others to 44 carries every L3 group header
-holding actions up with them, since a header grows to its actions, landing a
-group header at the height of the panel header row — which is the shape
-[What went wrong](#what-went-wrong-and-what-it-teaches) started from. Flagged
-here rather than settled by whichever panel is edited next.
-
-One consequence to know before merging them: `FileTreeNode` writes its own
-`menuButtonClass` instead of appending a height to `iconButtonClass()`, because
-the two floors are single utility classes at the same specificity, so which one
-won would come down to stylesheet order rather than to call order.
+**The rung is one height, and the file tree's `…` is no longer an exception to
+it.** It used to be 44×44 where every other L5 was 36, on the reasoning that its
+menu was specified to a touch floor — which put two heights on one rung with
+nothing but history to tell them apart. The two are different measurements of
+one control: 36 is its visual weight, and the larger number was the hit area a
+thumb needs and a mouse does not. Every L5 is 36, and every L5 gets a thumb-sized
+hit area laid over it or grown behind the coarse-pointer gate —
+`iconButtonClass()` states both halves, and the tree's separate `menuButtonClass`
+is gone. The floor itself, and which of the two techniques to reach for, are
+[responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s.
 
 Colour, restated as rules rather than as a list of places:
 

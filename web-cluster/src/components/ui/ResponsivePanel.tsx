@@ -1,3 +1,4 @@
+import { useOutsideClick } from "@pockode/shared";
 import { type ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 
@@ -5,7 +6,7 @@ interface Props {
 	isOpen: boolean;
 	onClose: () => void;
 	title: string;
-	isDesktop: boolean;
+	isExpanded: boolean;
 	children: ReactNode;
 }
 
@@ -13,11 +14,17 @@ export function ResponsivePanel({
 	isOpen,
 	onClose,
 	title,
-	isDesktop,
+	isExpanded,
 	children,
 }: Props) {
 	const panelRef = useRef<HTMLDivElement>(null);
 	const titleId = useId();
+
+	useOutsideClick(isOpen, (target) => {
+		if (panelRef.current && !panelRef.current.contains(target)) {
+			onClose();
+		}
+	});
 
 	useEffect(() => {
 		if (!isOpen) return;
@@ -28,33 +35,25 @@ export function ResponsivePanel({
 			}
 		};
 
-		const handleClickOutside = (e: MouseEvent) => {
-			if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-				onClose();
-			}
-		};
-
 		document.addEventListener("keydown", handleKeyDown);
-		document.addEventListener("mousedown", handleClickOutside);
 
 		// Prevent body scroll on mobile
-		if (!isDesktop) {
+		if (!isExpanded) {
 			document.body.style.overflow = "hidden";
 		}
 
 		return () => {
 			document.removeEventListener("keydown", handleKeyDown);
-			document.removeEventListener("mousedown", handleClickOutside);
-			if (!isDesktop) {
+			if (!isExpanded) {
 				document.body.style.overflow = "";
 			}
 		};
-	}, [isOpen, onClose, isDesktop]);
+	}, [isOpen, onClose, isExpanded]);
 
 	if (!isOpen) return null;
 
 	// Mobile: bottom sheet
-	if (!isDesktop) {
+	if (!isExpanded) {
 		return createPortal(
 			<div className="fixed inset-0 z-50">
 				{/* Backdrop */}
@@ -116,7 +115,7 @@ export function ResponsivePanel({
 					<button
 						type="button"
 						onClick={onClose}
-						className="flex h-8 w-8 items-center justify-center rounded-lg text-th-text-secondary hover:bg-th-overlay-hover hover:text-th-text-primary"
+						className="flex size-11 shrink-0 items-center justify-center rounded-lg text-th-text-secondary hover:bg-th-overlay-hover hover:text-th-text-primary"
 						aria-label="Close"
 					>
 						<svg

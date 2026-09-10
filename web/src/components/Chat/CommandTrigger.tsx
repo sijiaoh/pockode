@@ -10,7 +10,7 @@ function CommandTrigger({ onClick, isActive, disabled }: Props) {
 			type="button"
 			onClick={onClick}
 			disabled={disabled}
-			className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+			className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg pointer-coarse:h-11 pointer-coarse:w-11 ${
 				isActive
 					? "bg-th-accent text-th-accent-text"
 					: "bg-th-bg-tertiary text-th-text-muted hover:text-th-text-primary"

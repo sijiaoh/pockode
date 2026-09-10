@@ -60,7 +60,7 @@ function BranchBar() {
 				<button
 					type="button"
 					onClick={() => setSheet("branches")}
-					className="flex min-h-[36px] min-w-0 flex-1 items-center gap-2 rounded px-2 text-th-text-primary transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+					className="flex min-h-[36px] min-w-0 flex-1 items-center gap-2 rounded px-2 text-th-text-primary pointer-coarse:min-h-11 transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 					aria-label={`Switch branch, currently ${headLabel(head)}`}
 				>
 					<GitBranch

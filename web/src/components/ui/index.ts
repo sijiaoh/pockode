@@ -11,6 +11,7 @@ export {
 export { DiffViewer } from "./DiffViewer";
 export { FileContentDisplay } from "./FileContentDisplay";
 export { FileStateCard } from "./FileStateCard";
+export { iconButtonClass } from "./iconButtonClass";
 export { default as PullToRefresh } from "./PullToRefresh";
 export { default as ReconnectBanner } from "./ReconnectBanner";
 export { default as ScrollableContent } from "./ScrollableContent";

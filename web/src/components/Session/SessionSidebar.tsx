@@ -38,7 +38,7 @@ interface Props {
 	onCloseFile: () => void;
 	onOpenWorkList: () => void;
 	onOpenAgentRoleList: () => void;
-	isDesktop: boolean;
+	isExpanded: boolean;
 	/**
 	 * The URL already points at another worktree while the store, and therefore
 	 * the session list, still holds the previous one's.
@@ -63,7 +63,7 @@ function SessionSidebar({
 	onCloseFile,
 	onOpenWorkList,
 	onOpenAgentRoleList,
-	isDesktop,
+	isExpanded,
 	isSwitchingWorktree,
 }: Props) {
 	const { hasAnyUnread } = useSession();
@@ -97,25 +97,25 @@ function SessionSidebar({
 	const handleSelectSession = useCallback(
 		(id: string) => {
 			onSelectSession(id);
-			if (!isDesktop) onClose();
+			if (!isExpanded) onClose();
 		},
-		[onSelectSession, isDesktop, onClose],
+		[onSelectSession, isExpanded, onClose],
 	);
 
 	const handleSelectDiffFile = useCallback(
 		(path: string, staged: boolean) => {
 			onSelectDiffFile(path, staged);
-			if (!isDesktop) onClose();
+			if (!isExpanded) onClose();
 		},
-		[onSelectDiffFile, isDesktop, onClose],
+		[onSelectDiffFile, isExpanded, onClose],
 	);
 
 	const handleSelectCommit = useCallback(
 		(hash: string) => {
 			onSelectCommit(hash);
-			if (!isDesktop) onClose();
+			if (!isExpanded) onClose();
 		},
-		[onSelectCommit, isDesktop, onClose],
+		[onSelectCommit, isExpanded, onClose],
 	);
 
 	const handleSelectFile = useCallback(
@@ -130,20 +130,20 @@ function SessionSidebar({
 			// hold the drawer open on every file tapped from then on, with no moment
 			// at which it starts closing again. The badge stays lit for it, which is
 			// how the row is found once the file has been read.
-			if (!isDesktop && !hasUnfinishedUploads) onClose();
+			if (!isExpanded && !hasUnfinishedUploads) onClose();
 		},
-		[onSelectFile, isDesktop, onClose, hasUnfinishedUploads],
+		[onSelectFile, isExpanded, onClose, hasUnfinishedUploads],
 	);
 
 	const containerContext = useMemo(
-		() => ({ isOpen, onClose, isDesktop }),
-		[isOpen, onClose, isDesktop],
+		() => ({ isOpen, onClose, isExpanded }),
+		[isOpen, onClose, isExpanded],
 	);
 
 	if (SidebarContent) {
 		return (
 			<SidebarContainerContext.Provider value={containerContext}>
-				<Sidebar isOpen={isOpen} onClose={onClose} isDesktop={isDesktop}>
+				<Sidebar isOpen={isOpen} onClose={onClose} isExpanded={isExpanded}>
 					<SidebarContent />
 				</Sidebar>
 			</SidebarContainerContext.Provider>
@@ -156,9 +156,9 @@ function SessionSidebar({
 			onClose={onClose}
 			tabs={tabs}
 			defaultTab="sessions"
-			isDesktop={isDesktop}
-			renderHeader={({ onClose, isDesktop }) => (
-				<WorktreeSwitcher onClose={onClose} isDesktop={isDesktop} />
+			isExpanded={isExpanded}
+			renderHeader={({ onClose, isExpanded }) => (
+				<WorktreeSwitcher onClose={onClose} isExpanded={isExpanded} />
 			)}
 		>
 			<SessionsTab

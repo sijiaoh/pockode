@@ -80,7 +80,7 @@ There is no auto-expand: a pending card starts expanded and only collapses once 
 ## Accessibility
 
 - The live region (`<output>`, whose implicit role is `status`) is **always mounted** and only its contents are conditional. A live region that appears together with its content is not announced by most screen readers. It is `pointer-events-none` so an empty one cannot swallow taps meant for messages underneath.
-- The pill's visual height is 36px (40px on `sm:`); an `after:-inset-1` pseudo-element grows the hit area to the 44px touch target without changing how it looks.
+- The pill's visual height is 36px (40px on `sm:`); the hit area comes from the `touch-target` utility, which lays a pseudo-element over it — 36px always, 44px where a finger may land ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) — without changing how it looks. It floats over the message list, so its own height is the layout and growing the box was not an option.
 - Entrance animation, jump scrolling and the ring's fade-out all degrade under `prefers-reduced-motion: reduce`.
 - No keyboard shortcut: the product is mobile-first, and the remaining shortcut space is already taken by Escape and the command palette.
 

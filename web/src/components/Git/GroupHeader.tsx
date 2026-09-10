@@ -27,7 +27,7 @@ function GroupHeader({ label, isExpanded, onToggle, actions }: Props) {
 	);
 
 	return (
-		<div className="sticky top-0 z-10 flex min-h-[32px] items-center gap-2 bg-th-bg-secondary px-3">
+		<div className="sticky top-0 z-10 flex min-h-[32px] items-center gap-2 bg-th-bg-secondary px-3 pointer-coarse:min-h-11">
 			{onToggle ? (
 				<button
 					type="button"
