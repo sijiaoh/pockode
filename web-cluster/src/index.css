@@ -4,6 +4,49 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* =============================================================================
+ * RESPONSIVE GATES
+ *
+ * The same three tiers, two breakpoints and two pointer gates as
+ * web/src/index.css, restated here because each project compiles its own
+ * stylesheet. Both are pinned to packages/shared/src/utils/responsive.ts by
+ * web/tests/responsiveTokens.test.ts. Full rules: docs/responsive-ui.md.
+ *
+ * px rather than Tailwind's default rem so these stay the same number as the
+ * matchMedia queries `useIsExpanded` asks, whatever the root font size is.
+ * ============================================================================= */
+@theme {
+	--breakpoint-sm: 640px;
+	--breakpoint-lg: 1024px;
+
+	--breakpoint-md: initial;
+	--breakpoint-xl: initial;
+	--breakpoint-2xl: initial;
+}
+
+/* The two pointer gates. Deliberately NOT complements: a touchscreen laptop
+ * matches both, and wants hover reveal (it has a trackpad) as well as
+ * thumb-sized hit areas (it has a touchscreen). Never write one as the negation
+ * of the other.
+ *
+ * Both names are Tailwind 4.1 built-ins, and these declarations deliberately
+ * shadow them. The built-ins are `(pointer: coarse)` and `(pointer: fine)` —
+ * the *primary* pointer, and without `hover: hover`. Leaving either undefined
+ * here would therefore not be the harmless nothing it looks like: the class
+ * would compile, to the one query docs/responsive-ui.md says must never size a
+ * hit area, and a touchscreen laptop would be told it has no finger. Verified
+ * against built CSS, not from documentation.
+ *
+ * So both are defined even though this project reveals nothing on hover and
+ * `pointer-fine:` has no users yet. An unused `@custom-variant` emits nothing,
+ * so parity costs zero bytes, while the missing half costs correctness in the
+ * one place hardest to notice: packages/shared compiles into *both*
+ * stylesheets, so a shared component can be right in web and wrong here.
+ * web/tests/responsiveTokens.test.ts pins every scanned source root to a
+ * stylesheet that defines both. */
+@custom-variant pointer-fine (@media (hover: hover) and (pointer: fine));
+@custom-variant pointer-coarse (@media (any-pointer: coarse));
+
+/* =============================================================================
  * BASE RESETS
  * ============================================================================= */
 

@@ -1,4 +1,4 @@
-import { ConfirmDialog } from "@pockode/shared";
+import { ConfirmDialog, useHasFinePointer } from "@pockode/shared";
 import {
 	AlertCircle,
 	Check,
@@ -93,7 +93,7 @@ function InlineEditableName({ role }: { role: AgentRole }) {
 	if (editing) {
 		return (
 			<div>
-				<div className="flex items-center gap-1">
+				<div className="flex items-center gap-2">
 					<input
 						ref={ref}
 						type="text"
@@ -275,6 +275,14 @@ function createStepItems(steps: string[]): StepItem[] {
 	}));
 }
 
+/**
+ * 36px of box on a fine pointer, 44px on a coarse one: the hit-area floor
+ * follows the pointer while the visual weight stays put where it can.
+ * See docs/responsive-ui.md.
+ */
+const stepActionButtonClass =
+	"flex min-h-[36px] min-w-[36px] items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary disabled:opacity-30 pointer-coarse:min-h-11 pointer-coarse:min-w-11";
+
 function StepsEditor({ role }: { role: AgentRole }) {
 	const updateAgentRole = useWSStore((s) => s.actions.updateAgentRole);
 	const [editing, setEditing] = useState(false);
@@ -285,6 +293,14 @@ function StepsEditor({ role }: { role: AgentRole }) {
 	const [error, setError] = useState<string | null>(null);
 	const [dragId, setDragId] = useState<string | null>(null);
 	const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
+	/**
+	 * The drag handle is a shortcut to the Move up / Move down buttons beside it,
+	 * so a coarse pointer simply does not get one: HTML5 drag-and-drop never
+	 * fires for a finger, and the `touch-none` the handle needs to work with a
+	 * stylus turns those 36px into a spot the step list cannot be scrolled from.
+	 * Reordering stays reachable either way. See docs/responsive-ui.md.
+	 */
+	const canDrag = useHasFinePointer();
 
 	// Sync local state when role changes externally
 	useEffect(() => {
@@ -431,16 +447,18 @@ function StepsEditor({ role }: { role: AgentRole }) {
 									}`}
 								>
 									{/* Drag handle - only this is draggable */}
-									<button
-										type="button"
-										draggable
-										onDragStart={() => handleDragStart(item.id)}
-										onDragEnd={handleDragEnd}
-										className="mt-1.5 flex min-h-[36px] min-w-[36px] cursor-grab touch-none items-center justify-center text-th-text-muted active:cursor-grabbing"
-										aria-label="Drag to reorder"
-									>
-										<GripVertical className="size-4" />
-									</button>
+									{canDrag && (
+										<button
+											type="button"
+											draggable
+											onDragStart={() => handleDragStart(item.id)}
+											onDragEnd={handleDragEnd}
+											className="mt-1.5 flex min-h-[36px] min-w-[36px] cursor-grab items-center justify-center text-th-text-muted active:cursor-grabbing"
+											aria-label="Drag to reorder"
+										>
+											<GripVertical className="size-4" />
+										</button>
+									)}
 									<div className="flex min-w-0 flex-1 items-center gap-1">
 										<span className="shrink-0 text-xs font-medium text-th-text-muted">
 											{index + 1}.
@@ -454,13 +472,17 @@ function StepsEditor({ role }: { role: AgentRole }) {
 											className="min-w-0 flex-1 resize-none rounded border-none bg-transparent px-1 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted focus:outline-none"
 										/>
 									</div>
-									{/* Move up/down buttons */}
-									<div className="mt-1.5 flex items-center gap-0.5">
+									{/* Move up / Move down / Remove. Three destructive-adjacent
+									    controls in a row, so they take the box-growing form of the
+									    44px floor rather than an overlaid one: gap-0.5 (2px) used
+									    to put Remove two pixels from Move down. The card is well
+									    over 44px tall, so growing costs nothing but width. */}
+									<div className="mt-1.5 flex items-center gap-1 pointer-coarse:gap-2">
 										<button
 											type="button"
 											onClick={() => moveStepUp(item.id)}
 											disabled={saving || index === 0}
-											className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary disabled:opacity-30"
+											className={stepActionButtonClass}
 											aria-label="Move up"
 										>
 											<ChevronUp className="size-3.5" />
@@ -469,7 +491,7 @@ function StepsEditor({ role }: { role: AgentRole }) {
 											type="button"
 											onClick={() => moveStepDown(item.id)}
 											disabled={saving || index === stepItems.length - 1}
-											className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary disabled:opacity-30"
+											className={stepActionButtonClass}
 											aria-label="Move down"
 										>
 											<ChevronDown className="size-3.5" />
@@ -478,7 +500,7 @@ function StepsEditor({ role }: { role: AgentRole }) {
 											type="button"
 											onClick={() => removeStep(item.id)}
 											disabled={saving}
-											className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-error"
+											className={`${stepActionButtonClass} hover:text-th-error`}
 											aria-label="Remove step"
 										>
 											<Trash2 className="size-3.5" />

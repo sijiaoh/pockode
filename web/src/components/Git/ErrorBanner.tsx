@@ -1,7 +1,7 @@
 import { AlertTriangle, X } from "lucide-react";
 import { useState } from "react";
+import { iconButtonClass } from "../ui/iconButtonClass";
 import GitOutput from "./GitOutput";
-import { iconButtonClass } from "./iconButtonClass";
 
 interface Props {
 	/** One line of plain language: what failed. */

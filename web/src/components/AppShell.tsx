@@ -1,4 +1,4 @@
-import { useIsDesktop } from "@pockode/shared";
+import { useIsExpanded } from "@pockode/shared";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
@@ -25,7 +25,7 @@ function AppShell() {
 	const hasAuthToken = useAuthStore(selectHasAuthToken);
 	const wsStatus = useWSStore((state) => state.status);
 	const navigate = useNavigate();
-	const isDesktop = useIsDesktop();
+	const isExpanded = useIsExpanded();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 
 	// Here rather than in `MainContainer`, which only exists once a session has
@@ -238,6 +238,14 @@ function AppShell() {
 	const handleOpenSidebar = useCallback(() => {
 		setSidebarOpen(true);
 	}, []);
+
+	// Growing into the expanded tier turns the drawer into a persistent column,
+	// which has no open/closed state of its own. Without this the flag survives
+	// the transition, so rotating a mini pad to landscape and back would reopen
+	// a drawer the user never asked for.
+	useEffect(() => {
+		if (isExpanded) setSidebarOpen(false);
+	}, [isExpanded]);
 
 	const handleSelectSession = useCallback(
 		(id: string) => {
@@ -545,7 +553,7 @@ function AppShell() {
 					onCloseFile={handleCloseOverlay}
 					onOpenWorkList={handleOpenWorkList}
 					onOpenAgentRoleList={handleOpenAgentRoleList}
-					isDesktop={isDesktop}
+					isExpanded={isExpanded}
 					isSwitchingWorktree={worktreeSwitchInFlight}
 				/>
 				<ChatPanel
@@ -555,7 +563,7 @@ function AppShell() {
 					onUpdateTitle={(title) => {
 						if (currentSessionId) updateTitle(currentSessionId, title);
 					}}
-					onOpenSidebar={handleOpenSidebar}
+					onOpenSidebar={isExpanded ? undefined : handleOpenSidebar}
 					onOpenSettings={handleOpenSettings}
 					overlay={overlay}
 					onCloseOverlay={handleCloseOverlay}

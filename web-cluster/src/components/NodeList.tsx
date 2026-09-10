@@ -290,7 +290,7 @@ export function NodeList() {
 							<button
 								type="button"
 								onClick={() => setActionNotice(null)}
-								className="min-h-[32px] shrink-0 rounded px-2 text-xs hover:bg-th-overlay-hover"
+								className="min-h-9 shrink-0 rounded px-2 text-xs hover:bg-th-overlay-hover pointer-coarse:min-h-11"
 							>
 								Close
 							</button>

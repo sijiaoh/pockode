@@ -1,5 +1,5 @@
 import { getDiffViewHighlighter } from "@git-diff-view/shiki";
-import { useIsDesktop } from "@pockode/shared";
+import { useIsExpanded } from "@pockode/shared";
 import { Check, Copy } from "lucide-react";
 import * as React from "react";
 import { useShikiHighlighter } from "react-shiki";
@@ -79,8 +79,8 @@ export function CodeHighlighter({
 	/** Render the code as-is. Use for input too large to tokenize on the main thread. */
 	plain?: boolean;
 }) {
-	const isDesktop = useIsDesktop();
-	const fontSize = isDesktop ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
+	const isExpanded = useIsExpanded();
+	const fontSize = isExpanded ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
 	const [copied, setCopied] = React.useState(false);
 	const timerRef = React.useRef<number | undefined>(undefined);
 
@@ -111,7 +111,7 @@ export function CodeHighlighter({
 			<button
 				type="button"
 				onClick={handleCopy}
-				className="code-copy-button"
+				className="code-copy-button touch-target"
 				aria-label={copied ? "Copied" : "Copy code"}
 			>
 				{copied ? <Check size={14} /> : <Copy size={14} />}

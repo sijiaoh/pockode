@@ -11,7 +11,7 @@ import { useSidebarContainer } from "../../../lib/sidebarContainerContext";
 export default function SessionsTab() {
 	const navigate = useNavigate();
 	const { worktree, sessionId: routeSessionId } = useRouteState();
-	const { onClose, isDesktop } = useSidebarContainer();
+	const { onClose, isExpanded } = useSidebarContainer();
 	const {
 		filteredSessions,
 		currentSessionId,
@@ -30,9 +30,9 @@ export default function SessionsTab() {
 					sessionId: id,
 				}),
 			);
-			if (!isDesktop) onClose();
+			if (!isExpanded) onClose();
 		},
-		[navigate, worktree, isDesktop, onClose],
+		[navigate, worktree, isExpanded, onClose],
 	);
 
 	const handleCreateSession = useCallback(async () => {
@@ -45,11 +45,11 @@ export default function SessionsTab() {
 					sessionId: newSession.id,
 				}),
 			);
-			if (!isDesktop) onClose();
+			if (!isExpanded) onClose();
 		} catch (error) {
 			console.error("Failed to create session:", error);
 		}
-	}, [createSession, navigate, worktree, isDesktop, onClose]);
+	}, [createSession, navigate, worktree, isExpanded, onClose]);
 
 	return (
 		<div

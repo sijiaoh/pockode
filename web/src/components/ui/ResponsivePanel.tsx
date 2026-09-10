@@ -1,3 +1,4 @@
+import { useOutsideClick } from "@pockode/shared";
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -11,8 +12,8 @@ interface Props {
 	title: string;
 	/** Reference to the trigger button (for click-outside detection) */
 	triggerRef?: React.RefObject<HTMLElement | null>;
-	/** Whether in desktop mode */
-	isDesktop: boolean;
+	/** Two columns fit: render as a dropdown rather than a bottom drawer. */
+	isExpanded: boolean;
 	/** Panel content */
 	children: ReactNode;
 	/** Desktop panel position relative to trigger */
@@ -26,15 +27,15 @@ interface Props {
 }
 
 /**
- * Responsive panel that renders as a bottom sheet on mobile and a dropdown on desktop.
- * Handles: outside click, Escape key, body scroll prevention (mobile).
+ * Bottom sheet below the expanded tier, dropdown anchored to the trigger at and
+ * above it. Handles: outside click, Escape key, body scroll prevention (drawer).
  */
 function ResponsivePanel({
 	isOpen,
 	onClose,
 	title,
 	triggerRef,
-	isDesktop,
+	isExpanded,
 	children,
 	desktopPosition = "stretch",
 	desktopWidth = "w-72",
@@ -43,33 +44,23 @@ function ResponsivePanel({
 }: Props) {
 	const panelRef = useRef<HTMLDivElement>(null);
 	const titleId = useId();
-	const mobile = !isDesktop;
+	const mobile = !isExpanded;
 
-	// Close on outside click
-	useEffect(() => {
-		if (!isOpen) return;
+	useOutsideClick(isOpen, (target) => {
+		// Ignore clicks on trigger
+		if (triggerRef?.current?.contains(target)) {
+			return;
+		}
 
-		const handleClickOutside = (e: MouseEvent) => {
-			const target = e.target as Element;
+		// Ignore clicks inside portaled dialogs (e.g., confirmation modals)
+		if (target.closest('[role="dialog"]')) {
+			return;
+		}
 
-			// Ignore clicks on trigger
-			if (triggerRef?.current?.contains(target)) {
-				return;
-			}
-
-			// Ignore clicks inside portaled dialogs (e.g., confirmation modals)
-			if (target.closest('[role="dialog"]')) {
-				return;
-			}
-
-			if (panelRef.current && !panelRef.current.contains(target)) {
-				onClose();
-			}
-		};
-
-		document.addEventListener("mousedown", handleClickOutside);
-		return () => document.removeEventListener("mousedown", handleClickOutside);
-	}, [isOpen, onClose, triggerRef]);
+		if (panelRef.current && !panelRef.current.contains(target)) {
+			onClose();
+		}
+	});
 
 	// Close on Escape
 	useEffect(() => {
@@ -130,7 +121,7 @@ function ResponsivePanel({
 					<button
 						type="button"
 						onClick={onClose}
-						className="-mr-2 flex h-8 w-8 items-center justify-center rounded-full text-th-text-muted transition-colors hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
+						className="touch-target -my-1.5 -mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-th-text-muted transition-colors hover:bg-th-bg-tertiary hover:text-th-text-primary active:scale-95"
 						aria-label="Close"
 					>
 						<X className="h-5 w-5" />

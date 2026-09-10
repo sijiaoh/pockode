@@ -16,12 +16,12 @@ interface Props {
 	onClose: () => void;
 	tabs: TabConfig[];
 	defaultTab: string;
-	isDesktop: boolean;
+	isExpanded: boolean;
 	children: React.ReactNode;
-	/** Render function for header slot, receives onClose and isDesktop for mobile close button */
+	/** Render function for header slot, receives onClose and isExpanded for mobile close button */
 	renderHeader?: (props: {
 		onClose: () => void;
-		isDesktop: boolean;
+		isExpanded: boolean;
 	}) => React.ReactNode;
 }
 
@@ -39,7 +39,7 @@ function TabbedSidebar({
 	onClose,
 	tabs,
 	defaultTab,
-	isDesktop,
+	isExpanded,
 	children,
 	renderHeader,
 }: Props) {
@@ -68,9 +68,9 @@ function TabbedSidebar({
 
 	return (
 		<SidebarContext.Provider value={contextValue}>
-			<Sidebar isOpen={isOpen} onClose={onClose} isDesktop={isDesktop}>
+			<Sidebar isOpen={isOpen} onClose={onClose} isExpanded={isExpanded}>
 				{/* Header slot */}
-				{renderHeader?.({ onClose, isDesktop })}
+				{renderHeader?.({ onClose, isExpanded })}
 
 				{/* Tab bar */}
 				<div className="flex border-b border-th-border">
@@ -81,7 +81,7 @@ function TabbedSidebar({
 								key={tab.id}
 								type="button"
 								onClick={() => handleTabClick(tab.id)}
-								className={`relative flex flex-1 items-center justify-center py-3 transition-colors ${
+								className={`relative flex min-h-11 flex-1 items-center justify-center py-3 transition-colors ${
 									activeTab === tab.id
 										? "border-b-2 border-th-accent text-th-accent"
 										: "text-th-text-muted hover:text-th-text-primary"

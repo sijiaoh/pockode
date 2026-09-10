@@ -3,7 +3,7 @@ import { memo } from "react";
 import { type FileStatus, GIT_STATUS_INFO } from "../../types/git";
 import { splitPath } from "../../utils/path";
 import SidebarListItem from "../common/SidebarListItem";
-import { iconButtonClass } from "./iconButtonClass";
+import { iconButtonClass } from "../ui/iconButtonClass";
 
 interface Props {
 	file: FileStatus;

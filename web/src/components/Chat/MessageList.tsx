@@ -458,7 +458,7 @@ function MessageList({
 				<button
 					type="button"
 					onClick={handleScrollToBottom}
-					className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-th-border bg-th-bg-primary p-2 text-th-text-secondary shadow-xl transition-colors hover:bg-th-bg-secondary hover:text-th-text-primary"
+					className="absolute bottom-4 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-th-border bg-th-bg-primary text-th-text-secondary pointer-coarse:size-11 shadow-xl transition-colors hover:bg-th-bg-secondary hover:text-th-text-primary"
 					aria-label="Scroll to bottom"
 				>
 					<ArrowDown className="h-5 w-5" aria-hidden="true" />

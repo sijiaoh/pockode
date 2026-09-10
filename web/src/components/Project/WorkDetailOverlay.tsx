@@ -380,7 +380,7 @@ function InlineEditableTitle({ work }: { work: Work }) {
 	if (editing) {
 		return (
 			<div>
-				<div className="flex items-center gap-1">
+				<div className="flex items-center gap-2">
 					<input
 						ref={ref}
 						type="text"

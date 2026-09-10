@@ -20,7 +20,7 @@ function SyncChip({ sync, onClick }: Props) {
 		<button
 			type="button"
 			onClick={onClick}
-			className="flex min-h-[36px] shrink-0 items-center gap-1 rounded px-2 text-xs text-th-text-secondary transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+			className="flex min-h-[36px] shrink-0 items-center gap-1 rounded px-2 pointer-coarse:min-h-11 text-xs text-th-text-secondary transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 			aria-label={`Sync with remote, ${describeState(sync, needsPublish)}`}
 		>
 			{needsPublish ? (

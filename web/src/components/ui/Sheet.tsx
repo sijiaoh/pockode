@@ -1,4 +1,4 @@
-import { useIsDesktop } from "@pockode/shared";
+import { useIsExpanded } from "@pockode/shared";
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId } from "react";
 import { createPortal } from "react-dom";
@@ -51,7 +51,12 @@ function useLockBodyScroll(): void {
 }
 
 /**
- * Bottom drawer on mobile, centered modal on desktop.
+ * Bottom drawer below the expanded tier, centered modal at and above it.
+ *
+ * That one decision is read once, from `useIsExpanded`, and drives both the
+ * class strings and the drag handle. It deliberately has no `lg:` twin: a
+ * width prefix saying the same thing would be a second copy of the threshold,
+ * and the two would drift the moment either is edited.
  *
  * The body scrolls between a fixed header and footer; it has no padding of its
  * own so a sheet can put full-bleed rows in it.
@@ -69,9 +74,9 @@ function Sheet({
 	footer,
 	children,
 }: Props) {
-	const isDesktop = useIsDesktop();
+	const isExpanded = useIsExpanded();
 	const titleId = useId();
-	const mobile = !isDesktop;
+	const asDrawer = !isExpanded;
 
 	useEffect(() => {
 		if (!dismissible) return;
@@ -99,7 +104,9 @@ function Sheet({
 
 	return createPortal(
 		<div
-			className="fixed inset-0 z-50 flex items-end justify-center bg-th-bg-overlay md:items-center"
+			className={`fixed inset-0 z-50 flex justify-center bg-th-bg-overlay ${
+				asDrawer ? "items-end" : "items-center"
+			}`}
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby={titleId}
@@ -114,19 +121,22 @@ function Sheet({
 			{/* Content */}
 			<div
 				className={`relative flex w-full flex-col bg-th-bg-secondary shadow-xl ${
-					mobile
+					asDrawer
 						? "max-h-[90dvh] rounded-t-2xl"
 						: "mx-4 max-h-[85dvh] max-w-md rounded-xl"
 				}`}
 			>
-				{/* Drag handle - mobile only */}
-				{mobile && (
+				{/* Drag handle - drawer only */}
+				{asDrawer && (
 					<div className="flex shrink-0 justify-center pt-3">
 						<div className="h-1 w-10 rounded-full bg-th-text-muted/30" />
 					</div>
 				)}
 
-				{/* Header */}
+				{/* Header. The close button is 36px of box with a 44px hit area laid
+				    over it (touch-target) and negative margins that let it eat into
+				    the header's padding, so a thumb gets its 44px without the header
+				    growing to fit a 44px box. */}
 				<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
 					<h2
 						id={titleId}
@@ -138,7 +148,7 @@ function Sheet({
 						type="button"
 						onClick={onClose}
 						disabled={!dismissible}
-						className="-mr-1 rounded p-1 text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+						className="touch-target -my-1.5 -mr-1 flex size-9 shrink-0 items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary disabled:cursor-not-allowed disabled:opacity-50"
 						aria-label="Close"
 					>
 						<X className="h-5 w-5" />

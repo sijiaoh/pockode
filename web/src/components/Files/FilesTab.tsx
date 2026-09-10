@@ -527,7 +527,7 @@ function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
 						aria-label="Project root actions"
 						aria-haspopup="dialog"
 						aria-expanded={menuTarget?.path === ""}
-						className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-th-text-muted transition-colors hover:bg-th-bg-tertiary hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95"
+						className="flex size-9 shrink-0 pointer-coarse:size-11 items-center justify-center rounded-full text-th-text-muted transition-colors hover:bg-th-bg-tertiary hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95"
 					>
 						<MoreHorizontal className="h-4 w-4" aria-hidden="true" />
 					</button>

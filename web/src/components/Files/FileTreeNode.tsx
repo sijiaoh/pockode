@@ -11,7 +11,7 @@ import { memo, useCallback, useEffect, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFSWatch } from "../../hooks/useFSWatch";
 import type { Entry } from "../../types/contents";
-import { Spinner } from "../ui";
+import { iconButtonClass, Spinner } from "../ui";
 
 interface Props {
 	entry: Entry;
@@ -30,18 +30,6 @@ interface Props {
 	/** Folder something outside the tree — a new entry — needs open. */
 	forceOpenPath: string | null;
 }
-
-/**
- * Not `iconButtonClass()`: that rung is fixed at 36px and this button takes the
- * 44px touch floor. Appending a height to it would not settle that — both are
- * single utility classes at the same specificity, so stylesheet order would
- * decide which won, not call order.
- *
- * The rung having two heights at all is a known divergence, not a rule this
- * button is the exception to; it is flagged in docs/sidebar-ui.md#visual-weight.
- */
-const menuButtonClass =
-	"flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-md text-th-text-muted transition-all hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset active:scale-95";
 
 const FileTreeNode = memo(function FileTreeNode({
 	entry,
@@ -118,7 +106,7 @@ const FileTreeNode = memo(function FileTreeNode({
 			    short of the menu, leaving a notch out of the drop target. */}
 			<div
 				style={{ paddingLeft }}
-				className={`group flex min-h-[44px] items-center gap-1.5 pr-1 text-sm transition-colors ${
+				className={`group flex min-h-[44px] items-center gap-2 pr-1 text-sm transition-colors ${
 					isDropTarget
 						? // A fill rather than a tint of the row, because this one is
 							// answering a cursor that is moving right now.
@@ -171,10 +159,10 @@ const FileTreeNode = memo(function FileTreeNode({
 						e.stopPropagation();
 						onOpenMenu(entry);
 					}}
-					className={`${menuButtonClass} ${
+					className={`${iconButtonClass()} focus-visible:ring-inset ${
 						isMenuOpen
 							? ""
-							: "md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+							: "pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100"
 					}`}
 					aria-label={`More actions for ${entry.path}`}
 					aria-haspopup="dialog"

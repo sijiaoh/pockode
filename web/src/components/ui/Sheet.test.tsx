@@ -2,6 +2,11 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import Sheet from "./Sheet";
 
+/** The full-viewport flex container that parks the content box. */
+function overlay(): HTMLElement {
+	return screen.getByRole("dialog");
+}
+
 /** The flex column the header, body and footer live in. */
 function contentBox(): HTMLElement {
 	const box = screen.getByRole("heading", { name: "Long" }).parentElement
@@ -43,9 +48,22 @@ describe("Sheet", () => {
 		expect(contentBox().className).toMatch(CAPPED);
 	});
 
+	// A tablet held upright is below the expanded tier and keeps the drawer, so
+	// the sheet stays under the thumb instead of floating out of reach in the
+	// middle of the screen.
+	it("sits at the bottom of the viewport as a drawer", () => {
+		renderTall();
+
+		expect(overlay()).toHaveClass("items-end");
+		expect(overlay()).not.toHaveClass("items-center");
+	});
+
 	describe("as a desktop modal", () => {
-		// useIsDesktop reads (min-width: 768px), which the setup's matchMedia stub
-		// answers false for, so the default in tests is the mobile layout.
+		// useIsExpanded reads (min-width: 1024px), which the setup's matchMedia
+		// stub answers false for, so the default in tests is the mobile layout.
+		// One hook decides both the class strings and the drag handle; there is
+		// deliberately no width prefix restating it, so flipping this stub is
+		// enough to move the whole component between its two forms.
 		const original = window.matchMedia;
 		const set = (value: typeof window.matchMedia) =>
 			Object.defineProperty(window, "matchMedia", { writable: true, value });
@@ -68,6 +86,13 @@ describe("Sheet", () => {
 			renderTall();
 
 			expect(contentBox().className).toMatch(CAPPED);
+		});
+
+		it("sits in the middle of the viewport", () => {
+			renderTall();
+
+			expect(overlay()).toHaveClass("items-center");
+			expect(overlay()).not.toHaveClass("items-end");
 		});
 
 		it("scrolls the body while the footer stays put", () => {
