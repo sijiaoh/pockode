@@ -38,9 +38,11 @@ import type {
 } from "../types/work";
 import { getWebSocketUrl } from "../utils/config";
 import {
+	type AgentActions,
 	type AgentRoleActions,
 	type ChatActions,
 	type CommandActions,
+	createAgentActions,
 	createAgentRoleActions,
 	createChatActions,
 	createCommandActions,
@@ -130,6 +132,7 @@ export interface WatchActions {
 }
 
 type RPCActions = ConnectionActions &
+	AgentActions &
 	AgentRoleActions &
 	ChatActions &
 	CommandActions &
@@ -470,6 +473,7 @@ function handleNotification(method: string, params: unknown): void {
 }
 
 // Create namespace-specific actions
+const agentActions = createAgentActions(getClient);
 const agentRoleActions = createAgentRoleActions(getClient);
 const chatActions = createChatActions(getClient, getAgentStartClient);
 const commandActions = createCommandActions(getClient);
@@ -979,6 +983,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		},
 
 		// Spread namespace-specific actions
+		...agentActions,
 		...agentRoleActions,
 		...chatActions,
 		...commandActions,

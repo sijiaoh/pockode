@@ -226,6 +226,90 @@ the content (`web/src/components/Chat/MessageItem.tsx`), so prose reaching it
 throws during render. `WarningItem` already draws a message-and-code banner,
 which is the shape this is.
 
+### Session Forking
+
+Forking is two jobs with one interface between them. Pockode does the first
+itself: `chat.Client.Fork` copies the source's history up to the anchor into a
+new session. The second — bringing the *agent's* own memory of that conversation
+across — belongs to the agent, and whether it can is the agent's own answer.
+
+**The agent declares what it can do, and everything else reads the declaration.**
+`Agent.ForkSupport` returns one of two values, and they are the two facts that
+are true today:
+
+| `agent.ForkSupport` | What the CLI can reopen | What Pockode does with it |
+|---------------------|-------------------------|---------------------------|
+| `ForkUnsupported` (`"none"`) | nothing — it cannot reopen an earlier conversation at all | the fork is refused: `chat.Client.Fork` answers `ErrForkUnsupported` before creating anything, and the frontend shows the menu row disabled with that reason |
+| `ForkFromAnyMessage` (`"any_message"`) | a conversation at a chosen point inside it | forking is offered from any message and can carry the agent's memory from any of them |
+
+Nothing on the subject of forking asks *which* agent it is holding: no branch
+anywhere in the backend or the frontend compares an agent type to `"codex"` to
+decide what a fork may do. The frontend is sent the same declaration (`agent.list`
+→ `rpc.AgentInfo.fork_support`) rather than keeping a table of its own, which would
+be a second place for the fact to be told from and would disagree the day an agent
+learns something new.
+
+(Forking is the only subject settled this way so far. One agent-name branch remains
+elsewhere — `ChatPanel` passes `isCodex` down to decide whether a permission
+request offers *Always Allow* — which is a different fact about an agent and would
+need a capability of its own to express.)
+
+A declaration other than `ForkUnsupported` obliges the agent to implement
+`agent.SessionForker`. `process.Manager.ForkAgentSession` reaches that through a
+type assertion and **reports** a declaration with nothing behind it as an error
+rather than shrugging it off: a fork whose agent was never consulted is
+indistinguishable, from the outside, from one that was consulted and could not
+help.
+
+Under `ForkFromAnyMessage`, `carried == false` is still an ordinary answer: the
+source may turn out to have nothing worth reopening. It owes the user a
+sentence, which `chat.Client` writes into the forked transcript as a
+`fork_agent_context_unavailable` warning rather than leave to be discovered. Only
+a returned *error* is a failure, and it costs the whole fork: the caller deletes
+the half-made session instead of leaving an empty one wearing the source's title.
+
+**Why `ForkUnsupported` is a refusal and not a warning.** The Pockode side of such
+a fork would work perfectly — the transcript copies like any other. What the user
+would get is a session whose agent has never seen the conversation filling its
+screen, and no way to continue it; `session.fork` must not claim to do something
+it does not do just because half of it succeeded. The frontend blocks it first for
+the user's sake, and the backend refuses it because that is the contract.
+
+**What the cut means.** The anchor is inclusive and is not snapped to a turn
+boundary. Cutting mid-turn leaves a last turn with no terminal event, and none is
+invented to tidy it up: the next agent reads this transcript too, and one
+claiming a turn ended where it was cut would lie to it as well as to the user.
+The price lands in the fork's UI: with nothing to
+settle it, that last message sits in the frontend's `streaming` status until the
+user's next message closes the turn, and while it does it cannot itself be a fork
+anchor. It does not look busy in the meantime — the spinner is gated on a live
+process, and a fresh fork has none.
+
+Events the cut left half of go the other way — `agent.TruncateHistory` drops a
+tool call whose result fell after the anchor, and a permission or question prompt
+whose answer did. Extending the cut forward to the answer instead would copy back
+part of the very turn the user forked away from. Only an event with an ID to pair
+on can dangle; one without could not have been paired before the fork either, so
+dropping it would remove history the source still shows.
+
+**The source is described by two facts, not one.** `ForkOptions.Truncated` says
+records already exist after the anchor; `SourceProcessLive` says more can appear
+at any moment. The second is not implied by the first — it is about a transcript
+that is still moving, which is why it is worded as *can grow* rather than *is
+growing* and why an agent must not read it as a snapshot. Both constrain only a
+replay with no point pinned to stop at — with a point pinned, everything past it
+falls outside the replay anyway. Claude reads them for exactly that case: it
+finds its point in `ForkOptions.History`, and history written before Pockode
+recorded the CLI's message ids names none (see [Claude's case](#forking)).
+
+**A forked session is [activated](#activation) at birth** when the copied records
+contain agent output (`agent.HistoryActivatesSession`) — it has a transcript, so
+its agent selector locks, which is right: that transcript was produced by that
+agent. The cost is that activation stops implying "a CLI has run for this
+session" — an inference [Claude had to be taught to stop making](#forking).
+Codex never meets it: [its forks are refused](#no-forking) before there is a
+session to activate.
+
 ## EventRecord: Unified Event Format
 
 `EventRecord` is the standard serialization format for events, used for both:
@@ -253,10 +337,22 @@ type EventRecord struct {
     Origin                MessageOrigin      `json:"origin,omitempty"`
     Subtype               string             `json:"subtype,omitempty"`
     Meta                  *MessageMeta       `json:"meta,omitempty"`
+    ProviderMessageID     string             `json:"provider_message_id,omitempty"`
 }
 ```
 
 **Design Decision**: A single format avoids type conversion errors during serialization/deserialization.
+
+`ProviderMessageID` is the agent's own id for the message this event was parsed
+out of — Claude's per-frame `uuid`, which is also the uuid of the matching entry
+in the CLI's transcript. It is a fact the event arrived with rather than Pockode
+state, which is why it lives on the record. It exists so a fork can name its cut
+point in the agent's own terms ([Session Forking](#session-forking)): `HistorySeq`
+means nothing to a CLI, and one agent message can produce several records here, so
+position cannot be recovered from the records either. Empty for events with no
+message behind them (a warning Pockode raised itself), for agents that expose no
+ids, and for every record written before the field existed — which is why every
+reader treats it as optional rather than assuming it.
 
 `IsError` is best-effort and is only ever set from what the CLI itself reports —
 Claude's `is_error` on a `tool_result` block, Codex's command exit code, patch
@@ -287,7 +383,10 @@ live against **0.153.0**, which is where the captured approval fixtures in
 Claude has a smaller exception. The mapping was read at 2.1.222, but the
 `tool_result` content shapes and the subagent tool's name were checked live
 against **2.1.263**: that is where the text-block array below was observed, and
-where the subagent tool answers to `Agent`. Which version renamed it from
+where the subagent tool answers to `Agent`, and where the truncating-resume
+behaviour behind [forking](#forking) was measured — note that `--resume-session-at`
+and its companions are absent from `claude --help`, so their semantics come from
+running them, not from reading it. Which version renamed it from
 `Task` was not established and does not matter — history recorded by older CLIs
 still says `Task`, so both names have to keep working
 ([frontend-state.md](frontend-state.md#task-groups)).
@@ -394,8 +493,10 @@ at face value, that case needs no special handling.
 |---|---|
 | no file, not activated | `--session-id <pockodeID>` |
 | no file, activated | `--resume <pockodeID> --fork-session` |
+| `unstarted: true` | `--session-id <pockodeID>` |
 | `recovery: ""` | `--resume <sessionId>` |
 | `recovery: "fork"` | `--resume <sessionId> --fork-session` |
+| `recovery: "fork"` + `resumeAt` | the same, plus `--resume-session-at <uuid>` |
 | `recovery: "fresh"` | `--session-id <new UUID>` + a user-visible warning |
 
 Forking is the middle rung because it is the least destructive move that can
@@ -458,6 +559,108 @@ provider ID changes or the ladder moves — so the fsync costs nothing measurabl
 Sessions with no Pockode session ID (integration tests) skip the write entirely,
 since `path()` would otherwise collapse to one file shared by all of them. Codex
 has no counterpart because its threads cannot outlive the CLI process at all (see [Codex Implementation](#codex-implementation)).
+
+### Forking
+
+`claude.Agent.ForkSession` starts no process. It writes the forked session's
+`claude_resume.json` ahead of time, so the first launch the user's first message
+triggers is already the right one, and the states it can write are the whole
+implementation:
+
+| Fork | Seeded state | First launch |
+|---|---|---|
+| carries the conversation, cut at the anchor | `{sessionId: <source's provider ID>, recovery: "fork", resumeAt: <anchor message uuid>}` | `--resume <source's ID> --fork-session --resume-session-at <uuid>` |
+| carries the whole conversation | `{sessionId: <source's provider ID>, recovery: "fork"}` | `--resume <source's ID> --fork-session` |
+| carries nothing | `{unstarted: true}` | `--session-id <pockodeID>` |
+
+**The `fork` rung is what protects the source**, not a convenience. It is the only
+launch that replays a conversation without claiming its ID, and the ladder only
+ever escalates away from resuming (`fork` → `fresh`), so no retry of the new
+session can decay into a plain `--resume` that would write its turns into the
+source's transcript. Once the new session reaches `init` it owns a provider ID of
+its own and the rung resets, exactly as a recovery would.
+
+**`--resume-session-at <uuid>` is what makes a fork from the middle carry
+anything.** `--resume` alone replays a conversation in full; adding it keeps the
+transcript entry with that uuid, drops everything after it, and does so before the
+session is forked. Both facts were measured against claude 2.1.263 and are pinned
+by `TestIntegration_ForkSessionCarriesContextFromTheMiddle`: a fork taken at the
+first of two turns knows the first and has never heard of the second.
+
+Pinning by *message* rather than by *time* is also why `SourceProcessLive` stopped
+mattering. Whatever the source's process appends to its own transcript — while
+the fork is being taken, or hours later — lands past the anchor and is cut away by
+the same slice. The same test forks from a source that is still running and makes
+it talk again afterwards; none of it reaches the new session, and the source's
+transcript keeps every turn.
+
+The optional companion flag `--resume-drops-turn` is deliberately **not** passed.
+It asserts that everything being discarded belongs to one named turn and refuses
+the resume otherwise, which is a guard for undoing a single turn; a Pockode fork
+routinely discards many, so passing it would turn the normal case into a refusal.
+
+**Naming the anchor needs the CLI's own uuid for that message**, which Pockode
+keeps in `EventRecord.ProviderMessageID` — `HistorySeq` means nothing to the CLI,
+and one CLI message can become several records, so position cannot stand in for
+it. `forkAnchorMessage` takes the last record in the copied history that carries
+one. The message it names is kept whole, so a cut *inside* an assistant message
+(text, then a tool call) brings that message across entire: the CLI reports the
+tool call whose result was cut away as failed, which is a better mismatch than
+dropping the very message the user forked at.
+
+The mismatch runs the other way at a **user message**: the CLI never streams back
+the prompts Pockode sends it, so Pockode has no uuid for them, and a fork anchored
+on one stops at the agent's previous message. The new session shows a last message
+its agent does not have in context. That is the safe direction — carrying less
+than the transcript shows rather than more — and it is the only one available.
+
+Three situations still carry nothing, all reported the same honest way —
+`carried == false`, which makes `chat.Client` record it in the new session's
+history:
+
+- **no record in the copied history carries a message uuid, and the fork is cut**
+  (`Truncated`) — history written before Pockode stored the uuids, or a fork taken
+  before the agent said anything. There is no point to cut at, so the only thing
+  `--resume` could serve is the whole conversation, which is not what was asked
+  for.
+- **no message uuid and `SourceProcessLive`** — same gap, and here even the whole
+  conversation is unsafe: with nothing pinning the replay, the CLI reads the
+  source's transcript when it gets there rather than as it was when the fork was
+  taken, and would hand the new session turns from past the fork point.
+- **the source has no provider session recorded, or gave up on the one it had**
+  (`recovery: "fresh"`) — replaying it would fail, which is worse *after* telling
+  the user it would not.
+
+**A fork of a fork mostly falls out of this**, and needs one line to finish. The
+provider session read from the source is the source's *own* source when the source
+has not launched yet, and copied uuids survive `--fork-session` (the CLI keeps
+them), so the grandchild's own anchor names a message that session really
+contains. The line is the case where the grandchild kept nothing that names a
+message: it inherits the source's `resumeAt` instead of replaying whole, because
+it kept a prefix of what the source kept and must not reach further than the
+source does.
+
+One promise can still be broken after the fact: a uuid the source's current
+provider session does not contain — because it started over at some point and the
+earlier messages live in a conversation it has abandoned, or for any other reason
+an entry is no longer in that transcript — makes the first launch exit with
+`No message found with message.uuid of: ...` before `init`. That is a launch
+failure like any other, so the ladder escalates `fork` → `fresh` and the user gets
+the `session_not_resumable` warning — late, but honest. It cannot cost the
+whole-conversation fork anything it used to have: that fork's anchor is the newest
+message recorded, and nothing removes the newest entry from a transcript.
+
+**`unstarted` exists because a forked session is [activated](#activation) at
+birth.** Activation is otherwise proof the CLI owns the Pockode ID (the "no file,
+activated" rung above), and that inference is false for a session whose transcript
+was copied in: resuming it would fail, walk the ladder, and arrive at the
+`--session-id` launch it should have started with — after telling the user Claude
+"could not reopen this session's earlier conversation", about a conversation it
+never had. Claude's answer records the fact in the state file that already decides
+how the session opens; Codex needs no answer to the same problem, having no forked
+session to answer for ([the fork is refused](#no-forking)). `unstarted` only means
+anything while no provider ID is recorded, because recording one is precisely what
+stops a session being unstarted.
 
 ### Message Type Mapping
 
@@ -752,6 +955,7 @@ Pending control requests we need to correlate later are tracked via `pendingRequ
 | Tool calls | Stateless (request → response) | Stateful (call → wait for result) |
 | Permission requests | `PermissionUpdate` objects | Elicitation mechanism |
 | Session recovery | `claude_resume.json` → a `--resume` → `--fork-session` → new-session ladder ([above](#session-recovery-ladder)) | none — see below |
+| Session forking | `ForkFromAnyMessage` — carries the agent's side from any message in the conversation ([above](#forking)) | `ForkUnsupported` — the fork is refused ([below](#no-forking)) |
 
 ### MCP Initialization
 
@@ -821,6 +1025,37 @@ these baselines exist to replace.
 ### No Session Recovery
 
 Codex is the one agent Pockode cannot resume. A thread lives in the memory of the `mcp-server` process that created it — `codex-reply` resolves thread IDs against an in-memory map and answers `Session not found for thread_id` for anything else, confirmed by replaying a thread ID into a fresh process. So a stored thread ID does not merely fail to help, it makes **every** message of the restarted session fail; Pockode therefore starts a new thread and emits a warning saying the agent no longer has the earlier turns. Pockode's own transcript keeps them, which is what makes the loss easy to miss.
+
+### No Forking
+
+Codex declares `agent.ForkUnsupported`, so a Codex session cannot be forked at all
+and `session.fork` refuses it rather than producing a session whose agent has never
+seen the transcript it shows (see [Session Forking](#session-forking)).
+
+The reason is the same in-memory thread: the fork would run in its own process, and
+even a fork taken from a still-live source cannot reach that source's thread —
+pointing it there would not fork the conversation but share it, each session writing
+turns the other never asked for.
+
+Two things about that conclusion are worth keeping straight, because a stronger
+version of it is wrong:
+
+- **The MCP channel has no fork and no recovery.** Re-verified against codex-cli
+  0.153.0: its MCP server offers only `codex` (start a thread) and `codex-reply`
+  (continue one by id), with no way to open a thread from the rollout files on disk.
+  This is the channel Pockode speaks, so this is the limit that applies.
+- **The CLI as a whole is not that limited.** The same version has a
+  `codex exec fork <SESSION_ID>` that reopens a session from disk, across processes.
+  So "Codex cannot reopen a conversation" is only true of the MCP channel. What is
+  true of the CLI either way is that `fork` takes **nothing but a session id** — no
+  message selector of any kind — so even reaching it would give whole-conversation
+  forks and never the one this feature is for. Moving to the `exec` channel would be
+  a rewrite of the Codex integration, not a fork feature.
+
+Because the fork is refused up front, nothing downstream has to cope with it: there
+is no forked Codex session to be [activated](#activation) at birth, and so no first
+`Start` carrying `Resume` for a conversation that never happened — and therefore no
+second wording of the same fact to suppress.
 
 ### Elicitation (Permission Requests)
 
@@ -1125,9 +1360,11 @@ for a session that was merely started is a product question.
 `Activated` marks a session as *started*, and three things read it:
 
 - Claude's [recovery ladder](#session-recovery-ladder), which receives it as
-  `StartOptions.Resume`.
+  `StartOptions.Resume` — overridden for a forked session, whose transcript is
+  [not a conversation of its own](#forking).
 - Codex, through the same field, to warn that the agent has lost the earlier turns
-  — its threads never survive the process that made them.
+  — its threads never survive the process that made them. A forked Codex session
+  never reaches this: [the fork is refused](#no-forking) instead.
 - `session.set_agent_type`, which refuses to switch a started session's backend.
 
 It is set from the event stream — the first event answering
@@ -1196,6 +1433,31 @@ The session index (`sessions/index.json`) is a whole-file rewrite instead, and
 uses `filestore.WriteFileAtomic`. If it is nonetheless found corrupt at startup,
 it is moved to `index.json.corrupt` and the store starts empty rather than
 failing to boot.
+
+**Naming a record.** A client that needs to point at one record — forking is so
+far the only caller — quotes back a `session.HistorySeq`: the record's 1-based
+position in what `GetHistory` returns. The server hands the number out, on
+replayed history (`StampHistorySeq`) and on every `chat.*` notification of a
+persisted event alike, and the client only ever reads it back.
+
+**Counting records client-side is the trap the number exists to close.**
+`chat.Client.SendPermissionResponse` and `SendQuestionResponse` append to history
+without broadcasting, so a client's own counter drifts by one for every
+permission or question answered in the session — silently, and a fork would then
+cut somewhere the user never chose. For the same reason the seqs a client knows
+are sparse, which is harmless: it can only anchor on a record it has seen.
+Broadcasting those responses to fill the gaps would trade a harmless hole for a
+real one.
+
+Sequence numbers are stamped on the way out and never written to the file. A seq
+is a record's address in one session's history, not part of what happened, and a
+stored one would be copied into a fork and go on naming a position it no longer
+holds. Nothing is lost by not storing them: the counter is seeded by counting the
+records already in the file, so numbering picks up where it left off across
+restarts. The one record carrying a seq of its own is the synthetic warning
+`GetHistory` appends when the file was damaged: `NoHistorySeq` (0), "not
+addressable", because it is in no file and the next real append takes the
+position it would otherwise appear to hold.
 
 ## Concurrency Safety
 
@@ -1287,6 +1549,8 @@ The following conditions send an `ErrorEvent` and end the session:
 | Claude implementation | `server/agent/claude/claude.go` |
 | Claude background waits | `server/agent/claude/background_tasks.go`, `background_wait.go`, `background_loss.go` |
 | Codex implementation | `server/agent/codex/codex.go` |
+| Session forking | `server/agent/fork.go`, `claude/fork.go`, `codex/fork.go` |
+| Fork capability over the wire | `server/ws/rpc_agent.go`, `web/src/lib/rpc/agent.ts`, `web/src/hooks/useForkSupport.ts` |
 | Chat client | `server/chat/client.go` |
 | Process management | `server/process/manager.go` |
 | Session storage | `server/session/store.go` |

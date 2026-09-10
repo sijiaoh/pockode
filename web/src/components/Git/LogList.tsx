@@ -2,8 +2,8 @@ import { MoreHorizontal } from "lucide-react";
 import { memo } from "react";
 import type { GitCommit } from "../../types/git";
 import { formatRelativeDate } from "../../utils/relativeTime";
+import { iconButtonClass } from "../common/iconButtonClass";
 import SidebarListItem from "../common/SidebarListItem";
-import { iconButtonClass } from "./iconButtonClass";
 
 interface Props {
 	commits: GitCommit[];

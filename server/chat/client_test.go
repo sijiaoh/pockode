@@ -13,10 +13,21 @@ import (
 
 // mockAgent starts sessions that do nothing, so that a process created by
 // mistake is visible to the manager rather than failing to start.
-type mockAgent struct{}
+type mockAgent struct {
+	// forkSupport is what this agent declares about being forked; empty reads as
+	// agent.ForkUnsupported, for the tests that have nothing to do with forking.
+	forkSupport agent.ForkSupport
+}
 
 func (mockAgent) Start(context.Context, agent.StartOptions) (agent.Session, error) {
 	return &mockSession{events: make(chan agent.AgentEvent)}, nil
+}
+
+func (m mockAgent) ForkSupport() agent.ForkSupport {
+	if m.forkSupport == "" {
+		return agent.ForkUnsupported
+	}
+	return m.forkSupport
 }
 
 type mockSession struct{ events chan agent.AgentEvent }

@@ -1,8 +1,8 @@
 import { Loader2, Minus, Plus, Undo2 } from "lucide-react";
 import type { FileStatus } from "../../types/git";
+import { iconButtonClass } from "../common/iconButtonClass";
 import DiffFileItem from "./DiffFileItem";
 import GroupHeader from "./GroupHeader";
-import { iconButtonClass } from "./iconButtonClass";
 
 interface Props {
 	title: string;

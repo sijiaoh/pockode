@@ -2,8 +2,10 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -233,10 +235,10 @@ func TestFileStore_History(t *testing.T) {
 	record1 := map[string]string{"type": "message", "content": "hello"}
 	record2 := map[string]string{"type": "text", "content": "world"}
 
-	if err := store.AppendToHistory(ctx, sess.ID, record1); err != nil {
+	if _, err := store.AppendToHistory(ctx, sess.ID, record1); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
-	if err := store.AppendToHistory(ctx, sess.ID, record2); err != nil {
+	if _, err := store.AppendToHistory(ctx, sess.ID, record2); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
 
@@ -334,5 +336,157 @@ func TestFileStore_MigratesEmptyMode(t *testing.T) {
 	}
 	if sess.Mode != ModeDefault {
 		t.Errorf("expected mode to be migrated to %q, got %q", ModeDefault, sess.Mode)
+	}
+}
+
+// TestFileStore_WriteHistoryKeepsOneRecordPerLine: the file format is one JSON
+// record per line, so a record carrying a newline — a pretty-printed one — would
+// otherwise become two lines, neither of which parses, and the history would come
+// back damaged.
+func TestFileStore_WriteHistoryKeepsOneRecordPerLine(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	if _, err := store.Create(ctx, "sess", AgentTypeClaude, ModeDefault); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	records := []json.RawMessage{
+		json.RawMessage("{\n  \"type\": \"text\",\n  \"content\": \"line one\"\n}"),
+		json.RawMessage(`{"type":"done"}`),
+	}
+	if err := store.WriteHistory(ctx, "sess", records); err != nil {
+		t.Fatalf("WriteHistory failed: %v", err)
+	}
+
+	got, err := store.GetHistory(ctx, "sess")
+	if err != nil {
+		t.Fatalf("GetHistory failed: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("read back %d records, want 2: %s", len(got), got)
+	}
+	if string(got[0]) != `{"type":"text","content":"line one"}` {
+		t.Errorf("first record = %s, want it compacted onto one line", got[0])
+	}
+}
+
+// TestFileStore_WriteHistoryRejectsInvalidJSON keeps a caller's mistake out of
+// the file: a history that cannot be read back is silent data loss.
+func TestFileStore_WriteHistoryRejectsInvalidJSON(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	err = store.WriteHistory(ctx, "sess", []json.RawMessage{
+		json.RawMessage(`{"type":"text"}`),
+		json.RawMessage(`{oops`),
+	})
+	if err == nil {
+		t.Fatal("WriteHistory accepted a record that is not valid JSON")
+	}
+	if !strings.Contains(err.Error(), "record 1") {
+		t.Errorf("error = %v, want it to name which record was wrong", err)
+	}
+}
+
+// TestFileStore_AppendToHistoryNumbersRecords pins what a sequence number means:
+// the position of that record in the history GetHistory returns. A client is
+// given these numbers and quotes them back to name a record — a fork point, for
+// instance — so an off-by-one here is an off-by-one in every such reference.
+func TestFileStore_AppendToHistoryNumbersRecords(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	if _, err := store.Create(ctx, "sess", AgentTypeClaude, ModeDefault); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	contents := []string{"one", "two", "three"}
+	var seqs []HistorySeq
+	for _, content := range contents {
+		seq, err := store.AppendToHistory(ctx, "sess", map[string]string{"type": "text", "content": content})
+		if err != nil {
+			t.Fatalf("AppendToHistory failed: %v", err)
+		}
+		seqs = append(seqs, seq)
+	}
+
+	// A store that restarted must keep numbering where the file left off, or every
+	// seq handed out after a server restart would name an earlier record.
+	reopened, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	seq, err := reopened.AppendToHistory(ctx, "sess", map[string]string{"type": "text", "content": "four"})
+	if err != nil {
+		t.Fatalf("AppendToHistory failed: %v", err)
+	}
+	seqs = append(seqs, seq)
+	contents = append(contents, "four")
+
+	records, err := reopened.GetHistory(ctx, "sess")
+	if err != nil {
+		t.Fatalf("GetHistory failed: %v", err)
+	}
+
+	for i, seq := range seqs {
+		if !seq.Valid() {
+			t.Fatalf("record %d got no sequence number", i)
+		}
+		if seq.Index() >= len(records) {
+			t.Fatalf("seq %d points past the %d records read back", seq, len(records))
+		}
+		var rec struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(records[seq.Index()], &rec); err != nil {
+			t.Fatalf("record at seq %d does not parse: %v", seq, err)
+		}
+		if rec.Content != contents[i] {
+			t.Errorf("seq %d names %q, want %q", seq, rec.Content, contents[i])
+		}
+	}
+}
+
+// TestStampHistorySeq: the numbers a client is given for replayed history have to
+// be the same ones AppendToHistory handed out, or a fork point taken from
+// replayed history would name a different record than one taken from a live event.
+func TestStampHistorySeq(t *testing.T) {
+	stamped := StampHistorySeq([]json.RawMessage{
+		json.RawMessage(`{"type":"text","content":"one"}`),
+		json.RawMessage(`{}`),
+	})
+
+	if len(stamped) != 2 {
+		t.Fatalf("stamped %d records, want 2", len(stamped))
+	}
+
+	for i, raw := range stamped {
+		var rec struct {
+			Seq     HistorySeq `json:"seq"`
+			Content string     `json:"content"`
+		}
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			t.Fatalf("record %d does not parse: %v", i, err)
+		}
+		if rec.Seq != HistorySeq(i+1) {
+			t.Errorf("record %d has seq %d, want %d", i, rec.Seq, i+1)
+		}
+	}
+
+	var first struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(stamped[0], &first); err != nil {
+		t.Fatalf("first record does not parse: %v", err)
+	}
+	if first.Content != "one" {
+		t.Errorf("content = %q, want it preserved", first.Content)
 	}
 }

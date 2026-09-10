@@ -58,6 +58,11 @@ type testEnv struct {
 	cancel          context.CancelFunc
 	reqID           int
 	authResult      rpc.AuthResult
+	// buffered holds frames read while waiting for a reply that had not arrived
+	// yet. A notification can overtake the reply to the request that caused it,
+	// so call() has to read past it — and dropping it would leave every later
+	// readNotification one frame short, waiting for a frame already delivered.
+	buffered [][]byte
 }
 
 func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
@@ -198,8 +203,11 @@ func (e *testEnv) call(method string, params interface{}) rpcResponse {
 		e.t.Fatalf("failed to send: %v", err)
 	}
 
-	// Read messages until we get the response with matching ID.
-	// This handles cases where notifications arrive before the response.
+	// Read frames until the reply with the matching ID. Anything read on the way
+	// is a notification that overtook it, and is put back for the test to read.
+	// Straight off the socket, never through readFrame: a frame already buffered
+	// arrived before this request was even sent, so it can never be the reply, and
+	// taking it here would only put it back and spin.
 	for {
 		_, respData, err := e.conn.Read(e.ctx)
 		if err != nil {
@@ -214,15 +222,29 @@ func (e *testEnv) call(method string, params interface{}) rpcResponse {
 		if resp.ID == reqID {
 			return resp
 		}
-		// Skip notifications (ID=0) and continue waiting
+		e.buffered = append(e.buffered, respData)
 	}
 }
 
-func (e *testEnv) readNotification() rpcNotification {
+// readFrame returns the next frame the test has not seen yet, taking the ones
+// call() read past before going back to the socket. Frames stay in arrival
+// order: call() appends in the order it read them, and this drains from the front.
+func (e *testEnv) readFrame() []byte {
+	if len(e.buffered) > 0 {
+		data := e.buffered[0]
+		e.buffered = e.buffered[1:]
+		return data
+	}
+
 	_, data, err := e.conn.Read(e.ctx)
 	if err != nil {
 		e.t.Fatalf("failed to read: %v", err)
 	}
+	return data
+}
+
+func (e *testEnv) readNotification() rpcNotification {
+	data := e.readFrame()
 
 	var notif rpcNotification
 	if err := json.Unmarshal(data, &notif); err != nil {
@@ -252,9 +274,7 @@ func (e *testEnv) sendMessage(sessionID, content string) {
 
 func (e *testEnv) skipN(n int) {
 	for i := 0; i < n; i++ {
-		if _, _, err := e.conn.Read(e.ctx); err != nil {
-			e.t.Fatalf("failed to skip response %d: %v", i, err)
-		}
+		e.readFrame()
 	}
 }
 
@@ -967,6 +987,117 @@ func TestHandler_SessionSetAgentType_NotFound(t *testing.T) {
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
 		t.Errorf("expected session not found error, got %+v", resp)
+	}
+}
+
+// TestHandler_SessionFork covers the wiring: a fork asked for over the wire comes
+// back as a session of its own, carrying the anchored conversation and pointing at
+// the session it came from.
+func TestHandler_SessionFork(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{forkSupport: agent.ForkFromAnyMessage})
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
+	store.Update(bgCtx, "source", "Fix the parser")
+	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
+	store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "drop me"})
+
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
+	if resp.Error != nil {
+		t.Fatalf("fork failed: %s", resp.Error.Message)
+	}
+
+	var forked rpc.SessionListItem
+	if err := json.Unmarshal(resp.Result, &forked); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	if forked.ID == "source" || forked.ID == "" {
+		t.Fatalf("forked session ID = %q, want a new one", forked.ID)
+	}
+	if forked.Title != "Fix the parser" || forked.Mode != session.ModeYolo {
+		t.Errorf("title/mode = %q/%q, want the source's", forked.Title, forked.Mode)
+	}
+	if forked.ForkedFrom == nil || forked.ForkedFrom.SessionID != "source" {
+		t.Errorf("forkedFrom = %+v, want the source", forked.ForkedFrom)
+	}
+
+	history, err := store.GetHistory(bgCtx, forked.ID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	// The anchored record, plus the warning that this agent brought no context with
+	// it — the mock answers carried == false.
+	if len(history) != 2 {
+		t.Fatalf("forked history has %d records, want 2: %s", len(history), history)
+	}
+	if !strings.Contains(string(history[0]), "keep me") {
+		t.Errorf("first record = %s, want the anchored one", history[0])
+	}
+}
+
+// TestHandler_SessionFork_AnchorOutOfRange: the reply has to say what was wrong
+// with the request, since the sheet shows the server's message to the user.
+func TestHandler_SessionFork_AnchorOutOfRange(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{forkSupport: agent.ForkFromAnyMessage})
+	env.getMainWorktree().SessionStore.Create(bgCtx, "source", session.AgentTypeClaude, "")
+
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: 7})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "outside the session's history") {
+		t.Errorf("expected an out-of-range error, got %+v", resp)
+	}
+}
+
+// TestHandler_SessionFork_AgentCannotFork: the method refuses a fork its agent
+// cannot follow, with InvalidParams rather than an internal error — nothing
+// failed, the request asked for something this agent does not do — and a message
+// the sheet can show as-is.
+func TestHandler_SessionFork_AgentCannotFork(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{forkSupport: agent.ForkUnsupported})
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
+	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
+
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "does not support forking") {
+		t.Fatalf("expected a refusal naming the missing capability, got %+v", resp)
+	}
+	if resp.Error.Code != jsonrpc2.CodeInvalidParams {
+		t.Errorf("error code = %d, want InvalidParams (%d)", resp.Error.Code, jsonrpc2.CodeInvalidParams)
+	}
+
+	sessions, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Errorf("sessions = %+v, want only the source", sessions)
+	}
+}
+
+// TestHandler_AgentList: the frontend decides what to offer from this table, so
+// every registered agent has to appear in it with a declaration it can read.
+func TestHandler_AgentList(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{forkSupport: agent.ForkFromAnyMessage})
+
+	resp := env.call("agent.list", struct{}{})
+	if resp.Error != nil {
+		t.Fatalf("agent.list failed: %s", resp.Error.Message)
+	}
+
+	var result rpc.AgentListResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	if len(result.Agents) != 1 {
+		t.Fatalf("agents = %+v, want the one registered agent", result.Agents)
+	}
+	if result.Agents[0].Type != session.AgentTypeClaude {
+		t.Errorf("agent type = %q, want the registered one", result.Agents[0].Type)
+	}
+	if result.Agents[0].ForkSupport != agent.ForkFromAnyMessage {
+		t.Errorf("forkSupport = %q, want the agent's own declaration", result.Agents[0].ForkSupport)
 	}
 }
 

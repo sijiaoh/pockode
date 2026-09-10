@@ -1,3 +1,4 @@
+export { type AgentActions, type AgentInfo, createAgentActions } from "./agent";
 export {
 	type AgentRoleActions,
 	createAgentRoleActions,

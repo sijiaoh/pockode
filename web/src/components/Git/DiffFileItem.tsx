@@ -2,8 +2,8 @@ import { Loader2, Minus, Plus, Undo2 } from "lucide-react";
 import { memo } from "react";
 import { type FileStatus, GIT_STATUS_INFO } from "../../types/git";
 import { splitPath } from "../../utils/path";
+import { iconButtonClass } from "../common/iconButtonClass";
 import SidebarListItem from "../common/SidebarListItem";
-import { iconButtonClass } from "./iconButtonClass";
 
 interface Props {
 	file: FileStatus;

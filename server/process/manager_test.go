@@ -36,6 +36,12 @@ type startCall struct {
 	mcpServerDir string
 }
 
+// ForkSupport: these tests are about processes, not forks, so the mock declares
+// the one answer that needs no ForkSession to back it.
+func (m *mockAgent) ForkSupport() agent.ForkSupport {
+	return agent.ForkUnsupported
+}
+
 func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -833,4 +839,32 @@ func TestProcess_ActivationFollowsAgentOutput(t *testing.T) {
 		meta, _, _ := store.Get("sess-1")
 		return meta.Activated
 	})
+}
+
+// declaringAgent declares it can be forked and then does not implement
+// agent.SessionForker — the one way the two halves of the capability can
+// disagree, since the declaration is a method and the work is an interface the
+// manager reaches by type assertion.
+type declaringAgent struct{ *mockAgent }
+
+func (declaringAgent) ForkSupport() agent.ForkSupport { return agent.ForkFromAnyMessage }
+
+// TestForkAgentSession_DeclarationWithoutImplementation: the mismatch is reported
+// rather than treated as "carried nothing". Staying quiet would hand the user a
+// fork whose agent was never consulted, told apart from one that was consulted
+// and could not help by nothing at all.
+func TestForkAgentSession_DeclarationWithoutImplementation(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	registry := agent.NewRegistry()
+	registry.Register(session.AgentTypeClaude, declaringAgent{&mockAgent{}})
+	m := NewManager(registry, t.TempDir(), t.TempDir(), "", store, time.Minute)
+	defer m.Shutdown()
+
+	carried, err := m.ForkAgentSession(context.Background(), session.AgentTypeClaude, agent.ForkOptions{})
+	if err == nil {
+		t.Fatal("a declaration with nothing behind it was accepted silently")
+	}
+	if carried {
+		t.Error("carried = true on a failure")
+	}
 }

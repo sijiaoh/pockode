@@ -1,16 +1,23 @@
 import { Square } from "lucide-react";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
+import { useForkSession } from "../../hooks/useForkSession";
+import { useForkSupport } from "../../hooks/useForkSupport";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { forkBlockedReason } from "../../lib/agentType";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
+import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
 	AskUserQuestionRequest,
+	HistorySeq,
 	PermissionRequest,
 } from "../../types/message";
 import type { OverlayState } from "../../types/overlay";
+import { resolveForkAnchor } from "../../utils/forkAnchor";
+import { buildForkTitle } from "../../utils/forkTitle";
 import { formatStepProgress, getStepProgress } from "../../utils/workSteps";
 import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitView, DiffView } from "../Git";
@@ -25,8 +32,10 @@ import { SettingsPage } from "../Settings";
 import { statusDotStyles, statusLabels } from "../ui/StatusBadge";
 import AgentSelector from "./AgentSelector";
 import ChatSkeleton from "./ChatSkeleton";
+import ForkSessionSheet from "./ForkSessionSheet";
 import DefaultInputBar from "./InputBar";
 import MessageList from "./MessageList";
+import MessageMenu from "./MessageMenu";
 import ModeSelector from "./ModeSelector";
 
 const noop = () => {};
@@ -114,6 +123,8 @@ interface Props {
 	overlay?: OverlayState;
 	onCloseOverlay?: () => void;
 	onNavigateToSession?: (sessionId: string, worktree: string) => void;
+	/** Opens another session of this worktree, which a fork's parent and child both are. */
+	onSelectSession?: (sessionId: string) => void;
 	onOpenWorkDetail?: (workId: string) => void;
 	onOpenWorkList?: () => void;
 	onOpenAgentRoleList?: () => void;
@@ -130,6 +141,7 @@ function ChatPanel({
 	overlay,
 	onCloseOverlay,
 	onNavigateToSession,
+	onSelectSession,
 	onOpenWorkDetail,
 	onOpenWorkList,
 	onOpenAgentRoleList,
@@ -239,11 +251,82 @@ function ChatPanel({
 		interrupt();
 	}, [interrupt]);
 
+	// Which message a menu is open for, and which one a fork is being confirmed
+	// for. Held here rather than inside a message: both sheets are portals and
+	// the fork is a session-level request, so neither belongs to one bubble.
+	const [menuMessageId, setMenuMessageId] = useState<string | null>(null);
+	const [forkTarget, setForkTarget] = useState<{
+		messageId: string;
+		defaultTitle: string;
+	} | null>(null);
+	const { forkSession, isForking, forkError, clearForkError } =
+		useForkSession();
+	// The agent's own declaration of whether it can follow a fork of a
+	// conversation, which is what decides whether the menu offers forking at all.
+	const forkSupport = useForkSupport(agentType);
+
+	const forkedFromSessionId = useSessionStore(
+		(s) => s.sessions.find((x) => x.id === sessionId)?.forked_from?.session_id,
+	);
+
+	// Stable: it reaches the memoized MessageItem of every bubble.
+	const handleOpenMessageMenu = useCallback((messageId: string) => {
+		setMenuMessageId(messageId);
+	}, []);
+
+	const handleStartFork = useCallback(
+		(messageId: string) => {
+			// Read rather than subscribed: the pre-filled name is a snapshot taken
+			// when the sheet opens, and the panel has no other use for the list.
+			const titles = useSessionStore
+				.getState()
+				.sessions.map((session) => session.title);
+			// Swaps the menu for the confirm sheet in one commit.
+			setMenuMessageId(null);
+			clearForkError();
+			setForkTarget({
+				messageId,
+				defaultTitle: buildForkTitle(sessionTitle, titles),
+			});
+		},
+		[sessionTitle, clearForkError],
+	);
+
+	const handleCloseFork = useCallback(() => {
+		setForkTarget(null);
+		clearForkError();
+	}, [clearForkError]);
+
+	const handleFork = useCallback(
+		async (anchorSeq: HistorySeq, title: string) => {
+			try {
+				const forked = await forkSession(sessionId, anchorSeq, title);
+				setForkTarget(null);
+				onSelectSession?.(forked.id);
+			} catch {
+				// Reported through forkError in the sheet, which stays open: landing
+				// the user in a session that may not exist is worse than the error.
+			}
+		},
+		[forkSession, sessionId, onSelectSession],
+	);
+
+	const menuMessage = menuMessageId
+		? messages.find((m) => m.id === menuMessageId)
+		: undefined;
+	const forkAnchor = forkTarget
+		? resolveForkAnchor(messages, forkTarget.messageId)
+		: null;
+	const isSheetOpen = Boolean(menuMessage || forkAnchor);
+
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			// Skip if already handled (e.g., by CommandPalette)
 			if (e.defaultPrevented) return;
 			if (isInputBarHidden(overlay)) return;
+			// A sheet takes Escape for dismissing itself; interrupting the agent as
+			// well would make one key do two unrelated things.
+			if (isSheetOpen) return;
 			if (e.key === "Escape" && isStreaming) {
 				handleInterrupt();
 			}
@@ -251,7 +334,7 @@ function ChatPanel({
 
 		document.addEventListener("keydown", handleKeyDown);
 		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, [isStreaming, handleInterrupt, overlay]);
+	}, [isStreaming, handleInterrupt, overlay, isSheetOpen]);
 
 	const renderContent = () => {
 		if (!overlay) {
@@ -271,6 +354,12 @@ function ChatPanel({
 					onQuestionRespond={handleQuestionRespond}
 					onHintClick={handleSend}
 					onOpenWorkDetail={onOpenWorkDetail}
+					forkedFromSessionId={forkedFromSessionId}
+					onOpenSession={onSelectSession}
+					// Forking without a way to open the result would leave the user in
+					// the parent with no sign anything happened, so the whole entry
+					// point waits for a host that can navigate.
+					onOpenMessageMenu={onSelectSession && handleOpenMessageMenu}
 				/>
 			);
 		}
@@ -399,6 +488,28 @@ function ChatPanel({
 						<div className="size-8 shrink-0" />
 					)}
 				</div>
+			)}
+			{menuMessage && (
+				<MessageMenu
+					message={menuMessage}
+					forkBlockedReason={forkBlockedReason(agentType, forkSupport)}
+					onFork={() => handleStartFork(menuMessage.id)}
+					onClose={() => setMenuMessageId(null)}
+				/>
+			)}
+			{/* Gone if the anchor left the transcript — a session deleted, a
+			    worktree switched away from. There is nothing left to confirm. */}
+			{forkTarget && forkAnchor && (
+				<ForkSessionSheet
+					anchor={forkAnchor.message}
+					droppedCount={forkAnchor.droppedCount}
+					agentType={agentType}
+					defaultTitle={forkTarget.defaultTitle}
+					isForking={isForking}
+					error={forkError}
+					onFork={(title) => handleFork(forkAnchor.anchorSeq, title)}
+					onClose={handleCloseFork}
+				/>
 			)}
 			{!isInputBarHidden(overlay) && (
 				<InputBar

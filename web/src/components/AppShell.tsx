@@ -560,6 +560,7 @@ function AppShell() {
 					overlay={overlay}
 					onCloseOverlay={handleCloseOverlay}
 					onNavigateToSession={handleNavigateToSession}
+					onSelectSession={handleSelectSession}
 					onOpenWorkDetail={handleOpenWorkDetail}
 					onOpenWorkList={handleOpenWorkList}
 					onOpenAgentRoleList={handleOpenAgentRoleList}

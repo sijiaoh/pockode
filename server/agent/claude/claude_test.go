@@ -183,6 +183,30 @@ func TestParseLine(t *testing.T) {
 			}},
 		},
 		{
+			// The uuid is what a fork names its cut point with, so it has to reach
+			// every record one CLI message produces — the cut can fall between them.
+			name:  "the CLI message uuid reaches every event the message produces",
+			input: `{"type":"assistant","uuid":"msg-uuid","message":{"content":[{"type":"text","text":"reading"},{"type":"tool_use","id":"toolu_9","name":"Read","input":{"path":"a.go"}}]}}`,
+			expected: []agent.AgentEvent{
+				agent.TextEvent{Content: "reading", ProviderMessageID: "msg-uuid"},
+				agent.ToolCallEvent{
+					ToolUseID:         "toolu_9",
+					ToolName:          "Read",
+					ToolInput:         json.RawMessage(`{"path":"a.go"}`),
+					ProviderMessageID: "msg-uuid",
+				},
+			},
+		},
+		{
+			name:  "tool_result carries the uuid of the user message it arrived in",
+			input: `{"type":"user","uuid":"result-uuid","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_9","content":"done"}]}}`,
+			expected: []agent.AgentEvent{agent.ToolResultEvent{
+				ToolUseID:         "toolu_9",
+				ToolResult:        "done",
+				ProviderMessageID: "result-uuid",
+			}},
+		},
+		{
 			name:  "assistant text and tool_use in same message",
 			input: `{"type":"assistant","message":{"content":[{"type":"text","text":"I will read the file"},{"type":"tool_use","id":"toolu_456","name":"Read","input":{"path":"main.go"}}]}}`,
 			expected: []agent.AgentEvent{
@@ -710,6 +734,14 @@ func TestClaudeResumeStateResolve(t *testing.T) {
 			want:   claudeLaunch{sessionID: "pockode-session", resume: true, fork: true},
 		},
 		{
+			// A forked session's transcript is not its own conversation, so
+			// activation must not send it off to resume one.
+			name:   "an unstarted session starts a provider session of its own",
+			state:  &claudeResumeState{Unstarted: true},
+			resume: true,
+			want:   claudeLaunch{sessionID: "pockode-session"},
+		},
+		{
 			name:   "recorded id is resumed",
 			state:  &claudeResumeState{SessionID: "claude-session"},
 			resume: true,
@@ -720,6 +752,14 @@ func TestClaudeResumeStateResolve(t *testing.T) {
 			state:  &claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork},
 			resume: true,
 			want:   claudeLaunch{sessionID: "claude-session", resume: true, fork: true},
+		},
+		{
+			// What a fork taken in the middle of a conversation seeds: the same
+			// replay, cut short at the message the fork was taken from.
+			name:   "fork stage carries the message to stop the replay at",
+			state:  &claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork, ResumeAt: "msg-7"},
+			resume: true,
+			want:   claudeLaunch{sessionID: "claude-session", resume: true, fork: true, resumeAt: "msg-7"},
 		},
 		{
 			name:         "fresh stage starts a new provider session",

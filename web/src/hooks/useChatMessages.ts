@@ -4,6 +4,7 @@ import {
 	closePreviousTurn,
 	expirePendingDialogs,
 	normalizeEvent,
+	readHistorySeq,
 	replayHistory,
 	settleRunningTasks,
 	updatePermissionRequestStatus,
@@ -113,7 +114,8 @@ export function useChatMessages({
 		setIsProcessRunning(notification.type !== "process_ended");
 
 		const event = normalizeEvent(notification);
-		setMessages((prev) => applyServerEvent(prev, event));
+		const seq = readHistorySeq(notification);
+		setMessages((prev) => applyServerEvent(prev, event, seq));
 	}, []);
 
 	// Reset when the session changes. During render rather than in an effect: an

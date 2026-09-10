@@ -68,7 +68,7 @@ func TestFileStore_GetHistory_PartialLine(t *testing.T) {
 	if _, err := store.Create(ctx, sessionID, "", ""); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
-	if err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "hello"}); err != nil {
+	if _, err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "hello"}); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
 
@@ -76,7 +76,7 @@ func TestFileStore_GetHistory_PartialLine(t *testing.T) {
 	appendRaw(t, historyPath, `{"type":"text","con`)
 
 	// Appending after the crash must keep the new record readable.
-	if err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "world"}); err != nil {
+	if _, err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "world"}); err != nil {
 		t.Fatalf("AppendToHistory failed: %v", err)
 	}
 
@@ -112,5 +112,66 @@ func appendRaw(t *testing.T, path, content string) {
 	defer f.Close()
 	if _, err := f.WriteString(content); err != nil {
 		t.Fatalf("write: %v", err)
+	}
+}
+
+// TestFileStore_DamagedHistory_KeepsSeqsUnique: the warning GetHistory adds for
+// unreadable records is not in the file, so it must not take an address a real
+// record can also get. Numbered by position it would collide with the next
+// append, and a client anchoring on it would name a record it never saw.
+func TestFileStore_DamagedHistory_KeepsSeqsUnique(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	sessionID := "damaged-session"
+	if _, err := store.Create(ctx, sessionID, "", ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if _, err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "kept"}); err != nil {
+		t.Fatalf("AppendToHistory failed: %v", err)
+	}
+	appendRaw(t, filepath.Join(dir, "sessions", sessionID, "history.jsonl"), `{"type":"text","con`)
+
+	seq, err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "after the damage"})
+	if err != nil {
+		t.Fatalf("AppendToHistory failed: %v", err)
+	}
+
+	records, err := store.GetHistory(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetHistory failed: %v", err)
+	}
+	stamped := StampHistorySeq(records)
+
+	// Two readable records plus the warning.
+	if len(stamped) != 3 {
+		t.Fatalf("got %d records, want 3: %s", len(stamped), stamped)
+	}
+
+	var seqs []HistorySeq
+	for i, raw := range stamped {
+		var rec struct {
+			Type string     `json:"type"`
+			Seq  HistorySeq `json:"seq"`
+		}
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			t.Fatalf("record %d does not parse: %v", i, err)
+		}
+		if rec.Seq.Valid() {
+			seqs = append(seqs, rec.Seq)
+		}
+	}
+
+	if len(seqs) != 2 {
+		t.Fatalf("%d records are addressable, want the 2 real ones: %s", len(seqs), stamped)
+	}
+	if seqs[0] == seqs[1] {
+		t.Errorf("two records share seq %d", seqs[0])
+	}
+	if seqs[1] != seq {
+		t.Errorf("the appended record reads back as seq %d, was handed %d", seqs[1], seq)
 	}
 }

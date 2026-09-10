@@ -1,7 +1,9 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 )
 
@@ -22,6 +24,20 @@ func (a AgentType) IsValid() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// DisplayName is how the agent is named in text a user reads. Kept next to the
+// type so a message written on the server and one written in the UI cannot end up
+// calling the same agent two different things.
+func (a AgentType) DisplayName() string {
+	switch a {
+	case AgentTypeClaude:
+		return "Claude"
+	case AgentTypeCodex:
+		return "Codex"
+	default:
+		return string(a)
 	}
 }
 
@@ -48,6 +64,95 @@ func (m Mode) IsValid() bool {
 	}
 }
 
+// HistorySeq names one record of a session's history: its 1-based position in
+// the sequence GetHistory returns.
+//
+// It exists because a client cannot count history records for itself. It is
+// never told about every record that is stored — a permission or question answer
+// is appended without being broadcast, and a client's own message comes back to
+// it only as its own local echo — so a counter kept on the client drifts, and
+// silently: nothing about a fork cut one record off looks wrong. A number the
+// server hands out and the client only ever quotes back cannot drift. The
+// numbers a client knows are therefore sparse, which is harmless, because the
+// only records it ever names are ones it has seen.
+type HistorySeq int
+
+// NoHistorySeq is the zero value, meaning "no record": what an append that
+// failed reports, and what a notification carries for an event that was never
+// persisted. Sequence numbers start at 1 so that this stays distinguishable from
+// the first record on the wire, where an absent field reads as zero.
+const NoHistorySeq HistorySeq = 0
+
+// Valid reports whether the sequence number names a record at all.
+func (s HistorySeq) Valid() bool { return s > 0 }
+
+// Index converts to a 0-based index into the records GetHistory returned. Only
+// meaningful for a Valid sequence number.
+func (s HistorySeq) Index() int { return int(s) - 1 }
+
+// StampHistorySeq returns the records with their sequence numbers written into
+// them, which is how a client learns what to quote back — see HistorySeq. The
+// stored records are left alone: a sequence number is a record's address in the
+// history, not part of the event that was recorded.
+//
+// Records are rewritten field by field rather than through a typed struct so
+// that a record written by another version of Pockode keeps every field it
+// arrived with.
+func StampHistorySeq(records []json.RawMessage) []json.RawMessage {
+	stamped := make([]json.RawMessage, len(records))
+	for i, raw := range records {
+		fields := make(map[string]json.RawMessage)
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			// Not a JSON object, so there is nothing to hang a field on. Passed
+			// through unchanged: the client still sees the record, it just cannot
+			// name it.
+			stamped[i] = raw
+			continue
+		}
+
+		if _, addressed := fields["seq"]; addressed {
+			// Already answered for: a record the store synthesized rather than read
+			// from the file says so by carrying seq 0, and must not be given the
+			// address of a record that does exist. See historyWarning.
+			stamped[i] = raw
+			continue
+		}
+
+		fields["seq"] = json.RawMessage(strconv.Itoa(i + 1))
+		out, err := json.Marshal(fields)
+		if err != nil {
+			stamped[i] = raw
+			continue
+		}
+		stamped[i] = out
+	}
+	return stamped
+}
+
+// ForkOrigin records the session a session was forked from.
+//
+// The parent's ID only, deliberately: a copy of its title here would go stale
+// the moment the parent is renamed, and a record that reports a name the parent
+// no longer has is worse than one the client resolves against the session list
+// it already holds — where a parent that is gone is simply absent.
+type ForkOrigin struct {
+	SessionID string `json:"session_id"`
+}
+
+// ForkSpec describes a session created as a copy of another one. Everything a
+// fork inherits is decided here, in one place, and written in one index update:
+// a fork that flickered through three states on its way into the session list
+// would be visible to every client watching.
+type ForkSpec struct {
+	// Source is the session being forked.
+	Source SessionMeta
+	// Title names the fork. Empty copies the source's title.
+	Title string
+	// Activated reports whether the copied history already holds agent output,
+	// which makes the fork a session that has run — see SessionMeta.Activated.
+	Activated bool
+}
+
 // SessionMeta holds metadata for a chat session.
 // These fields represent the conversation's state, not the process's state.
 // A process may be created, reaped, and recreated many times within a single
@@ -62,6 +167,10 @@ type SessionMeta struct {
 	Mode       Mode      `json:"mode"`        // agent mode (default, yolo, plan)
 	NeedsInput bool      `json:"needs_input"` // true when waiting for user input (permission/question)
 	Unread     bool      `json:"unread"`      // true when session has unread changes
+	// ForkedFrom is set on a session created by forking another, and never
+	// changes afterwards: where a conversation came from is a fact about its
+	// birth, not a live relationship.
+	ForkedFrom *ForkOrigin `json:"forked_from,omitempty"`
 }
 
 // Operation represents the type of change to the session list.

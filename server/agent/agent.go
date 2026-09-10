@@ -65,6 +65,16 @@ type Agent interface {
 	// Start launches a persistent agent process and returns a Session.
 	// The process stays alive until the context is cancelled or Close is called.
 	Start(ctx context.Context, opts StartOptions) (Session, error)
+
+	// ForkSupport states whether this agent can follow a fork of a conversation,
+	// and from where. Every agent answers for itself, so no caller has to know
+	// which agent it is holding; see ForkSupport for what the answers mean.
+	//
+	// Anything other than ForkUnsupported obliges the agent to implement
+	// SessionForker as well — the declaration is a promise about what that call
+	// will do, and process.Manager reports the mismatch rather than quietly
+	// forking without the agent.
+	ForkSupport() ForkSupport
 }
 
 // Session represents an active agent session with bidirectional communication.

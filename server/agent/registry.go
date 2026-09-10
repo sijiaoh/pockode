@@ -19,6 +19,19 @@ func (r *Registry) Register(agentType session.AgentType, a Agent) {
 	r.agents[agentType] = a
 }
 
+// ForkSupports returns what every registered agent says about being forked.
+//
+// Clients get this table rather than a yes/no per session: fork support belongs
+// to the agent, not to any one session that happens to use it, and a copy made
+// per session would be a second place for the same fact to be told from.
+func (r *Registry) ForkSupports() map[session.AgentType]ForkSupport {
+	supports := make(map[session.AgentType]ForkSupport, len(r.agents))
+	for agentType, a := range r.agents {
+		supports[agentType] = a.ForkSupport()
+	}
+	return supports
+}
+
 func (r *Registry) Get(agentType session.AgentType) (Agent, error) {
 	a, ok := r.agents[agentType]
 	if !ok {

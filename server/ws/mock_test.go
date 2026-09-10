@@ -75,6 +75,10 @@ type mockAgent struct {
 	events    []agent.AgentEvent
 	startErr  error
 	sessionID string
+	// forkSupport is what this agent declares about being forked, and forkCarried
+	// what its ForkSession then answers.
+	forkSupport agent.ForkSupport
+	forkCarried bool
 
 	mu                sync.Mutex
 	messages          []string
@@ -91,6 +95,21 @@ func (m *mockAgent) recordMessage(sessionID, prompt string) {
 		m.messagesBySession = make(map[string][]string)
 	}
 	m.messagesBySession[sessionID] = append(m.messagesBySession[sessionID], prompt)
+}
+
+// ForkSupport reports what this agent declares about being forked; empty reads as
+// agent.ForkUnsupported, for the tests that have nothing to do with forking.
+func (m *mockAgent) ForkSupport() agent.ForkSupport {
+	if m.forkSupport == "" {
+		return agent.ForkUnsupported
+	}
+	return m.forkSupport
+}
+
+// ForkSession keeps the promise the declaration makes. Carrying nothing is the
+// answer that leaves the fork's warning in the new session's history.
+func (m *mockAgent) ForkSession(context.Context, agent.ForkOptions) (bool, error) {
+	return m.forkCarried, nil
 }
 
 func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {

@@ -2,6 +2,7 @@ import type {
 	AskUserQuestion,
 	AssistantMessage,
 	ContentPart,
+	HistorySeq,
 	Message,
 	MessageOrigin,
 	PermissionUpdate,
@@ -92,6 +93,21 @@ export type NormalizedEvent =
 	  }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
+
+/**
+ * The record's address in the session's history, as handed out by the server —
+ * with replayed history and with every live notification alike, so a client
+ * cannot tell the two apart when it later names a record.
+ *
+ * Absent for an event that was never persisted, and for history written before
+ * seqs existed. Absent means "not addressable", never "position zero".
+ */
+export function readHistorySeq(
+	e: ServerNotification | Record<string, unknown>,
+): HistorySeq | undefined {
+	const seq = (e as Record<string, unknown>).seq;
+	return typeof seq === "number" && seq > 0 ? seq : undefined;
+}
 
 // Convert snake_case server event to camelCase
 export function normalizeEvent(
@@ -367,10 +383,43 @@ export function createAssistantMessage(
 	};
 }
 
-// Shared by history replay and real-time streaming
+/**
+ * Writes a record's seq onto the message it was folded into, so a fork can name
+ * that message as its cut point (docs/session-fork-ui.md).
+ *
+ * Only ever the last message: an event that lands in an earlier one — a
+ * tool_result arriving after its turn was interrupted — must not push that
+ * message's anchor past the messages below it, or "keep everything up to and
+ * including this message" would silently keep more than it shows. The record
+ * stays unaddressable instead, which the client is free to do: it only ever
+ * anchors on records it has been given a seq for.
+ */
+function stampAnchorSeq(
+	before: Message[],
+	after: Message[],
+	seq: HistorySeq | undefined,
+): Message[] {
+	if (seq === undefined || after.length === 0) return after;
+
+	const index = after.length - 1;
+	const last = after[index];
+	// Compared against the same position rather than the end of `before`: a
+	// terminal event can drop an empty placeholder, and the message left behind
+	// is then an old one that this record did not touch.
+	if (last === before[index]) return after;
+	if (last.role !== "user" && last.role !== "assistant") return after;
+
+	const updated = [...after];
+	updated[index] = { ...last, anchorSeq: seq };
+	return updated;
+}
+
+// Shared by history replay and real-time streaming. `seq` is the record's
+// address in history, absent for an event that was never persisted.
 export function applyServerEvent(
 	messages: Message[],
 	event: NormalizedEvent,
+	seq?: HistorySeq,
 ): Message[] {
 	// User message or system-driven message (history replay or broadcast)
 	if (event.type === "message") {
@@ -387,13 +436,21 @@ export function applyServerEvent(
 				event.meta,
 			);
 		}
+		// Stamped inside applyUserMessage rather than by stampAnchorSeq: the turn
+		// this message opens leaves an empty assistant placeholder behind it, so
+		// the last element is not the one holding the record.
 		return applyUserMessage(messages, event.content, {
 			source: event.origin,
 			subtype: event.subtype,
 			meta: event.meta,
+			anchorSeq: seq,
 		});
 	}
 
+	return stampAnchorSeq(messages, applyEvent(messages, event), seq);
+}
+
+function applyEvent(messages: Message[], event: NormalizedEvent): Message[] {
 	// Permission response updates existing permission_request across all messages
 	if (event.type === "permission_response") {
 		const newStatus = event.choice === "deny" ? "denied" : "allowed";
@@ -782,6 +839,7 @@ interface UserMessageOptions {
 	source?: MessageOrigin;
 	subtype?: string;
 	meta?: SystemMessageMeta;
+	anchorSeq?: HistorySeq;
 }
 
 /**
@@ -899,6 +957,9 @@ export function applyUserMessage(
 		content,
 		status: "complete",
 		createdAt: new Date(),
+		...(options?.anchorSeq !== undefined
+			? { anchorSeq: options.anchorSeq }
+			: {}),
 		// Only tag system-driven messages; a plain user message stays source-less.
 		...(options?.source === "system"
 			? { source: options.source, subtype: options.subtype, meta: options.meta }
@@ -912,8 +973,12 @@ export function replayHistory(records: unknown[]): Message[] {
 	let messages: Message[] = [];
 
 	for (const record of records) {
-		const event = normalizeEvent(record as Record<string, unknown>);
-		messages = applyServerEvent(messages, event);
+		const raw = record as Record<string, unknown>;
+		messages = applyServerEvent(
+			messages,
+			normalizeEvent(raw),
+			readHistorySeq(raw),
+		);
 	}
 
 	return messages;

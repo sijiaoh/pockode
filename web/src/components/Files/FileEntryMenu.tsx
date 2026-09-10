@@ -1,11 +1,6 @@
-import {
-	FilePlus,
-	FolderPlus,
-	type LucideIcon,
-	Trash2,
-	Upload,
-} from "lucide-react";
+import { FilePlus, FolderPlus, Trash2, Upload } from "lucide-react";
 import type { Entry } from "../../types/contents";
+import MenuRow from "../common/MenuRow";
 import { Sheet } from "../ui";
 
 /**
@@ -24,32 +19,6 @@ interface Props {
 	onNewFile: () => void;
 	onNewFolder: () => void;
 	onDelete: () => void;
-}
-
-const rowClass =
-	"flex min-h-[48px] w-full items-center gap-3 px-4 text-left text-sm transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset";
-
-function MenuRow({
-	icon: Icon,
-	label,
-	danger,
-	onClick,
-}: {
-	icon: LucideIcon;
-	label: string;
-	danger?: boolean;
-	onClick: () => void;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			className={`${rowClass} ${danger ? "text-th-error" : "text-th-text-primary"}`}
-		>
-			<Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-			{label}
-		</button>
-	);
 }
 
 /**
