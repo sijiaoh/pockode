@@ -158,15 +158,23 @@ type ForkSpec struct {
 // A process may be created, reaped, and recreated many times within a single
 // session, but NeedsInput and Unread persist across those process lifecycles.
 type SessionMeta struct {
-	ID         string    `json:"id"`
-	Title      string    `json:"title"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	Activated  bool      `json:"activated"`   // true once the agent has produced output
-	AgentType  AgentType `json:"agent_type"`  // which AI backend (claude, codex)
-	Mode       Mode      `json:"mode"`        // agent mode (default, yolo, plan)
-	NeedsInput bool      `json:"needs_input"` // true when waiting for user input (permission/question)
-	Unread     bool      `json:"unread"`      // true when session has unread changes
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Activated bool      `json:"activated"`  // true once the agent has produced output
+	AgentType AgentType `json:"agent_type"` // which AI backend (claude, codex)
+	Mode      Mode      `json:"mode"`       // agent mode (default, yolo, plan)
+	// Model is agent-specific (see model.go). Empty — the value every session
+	// created before this field existed carries — means no model flag is passed
+	// and the CLI picks for itself.
+	Model string `json:"model"`
+	// Effort is agent-specific (see effort.go). Empty — the value every session
+	// created before this field existed carries — means the CLI is passed no
+	// effort level and keeps its own default.
+	Effort     string `json:"effort"`
+	NeedsInput bool   `json:"needs_input"` // true when waiting for user input (permission/question)
+	Unread     bool   `json:"unread"`      // true when session has unread changes
 	// ForkedFrom is set on a session created by forking another, and never
 	// changes afterwards: where a conversation came from is a fact about its
 	// birth, not a live relationship.

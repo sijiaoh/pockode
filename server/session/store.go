@@ -30,6 +30,8 @@ type Store interface {
 	Activate(ctx context.Context, sessionID string) error
 	SetAgentType(ctx context.Context, sessionID string, agentType AgentType) error
 	SetMode(ctx context.Context, sessionID string, mode Mode) error
+	SetModel(ctx context.Context, sessionID string, model string) error
+	SetEffort(ctx context.Context, sessionID string, effort string) error
 	SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error
 	SetUnread(ctx context.Context, sessionID string, unread bool) error
 
@@ -234,11 +236,13 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 		CreatedAt: now,
 		UpdatedAt: now,
 		Activated: fork.Activated,
-		// The agent and mode are inherited rather than taken from the defaults: a
-		// conversation that continued under a different agent would not be a fork
-		// of this one.
+		// The engine choice — agent, mode, model, effort — is inherited rather
+		// than taken from the defaults: a conversation that continued under a
+		// different agent would not be a fork of this one.
 		AgentType:  fork.Source.AgentType,
 		Mode:       fork.Source.Mode,
+		Model:      fork.Source.Model,
+		Effort:     fork.Source.Effort,
 		ForkedFrom: &ForkOrigin{SessionID: fork.Source.ID},
 	}
 
@@ -281,7 +285,11 @@ func (s *FileStore) Delete(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (s *FileStore) Update(ctx context.Context, sessionID string, title string) error {
+// updateMeta applies a mutation to one session's metadata under the store lock.
+// It persists and notifies only when apply reports an actual change, so callers
+// that write the value a session already has cost nothing. An apply that
+// rejects the write returns the error to the caller unchanged.
+func (s *FileStore) updateMeta(ctx context.Context, sessionID string, apply func(*SessionMeta) (bool, error)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -289,139 +297,120 @@ func (s *FileStore) Update(ctx context.Context, sessionID string, title string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now()
 	for i := range s.sessions {
-		if s.sessions[i].ID == sessionID {
-			s.sessions[i].Title = title
-			s.sessions[i].UpdatedAt = now
-			if err := s.persistIndex(); err != nil {
-				return err
-			}
-			s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
+		if s.sessions[i].ID != sessionID {
+			continue
+		}
+		changed, err := apply(&s.sessions[i])
+		if err != nil {
+			return err
+		}
+		if !changed {
 			return nil
 		}
+		if err := s.persistIndex(); err != nil {
+			return err
+		}
+		s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
+		return nil
 	}
 
 	return ErrSessionNotFound
+}
+
+func (s *FileStore) Update(ctx context.Context, sessionID string, title string) error {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		meta.Title = title
+		meta.UpdatedAt = time.Now()
+		return true, nil
+	})
 }
 
 func (s *FileStore) Activate(ctx context.Context, sessionID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for i := range s.sessions {
-		if s.sessions[i].ID == sessionID {
-			s.sessions[i].Activated = true
-			s.sessions[i].UpdatedAt = time.Now()
-			if err := s.persistIndex(); err != nil {
-				return err
-			}
-			s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
-			return nil
-		}
-	}
-
-	return ErrSessionNotFound
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		meta.Activated = true
+		meta.UpdatedAt = time.Now()
+		return true, nil
+	})
 }
 
 func (s *FileStore) SetAgentType(ctx context.Context, sessionID string, agentType AgentType) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for i := range s.sessions {
-		if s.sessions[i].ID == sessionID {
-			s.sessions[i].AgentType = agentType
-			s.sessions[i].UpdatedAt = time.Now()
-			if err := s.persistIndex(); err != nil {
-				return err
-			}
-			s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
-			return nil
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		meta.AgentType = agentType
+		// Models are agent-specific and no two agents share one, so a model
+		// selected for the previous agent would only make the CLI fail to start.
+		// Falling back to the empty model hands the choice back to the CLI.
+		if !IsValidModel(agentType, meta.Model) {
+			meta.Model = ""
 		}
-	}
-
-	return ErrSessionNotFound
+		// Same for effort: the levels are per agent and the new agent may not
+		// offer the stored one — or may have no effort concept at all.
+		if !IsValidEffort(agentType, meta.Effort) {
+			meta.Effort = ""
+		}
+		meta.UpdatedAt = time.Now()
+		return true, nil
+	})
 }
 
 func (s *FileStore) SetMode(ctx context.Context, sessionID string, mode Mode) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		meta.Mode = mode
+		meta.UpdatedAt = time.Now()
+		return true, nil
+	})
+}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for i := range s.sessions {
-		if s.sessions[i].ID == sessionID {
-			s.sessions[i].Mode = mode
-			s.sessions[i].UpdatedAt = time.Now()
-			if err := s.persistIndex(); err != nil {
-				return err
-			}
-			s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
-			return nil
+// SetModel rejects a model the session's agent cannot run with
+// (ErrModelNotAvailable). The check belongs here rather than in the caller: the
+// agent type it has to be judged against is only stable under the store lock,
+// so a caller that validated beforehand could still write a model the agent
+// type it saw no longer has.
+func (s *FileStore) SetModel(ctx context.Context, sessionID string, model string) error {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		if !IsValidModel(meta.AgentType, model) {
+			return false, fmt.Errorf("%w: model %q, agent %q", ErrModelNotAvailable, model, meta.AgentType)
 		}
-	}
+		meta.Model = model
+		meta.UpdatedAt = time.Now()
+		return true, nil
+	})
+}
 
-	return ErrSessionNotFound
+// SetEffort rejects an effort level the session's agent does not offer
+// (ErrEffortNotAvailable), for the same reason SetModel judges the model here:
+// the agent type it has to be judged against is only stable under the store
+// lock. The stored model is left alone — effort is validated per agent, not per
+// model (see effort.go).
+func (s *FileStore) SetEffort(ctx context.Context, sessionID string, effort string) error {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		if !IsValidEffort(meta.AgentType, effort) {
+			return false, fmt.Errorf("%w: effort %q, agent %q", ErrEffortNotAvailable, effort, meta.AgentType)
+		}
+		meta.Effort = effort
+		meta.UpdatedAt = time.Now()
+		return true, nil
+	})
 }
 
 func (s *FileStore) SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for i := range s.sessions {
-		if s.sessions[i].ID == sessionID {
-			if s.sessions[i].NeedsInput == needsInput {
-				return nil
-			}
-			s.sessions[i].NeedsInput = needsInput
-			if err := s.persistIndex(); err != nil {
-				return err
-			}
-			s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
-			return nil
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		if meta.NeedsInput == needsInput {
+			return false, nil
 		}
-	}
-
-	return ErrSessionNotFound
+		meta.NeedsInput = needsInput
+		return true, nil
+	})
 }
 
 func (s *FileStore) SetUnread(ctx context.Context, sessionID string, unread bool) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for i := range s.sessions {
-		if s.sessions[i].ID == sessionID {
-			if s.sessions[i].Unread == unread {
-				return nil
-			}
-			s.sessions[i].Unread = unread
-			if err := s.persistIndex(); err != nil {
-				return err
-			}
-			s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[i]})
-			return nil
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		if meta.Unread == unread {
+			return false, nil
 		}
-	}
-
-	return ErrSessionNotFound
+		meta.Unread = unread
+		return true, nil
+	})
 }
 
 func (s *FileStore) historyPath(sessionID string) string {
@@ -561,28 +550,8 @@ func (s *FileStore) WriteHistory(ctx context.Context, sessionID string, records 
 }
 
 func (s *FileStore) Touch(ctx context.Context, sessionID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	idx := -1
-	for i, sess := range s.sessions {
-		if sess.ID == sessionID {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		return ErrSessionNotFound
-	}
-
-	s.sessions[idx].UpdatedAt = time.Now()
-	if err := s.persistIndex(); err != nil {
-		return err
-	}
-	s.notifyChange(SessionChangeEvent{Op: OperationUpdate, Session: s.sessions[idx]})
-	return nil
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		meta.UpdatedAt = time.Now()
+		return true, nil
+	})
 }

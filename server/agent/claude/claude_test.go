@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1522,5 +1523,35 @@ func TestStart_MCPConfigUsesServerDir(t *testing.T) {
 	// It must NOT be written to the per-worktree session dir.
 	if _, err := os.Stat(filepath.Join(sessionDir, "mcp-config.json")); err == nil {
 		t.Errorf("mcp-config unexpectedly written to session dir %s", sessionDir)
+	}
+}
+
+// hasFlagValue reports whether args contains flag followed by value.
+func hasFlagValue(args []string, flag, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildArgs_ModelAndEffort(t *testing.T) {
+	args := buildArgs(agent.StartOptions{Model: "opus", Effort: "xhigh"}, claudeLaunch{})
+
+	if !hasFlagValue(args, "--model", "opus") {
+		t.Errorf("expected --model opus in %v", args)
+	}
+	if !hasFlagValue(args, "--effort", "xhigh") {
+		t.Errorf("expected --effort xhigh in %v", args)
+	}
+
+	// Nothing selected must leave both flags out entirely, so the CLI keeps its
+	// own defaults instead of being handed an empty value.
+	args = buildArgs(agent.StartOptions{}, claudeLaunch{})
+	for _, flag := range []string{"--model", "--effort"} {
+		if slices.Contains(args, flag) {
+			t.Errorf("expected no %s when nothing is selected, got %v", flag, args)
+		}
 	}
 }

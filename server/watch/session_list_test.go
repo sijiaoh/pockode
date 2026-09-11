@@ -72,6 +72,14 @@ func (m *mockSessionStore) SetMode(ctx context.Context, sessionID string, mode s
 	return nil
 }
 
+func (m *mockSessionStore) SetModel(ctx context.Context, sessionID string, model string) error {
+	return nil
+}
+
+func (m *mockSessionStore) SetEffort(ctx context.Context, sessionID string, effort string) error {
+	return nil
+}
+
 func (m *mockSessionStore) SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error {
 	return nil
 }

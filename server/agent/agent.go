@@ -48,7 +48,14 @@ type StartOptions struct {
 	SessionID    string
 	Resume       bool
 	Mode         session.Mode
-	DisableMCP   bool // skip MCP config (for testing)
+	// Model is the agent-specific model id (session.ModelsForAgent). Empty means
+	// pass no model flag and let the CLI pick.
+	Model string
+	// Effort is the agent-specific reasoning effort level
+	// (session.EffortsForAgent). Empty means pass nothing and let the CLI keep
+	// its own default.
+	Effort     string
+	DisableMCP bool // skip MCP config (for testing)
 }
 
 // MCPDir returns the directory to point the MCP proxy at (where server.json

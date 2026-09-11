@@ -70,6 +70,7 @@ ctx.chatUI.configure({
 
   // Set to null to hide, or provide custom component
   ModeSelector: null,
+  EngineSelector: null, // the agent + model + effort chip
   StopButton: null,
 
   // Style customization
