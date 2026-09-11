@@ -318,11 +318,21 @@ case](#forking)).
 
 **A forked session is [activated](#activation) at birth** when the copied records
 contain agent output (`agent.HistoryActivatesSession`) — it has a transcript, so
-its agent selector locks, which is right: that transcript was produced by that
-agent. The cost is that activation stops implying "a CLI has run for this
-session" — an inference [Claude had to be taught to stop making](#forking).
-Codex never meets it: [its forks are refused](#no-forking) before there is a
-session to activate.
+the agent half of its engine selector locks, which is right: that transcript was
+produced by that agent. Model and effort stay open, as they are on any other
+activated session — those can change mid-conversation, the agent cannot. The cost
+is that activation stops implying "a CLI has run for this session" — an inference
+[Claude had to be taught to stop making](#forking). Codex never meets it: [its
+forks are refused](#no-forking) before there is a session to activate.
+
+**A fork inherits the whole engine choice — agent, mode, model and effort** —
+rather than starting from the defaults (`FileStore.CreateFork`). The argument for
+the agent carries unchanged to the rest: a conversation continued on a different
+model is not a continuation of the one that was forked, and a user who tuned a
+session before branching off it means the branch to keep that tuning. Inheriting
+needs no validation pass, either — the source's values were already checked
+against the source's agent ([Session Models](#session-models)), and the fork runs
+the same agent.
 
 ## EventRecord: Unified Event Format
 
@@ -1357,13 +1367,14 @@ the one case where no events for hours does not mean abandoned; see
 type SessionMeta struct {
     ID         string
     Title      string
-    Activated  bool      // True once the agent has produced output
-    AgentType  AgentType // claude, codex
-    Mode       Mode      // default, yolo
-    Model      string    // agent-specific model id; empty = CLI decides
-    Effort     string    // agent-specific reasoning effort; empty = CLI decides
-    NeedsInput bool      // Awaiting user permission/question response
-    Unread     bool      // Has unread changes
+    Activated  bool        // True once the agent has produced output
+    AgentType  AgentType   // claude, codex
+    Mode       Mode        // default, yolo
+    Model      string      // agent-specific model id; empty = CLI decides
+    Effort     string      // agent-specific reasoning effort; empty = CLI decides
+    NeedsInput bool        // Awaiting user permission/question response
+    Unread     bool        // Has unread changes
+    ForkedFrom *ForkOrigin // Set on a fork, naming the session it came from
 }
 ```
 

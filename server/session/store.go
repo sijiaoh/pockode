@@ -237,8 +237,10 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 		UpdatedAt: now,
 		Activated: fork.Activated,
 		// The engine choice — agent, mode, model, effort — is inherited rather
-		// than taken from the defaults: a conversation that continued under a
-		// different agent would not be a fork of this one.
+		// than taken from the defaults: a conversation continued under a
+		// different agent, or answered by a different model, is not a fork of
+		// this one. No validation is needed on the way in, because the source's
+		// values were already judged against the agent the fork also runs.
 		AgentType:  fork.Source.AgentType,
 		Mode:       fork.Source.Mode,
 		Model:      fork.Source.Model,

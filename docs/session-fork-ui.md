@@ -326,12 +326,13 @@ moment the parent is renamed, and the client is holding the session list
 anyway — a parent it cannot find there has been deleted, which is the case this
 document already specifies wording for.
 
-The new session inherits the parent's `agent_type`, `mode` and worktree; a fork
-that lands in a different worktree or under a different agent is a different
-session, not a fork. It is born `activated: true` — it has a transcript — which
-by the existing rule locks its agent selector, and that is the behaviour we
-want: the inherited transcript was produced by that agent. `unread` and
-`needs_input` start false.
+The new session inherits the parent's whole engine choice — `agent_type`,
+`mode`, `model` and `effort` — and its worktree; a fork that lands in a different
+worktree, or answers on a different agent or model, is a different session, not a
+fork. It is born `activated: true` — it has a transcript — which by the existing
+rule locks the agent half of its engine selector, and that is the behaviour we
+want: the inherited transcript was produced by that agent. Model and effort stay
+changeable, as on any activated session. `unread` and `needs_input` start false.
 
 A fork of a session that belongs to a work is **not** linked to that work. A
 work owns one session, and a second one claiming the same work would make

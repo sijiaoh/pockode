@@ -1555,3 +1555,65 @@ func TestBuildArgs_ModelAndEffort(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildArgs_Launch covers how a resolved launch reaches the CLI: which of
+// --session-id and --resume is chosen, and that the fork rung's two flags travel
+// with it. They are the only arguments assembled from state rather than fixed,
+// so a rung that lost a flag here would start a CLI that silently continued the
+// wrong conversation.
+func TestBuildArgs_Launch(t *testing.T) {
+	tests := []struct {
+		name    string
+		launch  claudeLaunch
+		want    []string
+		unwant  []string
+		wantVal map[string]string
+	}{
+		{
+			name:    "fresh session names itself",
+			launch:  claudeLaunch{sessionID: "sess-1"},
+			unwant:  []string{"--resume", "--fork-session", "--resume-session-at"},
+			wantVal: map[string]string{"--session-id": "sess-1"},
+		},
+		{
+			name:    "resume reopens by id",
+			launch:  claudeLaunch{sessionID: "sess-1", resume: true},
+			unwant:  []string{"--session-id", "--fork-session", "--resume-session-at"},
+			wantVal: map[string]string{"--resume": "sess-1"},
+		},
+		{
+			name:    "fork resumes at a point under a new id",
+			launch:  claudeLaunch{sessionID: "sess-1", resume: true, fork: true, resumeAt: "msg-7"},
+			want:    []string{"--fork-session"},
+			unwant:  []string{"--session-id"},
+			wantVal: map[string]string{"--resume": "sess-1", "--resume-session-at": "msg-7"},
+		},
+		{
+			name:   "no session id leaves every launch flag out",
+			launch: claudeLaunch{},
+			unwant: []string{"--session-id", "--resume", "--fork-session", "--resume-session-at"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := buildArgs(agent.StartOptions{}, tt.launch)
+
+			for _, flag := range tt.want {
+				if !slices.Contains(args, flag) {
+					t.Errorf("expected %s in %v", flag, args)
+				}
+			}
+			for _, flag := range tt.unwant {
+				if slices.Contains(args, flag) {
+					t.Errorf("expected no %s, got %v", flag, args)
+				}
+			}
+			for flag, value := range tt.wantVal {
+				if !hasFlagValue(args, flag, value) {
+					t.Errorf("expected %s %s in %v", flag, value, args)
+				}
+			}
+		})
+	}
+}
