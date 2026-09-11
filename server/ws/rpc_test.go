@@ -280,11 +280,16 @@ func (e *testEnv) subscribeChatMessages(sessionID string) rpc.ChatMessagesSubscr
 	return result
 }
 
-func (e *testEnv) sendMessage(sessionID, content string) {
+func (e *testEnv) sendMessage(sessionID, content string) rpc.MessageResult {
 	resp := e.call("chat.message", rpc.MessageParams{SessionID: sessionID, Content: content})
 	if resp.Error != nil {
 		e.t.Fatalf("message failed: %s", resp.Error.Message)
 	}
+	var result rpc.MessageResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		e.t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	return result
 }
 
 func (e *testEnv) skipN(n int) {
@@ -469,6 +474,45 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 	}
 	if notif2.Method != "chat.done" {
 		t.Errorf("expected method 'chat.done', got %q", notif2.Method)
+	}
+}
+
+// TestHandler_ChatMessage_ReturnsSeq: the sender is excluded from the broadcast
+// that carries every other record's seq, so this reply is the only place it can
+// learn where its own message landed — and without that it cannot fork from a
+// message it just sent until the session is reloaded. The seq has to be the real
+// address of that record, not merely non-zero: it goes straight back as a fork
+// anchor.
+func TestHandler_ChatMessage_ReturnsSeq(t *testing.T) {
+	mock := &mockAgent{events: []agent.AgentEvent{agent.DoneEvent{}}}
+	env := newTestEnv(t, mock)
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "sess", "", "")
+
+	env.subscribeChatMessages("sess")
+	first := env.sendMessage("sess", "first prompt")
+	env.skipN(1)
+	second := env.sendMessage("sess", "second prompt")
+	env.skipN(1)
+
+	history, err := store.GetHistory(bgCtx, "sess")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+
+	// Checked against the history rather than against 1 and 2: the agent's own
+	// output is recorded in between, so the numbers only mean anything as
+	// addresses.
+	for _, c := range []struct {
+		seq  session.HistorySeq
+		want string
+	}{{first.Seq, "first prompt"}, {second.Seq, "second prompt"}} {
+		if !c.seq.Valid() || c.seq.Index() >= len(history) {
+			t.Fatalf("seq for %q = %d, outside a history of %d records", c.want, c.seq, len(history))
+		}
+		if !strings.Contains(string(history[c.seq.Index()]), c.want) {
+			t.Errorf("seq %d names %s, want the record holding %q", c.seq, history[c.seq.Index()], c.want)
+		}
 	}
 }
 
@@ -1013,7 +1057,8 @@ func TestHandler_SessionFork(t *testing.T) {
 	store := env.getMainWorktree().SessionStore
 	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
 	store.Update(bgCtx, "source", "Fix the parser")
-	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
+	store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
+	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "keep me too"})
 	store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "drop me"})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
@@ -1040,13 +1085,36 @@ func TestHandler_SessionFork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
-	// The anchored record, plus the warning that this agent brought no context with
-	// it — the mock answers carried == false.
-	if len(history) != 2 {
-		t.Fatalf("forked history has %d records, want 2: %s", len(history), history)
+	// The conversation through the anchored record, plus the warning that this
+	// agent brought no context with it — the mock answers carried == false.
+	if len(history) != 3 {
+		t.Fatalf("forked history has %d records, want 3: %s", len(history), history)
 	}
-	if !strings.Contains(string(history[0]), "keep me") {
-		t.Errorf("first record = %s, want the anchored one", history[0])
+	if !strings.Contains(string(history[0]), "keep me") ||
+		!strings.Contains(string(history[1]), "keep me too") {
+		t.Errorf("forked history = %s, want the conversation through the anchor", history)
+	}
+}
+
+// TestHandler_SessionFork_NoHistoryBeforeAnchor: a fork anchored on the first
+// thing said in the session returns to before there was a conversation, and an
+// empty session is not a branch of one. The refusal has to reach the client as a
+// bad request with its own wording, since the sheet shows it to the user.
+func TestHandler_SessionFork_NoHistoryBeforeAnchor(t *testing.T) {
+	env := newForkableTestEnv(t)
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
+	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "the first thing"})
+
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
+	if resp.Error == nil {
+		t.Fatalf("fork succeeded with nothing to keep: %s", resp.Result)
+	}
+	if resp.Error.Code != jsonrpc2.CodeInvalidParams {
+		t.Errorf("error code = %d, want invalid params", resp.Error.Code)
+	}
+	if !strings.Contains(resp.Error.Message, "no conversation before this message") {
+		t.Errorf("error = %q, want it to say what was wrong", resp.Error.Message)
 	}
 }
 

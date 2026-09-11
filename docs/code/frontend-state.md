@@ -47,7 +47,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | agentRoleStore | AI roles | State/Actions interface split |
 | settingsStore | App settings | State/Actions interface split |
 | authStore | Auth token | localStorage init |
-| inputStore | Draft text | persist middleware |
+| inputStore | Draft text, per session | persist middleware |
 | filesSearchStore | File search options | localStorage init |
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
 | worktreeStore | Current worktree | External listener pattern |
@@ -224,11 +224,14 @@ of the last history record folded into it, and the reducer stamps it on the
 newest message only — `applyServerEvent` is the one path both replayed
 history and live notifications take, so the two cannot disagree about where a
 cut lands. A record that lands in an earlier message goes unstamped rather than
-raise that message's anchor past the messages below it, which would make "keep
-everything up to and including this message" quietly keep more than the user can
-see. The client is free to leave records unaddressable because it only anchors
-on ones the server gave it a seq for; what it must never do is number them
-itself ([agent-integration.md](agent-integration.md#history-storage)).
+raise that message's anchor past the messages below it, which would quietly move
+the cut past messages the user can see: they point at a bubble, and the fork
+would cut somewhere later than the bubble they pointed at. The client is free
+to leave records unaddressable because it only anchors on ones the server gave it
+a seq for; what it must never do is number them itself, or do arithmetic on the
+numbers it was given — where the cut falls relative to the anchor is the server's
+answer, not the client's ([session-fork-ui.md](../session-fork-ui.md#the-rule),
+[agent-integration.md](agent-integration.md#history-storage)).
 
 `complete` is deliberately excluded from that rule: when a background wait runs
 out of budget Pockode delivers the `done` itself

@@ -16,6 +16,7 @@ import {
 	normalizeEvent,
 	replayHistory,
 	settleRunningTasks,
+	stampMessageAnchorSeq,
 } from "./messageReducer";
 
 // Deterministic but distinct ids: whether a message keeps its id or gets a
@@ -1621,8 +1622,8 @@ describe("messageReducer", () => {
 			expect((messages[1] as AssistantMessage).anchorSeq).toBeUndefined();
 		});
 
-		// Anchors that ran backwards would make "everything up to and including
-		// this message" keep messages shown below the anchor.
+		// An anchor that ran backwards would put the cut somewhere later than the
+		// bubble the user pointed at, keeping messages shown below it.
 		it("does not move an earlier message's anchor past a later one", () => {
 			const messages = replayHistory([
 				{ type: "message", content: "Run it", seq: 1 },
@@ -1650,6 +1651,38 @@ describe("messageReducer", () => {
 					m.role === "assistant" && m.status === "interrupted",
 			);
 			expect(interrupted?.anchorSeq).toBe(3);
+		});
+
+		// The message a client sends itself is echoed before the server has a
+		// number for it, and the reply carrying that number arrives later — by
+		// which time the transcript has moved on. Position cannot find it again:
+		// the turn it opened left a placeholder below it, and the agent may have
+		// streamed in more.
+		it("stamps the message it names, not the last one", () => {
+			const before = replayHistory([
+				{ type: "message", content: "Hello", seq: 1 },
+				{ type: "text", content: "Hi", seq: 2 },
+			]);
+			const sent = applyUserMessage(before, "Try again");
+			const sentId = sent[sent.length - 2].id;
+
+			const after = stampMessageAnchorSeq(sent, sentId, 3);
+
+			expect((after[after.length - 2] as UserMessage).anchorSeq).toBe(3);
+			// The placeholder the turn opened is a different record's to claim.
+			expect((after[after.length - 1] as AssistantMessage).anchorSeq).toBe(
+				undefined,
+			);
+		});
+
+		// The reply can land after the user has left for another session, whose
+		// history the seq names nothing in.
+		it("stamps nothing when the message is gone", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "Elsewhere", seq: 1 },
+			]);
+
+			expect(stampMessageAnchorSeq(messages, "not-here", 9)).toBe(messages);
 		});
 	});
 

@@ -425,9 +425,11 @@ The shared definitions, so the common cases cannot drift apart:
   list row, a group header or the row under a chat bubble (36 / coarse 44).
   Shared by both sidebar panels and chat; it moved out of `Git/` once the file
   tree stopped writing its own copy.
-- `web/src/components/common/MenuRow.tsx`'s `menuRowClass` — a full-bleed row of
-  a menu sheet (48, clear of the floor for either pointer). Shared by the file
-  entry menu and the message menu.
+- `web/src/components/common/MenuRow.tsx`'s `MenuRow` — a full-bleed row of a
+  menu sheet (48, clear of the floor for either pointer). Only the file entry
+  menu uses it today; the message menu it was extracted for is gone, its one row
+  now an icon standing on the bubble's action row
+  ([session-fork-ui.md](session-fork-ui.md#entry-point)).
 - `web/src/components/ui/ContentView.tsx`'s `actionIconButtonClass` — the
   bordered icon action in the bar under a file or a diff (36 / coarse 44). It was
   32px for everyone, under the floor for *either* pointer.

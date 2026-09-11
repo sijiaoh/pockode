@@ -23,6 +23,7 @@ import type {
 	ToolCall,
 } from "../../types/message";
 import { isForkableMessage } from "../../utils/forkAnchor";
+import { hasMessageActions } from "../../utils/messageActions";
 import { formatFilePath } from "../../utils/path";
 import { systemActionLabel } from "../../utils/systemMessage";
 import {
@@ -556,6 +557,11 @@ function ContentPartItem({
 
 interface Props {
 	message: Message;
+	/**
+	 * First in the whole transcript, not in the rendered window: it decides
+	 * whether a fork anchored here has any conversation behind it to keep.
+	 */
+	isFirst?: boolean;
 	isLast?: boolean;
 	isProcessRunning?: boolean;
 	isCodex?: boolean;
@@ -568,19 +574,43 @@ interface Props {
 		answers: Record<string, string> | null,
 	) => void;
 	onOpenWorkDetail?: (workId: string) => void;
-	/** Must be stable: this component is memoized. */
-	onOpenMessageMenu?: (messageId: string) => void;
+	/**
+	 * Absent when forking is out of reach for the whole session — the agent
+	 * cannot be forked, or there is no way to open the result. Must be stable:
+	 * this component is memoized.
+	 */
+	onForkMessage?: (messageId: string) => void;
+}
+
+/**
+ * Why fork cannot run on this message, or undefined when it can.
+ *
+ * The permanent reason is asked first: a first message with no seq yet is still
+ * a message a fork could never keep anything before, and a label promising
+ * "yet" would be waiting for something that is not coming.
+ */
+function forkBlockedReason(
+	message: Message,
+	isFirst: boolean | undefined,
+): "not-yet" | "nothing-before" | undefined {
+	// A fork anchored on a message the user sent returns to before they sent it,
+	// so the transcript's opening prompt has nothing behind it to keep. The
+	// server refuses this one too (chat.ErrForkAnchorNoHistory).
+	if (isFirst && message.role === "user") return "nothing-before";
+	if (!isForkableMessage(message)) return "not-yet";
+	return undefined;
 }
 
 const MessageItem = memo(function MessageItem({
 	message,
+	isFirst,
 	isLast,
 	isProcessRunning,
 	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
 	onOpenWorkDetail,
-	onOpenMessageMenu,
+	onForkMessage,
 }: Props) {
 	const chatUIConfig = useChatUIConfig();
 	const UserAvatar = chatUIConfig.UserAvatar;
@@ -588,13 +618,13 @@ const MessageItem = memo(function MessageItem({
 	const userBubbleClass = chatUIConfig.userBubbleClass ?? "";
 	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
 
-	const actions =
-		onOpenMessageMenu && isForkableMessage(message) ? (
-			<MessageActions
-				side={message.role}
-				onOpenMenu={() => onOpenMessageMenu(message.id)}
-			/>
-		) : null;
+	const actions = hasMessageActions(message) ? (
+		<MessageActions
+			side={message.role}
+			onFork={onForkMessage && (() => onForkMessage(message.id))}
+			forkBlocked={forkBlockedReason(message, isFirst)}
+		/>
+	) : null;
 
 	if (message.role === "work") {
 		return (

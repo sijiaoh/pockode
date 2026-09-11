@@ -7,6 +7,7 @@ import {
 	readHistorySeq,
 	replayHistory,
 	settleRunningTasks,
+	stampMessageAnchorSeq,
 	updatePermissionRequestStatus,
 	updateQuestionStatus as updateQuestionStatusReducer,
 } from "../lib/messageReducer";
@@ -228,7 +229,13 @@ export function useChatMessages({
 			]);
 
 			try {
-				await sendMessage(sessionId, content);
+				// The server's reply is where this client learns the seq of its own
+				// message — it is excluded from the broadcast carrying everyone else's.
+				// Without it the bubble just added could not be forked from until the
+				// session was reloaded. An older server sends none, which simply leaves
+				// the message unaddressable, as every locally sent one used to be.
+				const seq = await sendMessage(sessionId, content);
+				setMessages((prev) => stampMessageAnchorSeq(prev, userMessageId, seq));
 				return true;
 			} catch (error) {
 				console.error("Failed to send message:", error);

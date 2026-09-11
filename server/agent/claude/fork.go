@@ -13,8 +13,8 @@ import (
 // Implementing agent.SessionForker is what declares Claude forkable, and nothing
 // else requires it: a method drifting out of that interface would not break the
 // build, it would leave *Agent no longer satisfying it and quietly take the fork
-// row out of every Claude session's menu. This line is the only thing that
-// notices.
+// icon off every message in every Claude session. This line is the only thing
+// that notices.
 var _ agent.SessionForker = (*Agent)(nil)
 
 // ForkSupport implements agent.SessionForker: Claude can reopen a conversation at
@@ -44,10 +44,10 @@ func (a *Agent) ForkSupport() agent.ForkSupport {
 //
 // Naming the cut needs the CLI's own uuid for the message, which Pockode only
 // has for records written since it started keeping them. A fork whose kept
-// history names none — a session that predates that, or a cut taken at a point
-// the agent has not spoken before — carries nothing, reported as carried ==
-// false, which is an answer and not a failure. There is no uncut fallback for
-// it; carriableProviderSession says why.
+// history names none — a session that predates that, or one the agent never
+// spoke in — carries nothing, reported as carried == false, which is an answer
+// and not a failure. There is no uncut fallback for it; carriableProviderSession
+// says why.
 //
 // The source session is left exactly as it was. Resuming with --fork-session
 // makes the CLI mint a new provider session ID for the replayed conversation, so
@@ -95,9 +95,9 @@ func (a *Agent) ForkSession(_ context.Context, opts agent.ForkOptions) (bool, er
 func carriableProviderSession(opts agent.ForkOptions, log *slog.Logger) (providerID, resumeAt string, ok bool) {
 	resumeAt = forkAnchorMessage(opts.History)
 	if resumeAt == "" {
-		// History written before Pockode recorded the CLI's uuids, or a cut taken
-		// at a point the agent has not spoken before — in which case there is no
-		// memory to carry in the first place, however long the source went on.
+		// History written before Pockode recorded the CLI's uuids, or a session the
+		// agent never spoke in — in which case there is no memory to carry in the
+		// first place, however long the source went on.
 		log.Info("fork keeps no claude context: the kept history names no transcript message to cut the conversation at")
 		return "", "", false
 	}
@@ -126,14 +126,21 @@ func carriableProviderSession(opts agent.ForkOptions, log *slog.Logger) (provide
 // should stop at: the last one any record in the forked history came from.
 // Empty when no record names one.
 //
-// It lands at or before the fork point, never past it, which is the direction
-// that matters: only records the fork kept are searched. It lands strictly
-// before it whenever the last kept records name no message — a fork anchored on
-// the user's own message stops at the agent's previous one, because the CLI
-// never streams the prompts Pockode sends it and so Pockode has no uuid for
-// them. The new session then shows a last message its agent does not have in
-// context. Carrying less than the transcript shows is the safe side of that
-// mismatch, and it is the only side available.
+// It lands at or before the end of the kept history, never past it: only records
+// the fork kept are searched. It lands strictly before it whenever the last kept
+// records name no message — Pockode's own warnings, and the prompts it sends the
+// CLI, which the CLI never streams back and so have no uuid here. The new
+// session then ends on a message its agent does not have in context. Carrying
+// less than the transcript shows is the safe side of that mismatch, and it is
+// the only side available.
+//
+// What used to make that the ordinary case no longer does: a fork anchored on a
+// message the user sent has that message cut away by chat.Client.Fork, so the
+// kept history normally ends on the agent's turn and the replay stops where the
+// transcript does. The mismatch survives wherever the record before the anchor
+// names no message either — two prompts sent back to back while the agent
+// worked, or a message Pockode wrote itself, a work card say, sitting in front
+// of the anchor.
 //
 // The message is kept whole. One CLI message can become several Pockode records
 // — an assistant turn with text and then a tool call — so a cut between them

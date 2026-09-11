@@ -72,7 +72,7 @@ interface Props {
 	forkedFromSessionId?: string;
 	onOpenSession?: (sessionId: string) => void;
 	/** Must be stable: it reaches the memoized `MessageItem`. */
-	onOpenMessageMenu?: (messageId: string) => void;
+	onForkMessage?: (messageId: string) => void;
 }
 
 function MessageList({
@@ -85,7 +85,7 @@ function MessageList({
 	onOpenWorkDetail,
 	forkedFromSessionId,
 	onOpenSession,
-	onOpenMessageMenu,
+	onForkMessage,
 }: Props) {
 	const { EmptyState: CustomEmptyState } = useChatUIConfig();
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -446,13 +446,14 @@ function MessageList({
 							<div key={message.id} className="py-1.5 sm:py-2">
 								<MessageItem
 									message={message}
+									isFirst={globalIndex === 0}
 									isLast={isLast}
 									isProcessRunning={isLast && isProcessRunning}
 									isCodex={isCodex}
 									onPermissionRespond={onPermissionRespond}
 									onQuestionRespond={onQuestionRespond}
 									onOpenWorkDetail={onOpenWorkDetail}
-									onOpenMessageMenu={onOpenMessageMenu}
+									onForkMessage={onForkMessage}
 								/>
 							</div>
 						);

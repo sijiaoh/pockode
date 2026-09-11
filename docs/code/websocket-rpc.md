@@ -92,6 +92,31 @@ Follows standard JSON-RPC 2.0; Pockode has no custom extensions.
 }
 ```
 
+### Growing a reply
+
+`chat.message` answers `rpc.MessageResult` — today one `omitempty` field, `seq`,
+telling the sender where its own message landed in the history. It needs one
+because the sender is deliberately left out of the broadcast that carries every
+other record's `seq` (it has already echoed the message into its own
+transcript), so the reply is the only place that address can reach it. What it
+is for is in [session-fork-ui.md](../session-fork-ui.md#which-messages-get-the-row-and-when-fork-is-on-it):
+a record a client cannot name is a record it cannot fork from.
+
+That method used to answer a bare `{}`, and growing it needed **no coordinated
+deploy**, which is the general rule worth stating: *adding* a field to a result
+is safe in both directions. An older client ignores what it does not read; a
+newer client against an older server sees the field absent, which `omitempty`
+already makes a legal answer — here it means "this message has no address",
+which was that client's normal state before the field existed. A client must
+therefore treat a missing optional field as a state it already knows how to be
+in, not as an error.
+
+*Changing what a field means* is the opposite case and does need lockstep, with
+nothing on the wire to reveal the disagreement. `session.fork`'s `anchor_seq` is
+the example ([session-fork-ui.md](../session-fork-ui.md#data-contract)) — same
+type, same name, different answer about which record it names. Do not reason
+about the two kinds of change from the same rule.
+
 ### Notification (Server → Client)
 
 ```json
@@ -512,9 +537,10 @@ the phrase repeated back. Every `session.*` handler replies this way, as does th
 session lookup in `chat.messages.subscribe`; handlers written before the helper
 still answer with a bare phrase or a bare cause. `session.fork` is the one
 `session.*` method that does not, because it runs the chat client's work: its
-distinctive failures — no such session, an anchor naming no record, an agent that
-cannot be forked at all — are the caller's, and it reaches for the chat helper
-below rather than grow a second mapping of the same errors. The chat handlers
+distinctive failures — no such session, an anchor naming no record, an anchor
+with nothing before it to keep, an agent that cannot be forked at all — are the
+caller's, and it reaches for the chat helper below rather than grow a second
+mapping of the same errors. The chat handlers
 keep their own `replyErrorForChat`: what is not the server's fault (no such session, no live
 process) becomes a client error, and anything else is logged there and forwarded
 as the cause — a failing agent start has to leave a trace even when the client

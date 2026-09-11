@@ -150,8 +150,10 @@ export interface UserMessage {
 	/**
 	 * The last history record folded into this message, and so the cut point a
 	 * fork anchored here uses. Absent when no record the client saw carries one:
-	 * a message this client sent itself (the server does not echo it back), or
-	 * one replayed from history written before seqs existed.
+	 * a record that could not be persisted, or a message this client sent itself
+	 * talking to a server too old to answer `chat.message` with a seq (see
+	 * `MessageResult`). Not history written before seqs existed — replay stamps
+	 * those by position.
 	 */
 	anchorSeq?: HistorySeq;
 	// Present only for system-driven messages; absent means a user-typed message.
@@ -342,6 +344,23 @@ export interface MessageParams {
 	content: string;
 }
 
+/**
+ * The reply to `chat.message`: where the server put the message just sent.
+ *
+ * This client is left out of the broadcast that carries every other record's
+ * seq — it already echoed the message into its own transcript — so this reply is
+ * the only place it learns the address of its own message, and without it that
+ * message could not be forked from until the session was reloaded.
+ *
+ * `seq` is absent when the record was not persisted, and from servers too old to
+ * send it at all. Both mean the same thing here and neither is an error: the
+ * message stays unaddressable, which is what every locally sent message used to
+ * be.
+ */
+export interface MessageResult {
+	seq?: HistorySeq;
+}
+
 export interface InterruptParams {
 	session_id: string;
 }
@@ -373,7 +392,15 @@ export interface SessionUpdateTitleParams {
 
 export interface SessionForkParams {
 	session_id: string;
-	/** Inclusive: the new session keeps every record up to and including this one. */
+	/**
+	 * The seq of the message the user picked, quoted back unchanged.
+	 *
+	 * How much the fork keeps is the server's to decide, not this client's: an
+	 * agent message is kept, a message the user sent is not, because the fork
+	 * returns to before they sent it. Never do arithmetic on this — a seq is an
+	 * address the server handed out, not an index (see `chat.Client.Fork` and
+	 * docs/session-fork-ui.md, *The rule*).
+	 */
 	anchor_seq: HistorySeq;
 	/** Empty copies the source session's title. */
 	title?: string;
