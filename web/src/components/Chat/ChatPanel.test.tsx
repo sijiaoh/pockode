@@ -1308,6 +1308,8 @@ describe("ChatPanel", () => {
 			updated_at: "2024-01-01T00:00:00Z",
 			mode: "default" as const,
 			agent_type: "claude" as const,
+			model: "",
+			effort: "",
 			activated: true,
 			state: "idle" as const,
 			needs_input: false,

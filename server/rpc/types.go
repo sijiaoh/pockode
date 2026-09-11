@@ -331,16 +331,50 @@ type SessionListUnsubscribeParams struct {
 
 type ChatMessagesSubscribeParams struct {
 	SessionID string `json:"session_id"`
+	// Limit caps how many of the newest history records come back. Zero asks for
+	// session.DefaultHistoryPageSize; anything above session.MaxHistoryPageSize is
+	// clamped to it.
+	Limit int `json:"limit,omitempty"`
 }
 
 type ChatMessagesSubscribeResult struct {
-	ID        string            `json:"id"`
-	History   []json.RawMessage `json:"history"`
-	State     string            `json:"state"` // "idle" | "running" | "ended"
-	Mode      session.Mode      `json:"mode"`
-	AgentType session.AgentType `json:"agent_type"`
-	Model     string            `json:"model"`
-	Effort    string            `json:"effort"`
+	ID string `json:"id"`
+	// History is the newest page of the session's history, oldest record first.
+	// Earlier pages are fetched with chat.messages.history.
+	History []json.RawMessage `json:"history"`
+	// HasMore reports whether records older than History[0] exist.
+	HasMore bool `json:"has_more"`
+	// NextBeforeSeq is the cursor for the page before this one; absent when
+	// HasMore is false. See ChatMessagesHistoryParams.BeforeSeq.
+	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
+	State         string             `json:"state"` // "idle" | "running" | "ended"
+	Mode          session.Mode       `json:"mode"`
+	AgentType     session.AgentType  `json:"agent_type"`
+	Model         string             `json:"model"`
+	Effort        string             `json:"effort"`
+}
+
+// ChatMessagesHistoryParams asks for the page of history older than one the
+// client already holds. It needs no subscription: an older page is settled
+// history, so it can never change and can never collide with what the
+// subscription streams, which is always newer than the page subscribing returned.
+type ChatMessagesHistoryParams struct {
+	SessionID string `json:"session_id"`
+	// BeforeSeq is exclusive: the reply holds the records immediately older than
+	// the record it names. It must be a cursor the server handed out
+	// (next_before_seq) — a client cannot derive one, because a record the server
+	// could not stamp carries no seq at all. Zero asks for the newest page.
+	BeforeSeq session.HistorySeq `json:"before_seq,omitempty"`
+	// Limit follows ChatMessagesSubscribeParams.Limit.
+	Limit int `json:"limit,omitempty"`
+}
+
+type ChatMessagesHistoryResult struct {
+	// History is the page, oldest record first. Empty when BeforeSeq already
+	// named the first record of the session.
+	History       []json.RawMessage  `json:"history"`
+	HasMore       bool               `json:"has_more"`
+	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
 }
 
 type ChatMessagesUnsubscribeParams struct {

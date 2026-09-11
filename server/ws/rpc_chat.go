@@ -8,6 +8,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/session"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -33,9 +34,15 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	}
 
 	notifier := h.state.getNotifier()
-	id, history, err := wt.ChatMessagesWatcher.Subscribe(notifier, params.SessionID)
+	id, page, err := wt.ChatMessagesWatcher.Subscribe(notifier, params.SessionID, params.Limit)
 	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		// A limit the client cannot ask for is its mistake; anything else Subscribe
+		// fails on is a history the server could not read.
+		if errors.Is(err, session.ErrInvalidHistoryLimit) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+			return
+		}
+		h.replyInternalError(ctx, conn, req.ID, "failed to read session history", err, "sessionId", params.SessionID)
 		return
 	}
 	h.state.trackSubscription(id, wt.ChatMessagesWatcher)
@@ -43,20 +50,74 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	wt.SessionListWatcher.MarkRead(params.SessionID)
 
 	result := rpc.ChatMessagesSubscribeResult{
-		ID:        id,
-		History:   history,
-		State:     wt.ProcessManager.GetProcessState(params.SessionID),
-		Mode:      meta.Mode,
-		AgentType: meta.AgentType,
-		Model:     meta.Model,
-		Effort:    meta.Effort,
+		ID:            id,
+		History:       page.Records,
+		HasMore:       page.HasMore,
+		NextBeforeSeq: page.NextBeforeSeq,
+		State:         wt.ProcessManager.GetProcessState(params.SessionID),
+		Mode:          meta.Mode,
+		AgentType:     meta.AgentType,
+		Model:         meta.Model,
+		Effort:        meta.Effort,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)
 		return
 	}
 
-	log.Info("subscribed to chat messages", "subscriptionId", id, "state", result.State, "mode", meta.Mode)
+	log.Info("subscribed to chat messages",
+		"subscriptionId", id, "state", result.State, "mode", meta.Mode,
+		"records", len(page.Records), "hasMore", page.HasMore)
+}
+
+// handleChatMessagesHistory serves the page of history older than a cursor the
+// client already holds — how a chat scrolled back past the page it subscribed
+// with reaches the rest of the conversation.
+func (h *rpcMethodHandler) handleChatMessagesHistory(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.ChatMessagesHistoryParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	log := h.log.With("sessionId", params.SessionID)
+
+	_, found, err := wt.SessionStore.Get(params.SessionID)
+	if err != nil {
+		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
+		return
+	}
+	if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+		return
+	}
+
+	records, err := wt.SessionStore.GetHistory(ctx, params.SessionID)
+	if err != nil {
+		h.replyInternalError(ctx, conn, req.ID, "failed to read session history", err, "sessionId", params.SessionID)
+		return
+	}
+
+	page, err := session.PageHistory(records, params.BeforeSeq, params.Limit)
+	if err != nil {
+		// Both failures name what the client asked for and what the history can
+		// answer, so the cause is the reply.
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+		return
+	}
+
+	result := rpc.ChatMessagesHistoryResult{
+		History:       page.Records,
+		HasMore:       page.HasMore,
+		NextBeforeSeq: page.NextBeforeSeq,
+	}
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		log.Error("failed to send history response", "error", err)
+		return
+	}
+
+	log.Debug("served chat history page",
+		"beforeSeq", params.BeforeSeq, "records", len(page.Records), "hasMore", page.HasMore)
 }
 
 func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {

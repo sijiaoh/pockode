@@ -449,8 +449,8 @@ func (s *FileStore) GetHistory(ctx context.Context, sessionID string) ([]json.Ra
 // It carries seq 0 because it is not in the file: nothing can be resolved back to
 // it, and leaving it to be numbered by position would hand out an address that the
 // next real append also gets — the client would then name a record it never saw.
-// StampHistorySeq leaves an existing seq alone, and this record is only ever
-// appended last, so the records before it keep their positions.
+// Stamping leaves an existing seq alone, and this record is only ever appended
+// last, so the records before it keep their positions.
 func historyWarning(stats filestore.JSONLStats) json.RawMessage {
 	var parts []string
 	if stats.Corrupted > 0 {

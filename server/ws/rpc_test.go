@@ -269,15 +269,7 @@ func (e *testEnv) readNotification() rpcNotification {
 }
 
 func (e *testEnv) subscribeChatMessages(sessionID string) rpc.ChatMessagesSubscribeResult {
-	resp := e.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{SessionID: sessionID})
-	if resp.Error != nil {
-		e.t.Fatalf("subscribe failed: %s", resp.Error.Message)
-	}
-	var result rpc.ChatMessagesSubscribeResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		e.t.Fatalf("failed to unmarshal result: %v", err)
-	}
-	return result
+	return e.subscribeChatMessagesWithLimit(sessionID, 0)
 }
 
 func (e *testEnv) sendMessage(sessionID, content string) {

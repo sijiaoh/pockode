@@ -99,7 +99,7 @@ owns them.
 
 ### Broadcasting
 
-`server/watch/chat_messages.go` — `ChatMessagesWatcher` implements `process.ChatMessageListener`. Receives already-persisted events (persistence happens in `ProcessManager.streamEvents()` via `store.AppendToHistory`), converts them to `EventRecord` via `ToRecord()`, then broadcasts JSON-RPC notifications with method `"chat.<event-type>"` and the subscription ID for client-side routing. Each notification also carries the record's `seq`, the same address `chat.messages.subscribe` stamps into the replayed history, so a client cannot tell a replayed record from a live one when it names a point in the conversation ([code/agent-integration.md](code/agent-integration.md#history-storage)). Events that were not persisted carry none.
+`server/watch/chat_messages.go` — `ChatMessagesWatcher` implements `process.ChatMessageListener`. Receives already-persisted events (persistence happens in `ProcessManager.streamEvents()` via `store.AppendToHistory`), converts them to `EventRecord` via `ToRecord()`, then broadcasts JSON-RPC notifications with method `"chat.<event-type>"` and the subscription ID for client-side routing. Each notification also carries the record's `seq`, the same address a history page carries on its records ([paging](agent-chat.md#history-paging)), so a client cannot tell a replayed record from a live one when it names a point in the conversation ([code/agent-integration.md](code/agent-integration.md#history-storage)). Events that were not persisted carry none.
 
 A user message is broadcast to every subscriber except the tab that sent it, so that tab's own optimistic echo never receives a `seq` and stays unaddressable until the history is reloaded — a record it cannot name, and must not number itself.
 
@@ -146,7 +146,7 @@ on `tool_use_id`:
 
 ### Subscription
 
-`web/src/hooks/useChatMessages.ts` — Subscribes via `chat.messages.subscribe` RPC, receives initial history, replays it through the reducer, then processes live notifications through the same pipeline.
+`web/src/hooks/useChatMessages.ts` — Subscribes via `chat.messages.subscribe` RPC, receives the newest page of history, replays it through the reducer, then processes live notifications through the same pipeline. Earlier pages are fetched on demand as the user scrolls back and spliced in front of what is already there ([agent-chat.md](agent-chat.md#reading-a-page-on-the-client)).
 
 ## Key Files
 

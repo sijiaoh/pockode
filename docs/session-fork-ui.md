@@ -94,8 +94,9 @@ list above already covers.
    transcript on a phone; showing it back is how they confirm they hit the
    right one.
 2. **What is cut**, one line, with the real count — messages as the user sees
-   them, counted over the whole transcript and not the 50-message window
-   `MessageList` happens to have rendered:
+   them. History is paged in from the bottom, so everything after the cut point
+   is loaded by definition and the count is exact however far back the user has
+   scrolled:
    *"The new session keeps the conversation up to this message. The 28 messages
    after it stay in this session."*
    Singular form for one. This sentence is the whole mental model, so it is
@@ -214,10 +215,13 @@ title (`MainContainer title={projectTitle}`), and more to the point, "this
 conversation begins as a copy of another one" is a fact about where the
 transcript starts — the top of the transcript is literally where it belongs.
 
-`MessageList` pages history 50 messages at a time from the bottom, so the banner
-renders **only when the top of history is actually on screen** (`startIndex ===
-0`). A banner pinned above a window into the middle of a transcript would claim
-a position it does not have.
+A session opens on the newest page of its history and pulls in earlier pages as
+the user scrolls back, so the banner renders **only once the whole transcript is
+loaded** (`hasMoreHistory === false`). A banner pinned above a window into the
+middle of a transcript would claim a position it does not have. Where it does
+render it stands in for the generic "Beginning of conversation" line
+([agent-chat.md](agent-chat.md#reading-a-page-on-the-client)) — it says the same
+thing and says more.
 
 **The sidebar row** — a small `GitBranch` glyph in `SidebarListItem`'s existing
 `leftSlot`, with the row's accessible name extended to

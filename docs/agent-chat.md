@@ -20,7 +20,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 
 | Layer | Path | Role |
 |-------|------|------|
-| RPC handlers | `server/ws/rpc_chat.go` | `chat.message`, `chat.interrupt`, `chat.messages.subscribe`, permission/question responses |
+| RPC handlers | `server/ws/rpc_chat.go` | `chat.message`, `chat.interrupt`, `chat.messages.subscribe` / `chat.messages.history` ([paging](#history-paging)), permission/question responses |
 | Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model` / `set_effort`, each closing the running process because a CLI is told these only at launch; `session.models` and `session.efforts` list the choices ([models](code/agent-integration.md#session-models), [effort](code/agent-integration.md#session-effort)) |
 | Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessage` (user) and `SendSystemMessage` (system automation) share one persist+broadcast path |
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
@@ -46,6 +46,111 @@ Besides user-typed messages, the Work system pushes automatic prompts to the sam
 See [agent-event.md](agent-event.md) for the full event type catalog, data flow, and frontend processing pipeline.
 
 An `AskUserQuestion` blocks the agent until it is answered, yet its card is easily pushed out of view by whatever the agent streams next. How chat keeps an unanswered question reachable is in [pending-question-entry.md](pending-question-entry.md).
+
+## History Paging
+
+Opening a session does not ship its whole transcript. `chat.messages.subscribe`
+replies with the newest page of history and a cursor; scrolling up fetches the
+pages before it with `chat.messages.history`. A long conversation is mostly tool
+calls and their results, and a client only ever renders the tail of it — sending
+the rest costs transport, parsing and memory for records nobody looks at.
+
+| Method | Params | Result |
+|--------|--------|--------|
+| `chat.messages.subscribe` | `session_id`, `limit?` | `id`, `history`, `has_more`, `next_before_seq?`, `state`, `mode`, `agent_type`, `model`, `effort` |
+| `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?` |
+
+- `history` is the page, **oldest record first**, each record stamped with its
+  `seq` — its address in the session's history ([`session.HistorySeq`](../server/session/types.go)).
+- `before_seq` is **exclusive**: the reply holds the records immediately older
+  than the record it names. Omitted (or `0`) asks for the newest page.
+- `has_more` says whether anything older than `history[0]` exists; `next_before_seq`
+  is the cursor for that page and is absent once `has_more` is false. The server
+  computes the cursor rather than letting the client read `history[0].seq`,
+  because a record it could not stamp — one that is not a JSON object — carries
+  no `seq` at all and would strand paging at that point.
+- `limit` of `0` means `session.DefaultHistoryPageSize` (50); anything above
+  `session.MaxHistoryPageSize` (500) is clamped. A negative `limit` and a
+  `before_seq` naming no record are both refused with an invalid-params error —
+  answering an unusable cursor with the newest page would silently restart the
+  client's scrollback from the bottom.
+
+`chat.messages.history` needs no subscription and cannot collide with one. An
+older page is settled history: append-only, so it can never change, and every
+record a live notification carries is newer than the page subscribing returned.
+A client scrolled up therefore keeps paging with the cursor it already holds
+while new records stream in below.
+
+### Reading a page on the client
+
+A page is a slice of the record stream, not a slice of the conversation. The
+reducer's rules assume it can see the whole stream, and two of those assumptions
+stop holding when it can only see a page. Both are repaired in `prependHistoryPage`
+([`messageReducer`](../web/src/lib/messageReducer.ts)), where the rest of the
+record-to-message rules already live — not in the list component, which would
+otherwise have to know what a record means.
+
+**A page does not know what happened after it.** A tool call whose result is one
+page newer replays as still running; a question answered later replays as still
+waiting. The client keeps every record that settles something recorded earlier —
+tool results, permission and question responses, cancellations, process ends —
+and replays them over each older page it pulls in. They are all "update it
+wherever it is" operations, so replaying them costs nothing when the target is
+not in that page either.
+
+Order matters inside that repair: the page's trailing turn is closed *first*.
+The records that ended it are in the page above, so left as it replayed it would
+keep a spinner running in the middle of the transcript — and with nothing left
+streaming, a later `process_ended` retires only the dialogs and Tasks this page
+left open instead of also stamping its status onto a turn that was still running
+at this point. A process killed by a restart writes no `process_ended` at all;
+that the process is gone is passed in separately, so every page is retired the
+same way the newest one already is.
+
+The mirror of this is one record the page above has to hand *down*. A record
+that only ends a turn — `done`, `error`, `interrupted`, `process_ended` — has
+nothing to end when it opens a page, so replaying that page alone learns nothing
+from it; the turn it ended is the one the page below trails off on. It is
+therefore held as that page's *boundary terminal* and replayed against it, with
+its `seq`, before the turn is closed. Without this an interrupted or failed turn
+reappears as an ordinary finished one on the way back up — with its error text
+gone and any Task it was running still spinning. Output that trails such a turn
+cannot reopen it, at a page seam for the same reason it cannot in one stream.
+
+**A page boundary can fall between two records that the reducer folds into one
+thing.** Three foldings span more than one record, and each is rejoined when the
+pages meet:
+
+| Folded | Split boundary looks like | Rejoined by |
+|---|---|---|
+| A turn | the older page trails off mid-answer; the page above opens on content no message event preceded | the reducer produces a leading assistant message in that one case only, which is what makes the join safe. Text at the seam goes through the same rule streaming uses, so a sentence — or a fenced code block — cut in two comes back as one part |
+| A turn's `task_group` | each half grew a group of its own | the older group keeps its place (it is where the turn spawned its first Task) and absorbs the newer half's tasks |
+| A work card | the same work shows as two cards | the older card keeps its place (it is anchored at the work's first system message, [code/work-system.md](code/work-system.md#rendering-in-the-transcript)) and takes the newer card's `id`, so the node on screen moves up rather than being remounted |
+
+Reconnecting re-subscribes and so lands back on the newest page: pages already
+scrolled in are dropped rather than stitched back together, since the cursor
+chain would have to be replayed from the bottom anyway.
+
+Scroll position is held by pinning to the message that was at the top when the
+page was asked for, not by comparing scroll heights before and after — the agent
+can go on writing at the bottom while the page is in flight, and that growth is
+indistinguishable from the growth above that has to be compensated for.
+
+A page that fails replaces the sentinel with the reason and a Retry button, so
+nothing is left to ask for the next page until the user presses it. Saying nothing would
+read as *this is where the conversation starts* — the one conclusion a failure
+must not let the user draw — and retrying on a sentinel that has not moved would
+loop out of sight. "Beginning of conversation" is therefore said only on the
+server's word that nothing older exists, and only to a user who has actually
+scrolled back far enough to wonder.
+
+Whatever has been paged in stays rendered: `MessageList` does not virtualize,
+and a collapsible body it has opened once stays mounted so that reopening is
+free (`web/src/components/ui/CollapsibleBody.tsx`). Scrolling back therefore
+grows the DOM for as long as the session stays open. That is the trade the
+cursor makes affordable — growth happens one page at a time and only because the
+user asked for it, where replaying the whole transcript on open imposed it on
+every session — and a reconnect starts over from the newest page.
 
 ## Session Persistence
 

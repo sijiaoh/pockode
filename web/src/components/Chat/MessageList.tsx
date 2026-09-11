@@ -14,11 +14,11 @@ import type {
 	PermissionRequest,
 } from "../../types/message";
 import { findPendingQuestions } from "../../utils/pendingQuestions";
+import { Spinner } from "../ui";
 import ForkOriginBanner from "./ForkOriginBanner";
 import MessageItem, { type PermissionChoice } from "./MessageItem";
 import PendingQuestionPill from "./PendingQuestionPill";
 
-const PAGE_SIZE = 50;
 const AT_BOTTOM_THRESHOLD = 50;
 /**
  * A question header row is only "seen" when it is fully in view: a sliver of a
@@ -50,6 +50,16 @@ function findQuestionCard(
 	return null;
 }
 
+function findMessageElement(
+	root: HTMLElement,
+	messageId: string,
+): HTMLElement | null {
+	for (const el of root.querySelectorAll<HTMLElement>("[data-message-id]")) {
+		if (el.dataset.messageId === messageId) return el;
+	}
+	return null;
+}
+
 function prefersReducedMotion(): boolean {
 	return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
@@ -57,6 +67,13 @@ function prefersReducedMotion(): boolean {
 interface Props {
 	messages: Message[];
 	isProcessRunning: boolean;
+	/** Whether the server still holds records older than `messages[0]`. */
+	hasMoreHistory?: boolean;
+	isLoadingMoreHistory?: boolean;
+	historyError?: string | null;
+	/** Bumped once per older page loaded; see `useChatMessages`. */
+	loadedHistoryPages?: number;
+	onLoadMoreHistory?: () => void;
 	isCodex?: boolean;
 	onPermissionRespond?: (
 		request: PermissionRequest,
@@ -78,6 +95,11 @@ interface Props {
 function MessageList({
 	messages,
 	isProcessRunning,
+	hasMoreHistory = false,
+	isLoadingMoreHistory = false,
+	historyError = null,
+	loadedHistoryPages = 0,
+	onLoadMoreHistory,
 	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
@@ -92,18 +114,18 @@ function MessageList({
 	const contentRef = useRef<HTMLDivElement>(null);
 	const sentinelRef = useRef<HTMLDivElement>(null);
 	const [showScrollButton, setShowScrollButton] = useState(false);
-	const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 	const isAtBottomRef = useRef(true);
-	const isLoadingMoreRef = useRef(false);
+	// Where the view sat when an older page was asked for, pinned to the message
+	// that was then at the top. A height difference would not do: the agent can
+	// go on writing at the bottom while the page is in flight, and that growth is
+	// indistinguishable from the growth above that has to be compensated for.
 	const scrollAnchorRef = useRef<{
-		scrollHeight: number;
+		messageId: string;
+		offsetTop: number;
 		scrollTop: number;
 	} | null>(null);
 
 	const totalCount = messages.length;
-	const startIndex = Math.max(0, totalCount - visibleCount);
-	const visibleMessages = messages.slice(startIndex);
-	const hasMore = startIndex > 0;
 	// Scroll container is only mounted when messages are non-empty (see early return below).
 	// Effects that attach to the container must re-run on this transition.
 	const hasMessages = totalCount > 0;
@@ -125,43 +147,60 @@ function MessageList({
 		return () => el.removeEventListener("scroll", handleScroll);
 	}, [hasMessages]);
 
-	// Re-create observer after each page load so it fires again if sentinel is still visible
-	// biome-ignore lint/correctness/useExhaustiveDependencies: visibleCount is an intentional trigger to re-observe after prepend
+	// Every request re-pins the anchor, so a page that failed cannot leave a stale
+	// one behind for the retry to restore to.
+	const requestOlderPage = useCallback(() => {
+		const scrollEl = scrollRef.current;
+		const first =
+			contentRef.current?.querySelector<HTMLElement>("[data-message-id]");
+		if (scrollEl && first?.dataset.messageId) {
+			scrollAnchorRef.current = {
+				messageId: first.dataset.messageId,
+				offsetTop: first.offsetTop,
+				scrollTop: scrollEl.scrollTop,
+			};
+		}
+		onLoadMoreHistory?.();
+	}, [onLoadMoreHistory]);
+
+	// Re-created after each page so it fires again while the sentinel is still in
+	// view; skipped entirely once a page has failed, since the sentinel does not
+	// move and the observer would retry in a tight loop behind the user's back.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: loadedHistoryPages is an intentional trigger to re-observe after a prepend
 	useEffect(() => {
 		const sentinel = sentinelRef.current;
 		const scrollEl = scrollRef.current;
-		if (!sentinel || !scrollEl || !hasMore) return;
+		if (!sentinel || !scrollEl || !hasMoreHistory || historyError) return;
 
 		const observer = new IntersectionObserver(
 			(entries) => {
-				if (entries[0].isIntersecting && !isLoadingMoreRef.current) {
-					isLoadingMoreRef.current = true;
-					scrollAnchorRef.current = {
-						scrollHeight: scrollEl.scrollHeight,
-						scrollTop: scrollEl.scrollTop,
-					};
-					setVisibleCount((c) => c + PAGE_SIZE);
-				}
+				if (entries[0].isIntersecting) requestOlderPage();
 			},
 			{ root: scrollEl, threshold: 0 },
 		);
 
 		observer.observe(sentinel);
 		return () => observer.disconnect();
-	}, [hasMore, visibleCount]);
+	}, [hasMoreHistory, historyError, loadedHistoryPages, requestOlderPage]);
 
-	// Restore scroll position after prepending older messages
-	// biome-ignore lint/correctness/useExhaustiveDependencies: visibleCount is an intentional trigger — runs when a new page is prepended
+	// Hold the view still over the messages that were already on screen after an
+	// older page is spliced in above them.
+	const prevTotalCountRef = useRef(totalCount);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: loadedHistoryPages is the trigger — it marks the commit that prepended a page
 	useLayoutEffect(() => {
 		const anchor = scrollAnchorRef.current;
 		const el = scrollRef.current;
+		scrollAnchorRef.current = null;
 		if (!anchor || !el) return;
 
-		const heightDiff = el.scrollHeight - anchor.scrollHeight;
-		el.scrollTop = anchor.scrollTop + heightDiff;
-		scrollAnchorRef.current = null;
-		isLoadingMoreRef.current = false;
-	}, [visibleCount]);
+		// Runs before the follow-the-tail effect below, and tells it this commit
+		// added nothing at the bottom: a prepend is not new content to follow.
+		prevTotalCountRef.current = totalCount;
+
+		const anchored = findMessageElement(el, anchor.messageId);
+		if (!anchored) return;
+		el.scrollTop = anchor.scrollTop + (anchored.offsetTop - anchor.offsetTop);
+	}, [loadedHistoryPages]);
 
 	// Initial scroll to bottom (before paint)
 	// biome-ignore lint/correctness/useExhaustiveDependencies: hasMessages triggers scroll when container first mounts
@@ -177,7 +216,6 @@ function MessageList({
 	// isAtBottomRef may become stale by that time. useLayoutEffect fires
 	// synchronously after DOM commit, so it captures isAtBottomRef before any
 	// async events can modify it.
-	const prevTotalCountRef = useRef(totalCount);
 	useLayoutEffect(() => {
 		const prev = prevTotalCountRef.current;
 		prevTotalCountRef.current = totalCount;
@@ -222,9 +260,8 @@ function MessageList({
 		Record<string, QuestionVisibility>
 	>({});
 
-	// Questions with no entry are unobservable — either not rendered yet or
-	// outside the pagination window — and count as hidden, which is exactly the
-	// case this pill exists for.
+	// Questions with no entry are unobservable — not rendered yet — and count as
+	// hidden, which is exactly the case this pill exists for.
 	const hiddenPending = pendingQuestions.filter(
 		({ requestId }) => !questionVisibility[requestId]?.visible,
 	);
@@ -238,7 +275,7 @@ function MessageList({
 	// Observe the collapsed header row of every pending card: an expanded card can
 	// be taller than the viewport and would never reach the full-visibility
 	// threshold, while the header row is both short and the card's entry point.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: visibleCount/startIndex/hasMessages are triggers — they change which question nodes exist
+	// biome-ignore lint/correctness/useExhaustiveDependencies: loadedHistoryPages/hasMessages are triggers — they change which question nodes exist
 	useEffect(() => {
 		const scrollEl = scrollRef.current;
 		if (!scrollEl) return;
@@ -254,8 +291,8 @@ function MessageList({
 		}
 
 		// Rebuild the map around the cards that actually exist: drop questions whose
-		// node is gone (answered, or outside the render window) so a stale "visible"
-		// can never suppress the pill, and seed the ones that have just appeared.
+		// node is gone (answered) so a stale "visible" can never suppress the pill,
+		// and seed the ones that have just appeared.
 		setQuestionVisibility((prev) => {
 			let changed = Object.keys(prev).length !== headers.size;
 			const next: Record<string, QuestionVisibility> = {};
@@ -274,8 +311,8 @@ function MessageList({
 				next[requestId] = { visible: true, direction: "up" };
 				changed = true;
 			}
-			// This effect re-runs on every appended message once paginated; keeping
-			// prev when nothing moved avoids a needless re-render.
+			// This effect re-runs on every appended message; keeping prev when nothing
+			// moved avoids a needless re-render.
 			return changed ? next : prev;
 		});
 
@@ -308,7 +345,7 @@ function MessageList({
 
 		for (const header of headers.values()) observer.observe(header);
 		return () => observer.disconnect();
-	}, [hasMessages, pendingIds, visibleCount, startIndex]);
+	}, [hasMessages, pendingIds, loadedHistoryPages]);
 
 	const [showPill, setShowPill] = useState(false);
 	useEffect(() => {
@@ -345,10 +382,10 @@ function MessageList({
 			if (!card) return;
 
 			// Jumping is a deliberate move away from the tail. Without dropping the
-			// at-bottom flag first, the auto-follow would undo the jump: widening the
-			// render window grows the content, and the ResizeObserver that reacts to
-			// that still sees `isAtBottomRef` set (scroll events from the smooth
-			// scroll have not been dispatched yet) and snaps back to the bottom.
+			// at-bottom flag first, the auto-follow would undo the jump: the next
+			// reflow of streaming output reaches the ResizeObserver while
+			// `isAtBottomRef` is still set (scroll events from the smooth scroll have
+			// not been dispatched yet) and snaps back to the bottom.
 			isAtBottomRef.current = false;
 			setShowScrollButton(true);
 
@@ -376,30 +413,11 @@ function MessageList({
 		[clearHighlight],
 	);
 
-	// Set when the jump target lies outside the render window: the scroll has to
-	// wait until the widened page has been committed to the DOM.
-	const deferredScrollTargetRef = useRef<string | null>(null);
-
+	// Every loaded message is rendered, and a question the server has not sent yet
+	// is not among `pendingQuestions` at all, so the target always has a node.
 	const handlePillClick = useCallback(() => {
-		if (!target) return;
-		if (target.messageIndex < startIndex) {
-			const needed = totalCount - target.messageIndex;
-			deferredScrollTargetRef.current = target.requestId;
-			setVisibleCount((c) =>
-				Math.max(c, Math.ceil(needed / PAGE_SIZE) * PAGE_SIZE),
-			);
-			return;
-		}
-		scrollToQuestion(target.requestId);
-	}, [target, startIndex, totalCount, scrollToQuestion]);
-
-	// biome-ignore lint/correctness/useExhaustiveDependencies: visibleCount is the trigger — the target node only exists after the widened page is committed
-	useLayoutEffect(() => {
-		const requestId = deferredScrollTargetRef.current;
-		if (!requestId) return;
-		deferredScrollTargetRef.current = null;
-		scrollToQuestion(requestId);
-	}, [visibleCount, scrollToQuestion]);
+		if (target) scrollToQuestion(target.requestId);
+	}, [target, scrollToQuestion]);
 
 	const handleScrollToBottom = useCallback(() => {
 		scrollRef.current?.scrollTo({
@@ -407,6 +425,17 @@ function MessageList({
 			behavior: "smooth",
 		});
 	}, []);
+
+	// Only with the top of the history actually on screen: pinned above a window
+	// into the middle of a transcript, the banner would claim a position it does
+	// not have.
+	const forkBanner =
+		!hasMoreHistory && forkedFromSessionId && onOpenSession ? (
+			<ForkOriginBanner
+				parentSessionId={forkedFromSessionId}
+				onOpenParent={onOpenSession}
+			/>
+		) : null;
 
 	if (messages.length === 0) {
 		if (CustomEmptyState) {
@@ -429,21 +458,54 @@ function MessageList({
 					ref={contentRef}
 					className="flex min-h-full flex-col justify-end px-3 sm:px-4"
 				>
-					{/* Only with the top of the history actually on screen: pinned
-					    above a window into the middle of a transcript, the banner would
-					    claim a position it does not have. */}
-					{startIndex === 0 && forkedFromSessionId && onOpenSession && (
-						<ForkOriginBanner
-							parentSessionId={forkedFromSessionId}
-							onOpenParent={onOpenSession}
-						/>
+					{historyError ? (
+						<div
+							role="alert"
+							className="flex flex-wrap items-center justify-center gap-2 py-2 text-th-error text-xs"
+						>
+							<span>{historyError}</span>
+							<button
+								type="button"
+								onClick={requestOlderPage}
+								className="touch-target rounded px-1 underline transition-colors hover:text-th-text-primary"
+							>
+								Retry
+							</button>
+						</div>
+					) : (
+						hasMoreHistory && (
+							<div
+								ref={sentinelRef}
+								className="flex items-center justify-center py-2"
+							>
+								{isLoadingMoreHistory && (
+									<Spinner
+										variant="current"
+										className="text-th-text-muted"
+										srText="Loading earlier messages"
+									/>
+								)}
+							</div>
+						)
 					)}
-					{hasMore && <div ref={sentinelRef} className="h-1" />}
-					{visibleMessages.map((message, index) => {
-						const globalIndex = startIndex + index;
-						const isLast = globalIndex === totalCount - 1;
+					{forkBanner}
+					{/* Only after the user has actually paged back — on a conversation
+					    that never needed a second page, saying where it starts states
+					    the obvious — and only where the fork banner is not already
+					    saying the same thing in more detail. */}
+					{!hasMoreHistory && loadedHistoryPages > 0 && !forkBanner && (
+						<p className="py-2 text-center text-th-text-muted text-xs">
+							Beginning of conversation
+						</p>
+					)}
+					{messages.map((message, index) => {
+						const isLast = index === totalCount - 1;
 						return (
-							<div key={message.id} className="py-1.5 sm:py-2">
+							<div
+								key={message.id}
+								data-message-id={message.id}
+								className="py-1.5 sm:py-2"
+							>
 								<MessageItem
 									message={message}
 									isLast={isLast}

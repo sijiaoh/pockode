@@ -256,6 +256,14 @@ out of budget Pockode delivers the `done` itself
 ([agent-integration.md](agent-integration.md#background-waits)), and output
 resuming afterwards is a genuinely live turn.
 
+History arrives one page at a time, so a turn can also be cut in two by a page
+boundary rather than by an ending. The halves are rejoined where the pages meet
+([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)), and the joined
+message keeps the newer half's anchor: it names the later record, which is where
+a fork of the joined message has to cut. The older half's anchor stands in only
+when the newer one never got one, a message without an anchor being one the user
+cannot fork from at all.
+
 ### Task Groups
 
 The subagent tool (named `Agent` today, `Task` in older CLIs and in history
@@ -283,9 +291,11 @@ and infers nothing of its own. Four rules keep it honest:
   reducer — so a Task still running at the end of a history stays running,
   which is right while the session is live. What history cannot show is a
   process killed while Pockode was down, since no `process_ended` was ever
-  recorded for it: `useChatMessages` settles once on load when the server
-  reports the session already ended, next to the call that expires the dialogs
-  orphaned the same way.
+  recorded for it: `useChatMessages` settles on the server's report that the
+  session has already ended, next to the call that expires the dialogs orphaned
+  the same way — and applies that to every page of history it pulls in, not only
+  the one it subscribed with
+  ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)).
 - An interrupted Task whose result finally arrives keeps its `interrupted`
   status and records `resultAfterInterrupt`. The content is kept and readable;
   what it cannot do is make the UI claim the Task finished normally. This is the

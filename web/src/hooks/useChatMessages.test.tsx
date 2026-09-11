@@ -10,6 +10,7 @@ import { useChatMessages } from "./useChatMessages";
 
 const mockState = vi.hoisted(() => ({
 	chatMessagesSubscribe: vi.fn(),
+	chatMessagesHistory: vi.fn(),
 	chatMessagesUnsubscribe: vi.fn(async () => {}),
 }));
 
@@ -18,6 +19,7 @@ vi.mock("../lib/wsStore", () => {
 		status: "connected",
 		actions: {
 			chatMessagesSubscribe: mockState.chatMessagesSubscribe,
+			chatMessagesHistory: mockState.chatMessagesHistory,
 			chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
 			sendMessage: vi.fn(),
 		},
@@ -58,6 +60,7 @@ function Probe({ sessionId }: { sessionId: string }) {
 describe("useChatMessages", () => {
 	beforeEach(() => {
 		committed.length = 0;
+		mockState.chatMessagesHistory.mockReset();
 		mockState.chatMessagesSubscribe.mockImplementation(
 			async (sessionId: string) => ({
 				id: `sub-${sessionId}`,
@@ -187,5 +190,172 @@ describe("useChatMessages", () => {
 			} as ServerNotification),
 		);
 		expect(streaming).toBe(false);
+	});
+
+	describe("paging back through history", () => {
+		// Renders the hook and hands the test everything it needs to page.
+		function renderPager() {
+			const state: {
+				messages: Message[];
+				hasMoreHistory: boolean;
+				historyError: string | null;
+				loadMore: () => Promise<void>;
+			} = {
+				messages: [],
+				hasMoreHistory: false,
+				historyError: null,
+				loadMore: async () => {},
+			};
+			function PageProbe() {
+				const chat = useChatMessages({ sessionId: "s1" });
+				state.messages = chat.messages;
+				state.hasMoreHistory = chat.hasMoreHistory;
+				state.historyError = chat.historyError;
+				state.loadMore = chat.loadMoreHistory;
+				return null;
+			}
+			render(<PageProbe />);
+			return state;
+		}
+
+		function subscribeWith(
+			history: unknown[],
+			rest: Record<string, unknown> = {},
+		) {
+			mockState.chatMessagesSubscribe.mockImplementation(async () => ({
+				id: "sub-1",
+				initial: {
+					history,
+					has_more: true,
+					next_before_seq: 7,
+					state: "ended",
+					mode: "default",
+					agent_type: "claude",
+					model: "",
+					effort: "",
+					...rest,
+				},
+			}));
+		}
+
+		it("asks for the page the server pointed at, not one it worked out itself", async () => {
+			// The page starts on a record with no seq of its own, so a cursor
+			// derived from the transcript would name the wrong record — or none.
+			subscribeWith([{ type: "text", content: "tail" }]);
+			mockState.chatMessagesHistory.mockResolvedValue({
+				history: [{ type: "message", content: "Earlier question" }],
+				has_more: false,
+			});
+
+			const state = renderPager();
+			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
+
+			await act(async () => {
+				await state.loadMore();
+			});
+
+			expect(mockState.chatMessagesHistory).toHaveBeenCalledWith("s1", 7);
+			expect(state.messages[0]).toMatchObject({
+				role: "user",
+				content: "Earlier question",
+			});
+			expect(state.hasMoreHistory).toBe(false);
+		});
+
+		it("brings an older page up to date with what the loaded pages already answered", async () => {
+			// The result of the call landed in the page that was loaded first, so
+			// the older page on its own still shows the call as running.
+			subscribeWith([
+				{ type: "tool_result", tool_use_id: "t1", tool_result: "file body" },
+			]);
+			mockState.chatMessagesHistory.mockResolvedValue({
+				history: [
+					{ type: "message", content: "Read it" },
+					{ type: "tool_call", tool_use_id: "t1", tool_name: "Read" },
+				],
+				has_more: false,
+			});
+
+			const state = renderPager();
+			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
+			await act(async () => {
+				await state.loadMore();
+			});
+
+			const answer = state.messages.at(-1) as AssistantMessage;
+			expect(answer.parts).toMatchObject([
+				{ type: "tool_call", tool: { result: "file body" } },
+			]);
+		});
+
+		it("hands the record that ended a turn down to the page that turn is on", async () => {
+			// The loaded page opens on the `error` that ended the turn below it, and
+			// so replays without it. The older page must not come back claiming the
+			// turn finished normally.
+			subscribeWith([
+				{ type: "error", error: "boom" },
+				{ type: "message", content: "Next" },
+			]);
+			mockState.chatMessagesHistory.mockResolvedValue({
+				history: [
+					{ type: "message", content: "Explain" },
+					{ type: "text", content: "half an answer" },
+				],
+				has_more: false,
+			});
+
+			const state = renderPager();
+			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
+			await act(async () => {
+				await state.loadMore();
+			});
+
+			expect(state.messages[1]).toMatchObject({
+				role: "assistant",
+				status: "error",
+				error: "boom",
+			});
+		});
+
+		it("says why an earlier page is missing rather than passing it off as the start", async () => {
+			subscribeWith([{ type: "text", content: "tail" }]);
+			mockState.chatMessagesHistory.mockRejectedValue(
+				new Error("invalid history cursor: 7"),
+			);
+
+			const state = renderPager();
+			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
+			await act(async () => {
+				await state.loadMore();
+			});
+
+			expect(state.historyError).toContain("invalid history cursor: 7");
+			// Still more to load: a failure is not the beginning of the session.
+			expect(state.hasMoreHistory).toBe(true);
+		});
+
+		it("does not page while a page is already in flight", async () => {
+			subscribeWith([{ type: "text", content: "tail" }]);
+			let release: (() => void) | undefined;
+			mockState.chatMessagesHistory.mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						release = () => resolve({ history: [], has_more: false });
+					}),
+			);
+
+			const state = renderPager();
+			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
+
+			await act(async () => {
+				state.loadMore();
+				state.loadMore();
+			});
+			expect(mockState.chatMessagesHistory).toHaveBeenCalledTimes(1);
+
+			await act(async () => {
+				release?.();
+			});
+		});
 	});
 });

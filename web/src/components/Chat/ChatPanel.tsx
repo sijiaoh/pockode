@@ -195,6 +195,11 @@ function ChatPanel({
 	const {
 		messages,
 		isLoadingHistory,
+		hasMoreHistory,
+		isLoadingMoreHistory,
+		historyError,
+		loadedHistoryPages,
+		loadMoreHistory,
 		isStreaming,
 		isProcessRunning,
 		mode,
@@ -390,6 +395,11 @@ function ChatPanel({
 					key={sessionId}
 					messages={messages}
 					isProcessRunning={isProcessRunning}
+					hasMoreHistory={hasMoreHistory}
+					isLoadingMoreHistory={isLoadingMoreHistory}
+					historyError={historyError}
+					loadedHistoryPages={loadedHistoryPages}
+					onLoadMoreHistory={loadMoreHistory}
 					isCodex={agentType === "codex"}
 					onPermissionRespond={handlePermissionRespond}
 					onQuestionRespond={handleQuestionRespond}

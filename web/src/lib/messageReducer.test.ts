@@ -13,7 +13,9 @@ import {
 	applyServerEvent,
 	applyUserMessage,
 	expirePendingDialogs,
+	isBackReference,
 	normalizeEvent,
+	prependHistoryPage,
 	replayHistory,
 	settleRunningTasks,
 } from "./messageReducer";
@@ -2260,6 +2262,302 @@ describe("messageReducer", () => {
 			expect(tasksOf(replayed[replayed.length - 1])).toMatchObject([
 				{ status: "done", result: "# Report" },
 			]);
+		});
+	});
+
+	describe("paging backwards through history", () => {
+		const partsOf = (message: Message) =>
+			message.role === "assistant" ? message.parts : [];
+
+		describe("isBackReference", () => {
+			it("picks out the records that settle something recorded earlier", () => {
+				expect(isBackReference({ type: "tool_result" })).toBe(true);
+				expect(isBackReference({ type: "question_response" })).toBe(true);
+				expect(isBackReference({ type: "process_ended" })).toBe(true);
+				expect(isBackReference({ type: "text", content: "hi" })).toBe(false);
+				expect(isBackReference({ type: "message", content: "hi" })).toBe(false);
+			});
+		});
+
+		describe("catching an older page up on what it could not know", () => {
+			it("finishes a call whose result only arrived a page later", () => {
+				const older = replayHistory([
+					{ type: "message", content: "Read it" },
+					{ type: "tool_call", tool_use_id: "t1", tool_name: "Read" },
+				]);
+				expect(partsOf(older[older.length - 1])).not.toMatchObject([
+					{ type: "tool_call", tool: { result: "file body" } },
+				]);
+
+				const caught = prependHistoryPage(older, [], {
+					backReferences: [
+						{
+							type: "tool_result",
+							tool_use_id: "t1",
+							tool_result: "file body",
+						},
+					],
+				});
+				expect(partsOf(caught[caught.length - 1])).toMatchObject([
+					{ type: "tool_call", tool: { result: "file body" } },
+				]);
+			});
+
+			it("retires a question the user has already answered", () => {
+				const older = replayHistory([
+					{
+						type: "ask_user_question",
+						request_id: "q1",
+						tool_use_id: "t1",
+						questions: sampleQuestions,
+					},
+				]);
+
+				const caught = prependHistoryPage(older, [], {
+					backReferences: [
+						{
+							type: "question_response",
+							request_id: "q1",
+							answers: { Library: "React" },
+						},
+					],
+				});
+				expect(partsOf(caught[caught.length - 1])).toMatchObject([
+					{ type: "ask_user_question", status: "answered" },
+				]);
+			});
+
+			it("retires what a later process end left open without claiming the turn ended there", () => {
+				// The process died long after this page. The question it stranded has
+				// to be retired, but the turn itself was still running at this point
+				// and did not end that way.
+				const older = replayHistory([
+					{ type: "message", content: "Ask me" },
+					{
+						type: "ask_user_question",
+						request_id: "q1",
+						tool_use_id: "t1",
+						questions: sampleQuestions,
+					},
+					{ type: "text", content: "half an answer" },
+				]);
+
+				const caught = prependHistoryPage(older, [], {
+					backReferences: [{ type: "process_ended" }],
+				});
+
+				const turn = caught[caught.length - 1];
+				expect(turn).toMatchObject({ status: "complete" });
+				expect(partsOf(turn)).toMatchObject([
+					{ type: "ask_user_question", status: "expired" },
+					{ type: "text" },
+				]);
+			});
+			it("retires what a killed process left open, which history never recorded", () => {
+				// A restart takes the process down without writing a process_ended, so
+				// nothing in any page says these are over.
+				const older = replayHistory([
+					{ type: "message", content: "Ask me" },
+					{
+						type: "ask_user_question",
+						request_id: "q1",
+						tool_use_id: "t1",
+						questions: sampleQuestions,
+					},
+				]);
+
+				const caught = prependHistoryPage(older, [], { processEnded: true });
+
+				expect(partsOf(caught[caught.length - 1])).toMatchObject([
+					{ type: "ask_user_question", status: "expired" },
+				]);
+			});
+		});
+
+		describe("prependHistoryPage", () => {
+			it("rejoins the turn the page boundary cut in half", () => {
+				// The cut falls between two records of one answer: the older page trails
+				// off mid-sentence, and the page above it opens on content that no
+				// message event preceded.
+				const older = replayHistory([
+					{ type: "message", content: "Explain" },
+					{ type: "text", content: "first half " },
+				]);
+				const current = replayHistory([
+					{ type: "text", content: "second half" },
+					{ type: "done" },
+				]);
+
+				const joined = prependHistoryPage(older, current);
+
+				expect(joined.map((m) => m.role)).toEqual(["user", "assistant"]);
+				expect(partsOf(joined[1])).toMatchObject([
+					{ type: "text", content: "first half second half" },
+				]);
+				// The bubble already on screen keeps its identity, so it is not remounted
+				// and whatever was expanded inside it survives.
+				expect(joined[1].id).toBe(current[0].id);
+			});
+
+			it("leaves a turn of its own alone", () => {
+				const older = replayHistory([
+					{ type: "message", content: "Earlier" },
+					{ type: "text", content: "answer" },
+					{ type: "done" },
+				]);
+				const current = replayHistory([
+					{ type: "message", content: "Later" },
+					{ type: "text", content: "reply" },
+					{ type: "done" },
+				]);
+
+				const joined = prependHistoryPage(older, current);
+				expect(joined.map((m) => m.role)).toEqual([
+					"user",
+					"assistant",
+					"user",
+					"assistant",
+				]);
+			});
+
+			it("keeps a work that outlived the page boundary as one card", () => {
+				// The card is anchored at the work's first system message, which is in
+				// the older page; the rows recorded after the cut are in the newer one.
+				const workMeta = {
+					work_id: "w1",
+					work_type: "task",
+					title: "Ship it",
+				};
+				const older = replayHistory([
+					{
+						type: "message",
+						content: "Kickoff",
+						origin: "system",
+						subtype: "kickoff",
+						meta: workMeta,
+					},
+					{ type: "text", content: "starting" },
+					{ type: "done" },
+				]);
+				const current = replayHistory([
+					{
+						type: "message",
+						content: "Auto-continue",
+						origin: "system",
+						subtype: "auto_continue",
+						meta: workMeta,
+					},
+				]);
+
+				const joined = prependHistoryPage(older, current);
+
+				const cards = joined.filter((m) => m.role === "work");
+				expect(cards).toHaveLength(1);
+				expect(cards[0]).toMatchObject({
+					workId: "w1",
+					entries: [{ subtype: "kickoff" }, { subtype: "auto_continue" }],
+				});
+				// The card already on screen keeps its id, so it moves up rather than
+				// being remounted with whatever the user had expanded thrown away.
+				expect(cards[0].id).toBe(current.find((m) => m.role === "work")?.id);
+			});
+
+			it("keeps a turn's Tasks in one group across the boundary", () => {
+				const older = replayHistory([
+					{ type: "message", content: "Explore" },
+					{
+						type: "tool_call",
+						tool_use_id: "t1",
+						tool_name: "Task",
+						tool_input: { description: "first" },
+					},
+				]);
+				const current = replayHistory([
+					{
+						type: "tool_call",
+						tool_use_id: "t2",
+						tool_name: "Task",
+						tool_input: { description: "second" },
+					},
+				]);
+
+				const joined = prependHistoryPage(older, current);
+
+				expect(partsOf(joined[joined.length - 1])).toMatchObject([
+					{
+						type: "task_group",
+						tasks: [{ description: "first" }, { description: "second" }],
+					},
+				]);
+			});
+
+			it("stops the spinner on a turn whose ending is in the page above", () => {
+				// Replayed alone the page ends on a streaming bubble, because the record
+				// that closed the turn is not in it.
+				const older = replayHistory([
+					{ type: "message", content: "Explain" },
+					{ type: "text", content: "half an answer" },
+				]);
+				expect(older[older.length - 1]).toMatchObject({ status: "streaming" });
+
+				const joined = prependHistoryPage(older, []);
+				expect(joined[joined.length - 1]).toMatchObject({ status: "complete" });
+			});
+
+			it("keeps how a turn ended when the record saying so opens the page above", () => {
+				// That record has nothing to end in its own page, so replaying that page
+				// drops it. Without it the turn reads as a normal finished answer.
+				const older = replayHistory([
+					{ type: "message", content: "Explain", seq: 1 },
+					{ type: "text", content: "half an answer", seq: 2 },
+					{
+						type: "tool_call",
+						tool_use_id: "t1",
+						tool_name: "Task",
+						tool_input: { description: "sub" },
+						seq: 3,
+					},
+				]);
+				const boundaryTerminal = { type: "error", error: "boom", seq: 4 };
+				const current = replayHistory([
+					boundaryTerminal,
+					{ type: "message", content: "Next", seq: 5 },
+				]);
+
+				const joined = prependHistoryPage(older, current, {
+					boundaryTerminal,
+				});
+
+				const turn = joined[1];
+				expect(turn).toMatchObject({ status: "error", error: "boom" });
+				// The record that ended the turn is the last one in it, so it is where
+				// a fork of the turn cuts — the address an unbroken replay leaves here.
+				expect(turn).toMatchObject({ anchorSeq: 4 });
+				// A turn that ended this way has no Task left running.
+				expect(partsOf(turn)).toMatchObject([
+					{ type: "text" },
+					{ type: "task_group", tasks: [{ status: "interrupted" }] },
+				]);
+			});
+
+			it("does not let output trailing an ended turn reopen it", () => {
+				// The CLI was still writing when the turn was cut short, so the page
+				// above opens on content that belongs to the turn that already ended.
+				const older = replayHistory([
+					{ type: "message", content: "Explain" },
+					{ type: "text", content: "half " },
+					{ type: "interrupted" },
+				]);
+				const current = replayHistory([{ type: "text", content: "an answer" }]);
+
+				const joined = prependHistoryPage(older, current);
+
+				const turn = joined[joined.length - 1];
+				expect(turn).toMatchObject({ status: "interrupted" });
+				expect(partsOf(turn)).toMatchObject([
+					{ type: "text", content: "half an answer" },
+				]);
+			});
 		});
 	});
 });

@@ -66,6 +66,14 @@ Measured against the real handler, a real repository and a recorded session
 The client-to-server direction is about 1.1 KB for the whole run, so compressing
 it buys nothing either way.
 
+The session-opening row was measured when subscribing replayed the entire
+history in one message. It now returns one page and the rest is fetched only as
+the user scrolls back ([paging](agent-chat.md#history-paging)), so those bytes
+are spread over several smaller messages and a client that never scrolls that
+far never pays for most of them. The ratio itself should barely move: with
+context takeover the deflate window carries across the pages, which is the same
+repetition the single message was compressing against.
+
 Those figures were taken on `coder/websocket` v1.8.14. From v1.8.15 every column
 loses a frame header or two per message, which moves them by well under a
 percent and does not reorder them.
