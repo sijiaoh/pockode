@@ -490,11 +490,12 @@ in comments.
 still working on the request, so a retry stacks a second copy of that work on top
 of the first: with react-query's default budget one slow response becomes four,
 each re-running the whole thing. `isRPCTimeout` exists so callers can tell "we
-stopped waiting" from "this failed", and `useContents` — the one query that can
-carry megabytes of file content — uses it to skip the retry. What marks a timeout
-is its message, not an error code of its own: code 0 is already spoken for above,
-and taking a second meaning would cost more than it buys. The message is supplied
-through the timeout's own error factory rather than left to json-rpc-2.0, so what
+stopped waiting" from "this failed", and the queries that can carry megabytes of
+file content — `useContents` for the working tree, `useCommitFile` for a blob out
+of a commit — use it to skip the retry. What marks a timeout is its message, not
+an error code of its own: code 0 is already spoken for above, and taking a second
+meaning would cost more than it buys. The message is supplied through the
+timeout's own error factory rather than left to json-rpc-2.0, so what
 `isRPCTimeout` matches on is not a library default that an upgrade could reword.
 
 ## Error Replies

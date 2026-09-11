@@ -206,6 +206,16 @@ type GitShowDiffParams struct {
 // GitShowDiffResult is the result of git.show.diff request.
 type GitShowDiffResult = git.DiffResult
 
+// GitShowFileParams is the params for git.show.file request.
+type GitShowFileParams struct {
+	Hash string `json:"hash"`
+	Path string `json:"path"`
+}
+
+// GitShowFileResult is the result of git.show.file request. It is the same
+// shape file.get returns for a file, so the client renders both the same way.
+type GitShowFileResult = contents.FileContent
+
 // GitBranchesResult is the result of git.branches request.
 type GitBranchesResult = git.BranchList
 

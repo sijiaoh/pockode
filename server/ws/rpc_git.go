@@ -279,6 +279,35 @@ func (h *rpcMethodHandler) handleGitShowDiff(ctx context.Context, conn *jsonrpc2
 	}
 }
 
+func (h *rpcMethodHandler) handleGitShowFile(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.GitShowFileParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.Hash == "" || params.Path == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "hash and path required")
+		return
+	}
+
+	file, err := git.ShowFile(wt.WorkDir, params.Hash, params.Path)
+	if err != nil {
+		// Asking for a path the commit never had is the caller's mistake, not a
+		// server fault, and file.get answers it the same way.
+		if errors.Is(err, contents.ErrNotFound) || errors.Is(err, contents.ErrInvalidPath) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+			return
+		}
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, file); err != nil {
+		h.log.Error("failed to send git show file response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleGitBranches(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
 	branches, err := git.Branches(wt.WorkDir)
 	if err != nil {

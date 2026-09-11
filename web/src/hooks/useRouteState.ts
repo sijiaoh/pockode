@@ -60,6 +60,14 @@ export function useRouteState(): RouteInfo {
 		from: WT_ROUTES.commitDiff,
 		shouldThrow: false,
 	});
+	const commitFileMatch = useMatch({
+		from: ROUTES.commitFile,
+		shouldThrow: false,
+	});
+	const wtCommitFileMatch = useMatch({
+		from: WT_ROUTES.commitFile,
+		shouldThrow: false,
+	});
 	const settingsMatch = useMatch({
 		from: ROUTES.settings,
 		shouldThrow: false,
@@ -160,6 +168,19 @@ export function useRouteState(): RouteInfo {
 			wtCommitDiffMatch?.search) as OverlaySearchParams;
 		return {
 			overlay: { type: "commit-diff", hash, path },
+			sessionId: search.session ?? null,
+			worktree,
+		};
+	}
+
+	const commitFileParams = commitFileMatch?.params ?? wtCommitFileMatch?.params;
+	if (commitFileParams) {
+		const hash = (commitFileParams as { hash: string }).hash;
+		const path = (commitFileParams as { _splat: string })._splat;
+		const search = (commitFileMatch?.search ??
+			wtCommitFileMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "commit-file", hash, path },
 			sessionId: search.session ?? null,
 			worktree,
 		};

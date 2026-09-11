@@ -15,6 +15,11 @@ interface Props {
 	error?: Error | null;
 	onBack: () => void;
 	onPathClick?: () => void;
+	/**
+	 * Accessible name for the path button. Worth setting wherever "Open <file>"
+	 * is ambiguous — a historical diff has more than one version to open.
+	 */
+	pathActionLabel?: string;
 	children: ReactNode;
 }
 
@@ -22,10 +27,12 @@ function PathDisplay({
 	path,
 	pathColor = "text-th-text-primary",
 	onClick,
+	actionLabel,
 }: {
 	path: string;
 	pathColor?: string;
 	onClick?: () => void;
+	actionLabel?: string;
 }) {
 	const { fileName, directory } = splitPath(path);
 	const content = (
@@ -43,7 +50,7 @@ function PathDisplay({
 				type="button"
 				onClick={onClick}
 				className="min-w-0 max-w-full flex items-center gap-1 text-left rounded-md border border-th-border bg-th-bg-secondary px-2 py-1 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent text-th-text-secondary hover:border-th-border-focus hover:text-th-text-primary active:scale-95"
-				aria-label={`Open ${fileName}`}
+				aria-label={actionLabel ?? `Open ${fileName}`}
 			>
 				<div className="min-w-0 flex-1">{content}</div>
 				<ChevronRight className="h-4 w-4 shrink-0" />
@@ -81,13 +88,19 @@ export default function ContentView({
 	error,
 	onBack,
 	onPathClick,
+	pathActionLabel,
 	children,
 }: Props) {
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<div className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
 				<BackToChatButton onClick={onBack} />
-				<PathDisplay path={path} pathColor={pathColor} onClick={onPathClick} />
+				<PathDisplay
+					path={path}
+					pathColor={pathColor}
+					onClick={onPathClick}
+					actionLabel={pathActionLabel}
+				/>
 			</div>
 
 			<div className="min-h-0 flex-1 overflow-auto">

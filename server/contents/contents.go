@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -64,8 +65,9 @@ const (
 	// other streams keep moving. Whole files go over HTTP; see docs/file.md.
 	MaxFileSize = 2 << 20 // 2 MiB
 
-	// http.DetectContentType inspects no more than this many bytes.
-	sniffLen = 512
+	// SniffLen is the most http.DetectContentType inspects, and so the least a
+	// caller has to hand NewFileContent for the MIME type to come out right.
+	SniffLen = 512
 )
 
 type Encoding string
@@ -215,24 +217,13 @@ func readFile(relPath, fullPath string) (*FileContent, error) {
 		return nil, fmt.Errorf("failed to stat file: %w", err)
 	}
 
-	file := &FileContent{
-		Name: info.Name(),
-		Type: TypeFile,
-		Path: relPath,
-		Size: info.Size(),
-	}
-
 	if info.Size() > MaxFileSize {
-		head := make([]byte, sniffLen)
+		head := make([]byte, SniffLen)
 		n, err := io.ReadFull(f, head)
 		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 			return nil, fmt.Errorf("failed to read file: %w", err)
 		}
-		file.MIME = detectMIME(info.Name(), head[:n])
-		file.Encoding = EncodingNone
-		file.Omitted = OmitTooLarge
-		file.Limit = MaxFileSize
-		return file, nil
+		return NewFileContent(relPath, info.Size(), head[:n]), nil
 	}
 
 	// Bounded rather than sized from info: the file may have grown since the
@@ -241,15 +232,37 @@ func readFile(relPath, fullPath string) (*FileContent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
-	file.MIME = detectMIME(info.Name(), content)
 
-	switch {
-	case int64(len(content)) > MaxFileSize:
+	size := info.Size()
+	if int64(len(content)) > MaxFileSize {
 		// The file outgrew the limit while it was being read, so the size taken
 		// before the read would contradict the verdict sitting next to it.
 		if grown, err := f.Stat(); err == nil {
-			file.Size = grown.Size()
+			size = grown.Size()
 		}
+	}
+
+	return NewFileContent(relPath, size, content), nil
+}
+
+// NewFileContent describes content already held in memory — a git blob, say —
+// the way readFile describes a file on disk, so that whatever produced it, a
+// client renders it with one code path.
+//
+// size is the content's full size, which may exceed len(content): a caller that
+// already knows the content is too large to send need only pass its first
+// SniffLen bytes, enough to name the MIME type.
+func NewFileContent(relPath string, size int64, content []byte) *FileContent {
+	file := &FileContent{
+		Name: path.Base(relPath),
+		Type: TypeFile,
+		Path: relPath,
+		Size: size,
+		MIME: detectMIME(relPath, content),
+	}
+
+	switch {
+	case size > MaxFileSize || int64(len(content)) > MaxFileSize:
 		file.Encoding = EncodingNone
 		file.Omitted = OmitTooLarge
 		file.Limit = MaxFileSize
@@ -264,7 +277,7 @@ func readFile(relPath, fullPath string) (*FileContent, error) {
 		file.Omitted = OmitBinary
 	}
 
-	return file, nil
+	return file
 }
 
 // Image formats http.DetectContentType cannot name: SVG is plain text, and
@@ -331,7 +344,7 @@ func isBinary(data []byte, truncated bool) bool {
 		return true
 	}
 	// NUL is valid UTF-8 and never appears in text, and sniffing only saw the
-	// first sniffLen bytes.
+	// first SniffLen bytes.
 	if bytes.IndexByte(data, 0) >= 0 {
 		return true
 	}

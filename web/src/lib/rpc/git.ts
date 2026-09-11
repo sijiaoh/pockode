@@ -1,4 +1,5 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
+import type { FileContent } from "../../types/contents";
 import type {
 	GitBranches,
 	GitDiffData,
@@ -17,6 +18,8 @@ export interface GitActions {
 		path: string,
 		hideWhitespace?: boolean,
 	) => Promise<GitDiffData>;
+	/** The file as it stood in that commit, shaped like a `file.get` file. */
+	getCommitFile: (hash: string, path: string) => Promise<FileContent>;
 	stage: (paths: string[]) => Promise<void>;
 	unstage: (paths: string[]) => Promise<void>;
 	/** Reverts unstaged edits; the server decides per path whether that means deleting it. */
@@ -63,6 +66,9 @@ export function createGitActions(
 				path,
 				hide_whitespace: hideWhitespace,
 			});
+		},
+		getCommitFile: async (hash: string, path: string): Promise<FileContent> => {
+			return requireClient().request("git.show.file", { hash, path });
 		},
 		stage: async (paths: string[]): Promise<void> => {
 			await requireClient().request("git.add", { paths });

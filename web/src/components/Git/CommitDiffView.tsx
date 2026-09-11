@@ -1,12 +1,23 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ALargeSmall, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+	ALargeSmall,
+	ChevronLeft,
+	ChevronRight,
+	FileClock,
+} from "lucide-react";
 import { useMemo } from "react";
 import { useCommitDiff } from "../../hooks/useCommitDiff";
 import { useGitCommit } from "../../hooks/useGitCommit";
 import { useRouteState } from "../../hooks/useRouteState";
 import { useDiffSettings } from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
-import { BottomActionBar, ContentView, getActionIconButtonClass } from "../ui";
+import { splitPath } from "../../utils/path";
+import {
+	BottomActionBar,
+	ContentView,
+	getActionIconButtonClass,
+	ToggleIconButton,
+} from "../ui";
 import DiffContent from "./DiffContent";
 
 interface Props {
@@ -31,6 +42,7 @@ function CommitDiffView({ hash, path }: Props) {
 
 	const files = useMemo(() => commit?.files ?? [], [commit]);
 	const currentIndex = files.findIndex((f) => f.path === path);
+	const currentFile = currentIndex >= 0 ? files[currentIndex] : null;
 	const prev = currentIndex > 0 ? files[currentIndex - 1] : null;
 	const next =
 		currentIndex >= 0 && currentIndex < files.length - 1
@@ -47,6 +59,20 @@ function CommitDiffView({ hash, path }: Props) {
 		);
 	};
 
+	const handlePathClick = () => {
+		navigate(overlayToNavigation({ type: "file", path }, worktree, sessionId));
+	};
+
+	const viewCommitVersion = () => {
+		navigate(
+			overlayToNavigation(
+				{ type: "commit-file", hash, path },
+				worktree,
+				sessionId,
+			),
+		);
+	};
+
 	const handleBack = () => {
 		navigate(
 			overlayToNavigation({ type: "commit", hash }, worktree, sessionId),
@@ -54,12 +80,21 @@ function CommitDiffView({ hash, path }: Props) {
 	};
 
 	const shortHash = hash.substring(0, 7);
+	// A commit that deletes a file holds no blob for it, so there is no version
+	// here to show. The reason travels with the control rather than leaving it
+	// silently greyed out, as with `getEditLabel`.
+	const deletedHere = currentFile?.status === "D";
+	const versionLabel = deletedHere
+		? `View this file at ${shortHash} (deleted in this commit)`
+		: `View this file at ${shortHash}`;
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
 			<ContentView
 				path={path}
 				pathColor="text-th-accent"
+				onPathClick={handlePathClick}
+				pathActionLabel={`Open current ${splitPath(path).fileName}`}
 				isLoading={isLoading}
 				error={error ?? undefined}
 				onBack={handleBack}
@@ -98,26 +133,24 @@ function CommitDiffView({ hash, path }: Props) {
 					<div className="flex items-center gap-2">
 						<button
 							type="button"
-							onClick={toggleHideWhitespace}
-							aria-pressed={hideWhitespace}
-							aria-label={
-								hideWhitespace
-									? "Show whitespace changes"
-									: "Hide whitespace changes"
-							}
-							title={
-								hideWhitespace
-									? "Show whitespace changes"
-									: "Hide whitespace changes"
-							}
-							className={`flex size-9 items-center justify-center rounded border transition-all pointer-coarse:size-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
-								hideWhitespace
-									? "bg-th-accent text-th-accent-text border-th-accent"
-									: "text-th-text-muted hover:text-th-text-secondary border-th-border bg-th-bg-tertiary hover:border-th-border-focus"
-							}`}
+							disabled={deletedHere}
+							onClick={viewCommitVersion}
+							className={getActionIconButtonClass(!deletedHere)}
+							aria-label={versionLabel}
+							title={versionLabel}
 						>
-							<ALargeSmall className="h-4 w-4" aria-hidden="true" />
+							<FileClock className="h-4 w-4" aria-hidden="true" />
 						</button>
+						<ToggleIconButton
+							icon={ALargeSmall}
+							pressed={hideWhitespace}
+							onClick={toggleHideWhitespace}
+							label={
+								hideWhitespace
+									? "Show whitespace changes"
+									: "Hide whitespace changes"
+							}
+						/>
 						<div className="text-xs text-th-text-muted">{shortHash}</div>
 					</div>
 				</div>

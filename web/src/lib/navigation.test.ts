@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildNavigation } from "./navigation";
+import { buildNavigation, overlayToNavigation } from "./navigation";
 
 describe("buildNavigation", () => {
 	describe("session", () => {
@@ -163,6 +163,43 @@ describe("buildNavigation", () => {
 			});
 		});
 
+		it("builds main worktree commit-file route", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "",
+				overlayType: "commit-file",
+				path: "src/index.ts",
+				hash: "abc1234",
+				sessionId: null,
+			});
+
+			expect(result).toEqual({
+				to: "/commit/$hash/file/$",
+				params: { hash: "abc1234", _splat: "src/index.ts" },
+			});
+		});
+
+		it("builds named worktree commit-file route with session", () => {
+			const result = buildNavigation({
+				type: "overlay",
+				worktree: "feature-x",
+				overlayType: "commit-file",
+				path: "src/app.ts",
+				hash: "def5678",
+				sessionId: "sess123",
+			});
+
+			expect(result).toEqual({
+				to: "/w/$worktree/commit/$hash/file/$",
+				params: {
+					worktree: "feature-x",
+					hash: "def5678",
+					_splat: "src/app.ts",
+				},
+				search: { session: "sess123" },
+			});
+		});
+
 		it("builds main worktree settings route", () => {
 			const result = buildNavigation({
 				type: "overlay",
@@ -229,6 +266,39 @@ describe("buildNavigation", () => {
 			const result = buildNavigation({ type: "home", worktree: "" });
 
 			expect(result.replace).toBeUndefined();
+		});
+	});
+});
+
+describe("overlayToNavigation", () => {
+	it("routes a commit-file overlay to its own path, not the commit splat", () => {
+		const result = overlayToNavigation(
+			{ type: "commit-file", hash: "abc1234", path: "src/app.ts" },
+			"",
+			null,
+		);
+
+		expect(result).toEqual({
+			to: "/commit/$hash/file/$",
+			params: { hash: "abc1234", _splat: "src/app.ts" },
+		});
+	});
+
+	it("keeps worktree and session on a commit-file overlay", () => {
+		const result = overlayToNavigation(
+			{ type: "commit-file", hash: "def5678", path: "docs/a.md" },
+			"feature-x",
+			"sess123",
+		);
+
+		expect(result).toEqual({
+			to: "/w/$worktree/commit/$hash/file/$",
+			params: {
+				worktree: "feature-x",
+				hash: "def5678",
+				_splat: "docs/a.md",
+			},
+			search: { session: "sess123" },
 		});
 	});
 });

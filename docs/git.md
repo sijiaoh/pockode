@@ -16,16 +16,17 @@ React SPA ──WebSocket──▶ Go Server ──exec──▶ git CLI
 
 | Layer | Path | Role |
 |-------|------|------|
-| RPC handlers | `server/ws/rpc_git.go` | `git.status`, `git.add`, `git.reset`, `git.discard`, `git.commit`, `git.log`, `git.show`, `git.show.diff`, `git.branches`, `git.checkout`, `git.branch.create`, `git.fetch`, `git.pull`, `git.push`, and the `git.subscribe` / `git.diff.subscribe` pairs with their unsubscribes |
+| RPC handlers | `server/ws/rpc_git.go` | `git.status`, `git.add`, `git.reset`, `git.discard`, `git.commit`, `git.log`, `git.show`, `git.show.diff`, `git.show.file`, `git.branches`, `git.checkout`, `git.branch.create`, `git.fetch`, `git.pull`, `git.push`, and the `git.subscribe` / `git.diff.subscribe` pairs with their unsubscribes |
 | Git operations | `server/git/git.go` | Init, Status, Add, Reset, Diff, DiffWithContent, Log, Show, ShowFileDiff |
+| Historical file contents | `server/git/showfile.go` | ShowFile |
 | Branch operations | `server/git/branch.go` | Head, Branches, Checkout, CreateBranch |
 | Remote operations | `server/git/remote.go` | sync state (upstream, ahead/behind, last fetch), Fetch, Pull, Push |
 | Commit operations | `server/git/commit.go` | CreateCommit |
 | Discard operations | `server/git/discard.go` | Discard |
 | Command execution | `server/git/command.go` | `gitCommand` / `execGit` / `execGitLines` / `execGitVerbose` / `execGitNetwork`, `CommandError`, and `literalPathspec` |
-| Frontend components | `web/src/components/Git/` | `DiffTab` is the panel: `BranchBar` (with `SyncChip`) and `CommitBar` frame the existing `DiffFileList` / `LogList` and open `BranchSheet` / `NewBranchSheet` / `SyncSheet` / `CommitSheet`, and `ErrorBanner` catches the failures with no sheet to land in. `DiffView` / `CommitView` render in the content area, not the panel |
+| Frontend components | `web/src/components/Git/` | `DiffTab` is the panel: `BranchBar` (with `SyncChip`) and `CommitBar` frame the existing `DiffFileList` / `LogList` and open `BranchSheet` / `NewBranchSheet` / `SyncSheet` / `CommitSheet`, and `ErrorBanner` catches the failures with no sheet to land in. `DiffView` renders in the content area rather than the panel, as does the chain from `CommitView` to `CommitDiffView` to `CommitFileView` |
 | Frontend types | `web/src/types/git.ts` | Wire types, plus the pure `describeGitSync` / `describeCommitAction` / `describeDiscard` the panel's labels and confirmation copy come from |
-| Frontend hooks | `web/src/hooks/useGit*.ts` | The panel's queries, mutations and watch subscriptions. Note `useGitCommit` *reads* a commit (`git.show`) — `useGitCreateCommit` is the one that writes |
+| Frontend hooks | `web/src/hooks/useGit*.ts` | The panel's queries, mutations and watch subscriptions. Note `useGitCommit` *reads* a commit (`git.show`) — `useGitCreateCommit` is the one that writes. `useCommitFile` (`git.show.file`) is outside the glob because it is not the panel's: it backs a content-area screen ([git-ui.md](git-ui.md#viewing-a-file-from-a-commit)) |
 | RPC actions | `web/src/lib/rpc/git.ts` | RPC action creators for all git methods |
 | Query keys | `web/src/hooks/gitQueries.ts` | The panel's three query keys plus `invalidateGitQueries` |
 
@@ -50,6 +51,18 @@ None of this helps when a filename is not valid UTF-8 (e.g. latin-1 byte sequenc
 Both must agree on this. Plain `git show` on a merge produces a *combined* diff, which by definition only keeps hunks differing from **every** parent — so a file identical to one side of the merge, the common case, yields nothing. Using it for the file contents while listing files against the first parent is what makes the list offer files that open blank.
 
 `git.log` is not first-parent filtered; history lists merge commits alongside the rest.
+
+## Historical File Contents
+
+`git.show.file` returns one path as it stood in one commit, in the shape `file.get` returns for a file (`contents.FileContent`): same `encoding`, same `omitted`/`limit` for a blob that is binary or over `contents.MaxFileSize`. One shape because the client renders a historical version with the viewer it already has.
+
+`ShowFile` reads the blob through `<hash>:<path>` — a rev-spec resolved against the repository root, not a pathspec, so none of the `:(literal)` concerns above apply. Over-sized blobs are read only as far as `contents.SniffLen`, enough to name the MIME type; git is stopped there rather than buffered in full.
+
+A path the commit does not contain is `contents.ErrNotFound`; a path that names a tree or a submodule there is `contents.ErrInvalidPath`, because this method has no listing to fall back on the way `file.get` has for a directory. Both are answered as invalid params, as `file.get`'s are. The not-found error carries git's own message, because a commit that does not exist and a path that does not exist in it arrive as the same non-zero exit and only git can say which happened.
+
+The not-found case is ordinary rather than exceptional: a deleted file is listed by the commit that **deleted** it, so that hash no longer has its content — `hash^` does.
+
+**A symlink is returned as a text file whose content is the path it points at.** git stores a mode-120000 entry as a blob holding the target path, and `cat-file -t` calls it `blob` like any other, so `git.show.file` hands back the link itself where `file.get` hands back what it points at — that side follows the link, for the reasons in [file.md](file.md#security). One path therefore reads as two unrelated files on the two screens, with nothing in either result marking one of them as a link. Accepted rather than fixed: `contents.FileContent` has no field that could say "symlink", recognising one costs a second command to read the mode, and what to show once it is recognised is a question of its own — the target path, or the target's own version in that commit, which the commit need not contain.
 
 ## Branches
 

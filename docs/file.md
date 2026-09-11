@@ -524,6 +524,16 @@ edit, and only its colours are negotiable.
 re-read, re-encode and re-send the whole file — see
 [code/websocket-rpc.md](code/websocket-rpc.md#request-timeout).
 
+A file as it stood in a commit reuses this same `FileViewState` and `FileBody`,
+so a historical binary or oversized blob is described by the same card — less
+the two things on it that only make sense beside controls that screen does not
+have: the download button, and the footnote naming why Edit is disabled. That
+screen's bottom bar tells the same story — no write action, no download — and
+adds one control the viewer above does not have: a toggle that drops text to
+plain, which is how a reader gets at a rendered Markdown file's source and the
+copy button that comes with it, there being no Edit to open it in.
+See [git-ui.md](git-ui.md#viewing-a-file-from-a-commit).
+
 ### Downloading
 
 Download sits between Edit and Delete and is available in every state, from

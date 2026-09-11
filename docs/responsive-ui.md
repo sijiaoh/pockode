@@ -431,6 +431,12 @@ The shared definitions, so the common cases cannot drift apart:
 - `web/src/components/ui/ContentView.tsx`'s `actionIconButtonClass` — the
   bordered icon action in the bar under a file or a diff (36 / coarse 44). It was
   32px for everyone, under the floor for *either* pointer.
+- `web/src/components/ui/ToggleIconButton.tsx` — the same bar's *sticky* icon
+  action, the one that stays on once pressed. `actionIconButtonClass` is not
+  reusable here: pressed fills the box with the accent, so border and background
+  belong to the state rather than to the shape. It restates the same two
+  numbers. It exists because that fill was on its way to a third hand-written
+  copy.
 - `web/src/components/Project/AgentRoleDetailOverlay.tsx`'s
   `stepActionButtonClass` — the step list's own reorder / delete trio. A local
   definition rather than a shared one, because it is not a sidebar list row; it

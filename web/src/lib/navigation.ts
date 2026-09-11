@@ -32,10 +32,17 @@ interface NavToCommitDiffOverlay extends NavToOverlayBase {
 	path: string;
 }
 
+interface NavToCommitFileOverlay extends NavToOverlayBase {
+	overlayType: "commit-file";
+	hash: string;
+	path: string;
+}
+
 type NavToFileOverlay =
 	| NavToPathOverlay
 	| NavToCommitOverlay
-	| NavToCommitDiffOverlay;
+	| NavToCommitDiffOverlay
+	| NavToCommitFileOverlay;
 
 interface NavToSettingsOverlay {
 	type: "overlay";
@@ -138,6 +145,15 @@ export function overlayToNavigation(
 					type: "overlay" as const,
 					worktree,
 					overlayType: "commit-diff" as const,
+					path: overlay.path,
+					hash: overlay.hash,
+					sessionId,
+				};
+			case "commit-file":
+				return {
+					type: "overlay" as const,
+					worktree,
+					overlayType: "commit-file" as const,
 					path: overlay.path,
 					hash: overlay.hash,
 					sessionId,
@@ -259,8 +275,13 @@ export function buildNavigation(
 				if (target.sessionId) {
 					result.search = { session: target.sessionId };
 				}
-			} else if (target.overlayType === "commit-diff") {
-				result.to = isMain ? ROUTES.commitDiff : WT_ROUTES.commitDiff;
+			} else if (
+				target.overlayType === "commit-diff" ||
+				target.overlayType === "commit-file"
+			) {
+				const route =
+					target.overlayType === "commit-diff" ? "commitDiff" : "commitFile";
+				result.to = isMain ? ROUTES[route] : WT_ROUTES[route];
 				result.params = { hash: target.hash, _splat: target.path };
 				if (!isMain) {
 					result.params.worktree = target.worktree;

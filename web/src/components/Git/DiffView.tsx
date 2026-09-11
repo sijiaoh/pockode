@@ -15,7 +15,12 @@ import { useRouteState } from "../../hooks/useRouteState";
 import { useDiffSettings } from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { flattenGitStatus } from "../../types/git";
-import { BottomActionBar, ContentView, getActionIconButtonClass } from "../ui";
+import {
+	BottomActionBar,
+	ContentView,
+	getActionIconButtonClass,
+	ToggleIconButton,
+} from "../ui";
 import DiffContent from "./DiffContent";
 
 interface Props {
@@ -134,28 +139,16 @@ function DiffView({ path, staged, onBack }: Props) {
 						</button>
 					</div>
 					<div className="flex items-center gap-2">
-						<button
-							type="button"
+						<ToggleIconButton
+							icon={ALargeSmall}
+							pressed={hideWhitespace}
 							onClick={toggleHideWhitespace}
-							aria-pressed={hideWhitespace}
-							aria-label={
+							label={
 								hideWhitespace
 									? "Show whitespace changes"
 									: "Hide whitespace changes"
 							}
-							title={
-								hideWhitespace
-									? "Show whitespace changes"
-									: "Hide whitespace changes"
-							}
-							className={`flex size-9 items-center justify-center rounded border transition-all pointer-coarse:size-11 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 ${
-								hideWhitespace
-									? "bg-th-accent text-th-accent-text border-th-accent"
-									: "text-th-text-muted hover:text-th-text-secondary border-th-border bg-th-bg-tertiary hover:border-th-border-focus"
-							}`}
-						>
-							<ALargeSmall className="h-4 w-4" aria-hidden="true" />
-						</button>
+						/>
 						<button
 							type="button"
 							onClick={handleToggleStage}
