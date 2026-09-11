@@ -17,7 +17,7 @@ import {
 	recordedStepProgress,
 } from "../../utils/workSteps";
 import StepList from "../Project/StepList";
-import { ScrollableContent } from "../ui";
+import { CollapsibleBody, ScrollableContent } from "../ui";
 import StatusBadge, { statusLabels } from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
 import { MarkdownContent } from "./MarkdownContent";
@@ -43,13 +43,13 @@ function TimelineGroupItem({ group }: TimelineGroupItemProps) {
 				/>
 				<span className="min-w-0 truncate text-th-text-muted">{label}</span>
 			</button>
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<div className="space-y-2 border-l border-th-border pb-2 pl-4">
 					{group.entries.map((entry: WorkTimelineEntry) => (
 						<MarkdownContent key={entry.id} content={entry.content} />
 					))}
 				</div>
-			)}
+			</CollapsibleBody>
 		</li>
 	);
 }
@@ -225,7 +225,7 @@ function WorkCardItem({ message, onOpenWorkDetail }: Props) {
 				</span>
 			</button>
 
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] space-y-3 overflow-auto border-t border-th-border p-2">
 					<div className="flex items-start gap-2">
 						<p className="min-w-0 flex-1 break-words text-sm text-th-text-primary">
@@ -269,7 +269,7 @@ function WorkCardItem({ message, onOpenWorkDetail }: Props) {
 						</ul>
 					</div>
 				</ScrollableContent>
-			)}
+			</CollapsibleBody>
 
 			{error && (
 				<p className="border-t border-th-border p-2 text-th-error" role="alert">
