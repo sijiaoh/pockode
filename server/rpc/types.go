@@ -82,6 +82,20 @@ type SessionSetModeParams struct {
 	Mode      session.Mode `json:"mode"`
 }
 
+type SessionSetModelParams struct {
+	SessionID string `json:"session_id"`
+	// Model must be one of session.ModelsForAgent for the session's current
+	// agent type, or "" to let the CLI pick.
+	Model string `json:"model"`
+}
+
+// SessionModelsResult carries the selectable models of every agent type, keyed
+// by agent type: switching a session's agent switches which list applies, so
+// the UI needs them all.
+type SessionModelsResult struct {
+	Models map[session.AgentType][]session.ModelOption `json:"models"`
+}
+
 type SessionMarkReadParams struct {
 	SessionID string `json:"session_id"`
 }
@@ -288,6 +302,7 @@ type ChatMessagesSubscribeResult struct {
 	State     string            `json:"state"` // "idle" | "running" | "ended"
 	Mode      session.Mode      `json:"mode"`
 	AgentType session.AgentType `json:"agent_type"`
+	Model     string            `json:"model"`
 }
 
 type ChatMessagesUnsubscribeParams struct {

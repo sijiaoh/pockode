@@ -194,7 +194,7 @@ func (c *Client) getOrCreateProcess(ctx context.Context, sessionID string) (*pro
 		return nil, ErrSessionNotFound
 	}
 
-	proc, _, err := c.pm.GetOrCreateProcess(ctx, sessionID, meta.Activated, meta.AgentType, meta.Mode)
+	proc, _, err := c.pm.GetOrCreateProcess(ctx, meta)
 	if err != nil {
 		return nil, err
 	}

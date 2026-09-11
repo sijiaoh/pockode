@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -334,5 +335,96 @@ func TestFileStore_MigratesEmptyMode(t *testing.T) {
 	}
 	if sess.Mode != ModeDefault {
 		t.Errorf("expected mode to be migrated to %q, got %q", ModeDefault, sess.Mode)
+	}
+}
+
+func TestFileStore_SetModel(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	model := ModelsForAgent(AgentTypeClaude)[0].ID
+	if err := store.SetModel(ctx, "s1", model); err != nil {
+		t.Fatalf("SetModel failed: %v", err)
+	}
+
+	meta, _, _ := store.Get("s1")
+	if meta.Model != model {
+		t.Errorf("expected model %q, got %q", model, meta.Model)
+	}
+
+	// Clearing the model is how a session goes back to letting the CLI decide.
+	if err := store.SetModel(ctx, "s1", ""); err != nil {
+		t.Fatalf("SetModel failed: %v", err)
+	}
+	meta, _, _ = store.Get("s1")
+	if meta.Model != "" {
+		t.Errorf("expected model to be cleared, got %q", meta.Model)
+	}
+}
+
+func TestFileStore_SetModelNonExistent(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+
+	err := store.SetModel(ctx, "missing", ModelsForAgent(AgentTypeClaude)[0].ID)
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("expected ErrSessionNotFound, got %v", err)
+	}
+}
+
+func TestFileStore_SetAgentType_DropsForeignModel(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if err := store.SetModel(ctx, "s1", ModelsForAgent(AgentTypeClaude)[0].ID); err != nil {
+		t.Fatalf("SetModel failed: %v", err)
+	}
+
+	if err := store.SetAgentType(ctx, "s1", AgentTypeCodex); err != nil {
+		t.Fatalf("SetAgentType failed: %v", err)
+	}
+
+	meta, _, _ := store.Get("s1")
+	if meta.Model != "" {
+		t.Errorf("expected Claude's model to be dropped when switching to codex, got %q", meta.Model)
+	}
+}
+
+func TestFileStore_SetAgentType_KeepsValidModel(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	model := ModelsForAgent(AgentTypeClaude)[0].ID
+	if err := store.SetModel(ctx, "s1", model); err != nil {
+		t.Fatalf("SetModel failed: %v", err)
+	}
+
+	if err := store.SetAgentType(ctx, "s1", AgentTypeClaude); err != nil {
+		t.Fatalf("SetAgentType failed: %v", err)
+	}
+
+	meta, _, _ := store.Get("s1")
+	if meta.Model != model {
+		t.Errorf("expected model %q to survive a same-agent switch, got %q", model, meta.Model)
+	}
+}
+
+func TestFileStore_SetModel_RejectsForeignAgentModel(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	err := store.SetModel(ctx, "s1", ModelsForAgent(AgentTypeCodex)[0].ID)
+	if !errors.Is(err, ErrModelNotAvailable) {
+		t.Fatalf("expected ErrModelNotAvailable, got %v", err)
+	}
+
+	meta, _, _ := store.Get("s1")
+	if meta.Model != "" {
+		t.Errorf("expected a rejected model not to be stored, got %q", meta.Model)
 	}
 }

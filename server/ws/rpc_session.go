@@ -157,6 +157,48 @@ func (h *rpcMethodHandler) handleSessionSetMode(ctx context.Context, conn *jsonr
 	}
 }
 
+func (h *rpcMethodHandler) handleSessionSetModel(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.SessionSetModelParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	// Which models are valid depends on the session's agent type, so the store
+	// judges the choice while holding that value still. Unlike session.set_mode
+	// the write therefore comes first: a model the agent cannot run must be
+	// refused without killing the process the session is running.
+	if err := wt.SessionStore.SetModel(ctx, params.SessionID, params.Model); err != nil {
+		switch {
+		case errors.Is(err, session.ErrSessionNotFound):
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+		case errors.Is(err, session.ErrModelNotAvailable):
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+		default:
+			h.replyInternalError(ctx, conn, req.ID, "failed to set model", err, "sessionId", params.SessionID)
+		}
+		return
+	}
+
+	// The model is only read when a CLI is launched, so a running process would
+	// keep the old one until it is replaced (same as session.set_mode).
+	wt.ProcessManager.Close(params.SessionID)
+
+	h.log.Info("session model changed", "sessionId", params.SessionID, "model", params.Model)
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send session set model response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleSessionModels(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	result := rpc.SessionModelsResult{Models: session.AllModels()}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send session models response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
 	notifier := h.state.getNotifier()
 	id, sessions, err := wt.SessionListWatcher.Subscribe(notifier)

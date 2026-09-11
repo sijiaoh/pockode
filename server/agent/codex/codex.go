@@ -474,6 +474,10 @@ func (s *mcpSession) buildStartConfig(prompt string) map[string]interface{} {
 		"config": overrides,
 	}
 
+	if s.opts.Model != "" {
+		config["model"] = s.opts.Model
+	}
+
 	switch s.opts.Mode {
 	case session.ModeYolo:
 		config["approval-policy"] = "never"

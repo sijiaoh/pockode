@@ -970,6 +970,134 @@ func TestHandler_SessionSetAgentType_NotFound(t *testing.T) {
 	}
 }
 
+func TestHandler_SessionSetModel(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	store := env.getMainWorktree().SessionStore
+	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	model := session.ModelsForAgent(session.AgentTypeClaude)[0].ID
+
+	resp := env.call("session.set_model", rpc.SessionSetModelParams{
+		SessionID: sess.ID,
+		Model:     model,
+	})
+
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %s", resp.Error.Message)
+	}
+
+	updated, _, _ := store.Get(sess.ID)
+	if updated.Model != model {
+		t.Errorf("expected model %q, got %q", model, updated.Model)
+	}
+}
+
+func TestHandler_SessionSetModel_ForeignAgentModel(t *testing.T) {
+	// The lists are per agent; accepting another agent's model would only
+	// surface later, as a CLI that refuses to start.
+	env := newTestEnv(t, &mockAgent{})
+	store := env.getMainWorktree().SessionStore
+	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+
+	resp := env.call("session.set_model", rpc.SessionSetModelParams{
+		SessionID: sess.ID,
+		Model:     session.ModelsForAgent(session.AgentTypeCodex)[0].ID,
+	})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "model not available") {
+		t.Errorf("expected rejection of the other agent's model, got %+v", resp)
+	}
+
+	updated, _, _ := store.Get(sess.ID)
+	if updated.Model != "" {
+		t.Errorf("expected model to stay unset, got %q", updated.Model)
+	}
+}
+
+// The whole reason set_model writes to the store before closing the process:
+// a model the session's agent cannot run is an invalid request, and an invalid
+// request must not cost the user the CLI they have running.
+func TestHandler_SessionSetModel_RefusalSparesTheProcess(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	wt := env.getMainWorktree()
+	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	env.sendMessage(sess.ID, "hello")
+
+	if !wt.ProcessManager.HasProcess(sess.ID) {
+		t.Fatal("expected process to be running after message")
+	}
+
+	resp := env.call("session.set_model", rpc.SessionSetModelParams{
+		SessionID: sess.ID,
+		Model:     session.ModelsForAgent(session.AgentTypeCodex)[0].ID,
+	})
+
+	if resp.Error == nil {
+		t.Fatal("expected the other agent's model to be refused")
+	}
+	if !wt.ProcessManager.HasProcess(sess.ID) {
+		t.Error("a refused model must not close the running process")
+	}
+}
+
+// An accepted model does close it: the CLI is told which model to use only at
+// launch, so the choice takes effect on the next one.
+func TestHandler_SessionSetModel_ClosesProcess(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	wt := env.getMainWorktree()
+	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	env.sendMessage(sess.ID, "hello")
+
+	if !wt.ProcessManager.HasProcess(sess.ID) {
+		t.Fatal("expected process to be running after message")
+	}
+
+	resp := env.call("session.set_model", rpc.SessionSetModelParams{
+		SessionID: sess.ID,
+		Model:     session.ModelsForAgent(session.AgentTypeClaude)[0].ID,
+	})
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+	if wt.ProcessManager.HasProcess(sess.ID) {
+		t.Error("expected process to be closed so the next launch uses the new model")
+	}
+}
+
+func TestHandler_SessionSetModel_NotFound(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("session.set_model", rpc.SessionSetModelParams{
+		SessionID: "non-existent",
+		Model:     "",
+	})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
+		t.Errorf("expected session not found error, got %+v", resp)
+	}
+}
+
+func TestHandler_SessionModels(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("session.models", nil)
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result rpc.SessionModelsResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	for _, agentType := range []session.AgentType{session.AgentTypeClaude, session.AgentTypeCodex} {
+		if len(result.Models[agentType]) == 0 {
+			t.Errorf("expected models for %q", agentType)
+		}
+	}
+}
+
 func TestHandler_ChatMessagesSubscribe_History(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore

@@ -1225,3 +1225,25 @@ func TestHandleElicitation_ResponseShape(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildStartConfig_Model(t *testing.T) {
+	// Codex takes the model on the session-starting tool call; `codex-reply`
+	// has no such field, which is why changing it restarts the process.
+	sess := &mcpSession{
+		opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", DisableMCP: true, Model: "gpt-5.6-sol"},
+		exe:  "/usr/local/bin/pockode",
+	}
+	if got := sess.buildStartConfig("hello")["model"]; got != "gpt-5.6-sol" {
+		t.Errorf("model = %v, want %q", got, "gpt-5.6-sol")
+	}
+
+	// No model selected must leave the key out entirely, so Codex keeps its own
+	// default instead of being handed an empty model.
+	sess = &mcpSession{
+		opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", DisableMCP: true},
+		exe:  "/usr/local/bin/pockode",
+	}
+	if _, ok := sess.buildStartConfig("hello")["model"]; ok {
+		t.Error("expected no model key when no model is selected")
+	}
+}

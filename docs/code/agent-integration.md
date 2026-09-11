@@ -1108,6 +1108,7 @@ type SessionMeta struct {
     Activated  bool      // True once the agent has produced output
     AgentType  AgentType // claude, codex
     Mode       Mode      // default, yolo
+    Model      string    // agent-specific model id; empty = CLI decides
     NeedsInput bool      // Awaiting user permission/question response
     Unread     bool      // Has unread changes
 }
@@ -1119,6 +1120,51 @@ building a process marks the session unread, whether or not the agent said
 anything. `StateChangeEvent.IsInitial` distinguishes that first idle, but only
 `work.AutoResumer` reads it. Noted rather than fixed: what "unread" should mean
 for a session that was merely started is a product question.
+
+### Session Models
+
+Each session carries its own model, and the choices are per agent — Claude takes
+aliases (`opus`, `sonnet`, …), Codex takes slugs (`gpt-5.6-sol`, …). Neither CLI
+can list its models, so `session/model.go` holds the list by hand and is the
+only place it exists: `session.models` answers the UI from it and
+`session.set_model` validates against it, so the UI can never offer a choice the
+server would then reject. It needs a manual update whenever an agent retires a
+model.
+
+The one other source that exists is Codex's own catalog cache
+(`~/.codex/models_cache.json`, whose `visibility: "list"` entries are exactly
+what a picker should show). It was rejected: an undocumented internal file that
+a fresh or logged-out install may not have, and Claude has no counterpart — so
+the hand-written list has to exist either way, and reading the cache would only
+add a second source that can disagree with it. If Codex's models start turning
+over fast enough to make the manual list a burden, that cache is the first thing
+to reach for.
+
+An empty model means *pass no model flag* — the CLI picks for itself. That is
+the default for new sessions and, since the field simply did not exist before,
+the value every older session already reads as, so no migration was needed.
+
+Like the mode, the model is only read when a CLI is launched: Claude gets
+`--model` in its arguments, Codex gets `model` on the `codex` tool call, which
+`codex-reply` does not accept. `session.set_model` therefore closes the running
+process, at the same cost for Codex as a mode change (see
+[Session Modes](#session-modes)).
+
+A session that has already started can still change its model, unlike its
+[agent type](#activation), because nothing outside the next launch is keyed to
+it: Claude's resume file is written per session, not per model, so the session
+resumes across the change with its context intact. Codex's thread does not
+survive it — but that is true of every restart, not of model changes.
+
+Switching agents drops a model the new agent does not have, rather than trying
+to map it — no model is shared between agents. Both halves of that invariant
+live in the store: `SetAgentType` clears a model the new agent cannot run, and
+`SetModel` refuses one, judged against the agent type while the store lock holds
+it still. An RPC handler that checked first would be racing the other call, and
+it would have to kill the session's process before finding out the request was
+invalid. So `session.set_model` writes to the store first and closes the process
+only once that write is accepted — the reverse of `session.set_mode`, which has
+nothing to reject and closes first.
 
 ### Activation
 
@@ -1164,10 +1210,11 @@ resume file is intact, so switching back resumes — which is why it stands. Clo
 properly means a compare-and-swap in the store (`SetAgentTypeIfNotActivated` or
 similar) instead of a read followed by an unconditional write.
 
-The frontend disables the agent selector on the same flag, which `SessionListItem`
-carries. Using the transcript instead (`messages.length > 0`) looks equivalent and
-is not: a failed first turn leaves a user message and an error behind, so the
-selector would stay disabled in exactly the situation it is meant to rescue.
+The frontend disables the agent half of the engine selector on the same flag,
+which `SessionListItem` carries. Using the transcript instead
+(`messages.length > 0`) looks equivalent and is not: a failed first turn leaves a
+user message and an error behind, so the selector would stay disabled in exactly
+the situation it is meant to rescue.
 
 ### History Storage
 

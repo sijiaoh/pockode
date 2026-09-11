@@ -480,6 +480,10 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSessionSetAgentType(ctx, conn, req, wt)
 	case "session.set_mode":
 		h.handleSessionSetMode(ctx, conn, req, wt)
+	case "session.set_model":
+		h.handleSessionSetModel(ctx, conn, req, wt)
+	case "session.models":
+		h.handleSessionModels(ctx, conn, req)
 	case "session.mark_read":
 		h.handleSessionMarkRead(ctx, conn, req, wt)
 	case "session.list.subscribe":

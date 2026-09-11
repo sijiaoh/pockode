@@ -146,8 +146,10 @@ func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent) {
 	}
 }
 
-// GetOrCreateProcess returns an existing process or creates a new one.
-func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resume bool, agentType session.AgentType, mode session.Mode) (*Process, bool, error) {
+// GetOrCreateProcess launches the CLI described by meta, or returns the process
+// already running for meta.ID. A session that has been activated is resumed.
+func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMeta) (*Process, bool, error) {
+	sessionID := meta.ID
 	m.processesMu.Lock()
 
 	// Checked under processesMu, which Shutdown also holds while cancelling, so a
@@ -163,7 +165,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 		return proc, false, nil
 	}
 
-	ag, err := m.agents.Get(agentType)
+	ag, err := m.agents.Get(meta.AgentType)
 	if err != nil {
 		m.processesMu.Unlock()
 		return nil, false, err
@@ -175,8 +177,9 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 		DataDir:      m.dataDir,
 		MCPServerDir: m.mcpServerDir,
 		SessionID:    sessionID,
-		Resume:       resume,
-		Mode:         mode,
+		Resume:       meta.Activated,
+		Mode:         meta.Mode,
+		Model:        meta.Model,
 	}
 	sess, err := ag.Start(m.ctx, opts)
 	if err != nil {
@@ -194,9 +197,8 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 		turnEnded:    true, // no turn has started yet
 		done:         make(chan struct{}),
 	}
-	// resume is the session's Activated flag, so an already activated session
-	// starts out knowing it has nothing to record.
-	proc.activated.Store(resume)
+	// An already activated session starts out knowing it has nothing to record.
+	proc.activated.Store(meta.Activated)
 	m.processes[sessionID] = proc
 
 	m.wg.Add(1)
@@ -220,7 +222,8 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 	if m.onStateChange != nil {
 		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: ProcessStateIdle, IsInitial: true})
 	}
-	slog.Info("process created", "sessionId", sessionID, "resume", resume, "agentType", agentType, "mode", mode)
+	slog.Info("process created", "sessionId", sessionID, "resume", meta.Activated,
+		"agentType", meta.AgentType, "mode", meta.Mode, "model", meta.Model)
 	return proc, true, nil
 }
 

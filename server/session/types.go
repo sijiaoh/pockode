@@ -53,15 +53,19 @@ func (m Mode) IsValid() bool {
 // A process may be created, reaped, and recreated many times within a single
 // session, but NeedsInput and Unread persist across those process lifecycles.
 type SessionMeta struct {
-	ID         string    `json:"id"`
-	Title      string    `json:"title"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	Activated  bool      `json:"activated"`   // true once the agent has produced output
-	AgentType  AgentType `json:"agent_type"`  // which AI backend (claude, codex)
-	Mode       Mode      `json:"mode"`        // agent mode (default, yolo, plan)
-	NeedsInput bool      `json:"needs_input"` // true when waiting for user input (permission/question)
-	Unread     bool      `json:"unread"`      // true when session has unread changes
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Activated bool      `json:"activated"`  // true once the agent has produced output
+	AgentType AgentType `json:"agent_type"` // which AI backend (claude, codex)
+	Mode      Mode      `json:"mode"`       // agent mode (default, yolo, plan)
+	// Model is agent-specific (see model.go). Empty — the value every session
+	// created before this field existed carries — means no model flag is passed
+	// and the CLI picks for itself.
+	Model      string `json:"model"`
+	NeedsInput bool   `json:"needs_input"` // true when waiting for user input (permission/question)
+	Unread     bool   `json:"unread"`      // true when session has unread changes
 }
 
 // Operation represents the type of change to the session list.

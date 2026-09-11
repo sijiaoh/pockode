@@ -88,6 +88,10 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		claudeArgs = append(claudeArgs, "--permission-mode", "bypassPermissions")
 	}
 
+	if opts.Model != "" {
+		claudeArgs = append(claudeArgs, "--model", opts.Model)
+	}
+
 	resumeState := newClaudeResumeStateManager(opts, slog.With("sessionId", opts.SessionID))
 	launch := resumeState.resolve()
 	if launch.sessionID != "" {
