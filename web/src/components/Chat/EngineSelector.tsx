@@ -1,0 +1,321 @@
+import { useIsExpanded } from "@pockode/shared";
+import { Check, ChevronDown, RotateCcw } from "lucide-react";
+import type { ReactNode } from "react";
+import { useCallback, useId, useRef, useState } from "react";
+import {
+	AUTO_MODEL_ID,
+	buildModelChoices,
+	getModelLabel,
+} from "../../lib/agentModel";
+import {
+	useAgentModelStore,
+	useModelsForAgent,
+} from "../../lib/agentModelStore";
+import { AGENT_TYPE_INFO, AGENT_TYPES } from "../../lib/agentType";
+import type { AgentType } from "../../types/settings";
+import ResponsivePanel from "../ui/ResponsivePanel";
+
+interface Props {
+	agentType: AgentType;
+	/** Empty means Auto — the CLI picks. */
+	model: string;
+	onAgentTypeChange: (type: AgentType) => Promise<void>;
+	onModelChange: (model: string) => Promise<void>;
+	/** Nothing about the session is known yet, so there is no value to show. */
+	isSessionResolved?: boolean;
+	/** The agent has answered here: its choice is locked and a switch restarts the CLI. */
+	isSessionActivated?: boolean;
+	disabled?: boolean;
+}
+
+// Decorative: the radio it belongs to already reports the selection.
+function SelectionDot({ selected }: { selected: boolean }) {
+	return (
+		<div
+			aria-hidden="true"
+			className={`h-4 w-4 flex-shrink-0 rounded-full border-2 ${
+				selected ? "border-th-accent bg-th-accent" : "border-th-text-muted"
+			}`}
+		>
+			{selected && (
+				// strokeWidth 3 in lucide's 24 viewBox, as the mode and agent lists
+				// have always drawn it.
+				<Check className="h-full w-full text-th-accent-text" strokeWidth={3} />
+			)}
+		</div>
+	);
+}
+
+/**
+ * One row of either section. A real radio rather than a button: the two sections
+ * are each a pick-one-of, and the browser's own radio gives that to a screen
+ * reader and to arrow keys for free. It stays visually hidden — the dot is drawn
+ * from `selected`, which follows the server's answer, not the click.
+ */
+function ChoiceRow({
+	group,
+	value,
+	label,
+	description,
+	selected,
+	onSelect,
+}: {
+	group: string;
+	value: string;
+	label: ReactNode;
+	description?: string;
+	selected: boolean;
+	onSelect: () => void;
+}) {
+	const descId = useId();
+
+	return (
+		// A row without a description no longer gets its height from two lines of
+		// text, so the hit area has to be spelled out.
+		<label
+			className={`flex w-full cursor-pointer gap-3 px-3 py-3 text-left transition-colors has-[:disabled]:cursor-default pointer-coarse:py-3.5 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-th-accent has-[:focus-visible]:ring-inset ${
+				description ? "items-start" : "items-center"
+			} ${selected ? "bg-th-accent/15" : "hover:bg-th-bg-tertiary"}`}
+		>
+			<input
+				type="radio"
+				name={group}
+				value={value}
+				checked={selected}
+				onChange={onSelect}
+				aria-describedby={description ? descId : undefined}
+				className="sr-only"
+			/>
+			<div className={description ? "mt-0.5" : undefined}>
+				<SelectionDot selected={selected} />
+			</div>
+			<div className="min-w-0 flex-1">
+				<div className="flex items-center gap-1.5 truncate text-sm font-medium text-th-text-primary">
+					{label}
+				</div>
+				{description && (
+					<div
+						id={descId}
+						className="mt-0.5 whitespace-pre text-xs text-th-text-muted"
+					>
+						{description}
+					</div>
+				)}
+			</div>
+		</label>
+	);
+}
+
+function Section({
+	title,
+	disabled,
+	children,
+}: {
+	title: string;
+	disabled?: boolean;
+	children: ReactNode;
+}) {
+	return (
+		// min-w-0: a fieldset's UA `min-inline-size: min-content` is the one default
+		// Tailwind's reset leaves behind, and it would let a long model id push past
+		// the panel instead of being truncated by its row.
+		<fieldset
+			disabled={disabled}
+			className={`min-w-0 ${disabled ? "opacity-50" : ""}`}
+		>
+			<legend className="px-3 pt-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-th-text-muted">
+				{title}
+			</legend>
+			{children}
+		</fieldset>
+	);
+}
+
+/**
+ * Agent and model in one control: the model list is entirely decided by the
+ * agent, so they are two levels of one choice rather than two choices. The chip
+ * carries the agent as its icon and the model as its text — a model cannot be
+ * expressed as an icon, and there is no room in the action bar for a third
+ * button wide enough to hold a word.
+ */
+function EngineSelector({
+	agentType,
+	model,
+	onAgentTypeChange,
+	onModelChange,
+	isSessionResolved = true,
+	isSessionActivated = false,
+	disabled = false,
+}: Props) {
+	const [isOpen, setIsOpen] = useState(false);
+	const triggerRef = useRef<HTMLButtonElement>(null);
+	// Radio `name` is document-wide; scope it so a second selector on the page
+	// cannot steal this one's selection.
+	const groupId = useId();
+	const isExpanded = useIsExpanded();
+
+	const models = useModelsForAgent(agentType);
+	const modelsError = useAgentModelStore((s) => s.error);
+
+	const agentInfo = AGENT_TYPE_INFO[agentType] ?? AGENT_TYPE_INFO.claude;
+	const modelLabel = getModelLabel(models, model);
+	const choices = buildModelChoices(models, model);
+
+	// Auto needs no list to be named, and a list that failed to load is never
+	// coming — anything else would show the raw id for a moment and then correct
+	// itself, or hang on a skeleton forever.
+	const hasLabel =
+		isSessionResolved &&
+		(model === AUTO_MODEL_ID || models !== undefined || modelsError !== null);
+
+	// Changing the agent is the one thing the server refuses once it has answered.
+	const agentLocked = disabled || isSessionActivated;
+
+	const handleClose = useCallback(() => setIsOpen(false), []);
+
+	// Both halves stay open on success and close on failure, and the reasons are
+	// the same for each. Open, because a radio group selects as the arrow keys
+	// move through it: closing on selection would leave a keyboard user able to
+	// reach only the option next to the current one. And because seeing the dot
+	// move — or the model list swap to the new agent's — is the confirmation.
+	// Closed on failure, because the caller reports the reason outside this panel,
+	// which the drawer covers below the expanded tier.
+	const applyChoice = async (change: () => Promise<void>) => {
+		try {
+			await change();
+		} catch {
+			setIsOpen(false);
+		}
+	};
+
+	const handleSelectAgent = (type: AgentType) =>
+		applyChoice(() => onAgentTypeChange(type));
+
+	const handleSelectModel = (id: string) =>
+		applyChoice(() => onModelChange(id));
+
+	return (
+		<div className="relative">
+			<button
+				ref={triggerRef}
+				type="button"
+				onClick={() => setIsOpen((v) => !v)}
+				disabled={disabled}
+				title={disabled ? "Wait for the current turn to finish" : undefined}
+				aria-haspopup="dialog"
+				aria-expanded={isOpen}
+				aria-label={`Engine: ${agentInfo.label}, ${hasLabel ? modelLabel : "loading"}`}
+				className="group flex h-9 min-w-0 items-center gap-1.5 rounded border border-th-border bg-th-bg-tertiary pl-2 pr-1.5 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50 pointer-coarse:h-11"
+			>
+				<agentInfo.icon
+					className="size-4 shrink-0 text-th-text-secondary group-hover:text-th-text-primary"
+					aria-hidden="true"
+				/>
+				{hasLabel ? (
+					<span className="max-w-[88px] truncate text-xs text-th-text-primary sm:max-w-[140px]">
+						{modelLabel}
+					</span>
+				) : (
+					// Not "Auto": the real value is one round trip away, and showing it
+					// early would flash a model the session may not be set to.
+					<span
+						className="h-3 w-10 animate-pulse rounded bg-th-text-muted/20"
+						aria-hidden="true"
+					/>
+				)}
+				<ChevronDown
+					className="size-3.5 shrink-0 text-th-text-muted"
+					aria-hidden="true"
+				/>
+			</button>
+
+			<ResponsivePanel
+				isOpen={isOpen}
+				onClose={handleClose}
+				title="Engine"
+				triggerRef={triggerRef}
+				isExpanded={isExpanded}
+				desktopPosition="left"
+				desktopPlacement="above"
+				desktopWidth="w-72"
+			>
+				<div className="overflow-y-auto pb-2">
+					<Section title="Agent" disabled={agentLocked}>
+						{AGENT_TYPES.map((typeKey) => {
+							const info = AGENT_TYPE_INFO[typeKey];
+							return (
+								<ChoiceRow
+									key={typeKey}
+									group={`${groupId}-agent`}
+									value={typeKey}
+									label={
+										<>
+											<info.icon className="size-3.5" aria-hidden="true" />
+											{info.label}
+										</>
+									}
+									description={info.description}
+									selected={agentType === typeKey}
+									onSelect={() => handleSelectAgent(typeKey)}
+								/>
+							);
+						})}
+					</Section>
+					{/* Spelled out rather than left in a `title` tooltip, which a finger
+					    can never reach — and kept outside the fieldset, because the
+					    `opacity-50` that dims the controls it explains would take this
+					    line to roughly 1.6:1 against the panel and undo the move. The
+					    fieldset dims what is unusable; the reason has to stay readable. */}
+					{isSessionActivated && (
+						<p className="px-3 pt-1 text-xs text-th-text-muted">
+							Agent is locked once the session starts
+						</p>
+					)}
+
+					<Section title="Model" disabled={disabled}>
+						{modelsError && (
+							<p className="px-3 py-2 text-xs text-th-error">
+								Couldn't load the model list: {modelsError}
+							</p>
+						)}
+						{/* A list that already arrived is still shown next to the error of
+						    a later re-fetch. When none ever arrived the rows are still
+						    drawn, because Auto is this layer's own constant and the
+						    session's current model is already known: the fetch is not
+						    retried until the socket reconnects, and without them someone
+						    whose list failed could not even put the session back on Auto.
+						    The error above them is what says the rest is missing. */}
+						{models || modelsError ? (
+							choices.map((choice) => (
+								<ChoiceRow
+									key={choice.id}
+									group={`${groupId}-model`}
+									value={choice.id}
+									label={choice.label}
+									description={choice.description}
+									selected={choice.id === model}
+									onSelect={() => handleSelectModel(choice.id)}
+								/>
+							))
+						) : (
+							<p className="px-3 py-2 text-xs text-th-text-muted">
+								Loading models…
+							</p>
+						)}
+					</Section>
+
+					{/* Not "switching model": changing the agent restarts the CLI too, so
+					    one line covers the whole panel. */}
+					{isSessionActivated && (
+						<p className="flex items-start gap-1.5 px-3 pt-3 text-xs text-th-text-muted">
+							<RotateCcw className="mt-0.5 size-3.5 shrink-0" />
+							<span>Switching restarts the CLI. History is kept.</span>
+						</p>
+					)}
+				</div>
+			</ResponsivePanel>
+		</div>
+	);
+}
+
+export default EngineSelector;

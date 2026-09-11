@@ -15,6 +15,7 @@ const mockSessionItem = (id: string, title = "Test"): SessionListItem => ({
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default",
 	agent_type: "codex",
+	model: "",
 	activated: false,
 	state: "ended",
 	needs_input: false,

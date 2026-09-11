@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useAgentModelStore } from "../../lib/agentModelStore";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
@@ -27,9 +28,13 @@ const mockState = vi.hoisted(() => ({
 	questionResponse: vi.fn(() => Promise.resolve()),
 	chatMessagesSubscribe: vi.fn(),
 	chatMessagesUnsubscribe: vi.fn(),
+	setSessionMode: vi.fn(() => Promise.resolve()),
+	setSessionAgentType: vi.fn(() => Promise.resolve()),
+	setSessionModel: vi.fn(() => Promise.resolve()),
 	startWork: vi.fn(() => Promise.resolve()),
 	onNotification: null as ((notification: ServerNotification) => void) | null,
 	mockHistory: [] as unknown[],
+	mockModel: "",
 	uuidCounter: 0,
 }));
 
@@ -50,6 +55,9 @@ vi.mock("../../lib/wsStore", () => {
 		},
 		chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
 		markSessionRead: vi.fn(() => Promise.resolve()),
+		setSessionMode: mockState.setSessionMode,
+		setSessionAgentType: mockState.setSessionAgentType,
+		setSessionModel: mockState.setSessionModel,
 		startWork: mockState.startWork,
 	});
 
@@ -93,6 +101,7 @@ describe("ChatPanel", () => {
 		mockState.onNotification = null;
 		mockState.uuidCounter = 0;
 		mockState.mockHistory = [];
+		mockState.mockModel = "";
 		// Default: subscribe returns empty history and ended state
 		mockState.chatMessagesSubscribe.mockImplementation(() =>
 			Promise.resolve({
@@ -102,6 +111,7 @@ describe("ChatPanel", () => {
 					state: "ended",
 					mode: "default",
 					agent_type: "claude",
+					model: mockState.mockModel,
 				},
 			}),
 		);
@@ -109,6 +119,14 @@ describe("ChatPanel", () => {
 		useSessionStore.setState({ sessions: [] });
 		useWorkStore.getState().reset();
 		useAgentRoleStore.getState().reset();
+		// Stands in for the one `session.models` fetch the app shell does.
+		useAgentModelStore.getState().setModels({
+			claude: [
+				{ id: "opus", label: "Opus" },
+				{ id: "sonnet", label: "Sonnet" },
+			],
+			codex: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+		});
 	});
 
 	// Helper to wait for history loading to complete
@@ -396,6 +414,7 @@ describe("ChatPanel", () => {
 						state: "ended",
 						mode: "default",
 						agent_type: "codex",
+						model: "",
 					},
 				}),
 			);
@@ -669,8 +688,11 @@ describe("ChatPanel", () => {
 		});
 	});
 
-	describe("agent selector", () => {
-		const seedSession = (activated: boolean) => {
+	describe("engine selector", () => {
+		// The subscription result and the session list carry the same model; a
+		// fixture that disagreed would only be testing which one landed last.
+		const seedSession = (activated: boolean, model = "") => {
+			mockState.mockModel = model;
 			useSessionStore.setState({
 				sessions: [
 					{
@@ -680,6 +702,7 @@ describe("ChatPanel", () => {
 						updated_at: "2024-01-01T00:00:00Z",
 						mode: "default",
 						agent_type: "claude",
+						model,
 						activated,
 						state: "ended",
 						needs_input: false,
@@ -689,10 +712,15 @@ describe("ChatPanel", () => {
 			});
 		};
 
+		const openPanel = async (user: ReturnType<typeof userEvent.setup>) => {
+			await user.click(screen.getByRole("button", { name: /^Engine:/ }));
+		};
+
 		// A first turn that failed before the agent said anything leaves messages
 		// in the transcript but never started the session, and switching agents is
 		// the only way out of it — so the transcript must not be what locks it.
-		it("stays enabled when a failed first turn left messages behind", async () => {
+		it("stays switchable when a failed first turn left messages behind", async () => {
+			const user = userEvent.setup();
 			seedSession(false);
 			mockState.mockHistory = [
 				{ type: "message", content: "Hello" },
@@ -701,17 +729,180 @@ describe("ChatPanel", () => {
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
+			await openPanel(user);
 
-			expect(screen.getByRole("button", { name: "Claude" })).not.toBeDisabled();
+			expect(screen.getByRole("radio", { name: /Codex/ })).toBeEnabled();
 		});
 
-		it("locks once the agent has answered in this session", async () => {
+		// Only the agent half locks: the server takes a new model at any point in a
+		// session's life, and that is the choice someone mid-conversation reaches for.
+		it("locks the agent once it has answered, leaving the model changeable", async () => {
+			const user = userEvent.setup();
 			seedSession(true);
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
+			await openPanel(user);
 
-			expect(screen.getByRole("button", { name: "Claude" })).toBeDisabled();
+			expect(screen.getByRole("radio", { name: /Codex/ })).toBeDisabled();
+			expect(
+				screen.getByText("Agent is locked once the session starts"),
+			).toBeInTheDocument();
+			expect(screen.getByRole("radio", { name: "Sonnet" })).toBeEnabled();
+			expect(
+				screen.getByText("Switching restarts the CLI. History is kept."),
+			).toBeInTheDocument();
+		});
+
+		it("shows the session's model on the chip and sends the new one", async () => {
+			const user = userEvent.setup();
+			seedSession(false, "opus");
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByRole("button", { name: "Engine: Claude, Opus" }),
+			).toBeInTheDocument();
+
+			await openPanel(user);
+			await user.click(screen.getByRole("radio", { name: "Sonnet" }));
+
+			expect(mockState.setSessionModel).toHaveBeenCalledWith(
+				"test-session",
+				"sonnet",
+			);
+		});
+
+		// A radio group selects as the arrow keys move through it, so closing on
+		// selection would leave a keyboard user able to reach only the option next
+		// to the current one.
+		it("stays open after a model is picked", async () => {
+			const user = userEvent.setup();
+			seedSession(false);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await openPanel(user);
+			await user.click(screen.getByRole("radio", { name: "Sonnet" }));
+
+			expect(screen.getByRole("radio", { name: "Opus" })).toBeInTheDocument();
+		});
+
+		// The reason is reported outside the panel, which the drawer covers below
+		// the expanded tier — so a refused switch has to get out of the way.
+		it("closes on a refused switch so the reason is not covered", async () => {
+			const user = userEvent.setup();
+			seedSession(false);
+			mockState.setSessionModel.mockRejectedValueOnce(new Error("nope"));
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await openPanel(user);
+			await user.click(screen.getByRole("radio", { name: "Sonnet" }));
+
+			await waitFor(() => {
+				expect(
+					screen.queryByRole("radio", { name: "Opus" }),
+				).not.toBeInTheDocument();
+			});
+			expect(await screen.findByRole("alert")).toBeInTheDocument();
+		});
+
+		// The empty model is the server's "let the CLI decide"; "Auto" is this
+		// layer's name for it and has to survive the round trip as an empty string.
+		it("sends the empty model for Auto", async () => {
+			const user = userEvent.setup();
+			seedSession(false, "opus");
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await openPanel(user);
+			await user.click(screen.getByRole("radio", { name: /^Auto/ }));
+
+			expect(mockState.setSessionModel).toHaveBeenCalledWith(
+				"test-session",
+				"",
+			);
+		});
+
+		// The one fetch is not retried until the socket reconnects, so a failed
+		// list would otherwise leave the model unchangeable — not even back to
+		// Auto, which this layer names on its own and needs no list to offer.
+		it("still offers Auto and the current model when the list failed to load", async () => {
+			const user = userEvent.setup();
+			seedSession(false, "opus-4");
+			useAgentModelStore.setState({ models: null, error: "request timed out" });
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await openPanel(user);
+
+			expect(
+				screen.getByText(/Couldn't load the model list: request timed out/),
+			).toBeInTheDocument();
+			expect(screen.getByRole("radio", { name: "opus-4" })).toBeChecked();
+
+			await user.click(screen.getByRole("radio", { name: /^Auto/ }));
+
+			expect(mockState.setSessionModel).toHaveBeenCalledWith(
+				"test-session",
+				"",
+			);
+		});
+
+		// A session keeps a model the server has since stopped offering. Rewriting
+		// it to Auto would misreport what the session will actually run.
+		it("shows a model the server no longer lists as itself", async () => {
+			seedSession(false, "opus-4");
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByRole("button", { name: "Engine: Claude, opus-4" }),
+			).toBeInTheDocument();
+		});
+
+		// Switching is a deliberate act whose only other feedback is the control
+		// snapping back. Without the server's reason, "that model is not this
+		// agent's" and "the connection dropped" look identical.
+		it("shows the server's reason when a model switch is refused", async () => {
+			const user = userEvent.setup();
+			seedSession(false);
+			mockState.setSessionModel.mockRejectedValueOnce(
+				new Error('model not available for this agent type: model "sonnet"'),
+			);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await openPanel(user);
+			await user.click(screen.getByRole("radio", { name: "Sonnet" }));
+
+			const alert = await screen.findByRole("alert");
+			expect(alert).toHaveTextContent("Failed to change model");
+			expect(alert).toHaveTextContent("model not available");
+
+			// The chip keeps reporting what the session is still set to.
+			expect(
+				screen.getByRole("button", { name: "Engine: Claude, Auto" }),
+			).toBeInTheDocument();
+		});
+
+		it("reports a refused mode switch the same way", async () => {
+			const user = userEvent.setup();
+			seedSession(false);
+			mockState.setSessionMode.mockRejectedValueOnce(new Error("no such mode"));
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByRole("button", { name: "Default" }));
+			await user.click(screen.getByRole("button", { name: /YOLO/ }));
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"Failed to change mode: no such mode",
+			);
 		});
 	});
 

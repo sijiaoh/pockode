@@ -24,6 +24,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ sessionStore ◀──┬── wsStore notifications               │   │
 │  ├─ workStore       │                                       │   │
 │  ├─ agentRoleStore  │                                       │   │
+│  ├─ agentModelStore │  (one fetch per connection)           │   │
 │  ├─ settingsStore   │                                       │   │
 │  └─ authStore       │                                       │   │
 ├─────────────────────────────────────────────────────────────────┤
@@ -45,6 +46,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | sessionStore | Chat session list | State/Actions interface split |
 | workStore | Work items | State/Actions interface split |
 | agentRoleStore | AI roles | State/Actions interface split |
+| agentModelStore | Selectable models per agent | Fetched once per connection, not subscribed |
 | settingsStore | App settings | State/Actions interface split |
 | authStore | Auth token | localStorage init |
 | inputStore | Draft text | persist middleware |
@@ -167,6 +169,14 @@ The catch is scope: those caches are keyed by query key, not by worktree, so
 switch completes. A worktree-scoped query missing from that list keeps serving
 the previous worktree's data — paths that look fine until they 404 on open —
 and it is the easy step to forget when adding a query.
+
+`agentModelStore` is the one store filled by a plain request/response call. The
+per-agent model lists are constants compiled into the server, so nothing
+react-query manages applies to them: they cannot go stale, no notification
+invalidates them, a single hook asks for them, and being server-wide they are
+untouched by a worktree switch. The one thing that can change the answer is a
+reconnect to a server upgraded in the meantime, which `useAgentModels` covers by
+fetching on every `connected` rather than once per app load.
 
 ## Message Reducer
 
@@ -391,12 +401,13 @@ Built-in themes are typed (`ThemeName`), custom themes are runtime-registered.
 Allows extensions to replace UI components:
 
 ```typescript
-// web/src/lib/registries/chatUIRegistry.ts:41-68
+// web/src/lib/registries/chatUIRegistry.ts:52-79
 export interface ChatUIConfig {
   UserAvatar?: ComponentType<AvatarProps>;
   AssistantAvatar?: ComponentType<AvatarProps>;
   InputBar?: ComponentType<InputBarProps>;
   ModeSelector?: ComponentType<ModeSelectorProps> | null;  // null hides it
+  EngineSelector?: ComponentType<EngineSelectorProps> | null;  // agent + model chip
   // ...
 }
 ```

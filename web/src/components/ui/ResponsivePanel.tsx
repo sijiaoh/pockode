@@ -18,6 +18,12 @@ interface Props {
 	children: ReactNode;
 	/** Desktop panel position relative to trigger */
 	desktopPosition?: "left" | "right" | "stretch";
+	/**
+	 * Which side of the trigger the dropdown grows towards. "above" is for
+	 * triggers that sit at the bottom of the viewport, where a panel hanging below
+	 * them would be off-screen.
+	 */
+	desktopPlacement?: "below" | "above";
 	/** Desktop panel width (ignored when position is "stretch") */
 	desktopWidth?: string;
 	/** Maximum height on mobile (dvh unit) */
@@ -38,6 +44,7 @@ function ResponsivePanel({
 	isExpanded,
 	children,
 	desktopPosition = "stretch",
+	desktopPlacement = "below",
 	desktopWidth = "w-72",
 	mobileMaxHeight = "70dvh",
 	desktopMaxHeight = "50vh",
@@ -95,6 +102,9 @@ function ResponsivePanel({
 				? "right-0"
 				: "left-0 right-0";
 
+	const desktopPlacementClass =
+		desktopPlacement === "above" ? "bottom-full mb-1" : "top-full mt-1";
+
 	const mobileStyle = { maxHeight: mobileMaxHeight };
 	const desktopStyle = { maxHeight: desktopMaxHeight };
 
@@ -105,7 +115,7 @@ function ResponsivePanel({
 			className={
 				mobile
 					? "fixed inset-x-0 bottom-0 z-[60] flex flex-col overflow-hidden rounded-t-2xl border-t border-th-border bg-th-bg-secondary shadow-xl"
-					: `absolute ${desktopPositionClass} top-full z-50 mt-1 flex flex-col overflow-hidden rounded-xl border border-th-border bg-th-bg-secondary shadow-lg ${desktopPosition !== "stretch" ? desktopWidth : ""}`
+					: `absolute ${desktopPositionClass} ${desktopPlacementClass} z-50 flex flex-col overflow-hidden rounded-xl border border-th-border bg-th-bg-secondary shadow-lg ${desktopPosition !== "stretch" ? desktopWidth : ""}`
 			}
 			role="dialog"
 			aria-modal={mobile}

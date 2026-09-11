@@ -1,4 +1,4 @@
-import { Square } from "lucide-react";
+import { AlertTriangle, Square, X } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
@@ -23,8 +23,8 @@ import {
 } from "../Project";
 import { SettingsPage } from "../Settings";
 import { statusDotStyles, statusLabels } from "../ui/StatusBadge";
-import AgentSelector from "./AgentSelector";
 import ChatSkeleton from "./ChatSkeleton";
+import EngineSelector from "./EngineSelector";
 import DefaultInputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
@@ -40,6 +40,38 @@ const inputBarHiddenOverlays: NonNullable<OverlayState>["type"][] = [
 
 function isInputBarHidden(overlay: OverlayState | undefined): boolean {
 	return !!overlay && inputBarHiddenOverlays.includes(overlay.type);
+}
+
+/**
+ * Changing the engine or the mode is a deliberate action whose only other
+ * feedback is the control snapping back to where it was. One bar for all three
+ * settings — the server's reason is what tells "that model isn't this agent's"
+ * apart from a dropped connection.
+ */
+function SettingErrorBar({
+	message,
+	onDismiss,
+}: {
+	message: string;
+	onDismiss: () => void;
+}) {
+	return (
+		<div
+			role="alert"
+			className="flex shrink-0 items-start gap-2 border-t border-th-border bg-th-bg-secondary px-3 py-1.5 text-xs text-th-error"
+		>
+			<AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+			<span className="min-w-0 flex-1">{message}</span>
+			<button
+				type="button"
+				onClick={onDismiss}
+				aria-label="Dismiss error"
+				className="touch-target -my-1 flex size-5 shrink-0 items-center justify-center rounded text-th-text-muted transition-colors hover:text-th-text-primary active:scale-95"
+			>
+				<X className="size-3.5" />
+			</button>
+		</div>
+	);
 }
 
 function LinkedWorkButton({
@@ -83,7 +115,9 @@ function LinkedWorkButton({
 			<span
 				className={`size-2 shrink-0 rounded-full ${statusDotStyles[linkedWork.status]}`}
 			/>
-			<span className="max-w-[120px] truncate">{linkedWork.title}</span>
+			<span className="max-w-[80px] truncate sm:max-w-[120px]">
+				{linkedWork.title}
+			</span>
 			{progress && (
 				<span className="shrink-0 text-th-text-muted">
 					· {formatStepProgress(progress)}
@@ -139,11 +173,12 @@ function ChatPanel({
 	const {
 		InputBar: CustomInputBar,
 		ModeSelector: CustomModeSelector,
-		AgentSelector: CustomAgentSelector,
+		EngineSelector: CustomEngineSelector,
 		StopButton: CustomStopButton,
 		ChatTopContent,
 	} = useChatUIConfig();
 	const InputBar = CustomInputBar ?? DefaultInputBar;
+	const Engine = CustomEngineSelector ?? EngineSelector;
 
 	const {
 		messages,
@@ -152,14 +187,18 @@ function ChatPanel({
 		isProcessRunning,
 		mode,
 		agentType,
+		model,
 		isSessionActivated,
 		status,
+		settingError,
+		clearSettingError,
 		sendUserMessage,
 		interrupt,
 		permissionResponse,
 		questionResponse,
 		setMode,
 		setAgentType,
+		setModel,
 		updatePermissionStatus,
 		updateQuestionStatus,
 	} = useChatMessages({
@@ -342,24 +381,21 @@ function ChatPanel({
 			{!overlay && ChatTopContent && <ChatTopContent sessionId={sessionId} />}
 			{renderContent()}
 			{/* Session action bar */}
+			{!overlay && settingError && (
+				<SettingErrorBar message={settingError} onDismiss={clearSettingError} />
+			)}
 			{!overlay && (
 				<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
-					<div className="flex items-center gap-1.5">
-						{CustomAgentSelector === null ? null : CustomAgentSelector ? (
-							<CustomAgentSelector
+					<div className="flex min-w-0 items-center gap-1.5">
+						{CustomEngineSelector === null ? null : (
+							<Engine
 								agentType={agentType}
+								model={model}
 								onAgentTypeChange={setAgentType}
-								disabled={
-									!isSessionResolved || isStreaming || isSessionActivated
-								}
-							/>
-						) : (
-							<AgentSelector
-								agentType={agentType}
-								onAgentTypeChange={setAgentType}
-								disabled={
-									!isSessionResolved || isStreaming || isSessionActivated
-								}
+								onModelChange={setModel}
+								isSessionResolved={isSessionResolved}
+								isSessionActivated={isSessionActivated}
+								disabled={!isSessionResolved || isStreaming}
 							/>
 						)}
 						{CustomModeSelector === null ? null : CustomModeSelector ? (

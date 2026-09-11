@@ -11,6 +11,8 @@ export interface SessionListItem {
 	updated_at: string;
 	mode: SessionMode;
 	agent_type: AgentType;
+	/** Empty means "pass no model flag, let the CLI pick". */
+	model: string;
 	/** True once the agent has produced output in this session. */
 	activated: boolean;
 	state: ProcessState;
@@ -366,6 +368,7 @@ export interface ChatMessagesSubscribeResult {
 	state: ProcessState;
 	mode: SessionMode;
 	agent_type: AgentType;
+	model: string;
 }
 
 export interface SessionSetModeParams {
@@ -376,6 +379,24 @@ export interface SessionSetModeParams {
 export interface SessionSetAgentTypeParams {
 	session_id: string;
 	agent_type: AgentType;
+}
+
+export interface SessionSetModelParams {
+	session_id: string;
+	model: string;
+}
+
+/** One selectable model, as the server lists it. */
+export interface ModelOption {
+	id: string;
+	label: string;
+}
+
+/** The selectable models of every agent type, as `session.models` returns them. */
+export type AgentModels = Record<AgentType, ModelOption[]>;
+
+export interface SessionModelsResult {
+	models: AgentModels;
 }
 
 // JSON-RPC 2.0 Notification Params (Server → Client)

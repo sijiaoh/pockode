@@ -66,6 +66,7 @@ describe("useChatMessages", () => {
 					state: "ended",
 					mode: "default",
 					agent_type: "claude",
+					model: "",
 				},
 			}),
 		);
@@ -110,6 +111,7 @@ describe("useChatMessages", () => {
 				state: "ended",
 				mode: "default",
 				agent_type: "claude",
+				model: "",
 			},
 		}));
 
@@ -156,6 +158,7 @@ describe("useChatMessages", () => {
 						state: "running",
 						mode: "default",
 						agent_type: "claude",
+						model: "",
 					},
 				};
 			},

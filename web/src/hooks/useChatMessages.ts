@@ -43,14 +43,23 @@ interface UseChatMessagesReturn {
 	isProcessRunning: boolean;
 	mode: SessionMode;
 	agentType: AgentType;
+	model: string;
 	isSessionActivated: boolean;
 	status: ConnectionStatus;
+	/**
+	 * The last failed engine/mode switch, in the server's words. Switching is a
+	 * deliberate user action whose only feedback is the control snapping back, so
+	 * the reason has to reach the screen.
+	 */
+	settingError: string | null;
+	clearSettingError: () => void;
 	sendUserMessage: (content: string) => Promise<boolean>;
 	interrupt: () => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
 	questionResponse: (params: QuestionResponseParams) => Promise<void>;
 	setMode: (mode: SessionMode) => Promise<void>;
 	setAgentType: (agentType: AgentType) => Promise<void>;
+	setModel: (model: string) => Promise<void>;
 	updatePermissionStatus: (
 		requestId: string,
 		status: "allowed" | "denied",
@@ -75,6 +84,8 @@ export function useChatMessages({
 	const [isProcessRunning, setIsProcessRunning] = useState(false);
 	const [mode, setModeState] = useState<SessionMode>("default");
 	const [agentType, setAgentTypeState] = useState<AgentType>("claude");
+	const [model, setModelState] = useState("");
+	const [settingError, setSettingError] = useState<string | null>(null);
 	const subscriptionIdRef = useRef<string | null>(null);
 
 	const status = useWSStore((state) => state.status);
@@ -109,6 +120,19 @@ export function useChatMessages({
 		}
 	}, [sessionAgentTypeFromStore]);
 
+	// Sync model from session store (updated via session list notifications).
+	// This is also how a model reset arrives: the server drops a model that does
+	// not belong to the newly chosen agent, so the value is only ever read back,
+	// never cleared here.
+	const sessionModelFromStore = useSessionStore(
+		(state) => state.sessions.find((s) => s.id === sessionId)?.model,
+	);
+	useEffect(() => {
+		if (sessionModelFromStore !== undefined) {
+			setModelState(sessionModelFromStore);
+		}
+	}, [sessionModelFromStore]);
+
 	const handleNotification = useCallback((notification: ServerNotification) => {
 		setIsProcessRunning(notification.type !== "process_ended");
 
@@ -129,6 +153,8 @@ export function useChatMessages({
 		setIsProcessRunning(false);
 		setModeState("default");
 		setAgentTypeState("claude");
+		setModelState("");
+		setSettingError(null);
 	}
 
 	// Subscribe to chat events when connected.
@@ -160,6 +186,7 @@ export function useChatMessages({
 					setIsProcessRunning(result.initial.state !== "ended");
 					setModeState(result.initial.mode);
 					setAgentTypeState(result.initial.agent_type);
+					setModelState(result.initial.model);
 					let messages = replayHistory(result.initial.history);
 					// After server restart, history won't contain process_ended events
 					// for processes that were killed. Use the authoritative process state
@@ -290,31 +317,66 @@ export function useChatMessages({
 		last?.role === "assistant" && last.status === "streaming";
 	const isStreaming = lastIsSending || (lastIsStreaming && isProcessRunning);
 
-	const setMode = useCallback(
-		async (newMode: SessionMode) => {
+	// One path for all three session settings: each applies the new value only
+	// once the server has taken it, so a rejection leaves the control showing what
+	// the session is actually set to, and records why for the UI to show.
+	const applySetting = useCallback(
+		async <T>(
+			what: string,
+			value: T,
+			send: (value: T) => Promise<void>,
+			apply: (value: T) => void,
+		) => {
 			try {
-				await actions.setSessionMode(sessionId, newMode);
-				setModeState(newMode);
+				await send(value);
+				apply(value);
+				setSettingError(null);
 			} catch (error) {
-				console.error("Failed to set mode:", error);
+				const reason =
+					error instanceof Error && error.message
+						? error.message
+						: "Unknown error";
+				setSettingError(`Failed to change ${what}: ${reason}`);
 				throw error;
 			}
 		},
-		[actions, sessionId],
+		[],
+	);
+
+	const setMode = useCallback(
+		(newMode: SessionMode) =>
+			applySetting(
+				"mode",
+				newMode,
+				(m) => actions.setSessionMode(sessionId, m),
+				setModeState,
+			),
+		[applySetting, actions, sessionId],
 	);
 
 	const setAgentType = useCallback(
-		async (newAgentType: AgentType) => {
-			try {
-				await actions.setSessionAgentType(sessionId, newAgentType);
-				setAgentTypeState(newAgentType);
-			} catch (error) {
-				console.error("Failed to set agent type:", error);
-				throw error;
-			}
-		},
-		[actions, sessionId],
+		(newAgentType: AgentType) =>
+			applySetting(
+				"agent",
+				newAgentType,
+				(a) => actions.setSessionAgentType(sessionId, a),
+				setAgentTypeState,
+			),
+		[applySetting, actions, sessionId],
 	);
+
+	const setModel = useCallback(
+		(newModel: string) =>
+			applySetting(
+				"model",
+				newModel,
+				(m) => actions.setSessionModel(sessionId, m),
+				setModelState,
+			),
+		[applySetting, actions, sessionId],
+	);
+
+	const clearSettingError = useCallback(() => setSettingError(null), []);
 
 	return {
 		messages,
@@ -323,8 +385,11 @@ export function useChatMessages({
 		isProcessRunning,
 		mode,
 		agentType,
+		model,
 		isSessionActivated,
 		status,
+		settingError,
+		clearSettingError,
 		sendUserMessage: sendUserMessageHandler,
 		interrupt: useCallback(
 			() => actions.interrupt(sessionId),
@@ -334,6 +399,7 @@ export function useChatMessages({
 		questionResponse: actions.questionResponse,
 		setMode,
 		setAgentType,
+		setModel,
 		updatePermissionStatus,
 		updateQuestionStatus,
 	};
