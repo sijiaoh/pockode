@@ -13,7 +13,7 @@ import type {
 import type { OverlayState } from "../../types/overlay";
 import { formatStepProgress, getStepProgress } from "../../utils/workSteps";
 import { FileEditor, FileView } from "../Files";
-import { CommitDiffView, CommitView, DiffView } from "../Git";
+import { CommitDiffView, CommitFileView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
 import {
 	AgentRoleDetailOverlay,
@@ -297,6 +297,8 @@ function ChatPanel({
 				);
 			case "commit-diff":
 				return <CommitDiffView hash={overlay.hash} path={overlay.path} />;
+			case "commit-file":
+				return <CommitFileView hash={overlay.hash} path={overlay.path} />;
 			case "settings":
 				return <SettingsPage onBack={onCloseOverlay ?? noop} />;
 			case "work-list":

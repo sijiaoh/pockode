@@ -17,3 +17,4 @@ export { default as ReconnectBanner } from "./ReconnectBanner";
 export { default as ScrollableContent } from "./ScrollableContent";
 export { default as Sheet } from "./Sheet";
 export { default as StatusIcon } from "./StatusIcon";
+export { default as ToggleIconButton } from "./ToggleIconButton";

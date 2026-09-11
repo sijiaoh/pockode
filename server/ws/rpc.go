@@ -522,6 +522,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitShow(ctx, conn, req, wt)
 	case "git.show.diff":
 		h.handleGitShowDiff(ctx, conn, req, wt)
+	case "git.show.file":
+		h.handleGitShowFile(ctx, conn, req, wt)
 	case "git.branches":
 		h.handleGitBranches(ctx, conn, req, wt)
 	case "git.checkout":

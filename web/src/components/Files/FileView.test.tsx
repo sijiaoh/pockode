@@ -150,6 +150,11 @@ describe("FileView", { timeout: 20_000 }, () => {
 		expect(screen.getByText("application/zip")).toBeInTheDocument();
 		expect(screen.getByText("4 KB")).toBeInTheDocument();
 		expect(editButton()).toBeDisabled();
+		// The other half of `FileBody`'s `readOnly`: the sentence belongs here,
+		// where there is a disabled button for it to explain.
+		expect(
+			screen.getByText("Editing is disabled for binary files."),
+		).toBeInTheDocument();
 		// The regression this replaces: no way to delete what you cannot preview.
 		expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
 	});
@@ -174,6 +179,9 @@ describe("FileView", { timeout: 20_000 }, () => {
 			screen.getByText(/Files over 2 MB aren't loaded/),
 		).toBeInTheDocument();
 		expect(editButton()).toBeDisabled();
+		expect(
+			screen.getByText("Editing is disabled for files this large."),
+		).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
 	});
 

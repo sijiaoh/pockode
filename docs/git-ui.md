@@ -163,6 +163,27 @@ Both entry points go through `GitCommitSheet.tsx`, which is where `stagedCount`,
 
 The default is recomputed as the change count crosses zero, but only until the user toggles the section by hand. After that their choice stands for the rest of the session. That decision lives in `lib/gitPanelStore.ts` rather than in `DiffTab`'s own state, so it does not depend on the panel staying mounted — the tabbed sidebar hides inactive tabs with a class rather than unmounting them, but that is a layout detail, and the layout does remount across the `expanded` breakpoint ([frontend-state.md](code/frontend-state.md#why-a-store-for-panel-ui-state)). `useHistoryExpanded(changeCount)` returns `override ?? changeCount === 0`.
 
+### Viewing a file from a commit
+
+A commit's diff is one file at two versions, so `CommitDiffView` — the content-area screen a file in `CommitView`'s list opens, one file as one commit changed it — offers both, at opposite ends of the screen and with no overlap in what they mean:
+
+| Entry | Where | Opens |
+|-------|-------|-------|
+| The path itself | Top bar, as in `DiffView` | `{ type: "file" }` — the **working tree** file, editable |
+| `View this file at <hash>` | Bottom bar, a `FileClock` icon | `{ type: "commit-file" }` — that commit's version, read-only |
+
+The path keeps the meaning it already has one screen over in `DiffView`, so there is no second rule to learn; only its accessible name changes, to `Open current <file>`, since "open" alone is ambiguous where two versions exist. Nothing special happens when the working-tree file is gone or renamed — the viewer says "File not found", which is the truth.
+
+**A commit that deletes a file has no version of it to show.** The blob lives in the parent, and `git.show.file` on this hash returns not-found ([git.md](git.md#historical-file-contents)). The button is therefore disabled for `status: "D"`, with the reason in its accessible name — `... (deleted in this commit)` — the same rule the Edit button follows. Showing `hash^` instead was rejected: a merge commit has more than one parent, so "the version before" is not always a single thing, and the deletion diff already carries the whole old content.
+
+`CommitFileView` is read-only in three ways that do not repeat each other: the path is plain text rather than a button, one banner names both the version and the constraint (`Read-only — this file as of <hash> · <subject>`), and **the bottom bar carries no write action at all**. A greyed-out Edit would read as a bug or a permission problem; editing history is not a thing that exists. Download is absent for a concrete reason: `/api/files/download` serves the working tree only, so a historical blob would need an endpoint that does not exist yet. The same rule reaches inside the body: `FileBody` takes `readOnly`, which drops the `Editing is disabled for …` footnote from the binary and too-large cards. That footnote explains `FileView`'s disabled Edit button; with no such button on screen it would point at a control that is not there, and imply that a file which happened not to be binary could be edited here.
+
+The body is `getFileViewState` + `FileBody` — empty, image, binary and too-large are rendered by the same code as for a current file, the two subtractions above aside, which is the point of `git.show.file` returning the `file.get` shape. The one addition is a plain-text toggle in the bottom bar: it drops Markdown to its source so `CodeHighlighter`'s copy button can take the whole file, which rendered Markdown offers no way to do. It stays off by default and is **not** reset when the file changes.
+
+The toggle appears only where pressing it could change something — a highlighted `text` body. An image, a binary and an empty file have no rendering to drop to source, and a file past `HIGHLIGHT_LIMIT` is already plain with a banner saying so; in all of those the control is **absent rather than inert**, by the same rule that keeps a disabled Edit off this screen. The bottom bar itself stays regardless, because the hash on it is identity, not an action. One consequence: an SVG's source, which `FileView` reaches through Edit, has no route here — a read-only screen has no Edit to borrow.
+
+`useCommitFile` neither watches the filesystem nor expires (`staleTime: Infinity`): what a commit holds is immutable. It does not retry a request its own clock gave up on either — a blob is as large as a working-tree file, and `useContents` skips that retry for the same reason ([code/websocket-rpc.md](code/websocket-rpc.md#request-timeout)).
+
 ### Submodules
 
 `flattenGitStatus` merges submodule files into the same Staged / Unstaged lists with their path prefixed, and `git.add` stages them in the *submodule's* index. A root-repo `git commit` would silently leave those files staged and uncommitted, which is exactly the silent failure the project forbids.

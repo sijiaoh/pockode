@@ -1,4 +1,5 @@
 export { default as CommitDiffView } from "./CommitDiffView";
+export { default as CommitFileView } from "./CommitFileView";
 export { default as CommitView } from "./CommitView";
 export { default as DiffContent } from "./DiffContent";
 export { default as DiffFileItem } from "./DiffFileItem";
