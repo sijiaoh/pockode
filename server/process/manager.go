@@ -235,7 +235,7 @@ func (m *Manager) ForkSupport(agentType session.AgentType) (agent.ForkSupport, e
 	if err != nil {
 		return agent.ForkUnsupported, err
 	}
-	return ag.ForkSupport(), nil
+	return agent.ForkSupportOf(ag), nil
 }
 
 // ForkAgentSession asks the agent behind agentType to carry its own context into
@@ -252,11 +252,12 @@ func (m *Manager) ForkAgentSession(ctx context.Context, agentType session.AgentT
 
 	forker, ok := ag.(agent.SessionForker)
 	if !ok {
-		// The agent declared fork support — callers got here by asking — and then
-		// turned out not to implement it. Reported rather than shrugged off: staying
-		// silent would hand the user a fork whose agent was never consulted, which is
+		// Callers ask ForkSupport before getting here, so this is a caller that
+		// forked a session whose agent had already said it cannot be. Reported
+		// rather than shrugged off as "carried nothing": staying silent would hand
+		// the user a fork whose agent was never consulted, which is
 		// indistinguishable from one it consulted and could not serve.
-		return false, fmt.Errorf("agent %q declares fork support %q but cannot fork", agentType, ag.ForkSupport())
+		return false, fmt.Errorf("agent %q cannot fork sessions", agentType)
 	}
 
 	opts.WorkDir = m.workDir

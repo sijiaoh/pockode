@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -28,6 +29,31 @@ func TestForkSupport_CanFork(t *testing.T) {
 		if got := support.CanFork(); got != want {
 			t.Errorf("ForkSupport(%q).CanFork() = %v, want %v", support, got, want)
 		}
+	}
+}
+
+// plainAgent implements no SessionForker, the way an agent that cannot be forked
+// is written (see agent/codex).
+type plainAgent struct{ Agent }
+
+// forkingAgent implements it, which is the whole declaration. ForkSession is
+// never called here; having to write it is the point.
+type forkingAgent struct{ Agent }
+
+func (forkingAgent) ForkSupport() ForkSupport { return ForkFromAnyMessage }
+
+func (forkingAgent) ForkSession(context.Context, ForkOptions) (bool, error) { return true, nil }
+
+// TestForkSupportOf: implementing SessionForker is the declaration, so an agent
+// that does not is unforkable without having to say so anywhere. Nothing else may
+// ask the question, and this is what keeps "declared" and "implemented" from
+// being two facts that can drift apart.
+func TestForkSupportOf(t *testing.T) {
+	if got := ForkSupportOf(plainAgent{}); got != ForkUnsupported {
+		t.Errorf("ForkSupportOf(an agent with no ForkSession) = %q, want %q", got, ForkUnsupported)
+	}
+	if got := ForkSupportOf(forkingAgent{}); got != ForkFromAnyMessage {
+		t.Errorf("ForkSupportOf(an agent that can fork) = %q, want its own answer", got)
 	}
 }
 

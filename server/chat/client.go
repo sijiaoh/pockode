@@ -28,8 +28,8 @@ var ErrSessionNotRunning = errors.New("session is no longer running, send a mess
 // source session's history.
 var ErrForkAnchorOutOfRange = errors.New("fork anchor is outside the session's history")
 
-// ErrForkUnsupported is returned when the source session's agent declares it
-// cannot reopen an earlier conversation at all (agent.ForkUnsupported).
+// ErrForkUnsupported is returned when the source session's agent answers
+// agent.ForkUnsupported: it cannot reopen an earlier conversation at all.
 //
 // The fork is refused rather than made without the agent. A session whose agent
 // has never seen the transcript filling its screen is not a branch of the
@@ -189,9 +189,9 @@ func (c *Client) Interrupt(_ context.Context, sessionID string) error {
 //
 // The source may be mid-turn. Forking neither waits for it nor disturbs it.
 //
-// A session whose agent declares agent.ForkUnsupported cannot be forked at all
-// (ErrForkUnsupported); see ForkSupport for why that is a refusal rather than a
-// fork with a warning on it.
+// A session whose agent answers agent.ForkUnsupported cannot be forked at all
+// (ErrForkUnsupported); see agent.ForkSupport for why that is a refusal rather
+// than a fork with a warning on it.
 func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.HistorySeq, title string) (session.SessionMeta, error) {
 	source, found, err := c.store.Get(sourceID)
 	if err != nil {
@@ -251,20 +251,15 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 		return fail(fmt.Errorf("copy history: %w", err))
 	}
 
-	// Sampled as late as possible, though it is a fact that can change right after
-	// it is read — which is why the agent is told the source's transcript *can*
-	// grow rather than that it is growing. A turn in flight is not in this fork's
-	// way in any case: history is append-only, so the copied prefix is already
-	// final, and everything still arriving falls after the anchor and would be
-	// dropped anyway.
-	sourceProcessLive := c.pm.GetProcess(sourceID) != nil
-
+	// Nothing about the source's present state goes with this, not even whether a
+	// turn is in flight. The fork point lives in the copied history and nowhere
+	// else: history is append-only, so the prefix above is already final, and
+	// whatever the source adds — during this call or long after it — falls past
+	// the anchor by construction (see agent.ForkOptions).
 	carried, err := c.pm.ForkAgentSession(ctx, source.AgentType, agent.ForkOptions{
-		SourceSessionID:   sourceID,
-		SessionID:         newID,
-		History:           history,
-		Truncated:         anchor.Index() < len(records)-1,
-		SourceProcessLive: sourceProcessLive,
+		SourceSessionID: sourceID,
+		SessionID:       newID,
+		History:         history,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("fork agent session: %w", err))
@@ -289,7 +284,7 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 	slog.Info("session forked",
 		"sourceSessionId", sourceID, "sessionId", newID,
 		"anchorSeq", int(anchor), "records", len(history),
-		"sourceProcessLive", sourceProcessLive, "agentContextCarried", carried)
+		"agentContextCarried", carried)
 	return meta, nil
 }
 

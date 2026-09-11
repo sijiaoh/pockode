@@ -38,8 +38,6 @@ func TestForkSession(t *testing.T) {
 		// messageIDs are the CLI message ids the copied history carries. Nil is
 		// history from before Pockode recorded them.
 		messageIDs []string
-		truncated  bool
-		sourceLive bool
 
 		wantCarried bool
 		wantState   claudeResumeState
@@ -52,18 +50,6 @@ func TestForkSession(t *testing.T) {
 			name:        "a cut conversation resumes the source and stops at the anchor",
 			sourceState: &claudeResumeState{SessionID: "claude-source"},
 			messageIDs:  []string{"msg-1", "msg-2"},
-			truncated:   true,
-			wantCarried: true,
-			wantState:   claudeResumeState{SessionID: "claude-source", Recovery: recoveryFork, ResumeAt: "msg-2"},
-			wantLaunch:  claudeLaunch{sessionID: "claude-source", resume: true, fork: true, resumeAt: "msg-2"},
-		},
-		{
-			// A pinned cut is what makes this safe: whatever the source's process
-			// adds to its conversation falls past the anchor.
-			name:        "a live source is fine once the cut is pinned to a message",
-			sourceState: &claudeResumeState{SessionID: "claude-source"},
-			messageIDs:  []string{"msg-1", "msg-2"},
-			sourceLive:  true,
 			wantCarried: true,
 			wantState:   claudeResumeState{SessionID: "claude-source", Recovery: recoveryFork, ResumeAt: "msg-2"},
 			wantLaunch:  claudeLaunch{sessionID: "claude-source", resume: true, fork: true, resumeAt: "msg-2"},
@@ -74,7 +60,6 @@ func TestForkSession(t *testing.T) {
 			// Two records of one assistant message, then a record with no message
 			// behind it at all.
 			messageIDs:  []string{"msg-1", "msg-2", "msg-2", ""},
-			truncated:   true,
 			wantCarried: true,
 			wantState:   claudeResumeState{SessionID: "claude-source", Recovery: recoveryFork, ResumeAt: "msg-2"},
 			wantLaunch:  claudeLaunch{sessionID: "claude-source", resume: true, fork: true, resumeAt: "msg-2"},
@@ -96,39 +81,17 @@ func TestForkSession(t *testing.T) {
 			name:        "a fork of an unlaunched fork cuts at its own anchor",
 			sourceState: &claudeResumeState{SessionID: "claude-grandparent", Recovery: recoveryFork, ResumeAt: "msg-9"},
 			messageIDs:  []string{"msg-1"},
-			truncated:   true,
 			wantCarried: true,
 			wantState:   claudeResumeState{SessionID: "claude-grandparent", Recovery: recoveryFork, ResumeAt: "msg-1"},
 			wantLaunch:  claudeLaunch{sessionID: "claude-grandparent", resume: true, fork: true, resumeAt: "msg-1"},
 		},
 		{
-			// Same shape, but nothing this fork kept names a message. Replaying
-			// the grandparent whole would reach past what the source itself kept,
-			// so the source's cut is inherited instead.
-			name:        "a fork of an unlaunched fork inherits its cut when it has none",
-			sourceState: &claudeResumeState{SessionID: "claude-grandparent", Recovery: recoveryFork, ResumeAt: "msg-9"},
-			wantCarried: true,
-			wantState:   claudeResumeState{SessionID: "claude-grandparent", Recovery: recoveryFork, ResumeAt: "msg-9"},
-			wantLaunch:  claudeLaunch{sessionID: "claude-grandparent", resume: true, fork: true, resumeAt: "msg-9"},
-		},
-		{
-			name:        "history with no message ids still carries a whole idle conversation",
+			// No uuid means no cut, and an uncut replay would follow the source
+			// wherever it has grown to by the time this fork first launches.
+			// History from before Pockode recorded the CLI's uuids therefore
+			// carries nothing, however idle the source looks right now.
+			name:        "history with no message ids carries nothing",
 			sourceState: &claudeResumeState{SessionID: "claude-source"},
-			wantCarried: true,
-			wantState:   claudeResumeState{SessionID: "claude-source", Recovery: recoveryFork},
-			wantLaunch:  claudeLaunch{sessionID: "claude-source", resume: true, fork: true},
-		},
-		{
-			name:        "history with no message ids carries nothing when cut",
-			sourceState: &claudeResumeState{SessionID: "claude-source"},
-			truncated:   true,
-			wantState:   claudeResumeState{Unstarted: true},
-			wantLaunch:  claudeLaunch{sessionID: "pockode-fork"},
-		},
-		{
-			name:        "history with no message ids carries nothing from a live source",
-			sourceState: &claudeResumeState{SessionID: "claude-source"},
-			sourceLive:  true,
 			wantState:   claudeResumeState{Unstarted: true},
 			wantLaunch:  claudeLaunch{sessionID: "pockode-fork"},
 		},
@@ -160,12 +123,10 @@ func TestForkSession(t *testing.T) {
 				history = []json.RawMessage{json.RawMessage(`{"type":"text"}`)}
 			}
 			opts := agent.ForkOptions{
-				DataDir:           dataDir,
-				SourceSessionID:   "pockode-source",
-				SessionID:         "pockode-fork",
-				History:           history,
-				Truncated:         tt.truncated,
-				SourceProcessLive: tt.sourceLive,
+				DataDir:         dataDir,
+				SourceSessionID: "pockode-source",
+				SessionID:       "pockode-fork",
+				History:         history,
 			}
 			carried, err := New().ForkSession(context.Background(), opts)
 			if err != nil {

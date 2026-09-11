@@ -5,14 +5,20 @@ import (
 	"encoding/json"
 )
 
-// ForkSupport states how much of a conversation an agent can follow into a fork:
-// it is the agent's own answer to "can you be forked, and from where".
+// ForkSupport states how much of a conversation an agent can follow into a fork.
+// It is what everything outside an agent's package reads instead of asking which
+// agent it is holding, and it is what the frontend is sent (rpc.AgentInfo's
+// fork_support) so that it does not keep a table of its own.
 //
-// It exists so that nothing outside an agent's package has to know which agent it
-// is talking to. Every difference between the agents on this subject is one of
-// these two values, and the values are the two that are true today — an agent
-// whose CLI cannot reopen a conversation, and one that can reopen one at a chosen
-// point in it.
+// It stays a named string rather than collapsing into a bool, even though the
+// only question asked of it today is CanFork. The values are not "yes" and "no"
+// but distinct capabilities, and a third is already in sight: `codex exec fork`
+// reopens a whole session and nothing finer, so an agent reachable only that way
+// would fork from the end of a conversation and from nowhere else — a value the
+// frontend has to tell apart from both of today's, since it decides which
+// messages offer the row and what a disabled row says. A bool would have to grow
+// back into this the day that happens, and it is a wire field, so growing it
+// back costs a synchronised change on both sides.
 type ForkSupport string
 
 const (
@@ -20,6 +26,10 @@ const (
 	// Forking such a session could only ever produce one whose agent has never
 	// seen the transcript the user is looking at, so Pockode does not offer it and
 	// session.fork refuses it.
+	//
+	// No agent returns this value. It is what ForkSupportOf answers for an agent
+	// that implements no SessionForker, which is how an agent says it cannot be
+	// forked.
 	ForkUnsupported ForkSupport = "none"
 
 	// ForkFromAnyMessage: the agent can reopen a conversation at a chosen point in
@@ -38,10 +48,29 @@ func (s ForkSupport) CanFork() bool {
 	return s == ForkFromAnyMessage
 }
 
+// ForkSupportOf reports what an agent says about being forked.
+//
+// Implementing SessionForker is the declaration, so this is the only way to ask
+// the question: an agent that does not implement it cannot be forked, and
+// implementing nothing is the whole of what opting out takes (see agent/codex).
+func ForkSupportOf(a Agent) ForkSupport {
+	forker, ok := a.(SessionForker)
+	if !ok {
+		return ForkUnsupported
+	}
+	return forker.ForkSupport()
+}
+
 // ForkOptions describes a fork Pockode has already carried out on its own side:
 // the new session exists and holds the source session's history, cut at the fork
 // point. What is left is to give the new session the agent's own view of that
 // same conversation.
+//
+// It deliberately says nothing about the source's current state — whether records
+// exist past the fork point, whether a process is still writing them. The fork
+// point is in History and nowhere else, so whatever the source does afterwards
+// falls past it by construction. Anything sampled from the source here would be
+// stale by the time it mattered: see SessionForker for when that is.
 type ForkOptions struct {
 	// WorkDir and DataDir belong to the forked session and therefore to the
 	// source as well: a fork always lands in the worktree it was forked from.
@@ -57,45 +86,36 @@ type ForkOptions struct {
 	// removed. The agent reads it to find, in its own transcript, the point the
 	// fork was taken at.
 	History []json.RawMessage
-
-	// Truncated reports that the source had records after the fork point, so
-	// context past it must not carry over. False means the fork keeps the whole
-	// conversation, which is the case an agent can serve by resuming it as it is.
-	//
-	// It constrains only a replay with no point pinned to stop at: with a point
-	// pinned, everything past it falls outside the replay anyway. Claude reads it
-	// for the fallback where the kept records name no message the CLI's
-	// transcript can be cut at.
-	Truncated bool
-
-	// SourceProcessLive reports that the source session still has an agent process
-	// running, so its own transcript can grow at any moment — during this call, and
-	// after it.
-	//
-	// It is the reason Truncated alone is not enough to decide that resuming the
-	// source is safe. A CLI asked to reopen a conversation reads whatever that
-	// conversation's transcript holds when it gets there, not what it held when the
-	// fork was taken: with a live process that is a moving target, and everything
-	// past the fork point is precisely what must not come across. Like Truncated,
-	// it constrains only a replay with no point pinned to stop at.
-	SourceProcessLive bool
 }
 
-// SessionForker is the work behind a ForkSupport declaration: every agent whose
-// ForkSupport is not ForkUnsupported implements it, and one that declares
-// ForkUnsupported is never asked (chat.Client refuses the fork before there is
-// anything to ask about).
-//
-// ForkSession is called once the new session and its history exist and before any
-// process is started for it. An implementation may write session-scoped state (a
-// resume mapping) but must not assume a live process on either side.
-//
-// It reports whether the agent will actually arrive in the new session
-// remembering the conversation. Returning false is a normal answer, not a
-// failure: the source may turn out to have no conversation worth reopening. The
-// caller tells the user. Returning an error is different: the caller deletes the
-// half-made session and reports it.
+// SessionForker is an agent's whole answer on being forked: the capability and
+// the work behind it are one declaration, so an agent that cannot be forked
+// implements nothing at all, and one that can cannot promise a capability it has
+// no code for. Ask ForkSupportOf whether an agent can be forked; assert for this
+// interface only when there is a fork to carry out.
 type SessionForker interface {
+	// ForkSupport says where in a conversation a fork of this agent's sessions may
+	// be taken from. It never answers ForkUnsupported: that is said by not
+	// implementing this interface.
+	ForkSupport() ForkSupport
+
+	// ForkSession gives an already-forked session the agent's own view of the
+	// conversation it inherited. It is called once the new session and its history
+	// exist and before any process is started for it. An implementation may write
+	// session-scoped state (a resume mapping) but must not assume a live process on
+	// either side.
+	//
+	// What it writes is acted on at the forked session's first launch, which is
+	// when the user first types into it — possibly days later, and possibly after
+	// they have gone back to talking to the source. An implementation therefore
+	// cannot resolve anything against how either session looks right now; it can
+	// only leave behind an instruction that stays correct however long it waits.
+	//
+	// It reports whether the agent will actually arrive in the new session
+	// remembering the conversation. Returning false is a normal answer, not a
+	// failure: the source may turn out to have no conversation worth reopening. The
+	// caller tells the user. Returning an error is different: the caller deletes
+	// the half-made session and reports it.
 	ForkSession(ctx context.Context, opts ForkOptions) (carried bool, err error)
 }
 

@@ -27,7 +27,7 @@ func (r *Registry) Register(agentType session.AgentType, a Agent) {
 func (r *Registry) ForkSupports() map[session.AgentType]ForkSupport {
 	supports := make(map[session.AgentType]ForkSupport, len(r.agents))
 	for agentType, a := range r.agents {
-		supports[agentType] = a.ForkSupport()
+		supports[agentType] = ForkSupportOf(a)
 	}
 	return supports
 }

@@ -13,25 +13,22 @@ import (
 	"github.com/pockode/server/session"
 )
 
-// forkingAgent is a mockAgent that declares it can be forked and carries its own
-// context across, recording what it was asked for. A real agent writes
-// session-scoped state here.
+// forkingAgent is a mockAgent that can be forked — it implements
+// agent.SessionForker — and carries its own context across, recording what it was
+// asked for. A real agent writes session-scoped state here.
 type forkingAgent struct {
 	mockAgent
-	// support defaults to agent.ForkFromAnyMessage. These tests are about what a
-	// fork does once the agent's declaration has let it through, so the declaration
-	// is only spelled out where it is the subject.
-	support agent.ForkSupport
 	carried bool
 	err     error
 	opts    agent.ForkOptions
 }
 
+// ForkSupport is fixed, not a field: an agent that implements SessionForker and
+// then answers agent.ForkUnsupported is the combination the interface exists to
+// rule out, and a mock able to express it would be modelling a state no agent
+// can be in.
 func (a *forkingAgent) ForkSupport() agent.ForkSupport {
-	if a.support == "" {
-		return agent.ForkFromAnyMessage
-	}
-	return a.support
+	return agent.ForkFromAnyMessage
 }
 
 func (a *forkingAgent) ForkSession(_ context.Context, opts agent.ForkOptions) (bool, error) {
@@ -50,7 +47,8 @@ type forkFixture struct {
 }
 
 // newForkFixture registers ag for claude sessions; a nil ag registers the plain
-// mockAgent, which declares that it cannot be forked at all.
+// mockAgent, which implements no agent.SessionForker and so cannot be forked at
+// all.
 func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.EventRecord) forkFixture {
 	t.Helper()
 
@@ -63,7 +61,7 @@ func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.EventRecord)
 	if ag != nil {
 		registry.Register(session.AgentTypeClaude, ag)
 	} else {
-		registry.Register(session.AgentTypeClaude, mockAgent{forkSupport: agent.ForkUnsupported})
+		registry.Register(session.AgentTypeClaude, mockAgent{})
 	}
 	pm := process.NewManager(registry, t.TempDir(), t.TempDir(), "", store, time.Minute)
 	t.Cleanup(pm.Shutdown)
@@ -160,17 +158,19 @@ func TestFork_CopiesConversationAndMeta(t *testing.T) {
 	}
 }
 
-// TestFork_TellsAgentWhereTheCutIs pins the hand-off the per-agent fork tasks
-// build on: the agent is asked after the session and its history exist, and is
-// told whether context past the fork point has to be left behind.
-func TestFork_TellsAgentWhereTheCutIs(t *testing.T) {
+// TestFork_HandsTheAgentTheCutHistory pins the hand-off the per-agent fork
+// implementations build on: the agent is asked after the session and its history
+// exist, it is told which sessions and directories it is working between, and the
+// history it is handed is already cut at the fork point — wherever that point
+// falls in the conversation, which is the whole of what the agent gets to work
+// from.
+func TestFork_HandsTheAgentTheCutHistory(t *testing.T) {
 	tests := []struct {
-		name          string
-		anchor        int // index into the fixture's history
-		wantTruncated bool
+		name   string
+		anchor int // index into the fixture's history
 	}{
-		{name: "cut inside the conversation", anchor: 0, wantTruncated: true},
-		{name: "cut at the last record", anchor: 1, wantTruncated: false},
+		{name: "cut inside the conversation", anchor: 0},
+		{name: "cut at the last record", anchor: 1},
 	}
 
 	for _, tt := range tests {
@@ -189,9 +189,6 @@ func TestFork_TellsAgentWhereTheCutIs(t *testing.T) {
 			if ag.opts.SourceSessionID != "source" || ag.opts.SessionID != meta.ID {
 				t.Errorf("agent got source/new %q/%q, want source/%q",
 					ag.opts.SourceSessionID, ag.opts.SessionID, meta.ID)
-			}
-			if ag.opts.Truncated != tt.wantTruncated {
-				t.Errorf("Truncated = %v, want %v", ag.opts.Truncated, tt.wantTruncated)
 			}
 			if len(ag.opts.History) != tt.anchor+1 {
 				t.Errorf("agent got %d records, want %d", len(ag.opts.History), tt.anchor+1)
@@ -232,15 +229,15 @@ func TestFork_WarnsWhenTheAgentWillNotRemember(t *testing.T) {
 	}
 }
 
-// TestFork_RefusedWhenTheAgentCannotBeForked: an agent declaring
-// agent.ForkUnsupported cannot reopen a conversation at any point in it, so a
+// TestFork_RefusedWhenTheAgentCannotBeForked: an agent that implements no
+// agent.SessionForker cannot reopen a conversation at any point in it, so a
 // fork of its session could only ever produce one whose agent has never seen the
 // transcript filling the screen. Refused outright rather than made with a warning
 // on it — session.fork must not claim to do something it does not do — and the
 // refusal has to name the agent, because the sheet shows it to the user as-is.
 //
-// Asked of the capability, not of a particular agent: whichever agent declares
-// this is the one this applies to.
+// Asked of the capability, not of a particular agent: whichever agent reads as
+// agent.ForkUnsupported is the one this applies to.
 func TestFork_RefusedWhenTheAgentCannotBeForked(t *testing.T) {
 	f := newForkFixture(t, nil, []agent.EventRecord{
 		{Type: agent.EventTypeMessage, Content: "first"},
@@ -271,7 +268,7 @@ func TestFork_RefusedWhenTheAgentCannotBeForked(t *testing.T) {
 // either way, and the agent says per fork what it could carry. Only
 // ForkUnsupported closes the door.
 func TestFork_OfferedWhateverTheAnchorWhenTheAgentCanFork(t *testing.T) {
-	f := newForkFixture(t, &forkingAgent{support: agent.ForkFromAnyMessage}, []agent.EventRecord{
+	f := newForkFixture(t, &forkingAgent{}, []agent.EventRecord{
 		{Type: agent.EventTypeMessage, Content: "first"},
 		{Type: agent.EventTypeText, Content: "answering first"},
 		{Type: agent.EventTypeMessage, Content: "second"},
@@ -406,48 +403,6 @@ func TestFork_WhileSourceIsRunning(t *testing.T) {
 	}
 	if proc.State() != process.ProcessStateRunning {
 		t.Errorf("source process state = %q, want it still running", proc.State())
-	}
-}
-
-// TestFork_TellsAgentWhetherTheSourceIsLive: a live process can grow the source's
-// own transcript at any moment, so an agent that resumes it cannot trust the fork
-// point it was given. Truncated does not cover this — the anchor here is the last
-// record there is.
-func TestFork_TellsAgentWhetherTheSourceIsLive(t *testing.T) {
-	tests := []struct {
-		name     string
-		live     bool
-		wantLive bool
-	}{
-		{name: "no process", live: false, wantLive: false},
-		{name: "live process", live: true, wantLive: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ag := &forkingAgent{carried: true}
-			f := newForkFixture(t, ag, []agent.EventRecord{
-				{Type: agent.EventTypeMessage, Content: "first"},
-			})
-
-			if tt.live {
-				if _, _, err := f.client.pm.GetOrCreateProcess(
-					context.Background(), "source", true, session.AgentTypeClaude, session.ModeYolo); err != nil {
-					t.Fatalf("GetOrCreateProcess: %v", err)
-				}
-			}
-
-			if _, err := f.client.Fork(context.Background(), "source", f.seqs[0], ""); err != nil {
-				t.Fatalf("Fork: %v", err)
-			}
-
-			if ag.opts.SourceProcessLive != tt.wantLive {
-				t.Errorf("SourceProcessLive = %v, want %v", ag.opts.SourceProcessLive, tt.wantLive)
-			}
-			if ag.opts.Truncated {
-				t.Error("Truncated = true, want false: the anchor is the last record")
-			}
-		})
 	}
 }
 

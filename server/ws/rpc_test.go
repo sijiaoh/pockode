@@ -38,9 +38,9 @@ func dialTestClient(ctx context.Context, serverURL string) (*websocket.Conn, err
 	return conn, err
 }
 
-func mockRegistry(mock *mockAgent) *agent.Registry {
+func mockRegistry(ag agent.Agent) *agent.Registry {
 	r := agent.NewRegistry()
-	r.Register(session.AgentTypeClaude, mock)
+	r.Register(session.AgentTypeClaude, ag)
 	return r
 }
 
@@ -70,6 +70,21 @@ func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
 }
 
 func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testEnv {
+	return newTestEnvWithAgent(t, mock, mock, workDir)
+}
+
+// newForkableTestEnv registers an agent whose sessions can be forked. Forking is
+// declared by implementing agent.SessionForker, so it takes a different type
+// rather than a field on the plain mock; env.mock still reaches the same
+// recording mock underneath.
+func newForkableTestEnv(t *testing.T) *testEnv {
+	mock := &mockAgent{}
+	return newTestEnvWithAgent(t, mock, forkableMockAgent{mock}, t.TempDir())
+}
+
+// newTestEnvWithAgent registers ag for claude sessions. mock is the same agent in
+// every case but the forkable one, where it is the mock ag records into.
+func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir string) *testEnv {
 	dataDir := t.TempDir()
 	cmdStore, err := command.NewStore(dataDir)
 	if err != nil {
@@ -100,7 +115,7 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 	}
 
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, mockRegistry(mock), dataDir, 10*time.Minute)
+	worktreeManager := worktree.NewManager(registry, mockRegistry(ag), dataDir, 10*time.Minute)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
 	workOps := work.NewOperations(workStore, workStarter, nil)
@@ -994,7 +1009,7 @@ func TestHandler_SessionSetAgentType_NotFound(t *testing.T) {
 // back as a session of its own, carrying the anchored conversation and pointing at
 // the session it came from.
 func TestHandler_SessionFork(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{forkSupport: agent.ForkFromAnyMessage})
+	env := newForkableTestEnv(t)
 	store := env.getMainWorktree().SessionStore
 	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
 	store.Update(bgCtx, "source", "Fix the parser")
@@ -1038,7 +1053,7 @@ func TestHandler_SessionFork(t *testing.T) {
 // TestHandler_SessionFork_AnchorOutOfRange: the reply has to say what was wrong
 // with the request, since the sheet shows the server's message to the user.
 func TestHandler_SessionFork_AnchorOutOfRange(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{forkSupport: agent.ForkFromAnyMessage})
+	env := newForkableTestEnv(t)
 	env.getMainWorktree().SessionStore.Create(bgCtx, "source", session.AgentTypeClaude, "")
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: 7})
@@ -1053,7 +1068,7 @@ func TestHandler_SessionFork_AnchorOutOfRange(t *testing.T) {
 // failed, the request asked for something this agent does not do — and a message
 // the sheet can show as-is.
 func TestHandler_SessionFork_AgentCannotFork(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{forkSupport: agent.ForkUnsupported})
+	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
 	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
 	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
@@ -1079,7 +1094,7 @@ func TestHandler_SessionFork_AgentCannotFork(t *testing.T) {
 // TestHandler_AgentList: the frontend decides what to offer from this table, so
 // every registered agent has to appear in it with a declaration it can read.
 func TestHandler_AgentList(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{forkSupport: agent.ForkFromAnyMessage})
+	env := newForkableTestEnv(t)
 
 	resp := env.call("agent.list", struct{}{})
 	if resp.Error != nil {

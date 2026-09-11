@@ -118,9 +118,9 @@ session still remembering that transcript is a separate question, and the answer
 depends on what its CLI can reopen.
 
 The question is asked of the agent's declared capability, never of its name. Each
-agent answers `ForkSupport` for itself and the server sends the table to the
-frontend (`agent.list`), so the UI asks *can this agent follow a fork* rather than
-*is this Codex*
+agent declares for itself — by implementing `agent.SessionForker` or not — and the
+server sends the resulting table to the frontend (`agent.list`), so the UI asks
+*can this agent follow a fork* rather than *is this Codex*
 ([code/agent-integration.md](code/agent-integration.md#session-forking)).
 
 - **`"none"`** — the agent cannot reopen an earlier conversation at all, so there
@@ -129,19 +129,22 @@ frontend (`agent.list`), so the UI asks *can this agent follow a fork* rather th
   the memory of the process that created it
   ([code/agent-integration.md](code/agent-integration.md#no-forking)).
 - **`"any_message"`** — the agent can reopen a conversation at a chosen message in
-  it, so the fork carries memory wherever the anchor sits, and a live source
+  it, so a fork can carry memory wherever the anchor sits, and a live source
   process does not matter: the point is pinned, so whatever the source adds falls
   past it. Claude is this case (`--resume-session-at`).
 
-Pinning the resume point is what makes the feature work. The backend's fallback
-for records too old to name a point shows what not pinning would cost: with no
-point to stop at, only a fork that keeps the whole conversation, taken from a
-source with no live process, can carry anything (`ForkOptions.Truncated`,
-`SourceProcessLive`). A session's agent process outlives its turns and is only
-reaped after the idle timeout (8h by default, `-idle-timeout`), so *any session
-the user is currently working in* has one — and forking from the newest message
-of a conversation still in progress is the "run two variants from here" case this
-feature exists for.
+Pinning the resume point is what makes the feature work, and it is the only thing
+that does: a fork whose kept records name no point carries nothing at all. There
+is no fallback that replays the source's conversation whole, because the agent
+reopens that conversation only when the user first types into the fork — which
+can be long afterwards, and after the user has gone back to talking to the
+source, so an uncut replay would deliver the very turns the fork was taken to
+leave behind ([code/agent-integration.md](code/agent-integration.md#forking)).
+Two kinds of fork name no point: one taken in a session that predates Pockode
+storing the CLI's message ids, and one taken at a point the agent has not spoken
+before — the user's own opening message, say, however long the conversation goes
+on afterwards — which has no memory to carry in any case. Both get the same warning as any other
+fork that could not carry memory.
 
 **The fork sheet promises nothing about memory, and that is deliberate.** An agent
 that cannot follow a fork never gets that far — the row is disabled before the
@@ -232,12 +235,13 @@ conversation turn and a half-written message is not yet one, so there is nothing
 there to refuse. Below are the cases where the user has asked for a fork of a
 real message and cannot have it.
 
-**The agent cannot fork at all** — it declares `ForkSupport: "none"`, which Codex
-does. The menu row renders disabled at `text-th-text-muted` with the reason
-inline: *"<Agent> cannot reopen an earlier conversation, so its sessions cannot be
-forked."* The wording puts it on the agent's missing ability, not on Pockode
-having failed, so the user looks for another way to get what they wanted instead
-of retrying. `session.fork` refuses the same case on the backend
+**The agent cannot fork at all** — the frontend is sent `fork_support: "none"` for
+it, the server's answer for an agent that implements no `agent.SessionForker`;
+Codex is that agent. The menu row renders disabled at `text-th-text-muted` with
+the reason inline: *"<Agent> cannot reopen an earlier conversation, so its
+sessions cannot be forked."* The wording puts it on the agent's missing ability,
+not on Pockode having failed, so the user looks for another way to get what they
+wanted instead of retrying. `session.fork` refuses the same case on the backend
 (`ErrForkUnsupported`): blocking it here is the experience, refusing it there is
 the contract.
 

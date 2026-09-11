@@ -257,13 +257,11 @@ func TestIntegration_ForkSessionCarriesContextFromTheMiddle(t *testing.T) {
 	// source process is still up and has already written past that point.
 	forkID := uuid.Must(uuid.NewV7()).String()
 	carried, err := New().ForkSession(ctx, agent.ForkOptions{
-		WorkDir:           workDir,
-		DataDir:           dataDir,
-		SourceSessionID:   sourceID,
-		SessionID:         forkID,
-		History:           recordsOf(t, kept),
-		Truncated:         true,
-		SourceProcessLive: true,
+		WorkDir:         workDir,
+		DataDir:         dataDir,
+		SourceSessionID: sourceID,
+		SessionID:       forkID,
+		History:         recordsOf(t, kept),
 	})
 	if err != nil {
 		t.Fatalf("ForkSession: %v", err)

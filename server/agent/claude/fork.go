@@ -10,14 +10,15 @@ import (
 	"github.com/pockode/server/filestore"
 )
 
-// process.Manager reaches ForkSession through a type assertion whose failure
-// means "this agent cannot fork", and that fallback is silent: a signature
-// drifting out of the interface would not break the build, it would quietly
-// stop every Claude fork from carrying its conversation.
+// Implementing agent.SessionForker is what declares Claude forkable, and nothing
+// else requires it: a method drifting out of that interface would not break the
+// build, it would leave *Agent no longer satisfying it and quietly take the fork
+// row out of every Claude session's menu. This line is the only thing that
+// notices.
 var _ agent.SessionForker = (*Agent)(nil)
 
-// ForkSupport implements agent.Agent: Claude can reopen a conversation at a
-// chosen message in it, so a fork taken anywhere in one can carry the agent's
+// ForkSupport implements agent.SessionForker: Claude can reopen a conversation at
+// a chosen message in it, so a fork taken anywhere in one can carry the agent's
 // side of it — `--resume-session-at <uuid>` is the capability, ForkSession is how
 // it is used.
 //
@@ -42,10 +43,11 @@ func (a *Agent) ForkSupport() agent.ForkSupport {
 // after it, falls past the cut and never reaches the new session.
 //
 // Naming the cut needs the CLI's own uuid for the message, which Pockode only
-// has for records written since it started keeping them. Without one the fork
-// falls back to what a plain --resume can serve: the whole conversation, from a
-// source that cannot be adding to it. Anything else is reported as
-// carried == false, which is an answer and not a failure.
+// has for records written since it started keeping them. A fork whose kept
+// history names none — a session that predates that, or a cut taken at a point
+// the agent has not spoken before — carries nothing, reported as carried ==
+// false, which is an answer and not a failure. There is no uncut fallback for
+// it; carriableProviderSession says why.
 //
 // The source session is left exactly as it was. Resuming with --fork-session
 // makes the CLI mint a new provider session ID for the replayed conversation, so
@@ -82,23 +84,22 @@ func (a *Agent) ForkSession(_ context.Context, opts agent.ForkOptions) (bool, er
 
 // carriableProviderSession returns the provider session the fork can be replayed
 // from and the transcript message to stop that replay at, or false when there is
-// nothing to replay. An empty resumeAt with ok == true means replay it whole.
+// nothing the fork can safely reopen.
+//
+// A cut is not optional. The CLI reads the source's transcript when the forked
+// session first launches, not as it stood when the fork was taken, and nothing
+// keeps the user from talking to the source in between: an uncut replay would
+// reach whatever the source has grown to by then, which is precisely the
+// conversation the user forked away from. Only a point pinned by message uuid
+// makes the replay independent of when it happens.
 func carriableProviderSession(opts agent.ForkOptions, log *slog.Logger) (providerID, resumeAt string, ok bool) {
 	resumeAt = forkAnchorMessage(opts.History)
 	if resumeAt == "" {
-		// No message to cut at: history written before Pockode recorded the CLI's
-		// uuids, or a fork taken before the agent had said anything. Only a fork
-		// that wants the whole conversation is left, and only from a source that
-		// will not be adding to it — the CLI reads the source's transcript when it
-		// gets there, not as it was when the fork was taken.
-		if opts.Truncated {
-			log.Info("fork keeps no claude context: the conversation is cut before its end and holds no message id to cut at")
-			return "", "", false
-		}
-		if opts.SourceProcessLive {
-			log.Info("fork keeps no claude context: the source session's transcript can still grow and the fork holds no message id to pin it at")
-			return "", "", false
-		}
+		// History written before Pockode recorded the CLI's uuids, or a cut taken
+		// at a point the agent has not spoken before — in which case there is no
+		// memory to carry in the first place, however long the source went on.
+		log.Info("fork keeps no claude context: the kept history names no transcript message to cut the conversation at")
+		return "", "", false
 	}
 
 	state, found := loadResumeState(resumeStatePath(opts.DataDir, opts.SourceSessionID), log)
@@ -114,14 +115,10 @@ func carriableProviderSession(opts agent.ForkOptions, log *slog.Logger) (provide
 			"claudeSessionId", state.SessionID)
 		return "", "", false
 	}
-	if resumeAt == "" {
-		// The source can be a fork that has not launched yet, in which case the
-		// session named here is its own source's and is already cut short. With
-		// no cut of our own to apply, inherit that one: this fork kept a prefix
-		// of what the source kept, so it must not reach further than the source
-		// does either.
-		resumeAt = state.ResumeAt
-	}
+	// The source can be a fork that has not launched yet, in which case the session
+	// named here is its own source's, already cut short at state.ResumeAt. Our own
+	// cut still wins: this fork kept a prefix of what the source kept, so its
+	// anchor is at or before the source's.
 	return state.SessionID, resumeAt, true
 }
 
