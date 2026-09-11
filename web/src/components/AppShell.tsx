@@ -1,7 +1,7 @@
 import { useIsExpanded } from "@pockode/shared";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useAgentModels } from "../hooks/useAgentModels";
+import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
 import { useFileDropGuard } from "../hooks/useFileDropGuard";
 import { useRouteState } from "../hooks/useRouteState";
@@ -92,7 +92,7 @@ function AppShell() {
 	useSettingsSubscription(hasAuthToken);
 	useWorkSubscription(hasAuthToken);
 	useAgentRoleSubscription(hasAuthToken);
-	useAgentModels(hasAuthToken);
+	useAgentOptions(hasAuthToken);
 
 	// Redirect to main when URL worktree doesn't exist in worktree list
 	useEffect(() => {

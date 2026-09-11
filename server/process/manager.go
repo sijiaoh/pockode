@@ -180,6 +180,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		Resume:       meta.Activated,
 		Mode:         meta.Mode,
 		Model:        meta.Model,
+		Effort:       meta.Effort,
 	}
 	sess, err := ag.Start(m.ctx, opts)
 	if err != nil {
@@ -223,7 +224,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: ProcessStateIdle, IsInitial: true})
 	}
 	slog.Info("process created", "sessionId", sessionID, "resume", meta.Activated,
-		"agentType", meta.AgentType, "mode", meta.Mode, "model", meta.Model)
+		"agentType", meta.AgentType, "mode", meta.Mode, "model", meta.Model, "effort", meta.Effort)
 	return proc, true, nil
 }
 

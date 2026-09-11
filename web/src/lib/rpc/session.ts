@@ -1,11 +1,14 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type {
+	AgentEfforts,
 	AgentModels,
 	SessionDeleteParams,
+	SessionEffortsResult,
 	SessionListItem,
 	SessionMode,
 	SessionModelsResult,
 	SessionSetAgentTypeParams,
+	SessionSetEffortParams,
 	SessionSetModelParams,
 	SessionSetModeParams,
 	SessionUpdateTitleParams,
@@ -22,8 +25,11 @@ export interface SessionActions {
 		agentType: AgentType,
 	) => Promise<void>;
 	setSessionModel: (sessionId: string, model: string) => Promise<void>;
+	setSessionEffort: (sessionId: string, effort: string) => Promise<void>;
 	/** The models selectable per agent type. Server-wide constants. */
 	listModels: () => Promise<AgentModels>;
+	/** The effort levels selectable per agent type. Server-wide constants. */
+	listEfforts: () => Promise<AgentEfforts>;
 	markSessionRead: (sessionId: string) => Promise<void>;
 }
 
@@ -89,12 +95,30 @@ export function createSessionActions(
 			} as SessionSetModelParams);
 		},
 
+		setSessionEffort: async (
+			sessionId: string,
+			effort: string,
+		): Promise<void> => {
+			await requireClient().request("session.set_effort", {
+				session_id: sessionId,
+				effort,
+			} as SessionSetEffortParams);
+		},
+
 		listModels: async (): Promise<AgentModels> => {
 			const result: SessionModelsResult = await requireClient().request(
 				"session.models",
 				{},
 			);
 			return result.models;
+		},
+
+		listEfforts: async (): Promise<AgentEfforts> => {
+			const result: SessionEffortsResult = await requireClient().request(
+				"session.efforts",
+				{},
+			);
+			return result.efforts;
 		},
 
 		markSessionRead: async (sessionId: string): Promise<void> => {

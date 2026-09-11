@@ -1812,3 +1812,127 @@ func TestHandler_MissingParams(t *testing.T) {
 		t.Errorf("expected 'invalid params' error, got %q", resp.Error.Message)
 	}
 }
+
+// effortOnlyOnCodex returns an effort level codex offers and claude does not.
+func effortOnlyOnCodex(t *testing.T) string {
+	t.Helper()
+	for _, e := range session.EffortsForAgent(session.AgentTypeCodex) {
+		if !session.IsValidEffort(session.AgentTypeClaude, e.ID) {
+			return e.ID
+		}
+	}
+	t.Skip("codex offers no effort level claude lacks")
+	return ""
+}
+
+func TestHandler_SessionSetEffort(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	store := env.getMainWorktree().SessionStore
+	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	effort := session.EffortsForAgent(session.AgentTypeClaude)[0].ID
+
+	resp := env.call("session.set_effort", rpc.SessionSetEffortParams{
+		SessionID: sess.ID,
+		Effort:    effort,
+	})
+
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %s", resp.Error.Message)
+	}
+
+	updated, _, _ := store.Get(sess.ID)
+	if updated.Effort != effort {
+		t.Errorf("expected effort %q, got %q", effort, updated.Effort)
+	}
+}
+
+func TestHandler_SessionSetEffort_ForeignAgentEffort(t *testing.T) {
+	// The lists are per agent; a level the CLI does not accept would be ignored
+	// with nothing but a warning nobody reads, so it is refused here.
+	env := newTestEnv(t, &mockAgent{})
+	store := env.getMainWorktree().SessionStore
+	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+
+	resp := env.call("session.set_effort", rpc.SessionSetEffortParams{
+		SessionID: sess.ID,
+		Effort:    effortOnlyOnCodex(t),
+	})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "effort not available") {
+		t.Errorf("expected rejection of the other agent's effort, got %+v", resp)
+	}
+
+	updated, _, _ := store.Get(sess.ID)
+	if updated.Effort != "" {
+		t.Errorf("expected effort to stay unset, got %q", updated.Effort)
+	}
+}
+
+// As with set_model: an invalid request must not cost the user the CLI they
+// have running, and an accepted one must, since the level is read at launch.
+func TestHandler_SessionSetEffort_ProcessLifetime(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	wt := env.getMainWorktree()
+	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	env.sendMessage(sess.ID, "hello")
+
+	if !wt.ProcessManager.HasProcess(sess.ID) {
+		t.Fatal("expected process to be running after message")
+	}
+
+	resp := env.call("session.set_effort", rpc.SessionSetEffortParams{
+		SessionID: sess.ID,
+		Effort:    effortOnlyOnCodex(t),
+	})
+	if resp.Error == nil {
+		t.Fatal("expected the other agent's effort to be refused")
+	}
+	if !wt.ProcessManager.HasProcess(sess.ID) {
+		t.Error("a refused effort must not close the running process")
+	}
+
+	resp = env.call("session.set_effort", rpc.SessionSetEffortParams{
+		SessionID: sess.ID,
+		Effort:    session.EffortsForAgent(session.AgentTypeClaude)[0].ID,
+	})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+	if wt.ProcessManager.HasProcess(sess.ID) {
+		t.Error("expected process to be closed so the next launch uses the new effort")
+	}
+}
+
+func TestHandler_SessionSetEffort_NotFound(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("session.set_effort", rpc.SessionSetEffortParams{
+		SessionID: "non-existent",
+		Effort:    "",
+	})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
+		t.Errorf("expected session not found error, got %+v", resp)
+	}
+}
+
+func TestHandler_SessionEfforts(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("session.efforts", nil)
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result rpc.SessionEffortsResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	for _, agentType := range []session.AgentType{session.AgentTypeClaude, session.AgentTypeCodex} {
+		if len(result.Efforts[agentType]) == 0 {
+			t.Errorf("expected efforts for %q", agentType)
+		}
+	}
+}

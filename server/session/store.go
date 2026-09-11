@@ -28,6 +28,7 @@ type Store interface {
 	SetAgentType(ctx context.Context, sessionID string, agentType AgentType) error
 	SetMode(ctx context.Context, sessionID string, mode Mode) error
 	SetModel(ctx context.Context, sessionID string, model string) error
+	SetEffort(ctx context.Context, sessionID string, effort string) error
 	SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error
 	SetUnread(ctx context.Context, sessionID string, unread bool) error
 
@@ -270,6 +271,11 @@ func (s *FileStore) SetAgentType(ctx context.Context, sessionID string, agentTyp
 		if !IsValidModel(agentType, meta.Model) {
 			meta.Model = ""
 		}
+		// Same for effort: the levels are per agent and the new agent may not
+		// offer the stored one — or may have no effort concept at all.
+		if !IsValidEffort(agentType, meta.Effort) {
+			meta.Effort = ""
+		}
 		meta.UpdatedAt = time.Now()
 		return true, nil
 	})
@@ -294,6 +300,22 @@ func (s *FileStore) SetModel(ctx context.Context, sessionID string, model string
 			return false, fmt.Errorf("%w: model %q, agent %q", ErrModelNotAvailable, model, meta.AgentType)
 		}
 		meta.Model = model
+		meta.UpdatedAt = time.Now()
+		return true, nil
+	})
+}
+
+// SetEffort rejects an effort level the session's agent does not offer
+// (ErrEffortNotAvailable), for the same reason SetModel judges the model here:
+// the agent type it has to be judged against is only stable under the store
+// lock. The stored model is left alone — effort is validated per agent, not per
+// model (see effort.go).
+func (s *FileStore) SetEffort(ctx context.Context, sessionID string, effort string) error {
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		if !IsValidEffort(meta.AgentType, effort) {
+			return false, fmt.Errorf("%w: effort %q, agent %q", ErrEffortNotAvailable, effort, meta.AgentType)
+		}
+		meta.Effort = effort
 		meta.UpdatedAt = time.Now()
 		return true, nil
 	})

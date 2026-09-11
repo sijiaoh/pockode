@@ -1247,3 +1247,27 @@ func TestBuildStartConfig_Model(t *testing.T) {
 		t.Error("expected no model key when no model is selected")
 	}
 }
+
+func TestBuildStartConfig_Effort(t *testing.T) {
+	// Effort has no field on the tool call, so it must land among the config
+	// overrides, under the key config.toml uses.
+	sess := &mcpSession{
+		opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", DisableMCP: true, Effort: "xhigh"},
+		exe:  "/usr/local/bin/pockode",
+	}
+	overrides := sess.buildStartConfig("hello")["config"].(map[string]interface{})
+	if got := overrides["model_reasoning_effort"]; got != "xhigh" {
+		t.Errorf("model_reasoning_effort = %v, want %q", got, "xhigh")
+	}
+
+	// No effort selected must leave the key out entirely, so Codex keeps its own
+	// default instead of being handed an empty level.
+	sess = &mcpSession{
+		opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", DisableMCP: true},
+		exe:  "/usr/local/bin/pockode",
+	}
+	overrides = sess.buildStartConfig("hello")["config"].(map[string]interface{})
+	if _, ok := overrides["model_reasoning_effort"]; ok {
+		t.Error("expected no model_reasoning_effort key when no effort is selected")
+	}
+}

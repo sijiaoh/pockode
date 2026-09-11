@@ -63,7 +63,11 @@ type SessionMeta struct {
 	// Model is agent-specific (see model.go). Empty — the value every session
 	// created before this field existed carries — means no model flag is passed
 	// and the CLI picks for itself.
-	Model      string `json:"model"`
+	Model string `json:"model"`
+	// Effort is agent-specific (see effort.go). Empty — the value every session
+	// created before this field existed carries — means the CLI is passed no
+	// effort level and keeps its own default.
+	Effort     string `json:"effort"`
 	NeedsInput bool   `json:"needs_input"` // true when waiting for user input (permission/question)
 	Unread     bool   `json:"unread"`      // true when session has unread changes
 }

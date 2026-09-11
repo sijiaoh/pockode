@@ -13,6 +13,8 @@ export interface SessionListItem {
 	agent_type: AgentType;
 	/** Empty means "pass no model flag, let the CLI pick". */
 	model: string;
+	/** Empty means "pass no effort flag, let the CLI keep its default". */
+	effort: string;
 	/** True once the agent has produced output in this session. */
 	activated: boolean;
 	state: ProcessState;
@@ -369,6 +371,8 @@ export interface ChatMessagesSubscribeResult {
 	mode: SessionMode;
 	agent_type: AgentType;
 	model: string;
+	/** Empty means "pass no effort flag, let the CLI keep its default". */
+	effort: string;
 }
 
 export interface SessionSetModeParams {
@@ -386,17 +390,37 @@ export interface SessionSetModelParams {
 	model: string;
 }
 
-/** One selectable model, as the server lists it. */
-export interface ModelOption {
+export interface SessionSetEffortParams {
+	session_id: string;
+	effort: string;
+}
+
+/**
+ * One selectable option of an agent, as the server lists it — a model or an
+ * effort level. The two are the same shape because they are the same kind of
+ * thing: a server-side constant the UI may only choose from, never extend.
+ */
+export interface AgentOption {
 	id: string;
 	label: string;
 }
 
 /** The selectable models of every agent type, as `session.models` returns them. */
-export type AgentModels = Record<AgentType, ModelOption[]>;
+export type AgentModels = Record<AgentType, AgentOption[]>;
 
 export interface SessionModelsResult {
 	models: AgentModels;
+}
+
+/**
+ * The selectable effort levels of every agent type, as `session.efforts`
+ * returns them. Partial: an agent with no notion of effort is absent rather
+ * than present with an empty list.
+ */
+export type AgentEfforts = Partial<Record<AgentType, AgentOption[]>>;
+
+export interface SessionEffortsResult {
+	efforts: AgentEfforts;
 }
 
 // JSON-RPC 2.0 Notification Params (Server → Client)

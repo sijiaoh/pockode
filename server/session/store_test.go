@@ -428,3 +428,136 @@ func TestFileStore_SetModel_RejectsForeignAgentModel(t *testing.T) {
 		t.Errorf("expected a rejected model not to be stored, got %q", meta.Model)
 	}
 }
+
+// effortOnlyOn returns a level the first agent offers and the second does not.
+// The two lists overlap heavily, so the tests that need a level to be foreign
+// have to look one up rather than name it.
+func effortOnlyOn(t *testing.T, has, lacks AgentType) string {
+	t.Helper()
+	for _, e := range EffortsForAgent(has) {
+		if !IsValidEffort(lacks, e.ID) {
+			return e.ID
+		}
+	}
+	t.Skipf("%q offers no effort %q lacks", has, lacks)
+	return ""
+}
+
+func TestFileStore_SetEffort(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	effort := EffortsForAgent(AgentTypeClaude)[0].ID
+	if err := store.SetEffort(ctx, "s1", effort); err != nil {
+		t.Fatalf("SetEffort failed: %v", err)
+	}
+
+	meta, _, _ := store.Get("s1")
+	if meta.Effort != effort {
+		t.Errorf("expected effort %q, got %q", effort, meta.Effort)
+	}
+
+	// Clearing is how a session goes back to the CLI's own default.
+	if err := store.SetEffort(ctx, "s1", ""); err != nil {
+		t.Fatalf("SetEffort failed: %v", err)
+	}
+	meta, _, _ = store.Get("s1")
+	if meta.Effort != "" {
+		t.Errorf("expected effort to be cleared, got %q", meta.Effort)
+	}
+}
+
+func TestFileStore_SetEffortNonExistent(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+
+	err := store.SetEffort(ctx, "missing", EffortsForAgent(AgentTypeClaude)[0].ID)
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("expected ErrSessionNotFound, got %v", err)
+	}
+}
+
+func TestFileStore_SetEffort_RejectsForeignAgentEffort(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	err := store.SetEffort(ctx, "s1", effortOnlyOn(t, AgentTypeCodex, AgentTypeClaude))
+	if !errors.Is(err, ErrEffortNotAvailable) {
+		t.Fatalf("expected ErrEffortNotAvailable, got %v", err)
+	}
+
+	meta, _, _ := store.Get("s1")
+	if meta.Effort != "" {
+		t.Errorf("expected a rejected effort not to be stored, got %q", meta.Effort)
+	}
+}
+
+func TestFileStore_SetAgentType_DropsForeignEffort(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	if _, err := store.Create(ctx, "s1", AgentTypeCodex, ModeDefault); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	effort := effortOnlyOn(t, AgentTypeCodex, AgentTypeClaude)
+	if err := store.SetEffort(ctx, "s1", effort); err != nil {
+		t.Fatalf("SetEffort failed: %v", err)
+	}
+
+	if err := store.SetAgentType(ctx, "s1", AgentTypeClaude); err != nil {
+		t.Fatalf("SetAgentType failed: %v", err)
+	}
+
+	meta, _, _ := store.Get("s1")
+	if meta.Effort != "" {
+		t.Errorf("expected codex's effort to be dropped when switching to claude, got %q", meta.Effort)
+	}
+}
+
+// A level both agents offer is kept: switching agent must not silently undo a
+// choice that is still valid.
+func TestFileStore_SetAgentType_KeepsSharedEffort(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	effort := EffortsForAgent(AgentTypeClaude)[0].ID
+	if !IsValidEffort(AgentTypeCodex, effort) {
+		t.Skipf("the agents share no effort level to test with")
+	}
+	if err := store.SetEffort(ctx, "s1", effort); err != nil {
+		t.Fatalf("SetEffort failed: %v", err)
+	}
+
+	if err := store.SetAgentType(ctx, "s1", AgentTypeCodex); err != nil {
+		t.Fatalf("SetAgentType failed: %v", err)
+	}
+
+	meta, _, _ := store.Get("s1")
+	if meta.Effort != effort {
+		t.Errorf("expected effort %q to survive the switch, got %q", effort, meta.Effort)
+	}
+}
+
+// Effort is validated per agent, not per model (see effort.go), so a model
+// change must leave it alone.
+func TestFileStore_SetModel_KeepsEffort(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	effort := EffortsForAgent(AgentTypeClaude)[0].ID
+	if err := store.SetEffort(ctx, "s1", effort); err != nil {
+		t.Fatalf("SetEffort failed: %v", err)
+	}
+
+	if err := store.SetModel(ctx, "s1", ModelsForAgent(AgentTypeClaude)[0].ID); err != nil {
+		t.Fatalf("SetModel failed: %v", err)
+	}
+
+	meta, _, _ := store.Get("s1")
+	if meta.Effort != effort {
+		t.Errorf("expected effort %q to survive a model change, got %q", effort, meta.Effort)
+	}
+}

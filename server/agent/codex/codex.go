@@ -468,6 +468,15 @@ func (s *mcpSession) buildStartConfig(prompt string) map[string]interface{} {
 		}
 	}
 
+	// Effort gets no field of its own on the `codex` tool call — its input
+	// schema has none (checked against the tool list codex mcp-server reports on
+	// codex-cli 0.153.0) — so it rides in as a config override, under the key
+	// config.toml uses. Codex forwards the value to the API's reasoning.effort
+	// without checking it, which is why session.IsValidEffort has to.
+	if s.opts.Effort != "" {
+		overrides["model_reasoning_effort"] = s.opts.Effort
+	}
+
 	config := map[string]interface{}{
 		"prompt": prompt,
 		"cwd":    s.opts.WorkDir,

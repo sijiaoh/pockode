@@ -44,6 +44,7 @@ interface UseChatMessagesReturn {
 	mode: SessionMode;
 	agentType: AgentType;
 	model: string;
+	effort: string;
 	isSessionActivated: boolean;
 	status: ConnectionStatus;
 	/**
@@ -60,6 +61,7 @@ interface UseChatMessagesReturn {
 	setMode: (mode: SessionMode) => Promise<void>;
 	setAgentType: (agentType: AgentType) => Promise<void>;
 	setModel: (model: string) => Promise<void>;
+	setEffort: (effort: string) => Promise<void>;
 	updatePermissionStatus: (
 		requestId: string,
 		status: "allowed" | "denied",
@@ -85,6 +87,7 @@ export function useChatMessages({
 	const [mode, setModeState] = useState<SessionMode>("default");
 	const [agentType, setAgentTypeState] = useState<AgentType>("claude");
 	const [model, setModelState] = useState("");
+	const [effort, setEffortState] = useState("");
 	const [settingError, setSettingError] = useState<string | null>(null);
 	const subscriptionIdRef = useRef<string | null>(null);
 
@@ -133,6 +136,17 @@ export function useChatMessages({
 		}
 	}, [sessionModelFromStore]);
 
+	// Same for the effort level, and for the same reason: choosing an agent that
+	// has no such level drops it server-side, and this is how that arrives.
+	const sessionEffortFromStore = useSessionStore(
+		(state) => state.sessions.find((s) => s.id === sessionId)?.effort,
+	);
+	useEffect(() => {
+		if (sessionEffortFromStore !== undefined) {
+			setEffortState(sessionEffortFromStore);
+		}
+	}, [sessionEffortFromStore]);
+
 	const handleNotification = useCallback((notification: ServerNotification) => {
 		setIsProcessRunning(notification.type !== "process_ended");
 
@@ -154,6 +168,7 @@ export function useChatMessages({
 		setModeState("default");
 		setAgentTypeState("claude");
 		setModelState("");
+		setEffortState("");
 		setSettingError(null);
 	}
 
@@ -187,6 +202,7 @@ export function useChatMessages({
 					setModeState(result.initial.mode);
 					setAgentTypeState(result.initial.agent_type);
 					setModelState(result.initial.model);
+					setEffortState(result.initial.effort);
 					let messages = replayHistory(result.initial.history);
 					// After server restart, history won't contain process_ended events
 					// for processes that were killed. Use the authoritative process state
@@ -317,7 +333,7 @@ export function useChatMessages({
 		last?.role === "assistant" && last.status === "streaming";
 	const isStreaming = lastIsSending || (lastIsStreaming && isProcessRunning);
 
-	// One path for all three session settings: each applies the new value only
+	// One path for every session setting: each applies the new value only
 	// once the server has taken it, so a rejection leaves the control showing what
 	// the session is actually set to, and records why for the UI to show.
 	const applySetting = useCallback(
@@ -376,6 +392,17 @@ export function useChatMessages({
 		[applySetting, actions, sessionId],
 	);
 
+	const setEffort = useCallback(
+		(newEffort: string) =>
+			applySetting(
+				"effort",
+				newEffort,
+				(e) => actions.setSessionEffort(sessionId, e),
+				setEffortState,
+			),
+		[applySetting, actions, sessionId],
+	);
+
 	const clearSettingError = useCallback(() => setSettingError(null), []);
 
 	return {
@@ -386,6 +413,7 @@ export function useChatMessages({
 		mode,
 		agentType,
 		model,
+		effort,
 		isSessionActivated,
 		status,
 		settingError,
@@ -400,6 +428,7 @@ export function useChatMessages({
 		setMode,
 		setAgentType,
 		setModel,
+		setEffort,
 		updatePermissionStatus,
 		updateQuestionStatus,
 	};

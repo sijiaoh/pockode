@@ -188,6 +188,7 @@ function ChatPanel({
 		mode,
 		agentType,
 		model,
+		effort,
 		isSessionActivated,
 		status,
 		settingError,
@@ -199,6 +200,7 @@ function ChatPanel({
 		setMode,
 		setAgentType,
 		setModel,
+		setEffort,
 		updatePermissionStatus,
 		updateQuestionStatus,
 	} = useChatMessages({
@@ -391,8 +393,10 @@ function ChatPanel({
 							<Engine
 								agentType={agentType}
 								model={model}
+								effort={effort}
 								onAgentTypeChange={setAgentType}
 								onModelChange={setModel}
+								onEffortChange={setEffort}
 								isSessionResolved={isSessionResolved}
 								isSessionActivated={isSessionActivated}
 								disabled={!isSessionResolved || isStreaming}

@@ -199,6 +199,48 @@ func (h *rpcMethodHandler) handleSessionModels(ctx context.Context, conn *jsonrp
 	}
 }
 
+func (h *rpcMethodHandler) handleSessionSetEffort(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.SessionSetEffortParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	// Written before the process is closed, for the same reason as
+	// session.set_model: which levels are valid depends on the session's agent
+	// type, and a level that agent does not offer must be refused without
+	// costing the user the CLI they have running.
+	if err := wt.SessionStore.SetEffort(ctx, params.SessionID, params.Effort); err != nil {
+		switch {
+		case errors.Is(err, session.ErrSessionNotFound):
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+		case errors.Is(err, session.ErrEffortNotAvailable):
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+		default:
+			h.replyInternalError(ctx, conn, req.ID, "failed to set effort", err, "sessionId", params.SessionID)
+		}
+		return
+	}
+
+	// The effort is only read when a CLI is launched, so a running process would
+	// keep the old one until it is replaced (same as session.set_model).
+	wt.ProcessManager.Close(params.SessionID)
+
+	h.log.Info("session effort changed", "sessionId", params.SessionID, "effort", params.Effort)
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send session set effort response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleSessionEfforts(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	result := rpc.SessionEffortsResult{Efforts: session.AllEfforts()}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send session efforts response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
 	notifier := h.state.getNotifier()
 	id, sessions, err := wt.SessionListWatcher.Subscribe(notifier)

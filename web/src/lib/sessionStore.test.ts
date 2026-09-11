@@ -10,6 +10,7 @@ const mockSession = (id: string, title = "Test"): SessionListItem => ({
 	mode: "default",
 	agent_type: "codex",
 	model: "",
+	effort: "",
 	activated: false,
 	state: "ended",
 	needs_input: false,

@@ -68,6 +68,10 @@ func (m *mockSessionStore) SetModel(ctx context.Context, sessionID string, model
 	return nil
 }
 
+func (m *mockSessionStore) SetEffort(ctx context.Context, sessionID string, effort string) error {
+	return nil
+}
+
 func (m *mockSessionStore) SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error {
 	return nil
 }

@@ -1109,6 +1109,7 @@ type SessionMeta struct {
     AgentType  AgentType // claude, codex
     Mode       Mode      // default, yolo
     Model      string    // agent-specific model id; empty = CLI decides
+    Effort     string    // agent-specific reasoning effort; empty = CLI decides
     NeedsInput bool      // Awaiting user permission/question response
     Unread     bool      // Has unread changes
 }
@@ -1165,6 +1166,54 @@ it would have to kill the session's process before finding out the request was
 invalid. So `session.set_model` writes to the store first and closes the process
 only once that write is accepted — the reverse of `session.set_mode`, which has
 nothing to reject and closes first.
+
+### Session Effort
+
+How much reasoning an agent spends before answering is carried exactly like the
+model: per session, agent-specific, read only at launch, and kept in a
+hand-written list (`session/effort.go`) that is the single source both
+`session.efforts` and `session.set_effort` read — so the UI can only offer what
+the server would accept. Empty means *pass nothing, let the CLI keep its own
+default* and, like the empty model, needed no migration. Everything
+[Session Models](#session-models) argues for that shape holds here unchanged,
+down to writing the store before closing the process so a refused level costs
+nobody their running CLI. Four things are its own.
+
+**Neither CLI refuses a level it does not understand, so the server must.**
+Claude answers an unknown `--effort` with a single warning line and then runs the
+turn at its default; Codex does not inspect the value at all and hands it to the
+API's `reasoning.effort`. So `IsValidEffort` is not the belt-and-braces it looks
+like next to `IsValidModel`: a level it let through would not fail anywhere
+downstream — it would run the turn at something the user did not choose and say
+nothing.
+
+**Codex receives it as a config override rather than an argument.** The `codex`
+tool call's input schema has no effort field at all, so the level rides in as a
+`config` override under `model_reasoning_effort` — the key `config.toml` uses for
+the same setting. Claude simply takes `--effort`.
+
+**The levels belong to the agent, not to the model.** Claude's `--effort` is a
+session flag whose accepted set does not vary with the model, and every model in
+`session/model.go`'s Codex list answered an invalid level with the same accepted
+set, so there is no per-model variation to encode. Should a model narrow its set
+later, the refusal comes from the API at the point of use and reaches the user as
+a real error — whereas the alternative is maintaining by hand a model-by-level
+matrix neither CLI publishes. Hence switching agent resets a level the new agent
+does not offer, the way it drops an unusable model, while switching model leaves
+the level alone.
+
+**An agent with no effort concept has no list at all, rather than an empty one.**
+That absence is the answer the UI needs: it distinguishes *this agent has nothing
+to offer* from *the list has not arrived*, and the empty effort stays valid for
+such an agent so nothing has to special-case it.
+
+Neither accepted set comes from a stable published source: Claude's is the
+parenthetical in its own `--help`, Codex's is the enum the API names when it
+refuses an invalid level. Both will drift with upstream, so `effort.go` records
+which CLI version each was read from and how — that is what makes the list
+checkable again later instead of merely re-guessable. One level the API accepts
+is deliberately left out of the Codex list (`none`): a coding agent asked not to
+reason at all is not a choice worth offering.
 
 ### Activation
 

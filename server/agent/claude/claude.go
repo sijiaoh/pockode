@@ -71,11 +71,11 @@ func ensureMCPConfig(dataDir string) (string, error) {
 	return configPath, nil
 }
 
-// Start launches a persistent Claude CLI process.
-func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
-	procCtx, cancel := context.WithCancel(ctx)
-
-	claudeArgs := []string{
+// buildArgs assembles every CLI flag that follows from the session's own state.
+// The MCP config flag is added by Start instead: it needs a file written to
+// disk, which this must stay free of to be worth testing.
+func buildArgs(opts agent.StartOptions, launch claudeLaunch) []string {
+	args := []string{
 		"--output-format", "stream-json",
 		"--input-format", "stream-json",
 		"--verbose",
@@ -83,27 +83,43 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 	// Always use permission-prompt-tool so we receive control_request events
 	// (including AskUserQuestion) regardless of mode.
-	claudeArgs = append(claudeArgs, "--permission-prompt-tool", "stdio")
+	args = append(args, "--permission-prompt-tool", "stdio")
 	if opts.Mode == session.ModeYolo {
-		claudeArgs = append(claudeArgs, "--permission-mode", "bypassPermissions")
+		args = append(args, "--permission-mode", "bypassPermissions")
 	}
 
 	if opts.Model != "" {
-		claudeArgs = append(claudeArgs, "--model", opts.Model)
+		args = append(args, "--model", opts.Model)
 	}
 
-	resumeState := newClaudeResumeStateManager(opts, slog.With("sessionId", opts.SessionID))
-	launch := resumeState.resolve()
+	// An unknown level only earns a warning from the CLI, which then runs at its
+	// default effort — so an unvalidated value here would be silently ignored
+	// rather than refused. session.IsValidEffort is what keeps that from
+	// happening (claude 2.1.263).
+	if opts.Effort != "" {
+		args = append(args, "--effort", opts.Effort)
+	}
+
 	if launch.sessionID != "" {
 		if launch.resume {
-			claudeArgs = append(claudeArgs, "--resume", launch.sessionID)
+			args = append(args, "--resume", launch.sessionID)
 			if launch.fork {
-				claudeArgs = append(claudeArgs, "--fork-session")
+				args = append(args, "--fork-session")
 			}
 		} else {
-			claudeArgs = append(claudeArgs, "--session-id", launch.sessionID)
+			args = append(args, "--session-id", launch.sessionID)
 		}
 	}
+
+	return args
+}
+
+// Start launches a persistent Claude CLI process.
+func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
+	procCtx, cancel := context.WithCancel(ctx)
+
+	resumeState := newClaudeResumeStateManager(opts, slog.With("sessionId", opts.SessionID))
+	claudeArgs := buildArgs(opts, resumeState.resolve())
 
 	// Add MCP config for work management tools (unless disabled for testing).
 	// The proxy must reach the single running server, whose server.json lives in

@@ -21,12 +21,12 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Layer | Path | Role |
 |-------|------|------|
 | RPC handlers | `server/ws/rpc_chat.go` | `chat.message`, `chat.interrupt`, `chat.messages.subscribe`, permission/question responses |
-| Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model`, each closing the running process because a CLI is told these only at launch; `session.models` lists the choices ([code/agent-integration.md](code/agent-integration.md#session-models)) |
+| Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model` / `set_effort`, each closing the running process because a CLI is told these only at launch; `session.models` and `session.efforts` list the choices ([models](code/agent-integration.md#session-models), [effort](code/agent-integration.md#session-effort)) |
 | Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessage` (user) and `SendSystemMessage` (system automation) share one persist+broadcast path |
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
 | Process manager | `server/process/manager.go` | Process lifecycle, state machine, idle reaper |
-| Frontend panel | `web/src/components/Chat/ChatPanel.tsx` | Message list, input bar, engine (agent + model) and mode selectors |
+| Frontend panel | `web/src/components/Chat/ChatPanel.tsx` | Message list, input bar, engine (agent + model + effort) and mode selectors |
 | Chat hook | `web/src/hooks/useChatMessages.ts` | Message state, streaming, permission/question handling |
 | RPC actions | `web/src/lib/rpc/chat.ts` | `sendMessage`, `interrupt`, `permissionResponse`, `questionResponse` |
 

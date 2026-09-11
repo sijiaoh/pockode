@@ -67,6 +67,7 @@ describe("useChatMessages", () => {
 					mode: "default",
 					agent_type: "claude",
 					model: "",
+					effort: "",
 				},
 			}),
 		);
@@ -112,6 +113,7 @@ describe("useChatMessages", () => {
 				mode: "default",
 				agent_type: "claude",
 				model: "",
+				effort: "",
 			},
 		}));
 
@@ -159,6 +161,7 @@ describe("useChatMessages", () => {
 						mode: "default",
 						agent_type: "claude",
 						model: "",
+						effort: "",
 					},
 				};
 			},

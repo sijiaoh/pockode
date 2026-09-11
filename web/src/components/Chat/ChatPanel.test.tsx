@@ -1,7 +1,7 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useAgentModelStore } from "../../lib/agentModelStore";
+import { useAgentOptionsStore } from "../../lib/agentOptionsStore";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
@@ -31,10 +31,12 @@ const mockState = vi.hoisted(() => ({
 	setSessionMode: vi.fn(() => Promise.resolve()),
 	setSessionAgentType: vi.fn(() => Promise.resolve()),
 	setSessionModel: vi.fn(() => Promise.resolve()),
+	setSessionEffort: vi.fn(() => Promise.resolve()),
 	startWork: vi.fn(() => Promise.resolve()),
 	onNotification: null as ((notification: ServerNotification) => void) | null,
 	mockHistory: [] as unknown[],
 	mockModel: "",
+	mockEffort: "",
 	uuidCounter: 0,
 }));
 
@@ -58,6 +60,7 @@ vi.mock("../../lib/wsStore", () => {
 		setSessionMode: mockState.setSessionMode,
 		setSessionAgentType: mockState.setSessionAgentType,
 		setSessionModel: mockState.setSessionModel,
+		setSessionEffort: mockState.setSessionEffort,
 		startWork: mockState.startWork,
 	});
 
@@ -102,6 +105,7 @@ describe("ChatPanel", () => {
 		mockState.uuidCounter = 0;
 		mockState.mockHistory = [];
 		mockState.mockModel = "";
+		mockState.mockEffort = "";
 		// Default: subscribe returns empty history and ended state
 		mockState.chatMessagesSubscribe.mockImplementation(() =>
 			Promise.resolve({
@@ -112,6 +116,7 @@ describe("ChatPanel", () => {
 					mode: "default",
 					agent_type: "claude",
 					model: mockState.mockModel,
+					effort: mockState.mockEffort,
 				},
 			}),
 		);
@@ -119,13 +124,20 @@ describe("ChatPanel", () => {
 		useSessionStore.setState({ sessions: [] });
 		useWorkStore.getState().reset();
 		useAgentRoleStore.getState().reset();
-		// Stands in for the one `session.models` fetch the app shell does.
-		useAgentModelStore.getState().setModels({
+		// Stands in for the one options fetch the app shell does. Only Claude has
+		// effort levels here, which is also how an agent without any is expressed.
+		useAgentOptionsStore.getState().setModels({
 			claude: [
 				{ id: "opus", label: "Opus" },
 				{ id: "sonnet", label: "Sonnet" },
 			],
 			codex: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+		});
+		useAgentOptionsStore.getState().setEfforts({
+			claude: [
+				{ id: "low", label: "Low" },
+				{ id: "high", label: "High" },
+			],
 		});
 	});
 
@@ -691,8 +703,9 @@ describe("ChatPanel", () => {
 	describe("engine selector", () => {
 		// The subscription result and the session list carry the same model; a
 		// fixture that disagreed would only be testing which one landed last.
-		const seedSession = (activated: boolean, model = "") => {
+		const seedSession = (activated: boolean, model = "", effort = "") => {
 			mockState.mockModel = model;
+			mockState.mockEffort = effort;
 			useSessionStore.setState({
 				sessions: [
 					{
@@ -703,6 +716,7 @@ describe("ChatPanel", () => {
 						mode: "default",
 						agent_type: "claude",
 						model,
+						effort,
 						activated,
 						state: "ended",
 						needs_input: false,
@@ -715,6 +729,11 @@ describe("ChatPanel", () => {
 		const openPanel = async (user: ReturnType<typeof userEvent.setup>) => {
 			await user.click(screen.getByRole("button", { name: /^Engine:/ }));
 		};
+
+		// Both lists name their empty value "Auto"; the legend above each is what
+		// tells them apart, for a screen reader as much as for this test.
+		const section = (title: string) =>
+			within(screen.getByRole("group", { name: title }));
 
 		// A first turn that failed before the agent said anything leaves messages
 		// in the transcript but never started the session, and switching agents is
@@ -744,7 +763,12 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 			await openPanel(user);
 
-			expect(screen.getByRole("radio", { name: /Codex/ })).toBeDisabled();
+			// Only the agent it is stuck with is listed: a third section made the
+			// scroll expensive, and an unselectable alternative buys nothing.
+			expect(screen.getByRole("radio", { name: /Claude/ })).toBeDisabled();
+			expect(
+				screen.queryByRole("radio", { name: /Codex/ }),
+			).not.toBeInTheDocument();
 			expect(
 				screen.getByText("Agent is locked once the session starts"),
 			).toBeInTheDocument();
@@ -818,7 +842,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 			await openPanel(user);
-			await user.click(screen.getByRole("radio", { name: /^Auto/ }));
+			await user.click(section("Model").getByRole("radio", { name: /^Auto/ }));
 
 			expect(mockState.setSessionModel).toHaveBeenCalledWith(
 				"test-session",
@@ -832,18 +856,31 @@ describe("ChatPanel", () => {
 		it("still offers Auto and the current model when the list failed to load", async () => {
 			const user = userEvent.setup();
 			seedSession(false, "opus-4");
-			useAgentModelStore.setState({ models: null, error: "request timed out" });
+			useAgentOptionsStore.setState({
+				models: null,
+				efforts: null,
+				error: "request timed out",
+			});
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 			await openPanel(user);
 
 			expect(
-				screen.getByText(/Couldn't load the model list: request timed out/),
+				screen.getByText(/Couldn't load the engine options: request timed out/),
 			).toBeInTheDocument();
 			expect(screen.getByRole("radio", { name: "opus-4" })).toBeChecked();
+			// One error line for both lists — they are one fetch as far as the panel
+			// is concerned — and the effort rows survive it for the same reason the
+			// model rows do: Auto is this layer's own constant.
+			expect(
+				section("Effort").getByRole("radio", { name: /^Auto/ }),
+			).toBeInTheDocument();
+			expect(
+				screen.queryAllByText(/Couldn't load the engine options/),
+			).toHaveLength(1);
 
-			await user.click(screen.getByRole("radio", { name: /^Auto/ }));
+			await user.click(section("Model").getByRole("radio", { name: /^Auto/ }));
 
 			expect(mockState.setSessionModel).toHaveBeenCalledWith(
 				"test-session",
@@ -887,6 +924,165 @@ describe("ChatPanel", () => {
 			expect(
 				screen.getByRole("button", { name: "Engine: Claude, Auto" }),
 			).toBeInTheDocument();
+		});
+
+		// Non-Auto only, and inside the model's truncation budget rather than
+		// beside it: on a narrow action bar there is room for one of the two, and
+		// the model is the session's identity while the effort is a setting.
+		it("shows the effort next to the model on the chip", async () => {
+			seedSession(false, "opus", "high");
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByRole("button", {
+					name: "Engine: Claude, Opus, High effort",
+				}),
+			).toBeInTheDocument();
+			expect(screen.getByText("· High")).toBeInTheDocument();
+		});
+
+		// Auto has no value to report: what the CLI then picks is its own business.
+		it("leaves the chip alone while the effort is Auto", async () => {
+			seedSession(false, "opus");
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByRole("button", { name: "Engine: Claude, Opus" }),
+			).toBeInTheDocument();
+		});
+
+		// The two are one string on the chip, so a level named from a list that has
+		// not arrived would flash its raw id beside a model that waited properly.
+		it("waits for both names before showing either on the chip", async () => {
+			seedSession(false, "", "high");
+			useAgentOptionsStore.setState({
+				models: null,
+				efforts: null,
+				error: null,
+			});
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByRole("button", { name: "Engine: Claude, loading" }),
+			).toBeInTheDocument();
+		});
+
+		it("sends the picked effort, and the empty one for Auto", async () => {
+			const user = userEvent.setup();
+			seedSession(false, "opus", "high");
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await openPanel(user);
+
+			await user.click(section("Effort").getByRole("radio", { name: "Low" }));
+			expect(mockState.setSessionEffort).toHaveBeenCalledWith(
+				"test-session",
+				"low",
+			);
+
+			await user.click(section("Effort").getByRole("radio", { name: /^Auto/ }));
+			expect(mockState.setSessionEffort).toHaveBeenCalledWith(
+				"test-session",
+				"",
+			);
+		});
+
+		// The levels belong to the agent, so switching agents has to swap the list
+		// — and an agent the server lists no levels for has to say so rather than
+		// leave a control that does nothing, or a gap at the bottom of a panel
+		// whose end nobody scrolls to.
+		it("says so when the chosen agent has no effort setting", async () => {
+			const user = userEvent.setup();
+			seedSession(false);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await openPanel(user);
+
+			expect(
+				section("Effort").getByRole("radio", { name: "High" }),
+			).toBeInTheDocument();
+
+			await user.click(screen.getByRole("radio", { name: /Codex/ }));
+
+			expect(
+				await screen.findByText("Codex has no effort setting."),
+			).toBeInTheDocument();
+			expect(section("Effort").queryByRole("radio")).not.toBeInTheDocument();
+		});
+
+		// The server drops a level the new agent cannot take, but until that lands
+		// the session really is still set to one — and hiding it behind "no effort
+		// setting" would leave the one value that needs clearing unreachable.
+		it("keeps a level the agent no longer offers visible and clearable", async () => {
+			const user = userEvent.setup();
+			seedSession(false, "", "high");
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await openPanel(user);
+			await user.click(screen.getByRole("radio", { name: /Codex/ }));
+
+			expect(
+				screen.queryByText("Codex has no effort setting."),
+			).not.toBeInTheDocument();
+			expect(
+				section("Effort").getByRole("radio", { name: "high" }),
+			).toBeChecked();
+
+			await user.click(section("Effort").getByRole("radio", { name: /^Auto/ }));
+			expect(mockState.setSessionEffort).toHaveBeenCalledWith(
+				"test-session",
+				"",
+			);
+		});
+
+		// Whether this agent has effort levels at all is not yet known, and every
+		// way of showing that would be inventing an answer.
+		it("hides the effort section until the lists arrive", async () => {
+			const user = userEvent.setup();
+			seedSession(false);
+			useAgentOptionsStore.setState({
+				models: null,
+				efforts: null,
+				error: null,
+			});
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await openPanel(user);
+
+			expect(screen.getByText("Loading models…")).toBeInTheDocument();
+			expect(
+				screen.queryByRole("group", { name: "Effort" }),
+			).not.toBeInTheDocument();
+		});
+
+		// Switching is a deliberate act whose only other feedback is the control
+		// snapping back, and the server's reason is what tells a refused level
+		// apart from a dropped connection.
+		it("shows the server's reason when an effort switch is refused", async () => {
+			const user = userEvent.setup();
+			seedSession(false);
+			mockState.setSessionEffort.mockRejectedValueOnce(
+				new Error("effort not available for this agent type"),
+			);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await openPanel(user);
+			await user.click(section("Effort").getByRole("radio", { name: "High" }));
+
+			const alert = await screen.findByRole("alert");
+			expect(alert).toHaveTextContent("Failed to change effort");
+			expect(alert).toHaveTextContent("effort not available");
 		});
 
 		it("reports a refused mode switch the same way", async () => {
