@@ -37,7 +37,8 @@ function ModeSelector({
 			try {
 				await onModeChange(newMode);
 			} catch {
-				// Error already logged in useChatMessages
+				// useChatMessages records the reason for the error bar above the
+				// action bar; there is nothing left for this component to do with it.
 			}
 		}
 		setIsOpen(false);

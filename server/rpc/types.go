@@ -95,6 +95,34 @@ type SessionForkParams struct {
 	Title string `json:"title,omitempty"`
 }
 
+type SessionSetModelParams struct {
+	SessionID string `json:"session_id"`
+	// Model must be one of session.ModelsForAgent for the session's current
+	// agent type, or "" to let the CLI pick.
+	Model string `json:"model"`
+}
+
+// SessionModelsResult carries the selectable models of every agent type, keyed
+// by agent type: switching a session's agent switches which list applies, so
+// the UI needs them all.
+type SessionModelsResult struct {
+	Models map[session.AgentType][]session.AgentOption `json:"models"`
+}
+
+type SessionSetEffortParams struct {
+	SessionID string `json:"session_id"`
+	// Effort must be one of session.EffortsForAgent for the session's current
+	// agent type, or "" to let the CLI keep its default.
+	Effort string `json:"effort"`
+}
+
+// SessionEffortsResult carries the selectable effort levels of every agent
+// type. An agent with no effort concept is absent from the map, which the UI
+// reads as "nothing to offer" — the same as an empty list.
+type SessionEffortsResult struct {
+	Efforts map[session.AgentType][]session.AgentOption `json:"efforts"`
+}
+
 type SessionMarkReadParams struct {
 	SessionID string `json:"session_id"`
 }
@@ -311,6 +339,8 @@ type ChatMessagesSubscribeResult struct {
 	State     string            `json:"state"` // "idle" | "running" | "ended"
 	Mode      session.Mode      `json:"mode"`
 	AgentType session.AgentType `json:"agent_type"`
+	Model     string            `json:"model"`
+	Effort    string            `json:"effort"`
 }
 
 type ChatMessagesUnsubscribeParams struct {

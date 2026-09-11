@@ -42,6 +42,7 @@ export const activate: Extension["activate"] = (ctx) => {
 	// 	EmptyState: CustomEmptyState,
 	// 	ChatTopContent: CustomChatTopContent,
 	// 	ModeSelector: null,
+	// 	EngineSelector: null,
 	// 	StopButton: null,
 	// });
 

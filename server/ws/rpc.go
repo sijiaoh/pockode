@@ -485,6 +485,14 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSessionSetMode(ctx, conn, req, wt)
 	case "session.fork":
 		h.handleSessionFork(ctx, conn, req, wt)
+	case "session.set_model":
+		h.handleSessionSetModel(ctx, conn, req, wt)
+	case "session.models":
+		h.handleSessionModels(ctx, conn, req)
+	case "session.set_effort":
+		h.handleSessionSetEffort(ctx, conn, req, wt)
+	case "session.efforts":
+		h.handleSessionEfforts(ctx, conn, req)
 	case "session.mark_read":
 		h.handleSessionMarkRead(ctx, conn, req, wt)
 	case "session.list.subscribe":

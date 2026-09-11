@@ -202,7 +202,7 @@ func TestProcess_OutOfTurnEventsKeepProcessIdle(t *testing.T) {
 			rec := &stateRecorder{}
 			m.SetOnStateChange(rec.record)
 
-			proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", true, session.AgentTypeClaude, session.ModeDefault)
+			proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", Activated: true, AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 			rec.waitForCount(t, 1) // initial idle
 			rec.reset()
 
@@ -293,7 +293,7 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 			rec := &stateRecorder{}
 			m.SetOnStateChange(rec.record)
 
-			proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+			proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 			rec.waitForCount(t, 1) // initial idle
 			if err := proc.SendMessage("go"); err != nil {
 				t.Fatalf("SendMessage: %v", err)
@@ -334,7 +334,7 @@ func TestProcess_ConsecutiveTurns(t *testing.T) {
 	rec := &stateRecorder{}
 	m.SetOnStateChange(rec.record)
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 	rec.waitForCount(t, 1)
 	rec.reset()
 
@@ -381,7 +381,7 @@ func TestManager_GetOrCreateProcess_NewSession(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	proc, created, err := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	proc, created, err := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestManager_ForwardsSeparateDataAndMCPDirs(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "/data/worktrees/feature-x", "/data", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	if _, _, err := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault); err != nil {
+	if _, _, err := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(mock.startCalls) != 1 {
@@ -432,8 +432,8 @@ func TestManager_GetOrCreateProcess_ExistingSession(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	proc1, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
-	proc2, created, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	proc1, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc2, created, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 
 	if created {
 		t.Error("expected created=false for existing session")
@@ -453,7 +453,7 @@ func TestManager_IdleReaper(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleTimeout)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 
 	waitUntil(t, "process reaped", func() bool { return m.GetProcess("sess-1") == nil })
 
@@ -472,7 +472,7 @@ func TestManager_IdleReaper_SparesABackgroundWait(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleTimeout)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 	sess := mock.session(t, "sess-1")
 
 	// Long enough for several reaper passes to look at it and leave it alone.
@@ -497,7 +497,7 @@ func TestManager_IdleReaper_EmitsProcessStateEnded(t *testing.T) {
 	rec := &stateRecorder{}
 	m.SetOnStateChange(rec.record)
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 
 	// The ended state is emitted by the streamEvents goroutine after the reaper
 	// closes the session, so it lands some time after the reap itself.
@@ -544,7 +544,7 @@ func TestManager_ActivityRefreshesIdleClock(t *testing.T) {
 			m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 			defer m.Shutdown()
 
-			proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+			proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 			before := proc.getLastActive()
 
 			time.Sleep(time.Millisecond) // ensure the clock has moved on
@@ -562,8 +562,8 @@ func TestManager_Shutdown_ClosesAllProcesses(t *testing.T) {
 	mock := &mockAgent{}
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-2", false, session.AgentTypeClaude, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-2", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 
 	m.Shutdown()
 
@@ -602,7 +602,7 @@ func TestManager_Shutdown_WaitsForTheEndedStateChange(t *testing.T) {
 		handled.Store(true)
 	})
 
-	if _, _, err := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault); err != nil {
+	if _, _, err := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
 		t.Fatalf("failed to create process: %v", err)
 	}
 
@@ -621,7 +621,7 @@ func TestManager_GetOrCreateProcess_AfterShutdown(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	m.Shutdown()
 
-	_, _, err := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	_, _, err := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 	if !errors.Is(err, ErrManagerClosed) {
 		t.Errorf("expected ErrManagerClosed, got %v", err)
 	}
@@ -636,8 +636,8 @@ func TestManager_Close_SpecificProcess(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-2", false, session.AgentTypeClaude, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-2", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 
 	m.Close("sess-1")
 
@@ -667,7 +667,7 @@ func TestManager_HasProcess(t *testing.T) {
 	}
 
 	// Create process
-	_, _, _ = m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 
 	if !m.HasProcess("sess-1") {
 		t.Error("expected HasProcess to return true after process creation")
@@ -683,7 +683,7 @@ func TestProcess_ClosedFlagSuppressesStateChanges(t *testing.T) {
 	rec := &stateRecorder{}
 	m.SetOnStateChange(rec.record)
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 
 	// Close sets the closed flag, preventing further state changes.
 	m.Close("sess-1")
@@ -712,7 +712,7 @@ func TestProcess_SetRunning_EmitsStateChange(t *testing.T) {
 		events = append(events, e)
 	})
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 
 	// Initial state is idle, creation emits idle
 	if len(events) != 1 || events[0].State != ProcessStateIdle {
@@ -743,7 +743,7 @@ func TestProcess_SetIdle_EmitsStateChange(t *testing.T) {
 		events = append(events, e)
 	})
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 	proc.SetRunning()
 
 	// SetIdle should emit idle
@@ -770,7 +770,7 @@ func TestProcess_SendMessage_SetsRunning(t *testing.T) {
 		events = append(events, e)
 	})
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), "sess-1", false, session.AgentTypeClaude, session.ModeDefault)
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
 
 	if proc.State() != ProcessStateIdle {
 		t.Fatalf("expected initial state to be idle")
@@ -802,7 +802,7 @@ func TestProcess_ActivationFollowsAgentOutput(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	if _, _, err := m.GetOrCreateProcess(ctx, "sess-1", false, session.AgentTypeClaude, session.ModeDefault); err != nil {
+	if _, _, err := m.GetOrCreateProcess(ctx, session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
 		t.Fatalf("failed to create process: %v", err)
 	}
 

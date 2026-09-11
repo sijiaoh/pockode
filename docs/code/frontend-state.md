@@ -21,11 +21,12 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  └─ worktreeStore + listeners                               │   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Domain Data Layer                                              │
-│  ├─ sessionStore ◀──┬── wsStore notifications               │   │
-│  ├─ workStore       │                                       │   │
-│  ├─ agentRoleStore  │                                       │   │
-│  ├─ settingsStore   │                                       │   │
-│  └─ authStore       │                                       │   │
+│  ├─ sessionStore ◀───┬── wsStore notifications              │   │
+│  ├─ workStore        │                                      │   │
+│  ├─ agentRoleStore   │                                      │   │
+│  ├─ agentOptionsStore│ (one fetch per connection)           │   │
+│  ├─ settingsStore    │                                      │   │
+│  └─ authStore        │                                      │   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Transport Layer                                                │
 │  └─ wsStore                                                     │
@@ -45,6 +46,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | sessionStore | Chat session list | State/Actions interface split |
 | workStore | Work items | State/Actions interface split |
 | agentRoleStore | AI roles | State/Actions interface split |
+| agentOptionsStore | Selectable models and effort levels per agent | Fetched once per connection, not subscribed |
 | settingsStore | App settings | State/Actions interface split |
 | authStore | Auth token | localStorage init |
 | inputStore | Draft text | persist middleware |
@@ -175,6 +177,25 @@ The catch is scope: those caches are keyed by query key, not by worktree, so
 switch completes. A worktree-scoped query missing from that list keeps serving
 the previous worktree's data — paths that look fine until they 404 on open —
 and it is the easy step to forget when adding a query.
+
+`agentOptionsStore` is the one store filled by a plain request/response call. The
+per-agent model and effort lists are constants compiled into the server, so
+nothing react-query manages applies to them: they cannot go stale, no
+notification invalidates them, a single hook asks for them, and being server-wide
+they are untouched by a worktree switch. The one thing that can change the answer
+is a reconnect to a server upgraded in the meantime, which `useAgentOptions`
+covers by fetching on every `connected` rather than once per app load.
+
+Both lists sit in that one store behind a **single** `error`, and
+`useAgentOptions` fetches them in one `Promise.allSettled`, even though the
+server answers them as two methods (`session.models`, `session.efforts`). That is
+not tidying. *This agent has no effort levels* and *the effort list never
+arrived* reach the selector as the same absence, and the only thing that tells
+them apart is whether an answer arrived at all — so that question must have one
+answer, not one per list. It does: *nothing has answered yet* is exactly
+`models === null && error === null`, a failed fetch counting as an answer. A list
+that did arrive is still kept when the other one failed; losing it would punish
+the working half for the broken one.
 
 ## Message Reducer
 
@@ -410,12 +431,13 @@ Built-in themes are typed (`ThemeName`), custom themes are runtime-registered.
 Allows extensions to replace UI components:
 
 ```typescript
-// web/src/lib/registries/chatUIRegistry.ts:41-68
+// web/src/lib/registries/chatUIRegistry.ts:55-82
 export interface ChatUIConfig {
   UserAvatar?: ComponentType<AvatarProps>;
   AssistantAvatar?: ComponentType<AvatarProps>;
   InputBar?: ComponentType<InputBarProps>;
   ModeSelector?: ComponentType<ModeSelectorProps> | null;  // null hides it
+  EngineSelector?: ComponentType<EngineSelectorProps> | null;  // agent + model + effort chip
   // ...
 }
 ```
