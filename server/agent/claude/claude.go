@@ -107,7 +107,7 @@ func buildArgs(opts agent.StartOptions, launch claudeLaunch) []string {
 				args = append(args, "--fork-session")
 			}
 			if launch.resumeAt != "" {
-				claudeArgs = append(claudeArgs, "--resume-session-at", launch.resumeAt)
+				args = append(args, "--resume-session-at", launch.resumeAt)
 			}
 		} else {
 			args = append(args, "--session-id", launch.sessionID)

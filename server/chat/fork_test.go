@@ -370,8 +370,9 @@ func TestFork_WhileSourceIsRunning(t *testing.T) {
 		{Type: agent.EventTypeMessage, Content: "second"},
 	})
 
-	proc, _, err := f.client.pm.GetOrCreateProcess(
-		context.Background(), "source", true, session.AgentTypeClaude, session.ModeYolo)
+	proc, _, err := f.client.pm.GetOrCreateProcess(context.Background(), session.SessionMeta{
+		ID: "source", Activated: true, AgentType: session.AgentTypeClaude, Mode: session.ModeYolo,
+	})
 	if err != nil {
 		t.Fatalf("GetOrCreateProcess: %v", err)
 	}
