@@ -23,6 +23,13 @@ const FILTER_THRESHOLD = 8;
  */
 const OVERWRITE_REFUSAL = /would be overwritten by checkout/i;
 
+const rowClass = (disabled: boolean) =>
+	`flex min-h-[44px] w-full items-center gap-2 px-4 py-2 text-left text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset ${
+		disabled
+			? "cursor-not-allowed text-th-text-muted"
+			: "text-th-text-primary hover:bg-th-bg-tertiary"
+	}`;
+
 function BranchSheet({ branches, onClose, onCheckout, onNewBranch }: Props) {
 	const [filter, setFilter] = useState("");
 	const [switchingTo, setSwitchingTo] = useState<string | null>(null);
@@ -63,13 +70,6 @@ function BranchSheet({ branches, onClose, onCheckout, onNewBranch }: Props) {
 			setSwitchingTo(null);
 		}
 	};
-
-	const rowClass = (disabled: boolean) =>
-		`flex min-h-[44px] w-full items-center gap-2 px-4 py-2 text-left text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset ${
-			disabled
-				? "cursor-not-allowed text-th-text-muted"
-				: "text-th-text-primary hover:bg-th-bg-tertiary"
-		}`;
 
 	return (
 		<Sheet

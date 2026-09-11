@@ -2,6 +2,21 @@ import type { SessionMode } from "./message";
 
 export type AgentType = "claude" | "codex";
 
+/**
+ * Whether an agent can follow a fork of a conversation, and from where, declared
+ * by the agent itself and delivered by the server (`agent.list`).
+ *
+ * The frontend keeps no opinion of its own about which agent can do what: every
+ * difference on this subject is one of these values, so the UI asks what an agent
+ * supports rather than which agent it is. Mirrors `agent.ForkSupport` in Go.
+ *
+ * - `none` — the agent cannot reopen an earlier conversation at all, so its
+ *   sessions cannot be forked and the server refuses to.
+ * - `any_message` — it can reopen a conversation at a chosen message in it, so a
+ *   fork from anywhere can carry that memory.
+ */
+export type ForkSupport = "none" | "any_message";
+
 export interface Settings {
 	default_agent_role_id?: string;
 	default_agent_type?: AgentType;

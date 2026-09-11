@@ -29,7 +29,7 @@ The Go server spawns AI CLI processes (Claude Code, Codex) as subprocesses, stre
 
 Infrastructure docs: [websocket-rpc-design.md](websocket-rpc-design.md) (RPC layer), [relay.md](relay.md) (NAT traversal), [cluster.md](cluster.md) (multi-project node orchestration), [agent-event.md](agent-event.md) (event stream), [watcher.md](watcher.md) (real-time subscriptions).
 
-Feature docs: [agent-chat.md](agent-chat.md) (chat), [pending-question-entry.md](pending-question-entry.md) (reaching an unanswered question in chat), [file.md](file.md) (file ops), [git.md](git.md) (git ops), [git-ui.md](git-ui.md) (the git panel's UI), [sidebar-ui.md](sidebar-ui.md) (the rules the Files and Git panels share), [responsive-ui.md](responsive-ui.md) (the width ladder, the pointer gates, and the hit-area floors — including where they currently stop).
+Feature docs: [agent-chat.md](agent-chat.md) (chat), [pending-question-entry.md](pending-question-entry.md) (reaching an unanswered question in chat), [session-fork-ui.md](session-fork-ui.md) (branching a new session off a chosen message), [file.md](file.md) (file ops), [git.md](git.md) (git ops), [git-ui.md](git-ui.md) (the git panel's UI), [sidebar-ui.md](sidebar-ui.md) (the rules the Files and Git panels share), [responsive-ui.md](responsive-ui.md) (the width ladder, the pointer gates, and the hit-area floors — including where they currently stop).
 
 ## Agent-Centric Workflow
 

@@ -46,6 +46,13 @@ func NewManager(registry *Registry, agents *agent.Registry, dataDir string, idle
 	}
 }
 
+// AgentForkSupports returns what every registered agent declares about being
+// forked. Agents are registered once per process, so the answer is the same for
+// every worktree.
+func (m *Manager) AgentForkSupports() map[session.AgentType]agent.ForkSupport {
+	return m.agents.ForkSupports()
+}
+
 func (m *Manager) Registry() *Registry {
 	return m.registry
 }
@@ -219,12 +226,12 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	})
 
 	chatClient := chat.NewClient(sessionStore, processManager)
-	chatClient.SetBroadcaster(func(sessionID string, event agent.MessageEvent, exclude any) {
+	chatClient.SetBroadcaster(func(sessionID string, event agent.MessageEvent, seq session.HistorySeq, exclude any) {
 		var n watch.Notifier
 		if exclude != nil {
 			n = exclude.(watch.Notifier)
 		}
-		chatMessagesWatcher.NotifyMessage(sessionID, event, n)
+		chatMessagesWatcher.NotifyMessage(sessionID, event, seq, n)
 	})
 
 	wt := &Worktree{

@@ -52,7 +52,15 @@ func (m *mockSessionStore) GetHistory(ctx context.Context, sessionID string) ([]
 	return nil, nil
 }
 
-func (m *mockSessionStore) AppendToHistory(ctx context.Context, sessionID string, record any) error {
+func (m *mockSessionStore) AppendToHistory(ctx context.Context, sessionID string, record any) (session.HistorySeq, error) {
+	return session.NoHistorySeq, nil
+}
+
+func (m *mockSessionStore) CreateFork(ctx context.Context, sessionID string, fork session.ForkSpec) (session.SessionMeta, error) {
+	return session.SessionMeta{}, nil
+}
+
+func (m *mockSessionStore) WriteHistory(ctx context.Context, sessionID string, records []json.RawMessage) error {
 	return nil
 }
 

@@ -13,6 +13,9 @@ import (
 
 // mockAgent starts sessions that do nothing, so that a process created by
 // mistake is visible to the manager rather than failing to start.
+//
+// It implements no agent.SessionForker, which is how an agent says its sessions
+// cannot be forked — the right default for the tests that are not about forking.
 type mockAgent struct{}
 
 func (mockAgent) Start(context.Context, agent.StartOptions) (agent.Session, error) {

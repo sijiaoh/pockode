@@ -4,6 +4,16 @@ import type { WorkType } from "./work";
 export type SessionMode = "default" | "yolo";
 export type ProcessState = "idle" | "running" | "ended";
 
+/**
+ * Where a forked session came from. Only the parent's id: the client resolves
+ * it against the session list it already holds, and a parent that is gone from
+ * that list is exactly the "forked from a deleted session" case. Copying the
+ * title here instead would keep showing the old one after a rename.
+ */
+export interface ForkOrigin {
+	session_id: string;
+}
+
 export interface SessionListItem {
 	id: string;
 	title: string;
@@ -16,7 +26,17 @@ export interface SessionListItem {
 	state: ProcessState;
 	needs_input: boolean;
 	unread: boolean;
+	/** Absent on a session that was created rather than forked. */
+	forked_from?: ForkOrigin;
 }
+
+/**
+ * One history record's address: its 1-based position in the session's history,
+ * assigned by the server and only ever quoted back. Never counted client-side —
+ * some records are written without being broadcast, so a local counter drifts
+ * and a fork would then cut in the wrong place (docs/session-fork-ui.md).
+ */
+export type HistorySeq = number;
 
 export type MessageStatus =
 	| "sending"
@@ -127,6 +147,13 @@ export interface UserMessage {
 	content: string;
 	status: MessageStatus;
 	createdAt: Date;
+	/**
+	 * The last history record folded into this message, and so the cut point a
+	 * fork anchored here uses. Absent when no record the client saw carries one:
+	 * a message this client sent itself (the server does not echo it back), or
+	 * one replayed from history written before seqs existed.
+	 */
+	anchorSeq?: HistorySeq;
 	// Present only for system-driven messages; absent means a user-typed message.
 	source?: MessageOrigin;
 	subtype?: string;
@@ -140,6 +167,8 @@ export interface AssistantMessage {
 	status: MessageStatus;
 	error?: string;
 	createdAt: Date;
+	/** See `UserMessage.anchorSeq`. */
+	anchorSeq?: HistorySeq;
 }
 
 /** One system message, folded into the card's collapsed timeline. */
@@ -340,6 +369,14 @@ export interface SessionDeleteParams {
 export interface SessionUpdateTitleParams {
 	session_id: string;
 	title: string;
+}
+
+export interface SessionForkParams {
+	session_id: string;
+	/** Inclusive: the new session keeps every record up to and including this one. */
+	anchor_seq: HistorySeq;
+	/** Empty copies the source session's title. */
+	title?: string;
 }
 
 export interface SessionListSubscribeResult {

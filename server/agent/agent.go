@@ -60,7 +60,9 @@ func (o StartOptions) MCPDir() string {
 	return o.DataDir
 }
 
-// Agent defines the interface for an AI agent.
+// Agent defines the interface for an AI agent. What an agent can do beyond
+// starting a session is said by the optional interfaces it implements, not by
+// declarations here — SessionForker is the one that exists today.
 type Agent interface {
 	// Start launches a persistent agent process and returns a Session.
 	// The process stays alive until the context is cancelled or Close is called.

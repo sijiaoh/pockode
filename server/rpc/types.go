@@ -82,6 +82,19 @@ type SessionSetModeParams struct {
 	Mode      session.Mode `json:"mode"`
 }
 
+// SessionForkParams asks for a new session holding this session's conversation
+// up to and including one record of its history.
+type SessionForkParams struct {
+	SessionID string `json:"session_id"` // the session to fork
+	// AnchorSeq is the seq of the last history record the new session keeps —
+	// the number the server put on that record, in the replayed history or in the
+	// live notification that delivered it. Inclusive, and it need not be the end
+	// of a turn.
+	AnchorSeq session.HistorySeq `json:"anchor_seq"`
+	// Title names the new session. Empty copies the source's title.
+	Title string `json:"title,omitempty"`
+}
+
 type SessionMarkReadParams struct {
 	SessionID string `json:"session_id"`
 }
@@ -353,6 +366,22 @@ type AskUserQuestionParams struct {
 	RequestID string                  `json:"request_id"`
 	ToolUseID string                  `json:"tool_use_id"`
 	Questions []agent.AskUserQuestion `json:"questions"`
+}
+
+// Agent namespace
+
+// AgentInfo describes one registered agent type: what the server knows about it
+// that a client cannot work out from its name.
+type AgentInfo struct {
+	Type session.AgentType `json:"type"`
+	// ForkSupport is the agent's own declaration of whether it can follow a fork
+	// of a conversation, and from where, sent so that the frontend asks what an
+	// agent can do instead of keeping a second copy of the answer per agent name.
+	ForkSupport agent.ForkSupport `json:"fork_support"`
+}
+
+type AgentListResult struct {
+	Agents []AgentInfo `json:"agents"`
 }
 
 // Settings namespace

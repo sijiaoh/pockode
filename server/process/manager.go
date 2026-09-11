@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -136,12 +137,14 @@ func (m *Manager) emitStateChangeEvent(e StateChangeEvent) {
 	}
 }
 
-// EmitMessage sends a message to the listener.
-func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent) {
+// EmitMessage sends a message to the listener. seq is where the event was
+// persisted in the session's history, or session.NoHistorySeq if it was not.
+func (m *Manager) EmitMessage(sessionID string, event agent.AgentEvent, seq session.HistorySeq) {
 	if m.messageListener != nil {
 		m.messageListener.OnChatMessage(ChatMessage{
 			SessionID: sessionID,
 			Event:     event,
+			Seq:       seq,
 		})
 	}
 }
@@ -222,6 +225,44 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, sessionID string, resu
 	}
 	slog.Info("process created", "sessionId", sessionID, "resume", resume, "agentType", agentType, "mode", mode)
 	return proc, true, nil
+}
+
+// ForkSupport returns what the agent behind agentType says about being forked,
+// which is the only thing anyone outside that agent's package needs to know to
+// decide whether and how a session of it can be forked.
+func (m *Manager) ForkSupport(agentType session.AgentType) (agent.ForkSupport, error) {
+	ag, err := m.agents.Get(agentType)
+	if err != nil {
+		return agent.ForkUnsupported, err
+	}
+	return agent.ForkSupportOf(ag), nil
+}
+
+// ForkAgentSession asks the agent behind agentType to carry its own context into
+// an already-created forked session, filling in the directories the manager owns.
+//
+// It reports whether the agent will remember the conversation in the new session.
+// False without an error is the ordinary answer for a fork the agent could not
+// follow: the fork stands and the caller has to tell the user.
+func (m *Manager) ForkAgentSession(ctx context.Context, agentType session.AgentType, opts agent.ForkOptions) (bool, error) {
+	ag, err := m.agents.Get(agentType)
+	if err != nil {
+		return false, err
+	}
+
+	forker, ok := ag.(agent.SessionForker)
+	if !ok {
+		// Callers ask ForkSupport before getting here, so this is a caller that
+		// forked a session whose agent had already said it cannot be. Reported
+		// rather than shrugged off as "carried nothing": staying silent would hand
+		// the user a fork whose agent was never consulted, which is
+		// indistinguishable from one it consulted and could not serve.
+		return false, fmt.Errorf("agent %q cannot fork sessions", agentType)
+	}
+
+	opts.WorkDir = m.workDir
+	opts.DataDir = m.dataDir
+	return forker.ForkSession(ctx, opts)
 }
 
 // GetProcess returns an existing process or nil.
@@ -526,7 +567,8 @@ func (p *Process) streamEvents(ctx context.Context) {
 		}
 
 		// Persist to history
-		if err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event)); err != nil {
+		seq, err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event))
+		if err != nil {
 			log.Error("failed to append to history", "error", err)
 		}
 
@@ -544,7 +586,7 @@ func (p *Process) streamEvents(ctx context.Context) {
 		}
 
 		// Emit to listener (ChatMessagesWatcher)
-		p.manager.EmitMessage(p.sessionID, event)
+		p.manager.EmitMessage(p.sessionID, event, seq)
 	}
 
 	log.Info("event stream ended")

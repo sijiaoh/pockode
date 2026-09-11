@@ -422,8 +422,12 @@ an inline parent.
 The shared definitions, so the common cases cannot drift apart:
 
 - `web/src/components/ui/iconButtonClass.ts` — the inline icon action inside a
-  list row or a group header (36 / coarse 44). Shared by both sidebar panels; it
-  moved out of `Git/` once the file tree stopped writing its own copy.
+  list row, a group header or the row under a chat bubble (36 / coarse 44).
+  Shared by both sidebar panels and chat; it moved out of `Git/` once the file
+  tree stopped writing its own copy.
+- `web/src/components/common/MenuRow.tsx`'s `menuRowClass` — a full-bleed row of
+  a menu sheet (48, clear of the floor for either pointer). Shared by the file
+  entry menu and the message menu.
 - `web/src/components/ui/ContentView.tsx`'s `actionIconButtonClass` — the
   bordered icon action in the bar under a file or a diff (36 / coarse 44). It was
   32px for everyone, under the floor for *either* pointer.

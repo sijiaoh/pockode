@@ -96,6 +96,9 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			if launch.fork {
 				claudeArgs = append(claudeArgs, "--fork-session")
 			}
+			if launch.resumeAt != "" {
+				claudeArgs = append(claudeArgs, "--resume-session-at", launch.resumeAt)
+			}
 		} else {
 			claudeArgs = append(claudeArgs, "--session-id", launch.sessionID)
 		}
@@ -597,6 +600,29 @@ const (
 type claudeResumeState struct {
 	SessionID string `json:"sessionId"`
 	Recovery  string `json:"recovery,omitempty"`
+	// Unstarted says this session has no provider conversation of its own yet,
+	// so the next launch must create one instead of resuming.
+	//
+	// It exists because a forked session is activated at birth: it holds a
+	// transcript, but the CLI has never run under its ID, which is otherwise
+	// what activation implies (see resolve). Without it such a session would
+	// open by resuming an ID no provider session ever had, fail, and walk the
+	// recovery ladder to reach the very launch it should have started with —
+	// warning the user about a lost conversation it never had.
+	//
+	// Only meaningful while SessionID is empty: recording a provider session is
+	// what stops this one being unstarted, so observe() clears both at once.
+	Unstarted bool `json:"unstarted,omitempty"`
+	// ResumeAt cuts the resumed conversation short at the CLI transcript message
+	// with this uuid, inclusive: --resume-session-at. A fork sets it so the new
+	// session starts from the point it was forked at rather than from wherever
+	// the source's conversation happens to have reached.
+	//
+	// Only meaningful together with Recovery == recoveryFork, which is the only
+	// stage that replays a conversation this session does not own. Cleared by
+	// observe() with everything else, because the cut is a property of the
+	// launch that seeded this session, not of the session the CLI mints from it.
+	ResumeAt string `json:"resumeAt,omitempty"`
 }
 
 // claudeLaunch is how the CLI should be started for this session.
@@ -606,6 +632,13 @@ type claudeLaunch struct {
 	resume bool
 	// fork adds --fork-session, which only applies together with resume.
 	fork bool
+	// resumeAt adds --resume-session-at, which only applies together with resume.
+	//
+	// Never without fork: cutting a conversation short and then continuing it
+	// under its own ID is how the source session would lose everything past the
+	// cut. Only the fork rung ever carries one, which is what keeps the pair
+	// together.
+	resumeAt string
 }
 
 // claudeResumeStateManager owns claude_resume.json: it picks how to launch the
@@ -631,7 +664,14 @@ func newClaudeResumeStateManager(opts agent.StartOptions, log *slog.Logger) *cla
 }
 
 func (m *claudeResumeStateManager) path() string {
-	return filepath.Join(m.opts.DataDir, "sessions", m.opts.SessionID, resumeStateFile)
+	return resumeStatePath(m.opts.DataDir, m.opts.SessionID)
+}
+
+// resumeStatePath locates a session's resume state without a manager, for the
+// sessions no manager owns yet: a fork reads the state of the session it came
+// from and seeds the state of the one being created.
+func resumeStatePath(dataDir, sessionID string) string {
+	return filepath.Join(dataDir, "sessions", sessionID, resumeStateFile)
 }
 
 // resolve decides how to launch the CLI, based on the recovery stage left
@@ -641,8 +681,10 @@ func (m *claudeResumeStateManager) path() string {
 //	|-----------------------|---------------------------------------------|
 //	| none, never activated | --session-id <pockodeID>                    |
 //	| none, activated       | --resume <pockodeID> --fork-session         |
+//	| unstarted             | --session-id <pockodeID>                    |
 //	| recovery ""           | --resume <sessionId>                        |
 //	| recovery "fork"       | --resume <sessionId> --fork-session         |
+//	|   + resumeAt          |   ... --resume-session-at <uuid>            |
 //	| recovery "fresh"      | --session-id <new UUID> (+ user warning)    |
 func (m *claudeResumeStateManager) resolve() claudeLaunch {
 	if m.opts.SessionID == "" {
@@ -657,7 +699,10 @@ func (m *claudeResumeStateManager) resolve() claudeLaunch {
 
 	if state.SessionID == "" {
 		m.anchorID = m.opts.SessionID
-		if !m.opts.Resume {
+		// Unstarted is the recorded answer to the same question activation is
+		// only a guess at, so it wins: this session has no provider
+		// conversation, whatever its transcript suggests.
+		if !m.opts.Resume || state.Unstarted {
 			m.stage = recoveryNone
 			return claudeLaunch{sessionID: m.opts.SessionID}
 		}
@@ -677,8 +722,13 @@ func (m *claudeResumeStateManager) resolve() claudeLaunch {
 	switch state.Recovery {
 	case recoveryFork:
 		m.stage = recoveryFork
-		m.log.Info("forking claude session after a failed resume", "claudeSessionId", state.SessionID)
-		return claudeLaunch{sessionID: state.SessionID, resume: true, fork: true}
+		// Reached either because a plain resume of this id failed, or because a
+		// forked session was pointed at the session it was forked from. Both want
+		// the same launch: replay the conversation without claiming its id. Only
+		// the second knows where the replay should stop.
+		m.log.Info("forking the recorded claude session",
+			"claudeSessionId", state.SessionID, "resumeAt", state.ResumeAt)
+		return claudeLaunch{sessionID: state.SessionID, resume: true, fork: true, resumeAt: state.ResumeAt}
 	case recoveryFresh:
 		m.stage = recoveryFresh
 		m.warnFresh = true
@@ -713,13 +763,17 @@ func (m *claudeResumeStateManager) pendingWarning() (agent.WarningEvent, bool) {
 }
 
 func (m *claudeResumeStateManager) load() (claudeResumeState, bool) {
-	data, err := os.ReadFile(m.path())
+	return loadResumeState(m.path(), m.log)
+}
+
+func loadResumeState(path string, log *slog.Logger) (claudeResumeState, bool) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return claudeResumeState{}, false
 	}
 	var state claudeResumeState
 	if err := json.Unmarshal(data, &state); err != nil {
-		m.log.Warn("failed to parse claude resume state", "error", err)
+		log.Warn("failed to parse claude resume state", "error", err)
 		return claudeResumeState{}, false
 	}
 	return state, true
@@ -883,6 +937,12 @@ type cliEvent struct {
 	Subtype   string          `json:"subtype,omitempty"`
 	Message   json.RawMessage `json:"message,omitempty"`
 	SessionID string          `json:"session_id,omitempty"`
+	// UUID is the CLI's id for this frame. On assistant and user frames it is
+	// also the uuid of the matching entry in the CLI's own transcript, which is
+	// what --resume-session-at takes; on every other frame (init, result,
+	// telemetry) it names something the transcript has no entry for, so those
+	// ids are deliberately not carried into history.
+	UUID string `json:"uuid,omitempty"`
 }
 
 type cliMessage struct {
@@ -1286,19 +1346,20 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent) []agent.
 			}
 		case "tool_use", "server_tool_use":
 			if len(textParts) > 0 {
-				events = append(events, agent.TextEvent{Content: strings.Join(textParts, "")})
+				events = append(events, agent.TextEvent{Content: strings.Join(textParts, ""), ProviderMessageID: event.UUID})
 				textParts = nil
 			}
 			events = append(events, agent.ToolCallEvent{
-				ToolUseID: block.ID,
-				ToolName:  block.Name,
-				ToolInput: block.Input,
+				ToolUseID:         block.ID,
+				ToolName:          block.Name,
+				ToolInput:         block.Input,
+				ProviderMessageID: event.UUID,
 			})
 		}
 	}
 
 	if len(textParts) > 0 {
-		events = append(events, agent.TextEvent{Content: strings.Join(textParts, "")})
+		events = append(events, agent.TextEvent{Content: strings.Join(textParts, ""), ProviderMessageID: event.UUID})
 	}
 
 	return events
@@ -1347,9 +1408,10 @@ func parseUserEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 				}
 			}
 			events = append(events, agent.ToolResultEvent{
-				ToolUseID:  block.ToolUseID,
-				ToolResult: content,
-				IsError:    block.IsError,
+				ToolUseID:         block.ToolUseID,
+				ToolResult:        content,
+				IsError:           block.IsError,
+				ProviderMessageID: event.UUID,
 			})
 
 		default:

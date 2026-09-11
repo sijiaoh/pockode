@@ -33,6 +33,30 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 	}
 }
 
+func (h *rpcMethodHandler) handleSessionFork(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.SessionForkParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	meta, err := wt.ChatClient.Fork(ctx, params.SessionID, params.AnchorSeq, params.Title)
+	if err != nil {
+		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
+		return
+	}
+
+	// Not logged here: chat.Client already logged the fork with what it did.
+	result := rpc.SessionListItem{
+		SessionMeta: meta,
+		State:       wt.ProcessManager.GetProcessState(meta.ID),
+	}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send session fork response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleSessionDelete(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
 	var params rpc.SessionDeleteParams
 	if err := unmarshalParams(req, &params); err != nil {

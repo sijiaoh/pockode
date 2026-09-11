@@ -189,19 +189,25 @@ type AgentEvent interface {
 
 type TextEvent struct {
 	Content string
+	// ProviderMessageID names the agent message this text came out of, when the
+	// agent gives its messages ids. See EventRecord.ProviderMessageID.
+	ProviderMessageID string
 }
 
 func (TextEvent) EventType() EventType { return EventTypeText }
 func (TextEvent) isAgentEvent()        {}
 
 func (e TextEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Content: e.Content}
+	return EventRecord{Type: e.EventType(), Content: e.Content, ProviderMessageID: e.ProviderMessageID}
 }
 
 type ToolCallEvent struct {
 	ToolName  string
 	ToolInput json.RawMessage
 	ToolUseID string
+	// ProviderMessageID names the agent message this call came out of, when the
+	// agent gives its messages ids. See EventRecord.ProviderMessageID.
+	ProviderMessageID string
 }
 
 func (ToolCallEvent) EventType() EventType { return EventTypeToolCall }
@@ -209,10 +215,11 @@ func (ToolCallEvent) isAgentEvent()        {}
 
 func (e ToolCallEvent) ToRecord() EventRecord {
 	return EventRecord{
-		Type:      e.EventType(),
-		ToolName:  e.ToolName,
-		ToolInput: e.ToolInput,
-		ToolUseID: e.ToolUseID,
+		Type:              e.EventType(),
+		ToolName:          e.ToolName,
+		ToolInput:         e.ToolInput,
+		ToolUseID:         e.ToolUseID,
+		ProviderMessageID: e.ProviderMessageID,
 	}
 }
 
@@ -222,6 +229,9 @@ type ToolResultEvent struct {
 	// IsError reports that the tool call failed. Best-effort: only set when the
 	// agent CLI says so, never inferred from the result text.
 	IsError bool
+	// ProviderMessageID names the agent message this result came out of, when
+	// the agent gives its messages ids. See EventRecord.ProviderMessageID.
+	ProviderMessageID string
 }
 
 func (ToolResultEvent) EventType() EventType { return EventTypeToolResult }
@@ -229,10 +239,11 @@ func (ToolResultEvent) isAgentEvent()        {}
 
 func (e ToolResultEvent) ToRecord() EventRecord {
 	return EventRecord{
-		Type:       e.EventType(),
-		ToolUseID:  e.ToolUseID,
-		ToolResult: e.ToolResult,
-		IsError:    e.IsError,
+		Type:              e.EventType(),
+		ToolUseID:         e.ToolUseID,
+		ToolResult:        e.ToolResult,
+		IsError:           e.IsError,
+		ProviderMessageID: e.ProviderMessageID,
 	}
 }
 

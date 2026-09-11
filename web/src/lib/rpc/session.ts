@@ -1,6 +1,8 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type {
+	HistorySeq,
 	SessionDeleteParams,
+	SessionForkParams,
 	SessionListItem,
 	SessionMode,
 	SessionSetAgentTypeParams,
@@ -11,6 +13,15 @@ import type { AgentType } from "../../types/settings";
 
 export interface SessionActions {
 	createSession: () => Promise<SessionListItem>;
+	/**
+	 * Creates a session holding this session's conversation up to and including
+	 * the record named by `anchorSeq`. The source session is left untouched.
+	 */
+	forkSession: (
+		sessionId: string,
+		anchorSeq: HistorySeq,
+		title: string,
+	) => Promise<SessionListItem>;
 	deleteSession: (sessionId: string) => Promise<void>;
 	updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
 	setSessionMode: (sessionId: string, mode: SessionMode) => Promise<void>;
@@ -35,6 +46,18 @@ export function createSessionActions(
 	return {
 		createSession: async (): Promise<SessionListItem> => {
 			return requireClient().request("session.create", {});
+		},
+
+		forkSession: async (
+			sessionId: string,
+			anchorSeq: HistorySeq,
+			title: string,
+		): Promise<SessionListItem> => {
+			return requireClient().request("session.fork", {
+				session_id: sessionId,
+				anchor_seq: anchorSeq,
+				title,
+			} as SessionForkParams);
 		},
 
 		deleteSession: async (sessionId: string): Promise<void> => {

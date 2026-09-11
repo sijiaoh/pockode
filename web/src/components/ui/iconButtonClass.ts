@@ -1,11 +1,11 @@
 /**
- * An inline icon action inside a list row or a group header: 36px of box, no
- * border, no fill, muted until hovered.
+ * An inline icon action inside a list row, a group header or the row under a
+ * chat bubble: 36px of box, no border, no fill, muted until hovered.
  *
  * One definition rather than one per call site, because the whole point of the
- * rung is that stage, unstage, discard, amend and a file entry's `…` all read
- * as the same weight — a copy of the string per feature is a chance for one of
- * them to drift louder.
+ * rung is that stage, unstage, discard, amend, a file entry's `…` and a
+ * message's `…` all read as the same weight — a copy of the string per feature
+ * is a chance for one of them to drift louder.
  *
  * 36px is the visual rung and the floor for a mouse; a coarse pointer grows the
  * box to 44px instead, so the weight stays put on a desktop and a thumb still

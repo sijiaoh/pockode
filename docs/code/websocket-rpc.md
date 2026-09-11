@@ -39,6 +39,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `settings.*` | app | `ws/rpc_settings.go` |
 | `work.*` | app | `ws/rpc_work.go` |
 | `agent_role.*` | app | `ws/rpc_agent_role.go` |
+| `agent.*` | app | `ws/rpc_agent.go` |
 
 - **Worktree scope**: Operations that depend on the current working directory (files, Git, etc.)
 - **App scope**: Global operations across worktrees (settings, project management, etc.)
@@ -508,8 +509,12 @@ server side can see. A bare "failed to create session" strands that failure with
 no trace anywhere: nothing in the log, and nothing for the frontend to show but
 the phrase repeated back. Every `session.*` handler replies this way, as does the
 session lookup in `chat.messages.subscribe`; handlers written before the helper
-still answer with a bare phrase or a bare cause. The chat handlers keep their own
-`replyErrorForChat`: what is not the server's fault (no such session, no live
+still answer with a bare phrase or a bare cause. `session.fork` is the one
+`session.*` method that does not, because it runs the chat client's work: its
+distinctive failures — no such session, an anchor naming no record, an agent that
+cannot be forked at all — are the caller's, and it reaches for the chat helper
+below rather than grow a second mapping of the same errors. The chat handlers
+keep their own `replyErrorForChat`: what is not the server's fault (no such session, no live
 process) becomes a client error, and anything else is logged there and forwarded
 as the cause — a failing agent start has to leave a trace even when the client
 stopped waiting for the reply.

@@ -22,6 +22,7 @@ import type {
 	SystemMessageStep,
 	ToolCall,
 } from "../../types/message";
+import { isForkableMessage } from "../../utils/forkAnchor";
 import { formatFilePath } from "../../utils/path";
 import { systemActionLabel } from "../../utils/systemMessage";
 import {
@@ -31,6 +32,7 @@ import {
 import { ScrollableContent, Spinner } from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
 import { MarkdownContent } from "./MarkdownContent";
+import MessageActions from "./MessageActions";
 import TaskGroupItem from "./TaskGroupItem";
 import ToolResultDisplay from "./ToolResultDisplay";
 import WorkCardItem from "./WorkCardItem";
@@ -566,6 +568,8 @@ interface Props {
 		answers: Record<string, string> | null,
 	) => void;
 	onOpenWorkDetail?: (workId: string) => void;
+	/** Must be stable: this component is memoized. */
+	onOpenMessageMenu?: (messageId: string) => void;
 }
 
 const MessageItem = memo(function MessageItem({
@@ -576,12 +580,21 @@ const MessageItem = memo(function MessageItem({
 	onPermissionRespond,
 	onQuestionRespond,
 	onOpenWorkDetail,
+	onOpenMessageMenu,
 }: Props) {
 	const chatUIConfig = useChatUIConfig();
 	const UserAvatar = chatUIConfig.UserAvatar;
 	const AssistantAvatar = chatUIConfig.AssistantAvatar;
 	const userBubbleClass = chatUIConfig.userBubbleClass ?? "";
 	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
+
+	const actions =
+		onOpenMessageMenu && isForkableMessage(message) ? (
+			<MessageActions
+				side={message.role}
+				onOpenMenu={() => onOpenMessageMenu(message.id)}
+			/>
+		) : null;
 
 	if (message.role === "work") {
 		return (
@@ -605,72 +618,78 @@ const MessageItem = memo(function MessageItem({
 			);
 		}
 		return (
-			<div className="flex items-end justify-end gap-2">
-				<div
-					className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-user-bubble p-2.5 text-th-user-bubble-text sm:p-3 ${userBubbleClass}`}
-				>
-					<p className="whitespace-pre-wrap">{message.content}</p>
+			<>
+				<div className="flex items-end justify-end gap-2">
+					<div
+						className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-user-bubble p-2.5 text-th-user-bubble-text sm:p-3 ${userBubbleClass}`}
+					>
+						<p className="whitespace-pre-wrap">{message.content}</p>
+					</div>
+					{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
 				</div>
-				{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
-			</div>
+				{actions}
+			</>
 		);
 	}
 
 	// Assistant message
 	return (
-		<div className="flex items-end justify-start gap-2">
-			{AssistantAvatar && <AssistantAvatar className="size-10 shrink-0" />}
-			<div
-				className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3 ${assistantBubbleClass}`}
-			>
-				{message.parts.length > 0 && (
-					<div className="space-y-2">
-						{message.parts.map((part, index) => {
-							const key =
-								part.type === "permission_request"
-									? part.request.requestId
-									: part.type === "ask_user_question"
+		<>
+			<div className="flex items-end justify-start gap-2">
+				{AssistantAvatar && <AssistantAvatar className="size-10 shrink-0" />}
+				<div
+					className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3 ${assistantBubbleClass}`}
+				>
+					{message.parts.length > 0 && (
+						<div className="space-y-2">
+							{message.parts.map((part, index) => {
+								const key =
+									part.type === "permission_request"
 										? part.request.requestId
-										: part.type === "tool_call"
-											? // Index suffix: Claude Code resends tool_call after permission approval
-												`${part.tool.id}-${index}`
-											: part.type === "task_group"
-												? // Keyed on the anchor Task so a newly spawned one grows
-													// the group instead of remounting it and dropping what
-													// the user had expanded.
-													part.tasks[0].toolUseId
-												: `${part.type}-${index}`;
-							return (
-								<ContentPartItem
-									key={key}
-									part={part}
-									isCodex={isCodex}
-									onPermissionRespond={onPermissionRespond}
-									onQuestionRespond={onQuestionRespond}
-								/>
-							);
-						})}
-					</div>
-				)}
+										: part.type === "ask_user_question"
+											? part.request.requestId
+											: part.type === "tool_call"
+												? // Index suffix: Claude Code resends tool_call after permission approval
+													`${part.tool.id}-${index}`
+												: part.type === "task_group"
+													? // Keyed on the anchor Task so a newly spawned one grows
+														// the group instead of remounting it and dropping what
+														// the user had expanded.
+														part.tasks[0].toolUseId
+													: `${part.type}-${index}`;
+								return (
+									<ContentPartItem
+										key={key}
+										part={part}
+										isCodex={isCodex}
+										onPermissionRespond={onPermissionRespond}
+										onQuestionRespond={onQuestionRespond}
+									/>
+								);
+							})}
+						</div>
+					)}
 
-				{/* Status indicator */}
-				{message.status === "sending" && (
-					<Spinner variant="current" className="mt-2" />
-				)}
-				{message.status === "streaming" && isLast && isProcessRunning && (
-					<Spinner variant="current" className="mt-2" />
-				)}
-				{message.status === "error" && (
-					<p className="mt-2 text-sm text-th-error">{message.error}</p>
-				)}
-				{message.status === "interrupted" && (
-					<p className="mt-2 text-sm text-th-text-muted">Interrupted</p>
-				)}
-				{message.status === "process_ended" && (
-					<p className="mt-2 text-sm text-th-warning">Process ended</p>
-				)}
+					{/* Status indicator */}
+					{message.status === "sending" && (
+						<Spinner variant="current" className="mt-2" />
+					)}
+					{message.status === "streaming" && isLast && isProcessRunning && (
+						<Spinner variant="current" className="mt-2" />
+					)}
+					{message.status === "error" && (
+						<p className="mt-2 text-sm text-th-error">{message.error}</p>
+					)}
+					{message.status === "interrupted" && (
+						<p className="mt-2 text-sm text-th-text-muted">Interrupted</p>
+					)}
+					{message.status === "process_ended" && (
+						<p className="mt-2 text-sm text-th-warning">Process ended</p>
+					)}
+				</div>
 			</div>
-		</div>
+			{actions}
+		</>
 	);
 });
 

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
@@ -28,6 +28,12 @@ const mockState = vi.hoisted(() => ({
 	chatMessagesSubscribe: vi.fn(),
 	chatMessagesUnsubscribe: vi.fn(),
 	startWork: vi.fn(() => Promise.resolve()),
+	forkSession: vi.fn(),
+	// The agents the server declares. The fork UI here is tested on an agent that
+	// can be forked; the refusal has its own test below.
+	listAgents: vi.fn(() =>
+		Promise.resolve([{ type: "claude", fork_support: "any_message" }]),
+	),
 	onNotification: null as ((notification: ServerNotification) => void) | null,
 	mockHistory: [] as unknown[],
 	uuidCounter: 0,
@@ -51,6 +57,8 @@ vi.mock("../../lib/wsStore", () => {
 		chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
 		markSessionRead: vi.fn(() => Promise.resolve()),
 		startWork: mockState.startWork,
+		forkSession: mockState.forkSession,
+		listAgents: mockState.listAgents,
 	});
 
 	const mockStore = ((selector: (state: unknown) => unknown) => {
@@ -72,7 +80,7 @@ vi.mock("../../lib/wsStore", () => {
 		actions: createMockActions(),
 	});
 
-	return { useWSStore: mockStore };
+	return { useWSStore: mockStore, wsActions: createMockActions() };
 });
 
 vi.mock("../../utils/uuid", () => ({
@@ -106,6 +114,7 @@ describe("ChatPanel", () => {
 			}),
 		);
 		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
+		mockState.forkSession.mockReset();
 		useSessionStore.setState({ sessions: [] });
 		useWorkStore.getState().reset();
 		useAgentRoleStore.getState().reset();
@@ -893,6 +902,209 @@ describe("ChatPanel", () => {
 			expect(screen.getByText("Bash")).toBeInTheDocument();
 			await user.click(screen.getByText("Bash"));
 			expect(screen.getByText("file.txt")).toBeInTheDocument();
+		});
+	});
+	describe("forking a session", () => {
+		const forkHistory = [
+			{ type: "message", content: "Hello", seq: 1 },
+			{ type: "text", content: "Hi there!", seq: 2 },
+			{ type: "done", seq: 3 },
+			{ type: "message", content: "Try again", seq: 4 },
+			{ type: "text", content: "Second answer", seq: 5 },
+			{ type: "done", seq: 6 },
+		];
+
+		const forkedSession = {
+			id: "forked-session",
+			title: "Test Chat (fork)",
+			created_at: "2024-01-01T00:00:00Z",
+			updated_at: "2024-01-01T00:00:00Z",
+			mode: "default" as const,
+			agent_type: "claude" as const,
+			activated: true,
+			state: "idle" as const,
+			needs_input: false,
+			unread: false,
+			forked_from: { session_id: "test-session" },
+		};
+
+		// Opens the menu of the first assistant answer and confirms the fork sheet.
+		const openForkSheet = async (user: ReturnType<typeof userEvent.setup>) => {
+			const menuButtons = screen.getAllByRole("button", {
+				name: "Message actions",
+			});
+			await user.click(menuButtons[1]);
+			await user.click(screen.getByRole("button", { name: "Fork from here" }));
+		};
+
+		// The capability comes from the server, so the only honest way to stop a user
+		// here is to show the row and say the agent cannot do it. Driven by the
+		// declaration, not by which agent the session runs.
+		it("offers a disabled fork with a reason when the agent cannot be forked", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			mockState.listAgents.mockResolvedValueOnce([
+				{ type: "claude", fork_support: "none" },
+			]);
+
+			// The menu exists only where forking can navigate to the result.
+			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
+			await waitForHistoryLoad();
+
+			const menuButtons = screen.getAllByRole("button", {
+				name: "Message actions",
+			});
+			await user.click(menuButtons[1]);
+
+			const row = await screen.findByRole("button", {
+				name: /Fork from here/,
+			});
+			expect(row).toBeDisabled();
+			expect(row).toHaveTextContent(/cannot be forked/);
+
+			await user.click(row);
+			expect(mockState.forkSession).not.toHaveBeenCalled();
+		});
+
+		it("forks from the chosen message and opens the new session", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			mockState.forkSession.mockResolvedValue(forkedSession);
+			const onSelectSession = vi.fn();
+
+			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
+			await waitForHistoryLoad();
+
+			await openForkSheet(user);
+
+			// The anchor is echoed back, and so is what forking there costs.
+			const sheet = within(screen.getByRole("dialog"));
+			expect(sheet.getByText("Hi there!")).toBeInTheDocument();
+			expect(
+				sheet.getByText(/The 2 messages after it stay in this session/),
+			).toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Fork" }));
+
+			await waitFor(() =>
+				expect(onSelectSession).toHaveBeenCalledWith("forked-session"),
+			);
+			// Seq 3, the last record folded into that answer — never a count of the
+			// messages above it.
+			expect(mockState.forkSession).toHaveBeenCalledWith(
+				"test-session",
+				3,
+				"Test Chat (fork)",
+			);
+			// Findable straight away, rather than only once the subscription
+			// catches up.
+			expect(useSessionStore.getState().sessions.map((s) => s.id)).toContain(
+				"forked-session",
+			);
+		});
+
+		// Landing the user in a session that may not exist is worse than the error.
+		it("keeps the sheet open and never navigates when the fork fails", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			mockState.forkSession.mockRejectedValue(new Error("session not found"));
+			const onSelectSession = vi.fn();
+
+			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
+			await waitForHistoryLoad();
+
+			await openForkSheet(user);
+			await user.click(screen.getByRole("button", { name: "Fork" }));
+
+			await waitFor(() =>
+				expect(screen.getByRole("alert")).toHaveTextContent(
+					"session not found",
+				),
+			);
+			expect(onSelectSession).not.toHaveBeenCalled();
+			// Retrying is pressing Fork again.
+			expect(screen.getByRole("button", { name: "Fork" })).toBeEnabled();
+		});
+
+		// The live path and the replay path have to agree: a seq that only
+		// survived one of them would fork from a different place depending on
+		// whether the user had reloaded.
+		it("anchors on a seq that arrived live, not only on replayed history", async () => {
+			const user = userEvent.setup();
+			mockState.forkSession.mockResolvedValue(forkedSession);
+			const onSelectSession = vi.fn();
+
+			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
+			await waitForHistoryLoad();
+
+			act(() => {
+				mockState.onNotification?.({
+					type: "message",
+					content: "Hello",
+					seq: 7,
+				} as ServerNotification);
+				mockState.onNotification?.({
+					type: "text",
+					content: "Hi there!",
+					seq: 8,
+				} as ServerNotification);
+				mockState.onNotification?.({
+					type: "done",
+					seq: 9,
+				} as ServerNotification);
+			});
+
+			await openForkSheet(user);
+			await user.click(screen.getByRole("button", { name: "Fork" }));
+
+			await waitFor(() =>
+				expect(mockState.forkSession).toHaveBeenCalledWith(
+					"test-session",
+					9,
+					"Test Chat (fork)",
+				),
+			);
+		});
+
+		it("offers no menu on a message that has no settled cut point", async () => {
+			mockState.mockHistory = [
+				// No seq: this client sent the message, so the server never echoed a
+				// record back for it.
+				{ type: "message", content: "Hello" },
+				{ type: "text", content: "Still writing", seq: 1 },
+			];
+
+			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.queryByRole("button", { name: "Message actions" }),
+			).toBeNull();
+		});
+
+		it("says at the top of the transcript where the session came from", async () => {
+			const user = userEvent.setup();
+			const onSelectSession = vi.fn();
+			useSessionStore.setState({
+				sessions: [
+					{
+						...forkedSession,
+						id: "test-session",
+						forked_from: { session_id: "parent-session" },
+					},
+					{ ...forkedSession, id: "parent-session", title: "Parent chat" },
+				],
+			});
+			mockState.mockHistory = forkHistory;
+
+			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
+			await waitForHistoryLoad();
+
+			const banner = screen.getByRole("button", {
+				name: /Forked from "Parent chat"/,
+			});
+			await user.click(banner);
+			expect(onSelectSession).toHaveBeenCalledWith("parent-session");
 		});
 	});
 });

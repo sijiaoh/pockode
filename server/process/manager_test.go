@@ -834,3 +834,24 @@ func TestProcess_ActivationFollowsAgentOutput(t *testing.T) {
 		return meta.Activated
 	})
 }
+
+// TestForkAgentSession_AgentThatCannotFork: asked to fork an agent that
+// implements no agent.SessionForker — a caller that skipped ForkSupport — the
+// manager reports it rather than answering "carried nothing". Staying quiet would
+// hand the user a fork whose agent was never consulted, told apart from one that
+// was consulted and could not help by nothing at all.
+func TestForkAgentSession_AgentThatCannotFork(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	registry := agent.NewRegistry()
+	registry.Register(session.AgentTypeClaude, &mockAgent{})
+	m := NewManager(registry, t.TempDir(), t.TempDir(), "", store, time.Minute)
+	defer m.Shutdown()
+
+	carried, err := m.ForkAgentSession(context.Background(), session.AgentTypeClaude, agent.ForkOptions{})
+	if err == nil {
+		t.Fatal("a declaration with nothing behind it was accepted silently")
+	}
+	if carried {
+		t.Error("carried = true on a failure")
+	}
+}

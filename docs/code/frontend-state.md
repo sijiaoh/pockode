@@ -162,6 +162,14 @@ Stores hold what the app itself owns (UI preferences) and what arrives as a
 stream of subscription notifications. A watcher notification and a cached query
 compose: `*.changed` says something moved, and the query refetches.
 
+One fetch sits outside both: `agent.list`, which reports what each registered
+agent declares about being forked. Its answer comes from the implementations
+compiled into the server, so it cannot change while that server runs — there is
+no staleness to manage and nothing to invalidate, and `lib/rpc/agent.ts` caches
+the promise for the tab instead. That hand-rolled cache is the price, and it is
+only worth paying for a value that is constant by construction; anything that can
+change server-side belongs in react-query with the rest.
+
 The catch is scope: those caches are keyed by query key, not by worktree, so
 `queryClient.ts` invalidates every key in `WORKTREE_DEPENDENT_QUERY_KEYS` once a
 switch completes. A worktree-scoped query missing from that list keeps serving
@@ -210,6 +218,17 @@ would open a fresh `streaming` bubble, and `isStreaming` — read off the last
 message's status, gated on the process still being alive — would report the
 stopped turn as running and keep the input blocked. An interrupt is exactly
 the case that gate does not catch: it ends the turn, not the process.
+
+The same lateness decides where a fork can cut. A message carries the `anchorSeq`
+of the last history record folded into it, and the reducer stamps it on the
+newest message only — `applyServerEvent` is the one path both replayed
+history and live notifications take, so the two cannot disagree about where a
+cut lands. A record that lands in an earlier message goes unstamped rather than
+raise that message's anchor past the messages below it, which would make "keep
+everything up to and including this message" quietly keep more than the user can
+see. The client is free to leave records unaddressable because it only anchors
+on ones the server gave it a seq for; what it must never do is number them
+itself ([agent-integration.md](agent-integration.md#history-storage)).
 
 `complete` is deliberately excluded from that rule: when a background wait runs
 out of budget Pockode delivers the `done` itself

@@ -5,6 +5,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -117,6 +118,13 @@ func TestIntegration_RecoversBurnedSessionID(t *testing.T) {
 // runTurn drives one complete message through a real CLI process.
 func runTurn(t *testing.T, workDir, dataDir, sessionID string, resume bool) {
 	t.Helper()
+	runPrompt(t, workDir, dataDir, sessionID, resume, "Reply with exactly: ok")
+}
+
+// runPrompt drives one complete message through a real CLI process and returns
+// everything the agent said.
+func runPrompt(t *testing.T, workDir, dataDir, sessionID string, resume bool, prompt string) string {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -133,10 +141,11 @@ func runTurn(t *testing.T, workDir, dataDir, sessionID string, resume bool) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage("Reply with exactly: ok"); err != nil {
+	if err := sess.SendMessage(prompt); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
+	var said strings.Builder
 	for {
 		select {
 		case event, ok := <-sess.Events():
@@ -144,15 +153,252 @@ func runTurn(t *testing.T, workDir, dataDir, sessionID string, resume bool) {
 				t.Fatal("channel closed before done event")
 			}
 			switch e := event.(type) {
+			case agent.TextEvent:
+				said.WriteString(e.Content)
 			case agent.ErrorEvent:
 				t.Fatalf("error event: %s", e.Error)
 			case agent.DoneEvent:
-				return
+				return said.String()
 			}
 		case <-ctx.Done():
 			t.Fatal("timeout waiting for done event")
 		}
 	}
+}
+
+// TestIntegration_ForkSessionCarriesContext is the check behind the whole
+// feature: that resuming the source's provider session with --fork-session
+// really does give the new session the earlier conversation, and really does
+// leave the source's own transcript alone.
+func TestIntegration_ForkSessionCarriesContext(t *testing.T) {
+	workDir := t.TempDir()
+	dataDir := t.TempDir()
+	sourceID := uuid.Must(uuid.NewV7()).String()
+
+	runPrompt(t, workDir, dataDir, sourceID, false,
+		"Remember this word: BANANA. Reply with exactly: ok")
+	sourceState := readIntegrationResumeState(t, dataDir, sourceID)
+
+	forkID := uuid.Must(uuid.NewV7()).String()
+	carried, err := New().ForkSession(context.Background(), agent.ForkOptions{
+		WorkDir:         workDir,
+		DataDir:         dataDir,
+		SourceSessionID: sourceID,
+		SessionID:       forkID,
+	})
+	if err != nil {
+		t.Fatalf("ForkSession: %v", err)
+	}
+	if !carried {
+		t.Fatal("fork of a whole, idle conversation reported no carried context")
+	}
+
+	const question = "What word did I ask you to remember? Reply with exactly that word."
+	said := runPrompt(t, workDir, dataDir, forkID, true, question)
+	if !strings.Contains(said, "BANANA") {
+		t.Fatalf("the forked session did not remember the conversation, it said: %s", said)
+	}
+
+	forkState := readIntegrationResumeState(t, dataDir, forkID)
+	if forkState.SessionID == sourceState.SessionID {
+		t.Fatalf("the fork claimed the source's provider session %q", sourceState.SessionID)
+	}
+	if forkState.Recovery != recoveryNone {
+		t.Errorf("recovery = %q after a successful turn, want empty", forkState.Recovery)
+	}
+
+	// The source's transcript is where the pollution would show: a plain resume
+	// would have appended the fork's turn to it.
+	transcript := readProviderTranscript(t, sourceState.SessionID)
+	if strings.Contains(transcript, question) {
+		t.Error("the fork's turn was written into the source session's transcript")
+	}
+}
+
+// TestIntegration_ForkSessionCarriesContextFromTheMiddle is the check behind the
+// two claims that make a fork worth taking from anywhere in a conversation:
+// --resume-session-at really does cut the replayed conversation at the message
+// the fork was taken from, and pinning the cut to a message really does make a
+// source whose process is still running — and still writing to its own
+// transcript — safe to fork from.
+//
+// It is the same shape as the whole-conversation test above and deliberately
+// harder: the source keeps two turns, the fork keeps only the first, and the
+// source is left running throughout.
+func TestIntegration_ForkSessionCarriesContextFromTheMiddle(t *testing.T) {
+	// Three real turns on the source plus one on the fork; measured at ~90s.
+	ctx, cancel := context.WithTimeout(context.Background(), 480*time.Second)
+	defer cancel()
+
+	workDir := t.TempDir()
+	dataDir := t.TempDir()
+	sourceID := uuid.Must(uuid.NewV7()).String()
+
+	source, err := New().Start(ctx, agent.StartOptions{
+		WorkDir:    workDir,
+		DataDir:    dataDir,
+		SessionID:  sourceID,
+		Mode:       session.ModeYolo,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatalf("Start source failed: %v", err)
+	}
+	defer source.Close()
+
+	kept := turnOn(t, ctx, source, "Remember this word: BANANA. Reply with exactly: ok")
+	anchor := lastProviderMessageID(t, kept)
+	dropped := turnOn(t, ctx, source, "Now also remember this word: KIWI. Reply with exactly: ok")
+	if lastProviderMessageID(t, dropped) == anchor {
+		t.Fatal("the second turn reused the first turn's message id, so the cut proves nothing")
+	}
+
+	// The history the fork gets: the source's records up to the anchor. The
+	// source process is still up and has already written past that point.
+	forkID := uuid.Must(uuid.NewV7()).String()
+	carried, err := New().ForkSession(ctx, agent.ForkOptions{
+		WorkDir:         workDir,
+		DataDir:         dataDir,
+		SourceSessionID: sourceID,
+		SessionID:       forkID,
+		History:         recordsOf(t, kept),
+	})
+	if err != nil {
+		t.Fatalf("ForkSession: %v", err)
+	}
+	if !carried {
+		t.Fatal("a fork with a message to cut at reported no carried context")
+	}
+
+	// The source keeps talking after the fork was taken. Nothing it says now may
+	// reach the new session either.
+	turnOn(t, ctx, source, "Now also remember this word: PAPAYA. Reply with exactly: ok")
+
+	const question = "What words did I ask you to remember? List every one of them."
+	said := runPrompt(t, workDir, dataDir, forkID, true, question)
+	if !strings.Contains(said, "BANANA") {
+		t.Fatalf("the fork did not remember the conversation up to the cut, it said: %s", said)
+	}
+	for _, past := range []string{"KIWI", "PAPAYA"} {
+		if strings.Contains(said, past) {
+			t.Fatalf("the fork knows %s, which the source said after the cut; it said: %s", past, said)
+		}
+	}
+
+	sourceState := readIntegrationResumeState(t, dataDir, sourceID)
+	transcript := readProviderTranscript(t, sourceState.SessionID)
+	if strings.Contains(transcript, question) {
+		t.Error("the fork's turn was written into the source session's transcript")
+	}
+	if !strings.Contains(transcript, "PAPAYA") {
+		t.Error("the source lost the turn it took after being forked from")
+	}
+}
+
+// turnOn sends one message to an already running session and returns the events
+// of that turn, up to and including its ending.
+func turnOn(t *testing.T, ctx context.Context, sess agent.Session, prompt string) []agent.AgentEvent {
+	t.Helper()
+	if err := sess.SendMessage(prompt); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	var turn []agent.AgentEvent
+	for {
+		select {
+		case event, ok := <-sess.Events():
+			if !ok {
+				t.Fatal("channel closed before done event")
+			}
+			turn = append(turn, event)
+			switch e := event.(type) {
+			case agent.ErrorEvent:
+				t.Fatalf("error event: %s", e.Error)
+			case agent.DoneEvent:
+				return turn
+			}
+		case <-ctx.Done():
+			t.Fatal("timeout waiting for done event")
+		}
+	}
+}
+
+// recordsOf serializes events the way a session's history holds them, which is
+// the only form ForkSession reads them in.
+func recordsOf(t *testing.T, events []agent.AgentEvent) []json.RawMessage {
+	t.Helper()
+	records := make([]json.RawMessage, 0, len(events))
+	for _, event := range events {
+		raw, err := json.Marshal(agent.NewEventRecord(event))
+		if err != nil {
+			t.Fatalf("marshal record: %v", err)
+		}
+		records = append(records, raw)
+	}
+	return records
+}
+
+func lastProviderMessageID(t *testing.T, events []agent.AgentEvent) string {
+	t.Helper()
+	id := forkAnchorMessage(recordsOf(t, events))
+	if id == "" {
+		t.Fatal("no event in the turn carried a CLI message id")
+	}
+	return id
+}
+
+func readIntegrationResumeState(t *testing.T, dataDir, sessionID string) claudeResumeState {
+	t.Helper()
+	path := filepath.Join(dataDir, "sessions", sessionID, resumeStateFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read resume state: %v", err)
+	}
+	var state claudeResumeState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("parse resume state: %v", err)
+	}
+	if state.SessionID == "" {
+		t.Fatalf("no provider session recorded for %s", sessionID)
+	}
+	return state
+}
+
+// readProviderTranscript finds the CLI's own record of a provider session. It is
+// searched for by name rather than composed, because how the CLI derives the
+// per-project directory from a working directory is its own business and only
+// the file name is documented by the session ID we asked for.
+func readProviderTranscript(t *testing.T, providerSessionID string) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve home dir: %v", err)
+	}
+
+	var found string
+	root := filepath.Join(home, ".claude", "projects")
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && d.Name() == providerSessionID+".jsonl" {
+			found = path
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("search %s: %v", root, err)
+	}
+	if found == "" {
+		t.Fatalf("no transcript for provider session %s under %s", providerSessionID, root)
+	}
+
+	data, err := os.ReadFile(found)
+	if err != nil {
+		t.Fatalf("read transcript: %v", err)
+	}
+	return string(data)
 }
 
 // TestIntegration_BackgroundTaskDoesNotEndTheTurn covers the CLI behaviour that

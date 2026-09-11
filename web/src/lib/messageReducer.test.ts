@@ -1593,6 +1593,66 @@ describe("messageReducer", () => {
 		});
 	});
 
+	// The address a fork cuts at. It has to come from the server, and it has to
+	// land on the message the user is looking at — a seq on the wrong message
+	// cuts the transcript in the wrong place, silently.
+	describe("anchor seqs", () => {
+		it("gives each message the seq of the last record folded into it", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "Hello", seq: 1 },
+				{ type: "text", content: "Hi", seq: 2 },
+				{ type: "text", content: " there", seq: 3 },
+				{ type: "done", seq: 4 },
+			]);
+
+			expect(messages).toHaveLength(2);
+			// The user message, not the empty placeholder the turn opens with.
+			expect((messages[0] as UserMessage).anchorSeq).toBe(1);
+			expect((messages[1] as AssistantMessage).anchorSeq).toBe(4);
+		});
+
+		it("leaves a message with no seq unaddressable", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "Hello" },
+				{ type: "text", content: "Hi" },
+			]);
+
+			expect((messages[0] as UserMessage).anchorSeq).toBeUndefined();
+			expect((messages[1] as AssistantMessage).anchorSeq).toBeUndefined();
+		});
+
+		// Anchors that ran backwards would make "everything up to and including
+		// this message" keep messages shown below the anchor.
+		it("does not move an earlier message's anchor past a later one", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "Run it", seq: 1 },
+				{
+					type: "tool_call",
+					tool_name: "Bash",
+					tool_input: { command: "ls" },
+					tool_use_id: "tool-1",
+					seq: 2,
+				},
+				{ type: "interrupted", seq: 3 },
+				{ type: "message", content: "Never mind", seq: 4 },
+				// The interrupted turn's tool finally reports back, into a message
+				// that is no longer the last one.
+				{
+					type: "tool_result",
+					tool_use_id: "tool-1",
+					tool_result: "file.txt",
+					seq: 5,
+				},
+			]);
+
+			const interrupted = messages.find(
+				(m): m is AssistantMessage =>
+					m.role === "assistant" && m.status === "interrupted",
+			);
+			expect(interrupted?.anchorSeq).toBe(3);
+		});
+	});
+
 	describe("replayHistory", () => {
 		it("replays user message + assistant response", () => {
 			const history = [

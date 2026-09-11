@@ -162,12 +162,18 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 	}
 }
 
-// replyErrorForChat handles chat-specific errors with appropriate RPC codes.
+// replyErrorForChat maps the errors chat.Client returns to RPC codes. Used by the
+// chat methods and by session.fork, which goes through the same client.
 func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, sessionID string, err error) {
 	if errors.Is(err, chat.ErrSessionNotFound) {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
-	} else if errors.Is(err, chat.ErrSessionNotRunning) {
-		// The user acted on a prompt whose process is gone, not a server fault.
+	} else if errors.Is(err, chat.ErrSessionNotRunning) ||
+		errors.Is(err, chat.ErrForkAnchorOutOfRange) ||
+		errors.Is(err, chat.ErrForkUnsupported) {
+		// The request does not fit the session's history, state or agent — a prompt
+		// whose process is gone, a fork anchored past the end of the history, a fork
+		// of a session whose agent cannot be forked. The message names what was
+		// wrong, and none of them is a server fault.
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {
 		// The reply carries the cause, but this is the branch a failing agent

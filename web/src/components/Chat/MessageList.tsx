@@ -14,6 +14,7 @@ import type {
 	PermissionRequest,
 } from "../../types/message";
 import { findPendingQuestions } from "../../utils/pendingQuestions";
+import ForkOriginBanner from "./ForkOriginBanner";
 import MessageItem, { type PermissionChoice } from "./MessageItem";
 import PendingQuestionPill from "./PendingQuestionPill";
 
@@ -67,6 +68,11 @@ interface Props {
 	) => void;
 	onHintClick?: (hint: string) => void;
 	onOpenWorkDetail?: (workId: string) => void;
+	/** The session this one was forked from, if it was. */
+	forkedFromSessionId?: string;
+	onOpenSession?: (sessionId: string) => void;
+	/** Must be stable: it reaches the memoized `MessageItem`. */
+	onOpenMessageMenu?: (messageId: string) => void;
 }
 
 function MessageList({
@@ -77,6 +83,9 @@ function MessageList({
 	onQuestionRespond,
 	onHintClick,
 	onOpenWorkDetail,
+	forkedFromSessionId,
+	onOpenSession,
+	onOpenMessageMenu,
 }: Props) {
 	const { EmptyState: CustomEmptyState } = useChatUIConfig();
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -420,6 +429,15 @@ function MessageList({
 					ref={contentRef}
 					className="flex min-h-full flex-col justify-end px-3 sm:px-4"
 				>
+					{/* Only with the top of the history actually on screen: pinned
+					    above a window into the middle of a transcript, the banner would
+					    claim a position it does not have. */}
+					{startIndex === 0 && forkedFromSessionId && onOpenSession && (
+						<ForkOriginBanner
+							parentSessionId={forkedFromSessionId}
+							onOpenParent={onOpenSession}
+						/>
+					)}
 					{hasMore && <div ref={sentinelRef} className="h-1" />}
 					{visibleMessages.map((message, index) => {
 						const globalIndex = startIndex + index;
@@ -434,6 +452,7 @@ function MessageList({
 									onPermissionRespond={onPermissionRespond}
 									onQuestionRespond={onQuestionRespond}
 									onOpenWorkDetail={onOpenWorkDetail}
+									onOpenMessageMenu={onOpenMessageMenu}
 								/>
 							</div>
 						);
