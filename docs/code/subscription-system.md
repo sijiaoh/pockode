@@ -176,7 +176,68 @@ The shortcut is hard to see as wrong from inside any one of those files: a cance
 
 So teardown is synchronous on all three sides: watchers wait on their loops, the process manager on its event streams, the `AutoResumer` on its follow-ups. FSWatcher's debounce timers are the one deliberate exception — `time.AfterFunc` callbacks are not tracked, so `Stop` can return with one still in flight. They are exempt because of what they do rather than for convenience: they only notify subscribers, never write to a store, and `notifyPath` re-checks the context before it does even that.
 
-## Frontend: useSubscription Hook
+### Why a Session Is Two Subscriptions
+
+A session is reported by two subscriptions: `session.list` draws the rows in the
+sidebar, `session.detail` describes the one session that is open. Originally
+there was only the list, and it embedded the whole `session.SessionMeta` in every
+row — so the chat panel got the open session's model and effort by `find()`ing
+its own id in the session list store.
+
+That lookup is the tell. It says the list is the primary record and a session's
+own metadata is a crop of it, which is backwards: the list answers *which
+sessions exist and what do their rows look like*, and a row has no use for a
+model id. The cost was not only conceptual. The list goes to **every**
+subscriber on **every** change, so a model chosen in one session went out to
+clients reading a different one — and since `AppShell` holds that subscription
+for the whole app, every connected client learned every session's settings
+whether or not it ever showed them.
+
+So the split follows what each answer is *about*: rows for the list, the session
+itself for the detail. What is worth writing down is where the line falls when a
+fact could plausibly go in either.
+
+**One mutable fact, one source.** Whether the agent is running is volatile,
+owned by `process.Manager`, and already in the list as `SessionListItem.State`.
+Putting it in detail as well would not be redundancy, it would be ambiguity:
+two notifications carrying the same fact arrive in an order nobody guarantees —
+different watchers, different channels — and nothing on the wire tells the client
+which of the two it is holding is the current one. Run state therefore stays in
+the list and is never in detail.
+
+**The test is "can the copies disagree", not "does the field appear twice".**
+`forked_from` is in both, and that is fine: it is fixed when the session is born
+and never changes again, so the two copies cannot drift apart no matter what
+order they arrive in. They are also read for different questions — the list uses
+it to draw a branch icon on a row, the chat panel uses it to know the open
+session's own origin. A setting cannot pass that test; a birth fact cannot fail
+it.
+
+`title`, `unread` and `needs_input` also appear on both sides, and they are
+mutable — but detail's copies have no reader: the frontend takes all three from
+the list, where the row that displays them lives. Removing them would mean a
+second wire type for detail beside `SessionMeta`, which is a larger change than
+the duplication is a problem. Worth knowing before adding a reader for detail's
+copy, because that is the moment it becomes a second source.
+
+**A deletion has to be said out loud.** A subscriber whose session is removed is
+told `deleted: true`, rather than simply hearing nothing more — silence is
+indistinguishable from an idle session. The same applies to the dirty-flag full
+sync: a session the store no longer holds is reported as deleted rather than
+skipped, because the sync exists precisely for not knowing which events were
+dropped, and the dropped one may well have been the delete. A session the store
+fails to *read* is the opposite case and is skipped: an I/O error is not news
+about the session, and there is nothing truthful to say about it.
+
+`SessionDetailWatcher`'s buffer is 64, matching `SessionListWatcher` — the two
+are driven by the same store events, so a burst the list can absorb is a burst
+detail must absorb too, or every burst would send detail alone into a full sync.
+
+## Frontend
+
+`useSubscription` owns every subscription's lifecycle; the sections after it are
+the store and panel decisions that follow from *when* a subscription's data
+actually arrives.
 
 ### Why Generation Counter?
 
@@ -271,6 +332,84 @@ Not every subscription is worktree-scoped. Work list/detail, agent role list, se
 
 This is why wsStore separates its callback maps into two groups and, on switch, clears only the worktree-scoped ones (`clearWorktreeWatchSubscriptions`), reserving the full clear (`clearAllWatchSubscriptions`) for disconnect. Clearing app-level callbacks on switch would leave the server pushing to a connection whose local handlers are gone, silently dropping `work.list.changed` and similar notifications. Keeping the local teardown aligned with the server's watcher lifetime is what keeps the global work list live after a worktree switch.
 
+### Why the Open Session's Metadata Is Keyed by Session Id
+
+`sessionDetailStore` holds `{ sessionId, detail }` together and is read only
+through `selectSessionDetail(sessionId)`, which returns the detail solely when
+the id matches. Both halves exist for the same instant: the route changes, so the
+open session's id changes immediately, but its snapshot is a round trip behind.
+A store holding the detail alone would spend that instant answering the new
+session's name with the previous session's model and effort — and nothing about
+the value would reveal it. Keeping the id beside the data turns that instant into
+`null`, which is the truth: nothing is known about this session yet.
+
+That the store holds exactly one session is not a cache decision, it is the
+subject. One session is open at a time; this is what is on screen, not a record
+of everywhere the user has been.
+
+### Why session.detail Is Worktree-Scoped but Never Resubscribes
+
+`useSessionDetailSubscription` passes `resubscribeOnWorktreeChange: false`, yet
+its callback map is cleared by `clearWorktreeWatchSubscriptions` alongside the
+worktree-scoped ones. That looks contradictory and is not — the two settings
+answer different questions.
+
+The callback map mirrors the *server's* watcher lifetime. `SessionDetailWatcher`
+is owned by the worktree, so the switch ends the subscription server-side and the
+local handlers must go with it; leaving them would be the same leak described in
+[App-Level Subscriptions](#why-app-level-subscriptions-survive-worktree-switches),
+in the other direction.
+
+The hook flag answers what happens *after* the switch, and the answer is nothing,
+because the switch takes the session with it. By the time the new worktree is
+bound, `enabled` (`isSessionResolved`) has already gone false. Resubscribing
+would ask the new worktree about a session id it has never heard of, and buy a
+"session not found" for it. The session the user lands on subscribes on its own
+once the new list resolves it — the same reason `useChatMessages` gates its own
+subscription on `enabled` and lets the switch simply end it.
+
+### Why the Controls Wait for the Session to Describe Itself
+
+Until the first `session.detail` snapshot arrives, `useChatMessages` reports
+placeholder settings — they are type fillers, not claims — and
+`isSessionDetailLoaded` is what says so. `ChatPanel` combines it into
+`hasSessionSettings = isSessionResolved && isSessionDetailLoaded` and passes it
+to the engine and mode controls, which until it holds both refuse input and show
+nothing.
+
+**Refusing input**, because the placeholder can eat the correction. The
+placeholder mode is `default`, and `ModeSelector.handleSelect` is a no-op when
+the chosen mode equals the current one. So a session actually in `yolo` rendered
+as Default, and a user pressing "Default" to get back to it was silently ignored:
+the control believed nothing had changed.
+
+**Showing nothing**, because a disabled control is still making a claim, and
+every placeholder here is the reassuring one: `default` mode and `claude` agent
+say, of a session nothing is known about, that it is a Claude session that asks
+before it acts. The mode chip is the sharp case — its two states are a grey
+shield and an amber bolt, so the gap read as "this session prompts you" for a
+session running with no prompts at all. Both chips therefore draw a pulsing
+placeholder where the glyph goes and name no value, on an `isSessionResolved`
+prop each (`EngineSelector`, `ModeSelector`).
+
+Note which flag gates which, because the chip waits on two. The agent glyph
+waits on `hasSessionSettings`, the agent being one of the settings the snapshot
+brings. The model *name* waits again, on `hasLabel`: the option lists it is
+named from load separately, and while they are the only thing outstanding the
+agent is known and its icon is the one true thing on the chip. That second gate
+is also why the chip skeletons the model rather than showing "Auto" — Auto is a
+real setting, and a session set to Opus would claim to be on Auto until its
+lists arrived.
+
+The rule the two halves add up to: anything showing a value it does not have yet
+has to refuse input too — and had better not show it.
+
+The same reasoning is why nothing is applied optimistically: `applySetting` sends
+and waits. The write lands in the server's session store, whose change event
+necessarily reaches this subscription, so the new value arrives the one way every
+other client's does. A rejected switch needs no rollback — the control was never
+moved — and the reason reaches the user through `settingError`.
+
 ## Buffer Size Tuning
 
 | Watcher | Buffer | Reasoning |
@@ -278,6 +417,7 @@ This is why wsStore separates its callback maps into two groups and, on switch, 
 | ChatMessages | 256 | High frequency during active coding sessions |
 | WorkList | 64 | Medium frequency; UI can tolerate small delays |
 | SessionList | 64 | Medium frequency; similar to WorkList |
+| SessionDetail | 64 | Same store events as SessionList; see [above](#why-a-session-is-two-subscriptions) |
 | Settings | 16 | Low frequency; settings rarely change |
 
 These values were chosen empirically. The key insight: buffer overflow triggers full sync, which is more expensive than the incremental update but still correct. Thus, buffers should be large enough to handle typical bursts, but not so large that they consume excessive memory.

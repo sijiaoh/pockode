@@ -7,6 +7,10 @@ import { useForkSupport } from "../../hooks/useForkSupport";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { inputActions } from "../../lib/inputStore";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
+import {
+	selectSessionDetail,
+	useSessionDetailStore,
+} from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -206,6 +210,7 @@ function ChatPanel({
 		model,
 		effort,
 		isSessionActivated,
+		isSessionDetailLoaded,
 		status,
 		settingError,
 		clearSettingError,
@@ -223,6 +228,13 @@ function ChatPanel({
 		sessionId,
 		enabled: isSessionResolved,
 	});
+
+	// The three settings controls all read the session's own metadata, which
+	// arrives a round trip after the session resolves. Until it does there is no
+	// value to show and nothing to change: a control offering the placeholder
+	// would report a mode the session is not in, and refuse the very switch that
+	// says so, because the value it is being asked for looks like the current one.
+	const hasSessionSettings = isSessionResolved && isSessionDetailLoaded;
 
 	// One continuous wait, deliberately: resolving the session and loading its
 	// history are two phases of the same gap. Timing them separately would let a
@@ -311,9 +323,12 @@ function ChatPanel({
 	// refusal worth explaining.
 	const forkSupport = useForkSupport(agentType);
 
-	const forkedFromSessionId = useSessionStore(
-		(s) => s.sessions.find((x) => x.id === sessionId)?.forked_from?.session_id,
-	);
+	// From the session's own subscription, not from its row in the list: where a
+	// conversation came from is a fact about this session. The list is still read
+	// just below, for the *other* sessions' titles.
+	const forkedFromSessionId = useSessionDetailStore(
+		selectSessionDetail(sessionId),
+	)?.forked_from?.session_id;
 
 	const handleStartFork = useCallback(
 		(messageId: string) => {
@@ -501,9 +516,9 @@ function ChatPanel({
 								onAgentTypeChange={setAgentType}
 								onModelChange={setModel}
 								onEffortChange={setEffort}
-								isSessionResolved={isSessionResolved}
+								isSessionResolved={hasSessionSettings}
 								isSessionActivated={isSessionActivated}
-								disabled={!isSessionResolved || isStreaming}
+								disabled={!hasSessionSettings || isStreaming}
 							/>
 						)}
 						{CustomModeSelector === null ? null : CustomModeSelector ? (
@@ -511,14 +526,16 @@ function ChatPanel({
 								mode={mode}
 								agentType={agentType}
 								onModeChange={setMode}
-								disabled={!isSessionResolved || isStreaming}
+								isSessionResolved={hasSessionSettings}
+								disabled={!hasSessionSettings || isStreaming}
 							/>
 						) : (
 							<ModeSelector
 								mode={mode}
 								agentType={agentType}
 								onModeChange={setMode}
-								disabled={!isSessionResolved || isStreaming}
+								isSessionResolved={hasSessionSettings}
+								disabled={!hasSessionSettings || isStreaming}
 							/>
 						)}
 					</div>

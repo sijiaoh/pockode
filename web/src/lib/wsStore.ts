@@ -23,6 +23,8 @@ import type {
 	ChatMessagesSubscribeResult,
 	HistorySeq,
 	ServerNotification,
+	SessionDetailChangedNotification,
+	SessionDetailSubscribeResult,
 	SessionListChangedNotification,
 	SessionListItem,
 	SessionListSubscribeResult,
@@ -110,6 +112,11 @@ export interface WatchActions {
 		callback: (params: SessionListChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<SessionListItem[]>>;
 	sessionListUnsubscribe: (id: string) => Promise<void>;
+	sessionDetailSubscribe: (
+		sessionId: string,
+		callback: (params: SessionDetailChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<SessionDetailSubscribeResult>>;
+	sessionDetailUnsubscribe: (id: string) => Promise<void>;
 	chatMessagesSubscribe: (
 		sessionId: string,
 		callback: (notification: ServerNotification) => void,
@@ -185,6 +192,10 @@ const sessionListWatchCallbacks = new Map<
 	string,
 	(params: SessionListChangedNotification) => void
 >();
+const sessionDetailWatchCallbacks = new Map<
+	string,
+	(params: SessionDetailChangedNotification) => void
+>();
 // Key: subscriptionId -> callback (unified with other watchers)
 const chatMessagesCallbacks = new Map<
 	string,
@@ -229,6 +240,7 @@ function clearWorktreeWatchSubscriptions(): void {
 	gitWatchCallbacks.clear();
 	gitDiffWatchCallbacks.clear();
 	sessionListWatchCallbacks.clear();
+	sessionDetailWatchCallbacks.clear();
 	chatMessagesCallbacks.clear();
 }
 
@@ -435,6 +447,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 	"session.list.changed": (params) => {
 		const changedParams = params as SessionListChangedNotification;
 		sessionListWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
+	"session.detail.changed": (params) => {
+		const changedParams = params as SessionDetailChangedNotification;
+		sessionDetailWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
 	"settings.changed": (params) => {
@@ -855,6 +872,33 @@ export const useWSStore = create<WSState>((set, get) => ({
 			}
 		},
 
+		sessionDetailSubscribe: async (
+			sessionId: string,
+			callback: (params: SessionDetailChangedNotification) => void,
+		) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			const result = (await client.request("session.detail.subscribe", {
+				session_id: sessionId,
+			})) as SessionDetailSubscribeResult;
+			sessionDetailWatchCallbacks.set(result.id, callback);
+			return { id: result.id, initial: result };
+		},
+
+		sessionDetailUnsubscribe: async (id: string) => {
+			sessionDetailWatchCallbacks.delete(id);
+			const client = getClient();
+			if (client) {
+				try {
+					await client.request("session.detail.unsubscribe", { id });
+				} catch {
+					// Ignore errors (connection might be closed)
+				}
+			}
+		},
+
 		chatMessagesSubscribe: async (
 			sessionId: string,
 			callback: (notification: ServerNotification) => void,
@@ -1088,6 +1132,7 @@ export function resetWSStore() {
 	gitDiffWatchCallbacks.clear();
 	worktreeWatchCallbacks.clear();
 	sessionListWatchCallbacks.clear();
+	sessionDetailWatchCallbacks.clear();
 	chatMessagesCallbacks.clear();
 	settingsWatchCallbacks.clear();
 	workListWatchCallbacks.clear();

@@ -28,7 +28,11 @@ interface Props {
 	onAgentTypeChange: (type: AgentType) => Promise<void>;
 	onModelChange: (model: string) => Promise<void>;
 	onEffortChange: (effort: string) => Promise<void>;
-	/** Nothing about the session is known yet, so there is no value to show. */
+	/**
+	 * False while the session has yet to describe itself — it is not resolved
+	 * yet, or its metadata has not arrived — so `model` and `effort` are
+	 * placeholders and there is no value to name.
+	 */
 	isSessionResolved?: boolean;
 	/** The agent has answered here: its choice is locked and a switch restarts the CLI. */
 	isSessionActivated?: boolean;
@@ -147,15 +151,32 @@ function EngineSelector({
 				// The values, not the glyphs: the model name is truncated on screen
 				// and the effort suffix is the first thing to go, but a label that
 				// reported only what fits would report the wrong thing.
-				aria-label={`Engine: ${agentInfo.label}, ${hasLabel ? modelLabel : "loading"}${
-					hasLabel && effortLabel ? `, ${effortLabel} effort` : ""
-				}`}
+				aria-label={
+					isSessionResolved
+						? `Engine: ${agentInfo.label}, ${hasLabel ? modelLabel : "loading"}${
+								hasLabel && effortLabel ? `, ${effortLabel} effort` : ""
+							}`
+						: "Engine: loading"
+				}
 				className="group flex h-9 min-w-0 items-center gap-1.5 rounded border border-th-border bg-th-bg-tertiary pl-2 pr-1.5 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50 pointer-coarse:h-11"
 			>
-				<agentInfo.icon
-					className="size-4 shrink-0 text-th-text-secondary group-hover:text-th-text-primary"
-					aria-hidden="true"
-				/>
+				{/* The agent is one of the session's settings, so it waits like the
+				    rest: `agentInfo` falls back to Claude, and asserting that would
+				    put Claude's mark on a Codex session for a round trip. Gated on
+				    `isSessionResolved` rather than `hasLabel` — that one also drops
+				    while only the model list is still loading, by which point the
+				    agent is known and its icon is the one true thing on the chip. */}
+				{isSessionResolved ? (
+					<agentInfo.icon
+						className="size-4 shrink-0 text-th-text-secondary group-hover:text-th-text-primary"
+						aria-hidden="true"
+					/>
+				) : (
+					<span
+						className="size-4 shrink-0 animate-pulse rounded-full bg-th-text-muted/20"
+						aria-hidden="true"
+					/>
+				)}
 				{hasLabel ? (
 					// The effort suffix shares the model's truncation budget instead of
 					// being held out of it: on a 360px viewport the action bar has

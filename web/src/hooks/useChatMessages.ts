@@ -13,7 +13,10 @@ import {
 	updatePermissionRequestStatus,
 	updateQuestionStatus as updateQuestionStatusReducer,
 } from "../lib/messageReducer";
-import { useSessionStore } from "../lib/sessionStore";
+import {
+	selectSessionDetail,
+	useSessionDetailStore,
+} from "../lib/sessionDetailStore";
 import { type ConnectionStatus, useWSStore } from "../lib/wsStore";
 import type {
 	AssistantMessage,
@@ -28,6 +31,7 @@ import type {
 } from "../types/message";
 import type { AgentType } from "../types/settings";
 import { generateUUID } from "../utils/uuid";
+import { useSessionDetailSubscription } from "./useSessionDetailSubscription";
 
 export type { ConnectionStatus } from "../lib/wsStore";
 
@@ -58,11 +62,23 @@ interface UseChatMessagesReturn {
 	loadMoreHistory: () => Promise<void>;
 	isStreaming: boolean;
 	isProcessRunning: boolean;
+	/**
+	 * The session's own settings, from `session.detail`. Until its first snapshot
+	 * arrives they read as the placeholders below — no session has been described
+	 * yet, and `isSessionDetailLoaded` is what says so.
+	 */
 	mode: SessionMode;
 	agentType: AgentType;
 	model: string;
 	effort: string;
 	isSessionActivated: boolean;
+	/**
+	 * Whether the four settings above describe this session rather than standing
+	 * in for it. A control that names a value has to wait for this: naming the
+	 * placeholder would show a model the session is not set to, and then correct
+	 * itself a round trip later.
+	 */
+	isSessionDetailLoaded: boolean;
 	status: ConnectionStatus;
 	/**
 	 * The last failed engine/mode switch, in the server's words. Switching is a
@@ -120,10 +136,6 @@ export function useChatMessages({
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 	const [isProcessRunning, setIsProcessRunning] = useState(false);
-	const [mode, setModeState] = useState<SessionMode>("default");
-	const [agentType, setAgentTypeState] = useState<AgentType>("claude");
-	const [model, setModelState] = useState("");
-	const [effort, setEffortState] = useState("");
 	const [settingError, setSettingError] = useState<string | null>(null);
 	const [hasMoreHistory, setHasMoreHistory] = useState(false);
 	const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
@@ -155,58 +167,26 @@ export function useChatMessages({
 	const status = useWSStore((state) => state.status);
 	const actions = useWSStore((state) => state.actions);
 
-	// Sync mode from session store (updated via session list notifications)
-	const sessionModeFromStore = useSessionStore(
-		(state) => state.sessions.find((s) => s.id === sessionId)?.mode,
-	);
-	useEffect(() => {
-		if (sessionModeFromStore !== undefined) {
-			setModeState(sessionModeFromStore);
-		}
-	}, [sessionModeFromStore]);
+	// The session's settings have one source: its own subscription. Neither the
+	// session list nor the chat subscription carries them any more — both used
+	// to, and reading settings from more than one of them is how a rejected model
+	// change came back as two answers that disagreed.
+	useSessionDetailSubscription(sessionId, enabled);
+	const sessionDetail = useSessionDetailStore(selectSessionDetail(sessionId));
 
-	// Sync agentType from session store (updated via session list notifications)
-	const sessionAgentTypeFromStore = useSessionStore(
-		(state) => state.sessions.find((s) => s.id === sessionId)?.agent_type,
-	);
+	// Placeholders for the round trip before the first snapshot: never another
+	// session's values, because the selector above hands back nothing until the
+	// detail held is this session's.
+	const mode = sessionDetail?.mode ?? "default";
+	const agentType = sessionDetail?.agent_type ?? "claude";
+	const model = sessionDetail?.model ?? "";
+	const effort = sessionDetail?.effort ?? "";
 	// The server refuses to change agent type once the agent has answered here,
 	// and says so through this flag. The transcript is not a substitute for it: a
 	// first turn that failed before the agent said anything leaves messages behind
 	// in a session that never started, and that is exactly when switching agents
 	// is the only way out.
-	const isSessionActivated = useSessionStore(
-		(state) =>
-			state.sessions.find((s) => s.id === sessionId)?.activated ?? false,
-	);
-	useEffect(() => {
-		if (sessionAgentTypeFromStore !== undefined) {
-			setAgentTypeState(sessionAgentTypeFromStore);
-		}
-	}, [sessionAgentTypeFromStore]);
-
-	// Sync model from session store (updated via session list notifications).
-	// This is also how a model reset arrives: the server drops a model that does
-	// not belong to the newly chosen agent, so the value is only ever read back,
-	// never cleared here.
-	const sessionModelFromStore = useSessionStore(
-		(state) => state.sessions.find((s) => s.id === sessionId)?.model,
-	);
-	useEffect(() => {
-		if (sessionModelFromStore !== undefined) {
-			setModelState(sessionModelFromStore);
-		}
-	}, [sessionModelFromStore]);
-
-	// Same for the effort level, and for the same reason: choosing an agent that
-	// has no such level drops it server-side, and this is how that arrives.
-	const sessionEffortFromStore = useSessionStore(
-		(state) => state.sessions.find((s) => s.id === sessionId)?.effort,
-	);
-	useEffect(() => {
-		if (sessionEffortFromStore !== undefined) {
-			setEffortState(sessionEffortFromStore);
-		}
-	}, [sessionEffortFromStore]);
+	const isSessionActivated = sessionDetail?.activated ?? false;
 
 	const handleNotification = useCallback((notification: ServerNotification) => {
 		setIsProcessRunning(notification.type !== "process_ended");
@@ -230,10 +210,6 @@ export function useChatMessages({
 		setMessages([]);
 		setIsLoadingHistory(true);
 		setIsProcessRunning(false);
-		setModeState("default");
-		setAgentTypeState("claude");
-		setModelState("");
-		setEffortState("");
 		setSettingError(null);
 		setHasMoreHistory(false);
 		setIsLoadingMoreHistory(false);
@@ -274,10 +250,6 @@ export function useChatMessages({
 				subscriptionIdRef.current = result.id;
 				if (result.initial) {
 					setIsProcessRunning(result.initial.state !== "ended");
-					setModeState(result.initial.mode);
-					setAgentTypeState(result.initial.agent_type);
-					setModelState(result.initial.model);
-					setEffortState(result.initial.effort);
 					// Subscribing hands back the newest page only, and a re-subscribe
 					// hands it back again: pages paged in before a reconnect are gone, so
 					// the paging state starts over with them.
@@ -481,19 +453,14 @@ export function useChatMessages({
 		last?.role === "assistant" && last.status === "streaming";
 	const isStreaming = lastIsSending || (lastIsStreaming && isProcessRunning);
 
-	// One path for every session setting: each applies the new value only
-	// once the server has taken it, so a rejection leaves the control showing what
-	// the session is actually set to, and records why for the UI to show.
+	// One path for every session setting. Nothing is applied here: the new value
+	// reaches the screen through the session detail subscription, so a rejected
+	// change leaves the control showing what the session is still set to, with the
+	// server's reason recorded for the UI to show.
 	const applySetting = useCallback(
-		async <T>(
-			what: string,
-			value: T,
-			send: (value: T) => Promise<void>,
-			apply: (value: T) => void,
-		) => {
+		async (what: string, send: () => Promise<void>) => {
 			try {
-				await send(value);
-				apply(value);
+				await send();
 				setSettingError(null);
 			} catch (error) {
 				const reason =
@@ -509,44 +476,28 @@ export function useChatMessages({
 
 	const setMode = useCallback(
 		(newMode: SessionMode) =>
-			applySetting(
-				"mode",
-				newMode,
-				(m) => actions.setSessionMode(sessionId, m),
-				setModeState,
-			),
+			applySetting("mode", () => actions.setSessionMode(sessionId, newMode)),
 		[applySetting, actions, sessionId],
 	);
 
 	const setAgentType = useCallback(
 		(newAgentType: AgentType) =>
-			applySetting(
-				"agent",
-				newAgentType,
-				(a) => actions.setSessionAgentType(sessionId, a),
-				setAgentTypeState,
+			applySetting("agent", () =>
+				actions.setSessionAgentType(sessionId, newAgentType),
 			),
 		[applySetting, actions, sessionId],
 	);
 
 	const setModel = useCallback(
 		(newModel: string) =>
-			applySetting(
-				"model",
-				newModel,
-				(m) => actions.setSessionModel(sessionId, m),
-				setModelState,
-			),
+			applySetting("model", () => actions.setSessionModel(sessionId, newModel)),
 		[applySetting, actions, sessionId],
 	);
 
 	const setEffort = useCallback(
 		(newEffort: string) =>
-			applySetting(
-				"effort",
-				newEffort,
-				(e) => actions.setSessionEffort(sessionId, e),
-				setEffortState,
+			applySetting("effort", () =>
+				actions.setSessionEffort(sessionId, newEffort),
 			),
 		[applySetting, actions, sessionId],
 	);
@@ -568,6 +519,7 @@ export function useChatMessages({
 		model,
 		effort,
 		isSessionActivated,
+		isSessionDetailLoaded: sessionDetail !== null,
 		status,
 		settingError,
 		clearSettingError,

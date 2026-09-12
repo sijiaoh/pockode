@@ -22,8 +22,9 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	// Verify session exists and get mode
-	meta, found, err := wt.SessionStore.Get(params.SessionID)
+	// Verify the session exists. Its settings are not read here: they belong to
+	// session.detail.subscribe, which the client runs alongside this one.
+	_, found, err := wt.SessionStore.Get(params.SessionID)
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
 		return
@@ -55,10 +56,6 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		HasMore:       page.HasMore,
 		NextBeforeSeq: page.NextBeforeSeq,
 		State:         wt.ProcessManager.GetProcessState(params.SessionID),
-		Mode:          meta.Mode,
-		AgentType:     meta.AgentType,
-		Model:         meta.Model,
-		Effort:        meta.Effort,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)
@@ -66,7 +63,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	}
 
 	log.Info("subscribed to chat messages",
-		"subscriptionId", id, "state", result.State, "mode", meta.Mode,
+		"subscriptionId", id, "state", result.State,
 		"records", len(page.Records), "hasMore", page.HasMore)
 }
 

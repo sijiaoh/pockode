@@ -3,26 +3,15 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionStore } from "../lib/sessionStore";
+import { makeSessionListItem } from "../test/sessionFixtures";
 import type {
 	SessionListChangedNotification,
 	SessionListItem,
 } from "../types/message";
 import { useSession } from "./useSession";
 
-const mockSession = (id: string, title = "Test Session"): SessionListItem => ({
-	id,
-	title,
-	created_at: "2024-01-01T00:00:00Z",
-	updated_at: "2024-01-01T00:00:00Z",
-	mode: "default",
-	agent_type: "codex",
-	model: "",
-	effort: "",
-	activated: false,
-	state: "ended",
-	needs_input: false,
-	unread: false,
-});
+const mockSession = (id: string, title = "Test Session") =>
+	makeSessionListItem({ id, title });
 
 let notificationCallback: ((p: SessionListChangedNotification) => void) | null =
 	null;

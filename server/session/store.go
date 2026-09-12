@@ -53,7 +53,7 @@ type Store interface {
 	Touch(ctx context.Context, sessionID string) error
 
 	// Change notification
-	SetOnChangeListener(listener OnChangeListener)
+	AddOnChangeListener(listener OnChangeListener)
 }
 
 type indexData struct {
@@ -63,10 +63,10 @@ type indexData struct {
 // FileStore is NOT safe for multiple instances sharing the same dataDir.
 // Use a single instance per data directory (e.g., via dependency injection).
 type FileStore struct {
-	dataDir  string
-	mu       sync.RWMutex
-	sessions []SessionMeta // in-memory cache
-	listener OnChangeListener
+	dataDir   string
+	mu        sync.RWMutex
+	sessions  []SessionMeta // in-memory cache
+	listeners []OnChangeListener
 
 	// historyMu guards historyLen and is held across the append itself, so two
 	// concurrent appends cannot take sequence numbers in one order and reach the
@@ -131,15 +131,17 @@ func (s *FileStore) persistIndex() error {
 	return filestore.WriteFileAtomic(s.indexPath(), data, 0644)
 }
 
-func (s *FileStore) SetOnChangeListener(listener OnChangeListener) {
+func (s *FileStore) AddOnChangeListener(listener OnChangeListener) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.listener = listener
+	s.listeners = append(s.listeners, listener)
 }
 
+// notifyChange must be called with mu held — that is the contract listeners are
+// written against (see OnChangeListener).
 func (s *FileStore) notifyChange(event SessionChangeEvent) {
-	if s.listener != nil {
-		s.listener.OnSessionChange(event)
+	for _, l := range s.listeners {
+		l.OnSessionChange(event)
 	}
 }
 

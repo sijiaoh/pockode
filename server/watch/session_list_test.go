@@ -11,8 +11,8 @@ import (
 )
 
 type mockSessionStore struct {
-	sessions []session.SessionMeta
-	listener session.OnChangeListener
+	sessions  []session.SessionMeta
+	listeners []session.OnChangeListener
 }
 
 func (m *mockSessionStore) List() ([]session.SessionMeta, error) {
@@ -88,8 +88,17 @@ func (m *mockSessionStore) SetUnread(ctx context.Context, sessionID string, unre
 	return nil
 }
 
-func (m *mockSessionStore) SetOnChangeListener(listener session.OnChangeListener) {
-	m.listener = listener
+func (m *mockSessionStore) AddOnChangeListener(listener session.OnChangeListener) {
+	m.listeners = append(m.listeners, listener)
+}
+
+func (m *mockSessionStore) hasListener(l session.OnChangeListener) bool {
+	for _, registered := range m.listeners {
+		if registered == l {
+			return true
+		}
+	}
+	return false
 }
 
 type mockSessionStoreWithError struct {
@@ -175,7 +184,7 @@ func TestSessionListWatcher_ListenerRegistered(t *testing.T) {
 	store := &mockSessionStore{}
 	w := NewSessionListWatcher(store)
 
-	if store.listener != w {
+	if !store.hasListener(w) {
 		t.Error("expected watcher to be registered as listener")
 	}
 }
@@ -356,7 +365,7 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 		store:       store,
 		eventCh:     make(chan session.SessionChangeEvent, 1),
 	}
-	store.SetOnChangeListener(w)
+	store.AddOnChangeListener(w)
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	notifier := &captureNotifier{}

@@ -14,19 +14,23 @@ export interface ForkOrigin {
 	session_id: string;
 }
 
+/**
+ * One row of the session list: what drawing a row needs, and nothing more.
+ *
+ * A session's settings — mode, agent type, model, effort, activated — are not
+ * here. They come from `session.detail.subscribe`, for the one session that is
+ * open; the list goes to every client on every change, and a model chosen in one
+ * session is not news to a client reading another.
+ *
+ * Two fields are also on `SessionDetail`, and neither can drift: `state` is
+ * volatile process state the list owns outright and detail never carries, and
+ * `forked_from` is fixed when the session is born and never written again.
+ */
 export interface SessionListItem {
 	id: string;
 	title: string;
-	created_at: string;
+	/** The row's subtitle, and what the list is ordered by. */
 	updated_at: string;
-	mode: SessionMode;
-	agent_type: AgentType;
-	/** Empty means "pass no model flag, let the CLI pick". */
-	model: string;
-	/** Empty means "pass no effort flag, let the CLI keep its default". */
-	effort: string;
-	/** True once the agent has produced output in this session. */
-	activated: boolean;
 	state: ProcessState;
 	needs_input: boolean;
 	unread: boolean;
@@ -424,6 +428,50 @@ export type SessionListChangedNotification =
 	| { id: string; operation: "delete"; sessionId: string }
 	| { id: string; operation: "sync"; sessions: SessionListItem[] };
 
+/**
+ * One session's persistent metadata, as `session.detail.subscribe` reports it
+ * (the server's `session.SessionMeta`).
+ *
+ * No process state: whether an agent is running is volatile state the server
+ * pushes through the session list, and a second copy of it here would arrive in
+ * an order neither side controls, leaving no way to tell which of the two is
+ * current (server/watch/session_detail.go).
+ *
+ * Spelled out rather than derived from `SessionListItem`: the two are separate
+ * wire shapes answering different questions — what a session is, versus what a
+ * row of the list draws — and the list carries only the handful of fields a row
+ * needs. Deriving one from the other would make every future change to a row
+ * silently change what a session is.
+ */
+export interface SessionDetail {
+	id: string;
+	title: string;
+	created_at: string;
+	updated_at: string;
+	mode: SessionMode;
+	agent_type: AgentType;
+	/** Empty means "pass no model flag, let the CLI pick". */
+	model: string;
+	/** Empty means "pass no effort flag, let the CLI keep its default". */
+	effort: string;
+	/** True once the agent has produced output in this session. */
+	activated: boolean;
+	needs_input: boolean;
+	unread: boolean;
+	/** Absent on a session that was created rather than forked. */
+	forked_from?: ForkOrigin;
+}
+
+export interface SessionDetailSubscribeResult {
+	id: string;
+	session: SessionDetail;
+}
+
+/** A deleted session reports no metadata; `deleted` is set exactly then. */
+export type SessionDetailChangedNotification =
+	| { id: string; session: SessionDetail; deleted?: false }
+	| { id: string; session?: undefined; deleted: true };
+
 export interface ChatMessagesSubscribeParams {
 	session_id: string;
 	/** Omitted asks for the server's default page size. */
@@ -447,12 +495,12 @@ export interface ChatMessagesHistoryPage {
 
 export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
 	id: string;
+	/**
+	 * Whether a process is running for this session. The transcript's own
+	 * subscription reports it because the transcript is what it governs — the
+	 * session's settings come from `session.detail.subscribe` instead.
+	 */
 	state: ProcessState;
-	mode: SessionMode;
-	agent_type: AgentType;
-	model: string;
-	/** Empty means "pass no effort flag, let the CLI keep its default". */
-	effort: string;
 }
 
 export interface ChatMessagesHistoryParams {

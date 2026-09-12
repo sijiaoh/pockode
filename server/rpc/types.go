@@ -1,9 +1,14 @@
 // Package rpc defines JSON-RPC 2.0 wire format types for WebSocket communication.
 // These types represent the params and result structures for all RPC methods.
+//
+// Where a wire type is a deliberate narrowing of a domain type rather than a
+// copy of it, the narrowing lives here too (NewSessionListItem), so that what a
+// client is told is decided in one place instead of at each handler.
 package rpc
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
@@ -334,9 +339,43 @@ type WorktreeUnsubscribeParams struct {
 
 // Session list watch (subscription for session list changes)
 
+// SessionListItem is one row of the session list: what drawing a row needs, and
+// nothing more.
+//
+// The rest of a session's metadata — mode, agent type, model, effort, activated,
+// CreatedAt — is reported by session.detail.subscribe, for the one session a
+// client has open. It is not here because the list goes to every subscriber on
+// every change, and a model chosen in one session is not news to a client
+// reading another.
+//
+// Two fields appear on both sides, and neither can drift: State is volatile
+// process state that the list owns outright and detail never carries
+// (server/watch/session_detail.go), and ForkedFrom is fixed at the session's
+// birth and never written again.
 type SessionListItem struct {
-	session.SessionMeta
-	State string `json:"state"` // "idle" | "running" | "ended"
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// UpdatedAt is the row's subtitle, and what the list is ordered by.
+	UpdatedAt  time.Time           `json:"updated_at"`
+	State      string              `json:"state"` // "idle" | "running" | "ended"
+	NeedsInput bool                `json:"needs_input"`
+	Unread     bool                `json:"unread"`
+	ForkedFrom *session.ForkOrigin `json:"forked_from,omitempty"`
+}
+
+// NewSessionListItem builds the row for a session in a given process state.
+// Every producer of a row goes through here so that narrowing SessionMeta down
+// to a row is decided in one place.
+func NewSessionListItem(meta session.SessionMeta, state string) SessionListItem {
+	return SessionListItem{
+		ID:         meta.ID,
+		Title:      meta.Title,
+		UpdatedAt:  meta.UpdatedAt,
+		State:      state,
+		NeedsInput: meta.NeedsInput,
+		Unread:     meta.Unread,
+		ForkedFrom: meta.ForkedFrom,
+	}
 }
 
 type SessionListSubscribeResult struct {
@@ -346,6 +385,17 @@ type SessionListSubscribeResult struct {
 
 type SessionListUnsubscribeParams struct {
 	ID string `json:"id"`
+}
+
+// Session detail watch (subscription for a single session's metadata)
+
+type SessionDetailSubscribeParams struct {
+	SessionID string `json:"session_id"`
+}
+
+type SessionDetailSubscribeResult struct {
+	ID      string              `json:"id"`
+	Session session.SessionMeta `json:"session"`
 }
 
 // Chat messages watch (subscription for chat messages)
@@ -369,10 +419,6 @@ type ChatMessagesSubscribeResult struct {
 	// HasMore is false. See ChatMessagesHistoryParams.BeforeSeq.
 	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
 	State         string             `json:"state"` // "idle" | "running" | "ended"
-	Mode          session.Mode       `json:"mode"`
-	AgentType     session.AgentType  `json:"agent_type"`
-	Model         string             `json:"model"`
-	Effort        string             `json:"effort"`
 }
 
 // ChatMessagesHistoryParams asks for the page of history older than one the

@@ -1562,7 +1562,8 @@ properly means a compare-and-swap in the store (`SetAgentTypeIfNotActivated` or
 similar) instead of a read followed by an unconditional write.
 
 The frontend disables the agent half of the engine selector on the same flag,
-which `SessionListItem` carries. Using the transcript instead
+which reaches it through `session.detail` — the session list does not carry it,
+having no row to draw with it. Using the transcript instead
 (`messages.length > 0`) looks equivalent and is not: a failed first turn leaves a
 user message and an error behind, so the selector would stay disabled in exactly
 the situation it is meant to rescue.

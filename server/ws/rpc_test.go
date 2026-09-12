@@ -17,6 +17,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
+	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -270,6 +271,29 @@ func (e *testEnv) readNotification() rpcNotification {
 
 func (e *testEnv) subscribeChatMessages(sessionID string) rpc.ChatMessagesSubscribeResult {
 	return e.subscribeChatMessagesWithLimit(sessionID, 0)
+}
+
+// createSession creates a session over the wire and returns both the reply — a
+// session list row — and the metadata the session was stored with. A row carries
+// only what drawing a row needs (rpc.SessionListItem), so anything a test wants
+// to say about the engine a session was born with is read from the store.
+func (e *testEnv) createSession() (rpc.SessionListItem, session.SessionMeta) {
+	resp := e.call("session.create", nil)
+	if resp.Error != nil {
+		e.t.Fatalf("session.create failed: %s", resp.Error.Message)
+	}
+	var row rpc.SessionListItem
+	if err := json.Unmarshal(resp.Result, &row); err != nil {
+		e.t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	meta, found, err := e.getMainWorktree().SessionStore.Get(row.ID)
+	if err != nil {
+		e.t.Fatalf("failed to read back session %q: %v", row.ID, err)
+	}
+	if !found {
+		e.t.Fatalf("created session %q is not in the store", row.ID)
+	}
+	return row, meta
 }
 
 func (e *testEnv) sendMessage(sessionID, content string) rpc.MessageResult {
@@ -853,27 +877,62 @@ func TestHandler_SessionListSubscribe(t *testing.T) {
 	}
 }
 
-func TestHandler_SessionCreate(t *testing.T) {
+func TestHandler_SessionDetailSubscribe(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "session-1", session.CreateSpec{})
 
-	resp := env.call("session.create", nil)
-
+	resp := env.call("session.detail.subscribe", rpc.SessionDetailSubscribeParams{SessionID: "session-1"})
 	if resp.Error != nil {
-		t.Errorf("unexpected error: %s", resp.Error.Message)
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
 	}
 
-	var result session.SessionMeta
+	var result rpc.SessionDetailSubscribeResult
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("failed to unmarshal result: %v", err)
 	}
-
 	if result.ID == "" {
+		t.Error("expected non-empty subscription ID")
+	}
+	if result.Session.ID != "session-1" {
+		t.Errorf("session = %+v, want session-1", result.Session)
+	}
+
+	if resp := env.call("session.detail.unsubscribe", unsubscribeParams{ID: result.ID}); resp.Error != nil {
+		t.Errorf("unsubscribe failed: %s", resp.Error.Message)
+	}
+}
+
+func TestHandler_SessionDetailSubscribe_UnknownSession(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("session.detail.subscribe", rpc.SessionDetailSubscribeParams{SessionID: "nope"})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
+		t.Errorf("expected session not found error, got %+v", resp)
+	}
+}
+
+func TestHandler_SessionCreate(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	row, created := env.createSession()
+
+	// The row is what the client draws the new session with, so it is checked as
+	// the reply rather than through the store.
+	if row.ID == "" {
 		t.Error("expected non-empty session ID")
 	}
-	if result.Title != "New Chat" {
-		t.Errorf("expected title 'New Chat', got %q", result.Title)
+	if row.Title != "New Chat" {
+		t.Errorf("expected title 'New Chat', got %q", row.Title)
 	}
-	if result.Activated {
+	if row.State != string(process.ProcessStateEnded) {
+		t.Errorf("state = %q, want %q for a session with no process yet", row.State, process.ProcessStateEnded)
+	}
+	// Asserted on the stored session: a row carries no activated flag, so the
+	// same check against the reply would read false for a session that had been
+	// activated and prove nothing.
+	if created.Activated {
 		t.Error("expected activated=false for new session")
 	}
 }
@@ -1066,11 +1125,20 @@ func TestHandler_SessionFork(t *testing.T) {
 	if forked.ID == "source" || forked.ID == "" {
 		t.Fatalf("forked session ID = %q, want a new one", forked.ID)
 	}
-	if forked.Title != "Fix the parser" || forked.Mode != session.ModeYolo {
-		t.Errorf("title/mode = %q/%q, want the source's", forked.Title, forked.Mode)
+	if forked.Title != "Fix the parser" {
+		t.Errorf("title = %q, want the source's", forked.Title)
 	}
 	if forked.ForkedFrom == nil || forked.ForkedFrom.SessionID != "source" {
 		t.Errorf("forkedFrom = %+v, want the source", forked.ForkedFrom)
+	}
+	// The settings the fork inherited are checked in the store: the reply is a
+	// list row now, and a row carries no settings (rpc.SessionListItem).
+	forkedMeta, found, err := store.Get(forked.ID)
+	if err != nil || !found {
+		t.Fatalf("forked session %q not in the store (found=%v, err=%v)", forked.ID, found, err)
+	}
+	if forkedMeta.Mode != session.ModeYolo {
+		t.Errorf("mode = %q, want the source's %q", forkedMeta.Mode, session.ModeYolo)
 	}
 
 	history, err := store.GetHistory(bgCtx, forked.ID)

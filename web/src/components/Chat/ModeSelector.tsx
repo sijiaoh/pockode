@@ -7,6 +7,13 @@ interface Props {
 	mode: SessionMode;
 	agentType: AgentType;
 	onModeChange: (mode: SessionMode) => Promise<void>;
+	/**
+	 * False while the session has yet to describe itself, so `mode` is the
+	 * placeholder `default`. The chip shows no mode then: the placeholder is the
+	 * calm one, and a session running with no permission prompts would wear the
+	 * shield of one that asks.
+	 */
+	isSessionResolved?: boolean;
 	disabled?: boolean;
 }
 
@@ -28,6 +35,7 @@ function ModeSelector({
 	mode,
 	agentType,
 	onModeChange,
+	isSessionResolved = true,
 	disabled = false,
 }: Props) {
 	const [isOpen, setIsOpen] = useState(false);
@@ -68,12 +76,19 @@ function ModeSelector({
 				onClick={() => setIsOpen(!isOpen)}
 				disabled={disabled}
 				className="group flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary size-9 pointer-coarse:size-11 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50"
-				aria-label={currentInfo.label}
+				aria-label={isSessionResolved ? currentInfo.label : "Mode: loading"}
 			>
-				<currentInfo.icon
-					className={`h-4 w-4 ${currentColors.iconColor}`}
-					aria-hidden="true"
-				/>
+				{isSessionResolved ? (
+					<currentInfo.icon
+						className={`h-4 w-4 ${currentColors.iconColor}`}
+						aria-hidden="true"
+					/>
+				) : (
+					<span
+						className="h-4 w-4 animate-pulse rounded-full bg-th-text-muted/20"
+						aria-hidden="true"
+					/>
+				)}
 			</button>
 
 			{isOpen && (

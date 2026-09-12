@@ -248,6 +248,7 @@ This pattern ensures:
 | Subscription | Returns Initial Data | Recovery Strategy |
 |--------------|---------------------|-------------------|
 | `session.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
+| `session.detail.subscribe` | ✅ Full session metadata | `onSubscribed` replaces state |
 | `work.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
 | `work.detail.subscribe` | ✅ Full details | `onSubscribed` replaces state |
 | `settings.subscribe` | ✅ Full settings | `onSubscribed` replaces state |
@@ -593,7 +594,7 @@ established that the error never came from the server at all.
    - Add subscribe/unsubscribe methods in RPC handler
 
 3. **Add frontend callback map and subscription methods**
-   - Add callback map in `wsStore.ts`
+   - Add callback map in `wsStore.ts`, in the group matching the watcher's owner — worktree-scoped maps are cleared on a worktree switch, app-level ones only on disconnect (see [subscription-system.md](subscription-system.md#why-app-level-subscriptions-survive-worktree-switches))
    - Handle notification in `watchNotificationHandlers`
    - Expose subscribe/unsubscribe methods
 

@@ -48,7 +48,7 @@ Incoming notifications are routed by method name in `handleNotification()`:
 
 wsStore splits its watch callbacks into two groups, mirroring where the server keeps the matching watchers:
 
-- **Worktree-scoped** (file, git, git-diff, session list, chat messages) — the server tears down these watchers when the connection switches worktree.
+- **Worktree-scoped** (file, git, git-diff, session list, session detail, chat messages) — the server tears down these watchers when the connection switches worktree. Which group a callback map belongs to follows the server's watcher, not the hook's `resubscribeOnWorktreeChange` — session detail is worktree-scoped and still does not resubscribe ([why](../code/subscription-system.md#why-sessiondetail-is-worktree-scoped-but-never-resubscribes)).
 - **App-level / global** (work list, work detail, agent role list, settings, worktree list) — these watchers are Manager-level and keep pushing across worktree switches.
 
 On worktree switch, `switchWorktreeRPC()` calls `clearWorktreeWatchSubscriptions()`, which clears only the worktree-scoped maps. App-level callbacks are deliberately preserved: Work and AgentRole subscriptions set `resubscribeOnWorktreeChange: false` (they never resubscribe on switch), so clearing their callbacks would leave the server pushing `work.list.changed` and similar notifications into a connection with no local handler — silently dropping updates.

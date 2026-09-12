@@ -43,7 +43,7 @@ func NewSessionListWatcher(store session.Store) *SessionListWatcher {
 		store:       store,
 		eventCh:     make(chan session.SessionChangeEvent, 64), // Buffer to avoid blocking
 	}
-	store.SetOnChangeListener(w)
+	store.AddOnChangeListener(w)
 	return w
 }
 
@@ -87,10 +87,7 @@ func (w *SessionListWatcher) eventLoop() {
 }
 
 func (w *SessionListWatcher) buildItem(meta session.SessionMeta) rpc.SessionListItem {
-	return rpc.SessionListItem{
-		SessionMeta: meta,
-		State:       w.processStateGetter.GetProcessState(meta.ID),
-	}
+	return rpc.NewSessionListItem(meta, w.processStateGetter.GetProcessState(meta.ID))
 }
 
 // notifyChange sends notifications to all subscribers.
@@ -226,10 +223,7 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 
 	// Use e.State directly — the event already carries the authoritative state,
 	// so re-querying via GetProcessState would be redundant.
-	item := rpc.SessionListItem{
-		SessionMeta: meta,
-		State:       string(e.State),
-	}
+	item := rpc.NewSessionListItem(meta, string(e.State))
 	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
 		return sessionListChangedParams{
 			ID:        sub.ID,

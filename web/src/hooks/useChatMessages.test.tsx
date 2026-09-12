@@ -1,10 +1,13 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { useLayoutEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionDetailStore } from "../lib/sessionDetailStore";
+import { makeSessionDetail } from "../test/sessionFixtures";
 import type {
 	AssistantMessage,
 	Message,
 	ServerNotification,
+	SessionDetailChangedNotification,
 	UserMessage,
 } from "../types/message";
 import { isForkableMessage } from "../utils/forkAnchor";
@@ -14,6 +17,8 @@ const mockState = vi.hoisted(() => ({
 	chatMessagesSubscribe: vi.fn(),
 	chatMessagesHistory: vi.fn(),
 	chatMessagesUnsubscribe: vi.fn(async () => {}),
+	sessionDetailSubscribe: vi.fn(),
+	sessionDetailUnsubscribe: vi.fn(async () => {}),
 	// Mirrors ChatActions.sendMessage: it resolves with the seq the server gave
 	// the message, or undefined when there is no address to give.
 	sendMessage: vi.fn(
@@ -28,6 +33,8 @@ vi.mock("../lib/wsStore", () => {
 			chatMessagesSubscribe: mockState.chatMessagesSubscribe,
 			chatMessagesHistory: mockState.chatMessagesHistory,
 			chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
+			sessionDetailSubscribe: mockState.sessionDetailSubscribe,
+			sessionDetailUnsubscribe: mockState.sessionDetailUnsubscribe,
 			sendMessage: mockState.sendMessage,
 		},
 	};
@@ -40,10 +47,7 @@ vi.mock("../lib/wsStore", () => {
 	return { useWSStore: store };
 });
 
-vi.mock("../lib/sessionStore", () => ({
-	useSessionStore: (selector: (s: unknown) => unknown) =>
-		selector({ sessions: [] }),
-}));
+let detailNotify: ((p: SessionDetailChangedNotification) => void) | null = null;
 
 const history = (text: string): ServerNotification[] => [
 	{ type: "text", content: text } as ServerNotification,
@@ -93,16 +97,29 @@ describe("useChatMessages", () => {
 		mockState.sendMessage.mockReset();
 		mockState.sendMessage.mockResolvedValue(undefined);
 		mockState.chatMessagesHistory.mockReset();
+		detailNotify = null;
+		useSessionDetailStore.getState().clear();
+		mockState.sessionDetailSubscribe.mockImplementation(
+			async (
+				sessionId: string,
+				onNotification: (p: SessionDetailChangedNotification) => void,
+			) => {
+				detailNotify = onNotification;
+				return {
+					id: `detail-${sessionId}`,
+					initial: {
+						id: `detail-${sessionId}`,
+						session: makeSessionDetail({ id: sessionId }),
+					},
+				};
+			},
+		);
 		mockState.chatMessagesSubscribe.mockImplementation(
 			async (sessionId: string) => ({
 				id: `sub-${sessionId}`,
 				initial: {
 					history: history(`message of ${sessionId}`),
 					state: "ended",
-					mode: "default",
-					agent_type: "claude",
-					model: "",
-					effort: "",
 				},
 			}),
 		);
@@ -145,10 +162,6 @@ describe("useChatMessages", () => {
 			initial: {
 				history: [{ type: "message", content: "Anyone there?" }],
 				state: "ended",
-				mode: "default",
-				agent_type: "claude",
-				model: "",
-				effort: "",
 			},
 		}));
 
@@ -226,10 +239,6 @@ describe("useChatMessages", () => {
 							{ type: "text", content: "Working" },
 						],
 						state: "running",
-						mode: "default",
-						agent_type: "claude",
-						model: "",
-						effort: "",
 					},
 				};
 			},
@@ -294,10 +303,6 @@ describe("useChatMessages", () => {
 					has_more: true,
 					next_before_seq: 7,
 					state: "ended",
-					mode: "default",
-					agent_type: "claude",
-					model: "",
-					effort: "",
 					...rest,
 				},
 			}));
@@ -421,6 +426,118 @@ describe("useChatMessages", () => {
 			await act(async () => {
 				release?.();
 			});
+		});
+	});
+
+	// The one source rule, at the point where it used to be broken: mode, agent
+	// type, model and effort were once reported by the chat subscription and the
+	// session list as well, and reading them from more than one place is how a
+	// rejected change came back as two answers that disagreed.
+	describe("session settings", () => {
+		function renderSettings(sessionId = "s1") {
+			const state: {
+				mode: string;
+				agentType: string;
+				model: string;
+				effort: string;
+				activated: boolean;
+				loaded: boolean;
+			} = {
+				mode: "default",
+				agentType: "claude",
+				model: "",
+				effort: "",
+				activated: false,
+				loaded: false,
+			};
+			function SettingsProbe({ id }: { id: string }) {
+				const chat = useChatMessages({ sessionId: id });
+				state.mode = chat.mode;
+				state.agentType = chat.agentType;
+				state.model = chat.model;
+				state.effort = chat.effort;
+				state.activated = chat.isSessionActivated;
+				state.loaded = chat.isSessionDetailLoaded;
+				return null;
+			}
+			const view = render(<SettingsProbe id={sessionId} />);
+			const rerender = (id: string) => view.rerender(<SettingsProbe id={id} />);
+			return { state, rerender };
+		}
+
+		it("reads the settings from the session, not from the chat subscription", async () => {
+			mockState.sessionDetailSubscribe.mockImplementation(
+				async (sessionId: string) => ({
+					id: `detail-${sessionId}`,
+					initial: {
+						id: `detail-${sessionId}`,
+						session: makeSessionDetail({
+							id: sessionId,
+							agent_type: "codex",
+							model: "gpt-5",
+							effort: "high",
+							mode: "yolo",
+							activated: true,
+						}),
+					},
+				}),
+			);
+
+			const { state } = renderSettings();
+
+			await waitFor(() => expect(state.loaded).toBe(true));
+			expect(state).toMatchObject({
+				mode: "yolo",
+				agentType: "codex",
+				model: "gpt-5",
+				effort: "high",
+				activated: true,
+			});
+		});
+
+		it("follows a change the server pushes", async () => {
+			const { state } = renderSettings();
+			await waitFor(() => expect(state.loaded).toBe(true));
+
+			act(() => {
+				detailNotify?.({
+					id: "detail-s1",
+					session: makeSessionDetail({
+						id: "s1",
+						model: "haiku",
+						mode: "yolo",
+					}),
+				});
+			});
+
+			expect(state.model).toBe("haiku");
+			expect(state.mode).toBe("yolo");
+		});
+
+		// The settings of the session just left must never be shown under the name
+		// of the one just opened — the whole reason the detail is read through a
+		// selector that checks whose it is.
+		it("shows no settings for a session whose snapshot has not arrived", async () => {
+			mockState.sessionDetailSubscribe.mockImplementation(
+				async (sessionId: string) =>
+					sessionId === "s1"
+						? {
+								id: "detail-s1",
+								initial: {
+									id: "detail-s1",
+									session: makeSessionDetail({ id: "s1", model: "opus" }),
+								},
+							}
+						: new Promise(() => {}),
+			);
+
+			const { state, rerender } = renderSettings("s1");
+			await waitFor(() => expect(state.model).toBe("opus"));
+
+			rerender("s2");
+
+			expect(state.model).toBe("");
+			expect(state.loaded).toBe(false);
 		});
 	});
 });

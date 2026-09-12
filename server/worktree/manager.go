@@ -207,6 +207,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	gitWatcher := watch.NewGitWatcher(workDir)
 	gitDiffWatcher := watch.NewGitDiffWatcher(workDir)
 	sessionListWatcher := watch.NewSessionListWatcher(sessionStore)
+	sessionDetailWatcher := watch.NewSessionDetailWatcher(sessionStore)
 	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore)
 	// The process manager's data dir is this worktree's own (wtDataDir), so agent
 	// session state lands next to the session store. MCP discovery still points at
@@ -235,18 +236,19 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	})
 
 	wt := &Worktree{
-		Name:                name,
-		WorkDir:             workDir,
-		SessionStore:        sessionStore,
-		FSWatcher:           fsWatcher,
-		GitWatcher:          gitWatcher,
-		GitDiffWatcher:      gitDiffWatcher,
-		SessionListWatcher:  sessionListWatcher,
-		ChatMessagesWatcher: chatMessagesWatcher,
-		ProcessManager:      processManager,
-		ChatClient:          chatClient,
-		watchers:            []watch.Watcher{fsWatcher, gitWatcher, gitDiffWatcher, sessionListWatcher, chatMessagesWatcher},
-		subscribers:         make(map[watch.Notifier]struct{}),
+		Name:                 name,
+		WorkDir:              workDir,
+		SessionStore:         sessionStore,
+		FSWatcher:            fsWatcher,
+		GitWatcher:           gitWatcher,
+		GitDiffWatcher:       gitDiffWatcher,
+		SessionListWatcher:   sessionListWatcher,
+		SessionDetailWatcher: sessionDetailWatcher,
+		ChatMessagesWatcher:  chatMessagesWatcher,
+		ProcessManager:       processManager,
+		ChatClient:           chatClient,
+		watchers:             []watch.Watcher{fsWatcher, gitWatcher, gitDiffWatcher, sessionListWatcher, sessionDetailWatcher, chatMessagesWatcher},
+		subscribers:          make(map[watch.Notifier]struct{}),
 	}
 
 	processManager.SetOnProcessEnd(func() {

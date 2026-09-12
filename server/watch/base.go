@@ -7,8 +7,12 @@ import (
 )
 
 type Subscription struct {
-	ID       string
-	WorkID   string // used by WorkDetailWatcher to filter by work item
+	ID string
+	// Key names the single resource a subscription follows, for watchers whose
+	// subscribers each watch one item instead of a whole list: a work_id for
+	// WorkDetailWatcher, a session_id for SessionDetailWatcher. Empty on list
+	// watchers, which notify every subscriber.
+	Key      string
 	Notifier Notifier
 }
 
@@ -79,17 +83,32 @@ func (b *BaseWatcher) GetSubscription(id string) *Subscription {
 	return b.subscriptions[id]
 }
 
-// HasSubscriptionForWorkID reports whether any subscription targets workID.
+// HasSubscriptionForKey reports whether any subscription targets key.
 // Used to skip expensive per-event work (store reads) when no subscriber cares.
-func (b *BaseWatcher) HasSubscriptionForWorkID(workID string) bool {
+func (b *BaseWatcher) HasSubscriptionForKey(key string) bool {
 	b.subMu.RLock()
 	defer b.subMu.RUnlock()
 	for _, sub := range b.subscriptions {
-		if sub.WorkID == workID {
+		if sub.Key == key {
 			return true
 		}
 	}
 	return false
+}
+
+// NotifyForKey sends a notification only to subscribers whose Key matches.
+func (b *BaseWatcher) NotifyForKey(key, method string, makeParams func(sub *Subscription) any) {
+	for _, sub := range b.GetAllSubscriptions() {
+		if sub.Key != key {
+			continue
+		}
+		n := Notification{Method: method, Params: makeParams(sub)}
+		if err := sub.Notifier.Notify(b.ctx, n); err != nil {
+			slog.Debug("failed to notify subscriber",
+				"id", sub.ID,
+				"error", err)
+		}
+	}
 }
 
 func (b *BaseWatcher) NotifyAll(method string, makeParams func(sub *Subscription) any) int {

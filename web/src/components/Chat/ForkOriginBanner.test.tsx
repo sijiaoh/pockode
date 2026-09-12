@@ -1,23 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionStore } from "../../lib/sessionStore";
-import type { SessionListItem } from "../../types/message";
+import { makeSessionListItem } from "../../test/sessionFixtures";
 import ForkOriginBanner from "./ForkOriginBanner";
 
-const parent: SessionListItem = {
+const parent = makeSessionListItem({
 	id: "parent-session",
 	title: "Refactor the session store",
-	created_at: "2024-01-01T00:00:00Z",
-	updated_at: "2024-01-01T00:00:00Z",
-	mode: "default",
-	agent_type: "claude",
-	model: "",
-	effort: "",
-	activated: true,
-	state: "idle",
-	needs_input: false,
-	unread: false,
-};
+});
 
 describe("ForkOriginBanner", () => {
 	beforeEach(() => {
