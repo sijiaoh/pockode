@@ -6,7 +6,6 @@ import { useGitDiscard } from "../../hooks/useGitDiscard";
 import { useGitLog } from "../../hooks/useGitLog";
 import { useGitStage } from "../../hooks/useGitStage";
 import { useGitStatus } from "../../hooks/useGitStatus";
-import { useGitWatch } from "../../hooks/useGitWatch";
 import { gitPanelActions, useHistoryExpanded } from "../../lib/gitPanelStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import {
@@ -81,8 +80,6 @@ function DiffTab({
 	// Opened from the HEAD row's amend action; the commit bar owns its own.
 	const [isAmending, setIsAmending] = useState(false);
 	const handleAmend = useCallback(() => setIsAmending(true), []);
-
-	useGitWatch({ onChanged: refreshAll, enabled: isActive });
 
 	const flatStatus = useMemo(
 		() => (status ? flattenGitStatus(status) : null),
