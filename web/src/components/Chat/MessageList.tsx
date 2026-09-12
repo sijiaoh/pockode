@@ -426,9 +426,9 @@ function MessageList({
 		});
 	}, []);
 
-	// Only with the top of the history actually on screen: pinned above a window
-	// into the middle of a transcript, the banner would claim a position it does
-	// not have.
+	// Only once the whole transcript is loaded: pinned above a page that is still
+	// the middle of a conversation, the banner would claim a position it does not
+	// have.
 	const forkBanner =
 		!hasMoreHistory && forkedFromSessionId && onOpenSession ? (
 			<ForkOriginBanner

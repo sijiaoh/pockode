@@ -136,9 +136,13 @@ files that say which is which: `utils/messageActions.ts` answers the first,
   sends stays unaddressable until a reload.
 - A message holding a pending permission request or question is not a settled
   transcript to cut at.
-- A user message that opens the transcript has nothing behind it to keep
+- A user message that opens the *session* has nothing behind it to keep
   (*The rule*). This one needs the message's *position*, which is why it is
-  `resolveForkAnchor`'s answer and not `isForkableMessage`'s.
+  `resolveForkAnchor`'s answer and not `isForkableMessage`'s — and the position
+  has to be read against the whole session, not against the pages loaded so
+  far: while `hasMoreHistory` is true the topmost bubble on screen still has a
+  conversation above it, so both `resolveForkAnchor` and `MessageItem`'s
+  `isFirst` are given that flag rather than trusting index zero.
 
 Neither of the first two is a verdict on the message itself, so they leave the
 icon in place and quiet rather than removing it (*Blocked and failed*). Neither

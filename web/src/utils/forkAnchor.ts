@@ -89,14 +89,14 @@ export interface ForkAnchor {
  * would keep no conversation at all. The server refuses that one; this only
  * keeps the user out of a sheet that could not have worked.
  *
- * `hasOlderHistory` is what tells the top of the loaded transcript apart from
+ * `hasMoreHistory` is what tells the top of the loaded transcript apart from
  * the start of the session: with pages still unread above it, the first loaded
  * message has conversation behind it and forking there is fine.
  */
 export function resolveForkAnchor(
 	messages: Message[],
 	messageId: string,
-	hasOlderHistory: boolean,
+	hasMoreHistory: boolean,
 ): ForkAnchor | null {
 	const index = messages.findIndex((m) => m.id === messageId);
 	if (index === -1) return null;
@@ -112,7 +112,7 @@ export function resolveForkAnchor(
 	// cut falls on is the server's rule, and a client doing arithmetic on a seq
 	// would be inventing an address it was never given.
 	const dropsAnchor = message.role === "user";
-	if (dropsAnchor && index === 0 && !hasOlderHistory) return null;
+	if (dropsAnchor && index === 0 && !hasMoreHistory) return null;
 
 	const droppedCount =
 		messages.slice(index + 1).filter((m) => !isBlankBubble(m)).length +
