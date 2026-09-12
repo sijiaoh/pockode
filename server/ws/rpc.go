@@ -462,6 +462,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	// chat namespace
 	case "chat.messages.subscribe":
 		h.handleChatMessagesSubscribe(ctx, conn, req, wt)
+	case "chat.messages.history":
+		h.handleChatMessagesHistory(ctx, conn, req, wt)
 	case "chat.messages.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, wt.ChatMessagesWatcher, "chat-messages")
 	case "chat.message":

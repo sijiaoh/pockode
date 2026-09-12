@@ -30,7 +30,12 @@ import {
 	formatStepProgress,
 	recordedStepProgress,
 } from "../../utils/workSteps";
-import { ScrollableContent, Spinner } from "../ui";
+import {
+	CollapsibleBody,
+	ScrollableContent,
+	Spinner,
+	useEverExpanded,
+} from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
 import { MarkdownContent } from "./MarkdownContent";
 import MessageActions from "./MessageActions";
@@ -106,14 +111,16 @@ const ToolCallItem = memo(function ToolCallItem({ tool }: ToolCallItemProps) {
 					<span className="truncate text-th-text-muted">{summary}</span>
 				)}
 			</button>
-			{expanded && tool.result && (
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
-					<ToolResultDisplay
-						toolName={tool.name}
-						toolInput={tool.input}
-						result={tool.result}
-					/>
-				</ScrollableContent>
+			{tool.result && (
+				<CollapsibleBody expanded={expanded}>
+					<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+						<ToolResultDisplay
+							toolName={tool.name}
+							toolInput={tool.input}
+							result={tool.result}
+						/>
+					</ScrollableContent>
+				</CollapsibleBody>
 			)}
 		</div>
 	);
@@ -149,11 +156,11 @@ function SystemItem({ content }: SystemItemProps) {
 				/>
 				<span className="italic text-th-text-muted">{label}</span>
 			</button>
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					<pre className="text-th-text-muted">{content}</pre>
 				</ScrollableContent>
-			)}
+			</CollapsibleBody>
 		</div>
 	);
 }
@@ -192,11 +199,11 @@ function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
 					</span>
 				)}
 			</button>
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					<MarkdownContent content={content} />
 				</ScrollableContent>
-			)}
+			</CollapsibleBody>
 		</div>
 	);
 }
@@ -243,17 +250,21 @@ interface RawItemProps {
 
 function RawItem({ content }: RawItemProps) {
 	const [expanded, setExpanded] = useState(false);
-	const { label, formatted } = useMemo(() => {
+	const everExpanded = useEverExpanded(expanded);
+	const parsed = useMemo(() => {
 		try {
-			const parsed = JSON.parse(content);
-			return {
-				label: typeof parsed.type === "string" ? parsed.type : "raw",
-				formatted: JSON.stringify(parsed, null, 2),
-			};
+			return JSON.parse(content) as { type?: unknown };
 		} catch {
-			return { label: "raw", formatted: content };
+			return null;
 		}
 	}, [content]);
+	const label = typeof parsed?.type === "string" ? parsed.type : "raw";
+	// Re-indenting the payload is the expensive half and only the body reads it.
+	const formatted = useMemo(
+		() =>
+			everExpanded ? (parsed ? JSON.stringify(parsed, null, 2) : content) : "",
+		[everExpanded, parsed, content],
+	);
 
 	return (
 		<div className="rounded bg-th-bg-secondary text-xs">
@@ -267,11 +278,11 @@ function RawItem({ content }: RawItemProps) {
 				/>
 				<span className="italic text-th-text-muted">{label}</span>
 			</button>
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					<pre className="text-th-text-muted">{formatted}</pre>
 				</ScrollableContent>
-			)}
+			</CollapsibleBody>
 		</div>
 	);
 }
@@ -295,11 +306,11 @@ function CommandOutputItem({ content }: CommandOutputItemProps) {
 				/>
 				<span className="text-th-accent">Command Output</span>
 			</button>
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					<MarkdownContent content={content} />
 				</ScrollableContent>
-			)}
+			</CollapsibleBody>
 		</div>
 	);
 }
@@ -335,9 +346,10 @@ function formatInput(input: unknown): string {
 	}
 }
 
-/** Check if input is empty (null, undefined, or empty object) */
+/** Check if input is empty (null, undefined, empty string, or empty object) */
 function isEmptyInput(input: unknown): boolean {
 	if (input == null) return true;
+	if (input === "") return true;
 	if (typeof input === "object" && Object.keys(input as object).length === 0)
 		return true;
 	return false;
@@ -385,10 +397,7 @@ function PermissionRequestItem({
 	const planContent = isExitPlanMode
 		? extractPlanContent(request.toolInput)
 		: null;
-	const toolInputContent =
-		!planContent && !isEmptyInput(request.toolInput)
-			? formatInput(request.toolInput)
-			: null;
+	const hasToolInput = !planContent && !isEmptyInput(request.toolInput);
 	const permissionSuggestion =
 		isPending &&
 		request.permissionSuggestions &&
@@ -397,9 +406,17 @@ function PermissionRequestItem({
 			? request.permissionSuggestions[0]
 			: null;
 	const hasExpandableContent = Boolean(
-		planContent || toolInputContent || permissionSuggestion,
+		planContent || hasToolInput || permissionSuggestion,
 	);
 	const [expanded, setExpanded] = useState(isPending && hasExpandableContent);
+	const everExpanded = useEverExpanded(expanded);
+	// Whether there is an input to show is a cheap question; serializing it is
+	// not, and a denied request whose strip stays shut never needs the answer.
+	const toolInputContent = useMemo(
+		() =>
+			everExpanded && hasToolInput ? formatInput(request.toolInput) : null,
+		[everExpanded, hasToolInput, request.toolInput],
+	);
 
 	const statusConfig = {
 		pending: { Icon: CircleHelp, color: "text-th-warning" },
@@ -433,7 +450,7 @@ function PermissionRequestItem({
 				)}
 			</button>
 
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					{planContent && <MarkdownContent content={planContent} />}
 					{toolInputContent && (
@@ -460,7 +477,7 @@ function PermissionRequestItem({
 						</div>
 					)}
 				</ScrollableContent>
-			)}
+			</CollapsibleBody>
 
 			{isPending && onRespond && (
 				<div className="flex justify-end gap-2 border-t border-th-border p-2">
@@ -558,7 +575,7 @@ function ContentPartItem({
 interface Props {
 	message: Message;
 	/**
-	 * First in the whole transcript, not in the rendered window: it decides
+	 * First in the whole session, not in the pages loaded so far: it decides
 	 * whether a fork anchored here has any conversation behind it to keep.
 	 */
 	isFirst?: boolean;
@@ -594,7 +611,7 @@ function forkBlockedReason(
 	isFirst: boolean | undefined,
 ): "not-yet" | "nothing-before" | undefined {
 	// A fork anchored on a message the user sent returns to before they sent it,
-	// so the transcript's opening prompt has nothing behind it to keep. The
+	// so the session's opening prompt has nothing behind it to keep. The
 	// server refuses this one too (chat.ErrForkAnchorNoHistory).
 	if (isFirst && message.role === "user") return "nothing-before";
 	if (!isForkableMessage(message)) return "not-yet";

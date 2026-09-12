@@ -19,8 +19,8 @@ interface Props {
 	 *   label promises only that this is not the message's permanent state. The
 	 *   unpersisted record is the one case it outlives rather than describes: it
 	 *   does not survive a reload, so nobody is left waiting on the promise.
-	 * - `nothing-before`: the message opens the transcript, and a fork returns
-	 *   to before it was sent. Permanent, so the label must not promise later.
+	 * - `nothing-before`: the message opens the session, and a fork returns to
+	 *   before it was sent. Permanent, so the label must not promise later.
 	 */
 	forkBlocked?: "not-yet" | "nothing-before";
 }

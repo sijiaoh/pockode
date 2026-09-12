@@ -2,7 +2,6 @@ package watch
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"sync"
 
@@ -118,19 +117,25 @@ func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRe
 type notifyParams struct {
 	ID string `json:"id"`
 	// Seq is the record's address in the session's history, the same number
-	// StampHistorySeq writes into replayed history, so a client cannot tell a
-	// live record from a replayed one when it names it later. Omitted for an
-	// event that was never persisted.
+	// replayed history is stamped with, so a client cannot tell a live record
+	// from a replayed one when it names it later. Omitted for an event that was
+	// never persisted.
 	Seq session.HistorySeq `json:"seq,omitempty"`
 	agent.EventRecord
 }
 
-// Subscribe registers a subscriber for a specific session.
-// Returns subscription ID and history.
+// Subscribe registers a subscriber for a specific session and returns the
+// subscription ID together with the newest page of that session's history.
+//
+// limit follows session.PageHistory: zero asks for the default page size. Older
+// pages are fetched out of band (chat.messages.history) rather than through the
+// subscription, because they can never change and never arrive on their own —
+// every record a live notification carries is newer than this page.
 func (w *ChatMessagesWatcher) Subscribe(
 	notifier Notifier,
 	sessionID string,
-) (string, []json.RawMessage, error) {
+	limit int,
+) (string, session.HistoryPage, error) {
 	id := w.GenerateID()
 	sub := &Subscription{
 		ID:       id,
@@ -149,10 +154,16 @@ func (w *ChatMessagesWatcher) Subscribe(
 	history, err := w.store.GetHistory(context.Background(), sessionID)
 	if err != nil {
 		w.Unsubscribe(id)
-		return "", nil, err
+		return "", session.HistoryPage{}, err
 	}
 
-	return id, session.StampHistorySeq(history), nil
+	page, err := session.PageHistory(history, session.NoHistorySeq, limit)
+	if err != nil {
+		w.Unsubscribe(id)
+		return "", session.HistoryPage{}, err
+	}
+
+	return id, page, nil
 }
 
 // Unsubscribe removes a subscription.

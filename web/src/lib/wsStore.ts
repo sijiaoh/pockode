@@ -18,7 +18,10 @@ import type {
 import type {
 	AuthParams,
 	AuthResult,
+	ChatMessagesHistoryParams,
+	ChatMessagesHistoryResult,
 	ChatMessagesSubscribeResult,
+	HistorySeq,
 	ServerNotification,
 	SessionListChangedNotification,
 	SessionListItem,
@@ -111,6 +114,11 @@ export interface WatchActions {
 		sessionId: string,
 		callback: (notification: ServerNotification) => void,
 	) => Promise<WatchSubscribeResult<ChatMessagesSubscribeResult>>;
+	/** Fetches the page of history older than `beforeSeq` (exclusive). */
+	chatMessagesHistory: (
+		sessionId: string,
+		beforeSeq: HistorySeq,
+	) => Promise<ChatMessagesHistoryResult>;
 	chatMessagesUnsubscribe: (id: string) => Promise<void>;
 	settingsSubscribe: (
 		callback: (params: SettingsChangedNotification) => void,
@@ -860,6 +868,17 @@ export const useWSStore = create<WSState>((set, get) => ({
 			})) as ChatMessagesSubscribeResult;
 			chatMessagesCallbacks.set(result.id, callback);
 			return { id: result.id, initial: result };
+		},
+
+		chatMessagesHistory: async (sessionId: string, beforeSeq: HistorySeq) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			return (await client.request("chat.messages.history", {
+				session_id: sessionId,
+				before_seq: beforeSeq,
+			} satisfies ChatMessagesHistoryParams)) as ChatMessagesHistoryResult;
 		},
 
 		chatMessagesUnsubscribe: async (id: string) => {

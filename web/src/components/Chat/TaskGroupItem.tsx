@@ -1,7 +1,7 @@
 import { Ban, Check, ChevronRight, Workflow, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { TaskRun, TaskRunStatus } from "../../types/message";
-import { ScrollableContent, Spinner } from "../ui";
+import { CollapsibleBody, ScrollableContent, Spinner } from "../ui";
 import { MarkdownContent } from "./MarkdownContent";
 
 interface Props {
@@ -93,7 +93,7 @@ function TaskRow({ task, index }: TaskRowProps) {
 				)}
 			</button>
 
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<div className="border-t border-th-border">
 					{/* The note belongs to the report it qualifies, not to the row:
 					    on a phone a fixed-width label there truncates the
@@ -121,17 +121,17 @@ function TaskRow({ task, index }: TaskRowProps) {
 								/>
 								<span className="text-th-text-muted">Prompt</span>
 							</button>
-							{promptExpanded && (
+							<CollapsibleBody expanded={promptExpanded}>
 								<ScrollableContent className="max-h-[40vh] overflow-auto p-2">
 									<pre className="whitespace-pre-wrap text-th-text-muted">
 										{task.prompt}
 									</pre>
 								</ScrollableContent>
-							)}
+							</CollapsibleBody>
 						</div>
 					)}
 				</div>
-			)}
+			</CollapsibleBody>
 		</div>
 	);
 }
@@ -188,13 +188,13 @@ function TaskGroupItem({ tasks }: Props) {
 				)}
 			</button>
 
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<div className="border-t border-th-border">
 					{tasks.map((task, index) => (
 						<TaskRow key={task.toolUseId} task={task} index={index} />
 					))}
 				</div>
-			)}
+			</CollapsibleBody>
 		</div>
 	);
 }

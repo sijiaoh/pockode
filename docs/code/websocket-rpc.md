@@ -252,7 +252,7 @@ This pattern ensures:
 | `work.detail.subscribe` | ✅ Full details | `onSubscribed` replaces state |
 | `settings.subscribe` | ✅ Full settings | `onSubscribed` replaces state |
 | `agent_role.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
-| `chat.messages.subscribe` | ✅ Full history | `onSubscribed` replaces state |
+| `chat.messages.subscribe` | ✅ Newest history page | `onSubscribed` replaces state ([paging](../agent-chat.md#history-paging)) |
 | `git.diff.subscribe` | ✅ Diff data | `onSubscribed` updates state |
 | `fs.subscribe` | ❌ ID only | `onSubscribed` triggers refresh |
 | `git.subscribe` | ❌ ID only | `onSubscribed` triggers refresh |

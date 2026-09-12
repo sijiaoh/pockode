@@ -426,11 +426,27 @@ export type SessionListChangedNotification =
 
 export interface ChatMessagesSubscribeParams {
 	session_id: string;
+	/** Omitted asks for the server's default page size. */
+	limit?: number;
 }
 
-export interface ChatMessagesSubscribeResult {
-	id: string;
+/**
+ * One page of history, oldest record first.
+ *
+ * `next_before_seq` is the cursor for the page before this one and is absent
+ * once `has_more` is false. It is the only way to ask for an earlier page: a
+ * record the server could not address carries no seq, so a cursor derived from
+ * `history[0]` would eventually name nothing. The two fields say the same thing,
+ * and the client reads the cursor — the one of them it can act on.
+ */
+export interface ChatMessagesHistoryPage {
 	history: unknown[];
+	has_more: boolean;
+	next_before_seq?: HistorySeq;
+}
+
+export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
+	id: string;
 	state: ProcessState;
 	mode: SessionMode;
 	agent_type: AgentType;
@@ -438,6 +454,15 @@ export interface ChatMessagesSubscribeResult {
 	/** Empty means "pass no effort flag, let the CLI keep its default". */
 	effort: string;
 }
+
+export interface ChatMessagesHistoryParams {
+	session_id: string;
+	/** Exclusive: the reply holds the records immediately older than this one. */
+	before_seq?: HistorySeq;
+	limit?: number;
+}
+
+export type ChatMessagesHistoryResult = ChatMessagesHistoryPage;
 
 export interface SessionSetModeParams {
 	session_id: string;

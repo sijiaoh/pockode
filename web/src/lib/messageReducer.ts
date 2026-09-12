@@ -572,7 +572,7 @@ function applyEvent(messages: Message[], event: NormalizedEvent): Message[] {
 		if (isTerminalEvent) {
 			// No active message to terminate — but still expire pending dialogs on process end
 			if (event.type === "process_ended") {
-				return settleRunningTasks(expirePendingDialogs(messages));
+				return settleAfterProcessGone(messages);
 			}
 			return messages;
 		}
@@ -638,10 +638,8 @@ function applyEvent(messages: Message[], event: NormalizedEvent): Message[] {
 
 	updated[index] = message;
 
-	// Expire all pending dialogs when process ends
 	if (event.type === "process_ended") {
-		updated = expirePendingDialogs(updated);
-		updated = settleRunningTasks(updated);
+		updated = settleAfterProcessGone(updated);
 	}
 
 	// A terminal event settles every bubble's fate, so this is where an empty one
@@ -1008,6 +1006,247 @@ export function applyUserMessage(
 	};
 
 	return [...finalized, userMessage, createAssistantMessage()];
+}
+
+/**
+ * Record types that settle something recorded earlier rather than adding to the
+ * transcript: a tool result naming its call, an answer naming its question, a
+ * process end retiring every dialog still open.
+ *
+ * They are the reason a page of history cannot be read on its own. A page holds
+ * the conversation as it stood at that moment, so a call answered one page later
+ * replays as still running. A client that pages backwards keeps these aside and
+ * replays them over each older page it pulls in — they are all idempotent
+ * "update wherever it is" operations, so replaying them costs nothing when the
+ * target is not there.
+ */
+const BACK_REFERENCE_TYPES = new Set([
+	"tool_result",
+	"permission_response",
+	"question_response",
+	"request_cancelled",
+	"process_ended",
+]);
+
+/**
+ * Retires everything that can no longer report back now that the session's
+ * process is gone. Needed wherever history does not say so itself: a process
+ * killed by a restart writes no `process_ended` for replay to find.
+ */
+export function settleAfterProcessGone(messages: Message[]): Message[] {
+	return settleRunningTasks(expirePendingDialogs(messages));
+}
+
+export function isBackReference(record: unknown): boolean {
+	const type = (record as Record<string, unknown> | null)?.type;
+	return typeof type === "string" && BACK_REFERENCE_TYPES.has(type);
+}
+
+/**
+ * Record types that end a turn rather than adding to it.
+ *
+ * One of these opening a page has nothing in that page to end — the turn it
+ * ended trails off at the bottom of the page below — so replaying that page
+ * alone learns nothing from it. It is the boundary terminal of the page below
+ * and is handed to {@link prependHistoryPage} when that page arrives.
+ */
+const TURN_TERMINAL_TYPES = new Set([
+	"interrupted",
+	"process_ended",
+	"done",
+	"error",
+]);
+
+export function isTurnTerminal(record: unknown): boolean {
+	const type = (record as Record<string, unknown> | null)?.type;
+	return typeof type === "string" && TURN_TERMINAL_TYPES.has(type);
+}
+
+/** Rejoins the parts of one turn that a page boundary split in two. */
+function joinTurnParts(
+	before: ContentPart[],
+	after: ContentPart[],
+): ContentPart[] {
+	// Through the same rule the stream itself uses, so a sentence — or a fenced
+	// code block — cut in two by the boundary comes back as one part rather than
+	// two that render side by side.
+	const first = after[0];
+	const joined =
+		first?.type === "text"
+			? [
+					...applyEventToParts(before, {
+						type: "text",
+						content: first.content,
+					}),
+					...after.slice(1),
+				]
+			: [...before, ...after];
+
+	// A turn has one task_group, anchored where it spawned its first Task, and
+	// each half grew one of its own.
+	const anchor = joined.findIndex((part) => part.type === "task_group");
+	const stray = joined.findLastIndex((part) => part.type === "task_group");
+	if (anchor === stray) return joined;
+
+	const anchorGroup = joined[anchor];
+	const strayGroup = joined[stray];
+	if (anchorGroup.type !== "task_group" || strayGroup.type !== "task_group") {
+		return joined;
+	}
+	const folded = joined.filter((_, index) => index !== stray);
+	folded[anchor] = {
+		...anchorGroup,
+		tasks: [...anchorGroup.tasks, ...strayGroup.tasks],
+	};
+	return folded;
+}
+
+/**
+ * Folds each of the older page's work cards into the card the loaded pages
+ * already show for that work.
+ *
+ * A work card is anchored where the work's first system message landed and
+ * updated in place from then on (docs/code/work-system.md), so a work whose life
+ * spans a page boundary would otherwise appear twice. The anchor is in the older
+ * page by definition, which is why the entries move up rather than the card
+ * moving down.
+ */
+function foldWorkCards(older: Message[], current: Message[]): Message[] {
+	const anchors = new Map<string, number>();
+	older.forEach((message, index) => {
+		if (message.role === "work") anchors.set(message.workId, index);
+	});
+	if (anchors.size === 0) return [...older, ...current];
+
+	const merged = [...older];
+	const rest = current.filter((message) => {
+		if (message.role !== "work") return true;
+		const index = anchors.get(message.workId);
+		if (index === undefined) return true;
+		const anchor = merged[index];
+		if (anchor.role !== "work") return true;
+		merged[index] = {
+			// Everything but the identity comes from the anchor, whose title and
+			// type were recorded when the work was first seen. The id is the card
+			// already on screen: MessageList keys on it, so keeping it moves that
+			// node up instead of remounting a new card in its place.
+			...anchor,
+			id: message.id,
+			entries: [...anchor.entries, ...message.entries],
+		};
+		return false;
+	});
+	return [...merged, ...rest];
+}
+
+/** What a page could not know had happened to it after it was written. */
+interface HistoryPageCatchUp {
+	/**
+	 * The record that immediately follows this page, when it is one
+	 * {@link isTurnTerminal} keeps. Opening the page above it had nothing to end
+	 * and was dropped there; the turn it did end is the one this page trails off
+	 * on, so it is replayed here before that turn is closed.
+	 */
+	boundaryTerminal?: unknown;
+	/**
+	 * Records kept by {@link isBackReference} from every page already loaded,
+	 * oldest first.
+	 */
+	backReferences?: unknown[];
+	/**
+	 * The session's process is gone without history saying so — a restart killed
+	 * it, so no `process_ended` was ever recorded. Nothing can still report back
+	 * on a dialog or a Task this page left open.
+	 */
+	processEnded?: boolean;
+}
+
+/**
+ * Splices a page of older history in front of what is already on screen.
+ *
+ * A page boundary falls between two records, not between two turns, so the turn
+ * the cut lands in comes back as two halves: the older page trails off mid-turn,
+ * and the page above it opened on content that no message event preceded. The
+ * reducer has only one way to produce a leading assistant message — that exact
+ * orphan case — which is what makes rejoining the two halves safe.
+ */
+export function prependHistoryPage(
+	older: Message[],
+	current: Message[],
+	catchUp: HistoryPageCatchUp = {},
+): Message[] {
+	// The record that ended this page's last turn goes first, while that turn is
+	// still the streaming one: it is the only record that may say how the turn
+	// ended, and applying it after the turn has been closed would be a no-op.
+	let closed = older;
+	if (catchUp.boundaryTerminal) {
+		const record = catchUp.boundaryTerminal as Record<string, unknown>;
+		// With its seq, unlike the back-references: this record is the last of the
+		// turn it ends, so it is the point a fork of that turn has to cut at — the
+		// address replaying the whole history unbroken would have left there.
+		closed = applyServerEvent(
+			closed,
+			normalizeEvent(record),
+			readHistorySeq(record),
+		);
+	}
+
+	// The older page's last turn is over by definition: the records that ended it
+	// are in the page above. Left as it replayed, it would keep a spinner running
+	// forever in the middle of the transcript. This is also what stands in when
+	// the boundary terminal says nothing — a turn cut mid-answer by the page size
+	// ended no particular way.
+	//
+	// Closing it *before* replaying the back-references is what keeps a later
+	// `process_ended` from stamping its own status onto a turn that was still
+	// running at this point in the transcript: with nothing left streaming it
+	// retires only the dialogs and Tasks this page left open, which is the part
+	// of it that is true here.
+	closed = closePreviousTurn(closed);
+	for (const record of catchUp.backReferences ?? []) {
+		closed = applyServerEvent(
+			closed,
+			normalizeEvent(record as Record<string, unknown>),
+		);
+	}
+	if (catchUp.processEnded) {
+		closed = settleAfterProcessGone(closed);
+	}
+	if (closed.length === 0) return current;
+
+	const tail = closed[closed.length - 1];
+	const head = current[0];
+	if (tail.role !== "assistant" || head?.role !== "assistant") {
+		return foldWorkCards(closed, current);
+	}
+
+	// A turn that already ended this way keeps the status it ended with, and what
+	// trails it is late content that cannot reopen it — the same rule applyEvent
+	// follows when the two halves arrive in one stream. `complete` is excluded
+	// there too, so the head's status stands for it.
+	const endedAtBoundary =
+		tail.status === "interrupted" ||
+		tail.status === "error" ||
+		tail.status === "process_ended";
+	const joined = joinTurnParts(tail.parts, head.parts);
+
+	const merged: AssistantMessage = {
+		// Keeps the head's identity rather than the tail's: MessageList keys on it,
+		// so adopting the older id would remount the bubble and throw away whatever
+		// the user had expanded inside it — and the scroll anchor is pinned to it.
+		...head,
+		...(endedAtBoundary ? { status: tail.status, error: tail.error } : {}),
+		parts: endedAtBoundary ? settleRunningTaskParts(joined) : joined,
+		createdAt: tail.createdAt,
+		// The head's anchor wins when it has one: it names the later record, which
+		// is where a fork of this message has to cut.
+		...(head.anchorSeq === undefined && tail.anchorSeq !== undefined
+			? { anchorSeq: tail.anchorSeq }
+			: {}),
+	};
+	// The two halves are one message from here on, so the fold sees the turn the
+	// way the rest of the transcript does.
+	return foldWorkCards([...closed.slice(0, -1), merged], current.slice(1));
 }
 
 export function replayHistory(records: unknown[]): Message[] {

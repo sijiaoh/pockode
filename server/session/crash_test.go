@@ -144,7 +144,11 @@ func TestFileStore_DamagedHistory_KeepsSeqsUnique(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetHistory failed: %v", err)
 	}
-	stamped := StampHistorySeq(records)
+	page, err := PageHistory(records, NoHistorySeq, DefaultHistoryPageSize)
+	if err != nil {
+		t.Fatalf("PageHistory failed: %v", err)
+	}
+	stamped := page.Records
 
 	// Two readable records plus the warning.
 	if len(stamped) != 3 {

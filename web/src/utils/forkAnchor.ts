@@ -78,19 +78,25 @@ export interface ForkAnchor {
 
 /**
  * Locates the message a fork would cut at, together with what forking there
- * costs. Counted over the whole transcript rather than the window `MessageList`
- * happens to have rendered, because the sentence in the fork sheet claims to
- * describe the session.
+ * costs. The count is exact however far back the user has scrolled: history
+ * pages in from the bottom, so every message after the anchor is loaded by
+ * definition, and the sentence in the fork sheet claims to describe the
+ * session.
  *
- * Null when the message is gone, cannot be forked at, or is the first thing in
- * the transcript and was sent by the user — the transcript can move on while
+ * Null when the message is gone, cannot be forked at, or is the session's own
+ * opening message and was sent by the user — the transcript can move on while
  * the sheet is opening, and a fork returning to before the opening message
  * would keep no conversation at all. The server refuses that one; this only
  * keeps the user out of a sheet that could not have worked.
+ *
+ * `hasOlderHistory` is what tells the top of the loaded transcript apart from
+ * the start of the session: with pages still unread above it, the first loaded
+ * message has conversation behind it and forking there is fine.
  */
 export function resolveForkAnchor(
 	messages: Message[],
 	messageId: string,
+	hasOlderHistory: boolean,
 ): ForkAnchor | null {
 	const index = messages.findIndex((m) => m.id === messageId);
 	if (index === -1) return null;
@@ -106,7 +112,7 @@ export function resolveForkAnchor(
 	// cut falls on is the server's rule, and a client doing arithmetic on a seq
 	// would be inventing an address it was never given.
 	const dropsAnchor = message.role === "user";
-	if (dropsAnchor && index === 0) return null;
+	if (dropsAnchor && index === 0 && !hasOlderHistory) return null;
 
 	const droppedCount =
 		messages.slice(index + 1).filter((m) => !isBlankBubble(m)).length +

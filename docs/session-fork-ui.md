@@ -178,9 +178,10 @@ opens onto a refusal; only the unsettled message itself is unforkable.
    right one. The preview does not say whether the quoted message is the last
    one kept or the first one left behind; the sentence under it does.
 2. **What is cut**, one line, with the real count — messages as the user sees
-   them, counted over the whole transcript and not the 50-message window
-   `MessageList` happens to have rendered. Two sentences, because *The rule*
-   lands on two sides and "up to this message" would be a lie on one of them:
+   them. History pages in from the bottom, so everything after the cut point is
+   loaded by definition and the count is exact however far back the user has
+   scrolled. Two sentences, because *The rule* lands on two sides and "up to
+   this message" would be a lie on one of them:
    - assistant anchor: *"The new session keeps the conversation up to this
      message. The 28 messages after it stay in this session."*
    - user anchor: *"The new session keeps the conversation up to just before
@@ -327,10 +328,13 @@ title (`MainContainer title={projectTitle}`), and more to the point, "this
 conversation begins as a copy of another one" is a fact about where the
 transcript starts — the top of the transcript is literally where it belongs.
 
-`MessageList` pages history 50 messages at a time from the bottom, so the banner
-renders **only when the top of history is actually on screen** (`startIndex ===
-0`). A banner pinned above a window into the middle of a transcript would claim
-a position it does not have.
+A session opens on the newest page of its history and pulls in earlier pages as
+the user scrolls back, so the banner renders **only once the whole transcript is
+loaded** (`hasMoreHistory === false`). A banner pinned above a window into the
+middle of a transcript would claim a position it does not have. Where it does
+render it stands in for the generic "Beginning of conversation" line
+([agent-chat.md](agent-chat.md#reading-a-page-on-the-client)) — it says the same
+thing and says more.
 
 **The sidebar row** — a small `GitBranch` glyph in `SidebarListItem`'s existing
 `leftSlot`, with the row's accessible name extended to
@@ -423,10 +427,13 @@ Changed:
 - `MessageItem.tsx` — renders `MessageActions` for every conversation turn, and
   decides fork's blocked reason. New optional props `onForkMessage?: (messageId:
   string) => void` (stable, since the component is `memo`) and `isFirst?:
-  boolean` — first in the *whole* transcript, not in the rendered window, since
+  boolean` — first in the *whole* session, not in the pages loaded so far, since
   that is what decides whether a fork here has anything behind it to keep.
 - `MessageList.tsx` — the origin banner, and threading `onForkMessage` and
-  `isFirst`.
+  `isFirst`. The top of the loaded transcript is the session's start only once
+  `hasMoreHistory` is false; with older pages still unread, the first rendered
+  message has conversation behind it and forking there is fine. The same
+  condition is passed to `resolveForkAnchor` in `ChatPanel`.
 - `ChatPanel.tsx` — owns which message a fork is being confirmed for, owns the
   fork mutation and its in-flight/error state, renders `ForkSessionSheet`, and
   writes the dropped prompt into the draft store before navigating. The sheet is

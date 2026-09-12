@@ -459,10 +459,10 @@ func TestFileStore_AppendToHistoryNumbersRecords(t *testing.T) {
 // be the same ones AppendToHistory handed out, or a fork point taken from
 // replayed history would name a different record than one taken from a live event.
 func TestStampHistorySeq(t *testing.T) {
-	stamped := StampHistorySeq([]json.RawMessage{
+	stamped := stampHistorySeq([]json.RawMessage{
 		json.RawMessage(`{"type":"text","content":"one"}`),
 		json.RawMessage(`{}`),
-	})
+	}, 1)
 
 	if len(stamped) != 2 {
 		t.Fatalf("stamped %d records, want 2", len(stamped))

@@ -90,11 +90,11 @@ describe("resolveForkAnchor", () => {
 			assistantMessage({ id: "a2", anchorSeq: 4 }),
 		];
 
-		expect(resolveForkAnchor(messages, "a1")).toMatchObject({
+		expect(resolveForkAnchor(messages, "a1", false)).toMatchObject({
 			anchorSeq: 2,
 			droppedCount: 2,
 		});
-		expect(resolveForkAnchor(messages, "a2")?.droppedCount).toBe(0);
+		expect(resolveForkAnchor(messages, "a2", false)?.droppedCount).toBe(0);
 	});
 
 	// The two anchor roles differ in what the new session starts with: a user
@@ -107,8 +107,12 @@ describe("resolveForkAnchor", () => {
 			userMessage({ id: "u2", anchorSeq: 3, content: "Try again" }),
 		];
 
-		expect(resolveForkAnchor(messages, "u2")?.droppedText).toBe("Try again");
-		expect(resolveForkAnchor(messages, "a1")?.droppedText).toBeUndefined();
+		expect(resolveForkAnchor(messages, "u2", false)?.droppedText).toBe(
+			"Try again",
+		);
+		expect(
+			resolveForkAnchor(messages, "a1", false)?.droppedText,
+		).toBeUndefined();
 	});
 
 	// A fork returns to before the anchor was sent, so a message the user typed
@@ -121,7 +125,7 @@ describe("resolveForkAnchor", () => {
 			assistantMessage({ id: "a2", anchorSeq: 4 }),
 		];
 
-		expect(resolveForkAnchor(messages, "u2")).toMatchObject({
+		expect(resolveForkAnchor(messages, "u2", false)).toMatchObject({
 			// The seq goes back to the server untouched; which side of it the cut
 			// falls on is the server's rule, not arithmetic done here.
 			anchorSeq: 3,
@@ -137,9 +141,23 @@ describe("resolveForkAnchor", () => {
 			assistantMessage({ id: "a1" }),
 		];
 
-		expect(resolveForkAnchor(messages, "u1")).toBeNull();
+		expect(resolveForkAnchor(messages, "u1", false)).toBeNull();
 		// The agent's first answer still has that prompt behind it to keep.
-		expect(resolveForkAnchor(messages, "a1")?.droppedCount).toBe(0);
+		expect(resolveForkAnchor(messages, "a1", false)?.droppedCount).toBe(0);
+	});
+
+	// History pages in from the bottom, so the top of what is loaded is only the
+	// start of the session once there is nothing left above it to read.
+	it("allows a user anchor at the top when older pages remain", () => {
+		const messages: Message[] = [
+			userMessage({ id: "u1" }),
+			assistantMessage({ id: "a1" }),
+		];
+
+		expect(resolveForkAnchor(messages, "u1", true)).toMatchObject({
+			anchorSeq: 1,
+			droppedCount: 2,
+		});
 	});
 
 	// A bubble the agent never wrote into is not a message the user can see, so
@@ -150,7 +168,7 @@ describe("resolveForkAnchor", () => {
 			assistantMessage({ id: "a2", parts: [], status: "streaming" }),
 		];
 
-		expect(resolveForkAnchor(messages, "a1")?.droppedCount).toBe(0);
+		expect(resolveForkAnchor(messages, "a1", false)?.droppedCount).toBe(0);
 	});
 
 	it("is null for a message that cannot anchor a fork", () => {
@@ -161,7 +179,7 @@ describe("resolveForkAnchor", () => {
 			userMessage({ anchorSeq: undefined }),
 		];
 
-		expect(resolveForkAnchor(messages, "u1")).toBeNull();
-		expect(resolveForkAnchor(messages, "gone")).toBeNull();
+		expect(resolveForkAnchor(messages, "u1", false)).toBeNull();
+		expect(resolveForkAnchor(messages, "gone", false)).toBeNull();
 	});
 });

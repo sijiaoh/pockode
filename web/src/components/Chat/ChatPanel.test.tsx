@@ -1512,6 +1512,43 @@ describe("ChatPanel", () => {
 			expect(screen.queryByRole("dialog")).toBeNull();
 		});
 
+		// The two features meet here: history pages in from the bottom, so the
+		// message at the top of what is loaded is the session's opening prompt
+		// only once there is nothing older left to read.
+		it("keeps fork on the top message while older pages remain", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			mockState.chatMessagesSubscribe.mockImplementation(() =>
+				Promise.resolve({
+					id: "sub-1",
+					initial: {
+						history: mockState.mockHistory,
+						state: "ended",
+						mode: "default",
+						agent_type: "claude",
+						model: "",
+						effort: "",
+						next_before_seq: 1,
+					},
+				}),
+			);
+			mockState.forkSession.mockResolvedValue(forkedSession);
+
+			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.queryByRole("button", {
+					name: "Fork from here, nothing before this message to keep",
+				}),
+			).toBeNull();
+
+			await user.click(
+				screen.getAllByRole("button", { name: "Fork from here" })[0],
+			);
+			expect(await screen.findByRole("dialog")).toBeInTheDocument();
+		});
+
 		// The message you just sent is the one you most want to fork from — you
 		// asked, the answer disappointed, and you want to rephrase. It used to be
 		// the one message that could not be forked from at all until the session

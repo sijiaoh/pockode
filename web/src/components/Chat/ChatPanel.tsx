@@ -194,6 +194,11 @@ function ChatPanel({
 	const {
 		messages,
 		isLoadingHistory,
+		hasMoreHistory,
+		isLoadingMoreHistory,
+		historyError,
+		loadedHistoryPages,
+		loadMoreHistory,
 		isStreaming,
 		isProcessRunning,
 		mode,
@@ -354,7 +359,7 @@ function ChatPanel({
 	);
 
 	const forkAnchor = forkTarget
-		? resolveForkAnchor(messages, forkTarget.messageId)
+		? resolveForkAnchor(messages, forkTarget.messageId, hasMoreHistory)
 		: null;
 	const isSheetOpen = Boolean(forkAnchor);
 
@@ -388,6 +393,11 @@ function ChatPanel({
 					key={sessionId}
 					messages={messages}
 					isProcessRunning={isProcessRunning}
+					hasMoreHistory={hasMoreHistory}
+					isLoadingMoreHistory={isLoadingMoreHistory}
+					historyError={historyError}
+					loadedHistoryPages={loadedHistoryPages}
+					onLoadMoreHistory={loadMoreHistory}
 					isCodex={agentType === "codex"}
 					onPermissionRespond={handlePermissionRespond}
 					onQuestionRespond={handleQuestionRespond}
