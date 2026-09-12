@@ -94,8 +94,8 @@ WorkCommentListParams     { work_id }
 WorkCommentUpdateParams   { id, body }
 WorkDetailSubscribeParams { work_id }
 
-AgentRoleCreateParams   { name, role_prompt }
-AgentRoleUpdateParams   { id, name?, role_prompt? }
+AgentRoleCreateParams   { name, role_prompt, steps? }
+AgentRoleUpdateParams   { id, name?, role_prompt?, steps?, agent_type?, model?, effort? }
 AgentRoleDeleteParams   { id }
 ```
 
@@ -109,6 +109,24 @@ Defined in `server/rpc/types.go`.
 2. **Session creation**: Calls `WorkStarter.HandleWorkStart()` to create the Claude session and send the kickoff (or restart) message.
 
 If step 2 fails, the handler calls `Store.RollbackStart` — fresh starts revert to `open` (clears sessionID); restarts revert to `stopped` (preserves sessionID).
+
+### `agent_role.update` Engine Fields
+
+`agent_type`, `model` and `effort` follow the same "absent = unchanged" rule as
+the other optional fields, with two additions:
+
+- **Send `agent_type` alone when switching agents.** The server clears `model`
+  and `effort` as part of that write; sending the trio would race its own reset.
+- **An unavailable combination is rejected**, not silently reset. The error
+  comes back as JSON-RPC `InvalidParams` and its message is the store's own,
+  naming the offending id and the agent it was judged against — `invalid agent
+  role: model "gpt-5.6-sol" is not available for agent "claude"` — so it can be
+  shown to the user as-is. See
+  [Engine Fields](data-model.md#engine-fields) for why a role is stricter than a
+  session here.
+
+`agent_role.create` takes no engine fields: a new role follows the global
+default agent type and lets the CLI choose, which is the right starting point.
 
 ### `agent_role.delete` Referential Integrity
 

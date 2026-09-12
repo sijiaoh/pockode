@@ -28,7 +28,7 @@ func (m *mockSessionStore) Get(sessionID string) (session.SessionMeta, bool, err
 	return session.SessionMeta{}, false, nil
 }
 
-func (m *mockSessionStore) Create(ctx context.Context, sessionID string, agentType session.AgentType, mode session.Mode) (session.SessionMeta, error) {
+func (m *mockSessionStore) Create(ctx context.Context, sessionID string, spec session.CreateSpec) (session.SessionMeta, error) {
 	return session.SessionMeta{}, nil
 }
 

@@ -17,7 +17,7 @@ import (
 func seedHistory(t *testing.T, env *testEnv, sessionID string, n int) *worktree.Worktree {
 	t.Helper()
 	wt := env.getMainWorktree()
-	if _, err := wt.SessionStore.Create(bgCtx, sessionID, "", ""); err != nil {
+	if _, err := wt.SessionStore.Create(bgCtx, sessionID, session.CreateSpec{}); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	for i := 1; i <= n; i++ {

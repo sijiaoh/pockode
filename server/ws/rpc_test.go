@@ -394,7 +394,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 
 func TestHandler_ChatMessagesSubscribe(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	result := env.subscribeChatMessages("sess")
 
@@ -415,7 +415,7 @@ func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	wt := env.getMainWorktree()
-	wt.SessionStore.Create(bgCtx, "sess", "", "")
+	wt.SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	// Start process by sending message
 	env.subscribeChatMessages("sess")
@@ -452,7 +452,7 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "Hello AI")
@@ -479,7 +479,7 @@ func TestHandler_ChatMessage_ReturnsSeq(t *testing.T) {
 	mock := &mockAgent{events: []agent.AgentEvent{agent.DoneEvent{}}}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "sess", "", "")
+	store.Create(bgCtx, "sess", session.CreateSpec{})
 
 	env.subscribeChatMessages("sess")
 	first := env.sendMessage("sess", "first prompt")
@@ -517,8 +517,8 @@ func TestHandler_MultipleSessions(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "session-A", "", "")
-	store.Create(bgCtx, "session-B", "", "")
+	store.Create(bgCtx, "session-A", session.CreateSpec{})
+	store.Create(bgCtx, "session-B", session.CreateSpec{})
 
 	env.subscribeChatMessages("session-A")
 	env.subscribeChatMessages("session-B")
@@ -550,7 +550,7 @@ func TestHandler_PermissionRequest(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "run ls")
@@ -578,7 +578,7 @@ func TestHandler_AgentStartError(t *testing.T) {
 		startErr: fmt.Errorf("failed to start agent"),
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	env.subscribeChatMessages("sess")
 	resp := env.call("chat.message", rpc.MessageParams{SessionID: "sess", Content: "hello"})
@@ -596,7 +596,7 @@ func TestHandler_Interrupt(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "hello")
@@ -638,7 +638,7 @@ func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "new-session", "", "")
+	store.Create(bgCtx, "new-session", session.CreateSpec{})
 
 	env.subscribeChatMessages("new-session")
 	env.sendMessage("new-session", "hello")
@@ -680,7 +680,7 @@ func TestHandler_FailedFirstTurn_KeepsAgentTypeSwitchable(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "failed-session", session.AgentTypeClaude, "")
+	store.Create(bgCtx, "failed-session", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	env.subscribeChatMessages("failed-session")
 	env.sendMessage("failed-session", "hello")
@@ -719,7 +719,7 @@ func TestHandler_SessionWithAgentOutput_LocksAgentType(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "started-session", session.AgentTypeClaude, "")
+	store.Create(bgCtx, "started-session", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	env.subscribeChatMessages("started-session")
 	env.sendMessage("started-session", "hello")
@@ -743,7 +743,7 @@ func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "activated-session", "", "")
+	store.Create(bgCtx, "activated-session", session.CreateSpec{})
 	store.Activate(bgCtx, "activated-session")
 
 	env.subscribeChatMessages("activated-session")
@@ -774,7 +774,7 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "ask me")
@@ -827,8 +827,8 @@ func TestHandler_Message_SessionNotInStore(t *testing.T) {
 func TestHandler_SessionListSubscribe(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "session-1", "", "")
-	store.Create(bgCtx, "session-2", "", "")
+	store.Create(bgCtx, "session-1", session.CreateSpec{})
+	store.Create(bgCtx, "session-2", session.CreateSpec{})
 
 	resp := env.call("session.list.subscribe", nil)
 
@@ -911,7 +911,7 @@ func TestHandler_SessionCreate_ReportsUnderlyingCause(t *testing.T) {
 func TestHandler_SessionDelete(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "to-delete", "", "")
+	sess, _ := store.Create(bgCtx, "to-delete", session.CreateSpec{})
 
 	resp := env.call("session.delete", rpc.SessionDeleteParams{SessionID: sess.ID})
 
@@ -928,7 +928,7 @@ func TestHandler_SessionDelete(t *testing.T) {
 func TestHandler_SessionDelete_ClosesProcess(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	wt := env.getMainWorktree()
-	sess, _ := wt.SessionStore.Create(bgCtx, "to-delete-with-process", "", "")
+	sess, _ := wt.SessionStore.Create(bgCtx, "to-delete-with-process", session.CreateSpec{})
 	env.sendMessage(sess.ID, "hello")
 
 	if !wt.ProcessManager.HasProcess(sess.ID) {
@@ -948,7 +948,7 @@ func TestHandler_SessionDelete_ClosesProcess(t *testing.T) {
 func TestHandler_SessionUpdateTitle(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "to-update", "", "")
+	sess, _ := store.Create(bgCtx, "to-update", session.CreateSpec{})
 
 	resp := env.call("session.update_title", rpc.SessionUpdateTitleParams{
 		SessionID: sess.ID,
@@ -967,7 +967,7 @@ func TestHandler_SessionUpdateTitle(t *testing.T) {
 
 func TestHandler_SessionUpdateTitle_EmptyTitle(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
-	sess, _ := env.getMainWorktree().SessionStore.Create(bgCtx, "to-update", "", "")
+	sess, _ := env.getMainWorktree().SessionStore.Create(bgCtx, "to-update", session.CreateSpec{})
 
 	resp := env.call("session.update_title", rpc.SessionUpdateTitleParams{
 		SessionID: sess.ID,
@@ -995,7 +995,7 @@ func TestHandler_SessionUpdateTitle_NotFound(t *testing.T) {
 func TestHandler_SessionSetAgentType(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := store.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
 		SessionID: sess.ID,
@@ -1015,7 +1015,7 @@ func TestHandler_SessionSetAgentType(t *testing.T) {
 func TestHandler_SessionSetAgentType_ActivatedSession(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "activated", session.AgentTypeClaude, "")
+	store.Create(bgCtx, "activated", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	store.Activate(bgCtx, "activated")
 
 	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
@@ -1047,7 +1047,7 @@ func TestHandler_SessionSetAgentType_NotFound(t *testing.T) {
 func TestHandler_SessionFork(t *testing.T) {
 	env := newForkableTestEnv(t)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
+	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
 	store.Update(bgCtx, "source", "Fix the parser")
 	store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
 	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "keep me too"})
@@ -1095,7 +1095,7 @@ func TestHandler_SessionFork(t *testing.T) {
 func TestHandler_SessionFork_NoHistoryBeforeAnchor(t *testing.T) {
 	env := newForkableTestEnv(t)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
+	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
 	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "the first thing"})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
@@ -1114,7 +1114,7 @@ func TestHandler_SessionFork_NoHistoryBeforeAnchor(t *testing.T) {
 // with the request, since the sheet shows the server's message to the user.
 func TestHandler_SessionFork_AnchorOutOfRange(t *testing.T) {
 	env := newForkableTestEnv(t)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "source", session.AgentTypeClaude, "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: 7})
 
@@ -1130,7 +1130,7 @@ func TestHandler_SessionFork_AnchorOutOfRange(t *testing.T) {
 func TestHandler_SessionFork_AgentCannotFork(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
+	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
 	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
@@ -1179,7 +1179,7 @@ func TestHandler_AgentList(t *testing.T) {
 func TestHandler_SessionSetModel(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := store.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	model := session.ModelsForAgent(session.AgentTypeClaude)[0].ID
 
 	resp := env.call("session.set_model", rpc.SessionSetModelParams{
@@ -1202,7 +1202,7 @@ func TestHandler_SessionSetModel_ForeignAgentModel(t *testing.T) {
 	// surface later, as a CLI that refuses to start.
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := store.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	resp := env.call("session.set_model", rpc.SessionSetModelParams{
 		SessionID: sess.ID,
@@ -1225,7 +1225,7 @@ func TestHandler_SessionSetModel_ForeignAgentModel(t *testing.T) {
 func TestHandler_SessionSetModel_RefusalSparesTheProcess(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	wt := env.getMainWorktree()
-	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	env.sendMessage(sess.ID, "hello")
 
 	if !wt.ProcessManager.HasProcess(sess.ID) {
@@ -1250,7 +1250,7 @@ func TestHandler_SessionSetModel_RefusalSparesTheProcess(t *testing.T) {
 func TestHandler_SessionSetModel_ClosesProcess(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	wt := env.getMainWorktree()
-	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	env.sendMessage(sess.ID, "hello")
 
 	if !wt.ProcessManager.HasProcess(sess.ID) {
@@ -1307,7 +1307,7 @@ func TestHandler_SessionModels(t *testing.T) {
 func TestHandler_ChatMessagesSubscribe_History(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "with-history", "", "")
+	sess, _ := store.Create(bgCtx, "with-history", session.CreateSpec{})
 	store.AppendToHistory(bgCtx, sess.ID, map[string]string{"type": "message", "content": "hello"})
 
 	result := env.subscribeChatMessages(sess.ID)
@@ -2034,7 +2034,7 @@ func effortOnlyOnCodex(t *testing.T) string {
 func TestHandler_SessionSetEffort(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := store.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	effort := session.EffortsForAgent(session.AgentTypeClaude)[0].ID
 
 	resp := env.call("session.set_effort", rpc.SessionSetEffortParams{
@@ -2057,7 +2057,7 @@ func TestHandler_SessionSetEffort_ForeignAgentEffort(t *testing.T) {
 	// with nothing but a warning nobody reads, so it is refused here.
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := store.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	resp := env.call("session.set_effort", rpc.SessionSetEffortParams{
 		SessionID: sess.ID,
@@ -2079,7 +2079,7 @@ func TestHandler_SessionSetEffort_ForeignAgentEffort(t *testing.T) {
 func TestHandler_SessionSetEffort_ProcessLifetime(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	wt := env.getMainWorktree()
-	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	env.sendMessage(sess.ID, "hello")
 
 	if !wt.ProcessManager.HasProcess(sess.ID) {

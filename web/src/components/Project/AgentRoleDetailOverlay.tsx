@@ -19,6 +19,7 @@ import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import { MarkdownContent } from "../Chat/MarkdownContent";
 import BackButton from "../ui/BackButton";
+import AgentRoleEngineSelector from "./AgentRoleEngineSelector";
 
 interface Props {
 	roleId: string;
@@ -50,6 +51,9 @@ export default function AgentRoleDetailOverlay({ roleId, onBack }: Props) {
 			<div className="min-h-0 flex-1 overflow-auto">
 				<div className="space-y-5 p-4">
 					<InlineEditableName role={role} />
+					{/* Before the role prompt, which is an arbitrarily long markdown
+					    block: one row after it sits off the first screen on a phone. */}
+					<AgentRoleEngineSelector role={role} />
 					<InlineEditableRolePrompt role={role} />
 					<StepsEditor role={role} />
 					<DeleteSection role={role} onDeleted={onBack} />

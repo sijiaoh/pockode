@@ -15,7 +15,7 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 	sessionID := uuid.Must(uuid.NewV7()).String()
 
 	s := h.settingsStore.Get()
-	sess, err := wt.SessionStore.Create(ctx, sessionID, s.DefaultAgentType, s.DefaultMode)
+	sess, err := wt.SessionStore.Create(ctx, sessionID, session.CreateSpec{AgentType: s.DefaultAgentType, Mode: s.DefaultMode})
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to create session", err, "sessionId", sessionID)
 		return

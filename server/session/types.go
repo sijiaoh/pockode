@@ -146,6 +146,20 @@ type ForkOrigin struct {
 	SessionID string `json:"session_id"`
 }
 
+// CreateSpec is the engine a new session is born with. One struct rather than
+// four parameters because the four are validated against each other: a model or
+// effort only means anything next to the agent type it was chosen for.
+//
+// Every field may be empty. An empty AgentType or Mode falls back to the
+// server's built-in default; an empty Model or Effort means the CLI is passed
+// no flag and decides for itself.
+type CreateSpec struct {
+	AgentType AgentType
+	Mode      Mode
+	Model     string
+	Effort    string
+}
+
 // ForkSpec describes a session created as a copy of another one. Everything a
 // fork inherits is decided here, in one place, and written in one index update:
 // a fork that flickered through three states on its way into the session list

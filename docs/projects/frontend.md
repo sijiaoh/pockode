@@ -156,5 +156,28 @@ Activates `useAgentRoleSubscription`. Lists all roles with a delete button per r
 
 Shows detail for a single agent role:
 - **Name** — Inline-editable
+- **Engine** — Collapsed summary row opening a `ResponsivePanel` with Agent /
+  Model / Effort choices (`AgentRoleEngineSelector`)
 - **Role Prompt** — Inline-editable textarea with Markdown rendering
+- **Steps** — Reorderable list editor
 - **Delete** — Confirmation dialog
+
+#### AgentRoleEngineSelector
+
+There are **two** engine selectors, deliberately: this one and the chat's
+`EngineSelector`. A role can leave the agent unset, which no session can, and
+nothing the chat selector is shaped around — a resolved session, an agent locked
+by activation, a CLI that restarts on a switch — exists on a role. Merging them
+would mean a component driven by boolean switches.
+
+What they do share is the presentation of a pick-one list, extracted to
+`components/ui/ChoiceList.tsx` (`Section`, `ChoiceRow`, `SelectionDot`), so the
+touch-target floor and the radio semantics of those rows have one definition
+rather than two that drift.
+
+Both read their options from `agentOptionsStore` and neither fetches; the single
+fetch is `useAgentOptions`, called once in `AppShell`. Selecting applies
+immediately — there is no draft to save — and failures are reported inside the
+panel, this page having no channel outside it. The engine fields themselves are
+sent one at a time, with the agent's reset left to the server
+([API](api.md#agent_roleupdate-engine-fields)).

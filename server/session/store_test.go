@@ -19,7 +19,7 @@ func TestFileStore_Create(t *testing.T) {
 		t.Fatalf("NewFileStore failed: %v", err)
 	}
 
-	sess, err := store.Create(ctx, "test-session-id", "", "")
+	sess, err := store.Create(ctx, "test-session-id", CreateSpec{})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestFileStore_Create(t *testing.T) {
 func TestFileStore_Create_WithMode(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	sess, err := store.Create(ctx, "yolo-session", "", ModeYolo)
+	sess, err := store.Create(ctx, "yolo-session", CreateSpec{Mode: ModeYolo})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -62,8 +62,8 @@ func TestFileStore_List(t *testing.T) {
 		t.Errorf("expected 0 sessions, got %d", len(sessions))
 	}
 
-	sess1, _ := store.Create(ctx, "session-1", "", "")
-	sess2, _ := store.Create(ctx, "session-2", "", "")
+	sess1, _ := store.Create(ctx, "session-1", CreateSpec{})
+	sess2, _ := store.Create(ctx, "session-2", CreateSpec{})
 
 	sessions, err = store.List()
 	if err != nil {
@@ -85,7 +85,7 @@ func TestFileStore_List(t *testing.T) {
 func TestFileStore_Delete(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	sess, _ := store.Create(ctx, "session-to-delete", "", "")
+	sess, _ := store.Create(ctx, "session-to-delete", CreateSpec{})
 
 	err := store.Delete(ctx, sess.ID)
 	if err != nil {
@@ -110,7 +110,7 @@ func TestFileStore_DeleteNonExistent(t *testing.T) {
 func TestFileStore_Update(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	sess, _ := store.Create(ctx, "session-to-update", "", "")
+	sess, _ := store.Create(ctx, "session-to-update", CreateSpec{})
 	if sess.Title != "New Chat" {
 		t.Fatalf("expected initial title 'New Chat', got %q", sess.Title)
 	}
@@ -153,7 +153,7 @@ func TestFileStore_Get(t *testing.T) {
 		t.Error("expected not found for non-existent session")
 	}
 
-	created, _ := store.Create(ctx, "test-session", "", "")
+	created, _ := store.Create(ctx, "test-session", CreateSpec{})
 	sess, found, err := store.Get("test-session")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
@@ -169,7 +169,7 @@ func TestFileStore_Get(t *testing.T) {
 func TestFileStore_Activate(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	sess, _ := store.Create(ctx, "session-to-activate", "", "")
+	sess, _ := store.Create(ctx, "session-to-activate", CreateSpec{})
 	if sess.Activated {
 		t.Error("expected new session to not be activated")
 	}
@@ -204,7 +204,7 @@ func TestFileStore_Persistence(t *testing.T) {
 	dir := t.TempDir()
 
 	store1, _ := NewFileStore(dir)
-	sess, _ := store1.Create(ctx, "persistent-session", "", "")
+	sess, _ := store1.Create(ctx, "persistent-session", CreateSpec{})
 
 	// Create new store instance, should see persisted data
 	store2, _ := NewFileStore(dir)
@@ -223,7 +223,7 @@ func TestFileStore_Persistence(t *testing.T) {
 func TestFileStore_History(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	sess, _ := store.Create(ctx, "test-session", "", "")
+	sess, _ := store.Create(ctx, "test-session", CreateSpec{})
 
 	history, err := store.GetHistory(ctx, sess.ID)
 	if err != nil {
@@ -263,7 +263,7 @@ func TestFileStore_History(t *testing.T) {
 func TestFileStore_Touch_UpdatesUpdatedAt(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	sess, _ := store.Create(ctx, "test-session", "", "")
+	sess, _ := store.Create(ctx, "test-session", CreateSpec{})
 	initialUpdatedAt := sess.UpdatedAt
 
 	time.Sleep(time.Millisecond) // Ensure time difference
@@ -278,7 +278,7 @@ func TestFileStore_Touch_UpdatesUpdatedAt(t *testing.T) {
 func TestFileStore_AppendToHistory_DoesNotUpdateTimestamp(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
-	sess, _ := store.Create(ctx, "test-session", "", "")
+	sess, _ := store.Create(ctx, "test-session", CreateSpec{})
 	initialUpdatedAt := sess.UpdatedAt
 
 	store.AppendToHistory(ctx, sess.ID, map[string]string{"type": "message"})
@@ -293,7 +293,7 @@ func TestFileStore_Delete_RemovesHistory(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 
 	sessionID := "session-with-history"
-	store.Create(ctx, sessionID, "", "")
+	store.Create(ctx, sessionID, CreateSpec{})
 	store.AppendToHistory(ctx, sessionID, map[string]string{"type": "message", "content": "test"})
 
 	history, _ := store.GetHistory(ctx, sessionID)
@@ -350,7 +350,7 @@ func TestFileStore_WriteHistoryKeepsOneRecordPerLine(t *testing.T) {
 		t.Fatalf("NewFileStore failed: %v", err)
 	}
 
-	if _, err := store.Create(ctx, "sess", AgentTypeClaude, ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "sess", CreateSpec{AgentType: AgentTypeClaude, Mode: ModeDefault}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -404,7 +404,7 @@ func TestFileStore_AppendToHistoryNumbersRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileStore failed: %v", err)
 	}
-	if _, err := store.Create(ctx, "sess", AgentTypeClaude, ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "sess", CreateSpec{AgentType: AgentTypeClaude, Mode: ModeDefault}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -494,7 +494,7 @@ func TestStampHistorySeq(t *testing.T) {
 
 func TestFileStore_SetModel(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
-	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "s1", CreateSpec{AgentType: AgentTypeClaude, Mode: ModeDefault}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -529,7 +529,7 @@ func TestFileStore_SetModelNonExistent(t *testing.T) {
 
 func TestFileStore_SetAgentType_DropsForeignModel(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
-	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "s1", CreateSpec{AgentType: AgentTypeClaude, Mode: ModeDefault}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 	if err := store.SetModel(ctx, "s1", ModelsForAgent(AgentTypeClaude)[0].ID); err != nil {
@@ -548,7 +548,7 @@ func TestFileStore_SetAgentType_DropsForeignModel(t *testing.T) {
 
 func TestFileStore_SetAgentType_KeepsValidModel(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
-	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "s1", CreateSpec{AgentType: AgentTypeClaude, Mode: ModeDefault}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 	model := ModelsForAgent(AgentTypeClaude)[0].ID
@@ -568,7 +568,7 @@ func TestFileStore_SetAgentType_KeepsValidModel(t *testing.T) {
 
 func TestFileStore_SetModel_RejectsForeignAgentModel(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
-	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "s1", CreateSpec{AgentType: AgentTypeClaude, Mode: ModeDefault}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -599,7 +599,7 @@ func effortOnlyOn(t *testing.T, has, lacks AgentType) string {
 
 func TestFileStore_SetEffort(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
-	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "s1", CreateSpec{AgentType: AgentTypeClaude, Mode: ModeDefault}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -634,7 +634,7 @@ func TestFileStore_SetEffortNonExistent(t *testing.T) {
 
 func TestFileStore_SetEffort_RejectsForeignAgentEffort(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
-	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "s1", CreateSpec{AgentType: AgentTypeClaude, Mode: ModeDefault}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -651,7 +651,7 @@ func TestFileStore_SetEffort_RejectsForeignAgentEffort(t *testing.T) {
 
 func TestFileStore_SetAgentType_DropsForeignEffort(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
-	if _, err := store.Create(ctx, "s1", AgentTypeCodex, ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "s1", CreateSpec{AgentType: AgentTypeCodex, Mode: ModeDefault}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 	effort := effortOnlyOn(t, AgentTypeCodex, AgentTypeClaude)
@@ -673,7 +673,7 @@ func TestFileStore_SetAgentType_DropsForeignEffort(t *testing.T) {
 // choice that is still valid.
 func TestFileStore_SetAgentType_KeepsSharedEffort(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
-	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "s1", CreateSpec{AgentType: AgentTypeClaude, Mode: ModeDefault}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 	effort := EffortsForAgent(AgentTypeClaude)[0].ID
@@ -698,7 +698,7 @@ func TestFileStore_SetAgentType_KeepsSharedEffort(t *testing.T) {
 // change must leave it alone.
 func TestFileStore_SetModel_KeepsEffort(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
-	if _, err := store.Create(ctx, "s1", AgentTypeClaude, ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "s1", CreateSpec{AgentType: AgentTypeClaude, Mode: ModeDefault}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 	effort := EffortsForAgent(AgentTypeClaude)[0].ID
@@ -713,5 +713,63 @@ func TestFileStore_SetModel_KeepsEffort(t *testing.T) {
 	meta, _, _ := store.Get("s1")
 	if meta.Effort != effort {
 		t.Errorf("expected effort %q to survive a model change, got %q", effort, meta.Effort)
+	}
+}
+
+// TestFileStore_Create_ValidatesEngine covers a session born with a model or
+// effort its agent cannot run. Create refuses rather than storing it, because a
+// session listed with an engine that will not start is one clients can already
+// see and the kickoff message can already race.
+func TestFileStore_Create_ValidatesEngine(t *testing.T) {
+	codexModel := ModelsForAgent(AgentTypeCodex)[0].ID
+	codexEffort := effortOnlyOn(t, AgentTypeCodex, AgentTypeClaude)
+
+	tests := []struct {
+		name string
+		spec CreateSpec
+		want error
+	}{
+		{
+			name: "model of another agent",
+			spec: CreateSpec{AgentType: AgentTypeClaude, Model: codexModel},
+			want: ErrModelNotAvailable,
+		},
+		{
+			name: "effort the agent does not offer",
+			spec: CreateSpec{AgentType: AgentTypeClaude, Effort: codexEffort},
+			want: ErrEffortNotAvailable,
+		},
+		{
+			name: "judged against the fallback agent when none is named",
+			spec: CreateSpec{Model: codexModel},
+			want: ErrModelNotAvailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, _ := NewFileStore(t.TempDir())
+
+			if _, err := store.Create(ctx, "sess", tt.spec); !errors.Is(err, tt.want) {
+				t.Fatalf("error = %v, want %v", err, tt.want)
+			}
+			if _, found, _ := store.Get("sess"); found {
+				t.Error("session was stored despite the rejected engine")
+			}
+		})
+	}
+}
+
+func TestFileStore_Create_KeepsEngine(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	model := ModelsForAgent(AgentTypeCodex)[0].ID
+	effort := EffortsForAgent(AgentTypeCodex)[0].ID
+
+	sess, err := store.Create(ctx, "sess", CreateSpec{AgentType: AgentTypeCodex, Model: model, Effort: effort})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sess.Model != model || sess.Effort != effort {
+		t.Errorf("engine = %q/%q, want %q/%q", sess.Model, sess.Effort, model, effort)
 	}
 }

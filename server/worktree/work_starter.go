@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
 )
@@ -56,9 +57,12 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 	}
 
 	if sessionExists {
+		// Deliberately not re-applying the role's engine: a session owns its own
+		// agent, model and effort from the moment it is created, and editing the
+		// role afterwards must not reach back into conversations already running.
 		return s.sendRestart(ctx, wt, w, role.Steps)
 	}
-	return s.createAndSendKickoff(ctx, wt, w, role.Steps)
+	return s.createAndSendKickoff(ctx, wt, w, role)
 }
 
 func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work, steps []string) error {
@@ -70,10 +74,25 @@ func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work
 	return nil
 }
 
-func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w work.Work, steps []string) error {
+func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w work.Work, role agentrole.AgentRole) error {
+	steps := role.Steps
 	defaults := s.settingsStore.Get()
-	if _, err := wt.SessionStore.Create(ctx, w.SessionID, defaults.DefaultAgentType, defaults.DefaultMode); err != nil {
-		return fmt.Errorf("create session: %w", err)
+
+	agentType := role.AgentType
+	if agentType == "" {
+		agentType = defaults.DefaultAgentType
+	}
+	spec := session.CreateSpec{
+		AgentType: agentType,
+		Mode:      defaults.DefaultMode,
+		Model:     role.Model,
+		Effort:    role.Effort,
+	}
+	if _, err := wt.SessionStore.Create(ctx, w.SessionID, spec); err != nil {
+		// The role is named because the value that has to be fixed lives on it,
+		// not on this work item: a model the server has since retired stays on
+		// the role and breaks every work started with it.
+		return fmt.Errorf("create session for agent role %q (%s): %w", role.Name, role.ID, err)
 	}
 
 	if err := wt.SessionStore.Update(ctx, w.SessionID, w.Title); err != nil {
