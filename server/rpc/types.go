@@ -4,6 +4,10 @@
 // Where a wire type is a deliberate narrowing of a domain type rather than a
 // copy of it, the narrowing lives here too (NewSessionListItem), so that what a
 // client is told is decided in one place instead of at each handler.
+//
+// Unsubscribe params are deliberately absent: every unsubscribe carries the
+// same lone subscription id, so the ws package unmarshals them all with one
+// internal type instead of one wire type per watcher.
 package rpc
 
 import (
@@ -216,10 +220,6 @@ type GitDiffSubscribeResult struct {
 	NewContent string `json:"new_content"`
 }
 
-type GitDiffUnsubscribeParams struct {
-	ID string `json:"id"`
-}
-
 // GitPathsParams is used for git.add, git.reset and git.discard operations.
 type GitPathsParams struct {
 	Paths []string `json:"paths"`
@@ -313,27 +313,15 @@ type FSSubscribeResult struct {
 	ID string `json:"id"`
 }
 
-type FSUnsubscribeParams struct {
-	ID string `json:"id"`
-}
-
 // Git namespace
 
 type GitSubscribeResult struct {
 	ID string `json:"id"`
 }
 
-type GitUnsubscribeParams struct {
-	ID string `json:"id"`
-}
-
 // Worktree watch (subscription for worktree list changes)
 
 type WorktreeSubscribeResult struct {
-	ID string `json:"id"`
-}
-
-type WorktreeUnsubscribeParams struct {
 	ID string `json:"id"`
 }
 
@@ -381,10 +369,6 @@ func NewSessionListItem(meta session.SessionMeta, state string) SessionListItem 
 type SessionListSubscribeResult struct {
 	ID       string            `json:"id"`
 	Sessions []SessionListItem `json:"sessions"`
-}
-
-type SessionListUnsubscribeParams struct {
-	ID string `json:"id"`
 }
 
 // Session detail watch (subscription for a single session's metadata)
@@ -442,10 +426,6 @@ type ChatMessagesHistoryResult struct {
 	History       []json.RawMessage  `json:"history"`
 	HasMore       bool               `json:"has_more"`
 	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
-}
-
-type ChatMessagesUnsubscribeParams struct {
-	ID string `json:"id"`
 }
 
 // Worktree namespace

@@ -23,7 +23,7 @@ export interface ModeSelectorProps {
 	 * `agentType` are placeholders with no value to show — the same flag
 	 * `EngineSelectorProps` carries, for the same round trip.
 	 */
-	isSessionResolved?: boolean;
+	hasSessionSettings?: boolean;
 	disabled?: boolean;
 }
 
@@ -41,7 +41,11 @@ export interface EngineSelectorProps {
 	onAgentTypeChange: (type: "claude" | "codex") => Promise<void>;
 	onModelChange: (model: string) => Promise<void>;
 	onEffortChange: (effort: string) => Promise<void>;
-	isSessionResolved?: boolean;
+	/**
+	 * False while the session has yet to describe itself, so `agentType`, `model`
+	 * and `effort` are placeholders with no value to show.
+	 */
+	hasSessionSettings?: boolean;
 	isSessionActivated?: boolean;
 	disabled?: boolean;
 }

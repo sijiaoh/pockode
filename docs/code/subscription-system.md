@@ -360,22 +360,26 @@ local handlers must go with it; leaving them would be the same leak described in
 [App-Level Subscriptions](#why-app-level-subscriptions-survive-worktree-switches),
 in the other direction.
 
-The hook flag answers what happens *after* the switch, and the answer is nothing,
-because the switch takes the session with it. By the time the new worktree is
-bound, `enabled` (`isSessionResolved`) has already gone false. Resubscribing
-would ask the new worktree about a session id it has never heard of, and buy a
+The hook flag answers what happens *after* the switch, and the answer is
+nothing, because the switch takes the session with it. `ChatPanel` holds this
+subscription: settings and fork origin are one snapshot of the session itself,
+so one holder fills the store and everything below it — `useChatMessages`
+included — reads from there. The panel passes `isSessionResolved` as that
+subscription's `enabled`, the same flag that gates the chat subscription, so by
+the time the new worktree is bound both have already ended. Resubscribing would
+ask the new worktree about a session id it has never heard of, and buy a
 "session not found" for it. The session the user lands on subscribes on its own
-once the new list resolves it — the same reason `useChatMessages` gates its own
-subscription on `enabled` and lets the switch simply end it.
+once the new list resolves it.
 
 ### Why the Controls Wait for the Session to Describe Itself
 
-Until the first `session.detail` snapshot arrives, `useChatMessages` reports
-placeholder settings — they are type fillers, not claims — and
-`isSessionDetailLoaded` is what says so. `ChatPanel` combines it into
+Until the first `session.detail` snapshot arrives, `useChatMessages` — reading
+the store the panel's subscription fills — reports placeholder settings; they
+are type fillers, not claims, and `isSessionDetailLoaded` is what says so.
+`ChatPanel` combines it into
 `hasSessionSettings = isSessionResolved && isSessionDetailLoaded` and passes it
-to the engine and mode controls, which until it holds both refuse input and show
-nothing.
+down under that same name to the engine and mode controls, which until it holds
+both refuse input and show nothing.
 
 **Refusing input**, because the placeholder can eat the correction. The
 placeholder mode is `default`, and `ModeSelector.handleSelect` is a no-op when
@@ -389,7 +393,7 @@ say, of a session nothing is known about, that it is a Claude session that asks
 before it acts. The mode chip is the sharp case — its two states are a grey
 shield and an amber bolt, so the gap read as "this session prompts you" for a
 session running with no prompts at all. Both chips therefore draw a pulsing
-placeholder where the glyph goes and name no value, on an `isSessionResolved`
+placeholder where the glyph goes and name no value, on a `hasSessionSettings`
 prop each (`EngineSelector`, `ModeSelector`).
 
 Note which flag gates which, because the chip waits on two. The agent glyph

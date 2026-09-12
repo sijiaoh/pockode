@@ -13,7 +13,7 @@ interface Props {
 	 * calm one, and a session running with no permission prompts would wear the
 	 * shield of one that asks.
 	 */
-	isSessionResolved?: boolean;
+	hasSessionSettings?: boolean;
 	disabled?: boolean;
 }
 
@@ -35,7 +35,7 @@ function ModeSelector({
 	mode,
 	agentType,
 	onModeChange,
-	isSessionResolved = true,
+	hasSessionSettings = true,
 	disabled = false,
 }: Props) {
 	const [isOpen, setIsOpen] = useState(false);
@@ -76,9 +76,9 @@ function ModeSelector({
 				onClick={() => setIsOpen(!isOpen)}
 				disabled={disabled}
 				className="group flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary size-9 pointer-coarse:size-11 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50"
-				aria-label={isSessionResolved ? currentInfo.label : "Mode: loading"}
+				aria-label={hasSessionSettings ? currentInfo.label : "Mode: loading"}
 			>
-				{isSessionResolved ? (
+				{hasSessionSettings ? (
 					<currentInfo.icon
 						className={`h-4 w-4 ${currentColors.iconColor}`}
 						aria-hidden="true"

@@ -7,7 +7,7 @@ import type {
 	AssistantMessage,
 	Message,
 	ServerNotification,
-	SessionDetailChangedNotification,
+	SessionDetail,
 	UserMessage,
 } from "../types/message";
 import { isForkableMessage } from "../utils/forkAnchor";
@@ -17,8 +17,6 @@ const mockState = vi.hoisted(() => ({
 	chatMessagesSubscribe: vi.fn(),
 	chatMessagesHistory: vi.fn(),
 	chatMessagesUnsubscribe: vi.fn(async () => {}),
-	sessionDetailSubscribe: vi.fn(),
-	sessionDetailUnsubscribe: vi.fn(async () => {}),
 	// Mirrors ChatActions.sendMessage: it resolves with the seq the server gave
 	// the message, or undefined when there is no address to give.
 	sendMessage: vi.fn(
@@ -33,8 +31,6 @@ vi.mock("../lib/wsStore", () => {
 			chatMessagesSubscribe: mockState.chatMessagesSubscribe,
 			chatMessagesHistory: mockState.chatMessagesHistory,
 			chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
-			sessionDetailSubscribe: mockState.sessionDetailSubscribe,
-			sessionDetailUnsubscribe: mockState.sessionDetailUnsubscribe,
 			sendMessage: mockState.sendMessage,
 		},
 	};
@@ -46,8 +42,6 @@ vi.mock("../lib/wsStore", () => {
 	store.getState = () => state;
 	return { useWSStore: store };
 });
-
-let detailNotify: ((p: SessionDetailChangedNotification) => void) | null = null;
 
 const history = (text: string): ServerNotification[] => [
 	{ type: "text", content: text } as ServerNotification,
@@ -97,23 +91,7 @@ describe("useChatMessages", () => {
 		mockState.sendMessage.mockReset();
 		mockState.sendMessage.mockResolvedValue(undefined);
 		mockState.chatMessagesHistory.mockReset();
-		detailNotify = null;
 		useSessionDetailStore.getState().clear();
-		mockState.sessionDetailSubscribe.mockImplementation(
-			async (
-				sessionId: string,
-				onNotification: (p: SessionDetailChangedNotification) => void,
-			) => {
-				detailNotify = onNotification;
-				return {
-					id: `detail-${sessionId}`,
-					initial: {
-						id: `detail-${sessionId}`,
-						session: makeSessionDetail({ id: sessionId }),
-					},
-				};
-			},
-		);
 		mockState.chatMessagesSubscribe.mockImplementation(
 			async (sessionId: string) => ({
 				id: `sub-${sessionId}`,
@@ -434,6 +412,12 @@ describe("useChatMessages", () => {
 	// session list as well, and reading them from more than one place is how a
 	// rejected change came back as two answers that disagreed.
 	describe("session settings", () => {
+		// The panel's subscription is what fills this store; the chat only reads it.
+		const seedDetail = (id: string, overrides: Partial<SessionDetail> = {}) =>
+			useSessionDetailStore
+				.getState()
+				.setDetail(id, makeSessionDetail({ id, ...overrides }));
+
 		function renderSettings(sessionId = "s1") {
 			const state: {
 				mode: string;
@@ -465,27 +449,18 @@ describe("useChatMessages", () => {
 			return { state, rerender };
 		}
 
-		it("reads the settings from the session, not from the chat subscription", async () => {
-			mockState.sessionDetailSubscribe.mockImplementation(
-				async (sessionId: string) => ({
-					id: `detail-${sessionId}`,
-					initial: {
-						id: `detail-${sessionId}`,
-						session: makeSessionDetail({
-							id: sessionId,
-							agent_type: "codex",
-							model: "gpt-5",
-							effort: "high",
-							mode: "yolo",
-							activated: true,
-						}),
-					},
-				}),
-			);
+		it("reads the settings from the session, not from the chat subscription", () => {
+			seedDetail("s1", {
+				agent_type: "codex",
+				model: "gpt-5",
+				effort: "high",
+				mode: "yolo",
+				activated: true,
+			});
 
 			const { state } = renderSettings();
 
-			await waitFor(() => expect(state.loaded).toBe(true));
+			expect(state.loaded).toBe(true);
 			expect(state).toMatchObject({
 				mode: "yolo",
 				agentType: "codex",
@@ -495,19 +470,16 @@ describe("useChatMessages", () => {
 			});
 		});
 
-		it("follows a change the server pushes", async () => {
+		// A setting the server took arrives as a new snapshot in the store, and the
+		// chat has to show it: nothing applies a setting locally, so a value read
+		// once at mount would leave the control on the old one forever.
+		it("follows a change to the session's detail", () => {
+			seedDetail("s1");
 			const { state } = renderSettings();
-			await waitFor(() => expect(state.loaded).toBe(true));
+			expect(state.loaded).toBe(true);
 
 			act(() => {
-				detailNotify?.({
-					id: "detail-s1",
-					session: makeSessionDetail({
-						id: "s1",
-						model: "haiku",
-						mode: "yolo",
-					}),
-				});
+				seedDetail("s1", { model: "haiku", mode: "yolo" });
 			});
 
 			expect(state.model).toBe("haiku");
@@ -517,22 +489,11 @@ describe("useChatMessages", () => {
 		// The settings of the session just left must never be shown under the name
 		// of the one just opened — the whole reason the detail is read through a
 		// selector that checks whose it is.
-		it("shows no settings for a session whose snapshot has not arrived", async () => {
-			mockState.sessionDetailSubscribe.mockImplementation(
-				async (sessionId: string) =>
-					sessionId === "s1"
-						? {
-								id: "detail-s1",
-								initial: {
-									id: "detail-s1",
-									session: makeSessionDetail({ id: "s1", model: "opus" }),
-								},
-							}
-						: new Promise(() => {}),
-			);
+		it("shows no settings for a session whose snapshot has not arrived", () => {
+			seedDetail("s1", { model: "opus" });
 
 			const { state, rerender } = renderSettings("s1");
-			await waitFor(() => expect(state.model).toBe("opus"));
+			expect(state.model).toBe("opus");
 
 			rerender("s2");
 

@@ -419,10 +419,6 @@ export interface SessionListSubscribeResult {
 	sessions: SessionListItem[];
 }
 
-export interface SessionListUnsubscribeParams {
-	id: string;
-}
-
 export type SessionListChangedNotification =
 	| { id: string; operation: "create" | "update"; session: SessionListItem }
 	| { id: string; operation: "delete"; sessionId: string }

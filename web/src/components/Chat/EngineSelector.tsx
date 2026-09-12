@@ -33,7 +33,7 @@ interface Props {
 	 * yet, or its metadata has not arrived — so `model` and `effort` are
 	 * placeholders and there is no value to name.
 	 */
-	isSessionResolved?: boolean;
+	hasSessionSettings?: boolean;
 	/** The agent has answered here: its choice is locked and a switch restarts the CLI. */
 	isSessionActivated?: boolean;
 	disabled?: boolean;
@@ -53,7 +53,7 @@ function EngineSelector({
 	onAgentTypeChange,
 	onModelChange,
 	onEffortChange,
-	isSessionResolved = true,
+	hasSessionSettings = true,
 	isSessionActivated = false,
 	disabled = false,
 }: Props) {
@@ -86,7 +86,7 @@ function EngineSelector({
 	const canName = (id: string, options: AgentOption[] | undefined) =>
 		id === AUTO_ID || options !== undefined || optionsError !== null;
 	const hasLabel =
-		isSessionResolved && canName(model, models) && canName(effort, efforts);
+		hasSessionSettings && canName(model, models) && canName(effort, efforts);
 
 	// Until an answer arrives the section is hidden outright: whether this agent
 	// has effort levels at all is not yet known, and the "Loading models…" line
@@ -152,7 +152,7 @@ function EngineSelector({
 				// and the effort suffix is the first thing to go, but a label that
 				// reported only what fits would report the wrong thing.
 				aria-label={
-					isSessionResolved
+					hasSessionSettings
 						? `Engine: ${agentInfo.label}, ${hasLabel ? modelLabel : "loading"}${
 								hasLabel && effortLabel ? `, ${effortLabel} effort` : ""
 							}`
@@ -163,10 +163,10 @@ function EngineSelector({
 				{/* The agent is one of the session's settings, so it waits like the
 				    rest: `agentInfo` falls back to Claude, and asserting that would
 				    put Claude's mark on a Codex session for a round trip. Gated on
-				    `isSessionResolved` rather than `hasLabel` — that one also drops
+				    `hasSessionSettings` rather than `hasLabel` — that one also drops
 				    while only the model list is still loading, by which point the
 				    agent is known and its icon is the one true thing on the chip. */}
-				{isSessionResolved ? (
+				{hasSessionSettings ? (
 					<agentInfo.icon
 						className="size-4 shrink-0 text-th-text-secondary group-hover:text-th-text-primary"
 						aria-hidden="true"

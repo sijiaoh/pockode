@@ -31,16 +31,15 @@ import type {
 } from "../types/message";
 import type { AgentType } from "../types/settings";
 import { generateUUID } from "../utils/uuid";
-import { useSessionDetailSubscription } from "./useSessionDetailSubscription";
 
 export type { ConnectionStatus } from "../lib/wsStore";
 
 interface UseChatMessagesOptions {
 	sessionId: string;
 	/**
-	 * Subscribe only once `sessionId` is known to belong to the worktree the
-	 * connection is bound to. Subscribing earlier (mid worktree switch) targets a
-	 * session the server can't see yet.
+	 * Subscribe to the chat only once `sessionId` is known to belong to the
+	 * worktree the connection is bound to. Subscribing earlier (mid worktree
+	 * switch) targets a session the server can't see yet.
 	 */
 	enabled?: boolean;
 }
@@ -167,11 +166,11 @@ export function useChatMessages({
 	const status = useWSStore((state) => state.status);
 	const actions = useWSStore((state) => state.actions);
 
-	// The session's settings have one source: its own subscription. Neither the
-	// session list nor the chat subscription carries them any more — both used
-	// to, and reading settings from more than one of them is how a rejected model
-	// change came back as two answers that disagreed.
-	useSessionDetailSubscription(sessionId, enabled);
+	// The session's settings have one source: its own subscription, held by the
+	// panel and read here out of the store. Neither the session list nor the chat
+	// subscription carries them any more — both used to, and reading settings
+	// from more than one of them is how a rejected model change came back as two
+	// answers that disagreed.
 	const sessionDetail = useSessionDetailStore(selectSessionDetail(sessionId));
 
 	// Placeholders for the round trip before the first snapshot: never another
