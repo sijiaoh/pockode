@@ -41,6 +41,22 @@ type MessageParams struct {
 	Content   string `json:"content"`
 }
 
+// MessageResult tells the sender where its own message landed in the session's
+// history, so it can name that record later — to fork from it, above all.
+//
+// The sender is deliberately left out of the broadcast that carries every other
+// record's seq, because it has already echoed the message into its own
+// transcript. This reply is therefore the only place it can learn the address of
+// the one message it put there itself.
+//
+// Seq is omitted when the record was not persisted, and a server too old to send
+// it omits it too. Both mean the same thing to a client — the message is not
+// addressable — which is the state it was already in for every message it sent,
+// so neither is an error.
+type MessageResult struct {
+	Seq session.HistorySeq `json:"seq,omitempty"`
+}
+
 type InterruptParams struct {
 	SessionID string `json:"session_id"`
 }
@@ -83,13 +99,18 @@ type SessionSetModeParams struct {
 }
 
 // SessionForkParams asks for a new session holding this session's conversation
-// up to and including one record of its history.
+// up to the moment before one record of its history happened.
 type SessionForkParams struct {
 	SessionID string `json:"session_id"` // the session to fork
-	// AnchorSeq is the seq of the last history record the new session keeps —
-	// the number the server put on that record, in the replayed history or in the
-	// live notification that delivered it. Inclusive, and it need not be the end
-	// of a turn.
+	// AnchorSeq is the seq of the message the user picked — the number the server
+	// put on that record, in the replayed history or in the live notification that
+	// delivered it, sent back unchanged.
+	//
+	// What the fork keeps is the server's to decide: an agent message is kept,
+	// a message the user sent is not, because the fork returns to before they
+	// sent it (see chat.Client.Fork). A client must not do that arithmetic
+	// itself — the seq is an address the server handed out, not an index.
+	// The cut need not be the end of a turn.
 	AnchorSeq session.HistorySeq `json:"anchor_seq"`
 	// Title names the new session. Empty copies the source's title.
 	Title string `json:"title,omitempty"`

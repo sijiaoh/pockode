@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentOptionsStore } from "../../lib/agentOptionsStore";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { useInputStore } from "../../lib/inputStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
 import type { ServerNotification } from "../../types/message";
@@ -22,7 +23,11 @@ vi.mock("../Project", () => ({
 
 // Use vi.hoisted to ensure mockState is available when vi.mock factory runs
 const mockState = vi.hoisted(() => ({
-	sendMessage: vi.fn(() => Promise.resolve()),
+	// Mirrors ChatActions.sendMessage: it resolves with the seq the server gave
+	// the message, or undefined when there is no address to give.
+	sendMessage: vi.fn(
+		(): Promise<number | undefined> => Promise.resolve(undefined),
+	),
 	interrupt: vi.fn(() => Promise.resolve()),
 	permissionResponse: vi.fn(() => Promise.resolve()),
 	questionResponse: vi.fn(() => Promise.resolve()),
@@ -131,6 +136,7 @@ describe("ChatPanel", () => {
 		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
 		mockState.forkSession.mockReset();
 		useSessionStore.setState({ sessions: [] });
+		useInputStore.setState({ inputs: {} });
 		useWorkStore.getState().reset();
 		useAgentRoleStore.getState().reset();
 		// Stands in for the one options fetch the app shell does. Only Claude has
@@ -1315,42 +1321,41 @@ describe("ChatPanel", () => {
 			forked_from: { session_id: "test-session" },
 		};
 
-		// Opens the menu of the first assistant answer and confirms the fork sheet.
+		// Taps the fork icon under the first assistant answer, one step now that
+		// the action stands on the row instead of behind a `…`. It is the first
+		// offer in the transcript: the opening prompt above it has nothing behind
+		// it to fork to and carries its own label.
 		const openForkSheet = async (user: ReturnType<typeof userEvent.setup>) => {
-			const menuButtons = screen.getAllByRole("button", {
-				name: "Message actions",
+			const forkButtons = screen.getAllByRole("button", {
+				name: "Fork from here",
 			});
-			await user.click(menuButtons[1]);
-			await user.click(screen.getByRole("button", { name: "Fork from here" }));
+			await user.click(forkButtons[0]);
 		};
 
-		// The capability comes from the server, so the only honest way to stop a user
-		// here is to show the row and say the agent cannot do it. Driven by the
-		// declaration, not by which agent the session runs.
-		it("offers a disabled fork with a reason when the agent cannot be forked", async () => {
-			const user = userEvent.setup();
+		// An agent that was never forkable has no refusal to explain — a branch
+		// glyph under every bubble that could not once have applied is
+		// decoration. Driven by the server's declaration, not by which agent the
+		// session runs.
+		it("shows no fork icon at all when the agent cannot be forked", async () => {
 			mockState.mockHistory = forkHistory;
 			mockState.listAgents.mockResolvedValueOnce([
 				{ type: "claude", fork_support: "none" },
 			]);
 
-			// The menu exists only where forking can navigate to the result.
+			// The icon exists only where forking can navigate to the result.
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
-			const menuButtons = screen.getAllByRole("button", {
-				name: "Message actions",
-			});
-			await user.click(menuButtons[1]);
-
-			const row = await screen.findByRole("button", {
-				name: /Fork from here/,
-			});
-			expect(row).toBeDisabled();
-			expect(row).toHaveTextContent(/cannot be forked/);
-
-			await user.click(row);
-			expect(mockState.forkSession).not.toHaveBeenCalled();
+			// Waited for, not asserted once: the declaration arrives after the
+			// first paint, and `null` until then means "offer it" (useForkSupport).
+			await waitFor(() =>
+				expect(
+					screen.queryAllByRole("button", { name: /Fork from here/ }),
+				).toHaveLength(0),
+			);
+			// The transcript really is on screen, so the absence above is the
+			// declaration talking and not a render that never happened.
+			expect(screen.getByText("Hi there!")).toBeInTheDocument();
 		});
 
 		it("forks from the chosen message and opens the new session", async () => {
@@ -1388,6 +1393,9 @@ describe("ChatPanel", () => {
 			expect(useSessionStore.getState().sessions.map((s) => s.id)).toContain(
 				"forked-session",
 			);
+			// An agent anchor is kept by the fork, so there is nothing to restore
+			// and the new session opens on an empty input box.
+			expect(useInputStore.getState().inputs["forked-session"]).toBeUndefined();
 		});
 
 		// Landing the user in a session that may not exist is worse than the error.
@@ -1453,20 +1461,133 @@ describe("ChatPanel", () => {
 			);
 		});
 
-		it("offers no menu on a message that has no settled cut point", async () => {
+		// The seq arrives a moment later, so the icon stays where the thumb found
+		// it and goes quiet instead of vanishing.
+		it("disables fork on a message that has no settled cut point", async () => {
+			const user = userEvent.setup();
 			mockState.mockHistory = [
-				// No seq: this client sent the message, so the server never echoed a
-				// record back for it.
+				{ type: "message", content: "Opening", seq: 1 },
+				{ type: "text", content: "Sure", seq: 2 },
+				{ type: "done", seq: 3 },
+				// No seq: a record the server could not persist, or one this tab sent
+				// to a server too old to answer with its address. Nothing the client
+				// can name.
 				{ type: "message", content: "Hello" },
-				{ type: "text", content: "Still writing", seq: 1 },
 			];
 
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
+			// The reason rides the label: a tooltip never fires under a finger.
+			const fork = screen.getByRole("button", {
+				name: "Fork from here, not available yet",
+			});
+			expect(fork).toBeDisabled();
+
+			await user.click(fork);
+			expect(screen.queryByRole("dialog")).toBeNull();
+		});
+
+		// A fork anchored on something the user said returns to before they said
+		// it, so the transcript's opening prompt has nothing behind it to keep —
+		// permanently, which is why this label does not say "yet".
+		it("disables fork on the message that opens the transcript", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+
+			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
+			await waitForHistoryLoad();
+
+			const fork = screen.getByRole("button", {
+				name: "Fork from here, nothing before this message to keep",
+			});
+			expect(fork).toBeDisabled();
+
+			await user.click(fork);
+			expect(screen.queryByRole("dialog")).toBeNull();
+		});
+
+		// The message you just sent is the one you most want to fork from — you
+		// asked, the answer disappointed, and you want to rephrase. It used to be
+		// the one message that could not be forked from at all until the session
+		// was reloaded: the sender is left out of the broadcast carrying every
+		// other record's seq. Now the send's own reply brings it.
+		it("forks from a message this tab just sent, with no reload", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			mockState.sendMessage.mockResolvedValue(7);
+			mockState.forkSession.mockResolvedValue(forkedSession);
+
+			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "One more thing");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			// Nothing was resubscribed and no history was replayed: the only place
+			// this seq can have come from is the reply to the send itself.
+			expect(mockState.chatMessagesSubscribe).toHaveBeenCalledTimes(1);
+			const forkButtons = await screen.findAllByRole("button", {
+				name: "Fork from here",
+			});
+			const fork = forkButtons[forkButtons.length - 1];
+			expect(fork).toBeEnabled();
+
+			await user.click(fork);
+			const sheet = within(screen.getByRole("dialog"));
+			expect(sheet.getByText("One more thing")).toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Fork" }));
+
+			await waitFor(() =>
+				expect(mockState.forkSession).toHaveBeenCalledWith(
+					"test-session",
+					7,
+					"Test Chat (fork)",
+				),
+			);
+		});
+
+		// The seq goes back untouched and the sheet says the anchor is left
+		// behind: the "before this message" rule is the server's, and the client
+		// neither shifts the address nor claims to keep the prompt.
+		it("forks from a user message back to just before it", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			mockState.forkSession.mockResolvedValue(forkedSession);
+
+			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
+			await waitForHistoryLoad();
+
+			const forkButtons = screen.getAllByRole("button", {
+				name: "Fork from here",
+			});
+			// "Try again", the second thing the user said.
+			await user.click(forkButtons[1]);
+
+			const sheet = within(screen.getByRole("dialog"));
+			expect(sheet.getByText("Try again")).toBeInTheDocument();
 			expect(
-				screen.queryByRole("button", { name: "Message actions" }),
-			).toBeNull();
+				sheet.getByText(
+					/up to just before this message\. This message and the one after it stay in this session/,
+				),
+			).toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Fork" }));
+
+			await waitFor(() =>
+				expect(mockState.forkSession).toHaveBeenCalledWith(
+					"test-session",
+					4,
+					"Test Chat (fork)",
+				),
+			);
+			// The prompt the fork dropped waits in the new session's input box, to
+			// re-send or edit. A draft, not a message: nothing was sent.
+			expect(useInputStore.getState().inputs["forked-session"]).toBe(
+				"Try again",
+			);
+			expect(mockState.sendMessage).not.toHaveBeenCalled();
 		});
 
 		it("says at the top of the transcript where the session came from", async () => {

@@ -11,6 +11,10 @@ const TEST_TOKEN = "test-token";
 // an implementation detail everywhere except here.
 const RECONNECT_MAX_DELAY = 30000;
 
+// What the server answers `chat.message` with. Defaults to the empty object a
+// server too old to hand back a seq sends.
+let chatMessageResult: Record<string, unknown> = {};
+
 // Track created WebSocket instances
 let mockWsInstances: MockWebSocket[] = [];
 let currentMockWs: MockWebSocket | null = null;
@@ -40,6 +44,8 @@ class MockWebSocket {
 					result = { version: "test" };
 				} else if (parsed.method === "chat.messages.subscribe") {
 					result = { id: "sub-1", history: [], state: "ended" };
+				} else if (parsed.method === "chat.message") {
+					result = chatMessageResult;
 				}
 				this.simulateMessage({
 					jsonrpc: "2.0",
@@ -122,6 +128,7 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	mockWsInstances = [];
 	currentMockWs = null;
+	chatMessageResult = {};
 	globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 });
 
@@ -336,6 +343,32 @@ describe("wsStore", { timeout: 20_000 }, () => {
 				session_id: "test-session",
 				content: "hello",
 			});
+		});
+
+		// The seq of the sender's own message reaches it here and nowhere else:
+		// the broadcast carrying every other record's address skips the sender.
+		it("sendMessage returns the seq the server replies with", async () => {
+			chatMessageResult = { seq: 4 };
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+
+			await expect(
+				wsActions.sendMessage("test-session", "hello"),
+			).resolves.toBe(4);
+		});
+
+		// Purely additive on the wire: an older server answers with an empty
+		// result, which has to read as "no address" rather than fail the send or
+		// become a seq of 0, which names no record.
+		it("sendMessage tolerates a server that sends no seq", async () => {
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+
+			await expect(
+				wsActions.sendMessage("test-session", "hello"),
+			).resolves.toBeUndefined();
 		});
 
 		it("throws when not connected", async () => {

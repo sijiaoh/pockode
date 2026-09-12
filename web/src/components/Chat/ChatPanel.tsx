@@ -5,7 +5,7 @@ import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
-import { forkBlockedReason } from "../../lib/agentType";
+import { inputActions } from "../../lib/inputStore";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
@@ -35,7 +35,6 @@ import EngineSelector from "./EngineSelector";
 import ForkSessionSheet from "./ForkSessionSheet";
 import DefaultInputBar from "./InputBar";
 import MessageList from "./MessageList";
-import MessageMenu from "./MessageMenu";
 import ModeSelector from "./ModeSelector";
 
 const noop = () => {};
@@ -292,10 +291,9 @@ function ChatPanel({
 		interrupt();
 	}, [interrupt]);
 
-	// Which message a menu is open for, and which one a fork is being confirmed
-	// for. Held here rather than inside a message: both sheets are portals and
-	// the fork is a session-level request, so neither belongs to one bubble.
-	const [menuMessageId, setMenuMessageId] = useState<string | null>(null);
+	// Which message a fork is being confirmed for. Held here rather than inside a
+	// message: the sheet is a portal and the fork is a session-level request, so
+	// it belongs to no one bubble.
 	const [forkTarget, setForkTarget] = useState<{
 		messageId: string;
 		defaultTitle: string;
@@ -303,17 +301,14 @@ function ChatPanel({
 	const { forkSession, isForking, forkError, clearForkError } =
 		useForkSession();
 	// The agent's own declaration of whether it can follow a fork of a
-	// conversation, which is what decides whether the menu offers forking at all.
+	// conversation. An agent that cannot gets no fork icon anywhere: a branch
+	// glyph under forty bubbles that never once applied is decoration, not a
+	// refusal worth explaining.
 	const forkSupport = useForkSupport(agentType);
 
 	const forkedFromSessionId = useSessionStore(
 		(s) => s.sessions.find((x) => x.id === sessionId)?.forked_from?.session_id,
 	);
-
-	// Stable: it reaches the memoized MessageItem of every bubble.
-	const handleOpenMessageMenu = useCallback((messageId: string) => {
-		setMenuMessageId(messageId);
-	}, []);
 
 	const handleStartFork = useCallback(
 		(messageId: string) => {
@@ -322,8 +317,6 @@ function ChatPanel({
 			const titles = useSessionStore
 				.getState()
 				.sessions.map((session) => session.title);
-			// Swaps the menu for the confirm sheet in one commit.
-			setMenuMessageId(null);
 			clearForkError();
 			setForkTarget({
 				messageId,
@@ -339,10 +332,18 @@ function ChatPanel({
 	}, [clearForkError]);
 
 	const handleFork = useCallback(
-		async (anchorSeq: HistorySeq, title: string) => {
+		async (anchorSeq: HistorySeq, title: string, droppedText?: string) => {
 			try {
 				const forked = await forkSession(sessionId, anchorSeq, title);
 				setForkTarget(null);
+				// A fork anchored on the user's own prompt returns to before they
+				// sent it, so the prompt comes back as a draft of the new session
+				// instead of staying only in the one they forked away from. A
+				// draft and nothing more — unsent text has a store, and history is
+				// not it. Set before navigating so the box is never briefly empty;
+				// the caret needs no help, since setting a textarea's value leaves
+				// it after the text.
+				if (droppedText) inputActions.set(forked.id, droppedText);
 				onSelectSession?.(forked.id);
 			} catch {
 				// Reported through forkError in the sheet, which stays open: landing
@@ -352,13 +353,10 @@ function ChatPanel({
 		[forkSession, sessionId, onSelectSession],
 	);
 
-	const menuMessage = menuMessageId
-		? messages.find((m) => m.id === menuMessageId)
-		: undefined;
 	const forkAnchor = forkTarget
 		? resolveForkAnchor(messages, forkTarget.messageId)
 		: null;
-	const isSheetOpen = Boolean(menuMessage || forkAnchor);
+	const isSheetOpen = Boolean(forkAnchor);
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -398,9 +396,14 @@ function ChatPanel({
 					forkedFromSessionId={forkedFromSessionId}
 					onOpenSession={onSelectSession}
 					// Forking without a way to open the result would leave the user in
-					// the parent with no sign anything happened, so the whole entry
-					// point waits for a host that can navigate.
-					onOpenMessageMenu={onSelectSession && handleOpenMessageMenu}
+					// the parent with no sign anything happened, so the icon waits for
+					// a host that can navigate. The gate sits on fork alone — the rest
+					// of the row needs no navigation.
+					onForkMessage={
+						onSelectSession && forkSupport !== "none"
+							? handleStartFork
+							: undefined
+					}
 				/>
 			);
 		}
@@ -531,14 +534,6 @@ function ChatPanel({
 					)}
 				</div>
 			)}
-			{menuMessage && (
-				<MessageMenu
-					message={menuMessage}
-					forkBlockedReason={forkBlockedReason(agentType, forkSupport)}
-					onFork={() => handleStartFork(menuMessage.id)}
-					onClose={() => setMenuMessageId(null)}
-				/>
-			)}
 			{/* Gone if the anchor left the transcript — a session deleted, a
 			    worktree switched away from. There is nothing left to confirm. */}
 			{forkTarget && forkAnchor && (
@@ -549,7 +544,9 @@ function ChatPanel({
 					defaultTitle={forkTarget.defaultTitle}
 					isForking={isForking}
 					error={forkError}
-					onFork={(title) => handleFork(forkAnchor.anchorSeq, title)}
+					onFork={(title) =>
+						handleFork(forkAnchor.anchorSeq, title, forkAnchor.droppedText)
+					}
 					onClose={handleCloseFork}
 				/>
 			)}

@@ -5,6 +5,7 @@ import type {
 	HistorySeq,
 	Message,
 	MessageOrigin,
+	MessageResult,
 	PermissionUpdate,
 	QuestionStatus,
 	ServerNotification,
@@ -96,16 +97,23 @@ export type NormalizedEvent =
 
 /**
  * The record's address in the session's history, as handed out by the server —
- * with replayed history and with every live notification alike, so a client
- * cannot tell the two apart when it later names a record.
+ * with replayed history, with every live notification, and in the reply telling
+ * a client where its own message landed, so a client cannot tell any of them
+ * apart when it later names a record.
  *
- * Absent for an event that was never persisted, and for history written before
- * seqs existed. Absent means "not addressable", never "position zero".
+ * Absent for an event that was never persisted, for a record the store
+ * synthesized rather than read from the file (the damaged-history warning, which
+ * carries seq 0 so that it cannot be confused with a real record), and from a
+ * server too old to put one there. Absent means "not addressable", never
+ * "position zero".
+ *
+ * Not absent for history written before seqs existed: replay stamps every
+ * unaddressed record by position (session.StampHistorySeq).
  */
 export function readHistorySeq(
-	e: ServerNotification | Record<string, unknown>,
+	e: ServerNotification | MessageResult | Record<string, unknown> | undefined,
 ): HistorySeq | undefined {
-	const seq = (e as Record<string, unknown>).seq;
+	const seq = (e as Record<string, unknown> | undefined)?.seq;
 	return typeof seq === "number" && seq > 0 ? seq : undefined;
 }
 
@@ -389,10 +397,10 @@ export function createAssistantMessage(
  *
  * Only ever the last message: an event that lands in an earlier one — a
  * tool_result arriving after its turn was interrupted — must not push that
- * message's anchor past the messages below it, or "keep everything up to and
- * including this message" would silently keep more than it shows. The record
- * stays unaddressable instead, which the client is free to do: it only ever
- * anchors on records it has been given a seq for.
+ * message's anchor past the messages below it, or the fork would cut somewhere
+ * later than the bubble the user pointed at. The record stays unaddressable
+ * instead, which the client is free to do: it only ever anchors on records it
+ * has been given a seq for.
  */
 function stampAnchorSeq(
 	before: Message[],
@@ -411,6 +419,39 @@ function stampAnchorSeq(
 
 	const updated = [...after];
 	updated[index] = { ...last, anchorSeq: seq };
+	return updated;
+}
+
+/**
+ * Gives one already-rendered message its address in history.
+ *
+ * For the message this client sent itself: it is echoed locally before the
+ * server has recorded it, and the broadcast that would carry its seq is the one
+ * the sender is excluded from, so the number arrives separately — in the reply to
+ * `chat.message` — after the bubble is on screen. Stamped by id rather than by
+ * position because a user message is never the last element (the turn it opens
+ * leaves an empty assistant placeholder behind it) and because the agent may have
+ * streamed several messages in while the call was in flight.
+ *
+ * Returns the list untouched when there is nothing to stamp — no seq, or the
+ * message is gone because the user switched sessions, whose history this seq
+ * names nothing in.
+ */
+export function stampMessageAnchorSeq(
+	messages: Message[],
+	messageId: string,
+	seq: HistorySeq | undefined,
+): Message[] {
+	if (seq === undefined) return messages;
+
+	const index = messages.findIndex((m) => m.id === messageId);
+	if (index === -1) return messages;
+
+	const message = messages[index];
+	if (message.role !== "user" && message.role !== "assistant") return messages;
+
+	const updated = [...messages];
+	updated[index] = { ...message, anchorSeq: seq };
 	return updated;
 }
 

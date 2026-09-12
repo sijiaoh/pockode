@@ -20,8 +20,11 @@ import type { AgentType } from "../../types/settings";
 export interface SessionActions {
 	createSession: () => Promise<SessionListItem>;
 	/**
-	 * Creates a session holding this session's conversation up to and including
-	 * the record named by `anchorSeq`. The source session is left untouched.
+	 * Creates a session holding this session's conversation up to the moment
+	 * before the record named by `anchorSeq` happened — which keeps that record
+	 * when the agent produced it and drops it when the user sent it, the server's
+	 * call either way (`SessionForkParams.anchor_seq`). The source session is
+	 * left untouched.
 	 */
 	forkSession: (
 		sessionId: string,

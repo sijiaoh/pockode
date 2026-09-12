@@ -28,6 +28,8 @@ function assistantMessage(
 	};
 }
 
+// Only the reasons fork adds on top of `hasMessageActions`, which has its own
+// tests — a settled turn is the premise here, not the subject.
 describe("isForkableMessage", () => {
 	it("accepts a settled user or assistant message", () => {
 		expect(isForkableMessage(userMessage())).toBe(true);
@@ -36,12 +38,6 @@ describe("isForkableMessage", () => {
 
 	it("rejects a message the server never gave a seq for", () => {
 		expect(isForkableMessage(userMessage({ anchorSeq: undefined }))).toBe(
-			false,
-		);
-	});
-
-	it("rejects a message that is still being written", () => {
-		expect(isForkableMessage(assistantMessage({ status: "streaming" }))).toBe(
 			false,
 		);
 	});
@@ -80,22 +76,13 @@ describe("isForkableMessage", () => {
 		expect(isForkableMessage(answered)).toBe(true);
 	});
 
-	it("rejects Pockode's own annotations", () => {
+	it("rejects a message that carries no action row at all", () => {
 		expect(isForkableMessage(userMessage({ source: "system" }))).toBe(false);
-
-		const workCard: Message = {
-			id: "w1",
-			role: "work",
-			workId: "work-1",
-			entries: [],
-			createdAt: new Date(),
-		};
-		expect(isForkableMessage(workCard)).toBe(false);
 	});
 });
 
 describe("resolveForkAnchor", () => {
-	it("counts the messages that stay behind", () => {
+	it("counts the messages that stay behind an agent message", () => {
 		const messages: Message[] = [
 			userMessage({ id: "u1" }),
 			assistantMessage({ id: "a1" }),
@@ -110,6 +97,51 @@ describe("resolveForkAnchor", () => {
 		expect(resolveForkAnchor(messages, "a2")?.droppedCount).toBe(0);
 	});
 
+	// The two anchor roles differ in what the new session starts with: a user
+	// anchor hands its prompt back for re-sending, an agent anchor is kept and
+	// has nothing to hand back.
+	it("hands back the words of a user anchor only", () => {
+		const messages: Message[] = [
+			userMessage({ id: "u1" }),
+			assistantMessage({ id: "a1" }),
+			userMessage({ id: "u2", anchorSeq: 3, content: "Try again" }),
+		];
+
+		expect(resolveForkAnchor(messages, "u2")?.droppedText).toBe("Try again");
+		expect(resolveForkAnchor(messages, "a1")?.droppedText).toBeUndefined();
+	});
+
+	// A fork returns to before the anchor was sent, so a message the user typed
+	// is one of the things left behind rather than the last thing kept.
+	it("counts a user anchor itself as staying behind", () => {
+		const messages: Message[] = [
+			userMessage({ id: "u1" }),
+			assistantMessage({ id: "a1" }),
+			userMessage({ id: "u2", anchorSeq: 3 }),
+			assistantMessage({ id: "a2", anchorSeq: 4 }),
+		];
+
+		expect(resolveForkAnchor(messages, "u2")).toMatchObject({
+			// The seq goes back to the server untouched; which side of it the cut
+			// falls on is the server's rule, not arithmetic done here.
+			anchorSeq: 3,
+			droppedCount: 2,
+		});
+	});
+
+	// Same refusal the server makes: returning to before the opening prompt
+	// leaves no conversation, and an empty session is not a fork of one.
+	it("is null for a user message that opens the transcript", () => {
+		const messages: Message[] = [
+			userMessage({ id: "u1" }),
+			assistantMessage({ id: "a1" }),
+		];
+
+		expect(resolveForkAnchor(messages, "u1")).toBeNull();
+		// The agent's first answer still has that prompt behind it to keep.
+		expect(resolveForkAnchor(messages, "a1")?.droppedCount).toBe(0);
+	});
+
 	// A bubble the agent never wrote into is not a message the user can see, so
 	// a fork cannot claim to leave it behind.
 	it("does not count an empty placeholder as left behind", () => {
@@ -122,7 +154,12 @@ describe("resolveForkAnchor", () => {
 	});
 
 	it("is null for a message that cannot anchor a fork", () => {
-		const messages: Message[] = [userMessage({ anchorSeq: undefined })];
+		// Something ahead of it, so the missing seq is what this rejects rather
+		// than the opening-message rule tested above.
+		const messages: Message[] = [
+			assistantMessage({ id: "a0" }),
+			userMessage({ anchorSeq: undefined }),
+		];
 
 		expect(resolveForkAnchor(messages, "u1")).toBeNull();
 		expect(resolveForkAnchor(messages, "gone")).toBeNull();

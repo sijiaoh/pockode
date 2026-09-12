@@ -74,12 +74,15 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	wt.SessionListWatcher.ClearNeedsInput(params.SessionID)
 
-	if err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier()); err != nil {
+	seq, err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier())
+	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
 
-	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+	// This connection is the one excluded from the broadcast, so the reply is
+	// where it learns its own message's seq (see rpc.MessageResult).
+	if err := conn.Reply(ctx, req.ID, rpc.MessageResult{Seq: seq}); err != nil {
 		log.Error("failed to send response", "error", err)
 	}
 }
@@ -171,11 +174,12 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
 	} else if errors.Is(err, chat.ErrSessionNotRunning) ||
 		errors.Is(err, chat.ErrForkAnchorOutOfRange) ||
+		errors.Is(err, chat.ErrForkAnchorNoHistory) ||
 		errors.Is(err, chat.ErrForkUnsupported) {
 		// The request does not fit the session's history, state or agent — a prompt
-		// whose process is gone, a fork anchored past the end of the history, a fork
-		// of a session whose agent cannot be forked. The message names what was
-		// wrong, and none of them is a server fault.
+		// whose process is gone, a fork anchored past the end of the history or at
+		// the very first message, a fork of a session whose agent cannot be forked.
+		// The message names what was wrong, and none of them is a server fault.
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {
 		// The reply carries the cause, but this is the branch a failing agent
