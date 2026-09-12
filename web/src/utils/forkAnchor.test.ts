@@ -135,7 +135,7 @@ describe("resolveForkAnchor", () => {
 
 	// Same refusal the server makes: returning to before the opening prompt
 	// leaves no conversation, and an empty session is not a fork of one.
-	it("is null for a user message that opens the transcript", () => {
+	it("is null for a user message that opens the session", () => {
 		const messages: Message[] = [
 			userMessage({ id: "u1" }),
 			assistantMessage({ id: "a1" }),

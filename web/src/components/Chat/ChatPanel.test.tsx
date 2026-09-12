@@ -1494,9 +1494,9 @@ describe("ChatPanel", () => {
 		});
 
 		// A fork anchored on something the user said returns to before they said
-		// it, so the transcript's opening prompt has nothing behind it to keep —
+		// it, so the session's opening prompt has nothing behind it to keep —
 		// permanently, which is why this label does not say "yet".
-		it("disables fork on the message that opens the transcript", async () => {
+		it("disables fork on the message that opens the session", async () => {
 			const user = userEvent.setup();
 			mockState.mockHistory = forkHistory;
 
