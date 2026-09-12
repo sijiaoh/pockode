@@ -126,7 +126,8 @@ the other optional fields, with two additions:
   session here.
 
 `agent_role.create` takes no engine fields: a new role follows the global
-default agent type and lets the CLI choose, which is the right starting point.
+defaults — agent type, and the model and effort set for it — which is the right
+starting point.
 
 ### `agent_role.delete` Referential Integrity
 

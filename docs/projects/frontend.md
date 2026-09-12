@@ -164,20 +164,39 @@ Shows detail for a single agent role:
 
 #### AgentRoleEngineSelector
 
-There are **two** engine selectors, deliberately: this one and the chat's
-`EngineSelector`. A role can leave the agent unset, which no session can, and
-nothing the chat selector is shaped around — a resolved session, an agent locked
-by activation, a CLI that restarts on a switch — exists on a role. Merging them
-would mean a component driven by boolean switches.
+The summary row and its three-section panel are `components/ui/EngineField.tsx`,
+shared with the global defaults in Settings' Session section. It is controlled:
+the selected dot follows the value passed in, and the caller supplies the three
+`onSelect` callbacks. What goes on the wire differs per caller and so stays out of
+the component — a role sends the one field that changed and lets the server clear
+the rest ([API](api.md#agent_roleupdate-engine-fields)), while the global defaults
+go out as one object and must carry an emptied model and effort with a new agent
+([why](../code/agent-integration.md#session-models)). So does what an empty model
+means: on a role that sits on the global agent the server fills it in from
+Settings, so its Auto row names the inherited value (`From Settings: Opus`)
+instead of claiming the CLI decides.
 
-What they do share is the presentation of a pick-one list, extracted to
+`AgentRoleEngineSelector` is the role-shaped wrapper around it: the
+`Follow settings` row that leaves the agent unset, which only a role has
+somewhere to defer to, and the inherited descriptions above.
+
+Both callers read the global engine through `hooks/useGlobalEngine.ts`, the
+frontend twin of `settings.Settings.Engine` — one page to display it, the other to
+tell whether it is on the same agent and therefore inheriting. *Empty agent type
+means the built-in default agent* is a rule of the server's that the UI has to
+restate to draw an honest row before any write happens; restating it once, in a
+hook, is what keeps it from being spelled `?? "claude"` in every panel that asks.
+
+The chat's `EngineSelector` stays separate, deliberately. It is shaped around a
+resolved, possibly running session — an agent locked by activation, a CLI that
+restarts on a switch — and is replaceable through `chatUIRegistry`, so its props
+are an extension contract. Merging it in would mean a component driven by boolean
+switches. What it shares is the presentation of a pick-one list,
 `components/ui/ChoiceList.tsx` (`Section`, `ChoiceRow`, `SelectionDot`), so the
 touch-target floor and the radio semantics of those rows have one definition
-rather than two that drift.
+rather than several that drift.
 
-Both read their options from `agentOptionsStore` and neither fetches; the single
-fetch is `useAgentOptions`, called once in `AppShell`. Selecting applies
+All of them read their options from `agentOptionsStore` and none fetches; the
+single fetch is `useAgentOptions`, called once in `AppShell`. Selecting applies
 immediately — there is no draft to save — and failures are reported inside the
-panel, this page having no channel outside it. The engine fields themselves are
-sent one at a time, with the agent's reset left to the server
-([API](api.md#agent_roleupdate-engine-fields)).
+panel, these pages having no channel outside it.

@@ -1426,11 +1426,24 @@ over fast enough to make the manual list a burden, that cache is the first thing
 to reach for.
 
 An empty model means *pass no model flag* — the CLI picks for itself. It is
-where a new session starts unless whoever creates it names a model: sessions
-started for a work item take theirs from the agent role ([Role Engine to Session
-Engine](../projects/workflow-engine.md#role-engine-to-session-engine)). Since the
-field simply did not exist before, it is also the value every older session
-already reads as, so no migration was needed.
+where a new session starts unless whoever creates it names a model: the global
+default in Settings names one for every session created from scratch, and a
+session started for a work item can take the agent role's instead ([Role Engine
+to Session Engine](../projects/workflow-engine.md#role-engine-to-session-engine)).
+Since the field simply did not exist before, it is also the value every older
+session already reads as, so no migration was needed.
+
+The same lists judge the engines chosen *outside* a session — an agent role's,
+and the global defaults — through `session.ValidateEngine`, which takes agent,
+model and effort as one trio, so a combination refused in one of those places is
+refused in the other. A session checks the two lists one at a time instead: its
+agent type is settled by the time it is created, and `session.set_model` /
+`session.set_effort` each change a single value and answer with
+`ErrModelNotAvailable` / `ErrEffortNotAvailable`. Judging the global defaults as
+a trio is what makes them refused as a whole rather than half-applied, and that
+is why a client changing the default agent sends an emptied model and effort with
+it: `settings.update` carries the whole settings object, so a model picked for
+the previous agent would otherwise come back with the write and be rejected.
 
 Like the mode, the model is only read when a CLI is launched: Claude gets
 `--model` in its arguments, Codex gets `model` on the `codex` tool call, which

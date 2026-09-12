@@ -487,14 +487,8 @@ func applyEngineFields(r *AgentRole, fields UpdateFields) error {
 }
 
 func validateEngine(r AgentRole) error {
-	if r.AgentType != "" && !r.AgentType.IsValid() {
-		return fmt.Errorf("%w: unknown agent type %q", ErrInvalidRole, r.AgentType)
-	}
-	if !session.IsValidModel(r.AgentType, r.Model) {
-		return fmt.Errorf("%w: model %q is not available for agent %q", ErrInvalidRole, r.Model, r.AgentType)
-	}
-	if !session.IsValidEffort(r.AgentType, r.Effort) {
-		return fmt.Errorf("%w: effort %q is not available for agent %q", ErrInvalidRole, r.Effort, r.AgentType)
+	if err := session.ValidateEngine(r.Engine()); err != nil {
+		return fmt.Errorf("%w: %s", ErrInvalidRole, err)
 	}
 	return nil
 }

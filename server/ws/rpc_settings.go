@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -43,9 +44,12 @@ func (h *rpcMethodHandler) handleSettingsUpdate(ctx context.Context, conn *jsonr
 		}
 	}
 
-	// Validate default agent type if set
-	if params.Settings.DefaultAgentType != "" && !params.Settings.DefaultAgentType.IsValid() {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid default agent type")
+	// The default agent, model and effort are judged as one: a model or effort
+	// only exists within an agent's list, so a leftover value from the agent the
+	// user just switched away from is refused rather than silently dropped —
+	// the client clears the pair when it changes the agent.
+	if err := session.ValidateEngine(params.Settings.Engine()); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 		return
 	}
 

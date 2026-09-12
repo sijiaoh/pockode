@@ -151,6 +151,38 @@ func TestWorkStarter_SessionEngineComesFromRole(t *testing.T) {
 			role:     agentrole.AgentRole{Name: "engineer"},
 			want:     session.SessionMeta{AgentType: session.AgentTypeCodex, Mode: session.ModeDefault},
 		},
+		{
+			name: "role leaving the engine open takes the global model and effort",
+			defaults: settings.Settings{
+				DefaultAgentType: session.AgentTypeClaude,
+				DefaultModel:     "opus",
+				DefaultEffort:    "high",
+				DefaultMode:      session.ModeDefault,
+			},
+			role: agentrole.AgentRole{Name: "engineer"},
+			want: session.SessionMeta{AgentType: session.AgentTypeClaude, Mode: session.ModeDefault, Model: "opus", Effort: "high"},
+		},
+		{
+			name: "role on the same agent as the global default takes its model",
+			defaults: settings.Settings{
+				DefaultAgentType: session.AgentTypeClaude,
+				DefaultModel:     "opus",
+				DefaultMode:      session.ModeDefault,
+			},
+			role: agentrole.AgentRole{Name: "engineer", AgentType: session.AgentTypeClaude, Effort: "low"},
+			want: session.SessionMeta{AgentType: session.AgentTypeClaude, Mode: session.ModeDefault, Model: "opus", Effort: "low"},
+		},
+		{
+			name: "role on another agent is not given the global model",
+			defaults: settings.Settings{
+				DefaultAgentType: session.AgentTypeClaude,
+				DefaultModel:     "opus",
+				DefaultEffort:    "high",
+				DefaultMode:      session.ModeDefault,
+			},
+			role: agentrole.AgentRole{Name: "reviewer", AgentType: session.AgentTypeCodex},
+			want: session.SessionMeta{AgentType: session.AgentTypeCodex, Mode: session.ModeDefault},
+		},
 	}
 
 	for _, tt := range tests {
@@ -174,6 +206,31 @@ func TestWorkStarter_SessionEngineComesFromRole(t *testing.T) {
 					tt.want.AgentType, tt.want.Mode, tt.want.Model, tt.want.Effort)
 			}
 		})
+	}
+}
+
+// A global default the server no longer offers breaks work start just as a
+// stale role does, and the error has to send the user to the settings rather
+// than to the role, which holds no model at all.
+func TestWorkStarter_RejectsStaleGlobalEngine(t *testing.T) {
+	role := agentrole.AgentRole{ID: "role-1", Name: "engineer"}
+	defaults := settings.Settings{
+		DefaultAgentType: session.AgentTypeClaude,
+		DefaultModel:     "retired-model",
+		DefaultMode:      session.ModeDefault,
+	}
+	env := newStarterEnv(t, defaults, role)
+
+	w := work.Work{ID: "w1", Title: "do a thing", SessionID: "sess-1", AgentRoleID: role.ID}
+	err := env.starter.HandleWorkStart(context.Background(), w)
+	if err == nil {
+		t.Fatal("expected an error for a global model the agent cannot run")
+	}
+	if !strings.Contains(err.Error(), "global defaults") {
+		t.Errorf("error %q does not point at the settings the value lives in", err)
+	}
+	if _, found, _ := env.sessionStore.Get("sess-1"); found {
+		t.Error("a session was created despite the invalid engine")
 	}
 }
 

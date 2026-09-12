@@ -114,9 +114,7 @@ func (s *FileStore) readIndexFromDisk() (indexData, error) {
 
 	// Migrate: ensure all sessions have valid defaults
 	for i := range idx.Sessions {
-		if idx.Sessions[i].AgentType == "" {
-			idx.Sessions[i].AgentType = AgentTypeClaude
-		}
+		idx.Sessions[i].AgentType = ResolveAgentType(idx.Sessions[i].AgentType)
 		if idx.Sessions[i].Mode == "" {
 			idx.Sessions[i].Mode = ModeDefault
 		}
@@ -176,10 +174,7 @@ func (s *FileStore) Create(ctx context.Context, sessionID string, spec CreateSpe
 		return SessionMeta{}, err
 	}
 
-	agentType := spec.AgentType
-	if agentType == "" {
-		agentType = AgentTypeClaude
-	}
+	agentType := ResolveAgentType(spec.AgentType)
 	mode := spec.Mode
 	if mode == "" {
 		mode = ModeDefault

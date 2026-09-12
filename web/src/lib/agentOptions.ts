@@ -25,6 +25,19 @@ const AUTO_LABEL = "Auto";
 export const AUTO_MODEL_DESCRIPTION = "Let the CLI decide";
 export const AUTO_EFFORT_DESCRIPTION = "Follow the CLI default";
 
+/**
+ * What Auto means on an agent role that sits on the global default agent: the
+ * server fills the empty value in from Settings field by field, so the CLI never
+ * gets to decide and the two descriptions above would be untrue. The resolved
+ * value is named here rather than left for the reader to go look up, because
+ * that trip to the Settings page is the expensive one on a phone.
+ *
+ * Not worded as "Follow settings" — that row name belongs to the agent section,
+ * where the whole engine follows Settings rather than this one field.
+ */
+export const fromSettingsDescription = (label: string) =>
+	`From Settings: ${label}`;
+
 export interface Choice {
 	id: string;
 	label: string;

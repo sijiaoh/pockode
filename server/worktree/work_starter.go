@@ -65,6 +65,18 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 	return s.createAndSendKickoff(ctx, wt, w, role)
 }
 
+// engineSource names the places a session's rejected engine has to be fixed.
+// The role alone when it named the whole engine, and the global defaults as
+// well as soon as they filled anything in — pointing only at the role would send
+// the user looking for a value that is not on it.
+func engineSource(role agentrole.AgentRole, resolved session.Engine) string {
+	source := fmt.Sprintf("agent role %q (%s)", role.Name, role.ID)
+	if resolved != role.Engine() {
+		source += " with the global defaults applied"
+	}
+	return source
+}
+
 func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work, steps []string) error {
 	msg := work.BuildRestartMessage(w)
 	meta := work.NewMessageMeta(w, w.CurrentStep+1, len(steps))
@@ -78,21 +90,18 @@ func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w 
 	steps := role.Steps
 	defaults := s.settingsStore.Get()
 
-	agentType := role.AgentType
-	if agentType == "" {
-		agentType = defaults.DefaultAgentType
-	}
+	engine := defaults.ResolveEngine(role.Engine())
 	spec := session.CreateSpec{
-		AgentType: agentType,
+		AgentType: engine.AgentType,
 		Mode:      defaults.DefaultMode,
-		Model:     role.Model,
-		Effort:    role.Effort,
+		Model:     engine.Model,
+		Effort:    engine.Effort,
 	}
 	if _, err := wt.SessionStore.Create(ctx, w.SessionID, spec); err != nil {
-		// The role is named because the value that has to be fixed lives on it,
-		// not on this work item: a model the server has since retired stays on
-		// the role and breaks every work started with it.
-		return fmt.Errorf("create session for agent role %q (%s): %w", role.Name, role.ID, err)
+		// The work item is not what has to be fixed: a model the server has since
+		// retired sits on the role or in the global defaults and breaks every work
+		// started with it, so the error names wherever the engine came from.
+		return fmt.Errorf("create session for %s: %w", engineSource(role, engine), err)
 	}
 
 	if err := wt.SessionStore.Update(ctx, w.SessionID, w.Title); err != nil {
