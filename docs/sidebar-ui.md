@@ -149,11 +149,24 @@ Colour, restated as rules rather than as a list of places:
 
 | Token | Means |
 |-------|-------|
-| `th-accent` | The one primary action, the active tab, the focus ring, a drag under the cursor right now, a progress bar |
+| `th-accent` | The one primary action, the active tab, the focus ring, a drag under the cursor right now, a progress bar, a tab's notification badge (the dot, and the Git tab's change count) |
 | `th-accent` as a 2px left bar | A row singled out: the selected row in `SidebarListItem` |
 | `th-bg-tertiary` | The row you are looking at (selected file, selected commit), and the fill of secondary buttons inside sheets |
 | `th-text-muted` | Group headers, metadata, and icons that are not asking to be pressed — decoration, or an action rare enough to sit below the row it lives on (a tree row's `…`) |
 | `th-error` / `th-success` | A failure / a completed outcome. Never a state that is merely unusual |
+
+**Known gap: `th-accent-text` on `th-accent` falls below AA in two light
+themes.** The pair measures 3.74:1 in abyss light and 3.68:1 in mint light,
+against WCAG AA's 4.5:1 for text this size; the other eight theme variants pass
+with room to spare. Abyss is the default theme and the mode defaults to
+`system`, so this is what a first-run user on a light desktop gets. It is a
+property of the token pair rather than of any one place that uses it — every L1
+primary action sits at the same contrast, and the Git tab's count badge
+([git-ui.md](git-ui.md#the-change-count-on-the-tab)) only joined them. Recorded
+here rather than worked around where it was noticed: a single component picking
+a colour of its own would leave the system less consistent and the real problem
+better hidden. The fix belongs in those two themes' token values, where it lands
+for everything at once.
 
 Selection is the bar **and** the `th-bg-tertiary` fill together. The rule is
 about **row backgrounds** and only about them, which is the clause to keep in
@@ -195,7 +208,7 @@ The rules above are general; each panel's shape is documented with the panel.
 | Panel | Document | What it now covers that this file does not |
 |-------|----------|--------------------------------------------|
 | Files | [file.md](file.md) | The row's [`…` menu](file.md#entry-actions) and the create / delete flows it opens, the [two upload paths](file.md#uploading) and why neither leaves a destination behind. The search row's narrow-width fix and the wrapping option chips |
-| Git | [git-ui.md](git-ui.md) | The layout and its L3 group headers (sticky, `Staged` / `Changes` / `History`), the commit bar's render conditions, amend on HEAD's row, History's default, `canPull`, the sync sheet's state-dependent button list, and the branch sheet's overflow root cause |
+| Git | [git-ui.md](git-ui.md) | The layout and its L3 group headers (sticky, `Staged` / `Changes` / `History`), the commit bar's render conditions, amend on HEAD's row, History's default, `canPull`, the sync sheet's state-dependent button list, and the branch sheet's overflow root cause. Also the [change count on the tab](git-ui.md#the-change-count-on-the-tab) — what it counts, and why the `git.changed` subscription that feeds it sits in the sidebar rather than in the panel |
 
 Two of the redesign's outcomes reach past the panel they were found in, so they
 are flagged here rather than left where they were diagnosed:

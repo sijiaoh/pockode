@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,12 @@ vi.mock("../../lib/wsStore", () => ({
 vi.mock("../../lib/fileUpload", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../lib/fileUpload")>()),
 	uploadFile: vi.fn(),
+}));
+
+vi.mock("../../hooks/useGitWatch", () => ({ useGitWatch: () => undefined }));
+let gitChangeCount: number | undefined;
+vi.mock("../../hooks/useGitChangeCount", () => ({
+	useGitChangeCount: () => gitChangeCount,
 }));
 
 vi.mock("../../hooks/useSession", () => ({
@@ -43,33 +50,42 @@ vi.mock("../Worktree", () => ({ WorktreeSwitcher: () => null }));
 
 function renderSidebar(onClose: () => void) {
 	render(
-		<SessionSidebar
-			isOpen={true}
-			onClose={onClose}
-			currentSessionId={null}
-			onSelectSession={vi.fn()}
-			onCreateSession={vi.fn()}
-			onDeleteSession={vi.fn()}
-			onSelectDiffFile={vi.fn()}
-			onCloseDiffFile={vi.fn()}
-			activeDiffFile={null}
-			onSelectCommit={vi.fn()}
-			activeCommitHash={null}
-			onSelectFile={vi.fn()}
-			activeFilePath={null}
-			onCloseFile={vi.fn()}
-			onOpenWorkList={vi.fn()}
-			onOpenAgentRoleList={vi.fn()}
-			isSwitchingWorktree={false}
-			isExpanded={false}
-		/>,
+		<QueryClientProvider client={new QueryClient()}>
+			<SessionSidebar
+				isOpen={true}
+				onClose={onClose}
+				currentSessionId={null}
+				onSelectSession={vi.fn()}
+				onCreateSession={vi.fn()}
+				onDeleteSession={vi.fn()}
+				onSelectDiffFile={vi.fn()}
+				onCloseDiffFile={vi.fn()}
+				activeDiffFile={null}
+				onSelectCommit={vi.fn()}
+				activeCommitHash={null}
+				onSelectFile={vi.fn()}
+				activeFilePath={null}
+				onCloseFile={vi.fn()}
+				onOpenWorkList={vi.fn()}
+				onOpenAgentRoleList={vi.fn()}
+				isSwitchingWorktree={false}
+				isExpanded={false}
+			/>
+		</QueryClientProvider>,
 	);
 }
 
 /** The dot the Files tab is badged with, which has nothing else to name it. */
 function filesBadge(): Element | null {
-	return screen.getByLabelText("Files").querySelector("span");
+	// Nested: the tab button wraps its icon in a span the badges anchor to.
+	return screen.getByLabelText("Files").querySelector("span > span");
 }
+
+// Module-level, so every case states the count it is about rather than
+// inheriting one from whichever ran before it.
+beforeEach(() => {
+	gitChangeCount = undefined;
+});
 
 describe("SessionSidebar on a phone", () => {
 	beforeEach(() => {
@@ -116,5 +132,29 @@ describe("SessionSidebar on a phone", () => {
 		// The badge is the wider question and still lit, which is how the row is
 		// found again once the file has been read.
 		expect(filesBadge()).not.toBeNull();
+	});
+});
+
+describe("the Git tab's change count", () => {
+	it("is spoken after the tab label, with the noun it counts", () => {
+		gitChangeCount = 5;
+		renderSidebar(vi.fn());
+		expect(
+			screen.getByRole("button", { name: "Git, 5 changed files" }),
+		).toBeInTheDocument();
+	});
+
+	it("drops the plural for a single file", () => {
+		gitChangeCount = 1;
+		renderSidebar(vi.fn());
+		expect(
+			screen.getByRole("button", { name: "Git, 1 changed file" }),
+		).toBeInTheDocument();
+	});
+
+	it("says nothing at all when there is nothing changed", () => {
+		gitChangeCount = 0;
+		renderSidebar(vi.fn());
+		expect(screen.getByRole("button", { name: "Git" })).toBeInTheDocument();
 	});
 });

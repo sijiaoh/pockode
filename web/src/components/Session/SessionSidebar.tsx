@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import {
 	FolderOpen,
 	GitCompare,
@@ -5,6 +6,9 @@ import {
 	MessageSquare,
 } from "lucide-react";
 import { useCallback, useMemo } from "react";
+import { invalidateGitQueries } from "../../hooks/gitQueries";
+import { useGitChangeCount } from "../../hooks/useGitChangeCount";
+import { useGitWatch } from "../../hooks/useGitWatch";
 import { useSession } from "../../hooks/useSession";
 import { useSidebarUIConfig } from "../../lib/registries/sidebarUIRegistry";
 import { SidebarContainerContext } from "../../lib/sidebarContainerContext";
@@ -16,6 +20,7 @@ import { FilesTab } from "../Files";
 import { DiffTab } from "../Git";
 import { Sidebar, TabbedSidebar, type TabConfig } from "../Layout";
 import { ProjectTab } from "../Project";
+import { formatBadgeCount } from "../ui";
 import { WorktreeSwitcher } from "../Worktree";
 import SessionsTab from "./SessionsTab";
 
@@ -74,6 +79,37 @@ function SessionSidebar({
 	// Narrower than the badge, and deliberately so — see `handleSelectFile`.
 	const hasUnfinishedUploads = useHasUnfinishedUploads();
 
+	// The watcher belongs to the sidebar, not to the Git tab: it feeds the tab's
+	// count badge, which has to keep up while another tab is on top. Each term
+	// below closes a case where nobody is left to read the number — including the
+	// one easily dropped, a diff still open behind a drawer the tap closed.
+	// See docs/git-ui.md, *Who subscribes to `git.changed`*.
+	const queryClient = useQueryClient();
+	const refreshGit = useCallback(
+		() => invalidateGitQueries(queryClient),
+		[queryClient],
+	);
+	useGitWatch({
+		onChanged: refreshGit,
+		enabled: !SidebarContent && (isExpanded || isOpen || !!activeDiffFile),
+	});
+
+	const gitChangeCount = useGitChangeCount();
+	// Left out below 1 change: the badge does not show a "0", and neither should
+	// the label a screen reader speaks in its place.
+	const gitCountBadge = useMemo(
+		() =>
+			gitChangeCount
+				? {
+						value: gitChangeCount,
+						label: `${formatBadgeCount(gitChangeCount)} changed ${
+							gitChangeCount === 1 ? "file" : "files"
+						}`,
+					}
+				: undefined,
+		[gitChangeCount],
+	);
+
 	const tabs: TabConfig[] = useMemo(
 		() => [
 			{
@@ -88,10 +124,15 @@ function SessionSidebar({
 				icon: FolderOpen,
 				showBadge: hasUploadActivity,
 			},
-			{ id: "git", label: "Git", icon: GitCompare },
+			{
+				id: "git",
+				label: "Git",
+				icon: GitCompare,
+				countBadge: gitCountBadge,
+			},
 			{ id: "project", label: "Project", icon: ListChecks },
 		],
-		[hasAnyUnread, hasUploadActivity],
+		[hasAnyUnread, hasUploadActivity, gitCountBadge],
 	);
 
 	const handleSelectSession = useCallback(

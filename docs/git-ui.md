@@ -310,9 +310,76 @@ In-flight rules, uniform across the panel: the triggering control shows a spinne
 
 Discard is the one that refreshes whether it succeeded or not. It is several git invocations behind a single tap, and a batch that failed part-way has still deleted files; refreshing only on success would leave those rows on screen until the next poll.
 
+## The change count on the tab
+
+The Git tab's icon carries a badge with the number of files holding uncommitted
+changes, so the panel does not have to be on top for the user to know there is
+something here to look at. It counts the file lists above, but **deduplicated by
+path** across `Staged` and `Changes`, submodules included: a partially staged
+file is two rows in the panel and one changed file to someone reading a digit
+off an icon.
+
+| State | Badge |
+|-------|-------|
+| One or more changed files | the count, capped at `99+` — past that the exact figure decides nothing |
+| Nothing changed | **no badge**, never a `0` |
+| No status yet — the first read has not answered, or it failed | **no badge** — a badge is not an error channel. A status the panel cannot read is reported by the panel itself, in place of its file lists |
+
+A *later* refresh that fails is not in the table: react-query keeps the answer
+it already has, so the last known count stays on the icon rather than blinking
+out. Stale is the right of the two: the number is behind, but "some files
+changed" is still closer to the truth than "nothing changed".
+
+The badge is `aria-hidden` and the number reaches a screen reader through the
+tab button's own label instead (`Git, 5 changed files`), through the same
+truncation the eye gets — `formatBadgeCount` is exported from `ui/BadgeCount`
+rather than the `99+` rule being written twice. There is deliberately **no
+`aria-live`**: while an agent is editing files the count moves every few
+seconds, and announcing each step would turn a screen reader into a counter.
+Shape and colour live in `ui/BadgeCount`: the same `th-accent` fill and the same
+corner of the same icon box as the plain `ui/BadgeDot` the other tabs use, so
+the two read as one family ([sidebar-ui.md](sidebar-ui.md#visual-weight)).
+
+The badge rides in the sidebar's tab bar, so it is visible exactly when that bar
+is: below `expanded` a closed drawer takes the whole bar with it, and the
+hamburger button that opens it carries nothing. A change indicator outside the
+drawer would be a different feature.
+
+### Who subscribes to `git.changed`
+
+`SessionSidebar` holds the single `useGitWatch`, not `DiffTab` — the count is
+the reason. Scoping the subscription to the Git tab being *active* is what the
+panel used to do, and it cannot feed a badge that exists to be read from the
+other tabs: `useGitStatus` never refetches on its own, so the number would be
+whatever it was when the user last left the panel. Subscribing unconditionally
+is no answer either, because below `expanded` the closed drawer is hidden with
+a class rather than unmounted — the server's 3-second poll would then run for a
+whole session in which the sidebar was never opened.
+
+So it runs while somebody can read the answer, and stops otherwise:
+
+```typescript
+enabled: !SidebarContent && (isExpanded || isOpen || !!activeDiffFile)
+```
+
+- `isExpanded || isOpen` — **the tab bar is on screen**: the standing column at
+  `expanded` and above, an open drawer below it. A closed drawer is what this
+  excludes, and it is the whole reason a condition is needed at all — that
+  drawer is `hidden`, not gone.
+- `activeDiffFile` — **a diff is open.** `DiffView` renders in the content area
+  rather than in the sidebar and reads `git.status` for its previous/next file,
+  and on a phone tapping a file closes the drawer behind it. Without this term
+  the list under the reader's fingers would freeze exactly while they were using
+  it.
+- `!SidebarContent` — an extension supplying its own sidebar replaces the tab
+  bar outright, so there is no badge to feed.
+
+Re-enabling resubscribes, and `useGitWatch` refreshes on `onSubscribed`, so
+opening the drawer shows a current number rather than a stale one for a frame.
+
 ## Data behind the panel
 
-None of these queries runs on a refetch interval; `git.changed` is what drives all three together. `git.status` backs the file lists, `git.log` the history, and `git.branches` answers with HEAD (branch or detached hash, plus the message amend prefills), the local branches annotated with the worktree occupying each, the remote-only branches, and the sync state — one answer, so the branch name and the chip beside it can never disagree about which branch they describe.
+None of these queries runs on a refetch interval; `git.changed` is what drives all three together, and the subscription it arrives on belongs to the sidebar rather than to the panel ([above](#who-subscribes-to-gitchanged)). `git.status` backs the file lists, `git.log` the history, and `git.branches` answers with HEAD (branch or detached hash, plus the message amend prefills), the local branches annotated with the worktree occupying each, the remote-only branches, and the sync state — one answer, so the branch name and the chip beside it can never disagree about which branch they describe.
 
 Beyond the components named above, the panel's own supporting modules are:
 
