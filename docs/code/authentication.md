@@ -45,7 +45,7 @@ directory (`server/serverinfo/serverinfo.go`, see
   (`server/middleware/auth.go`).
 - The relay refuses to forward any `/api/mcp/` path before port selection, so the
   MCP API is never reachable remotely even in the single-port setup
-  (`server/relay/http.go`).
+  (`server/apiroute/` holds the predicate, `server/relay/proxy.go` enforces it).
 - The MCP handler **fails closed** on an empty token — an unset token never
   matches — rather than accepting all callers (`server/mcp/handler.go`).
 
@@ -188,6 +188,6 @@ hosting) revisits them rather than rediscovering them:
 | HTTP Bearer auth | `server/middleware/auth.go` |
 | WebSocket `auth` gate | `server/ws/rpc.go` |
 | MCP local API token | `server/mcp/handler.go`, `server/serverinfo/serverinfo.go` |
-| Relay MCP rejection | `server/relay/http.go` |
+| Relay MCP rejection | `server/apiroute/`, `server/relay/proxy.go` |
 | Cluster node token delivery | `server/cluster/node/process.go` |
 | On-disk restriction of credentials | `server/internal/fsperm/` |

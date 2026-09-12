@@ -58,6 +58,19 @@ class MockWebSocket {
 		this.readyState = MockWebSocket.CLOSED;
 		this.onclose?.();
 	}
+	// close() is not instant in a browser: it starts a handshake, and against a
+	// dead cluster onclose lands seconds later. The default mock fires it
+	// synchronously, which hides every bug that needs a socket to outlive its
+	// own close() call.
+	mockSlowClose() {
+		this.close = vi.fn(() => {
+			this.readyState = MockWebSocket.CLOSING;
+		});
+	}
+	finishClose() {
+		this.readyState = MockWebSocket.CLOSED;
+		this.onclose?.();
+	}
 }
 
 const OriginalWebSocket = globalThis.WebSocket;
@@ -146,6 +159,100 @@ describe("wsStore reconnect", () => {
 
 		expect(mockWsInstances.length).toBe(1);
 		expect(useWSStore.getState().status).toBe("connected");
+	});
+
+	// A relay outage lasts far longer than a handful of quick retries: the server
+	// alone needs ~20s to notice the tunnel is dead. Giving up would leave the
+	// page on the error screen until the user acts.
+	it("keeps retrying through a long outage and recovers on its own", async () => {
+		const useWSStore = await connectAndAuth();
+
+		for (let i = 0; i < 10; i++) {
+			currentMockWs?.simulateClose();
+			expect(useWSStore.getState().status).toBe("reconnecting");
+			// Longer than the capped backoff, so every attempt gets to fire.
+			await vi.advanceTimersByTimeAsync(60000);
+		}
+		expect(mockWsInstances.length).toBe(11);
+
+		currentMockWs?.simulateOpen();
+		await vi.runAllTimersAsync();
+		expect(useWSStore.getState().status).toBe("connected");
+	});
+
+	// The cloud can accept the browser's socket while the tunnel behind it is
+	// dead, so auth is sent and never answered. That is a network problem, not a
+	// credential problem: "auth_failed" would put the user on the token screen.
+	it("retries when auth is never answered instead of failing auth", async () => {
+		const useWSStore = await getStore();
+
+		useWSStore.getState().actions.connect(TEST_TOKEN);
+		if (currentMockWs) {
+			currentMockWs.send = vi.fn();
+		}
+		currentMockWs?.simulateOpen();
+
+		// Past the RPC timeout.
+		await vi.advanceTimersByTimeAsync(30000);
+
+		expect(useWSStore.getState().status).toBe("reconnecting");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(mockWsInstances.length).toBe(2);
+	});
+
+	// The unreachable screen's Retry button stays on screen for the whole
+	// reconnect, so connect() can land while an attempt is still opening its
+	// socket. That socket has to be dropped rather than orphaned: still attached,
+	// its eventual close would clear the newer connection's state and schedule a
+	// reconnect on top of it.
+	it("drops an in-flight socket when connect() supersedes it", async () => {
+		const useWSStore = await connectAndAuth();
+
+		currentMockWs?.simulateClose();
+		await vi.advanceTimersByTimeAsync(1000);
+		const superseded = currentMockWs;
+		expect(mockWsInstances.length).toBe(2);
+
+		useWSStore.getState().actions.connect(TEST_TOKEN);
+		expect(superseded?.close).toHaveBeenCalled();
+		expect(mockWsInstances.length).toBe(3);
+
+		currentMockWs?.simulateOpen();
+		await vi.runAllTimersAsync();
+		expect(useWSStore.getState().status).toBe("connected");
+
+		// The superseded socket giving up later must not disturb the live one.
+		superseded?.simulateClose();
+		await vi.runAllTimersAsync();
+		expect(useWSStore.getState().status).toBe("connected");
+		expect(mockWsInstances.length).toBe(3);
+	});
+
+	// disconnect() drops its socket reference before the close handshake
+	// finishes, so a socket closed against a dead cluster can still be closing
+	// when the next connect() opens its replacement. It must not take that
+	// replacement down when it finally lands.
+	it("ignores the close of a socket that has already been replaced", async () => {
+		const useWSStore = await connectAndAuth();
+
+		const superseded = currentMockWs;
+		superseded?.mockSlowClose();
+
+		useWSStore.getState().actions.disconnect();
+		useWSStore.getState().actions.connect(TEST_TOKEN);
+
+		const replacement = currentMockWs;
+		expect(replacement).not.toBe(superseded);
+		replacement?.simulateOpen();
+		await vi.runAllTimersAsync();
+		expect(useWSStore.getState().status).toBe("connected");
+
+		superseded?.finishClose();
+		await vi.runAllTimersAsync();
+
+		expect(useWSStore.getState().status).toBe("connected");
+		// No reconnect was scheduled on top of the healthy connection.
+		expect(mockWsInstances.length).toBe(2);
 	});
 
 	it("does not reconnect after an intentional disconnect", async () => {

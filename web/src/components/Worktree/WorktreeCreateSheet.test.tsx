@@ -28,7 +28,6 @@ function renderSheet(props: {
 			onCreate={props.onCreate}
 			isCreating={false}
 			setupHookSkip={props.setupHookSkip ?? null}
-			isDesktop={true}
 		/>,
 	);
 }

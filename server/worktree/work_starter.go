@@ -56,14 +56,14 @@ func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {
 	}
 
 	if sessionExists {
-		return s.sendRestart(ctx, wt, w)
+		return s.sendRestart(ctx, wt, w, role.Steps)
 	}
 	return s.createAndSendKickoff(ctx, wt, w, role.Steps)
 }
 
-func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work) error {
+func (s *WorkStarter) sendRestart(ctx context.Context, wt *Worktree, w work.Work, steps []string) error {
 	msg := work.BuildRestartMessage(w)
-	meta := work.NewMessageMeta(w.Title, 0, 0)
+	meta := work.NewMessageMeta(w, w.CurrentStep+1, len(steps))
 	if err := wt.ChatClient.SendSystemMessage(ctx, w.SessionID, msg, work.MessageSubtypeRestart, meta); err != nil {
 		return fmt.Errorf("send restart message: %w", err)
 	}
@@ -82,7 +82,7 @@ func (s *WorkStarter) createAndSendKickoff(ctx context.Context, wt *Worktree, w 
 
 	// Include first step in kickoff message if agent role has steps
 	msg := work.BuildKickoffMessageWithSteps(w, steps, w.CurrentStep)
-	meta := work.NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
+	meta := work.NewMessageMeta(w, w.CurrentStep+1, len(steps))
 	if err := wt.ChatClient.SendSystemMessage(ctx, w.SessionID, msg, work.MessageSubtypeKickoff, meta); err != nil {
 		if delErr := wt.SessionStore.Delete(ctx, w.SessionID); delErr != nil {
 			slog.Error("failed to clean up session after kickoff failure", "sessionId", w.SessionID, "error", delErr)

@@ -21,6 +21,11 @@ type BaseWatcher struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// spawnMu orders goroutine registration against cancellation, so that Go can
+	// never add to wg after CancelAndWait has started waiting on it.
+	spawnMu sync.Mutex
+	wg      sync.WaitGroup
 }
 
 func NewBaseWatcher(idPrefix string) *BaseWatcher {
@@ -102,7 +107,35 @@ func (b *BaseWatcher) NotifyAll(method string, makeParams func(sub *Subscription
 }
 
 func (b *BaseWatcher) Context() context.Context { return b.ctx }
-func (b *BaseWatcher) Cancel()                  { b.cancel() }
+
+// Go runs fn as a background goroutine tracked by the watcher, so that
+// CancelAndWait can wait for it. Every long-running loop a watcher starts must
+// go through here.
+func (b *BaseWatcher) Go(fn func()) {
+	b.spawnMu.Lock()
+	defer b.spawnMu.Unlock()
+	if b.ctx.Err() != nil {
+		return
+	}
+
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		fn()
+	}()
+}
+
+// CancelAndWait cancels the watcher context and blocks until every goroutine
+// started with Go has returned. Stop must be synchronous: a caller that has
+// stopped a watcher (a shutting-down worktree, a finishing test) is entitled to
+// assume nothing is still reading the store or the work tree behind its back.
+func (b *BaseWatcher) CancelAndWait() {
+	b.spawnMu.Lock()
+	b.cancel()
+	b.spawnMu.Unlock()
+
+	b.wg.Wait()
+}
 
 func (b *BaseWatcher) HasSubscriptions() bool {
 	b.subMu.RLock()

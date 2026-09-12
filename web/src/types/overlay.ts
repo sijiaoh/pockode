@@ -3,6 +3,7 @@ export type OverlayState =
 	| { type: "file"; path: string; edit?: boolean }
 	| { type: "commit"; hash: string }
 	| { type: "commit-diff"; hash: string; path: string }
+	| { type: "commit-file"; hash: string; path: string }
 	| { type: "settings" }
 	| { type: "work-list" }
 	| { type: "work-detail"; workId: string }

@@ -39,6 +39,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `settings.*` | app | `ws/rpc_settings.go` |
 | `work.*` | app | `ws/rpc_work.go` |
 | `agent_role.*` | app | `ws/rpc_agent_role.go` |
+| `agent.*` | app | `ws/rpc_agent.go` |
 
 - **Worktree scope**: Operations that depend on the current working directory (files, Git, etc.)
 - **App scope**: Global operations across worktrees (settings, project management, etc.)
@@ -247,7 +248,9 @@ Client                              Server
   │   auth { token, worktree? }        │
   ├───────────────────────────────────▶│   Validate token
   │                                    │   Bind to worktree
-  │   { version, title, work_dir }     │
+  │   { version, title, work_dir,      │
+  │     worktree_name,                 │
+  │     max_upload_size }              │
   │◀───────────────────────────────────┤
   │                                    │
   │   (Authenticated - can send other requests)
@@ -256,6 +259,14 @@ Client                              Server
 - Token uses constant-time comparison to prevent timing attacks
 - Optionally specify worktree; uses main worktree if not specified
 - Authentication response includes version number for detecting client/server version mismatch
+- `max_upload_size` is the ceiling on one HTTP upload request in bytes, sent so a
+  client can refuse an oversized file before spending a slow link on it instead
+  of keeping its own copy of the number ([File § Transfer](../file.md#transfer)).
+  A client reads it from its own `auth` reply rather than hard-coding it: the
+  server is free to change what it accepts, and the client that has to respect
+  the number is the one furthest from the decision. It is the same value on
+  every route — the relay tunnel streams a request body and imposes no ceiling
+  of its own.
 
 For where the server's token comes from (`--auth-token` / `POCKODE_AUTH_TOKEN`) and the overall trust model, see [Authentication](authentication.md).
 
@@ -285,6 +296,37 @@ Code: `server/ws/rpc.go` (`bindWorktree`, `trackSubscription`, `cleanup`),
 `server/ws/rpc_worktree.go` (`handleWorktreeSwitch`); regression coverage in
 `server/ws/rpc_lifecycle_test.go`.
 
+### Handlers Wait for Connection State
+
+The same connection state races again at the opposite end of its life — setup
+rather than teardown. `jsonrpc2.NewConn` starts its read loop before it returns,
+while `handleStream` only wires the state (`setConn`, which installs the notifier
+and the subscriptions map) once `NewConn` has returned. A request arriving in that
+window is dispatched against a half-built state.
+
+Two things then go wrong, neither of them gracefully. `handleAuth` would call
+`bindWorktree` while the notifier is still `nil`, subscribing that nil to the
+worktree; `cleanup` later unsubscribes the *real* notifier, so the nil entry is
+unreachable, outlives the connection, and panics the next watcher that notifies
+that worktree. `trackSubscription` would write to a still-`nil` map and panic
+immediately — recovered, but the recover only logs, so the client gets no reply
+at all and waits out its full timeout.
+
+`rpcConnState.ready` closes this window: `setConn` closes the channel and `Handle`
+waits on it before touching anything. One gate covers the whole class of
+"half-built state" bugs, which is why it is preferred over nil-checking each field
+as it is added. It cannot deadlock — `setConn` follows `NewConn` with nothing in
+between that can block or panic — and `Handle` runs on its own `AsyncHandler`
+goroutine, so waiting there never stalls the read loop.
+
+The window is narrow — the client still has to finish its handshake before it can
+send anything — but it is not empty, and a gate is cheaper than reasoning about
+how narrow it stays.
+
+Code: `server/ws/rpc.go` (`setConn`, `waitReady`); regression coverage in
+`server/ws/rpc_lifecycle_test.go`
+(`TestRPCMethodHandler_HandleWaitsForConnectionState`).
+
 ## Connection Management
 
 ### Connection Status
@@ -294,21 +336,39 @@ type ConnectionStatus =
   | "connecting"   // WebSocket connecting
   | "connected"    // Authenticated and ready
   | "disconnected" // Intentionally closed (no auto-reconnect)
-  | "reconnecting" // Connection lost, attempting to reconnect
-  | "auth_failed"  // Token invalid
-  | "error";       // Terminal state (no auto-reconnect)
+  | "reconnecting" // Connection lost, retrying with backoff
+  | "auth_failed"  // Server rejected the token
+  | "error";       // No token to connect with (needs user intervention)
 ```
 
 **Key distinction**: `disconnected` indicates an intentional disconnect (user action), while `reconnecting` indicates an unexpected connection loss that triggers automatic recovery.
 
+Besides the intentional `disconnected`, `auth_failed` and `error` are the only
+states that stop retrying, so both are deliberately narrow. `error` means there is
+no token to retry *with*; a connection that merely keeps failing stays in
+`reconnecting` indefinitely rather than escalating to either of them.
+
 ### Auto-Reconnect
 
-Automatically retries after unexpected disconnect, up to 5 times with 3-second intervals:
+Retries after an unexpected disconnect with exponential backoff and **no attempt
+limit** — for as long as the tab is open:
 
 ```typescript
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_INTERVAL = 3000;
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+const RECONNECT_JITTER = 0.2;
 ```
+
+**Why unbounded rather than a fixed attempt count**: a phone that loses signal in
+a lift, or a laptop whose lid was shut, has to recover on its own when the
+network returns. So does a client on the relay, where the server's own uplink can
+be down for the better part of a minute before its keepalive notices and then
+reconnects on a backoff of its own. Any fixed budget of a few quick attempts
+expires before the tunnel can possibly be back, so every outage ended on a dead
+page that only a manual refresh cleared. Backoff keeps the cost of a long outage
+at two attempts a minute while a brief blip still recovers in about a second.
+Jitter spreads the retries so every client of a restarting server does not arrive
+as one burst.
 
 **Reconnection behavior**:
 - Connection loss sets status to `reconnecting` (not `disconnected`)
@@ -316,18 +376,156 @@ const RECONNECT_INTERVAL = 3000;
 - Subscriptions are invalidated but data is preserved
 - On successful reconnect, subscriptions are automatically re-established
 - `auth_failed` and `error` states do not trigger reconnection and require user intervention
+- `online` and `visibilitychange` skip the rest of the current backoff: regained
+  connectivity or a foregrounded tab both mean the timer is now pessimistic. The
+  attempt counter is deliberately *not* reset, so a burst of recovery events
+  cannot turn into unlimited retries — a failed immediate retry resumes the
+  backoff where it left off
+- `connect()` clears any armed retry timer first, so calling it manually during
+  `reconnecting` cannot leave a second socket opening a moment later
+- Only the socket that is still the current one may touch the store. `close()`
+  *starts* a handshake rather than finishing one, and against a dead relay that
+  drags on for seconds — while `reconnectWebSocket()` opens the replacement just
+  100ms after asking for the close — so a superseded socket routinely outlives
+  its successor's setup. `onclose` therefore returns immediately for a socket
+  that is no longer current; without that check it would strip the live
+  connection of its RPC client and subscriptions and demote it to
+  `reconnecting`, leaving a healthy socket that nothing can reach and that
+  `disconnect()` can no longer close. `disconnect()` does its own subscription
+  cleanup for the same reason, rather than relying on `onclose` to pass by later.
+
+**A timed-out `auth` is not an auth failure.** A socket can open and then go
+silent — the relay tunnel behind it dies a moment later, or the phone's own link
+stalls — so `auth` goes out and nothing ever answers. The stakes are high for getting this wrong: `auth_failed` is terminal, it
+makes `AppShell` log the user out, and on the worktree-retry path it also discards
+their selected worktree — all for what may be a passing network fault. So the store
+distinguishes by error code:
+a genuine rejection always carries a real (negative) JSON-RPC code, while every way
+a request can die on this side of the wire carries `DefaultErrorCode` (0) — the
+client-side timeout and the rejection an in-flight request gets when its socket
+closes under it (both in [Request Timeout](#request-timeout)), and a send onto a
+socket that is not open, which json-rpc-2.0 catches and turns into a code-0 response
+carrying the thrown message. Only a real code counts as a rejection; everything else
+falls back to the normal reconnect path.
 
 ### UI During Reconnection
 
 When the connection enters `reconnecting` state, a non-intrusive banner is displayed at the top of the screen to inform users. The rest of the UI remains functional with cached data, avoiding disruptive full-page loading states.
 
+The exception is a reconnect with nothing on screen yet — the app was opened while
+the server was unreachable. There is no previous view to preserve and no terminal
+state to fall into any more, so `AppShell` treats "reconnecting and nothing
+rendered" as the cue to say the server is unreachable and that retries are running,
+rather than showing a loading spinner indefinitely.
+
+Because reconnection never gives up, the banner is the only thing that tells a
+blip apart from an outage: after the fifth drop (about 15 s of accumulated
+backoff) it escalates from "Reconnecting..." to "Can't reach the server" and
+offers a manual retry (`web/src/components/ui/ReconnectBanner.tsx`).
+
+The tunnel between pockode and the cloud has its own, separate backoff, whose
+ceiling is tied to the cloud's reconnect grace period — see the cloud's relay
+design document.
+
+### Inbound Message Size
+
+`maxClientMessage` (`server/ws/rpc.go`) caps one message from the client at
+16 MiB. It is a backstop rather than a limit anyone is meant to meet: the one
+method that carries bulk by design is `file.write`, which has a ceiling of its
+own and answers with an error, and this sits far enough above that ceiling to
+stay out of its way. Both, and the arithmetic between them, are in
+[file.md](../file.md#operations). For methods that set no ceiling — a chat
+message, a work body — this is the only one that applies.
+
+Setting it at all was a fix, not a tuning choice. Left at coder/websocket's
+32 KiB default the transport limit sat *below* what `file.write` accepted — and
+a transport limit does not reply, it closes the connection with
+`StatusMessageTooBig`. Any limit here has to stay above every method's own, or
+it silently takes over from it.
+
+### Compression
+
+`websocket.Accept` negotiates permessage-deflate with the browser
+(`clientCompression` in `server/ws/rpc.go`). Nothing on the client side has to
+opt in, and a client that does not offer the extension keeps working
+uncompressed.
+
+This is the last hop's only compression, and `/ws` carries most of what the
+phone downloads, so the mode is a real decision rather than a tuning knob — why
+context takeover, what it costs, and the measured numbers are in
+[websocket-rpc-design.md](../websocket-rpc-design.md#compression).
+
+The read limit is unaffected: it applies to decompressed bytes, so a compressed
+message cannot expand past it.
+
 ### Request Timeout
 
-All RPC requests have a default 30-second timeout:
+RPC requests carry a client-side timeout, 30 seconds by default:
 
 ```typescript
 const RPC_TIMEOUT_MS = 30000;
 ```
+
+That clock is the fallback, not the normal way a doomed request ends. A request's
+answer can only arrive on the socket it left by, so `onclose` rejects everything
+still pending rather than let a known-dead request sit out its remaining seconds.
+`disconnect()` has to make that call itself as well — for the same reason it does
+its own subscription cleanup, the `onclose` that follows it arrives for a socket
+that is no longer current and returns early (see
+[Auto-Reconnect](#auto-reconnect)).
+
+The exception is `AGENT_START_RPC_TIMEOUT_MS`, a longer clock for the requests
+that start an agent CLI on their own path.
+[Lock Strategy](agent-integration.md#lock-strategy) names those requests and the
+deadlines the server bounds a start with before it answers. Give up first and
+the reply naming the step that stalled is thrown away and the user is told
+"Request timed out" instead; because both budgets are fixed, that is what happens
+every time rather than now and then. So the rule is directional: a request's
+client timeout must outlast the deadlines the server spends answering it. A test
+pins those requests to a longer clock than the default, but nothing ties that
+clock to the Go deadlines it is derived from — the two sides only name each other
+in comments.
+
+**A timeout is not a failure the caller may retry blindly.** The server is likely
+still working on the request, so a retry stacks a second copy of that work on top
+of the first: with react-query's default budget one slow response becomes four,
+each re-running the whole thing. `isRPCTimeout` exists so callers can tell "we
+stopped waiting" from "this failed", and the queries that can carry megabytes of
+file content — `useContents` for the working tree, `useCommitFile` for a blob out
+of a commit — use it to skip the retry. What marks a timeout is its message, not
+an error code of its own: code 0 is already spoken for above, and taking a second
+meaning would cost more than it buys. The message is supplied through the
+timeout's own error factory rather than left to json-rpc-2.0, so what
+`isRPCTimeout` matches on is not a library default that an upgrade could reword.
+
+## Error Replies
+
+`replyInternalError` (`ws/rpc.go`) is how a handler reports a failure that is not
+the caller's fault: it answers `-32603` with `<what failed>: <why>` and logs the
+same failure with the ids that locate it (`connId`, plus a `sessionId` where the
+handler has one), in one call so neither half can go missing. The person on the
+other end is the developer running this server, and what keeps a session from
+starting is an unwritable data directory or a full disk — something only the
+server side can see. A bare "failed to create session" strands that failure with
+no trace anywhere: nothing in the log, and nothing for the frontend to show but
+the phrase repeated back. Every `session.*` handler replies this way, as does the
+session lookup in `chat.messages.subscribe`; handlers written before the helper
+still answer with a bare phrase or a bare cause. `session.fork` is the one
+`session.*` method that does not, because it runs the chat client's work: its
+distinctive failures — no such session, an anchor naming no record, an agent that
+cannot be forked at all — are the caller's, and it reaches for the chat helper
+below rather than grow a second mapping of the same errors. The chat handlers
+keep their own `replyErrorForChat`: what is not the server's fault (no such session, no live
+process) becomes a client error, and anything else is logged there and forwarded
+as the cause — a failing agent start has to leave a trace even when the client
+stopped waiting for the reply.
+
+A server's error message is therefore text to put in front of a user, never a
+value to branch on — it embeds an arbitrary error string, and its fixed half is
+free to be reworded. Nothing on the client matches text against a server reply:
+`isAuthRejection` ([above](#auto-reconnect)) reads the code alone, and
+`isRPCTimeout` ([above](#request-timeout)) compares text only after code 0 has
+established that the error never came from the server at all.
 
 ## Code Paths
 
@@ -352,9 +550,11 @@ const RPC_TIMEOUT_MS = 30000;
 2. **Implement backend handler**
    - Add handler in the corresponding `server/ws/rpc_*.go`
    - Register in the `Handle` switch in `rpc.go`
+   - Report a failure that is not the caller's fault with `replyInternalError` (see [Error Replies](#error-replies))
 
 3. **Add frontend action**
    - Add method in `web/src/lib/rpc/*.ts`
+   - If its result is cached with react-query and scoped to a worktree, register the query key in `WORKTREE_DEPENDENT_QUERY_KEYS` (see [frontend-state.md](frontend-state.md#server-cache-vs-store))
 
 ### Adding New Subscription Types
 

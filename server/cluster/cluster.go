@@ -70,7 +70,6 @@ func Run(cfg Config) error {
 	}
 
 	var relayManager *relay.Manager
-	var cancelRelayStreams context.CancelFunc
 	var remoteURL string
 	if cfg.RelayEnabled {
 		relayCfg := relay.Config{
@@ -91,14 +90,6 @@ func Run(cfg Config) error {
 			return fmt.Errorf("failed to start relay: %w", err)
 		}
 		log.Info("remote access enabled", "url", remoteURL)
-
-		var relayStreamCtx context.Context
-		relayStreamCtx, cancelRelayStreams = context.WithCancel(context.Background())
-		go func() {
-			for stream := range relayManager.NewStreams() {
-				go wsHandler.handleStream(relayStreamCtx, stream, stream.ConnectionID())
-			}
-		}()
 	}
 
 	// Fetch announcement from cloud
@@ -131,16 +122,17 @@ func Run(cfg Config) error {
 		exitRequests.Stop()
 
 		log.Info("shutting down cluster server")
+		// Close the relay before draining srv, not after: every relayed request
+		// is served by srv, so a tunnel still delivering traffic into a server
+		// that has stopped accepting would turn those requests into errors, and
+		// long-lived relayed WebSockets would hold Shutdown until its deadline.
+		if relayManager != nil {
+			relayManager.Stop()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Error("server shutdown error", "error", err)
-		}
-		if relayManager != nil {
-			if cancelRelayStreams != nil {
-				cancelRelayStreams()
-			}
-			relayManager.Stop()
 		}
 		close(shutdownDone)
 	}()

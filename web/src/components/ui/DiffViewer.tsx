@@ -1,7 +1,7 @@
 import { DiffModeEnum, DiffView } from "@git-diff-view/react";
 import "@git-diff-view/react/styles/diff-view-pure.css";
 import type { getDiffViewHighlighter } from "@git-diff-view/shiki";
-import { useIsDesktop } from "@pockode/shared";
+import { useIsExpanded } from "@pockode/shared";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import {
 	CODE_FONT_SIZE_DESKTOP,
@@ -25,7 +25,7 @@ export function DiffViewer({
 	newContent,
 }: DiffViewerProps) {
 	const isDark = useSyncExternalStore(subscribeToDarkMode, getIsDarkMode);
-	const isDesktop = useIsDesktop();
+	const isExpanded = useIsExpanded();
 	const [highlighter, setHighlighter] = useState<Awaited<
 		ReturnType<typeof getDiffViewHighlighter>
 	> | null>(null);
@@ -51,7 +51,7 @@ export function DiffViewer({
 				diffViewTheme={isDark ? "dark" : "light"}
 				diffViewHighlight
 				diffViewFontSize={
-					isDesktop ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE
+					isExpanded ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE
 				}
 			/>
 		</div>

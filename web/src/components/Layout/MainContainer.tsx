@@ -4,6 +4,13 @@ import { ConnectionStatus } from "../ui";
 
 interface Props {
 	children: React.ReactNode;
+	/**
+	 * Omitted when there is no drawer to open, which is the only thing that
+	 * decides whether the hamburger exists. The tier is read once, by whoever
+	 * owns the sidebar; a `lg:hidden` here would be a second copy of that
+	 * decision, and either half could then be edited into "a sidebar with no
+	 * switch" or "a switch with no sidebar".
+	 */
 	onOpenSidebar?: () => void;
 	onOpenSettings?: () => void;
 	title?: string;
@@ -39,7 +46,7 @@ function MainContainer({
 						<button
 							type="button"
 							onClick={onOpenSidebar}
-							className="-ml-2 flex h-11 w-11 items-center justify-center rounded text-th-text-muted transition-all hover:bg-th-bg-tertiary hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 md:hidden"
+							className="-ml-2 flex h-11 w-11 items-center justify-center rounded text-th-text-muted transition-all hover:bg-th-bg-tertiary hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95"
 							aria-label="Open menu"
 						>
 							<Menu className="h-5 w-5" aria-hidden="true" />

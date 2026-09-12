@@ -13,7 +13,7 @@ interface Props {
 	onClose: () => void;
 	getDisplayName: (worktree: WorktreeInfo) => string;
 	triggerRef?: React.RefObject<HTMLButtonElement | null>;
-	isDesktop: boolean;
+	isExpanded: boolean;
 	isCurrent: (worktree: WorktreeInfo) => boolean;
 }
 
@@ -26,7 +26,7 @@ function WorktreeDropdown({
 	onClose,
 	getDisplayName,
 	triggerRef,
-	isDesktop,
+	isExpanded,
 	isCurrent,
 }: Props) {
 	// Only main worktree exists = no other worktrees to switch to
@@ -46,7 +46,7 @@ function WorktreeDropdown({
 			onClose={onClose}
 			title="Switch worktree"
 			triggerRef={triggerRef}
-			isDesktop={isDesktop}
+			isExpanded={isExpanded}
 			mobileMaxHeight="70dvh"
 			desktopMaxHeight="50vh"
 		>

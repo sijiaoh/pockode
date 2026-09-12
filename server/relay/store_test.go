@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -75,6 +76,27 @@ func TestStore_LoadNonExistent(t *testing.T) {
 	}
 	if cfg != nil {
 		t.Errorf("Load() = %v, want nil for non-existent file", cfg)
+	}
+}
+
+// A relay.json truncated by a crash must not leave relay permanently broken:
+// Load reports "no config" so Start re-registers, same as an invalid token.
+func TestStore_LoadCorruptFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "relay.json")
+	if err := os.WriteFile(path, []byte(`{"subdomain":"te`), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := NewStore(dir).Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg != nil {
+		t.Errorf("Load() = %v, want nil for a corrupt file", cfg)
+	}
+	if _, err := os.Stat(path + ".corrupt"); err != nil {
+		t.Errorf("expected the corrupt file to be quarantined: %v", err)
 	}
 }
 

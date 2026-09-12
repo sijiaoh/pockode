@@ -3,11 +3,12 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
-	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/session"
@@ -99,6 +100,50 @@ func TestBuildStartConfig_MCPDirFallsBackToDataDir(t *testing.T) {
 	}
 }
 
+func TestBuildStartConfig_DisableMCP(t *testing.T) {
+	// Tests run against the test binary, which is not an MCP server; pointing
+	// Codex at it only produces startup failures.
+	sess := &mcpSession{
+		opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", DisableMCP: true},
+		exe:  "/usr/local/bin/pockode",
+	}
+
+	cfgObj := sess.buildStartConfig("hello")["config"].(map[string]interface{})
+	if _, ok := cfgObj["mcp_servers"]; ok {
+		t.Error("expected no mcp_servers when MCP is disabled")
+	}
+}
+
+func TestBuildStartConfig_ApprovalPolicy(t *testing.T) {
+	// Codex removed the "untrusted" policy; default mode must map to "on-request",
+	// otherwise every default-mode session dies on its first tool call.
+	tests := []struct {
+		mode        session.Mode
+		wantPolicy  string
+		wantSandbox string
+	}{
+		{session.ModeDefault, "on-request", "workspace-write"},
+		{session.ModeYolo, "never", "danger-full-access"},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			sess := &mcpSession{
+				opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", DisableMCP: true, Mode: tt.mode},
+				exe:  "/usr/local/bin/pockode",
+			}
+
+			config := sess.buildStartConfig("hello")
+			if config["approval-policy"] != tt.wantPolicy {
+				t.Errorf("approval-policy = %v, want %q", config["approval-policy"], tt.wantPolicy)
+			}
+			if config["sandbox"] != tt.wantSandbox {
+				t.Errorf("sandbox = %v, want %q", config["sandbox"], tt.wantSandbox)
+			}
+		})
+	}
+}
+
 func TestNormalizeCommand(t *testing.T) {
 	tests := []struct {
 		name string
@@ -169,7 +214,7 @@ func TestProcessCodexMsg_MCPToolCallBegin(t *testing.T) {
 		}
 	}`)
 
-	sess.processCodexMsg(raw)
+	sess.processCodexMsg(raw, nil)
 
 	events := drainEvents(sess.events)
 	if len(events) != 1 {
@@ -209,7 +254,7 @@ func TestProcessCodexMsg_MCPToolCallBegin_EmptyArgs(t *testing.T) {
 		}
 	}`)
 
-	sess.processCodexMsg(raw)
+	sess.processCodexMsg(raw, nil)
 
 	events := drainEvents(sess.events)
 	if len(events) != 1 {
@@ -238,7 +283,7 @@ func TestProcessCodexMsg_MCPToolCallEnd_Ok(t *testing.T) {
 		}
 	}`)
 
-	sess.processCodexMsg(raw)
+	sess.processCodexMsg(raw, nil)
 
 	events := drainEvents(sess.events)
 	if len(events) != 1 {
@@ -269,7 +314,7 @@ func TestProcessCodexMsg_MCPToolCallEnd_Err(t *testing.T) {
 		}
 	}`)
 
-	sess.processCodexMsg(raw)
+	sess.processCodexMsg(raw, nil)
 
 	events := drainEvents(sess.events)
 	if len(events) != 1 {
@@ -300,12 +345,210 @@ func TestProcessCodexMsg_MCPToolCallEnd_MultipleContent(t *testing.T) {
 		}
 	}`)
 
-	sess.processCodexMsg(raw)
+	sess.processCodexMsg(raw, nil)
 
 	events := drainEvents(sess.events)
 	ev := events[0].(agent.ToolResultEvent)
 	if ev.ToolResult != "part1\npart2" {
 		t.Errorf("ToolResult = %q, want %q", ev.ToolResult, "part1\npart2")
+	}
+}
+
+// --- Shell command events ---
+
+// Field names taken from a real exec_command_end: the output lives in
+// formatted_output/aggregated_output/stdout, never in an "output" field.
+func TestProcessCodexMsg_ExecCommandEnd(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "formatted output preferred",
+			raw:  `{"type":"exec_command_end","call_id":"c1","stdout":"hi\n","stderr":"","aggregated_output":"hi\n","exit_code":0,"formatted_output":"hi\n","status":"completed"}`,
+			want: "hi\n",
+		},
+		{
+			name: "falls back to the aggregated stream",
+			raw:  `{"type":"exec_command_end","call_id":"c1","stdout":"hi\n","aggregated_output":"hi\n","exit_code":0}`,
+			want: "hi\n",
+		},
+		{
+			name: "falls back to the separate streams",
+			raw:  `{"type":"exec_command_end","call_id":"c1","stdout":"out","stderr":"err","exit_code":1}`,
+			want: "out\nerr",
+		},
+		{
+			name: "failure without output still says so",
+			raw:  `{"type":"exec_command_end","call_id":"c1","stdout":"","stderr":"","aggregated_output":"","exit_code":127,"formatted_output":"","status":"failed"}`,
+			want: "(no output, exit code 127)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := newTestSession()
+			defer sess.cancel()
+
+			sess.processCodexMsg(json.RawMessage(tt.raw), nil)
+
+			events := drainEvents(sess.events)
+			if len(events) != 1 {
+				t.Fatalf("expected 1 event, got %d", len(events))
+			}
+			ev, ok := events[0].(agent.ToolResultEvent)
+			if !ok {
+				t.Fatalf("expected ToolResultEvent, got %T", events[0])
+			}
+			if ev.ToolResult != tt.want {
+				t.Errorf("ToolResult = %q, want %q", ev.ToolResult, tt.want)
+			}
+		})
+	}
+}
+
+// An approval request and the command it approves share call_id, so emitting a
+// tool call for both renders the command twice and only the first copy is ever
+// filled in by the result.
+func TestProcessCodexMsg_ExecApprovalRequestIsNotAToolCall(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	raw := json.RawMessage(`{"type":"exec_approval_request","call_id":"c1","turn_id":"2","command":["cat","/etc/shells"],"cwd":"/tmp"}`)
+	sess.processCodexMsg(raw, nil)
+
+	if events := drainEvents(sess.events); len(events) != 0 {
+		t.Errorf("expected no events, got %v", events)
+	}
+}
+
+func TestProcessCodexMsg_ExecCommandBegin(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	raw := json.RawMessage(`{"type":"exec_command_begin","call_id":"c1","turn_id":"2","command":["cat","/etc/shells"],"cwd":"/tmp","parsed_cmd":[]}`)
+	sess.processCodexMsg(raw, nil)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	ev := events[0].(agent.ToolCallEvent)
+	if ev.ToolName != "Bash" || ev.ToolUseID != "c1" {
+		t.Errorf("unexpected tool call: %+v", ev)
+	}
+	var input map[string]interface{}
+	if err := json.Unmarshal(ev.ToolInput, &input); err != nil {
+		t.Fatalf("failed to unmarshal ToolInput: %v", err)
+	}
+	if input["command"] != "cat /etc/shells" {
+		t.Errorf("command = %v", input["command"])
+	}
+}
+
+// --- Failure reporting ---
+
+// A server that fails to start silently removes its tools from the session; for
+// the pockode server that means no work_* tools at all.
+func TestProcessCodexMsg_MCPStartupFailureWarns(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	raw := json.RawMessage(`{"type":"mcp_startup_complete","ready":[],"failed":[{"server":"pockode","error":"handshaking with MCP server failed"}]}`)
+	sess.processCodexMsg(raw, nil)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	warning, ok := events[0].(agent.WarningEvent)
+	if !ok {
+		t.Fatalf("expected WarningEvent, got %T", events[0])
+	}
+	if warning.Code != "mcp_startup_failed" {
+		t.Errorf("Code = %q", warning.Code)
+	}
+	if !strings.Contains(warning.Message, "pockode") {
+		t.Errorf("Message = %q, want it to name the server", warning.Message)
+	}
+}
+
+func TestProcessCodexMsg_NonFatalErrorsBecomeWarnings(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	raw := json.RawMessage(`{"type":"stream_error","message":"stream disconnected, retrying","codex_error_info":"response_stream_disconnected"}`)
+	sess.processCodexMsg(raw, nil)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	warning := events[0].(agent.WarningEvent)
+	if warning.Message != "stream disconnected, retrying" || warning.Code != "stream_error" {
+		t.Errorf("unexpected warning: %+v", warning)
+	}
+}
+
+// The error event ends the turn through the tools/call result, which carries the
+// same message; emitting here as well would report the failure twice.
+func TestProcessCodexMsg_ErrorEventIsReportedByTheTurnResult(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	raw := json.RawMessage(`{"type":"error","message":"unauthorized","codex_error_info":"unauthorized"}`)
+	sess.processCodexMsg(raw, nil)
+
+	if events := drainEvents(sess.events); len(events) != 0 {
+		t.Errorf("expected no events, got %v", events)
+	}
+}
+
+// Bookkeeping events must not reach the transcript: Codex emits dozens of them
+// per turn, and the ones below all duplicate content rendered elsewhere.
+func TestProcessCodexMsg_BookkeepingEventsAreDropped(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	raws := []string{
+		`{"type":"task_started","turn_id":"2","started_at":1787262425}`,
+		`{"type":"task_complete","turn_id":"2","last_agent_message":"done"}`,
+		`{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex"}}`,
+		`{"type":"user_message","message":"Hi","images":[]}`,
+		`{"type":"item_started","thread_id":"t","turn_id":"2","item":{"type":"UserMessage"}}`,
+		`{"type":"item_completed","thread_id":"t","turn_id":"2","item":{"type":"UserMessage"}}`,
+		`{"type":"raw_response_item","item":{"type":"message","role":"user"}}`,
+		`{"type":"agent_message_content_delta","delta":"par"}`,
+		`{"type":"exec_command_output_delta","call_id":"c1","stream":"stdout","chunk":"aGk="}`,
+		`{"type":"mcp_startup_update","server":"pockode","status":{"state":"starting"}}`,
+		`{"type":"agent_reasoning","text":"thinking"}`,
+	}
+	for _, raw := range raws {
+		sess.processCodexMsg(json.RawMessage(raw), nil)
+	}
+
+	if events := drainEvents(sess.events); len(events) != 0 {
+		t.Errorf("expected no events, got %v", events)
+	}
+}
+
+// process.Manager calls Agent.Start under its global process lock, so a CLI that
+// never answers the handshake must fail on a deadline of its own — one that
+// expires without cancelling procCtx, which would kill a healthy CLI.
+func TestInitialize_DeadlineFailsWithoutCancellingProcess(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stdin = &discardWriteCloser{}
+
+	ctx, cancel := context.WithTimeout(sess.procCtx, 50*time.Millisecond)
+	defer cancel()
+
+	err := sess.initialize(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected a deadline error, got %v", err)
+	}
+	if sess.procCtx.Err() != nil {
+		t.Fatalf("handshake deadline cancelled procCtx: %v", sess.procCtx.Err())
 	}
 }
 
@@ -386,26 +629,7 @@ func TestCleanupPendingElicitations_NoPendingIsNoop(t *testing.T) {
 	}
 }
 
-// --- Fix 2: interrupted flag race ---
-
-func TestCallToolAsync_ClearsStaleInterruptedFlag(t *testing.T) {
-	sess := newTestSession()
-	defer sess.cancel()
-	sess.stdin = &discardWriteCloser{}
-
-	// Simulate a stale interrupted flag from a previous turn.
-	sess.interrupted.Store(true)
-
-	// callToolAsync should clear the flag.
-	err := sess.callToolAsync("codex", map[string]interface{}{"prompt": "hello"})
-	if err != nil {
-		t.Fatalf("callToolAsync error: %v", err)
-	}
-
-	if sess.interrupted.Load() {
-		t.Error("interrupted flag should be cleared at the start of callToolAsync")
-	}
-}
+// --- Turn termination ---
 
 // discardWriteCloser is a no-op writer for tests that don't send data to a real process.
 type discardWriteCloser struct{}
@@ -413,139 +637,436 @@ type discardWriteCloser struct{}
 func (d *discardWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (d *discardWriteCloser) Close() error                { return nil }
 
-func TestTurnAborted_DoesNotSetInterruptedFlag(t *testing.T) {
-	sess := newTestSession()
-	defer sess.cancel()
+// recordingWriteCloser captures what the session writes to the CLI's stdin.
+type recordingWriteCloser struct {
+	mu     sync.Mutex
+	writes [][]byte
+}
 
-	// Simulate: turn_aborted arrives but interrupted flag is false
-	// (e.g., late turn_aborted from a previous turn after a new turn started).
-	sess.interrupted.Store(false)
+func (r *recordingWriteCloser) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.writes = append(r.writes, append([]byte(nil), p...))
+	return len(p), nil
+}
 
-	raw := json.RawMessage(`{"type": "turn_aborted"}`)
-	sess.processCodexMsg(raw)
+func (r *recordingWriteCloser) Close() error { return nil }
 
-	if sess.interrupted.Load() {
-		t.Error("turn_aborted should not set the interrupted flag (race with next turn)")
+func (r *recordingWriteCloser) lastRequest(t *testing.T) rpcRequest {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.writes) == 0 {
+		t.Fatal("nothing was written to stdin")
+	}
+	var req rpcRequest
+	if err := json.Unmarshal(r.writes[len(r.writes)-1], &req); err != nil {
+		t.Fatalf("failed to parse written request: %v", err)
+	}
+	return req
+}
+
+// pendingTurnID returns the id of the single in-flight tools/call.
+func pendingTurnID(t *testing.T, sess *mcpSession) int64 {
+	t.Helper()
+	var id int64
+	found := false
+	sess.pendingRPCResults.Range(func(key, _ any) bool {
+		id = key.(int64)
+		found = true
+		return false
+	})
+	if !found {
+		t.Fatal("expected a pending tool call")
+	}
+	return id
+}
+
+// waitForWrite returns the first thing the session wrote to stdin. The write
+// happens on handleElicitation's goroutine, so it can trail the answer.
+func waitForWrite(t *testing.T, w *recordingWriteCloser) []byte {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		w.mu.Lock()
+		var first []byte
+		if len(w.writes) > 0 {
+			first = w.writes[0]
+		}
+		w.mu.Unlock()
+		if first != nil {
+			return first
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for a write to stdin")
+	return nil
+}
+
+// waitForEvent reads the next event, failing if the turn never ends.
+func waitForEvent(t *testing.T, sess *mcpSession) agent.AgentEvent {
+	t.Helper()
+	select {
+	case ev := <-sess.events:
+		return ev
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for an event")
+		return nil
 	}
 }
 
-func TestLateTurnAborted_DoesNotCorruptNextTurn(t *testing.T) {
+// A turn Codex aborts gets no tools/call response, so the abort event is the
+// only thing that can end the turn.
+func TestTurnAborted_EndsTheTurn(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason string
+		want   agent.EventType
+	}{
+		{"user interrupt", "interrupted", agent.EventTypeInterrupted},
+		{"replaced by another turn", "replaced", agent.EventTypeInterrupted},
+		{"budget limit", "budget_limited", agent.EventTypeError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := newTestSession()
+			defer sess.cancel()
+			sess.stdin = &discardWriteCloser{}
+
+			if err := sess.callToolAsync("codex", map[string]interface{}{"prompt": "hello"}); err != nil {
+				t.Fatalf("callToolAsync error: %v", err)
+			}
+			id := pendingTurnID(t, sess)
+
+			raw := json.RawMessage(`{"type":"turn_aborted","turn_id":"2","reason":"` + tt.reason + `"}`)
+			sess.processCodexMsg(raw, &id)
+
+			if got := waitForEvent(t, sess).EventType(); got != tt.want {
+				t.Errorf("event = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// A turn_aborted of an already finished turn must not end the turn running now.
+func TestTurnAborted_OtherRequestLeavesTurnRunning(t *testing.T) {
 	sess := newTestSession()
 	defer sess.cancel()
 	sess.stdin = &discardWriteCloser{}
 
-	// Simulate a new turn starting (clears the flag).
-	err := sess.callToolAsync("codex-reply", map[string]interface{}{"prompt": "next"})
-	if err != nil {
+	if err := sess.callToolAsync("codex-reply", map[string]interface{}{"prompt": "next"}); err != nil {
 		t.Fatalf("callToolAsync error: %v", err)
 	}
+	staleID := pendingTurnID(t, sess) - 1
 
-	// Simulate a late turn_aborted from the previous turn arriving.
-	raw := json.RawMessage(`{"type": "turn_aborted"}`)
-	sess.processCodexMsg(raw)
+	sess.processCodexMsg(json.RawMessage(`{"type":"turn_aborted","reason":"interrupted"}`), &staleID)
+	sess.processCodexMsg(json.RawMessage(`{"type":"turn_aborted","reason":"interrupted"}`), nil)
 
-	// The flag must still be false — a late turn_aborted must not corrupt the new turn.
-	if sess.interrupted.Load() {
-		t.Error("late turn_aborted should not set interrupted for the new turn")
+	if events := drainEvents(sess.events); len(events) != 0 {
+		t.Errorf("expected the running turn to be untouched, got %v", events)
 	}
 }
 
-// --- Fix 3: resume state ---
+// An interrupted turn produces both signals — our own synthetic response and
+// Codex's turn_aborted — and each of them alone can end the turn.
+func TestInterruptAndTurnAborted_EndTheTurnOnce(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stdin = &discardWriteCloser{}
 
-func TestResumeState_SaveAndLoad(t *testing.T) {
-	dir := t.TempDir()
-	sessionID := "test-session-123"
+	if err := sess.callToolAsync("codex", map[string]interface{}{"prompt": "hello"}); err != nil {
+		t.Fatalf("callToolAsync error: %v", err)
+	}
+	id := pendingTurnID(t, sess)
 
-	// Create a session with IDs set.
-	sess := &mcpSession{
-		log: slog.Default(),
-		opts: agent.StartOptions{
-			DataDir:   dir,
-			SessionID: sessionID,
-		},
-		sessionID:      "codex-sid-abc",
-		conversationID: "codex-cid-def",
+	if err := sess.SendInterrupt(); err != nil {
+		t.Fatalf("SendInterrupt error: %v", err)
+	}
+	if _, ok := waitForEvent(t, sess).(agent.InterruptedEvent); !ok {
+		t.Fatal("expected an interrupted event")
 	}
 
-	sess.saveResumeState()
+	// Codex reports the abort afterwards; the turn is already settled.
+	sess.processCodexMsg(json.RawMessage(`{"type":"turn_aborted","reason":"interrupted"}`), &id)
 
-	// Verify the file was created.
-	path := filepath.Join(dir, "sessions", sessionID, "codex_resume.json")
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("resume state file not created: %v", err)
-	}
-
-	// Create a new session and load the state.
-	sess2 := &mcpSession{
-		log: slog.Default(),
-		opts: agent.StartOptions{
-			DataDir:   dir,
-			SessionID: sessionID,
-		},
-	}
-	sess2.loadResumeState()
-
-	if sess2.sessionID != "codex-sid-abc" {
-		t.Errorf("sessionID = %q, want %q", sess2.sessionID, "codex-sid-abc")
-	}
-	if sess2.conversationID != "codex-cid-def" {
-		t.Errorf("conversationID = %q, want %q", sess2.conversationID, "codex-cid-def")
+	if events := drainEvents(sess.events); len(events) != 0 {
+		t.Errorf("expected the turn to end once, got %d extra events: %v", len(events), events)
 	}
 }
 
-func TestResumeState_SkipSaveWhenNoIDs(t *testing.T) {
-	dir := t.TempDir()
-	sessionID := "test-empty"
+func TestSendInterrupt_EndsTurnAsInterrupted(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stdin = &discardWriteCloser{}
 
-	sess := &mcpSession{
-		log: slog.Default(),
-		opts: agent.StartOptions{
-			DataDir:   dir,
-			SessionID: sessionID,
-		},
+	if err := sess.callToolAsync("codex", map[string]interface{}{"prompt": "hello"}); err != nil {
+		t.Fatalf("callToolAsync error: %v", err)
+	}
+	if err := sess.SendInterrupt(); err != nil {
+		t.Fatalf("SendInterrupt error: %v", err)
 	}
 
-	sess.saveResumeState()
-
-	// File should not be created.
-	path := filepath.Join(dir, "sessions", sessionID, "codex_resume.json")
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("resume state file should not be created when no IDs set")
+	if _, ok := waitForEvent(t, sess).(agent.InterruptedEvent); !ok {
+		t.Error("expected an interrupted event after SendInterrupt")
 	}
 }
 
-func TestResumeState_LoadMissingFileIsNoop(t *testing.T) {
-	dir := t.TempDir()
+// --- Turn result ---
 
-	sess := &mcpSession{
-		log: slog.Default(),
-		opts: agent.StartOptions{
-			DataDir:   dir,
-			SessionID: "nonexistent",
+// The MCP frame stays a JSON-RPC success even when the turn failed; isError is
+// the only signal, so ignoring it would render a failure as a completion.
+func TestParseTurnResult(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   string
+		want     agent.EventType
+		wantText string
+	}{
+		{
+			name:   "completed turn",
+			result: `{"content":[{"type":"text","text":"done"}],"structuredContent":{"threadId":"01a0-abc","content":"done"}}`,
+			want:   agent.EventTypeDone,
+		},
+		{
+			name:     "failed turn",
+			result:   `{"content":[{"type":"text","text":"Your access token could not be refreshed."}],"structuredContent":{"threadId":"01a0-abc","content":"Your access token could not be refreshed."},"isError":true}`,
+			want:     agent.EventTypeError,
+			wantText: "Your access token could not be refreshed.",
+		},
+		{
+			name:     "failed turn without structured content",
+			result:   `{"content":[{"type":"text","text":"Failed to parse thread_id"}],"isError":true}`,
+			want:     agent.EventTypeError,
+			wantText: "Failed to parse thread_id",
+		},
+		{
+			name:     "failed turn without any message",
+			result:   `{"content":[],"isError":true}`,
+			want:     agent.EventTypeError,
+			wantText: "codex reported an error without a message",
+		},
+		{
+			// The failure shape of CLIs older than the standardised MCP result.
+			name:     "failed turn of a pre-isError CLI",
+			result:   `{"error":"stream disconnected before completion"}`,
+			want:     agent.EventTypeError,
+			wantText: "stream disconnected before completion",
 		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := newTestSession()
+			defer sess.cancel()
 
-	sess.loadResumeState()
-
-	if sess.sessionID != "" {
-		t.Errorf("sessionID should be empty, got %q", sess.sessionID)
+			ev := sess.parseTurnResult(json.RawMessage(tt.result))
+			if ev.EventType() != tt.want {
+				t.Fatalf("event = %s, want %s", ev.EventType(), tt.want)
+			}
+			if errEvent, ok := ev.(agent.ErrorEvent); ok && errEvent.Error != tt.wantText {
+				t.Errorf("Error = %q, want %q", errEvent.Error, tt.wantText)
+			}
+		})
 	}
 }
 
-// --- handleElicitation routing ---
+// --- Thread identifier ---
 
-func TestHandleElicitation_PatchApply(t *testing.T) {
+// Without a thread id every message would start a new session, losing the
+// conversation. Codex reports it in the tool result and in session_configured.
+func TestRememberThreadID_Sources(t *testing.T) {
+	tests := []struct {
+		name  string
+		apply func(*mcpSession)
+		want  string
+	}{
+		{
+			name: "tool call result",
+			apply: func(s *mcpSession) {
+				s.parseTurnResult(json.RawMessage(`{"structuredContent":{"threadId":"thread-1"}}`))
+			},
+			want: "thread-1",
+		},
+		{
+			name: "session_configured event",
+			apply: func(s *mcpSession) {
+				s.processCodexMsg(json.RawMessage(`{"type":"session_configured","session_id":"sid-1","thread_id":"thread-2"}`), nil)
+			},
+			want: "thread-2",
+		},
+		{
+			name: "session_configured of a CLI without thread_id",
+			apply: func(s *mcpSession) {
+				s.processCodexMsg(json.RawMessage(`{"type":"session_configured","session_id":"sid-2"}`), nil)
+			},
+			want: "sid-2",
+		},
+		{
+			name:  "tool call result of a CLI without threadId",
+			apply: func(s *mcpSession) { s.parseTurnResult(json.RawMessage(`{"conversationId":"conv-1"}`)) },
+			want:  "conv-1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := newTestSession()
+			defer sess.cancel()
+
+			tt.apply(sess)
+
+			if sess.threadID != tt.want {
+				t.Errorf("threadID = %q, want %q", sess.threadID, tt.want)
+			}
+		})
+	}
+}
+
+// Rejecting an unknown thread echoes the rejected id back in
+// structuredContent (payload captured from codex-cli 0.153.0). Believing it
+// would re-pin the dead id on every attempt, so the session could never
+// recover on its own.
+func TestParseTurnResult_RejectedThreadIDIsNotAdopted(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.parseTurnResult(json.RawMessage(`{"isError":true,"content":[{"type":"text","text":"Session not found for thread_id: 01a06563-5a9d"}],"structuredContent":{"threadId":"01a06563-5a9d","content":"Session not found for thread_id: 01a06563-5a9d"}}`))
+
+	if sess.threadID != "" {
+		t.Fatalf("threadID = %q, want empty so the next message opens a new thread", sess.threadID)
+	}
+}
+
+// A turn that dies on an expired login still ran inside a registered thread,
+// and replying into it works (verified against codex-cli 0.153.0, whose 401
+// result this payload is). Dropping the thread would discard the agent's
+// context for a failure it survived.
+func TestParseTurnResult_FailedTurnKeepsConfirmedThreadID(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.processCodexMsg(json.RawMessage(`{"type":"session_configured","session_id":"01a06564-d116","thread_id":"01a06564-d116"}`), nil)
+	sess.parseTurnResult(json.RawMessage(`{"isError":true,"content":[{"type":"text","text":"unexpected status 401 Unauthorized"}],"structuredContent":{"threadId":"01a06564-d116","content":"unexpected status 401 Unauthorized"}}`))
+
+	if sess.threadID != "01a06564-d116" {
+		t.Fatalf("threadID = %q, want the thread the failed turn ran in", sess.threadID)
+	}
+}
+
+func TestSendMessage_ContinuesThreadAfterFirstTurn(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	stdin := &recordingWriteCloser{}
+	sess.stdin = stdin
+	sess.threadID = "thread-42"
+
+	if err := sess.SendMessage("second turn"); err != nil {
+		t.Fatalf("SendMessage error: %v", err)
+	}
+
+	req := stdin.lastRequest(t)
+	if req.Method != "tools/call" {
+		t.Fatalf("method = %q, want tools/call", req.Method)
+	}
+	var params struct {
+		Name      string            `json:"name"`
+		Arguments map[string]string `json:"arguments"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		t.Fatalf("failed to parse params: %v", err)
+	}
+	if params.Name != "codex-reply" {
+		t.Errorf("tool = %q, want codex-reply", params.Name)
+	}
+	// threadId is what current CLIs read, conversationId what older ones read.
+	if params.Arguments["threadId"] != "thread-42" {
+		t.Errorf("threadId = %q, want %q", params.Arguments["threadId"], "thread-42")
+	}
+	if params.Arguments["conversationId"] != "thread-42" {
+		t.Errorf("conversationId = %q, want %q", params.Arguments["conversationId"], "thread-42")
+	}
+	if params.Arguments["prompt"] != "second turn" {
+		t.Errorf("prompt = %q, want %q", params.Arguments["prompt"], "second turn")
+	}
+}
+
+// --- Restart ---
+
+// A Codex thread dies with the process that created it (verified against the
+// CLI: a fresh mcp-server answers "Session not found for thread_id"), so a
+// restarted session has to start a new thread and say the earlier turns are
+// gone from the agent's memory.
+func TestWarnSessionNotResumable(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.warnSessionNotResumable()
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	warning, ok := events[0].(agent.WarningEvent)
+	if !ok {
+		t.Fatalf("expected WarningEvent, got %T", events[0])
+	}
+	if warning.Code != "session_not_resumable" {
+		t.Errorf("Code = %q", warning.Code)
+	}
+}
+
+// Without a thread id the message has to open a new thread; sending
+// codex-reply with a stale id would fail for the rest of the session.
+func TestSendMessage_StartsNewThreadWhenUnknown(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	stdin := &recordingWriteCloser{}
+	sess.stdin = stdin
+	sess.opts = agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", DisableMCP: true}
+
+	if err := sess.SendMessage("first turn"); err != nil {
+		t.Fatalf("SendMessage error: %v", err)
+	}
+
+	var params struct {
+		Name      string                 `json:"name"`
+		Arguments map[string]interface{} `json:"arguments"`
+	}
+	if err := json.Unmarshal(stdin.lastRequest(t).Params, &params); err != nil {
+		t.Fatalf("failed to parse params: %v", err)
+	}
+	if params.Name != "codex" {
+		t.Errorf("tool = %q, want codex", params.Name)
+	}
+	if params.Arguments["prompt"] != "first turn" {
+		t.Errorf("prompt = %v", params.Arguments["prompt"])
+	}
+}
+
+// --- handleElicitation ---
+
+// Params take their shape from a patch approval captured off codex-cli 0.153.0,
+// trimmed to the fields we read (the path is renamed for readability; real ones
+// arrive absolute, which changes nothing here). A patch approval describes its
+// edits in codex_changes and carries no codex_command/codex_cwd at all, so
+// routing on codex_elicitation is what keeps an edit from being shown as an
+// empty shell command. Each change is internally tagged by "type"; only
+// "update" carries unified_diff, "add" and "delete" carry content instead.
+func TestHandleElicitation_PatchApproval(t *testing.T) {
 	sess := newTestSession()
 	sess.stdin = &discardWriteCloser{}
 	defer sess.cancel()
 
 	params := map[string]interface{}{
-		"message":                "Apply patch?",
-		"codex_elicitation":      "patch_apply",
-		"codex_call_id":          "call-edit-1",
-		"codex_command":          map[string]interface{}{"src/main.go": "diff content"},
-		"codex_cwd":              "/tmp",
-		"codex_mcp_tool_call_id": "toolu-edit-1",
+		"message":           "Allow Codex to apply proposed code changes?",
+		"codex_elicitation": "patch-approval",
+		"codex_call_id":     "call-edit-1",
+		"codex_changes": map[string]interface{}{
+			"src/main.go": map[string]interface{}{
+				"type":         "update",
+				"unified_diff": "@@ -1,3 +1,3 @@\n alpha\n-bravo\n+BRAVO\n charlie\n",
+				"move_path":    nil,
+			},
+		},
+		"codex_mcp_tool_call_id": "2",
 	}
 	paramsJSON, _ := json.Marshal(params)
 	msgID := int64(1)
@@ -569,8 +1090,9 @@ func TestHandleElicitation_PatchApply(t *testing.T) {
 	if perm.RequestID != "call-edit-1" {
 		t.Errorf("RequestID = %q, want %q", perm.RequestID, "call-edit-1")
 	}
-	if perm.ToolUseID != "toolu-edit-1" {
-		t.Errorf("ToolUseID = %q, want %q", perm.ToolUseID, "toolu-edit-1")
+	// The prompt points at the patch being approved, not at the whole tools/call.
+	if perm.ToolUseID != "call-edit-1" {
+		t.Errorf("ToolUseID = %q, want %q", perm.ToolUseID, "call-edit-1")
 	}
 
 	var input map[string]interface{}
@@ -585,18 +1107,18 @@ func TestHandleElicitation_PatchApply(t *testing.T) {
 	}
 }
 
-func TestHandleElicitation_ExecCommand(t *testing.T) {
+func TestHandleElicitation_ExecApproval(t *testing.T) {
 	sess := newTestSession()
 	sess.stdin = &discardWriteCloser{}
 	defer sess.cancel()
 
 	params := map[string]interface{}{
-		"message":                "Run command?",
-		"codex_elicitation":      "exec_command",
+		"message":                "Allow Codex to run `ls -la` in `/home/user`?",
+		"codex_elicitation":      "exec-approval",
 		"codex_call_id":          "call-bash-1",
-		"codex_command":          "ls -la",
+		"codex_command":          []string{"ls", "-la"},
 		"codex_cwd":              "/home/user",
-		"codex_mcp_tool_call_id": "toolu-bash-1",
+		"codex_mcp_tool_call_id": "2",
 	}
 	paramsJSON, _ := json.Marshal(params)
 	msgID := int64(2)
@@ -619,8 +1141,8 @@ func TestHandleElicitation_ExecCommand(t *testing.T) {
 	if perm.RequestID != "call-bash-1" {
 		t.Errorf("RequestID = %q, want %q", perm.RequestID, "call-bash-1")
 	}
-	if perm.ToolUseID != "toolu-bash-1" {
-		t.Errorf("ToolUseID = %q, want %q", perm.ToolUseID, "toolu-bash-1")
+	if perm.ToolUseID != "call-bash-1" {
+		t.Errorf("ToolUseID = %q, want %q", perm.ToolUseID, "call-bash-1")
 	}
 
 	var input map[string]interface{}
@@ -632,5 +1154,74 @@ func TestHandleElicitation_ExecCommand(t *testing.T) {
 	}
 	if input["cwd"] != "/home/user" {
 		t.Errorf("cwd = %v, want %q", input["cwd"], "/home/user")
+	}
+}
+
+// Codex parses the elicitation result into a ReviewDecision, so the wire shapes
+// below are the contract — a wrong one makes Codex drop the decision and report
+// "approval request failed" to the model. Captured from codex-cli 0.153.0.
+func TestHandleElicitation_ResponseShape(t *testing.T) {
+	tests := []struct {
+		name     string
+		choice   agent.PermissionChoice
+		wantJSON string
+	}{
+		{
+			name:     "allow",
+			choice:   agent.PermissionAllow,
+			wantJSON: `{"action":"accept","decision":"approved"}`,
+		},
+		{
+			name:     "always allow",
+			choice:   agent.PermissionAlwaysAllow,
+			wantJSON: `{"action":"accept","decision":"approved_for_session"}`,
+		},
+		{
+			// ReviewDecision::Denied is a struct variant; the bare string
+			// "denied" fails to deserialize and loses the refusal.
+			name:     "deny",
+			choice:   agent.PermissionDeny,
+			wantJSON: `{"action":"decline","decision":{"denied":{"rejection":"` + deniedByUser + `"}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := newTestSession()
+			stdin := &recordingWriteCloser{}
+			sess.stdin = stdin
+			defer sess.cancel()
+
+			paramsJSON, _ := json.Marshal(map[string]interface{}{
+				"codex_elicitation": "exec-approval",
+				"codex_call_id":     "call-1",
+				"codex_command":     []string{"ls"},
+			})
+			msgID := int64(7)
+			go sess.handleElicitation(sess.procCtx, rpcMessage{
+				ID:     &msgID,
+				Method: "elicitation/create",
+				Params: paramsJSON,
+			})
+
+			perm, ok := waitForEvent(t, sess).(agent.PermissionRequestEvent)
+			if !ok {
+				t.Fatal("expected a PermissionRequestEvent")
+			}
+			if err := sess.SendPermissionResponse(agent.PermissionRequestData{RequestID: perm.RequestID}, tt.choice); err != nil {
+				t.Fatalf("SendPermissionResponse error: %v", err)
+			}
+
+			got := waitForWrite(t, stdin)
+			var resp struct {
+				Result json.RawMessage `json:"result"`
+			}
+			if err := json.Unmarshal(got, &resp); err != nil {
+				t.Fatalf("failed to parse response: %v", err)
+			}
+			if string(resp.Result) != tt.wantJSON {
+				t.Errorf("result = %s, want %s", resp.Result, tt.wantJSON)
+			}
+		})
 	}
 }

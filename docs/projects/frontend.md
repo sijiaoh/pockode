@@ -106,7 +106,7 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 2. Stories are grouped by status in this order: **in_progress → waiting → needs_input → stopped → open → closed**
 3. Each group is a collapsible section (`StatusGroup`); `closed` group is collapsed by default
 4. Each group header shows: collapse toggle, status icon, status label, count badge
-5. Each story row shows: status icon, title, task progress (`closedTasks/totalTasks tasks`), and a `WorktreeBadge` marking which worktree the story (and its whole subtree) runs in — the list is global across worktrees, so the badge is what tells rows apart. Tasks inherit their story's worktree, so only story rows carry the badge.
+5. Each story row shows: status icon, title, task progress (`closedTasks/totalTasks tasks`), and a `WorktreeBadge` marking which worktree the story (and its whole subtree) runs in — the list is global across worktrees, so the badge is what tells rows apart. Tasks normally share their story's worktree, so repeating the badge on every task row would only add noise. Stories still in `open` status show no badge, since their worktree is only fixed once they start.
 6. A "New Story" button at the top opens an inline creation form (title + role selector)
 
 **Task progress:** Tasks are indexed by `parent_id` into a `Map<string, Work[]>`. For each story, closed count is tasks with status `closed`.
@@ -117,7 +117,7 @@ Shows the detail view for a single work item (story or task). Sections:
 
 - **Parent link** — If the item is a task, shows a tappable link to the parent story
 - **Title** — Inline-editable (tap pencil icon to enter edit mode)
-- **Status** — Read-only badge, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly)
+- **Status** — Read-only badge, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly; hidden while neither the work nor its root story has started, because only then can the worktree still change)
 - **Role** — Inline-editable select (tap to switch role)
 - **Description** — Inline-editable textarea with Markdown rendering
 - **Steps** — Step progress indicator showing current step position (if agent role has steps defined)
@@ -129,9 +129,22 @@ Shows the detail view for a single work item (story or task). Sections:
 | Position | Action | Condition |
 |---|---|---|
 | Left (primary) | **Start/Restart** | `status === "open"` or `"stopped"` |
-| Left (primary) | **Stop** | `status === "in_progress"` or `"needs_input"` |
+| Left (primary) | **Stop** | `status === "in_progress"`, `"waiting"` or `"needs_input"` |
+| Left (primary) | **Reopen** | `status === "closed"` |
 | Left (primary) | **Open Chat** | `session_id` exists |
 | Right (secondary) | **Delete** (icon-only, 44x44px) | `status !== "closed"` |
+
+Every status therefore offers a way forward — `open` starts, the four live
+statuses either stop or restart, `closed` reopens — so no status leaves the bar
+empty. Keep it that way: a status with no button is a work item the user cannot
+act on at all.
+
+The conditions are deliberately narrower than what the server accepts
+(`Store.Stop` takes any live status, `ValidateStartable` additionally takes
+`waiting` and `needs_input`). Since Stop already covers every paused status,
+also offering Restart there would only ask the user to guess whether the session
+is still alive, and nothing would be reachable that Stop-then-Restart does not
+already reach.
 
 The delete button uses a subtle style (`text-th-text-muted`) to avoid accidental taps, switching to red (`text-th-error`) on hover to confirm intent. Confirmation dialog appears before deletion.
 

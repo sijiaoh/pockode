@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -74,12 +75,26 @@ func lookupBinary(name string) (string, error) {
 // (lookupBinary) and, on Windows, taking over the command line when that
 // executable turns out to be the .cmd wrapper npm installs (see cmdline.go).
 func Command(name string, args ...string) (*exec.Cmd, error) {
+	// Background rather than a nil context: exec skips its cancellation
+	// machinery when ctx.Done() is nil, so this is exec.Command exactly.
+	return command(context.Background(), name, args)
+}
+
+// CommandContext is Command for an invocation the caller has to be able to give
+// up on — a short-lived probe such as `--version`, where a CLI that never
+// answers would otherwise hang the session start waiting on it. Session CLIs go
+// through StartProcess instead, which owns their lifetime itself.
+func CommandContext(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
+	return command(ctx, name, args)
+}
+
+func command(ctx context.Context, name string, args []string) (*exec.Cmd, error) {
 	path, err := lookupBinary(name)
 	if err != nil {
 		return nil, err
 	}
 
-	cmd := exec.Command(path, args...)
+	cmd := exec.CommandContext(ctx, path, args...)
 	if err := prepareCommandLine(cmd); err != nil {
 		return nil, fmt.Errorf("cannot run %s: %w", name, err)
 	}

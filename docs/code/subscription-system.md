@@ -93,10 +93,10 @@ Keys go through `subscriptionKey` (`filepath.ToSlash`) because the two sides of 
 File changes often come in bursts (editor save, build tools, git operations):
 
 ```go
-// server/watch/fs.go:14
+// server/watch/fs.go:15
 const debounceInterval = 100 * time.Millisecond
 
-// server/watch/fs.go:165-175
+// server/watch/fs.go:184-189
 w.timerMap[relPath] = time.AfterFunc(debounceInterval, func() {
     w.notifyPath(relPath)
     w.timerMu.Lock()
@@ -118,7 +118,7 @@ w.timerMap[relPath] = time.AfterFunc(debounceInterval, func() {
 GitWatcher uses 3-second polling instead of watching `.git` directory:
 
 ```go
-// server/watch/git.go:14
+// server/watch/git.go:13
 const gitPollInterval = 3 * time.Second
 ```
 
@@ -172,6 +172,14 @@ if changedPath != "" {
 **Rationale:** Directory listings need to update when files inside them change. Instead of requiring separate watches on both file and directory, FSWatcher automatically notifies parent directory subscribers.
 
 `path.Dir`, not `filepath.Dir`: subscription keys are slash-separated on every platform, so the parent has to be derived the same way.
+
+### Why Stop Waits Instead of Just Cancelling?
+
+Every watcher's `Stop` goes through `BaseWatcher.CancelAndWait`, which cancels the context *and* blocks until each loop started through `Go` has returned. Cancelling alone is the smaller implementation, and it is what the watchers did originally — as did `ProcessManager` and `AutoResumer`, both of which returned from teardown while their own goroutines were still running.
+
+The shortcut is hard to see as wrong from inside any one of those files: a cancelled context does stop the loop, just not before the caller moves on. It only reads as a bug once you look at what the caller does next. Stopping a worktree, deleting a session, or ending a test means the directory those goroutines write into is about to disappear, so anything outliving `Stop` writes into a tree already being torn down. That is how this surfaced — never as something a user could see, but as CI failing intermittently, when the event stream of a process that `Shutdown` had cancelled without waiting for wrote the session index into a `t.TempDir()` mid-cleanup.
+
+So teardown is synchronous on all three sides: watchers wait on their loops, the process manager on its event streams, the `AutoResumer` on its follow-ups. The process manager's wait is the one with a deadline, because it is the only one waiting on something outside the process: an agent CLI that refuses to close its output would otherwise hold the whole server's shutdown open, so it is reported and abandoned instead. FSWatcher's debounce timers are the one deliberate exception — `time.AfterFunc` callbacks are not tracked, so `Stop` can return with one still in flight. They are exempt because of what they do rather than for convenience: they only notify subscribers, never write to a store, and `notifyPath` re-checks the context before it does even that.
 
 ## Frontend: useSubscription Hook
 
@@ -248,9 +256,19 @@ The session list decides which chat `AppShell` renders, so "keep old data" is no
 beginReload: () => set({ isSuccess: false, isReloading: true }),
 ```
 
-`beginReload` keeps `sessions` and — deliberately — leaves `isLoading` false, so the sidebar keeps rendering the retained list instead of flashing a spinner. It only clears `isSuccess` (so redirect / new-session recovery waits for the new worktree's list) and raises `isReloading`.
+`beginReload` keeps `sessions` and — deliberately — leaves `isLoading` false, so the sidebar goes on rendering the retained list instead of dropping straight into a loading state. It only clears `isSuccess` (so redirect / new-session recovery waits for the new worktree's list) and raises `isReloading`.
 
-`AppShell` treats `isReloading` — together with `worktreeSwitchInFlight`, a pending `redirectSessionId`, or `needsNewSession` — as an "in transition" state and reuses the last resolved session as a placeholder (`displaySession`) instead of dropping to the loading blank. The same placeholder path smooths other transient renders, such as jumping to the next session after deleting the current one.
+`AppShell` treats `isReloading` — together with `worktreeSwitchInFlight`, a pending `redirectSessionId`, or `needsNewSession` — as an "in transition" state and, once a shell has been on screen, keeps it mounted through the transition instead of dropping to the loading blank. The same path smooths other transient renders, such as jumping to the next session after deleting the current one.
+
+**What the placeholder may and may not be.** Only the *shell* is retained; the previous session's content is not. The destination's id is known from the URL from the first frame of a switch, so `AppShell` hands `ChatPanel` that id straight away, along with `isSessionResolved` — false until the id is found in the session list of the worktree the connection is actually bound to (`!worktreeSwitchInFlight && !isReloading`, looked up in the unfiltered `sessions`, because a work's chat link points at a task session that `filteredSessions` may hide). While it is false the panel shows `ChatSkeleton` and disables the input.
+
+Retaining the previous *session* instead was the original implementation, and it meant a cross-worktree chat link showed the conversation the user had just left — including a send box wired to it — until the new list arrived. The retained sidebar list is stale in the same way, so for the duration it is barred from interaction — keyboard included, not just the pointer — then swapped for `SessionListSkeleton`, and its highlight follows the destination id rather than the list it is drawn from. Creating a session is blocked for the same stretch, since the connection is still bound to the worktree being left.
+
+Refreshing the list is barred there too, and that guard rests on something no single file shows: `isSuccess` is not merely a loading flag; it is the last gate standing in front of redirect recovery, and it does not lift at the same moment as `worktreeSwitchInFlight` — the store worktree catches up before the resubscription does, leaving a window in which `isSuccess` is the only thing still holding. Anything that raises it there hands recovery the list of the worktree being left, which is all it takes to navigate the user off the session they were heading for. A refresh is such a thing, and opening the sidebar onto the session list performs one.
+
+The previous session's messages can reach the screen with no worktree switch involved at all, which is why `useChatMessages` resets during render rather than in an effect: an effect would let them be committed for one frame under the new session's identity.
+
+During a switch both skeletons wait 150ms (`useDelayedFlag`), so one that lands quickly shows no indicator at all. What gets timed has to be the whole gap — resolving the session, then loading its history. `enabled` happens to make that a single flag: with no subscription allowed yet, `isLoadingHistory` is still true, so the second phase never starts the clock over. Timed as two waits they would each restart the delay and blank the screen for longer than no delay at all.
 
 ### Why App-Level Subscriptions Survive Worktree Switches
 

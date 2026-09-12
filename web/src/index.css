@@ -5,6 +5,91 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* =============================================================================
+ * RESPONSIVE GATES
+ *
+ * Width decides where things go; pointer decides whether they can be reached.
+ * Full rules: docs/responsive-ui.md. Numbers and queries here are mirrored by
+ * packages/shared/src/utils/responsive.ts and pinned together by
+ * tests/responsiveTokens.test.ts.
+ * ============================================================================= */
+
+/* Three tiers, two breakpoints: compact (<sm) / regular (sm) / expanded (lg).
+ * px rather than Tailwind's default rem so these stay the same number as the
+ * matchMedia queries JS asks, whatever the root font size is. */
+@theme {
+	--breakpoint-sm: 640px;
+	--breakpoint-lg: 1024px;
+
+	/* Tailwind ships five rungs; the ladder has three. Removing the tokens
+	 * retires the other prefixes rather than merely discouraging them — nothing
+	 * is emitted for `md:`, so a stray one cannot quietly switch a layout at a
+	 * width the hooks know nothing about. tests/widthLadder.test.ts reports it
+	 * out loud, since a class that compiles to nothing is otherwise invisible. */
+	--breakpoint-md: initial;
+	--breakpoint-xl: initial;
+	--breakpoint-2xl: initial;
+}
+
+/* The two pointer gates. Deliberately NOT complements: a touchscreen laptop
+ * matches both, and wants hover reveal (it has a trackpad) as well as
+ * thumb-sized hit areas (it has a touchscreen). Never write one as the negation
+ * of the other.
+ *
+ * Both names shadow a Tailwind 4.1 built-in, on purpose. The built-ins are
+ * `(pointer: coarse)` and `(pointer: fine)` — the *primary* pointer, and no
+ * `hover: hover`. Delete either line and the classes do not stop compiling,
+ * they quietly start meaning the built-in: hit areas sized by the query that
+ * answers false on a touchscreen laptop, hover reveal handed to a device that
+ * cannot hover. Every stylesheet that compiles a source root using these
+ * classes has to redeclare them; tests/responsiveTokens.test.ts checks that
+ * mapping and pins both queries to packages/shared. */
+@custom-variant pointer-fine (@media (hover: hover) and (pointer: fine));
+@custom-variant pointer-coarse (@media (any-pointer: coarse));
+
+/* Hit area follows the pointer, visual size follows the weight rung: this lays
+ * a floor over a control without resizing it, so a 36px group-header button
+ * stays 36px and still catches a thumb. Use it where growing the box would push
+ * its container out of its rung; where there is room, grow the box instead
+ * (`pointer-coarse:min-h-11 pointer-coarse:min-w-11`) — a real box is always
+ * simpler than an overlay.
+ *
+ * Both floors, not just the coarse one: 36 unconditionally, 44 where a finger
+ * may land. A box already at its 36px rung gets nothing from the first, but a
+ * smaller one — the code block's 26px copy button — would otherwise be left
+ * under the mouse floor by the very utility that is supposed to be its hit
+ * area. tests/touchTarget.test.ts reads `touch-target` as satisfying both
+ * floors, and this is what makes that true.
+ *
+ * The overlay only ever adds: it is centred on the box and never smaller than
+ * it, so the whole control stays clickable. Because it reaches outside the box,
+ * neighbouring controls need >= 8px between them or the two overlays overlap
+ * and every tap near the seam becomes a coin flip. tests/touchTarget.test.ts
+ * enforces both halves. See docs/responsive-ui.md.
+ */
+@utility touch-target {
+	position: relative;
+
+	&::after {
+		content: "";
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		translate: -50% -50%;
+		width: 100%;
+		min-width: 36px;
+		height: 100%;
+		min-height: 36px;
+	}
+
+	@media (any-pointer: coarse) {
+		&::after {
+			min-width: 44px;
+			min-height: 44px;
+		}
+	}
+}
+
+/* =============================================================================
  * BASE RESETS
  * ============================================================================= */
 
@@ -734,13 +819,11 @@ samp {
 		scale 150ms;
 	cursor: pointer;
 	-webkit-tap-highlight-color: transparent;
-}
-
-/* Expand touch target to 44px without enlarging the visible button */
-.code-copy-button::after {
-	content: "";
-	position: absolute;
-	inset: -0.375rem;
+	/* The hit area (36px always, 44px on a coarse pointer) comes from the
+	 * `touch-target` utility on the element; this box is 26px, so the first of
+	 * those two floors is doing real work here.
+	 * `position: absolute` above is what its ::after resolves against, and being
+	 * unlayered it beats the utility's own `position: relative`. */
 }
 
 .code-copy-button:hover {
@@ -796,4 +879,48 @@ samp {
 .editor-textarea {
 	/* biome-ignore lint/complexity/noImportantStyles: Override library's default focus ring */
 	outline: none !important;
+}
+
+/* =============================================================================
+ * PENDING QUESTION PILL
+ *
+ * Entrance animation for the pill, and the transient highlight applied to a
+ * question card after jumping to it.
+ * ============================================================================= */
+
+@theme {
+	--animate-question-pill-in: question-pill-in 150ms ease-out;
+
+	@keyframes question-pill-in {
+		from {
+			opacity: 0;
+			transform: translateY(-8px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+}
+
+/* The transition belongs on the card, not on .question-highlight: a transition
+ * declared by the class itself is already gone at the moment the class is
+ * removed (transitions read the after-change style), so the ring would snap out
+ * instead of fading. */
+[data-question-request-id] {
+	transition: box-shadow 300ms ease-out;
+}
+
+.question-highlight {
+	box-shadow: 0 0 0 2px var(--th-warning);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.animate-question-pill-in {
+		animation: none;
+	}
+
+	[data-question-request-id] {
+		transition: none;
+	}
 }

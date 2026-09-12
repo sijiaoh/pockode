@@ -1,7 +1,8 @@
-import { useIsDesktop } from "@pockode/shared";
+import { useIsExpanded } from "@pockode/shared";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
+import { useFileDropGuard } from "../hooks/useFileDropGuard";
 import { useRouteState } from "../hooks/useRouteState";
 import { useSession } from "../hooks/useSession";
 import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
@@ -18,14 +19,20 @@ import { useWSStore, wsActions } from "../lib/wsStore";
 import TokenInput from "./Auth/TokenInput";
 import { ChatPanel } from "./Chat";
 import { SessionSidebar } from "./Session";
+import { ReconnectBanner } from "./ui";
 
 function AppShell() {
 	const hasAuthToken = useAuthStore(selectHasAuthToken);
 	const wsStatus = useWSStore((state) => state.status);
 	const navigate = useNavigate();
-	const isDesktop = useIsDesktop();
+	const isExpanded = useIsExpanded();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
-	const isCreatingSession = useRef(false);
+
+	// Here rather than in `MainContainer`, which only exists once a session has
+	// resolved: the token screen, the loading screen and the "can't reach the
+	// server" screen are all screens someone can drop a file on, and every one of
+	// them would be replaced by it.
+	useFileDropGuard();
 
 	const {
 		overlay,
@@ -117,22 +124,32 @@ function AppShell() {
 		redirectSessionId,
 		needsNewSession,
 		createSession,
+		createError,
+		clearCreateError,
 		deleteSession,
 		updateTitle,
 	} = useSession({ enabled: hasAuthToken, routeSessionId });
 
-	// Keep the last resolved session shell so a worktree switch (or the redirect
-	// to another session that follows it) can reuse it as a placeholder instead
-	// of dropping to a full-screen "Loading..." blank.
-	const lastRenderedSession = useRef<{
-		id: string;
-		session: (typeof filteredSessions)[number];
-	} | null>(null);
-	if (currentSessionId && currentSession) {
-		lastRenderedSession.current = {
-			id: currentSessionId,
-			session: currentSession,
-		};
+	// The destination is known from the URL the moment a switch starts; only its
+	// title and history are not. It counts as resolved once it is found in the
+	// session list of the worktree the connection is actually bound to —
+	// worktreeSwitchInFlight alone is not enough, because the store syncs before
+	// the list does. Looked up in the unfiltered list on purpose: a work's chat
+	// link points at a task session, which is missing from filteredSessions
+	// whenever the task-session filter is on.
+	const isSessionResolved =
+		!worktreeSwitchInFlight &&
+		!isReloading &&
+		currentSessionId !== null &&
+		currentSession !== undefined;
+
+	// Once the shell has been on screen, keep it there through a switch: falling
+	// back to the full-screen "Loading..." would blank the whole app between two
+	// sessions. Only the shell is kept — the previous session's content is not,
+	// which is what the panel below renders the destination's placeholder for.
+	const hasRenderedShell = useRef(false);
+	if (isSessionResolved) {
+		hasRenderedShell.current = true;
 	}
 
 	// filteredSessions/currentSessionId get a fresh identity on every session-store
@@ -172,10 +189,21 @@ function AppShell() {
 		overlay,
 	]);
 
+	// A create that failed in the worktree we left must not be reported against
+	// the one we entered, nor keep the effect below from creating a session there.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: urlWorktree is what this effect reacts to, not something it reads
+	useEffect(() => {
+		clearCreateError();
+	}, [urlWorktree, clearCreateError]);
+
+	// createError gates this effect because needsNewSession stays true for as long
+	// as the worktree has no session: without the gate a failing create re-runs
+	// here on every render it causes, hammering the server thousands of times a
+	// minute. One attempt, then the error screen hands the retry back to the user.
 	useEffect(() => {
 		if (worktreeSwitchInFlight) return;
-		if (needsNewSession && !isCreatingSession.current) {
-			isCreatingSession.current = true;
+		if (createError) return;
+		if (needsNewSession) {
 			createSession()
 				.then((newSession) => {
 					navigate(
@@ -189,13 +217,15 @@ function AppShell() {
 						),
 					);
 				})
-				.finally(() => {
-					isCreatingSession.current = false;
+				.catch((error) => {
+					// Reported through createError below; logged for the console trail.
+					console.error("Failed to create session:", error);
 				});
 		}
 	}, [
 		worktreeSwitchInFlight,
 		needsNewSession,
+		createError,
 		createSession,
 		navigate,
 		urlWorktree,
@@ -208,6 +238,14 @@ function AppShell() {
 	const handleOpenSidebar = useCallback(() => {
 		setSidebarOpen(true);
 	}, []);
+
+	// Growing into the expanded tier turns the drawer into a persistent column,
+	// which has no open/closed state of its own. Without this the flag survives
+	// the transition, so rotating a mini pad to landscape and back would reopen
+	// a drawer the user never asked for.
+	useEffect(() => {
+		if (isExpanded) setSidebarOpen(false);
+	}, [isExpanded]);
 
 	const handleSelectSession = useCallback(
 		(id: string) => {
@@ -224,16 +262,29 @@ function AppShell() {
 	);
 
 	const handleCreateSession = useCallback(async () => {
-		const newSession = await createSession();
-		setSidebarOpen(false);
-		navigate(
-			buildNavigation({
-				type: "session",
-				worktree: urlWorktree,
-				sessionId: newSession.id,
-			}),
-		);
+		try {
+			const newSession = await createSession();
+			setSidebarOpen(false);
+			navigate(
+				buildNavigation({
+					type: "session",
+					worktree: urlWorktree,
+					sessionId: newSession.id,
+				}),
+			);
+		} catch (error) {
+			// Reported through createError below; logged for the console trail.
+			console.error("Failed to create session:", error);
+		}
 	}, [createSession, navigate, urlWorktree]);
+
+	// Serves both create paths: clearing the error lets the auto-create effect run
+	// again, and createSession deduplicates, so the effect joins the request
+	// started here rather than adding a second one.
+	const handleRetryCreateSession = useCallback(() => {
+		clearCreateError();
+		void handleCreateSession();
+	}, [clearCreateError, handleCreateSession]);
 
 	const handleDeleteSession = useCallback(
 		async (id: string) => {
@@ -378,31 +429,63 @@ function AppShell() {
 		[navigate],
 	);
 
+	// The server's own wording is the whole point here: "claude: executable file
+	// not found in $PATH" and a dropped connection must not read the same.
+	const createErrorMessage = createError?.message || "Unknown error";
+
 	if (!hasAuthToken) {
 		return <TokenInput onSubmit={handleTokenSubmit} />;
 	}
 
-	// While a session is resolving (initial load or a worktree switch), reuse the
-	// previously rendered session as a placeholder so the shell doesn't blank.
-	const displaySession =
-		currentSessionId && currentSession
-			? { id: currentSessionId, session: currentSession }
-			: inTransition && wsStatus === "connected"
-				? lastRenderedSession.current
-				: null;
+	const showShell =
+		isSessionResolved ||
+		(hasRenderedShell.current && inTransition && wsStatus === "connected");
 
-	if (!displaySession) {
-		if (wsStatus === "error") {
+	if (!showShell) {
+		// "reconnecting" belongs here only because there is nothing to show yet
+		// (the app was opened while the server was unreachable): retries now run for
+		// as long as the tab is open, so without this the user would sit on
+		// "Loading..." forever with no idea why. Once a session has rendered, the
+		// shell stays mounted and a reconnect shows the banner below instead.
+		if (wsStatus === "error" || wsStatus === "reconnecting") {
 			return (
 				<div
 					className="flex h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary"
 					role="alert"
 				>
-					<div className="text-th-text-muted">Unable to connect to server</div>
+					<div className="text-th-text-muted">
+						Can&apos;t reach the server &mdash; retrying&hellip;
+					</div>
 					<button
 						type="button"
 						onClick={() => window.location.reload()}
 						className="rounded bg-th-accent px-4 py-2 text-sm text-white hover:opacity-90"
+					>
+						Retry
+					</button>
+				</div>
+			);
+		}
+
+		// Checked after the transport screen on purpose: a create that failed
+		// because the socket dropped is a symptom, and "retrying..." is both the
+		// truer explanation and the one that resolves itself.
+		if (createError) {
+			return (
+				<div
+					className="flex h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary px-6 text-center"
+					role="alert"
+				>
+					<div className="text-th-text-muted">
+						Couldn&apos;t start a new session
+					</div>
+					<div className="max-w-md break-words text-sm text-th-error">
+						{createErrorMessage}
+					</div>
+					<button
+						type="button"
+						onClick={handleRetryCreateSession}
+						className="rounded bg-th-accent px-4 py-2 text-sm text-th-accent-text hover:opacity-90"
 					>
 						Retry
 					</button>
@@ -424,43 +507,68 @@ function AppShell() {
 
 	return (
 		<div className="flex h-dvh flex-col">
-			{wsStatus === "reconnecting" && (
-				// biome-ignore lint/a11y/useSemanticElements: status banner is not a form output
+			{createError && (
+				// Wraps rather than truncates: the reason is server text of any
+				// length, and the narrow screens this app targets are exactly where
+				// truncation would cut it off.
 				<div
-					className="flex items-center justify-center gap-2 bg-th-accent/20 px-4 py-1 text-sm text-th-text-muted"
-					role="status"
+					className="flex flex-wrap items-center justify-center gap-3 bg-th-error/20 px-4 py-1 text-sm text-th-error"
+					role="alert"
 				>
-					<span className="inline-block h-2 w-2 animate-pulse rounded-full bg-th-accent" />
-					Reconnecting...
+					<span className="break-words">
+						Couldn&apos;t start a new session: {createErrorMessage}
+					</span>
+					<button
+						type="button"
+						onClick={handleRetryCreateSession}
+						className="shrink-0 underline hover:opacity-80"
+					>
+						Retry
+					</button>
+					<button
+						type="button"
+						onClick={clearCreateError}
+						className="shrink-0 underline hover:opacity-80"
+					>
+						Dismiss
+					</button>
 				</div>
 			)}
+			<ReconnectBanner />
 			<div className="flex min-h-0 flex-1">
 				<SessionSidebar
 					isOpen={sidebarOpen}
 					onClose={() => setSidebarOpen(false)}
-					currentSessionId={displaySession.id}
+					currentSessionId={currentSessionId}
 					onSelectSession={handleSelectSession}
 					onCreateSession={handleCreateSession}
 					onDeleteSession={handleDeleteSession}
 					onSelectDiffFile={handleSelectDiffFile}
+					onCloseDiffFile={handleCloseOverlay}
 					activeDiffFile={activeDiffFile}
 					onSelectCommit={handleSelectCommit}
 					activeCommitHash={activeCommitHash}
 					onSelectFile={handleSelectFile}
 					activeFilePath={activeFilePath}
+					onCloseFile={handleCloseOverlay}
 					onOpenWorkList={handleOpenWorkList}
 					onOpenAgentRoleList={handleOpenAgentRoleList}
-					isDesktop={isDesktop}
+					isExpanded={isExpanded}
+					isSwitchingWorktree={worktreeSwitchInFlight}
 				/>
 				<ChatPanel
-					sessionId={displaySession.id}
-					sessionTitle={displaySession.session.title}
-					onUpdateTitle={(title) => updateTitle(displaySession.id, title)}
-					onOpenSidebar={handleOpenSidebar}
+					sessionId={currentSessionId ?? ""}
+					sessionTitle={currentSession?.title ?? ""}
+					isSessionResolved={isSessionResolved}
+					onUpdateTitle={(title) => {
+						if (currentSessionId) updateTitle(currentSessionId, title);
+					}}
+					onOpenSidebar={isExpanded ? undefined : handleOpenSidebar}
 					onOpenSettings={handleOpenSettings}
 					overlay={overlay}
 					onCloseOverlay={handleCloseOverlay}
 					onNavigateToSession={handleNavigateToSession}
+					onSelectSession={handleSelectSession}
 					onOpenWorkDetail={handleOpenWorkDetail}
 					onOpenWorkList={handleOpenWorkList}
 					onOpenAgentRoleList={handleOpenAgentRoleList}

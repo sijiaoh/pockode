@@ -41,9 +41,10 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 
 - **`work_create`**: Requires `agent_role_id` (validated to exist). Stories are top-level; tasks require `parent_id`.
 - **`work_start`**: Requires the work item to have an `agent_role_id`. Atomically transitions to `in_progress` and attaches a session ID via `Store.Claim` (a fresh UUIDv7, or the existing session on restart), then creates the session and sends the kickoff via `WorkStartHandler` (in-process).
-- **`step_done`**: Calls `Store.StepDone()`. Work items advance to the next configured step, or transition `in_progress → closed` when no steps remain. Use `work_wait` to transition `in_progress → waiting` while child work is still open.
-- **`work_needs_input`**: Calls `Store.MarkNeedsInput()`. Transitions `in_progress → needs_input`.
+- **`step_done`**: Calls `Store.StepDone()`. Work items advance to the next configured step, or close when no steps remain. Use `work_wait`, not `step_done`, to pause while child work is still open.
+- **`work_needs_input`**: Calls `Store.MarkNeedsInput()`. Pauses the work at `needs_input`.
 - **`work_reopen`**: Calls `Store.Reopen()`. Transitions `closed → in_progress`. Use when you need to add more child work items or continue working on a completed item.
+- **Accepted statuses**: `step_done` / `work_wait` / `work_needs_input` only require that the work is started and not closed, so a stale liveness status (`stopped`, `needs_input`, `waiting`) never blocks the agent. `work_start` is the one with a different rule: it also accepts `open`, but rejects a work that is already `in_progress`. See [workflow-engine](workflow-engine.md#status-transitions).
 - **`work_update`**: Uses pointer fields (`*string`) to distinguish "not provided" from "set to empty". Only updates data fields (title, body, agent_role_id).
 
 ## WebSocket RPC
@@ -60,7 +61,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.update` | `WorkUpdateParams` | `{}` | Update data fields (pointer semantics) |
 | `work.delete` | `WorkDeleteParams` | `{}` | Delete a work item (cascade-deletes children and sessions) |
 | `work.start` | `WorkStartParams` | `Work` (full object) | Atomic claim + session creation |
-| `work.stop` | `WorkStopParams` | `{}` | Stop a work item (in_progress/needs_input → stopped) |
+| `work.stop` | `WorkStopParams` | `{}` | Stop a work item (any started, unclosed work → stopped) |
 | `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → in_progress) |
 | `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
 | `work.comment.update` | `WorkCommentUpdateParams` | `Comment` | Update a comment's body |
@@ -104,7 +105,7 @@ Defined in `server/rpc/types.go`.
 
 `work.start` performs a two-phase operation:
 
-1. **Claim**: `Store.Claim` atomically transitions to `in_progress` and attaches a session ID under the store mutex — a fresh UUIDv7 for a fresh start, or the existing session ID on restart (`stopped`/`needs_input`). Deciding restart and session under the lock prevents concurrent claims from racing.
+1. **Claim**: `Store.Claim` atomically transitions to `in_progress` and attaches a session ID under the store mutex — a fresh UUIDv7 for a fresh start, or the existing session ID on restart (any work that already owns a session, so the chat history survives). Deciding restart and session under the lock prevents concurrent claims from racing.
 2. **Session creation**: Calls `WorkStarter.HandleWorkStart()` to create the Claude session and send the kickoff (or restart) message.
 
 If step 2 fails, the handler calls `Store.RollbackStart` — fresh starts revert to `open` (clears sessionID); restarts revert to `stopped` (preserves sessionID).

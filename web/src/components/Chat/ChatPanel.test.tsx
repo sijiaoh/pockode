@@ -1,7 +1,11 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { useSessionStore } from "../../lib/sessionStore";
+import { useWorkStore } from "../../lib/workStore";
 import type { ServerNotification } from "../../types/message";
+import type { Work } from "../../types/work";
 import ChatPanel from "./ChatPanel";
 
 // Mock scrollTo (not available in jsdom)
@@ -23,6 +27,13 @@ const mockState = vi.hoisted(() => ({
 	questionResponse: vi.fn(() => Promise.resolve()),
 	chatMessagesSubscribe: vi.fn(),
 	chatMessagesUnsubscribe: vi.fn(),
+	startWork: vi.fn(() => Promise.resolve()),
+	forkSession: vi.fn(),
+	// The agents the server declares. The fork UI here is tested on an agent that
+	// can be forked; the refusal has its own test below.
+	listAgents: vi.fn(() =>
+		Promise.resolve([{ type: "claude", fork_support: "any_message" }]),
+	),
 	onNotification: null as ((notification: ServerNotification) => void) | null,
 	mockHistory: [] as unknown[],
 	uuidCounter: 0,
@@ -45,6 +56,9 @@ vi.mock("../../lib/wsStore", () => {
 		},
 		chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
 		markSessionRead: vi.fn(() => Promise.resolve()),
+		startWork: mockState.startWork,
+		forkSession: mockState.forkSession,
+		listAgents: mockState.listAgents,
 	});
 
 	const mockStore = ((selector: (state: unknown) => unknown) => {
@@ -67,7 +81,7 @@ vi.mock("../../lib/wsStore", () => {
 		actions: createMockActions(),
 	});
 
-	return { useWSStore: mockStore };
+	return { useWSStore: mockStore, wsActions: createMockActions() };
 });
 
 vi.mock("../../utils/uuid", () => ({
@@ -78,6 +92,7 @@ describe("ChatPanel", () => {
 	const defaultProps = {
 		sessionId: "test-session",
 		sessionTitle: "Test Chat",
+		isSessionResolved: true,
 		onUpdateTitle: vi.fn(),
 	};
 
@@ -91,18 +106,134 @@ describe("ChatPanel", () => {
 		mockState.chatMessagesSubscribe.mockImplementation(() =>
 			Promise.resolve({
 				id: "sub-1",
-				initial: { history: mockState.mockHistory, state: "ended" },
+				initial: {
+					history: mockState.mockHistory,
+					state: "ended",
+					mode: "default",
+					agent_type: "claude",
+				},
 			}),
 		);
 		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
+		mockState.forkSession.mockReset();
+		useSessionStore.setState({ sessions: [] });
+		useWorkStore.getState().reset();
+		useAgentRoleStore.getState().reset();
 	});
 
 	// Helper to wait for history loading to complete
 	const waitForHistoryLoad = async () => {
 		await waitFor(() => {
-			expect(screen.getByRole("textbox")).not.toBeDisabled();
+			expect(
+				screen.queryByLabelText("Loading conversation"),
+			).not.toBeInTheDocument();
 		});
 	};
+
+	// The work this session runs, as the global subscription would have it.
+	const seedWork = (
+		overrides: Partial<Work> & Pick<Work, "status">,
+		steps?: string[],
+	) => {
+		useAgentRoleStore.getState().setRoles([
+			{
+				id: "role-1",
+				name: "Engineer",
+				role_prompt: "",
+				steps,
+				created_at: "2024-01-01T00:00:00Z",
+				updated_at: "2024-01-01T00:00:00Z",
+			},
+		]);
+		useWorkStore.getState().setWorks([
+			{
+				id: "work-1",
+				type: "task",
+				agent_role_id: "role-1",
+				title: "Ship the status bar",
+				session_id: "test-session",
+				created_at: "2024-01-01T00:00:00Z",
+				updated_at: "2024-01-01T00:00:00Z",
+				...overrides,
+			},
+		]);
+	};
+
+	const setWorkStatus = (status: Work["status"]) => {
+		act(() => {
+			useWorkStore
+				.getState()
+				.updateWorks((works) => works.map((w) => ({ ...w, status })));
+		});
+	};
+
+	// A switch hands the panel the destination's id before anything else about the
+	// destination is known. Whatever is still on screen belongs to the session the
+	// user came from: showing it reads as having opened the wrong chat, and the
+	// input would send the next message into it.
+	describe("while the destination session is still resolving", () => {
+		it("drops the previous session's messages and refuses to send", async () => {
+			const user = userEvent.setup();
+			const { rerender } = render(
+				<ChatPanel {...defaultProps} sessionId="previous" />,
+			);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Hello");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			expect(screen.getByText("Hello")).toBeInTheDocument();
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					sessionId="destination"
+					sessionTitle=""
+					isSessionResolved={false}
+				/>,
+			);
+
+			expect(screen.queryByText("Hello")).not.toBeInTheDocument();
+			expect(screen.getByLabelText("Loading conversation")).toBeInTheDocument();
+			expect(screen.getByRole("textbox")).toBeDisabled();
+			expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+			// Subscribing now would target a session the connection can't see yet.
+			expect(mockState.chatMessagesSubscribe).not.toHaveBeenCalledWith(
+				"destination",
+				expect.anything(),
+			);
+			expect(mockState.sendMessage).toHaveBeenCalledTimes(1);
+			expect(mockState.sendMessage).not.toHaveBeenCalledWith(
+				"destination",
+				expect.anything(),
+			);
+		});
+
+		it("opens the destination once it resolves", async () => {
+			const { rerender } = render(
+				<ChatPanel
+					{...defaultProps}
+					sessionId="destination"
+					sessionTitle=""
+					isSessionResolved={false}
+				/>,
+			);
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					sessionId="destination"
+					sessionTitle="Destination"
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(mockState.chatMessagesSubscribe).toHaveBeenCalledWith(
+				"destination",
+				expect.anything(),
+			);
+			expect(screen.getByRole("textbox")).not.toBeDisabled();
+		});
+	});
 
 	describe("sending messages", () => {
 		it("sends message via RPC with session_id and content", async () => {
@@ -140,8 +271,12 @@ describe("ChatPanel", () => {
 			expect(onUpdateTitle).toHaveBeenCalledWith("My first message");
 		});
 
-		it("shows error when send fails", async () => {
-			mockState.sendMessage.mockRejectedValueOnce(new Error("Network error"));
+		// The generic wording alone made "the CLI isn't installed" and "the network
+		// dropped" indistinguishable; the server's own reason has to reach the user.
+		it("shows the server's reason when send fails", async () => {
+			mockState.sendMessage.mockRejectedValueOnce(
+				new Error('failed to start claude: exec: "claude": not found in $PATH'),
+			);
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -151,7 +286,7 @@ describe("ChatPanel", () => {
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
 			await waitFor(() => {
-				expect(screen.getByText("Failed to send message")).toBeInTheDocument();
+				expect(screen.getByText(/not found in \$PATH/)).toBeInTheDocument();
 			});
 		});
 	});
@@ -269,6 +404,7 @@ describe("ChatPanel", () => {
 					initial: {
 						history: [],
 						state: "ended",
+						mode: "default",
 						agent_type: "codex",
 					},
 				}),
@@ -471,6 +607,276 @@ describe("ChatPanel", () => {
 				answers: { "Which library?": "React" },
 			});
 		});
+
+		it("restores the answered form when replaying history", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = [
+				{
+					type: "ask_user_question",
+					request_id: "q-2",
+					tool_use_id: "toolu_q_2",
+					questions: [
+						{
+							question: "Which library?",
+							header: "Library",
+							options: [
+								{ label: "React", description: "UI library" },
+								{ label: "Vue", description: "Progressive framework" },
+							],
+							multiSelect: false,
+						},
+					],
+				},
+				{
+					type: "question_response",
+					request_id: "q-2",
+					answers: { "Which library?": "Vue" },
+				},
+				{ type: "done" },
+			];
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByRole("button", { name: /Library/ }));
+
+			const chosen = screen.getByRole("radio", {
+				name: /Progressive framework/,
+			});
+			expect(chosen).toBeChecked();
+			expect(chosen).toBeDisabled();
+		});
+
+		// A cancelled question is persisted with a nil answers map, which the Go
+		// encoder strips entirely — so the key is absent, not null.
+		it("shows a cancelled question as cancelled when replaying history", async () => {
+			mockState.mockHistory = [
+				{
+					type: "ask_user_question",
+					request_id: "q-3",
+					tool_use_id: "toolu_q_3",
+					questions: [
+						{
+							question: "Which library?",
+							header: "Library",
+							options: [
+								{ label: "React", description: "UI library" },
+								{ label: "Vue", description: "Progressive framework" },
+							],
+							multiSelect: false,
+						},
+					],
+				},
+				{ type: "question_response", request_id: "q-3" },
+				{ type: "done" },
+			];
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByText("Cancelled")).toBeInTheDocument();
+			expect(screen.queryByText("Answered")).not.toBeInTheDocument();
+		});
+	});
+
+	describe("agent selector", () => {
+		const seedSession = (activated: boolean) => {
+			useSessionStore.setState({
+				sessions: [
+					{
+						id: "test-session",
+						title: "Test Chat",
+						created_at: "2024-01-01T00:00:00Z",
+						updated_at: "2024-01-01T00:00:00Z",
+						mode: "default",
+						agent_type: "claude",
+						activated,
+						state: "ended",
+						needs_input: false,
+						unread: false,
+					},
+				],
+			});
+		};
+
+		// A first turn that failed before the agent said anything leaves messages
+		// in the transcript but never started the session, and switching agents is
+		// the only way out of it — so the transcript must not be what locks it.
+		it("stays enabled when a failed first turn left messages behind", async () => {
+			seedSession(false);
+			mockState.mockHistory = [
+				{ type: "message", content: "Hello" },
+				{ type: "error", error: "Invalid API key" },
+			];
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByRole("button", { name: "Claude" })).not.toBeDisabled();
+		});
+
+		it("locks once the agent has answered in this session", async () => {
+			seedSession(true);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByRole("button", { name: "Claude" })).toBeDisabled();
+		});
+	});
+
+	// The top bar is the authoritative view of whether the task is still alive:
+	// it reads the live work store, never the transcript, so an interrupt shows up
+	// here immediately even in a session the user never scrolled up in.
+	describe("linked work status", () => {
+		it("shows the work status and step alongside the title", async () => {
+			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByRole("button", {
+					name: "In Progress, Ship the status bar, Step 2/3",
+				}),
+			).toBeInTheDocument();
+		});
+
+		it("follows the work store when the work is stopped", async () => {
+			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			setWorkStatus("stopped");
+
+			expect(
+				screen.getByRole("button", { name: /^Stopped, Ship the status bar/ }),
+			).toBeInTheDocument();
+		});
+
+		it("omits the step when the role defines none", async () => {
+			seedWork({ status: "in_progress", current_step: 0 });
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const button = screen.getByRole("button", {
+				name: /Ship the status bar/,
+			});
+			expect(button).toBeInTheDocument();
+			expect(button).not.toHaveTextContent(/Step/);
+		});
+
+		it("opens the work detail when clicked", async () => {
+			const user = userEvent.setup();
+			const onOpenWorkDetail = vi.fn();
+			seedWork({ status: "waiting", current_step: 0 }, ["a", "b"]);
+
+			render(
+				<ChatPanel {...defaultProps} onOpenWorkDetail={onOpenWorkDetail} />,
+			);
+			await waitForHistoryLoad();
+
+			await user.click(
+				screen.getByRole("button", { name: /Ship the status bar/ }),
+			);
+
+			expect(onOpenWorkDetail).toHaveBeenCalledWith("work-1");
+		});
+
+		it("shows nothing when no work is linked to the session", async () => {
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.queryByRole("button", { name: /Ship the status bar/ }),
+			).not.toBeInTheDocument();
+		});
+	});
+
+	// A work's life and its chat process are two separate clocks. The bug this
+	// guards against is reading one off the other: an interrupt stops the work
+	// without emitting any message, so a transcript that infers "still going"
+	// from its last banner is lying, and it lies exactly when the user most needs
+	// the truth.
+	describe("when a work and its chat process end at different times", () => {
+		const emit = (...notifications: ServerNotification[]) => {
+			act(() => {
+				for (const n of notifications) mockState.onNotification?.(n);
+			});
+		};
+
+		const autoContinue: ServerNotification = {
+			type: "message",
+			content: "Your session went idle but the work is still in_progress.",
+			origin: "system",
+			subtype: "auto_continue",
+			meta: {
+				work_id: "work-1",
+				work_type: "task",
+				title: "Ship the status bar",
+				step: { current: 2, total: 3 },
+			},
+		};
+
+		const card = (name: RegExp) => screen.getByRole("button", { name });
+
+		it("states the interrupt on the card, the strip and the turn, each in its own terms", async () => {
+			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			// The nudge that used to be the last thing in the transcript, reading
+			// like "I just started it up again".
+			emit(autoContinue);
+			// The user interrupts before the agent writes a word.
+			emit({ type: "interrupted" });
+
+			// The turn speaks only for the agent's output.
+			expect(screen.getByText("Interrupted")).toBeInTheDocument();
+			// The server takes a settle delay before it stops the work, and until it
+			// does, neither card nor strip pretends to know. Nothing spins meanwhile:
+			// in_progress is a resting state here, not a turn in flight.
+			expect(card(/^Task, In Progress, Step 2\/3/)).toBeInTheDocument();
+			expect(
+				screen.queryByRole("status", { name: "Loading" }),
+			).not.toBeInTheDocument();
+
+			setWorkStatus("stopped");
+
+			expect(card(/^Task, Stopped, Step 2\/3/)).toBeInTheDocument();
+			expect(
+				screen.getByRole("button", { name: "Restart" }),
+			).toBeInTheDocument();
+			expect(
+				screen.getByRole("button", { name: /^Stopped, Ship the status bar/ }),
+			).toBeInTheDocument();
+			// The auto-continue is history now, folded into the card rather than
+			// left at the tail of the transcript speaking for the task.
+			expect(screen.getAllByRole("button", { name: /^Task, / })).toHaveLength(
+				1,
+			);
+			expect(screen.getByText("Interrupted")).toBeInTheDocument();
+		});
+
+		it("lets the chat keep streaming after the work has closed", async () => {
+			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			emit(autoContinue, { type: "text", content: "wrapping up" });
+
+			setWorkStatus("closed");
+
+			expect(card(/^Task, Closed, 3\/3/)).toBeInTheDocument();
+			// The turn is untouched by the work reaching its end: still streaming,
+			// still spinning, still showing what the agent wrote.
+			expect(screen.getByText("wrapping up")).toBeInTheDocument();
+			expect(
+				screen.getByRole("status", { name: "Loading" }),
+			).toBeInTheDocument();
+		});
 	});
 
 	describe("history replay", () => {
@@ -497,6 +903,209 @@ describe("ChatPanel", () => {
 			expect(screen.getByText("Bash")).toBeInTheDocument();
 			await user.click(screen.getByText("Bash"));
 			expect(screen.getByText("file.txt")).toBeInTheDocument();
+		});
+	});
+	describe("forking a session", () => {
+		const forkHistory = [
+			{ type: "message", content: "Hello", seq: 1 },
+			{ type: "text", content: "Hi there!", seq: 2 },
+			{ type: "done", seq: 3 },
+			{ type: "message", content: "Try again", seq: 4 },
+			{ type: "text", content: "Second answer", seq: 5 },
+			{ type: "done", seq: 6 },
+		];
+
+		const forkedSession = {
+			id: "forked-session",
+			title: "Test Chat (fork)",
+			created_at: "2024-01-01T00:00:00Z",
+			updated_at: "2024-01-01T00:00:00Z",
+			mode: "default" as const,
+			agent_type: "claude" as const,
+			activated: true,
+			state: "idle" as const,
+			needs_input: false,
+			unread: false,
+			forked_from: { session_id: "test-session" },
+		};
+
+		// Opens the menu of the first assistant answer and confirms the fork sheet.
+		const openForkSheet = async (user: ReturnType<typeof userEvent.setup>) => {
+			const menuButtons = screen.getAllByRole("button", {
+				name: "Message actions",
+			});
+			await user.click(menuButtons[1]);
+			await user.click(screen.getByRole("button", { name: "Fork from here" }));
+		};
+
+		// The capability comes from the server, so the only honest way to stop a user
+		// here is to show the row and say the agent cannot do it. Driven by the
+		// declaration, not by which agent the session runs.
+		it("offers a disabled fork with a reason when the agent cannot be forked", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			mockState.listAgents.mockResolvedValueOnce([
+				{ type: "claude", fork_support: "none" },
+			]);
+
+			// The menu exists only where forking can navigate to the result.
+			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
+			await waitForHistoryLoad();
+
+			const menuButtons = screen.getAllByRole("button", {
+				name: "Message actions",
+			});
+			await user.click(menuButtons[1]);
+
+			const row = await screen.findByRole("button", {
+				name: /Fork from here/,
+			});
+			expect(row).toBeDisabled();
+			expect(row).toHaveTextContent(/cannot be forked/);
+
+			await user.click(row);
+			expect(mockState.forkSession).not.toHaveBeenCalled();
+		});
+
+		it("forks from the chosen message and opens the new session", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			mockState.forkSession.mockResolvedValue(forkedSession);
+			const onSelectSession = vi.fn();
+
+			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
+			await waitForHistoryLoad();
+
+			await openForkSheet(user);
+
+			// The anchor is echoed back, and so is what forking there costs.
+			const sheet = within(screen.getByRole("dialog"));
+			expect(sheet.getByText("Hi there!")).toBeInTheDocument();
+			expect(
+				sheet.getByText(/The 2 messages after it stay in this session/),
+			).toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Fork" }));
+
+			await waitFor(() =>
+				expect(onSelectSession).toHaveBeenCalledWith("forked-session"),
+			);
+			// Seq 3, the last record folded into that answer — never a count of the
+			// messages above it.
+			expect(mockState.forkSession).toHaveBeenCalledWith(
+				"test-session",
+				3,
+				"Test Chat (fork)",
+			);
+			// Findable straight away, rather than only once the subscription
+			// catches up.
+			expect(useSessionStore.getState().sessions.map((s) => s.id)).toContain(
+				"forked-session",
+			);
+		});
+
+		// Landing the user in a session that may not exist is worse than the error.
+		it("keeps the sheet open and never navigates when the fork fails", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			mockState.forkSession.mockRejectedValue(new Error("session not found"));
+			const onSelectSession = vi.fn();
+
+			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
+			await waitForHistoryLoad();
+
+			await openForkSheet(user);
+			await user.click(screen.getByRole("button", { name: "Fork" }));
+
+			await waitFor(() =>
+				expect(screen.getByRole("alert")).toHaveTextContent(
+					"session not found",
+				),
+			);
+			expect(onSelectSession).not.toHaveBeenCalled();
+			// Retrying is pressing Fork again.
+			expect(screen.getByRole("button", { name: "Fork" })).toBeEnabled();
+		});
+
+		// The live path and the replay path have to agree: a seq that only
+		// survived one of them would fork from a different place depending on
+		// whether the user had reloaded.
+		it("anchors on a seq that arrived live, not only on replayed history", async () => {
+			const user = userEvent.setup();
+			mockState.forkSession.mockResolvedValue(forkedSession);
+			const onSelectSession = vi.fn();
+
+			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
+			await waitForHistoryLoad();
+
+			act(() => {
+				mockState.onNotification?.({
+					type: "message",
+					content: "Hello",
+					seq: 7,
+				} as ServerNotification);
+				mockState.onNotification?.({
+					type: "text",
+					content: "Hi there!",
+					seq: 8,
+				} as ServerNotification);
+				mockState.onNotification?.({
+					type: "done",
+					seq: 9,
+				} as ServerNotification);
+			});
+
+			await openForkSheet(user);
+			await user.click(screen.getByRole("button", { name: "Fork" }));
+
+			await waitFor(() =>
+				expect(mockState.forkSession).toHaveBeenCalledWith(
+					"test-session",
+					9,
+					"Test Chat (fork)",
+				),
+			);
+		});
+
+		it("offers no menu on a message that has no settled cut point", async () => {
+			mockState.mockHistory = [
+				// No seq: this client sent the message, so the server never echoed a
+				// record back for it.
+				{ type: "message", content: "Hello" },
+				{ type: "text", content: "Still writing", seq: 1 },
+			];
+
+			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.queryByRole("button", { name: "Message actions" }),
+			).toBeNull();
+		});
+
+		it("says at the top of the transcript where the session came from", async () => {
+			const user = userEvent.setup();
+			const onSelectSession = vi.fn();
+			useSessionStore.setState({
+				sessions: [
+					{
+						...forkedSession,
+						id: "test-session",
+						forked_from: { session_id: "parent-session" },
+					},
+					{ ...forkedSession, id: "parent-session", title: "Parent chat" },
+				],
+			});
+			mockState.mockHistory = forkHistory;
+
+			render(<ChatPanel {...defaultProps} onSelectSession={onSelectSession} />);
+			await waitForHistoryLoad();
+
+			const banner = screen.getByRole("button", {
+				name: /Forked from "Parent chat"/,
+			});
+			await user.click(banner);
+			expect(onSelectSession).toHaveBeenCalledWith("parent-session");
 		});
 	});
 });

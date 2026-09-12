@@ -5,13 +5,31 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
 	"github.com/pockode/server/logger"
 )
+
+// tunnelCompression negotiates permessage-deflate on the relay uplink. It must
+// match the cloud relay's AcceptOptions: the weaker of the two offers wins,
+// and it wins for both directions.
+//
+// Context takeover retains a flate.Writer for the life of the connection —
+// one per pockode process here, but one per connected server on the cloud,
+// which is where that cost actually lands.
+const tunnelCompression = websocket.CompressionContextTakeover
+
+// connectTimeout bounds the uplink handshake. Nothing else does: yamux only
+// starts its keepalive once the tunnel is up, and while http.DefaultTransport
+// bounds the TCP dial and the TLS handshake, nothing bounds the wait for the
+// 101 response. A peer that accepts the connection and then answers nothing
+// would park the reconnect loop for good — which is what a blackholed network
+// looks like from here.
+const connectTimeout = 15 * time.Second
 
 type Config struct {
 	CloudURL      string
@@ -20,27 +38,27 @@ type Config struct {
 }
 
 type Manager struct {
-	config       Config
-	backendPort  int
-	frontendPort int
-	store        *Store
-	client       *Client
-	log          *slog.Logger
-	cancel       context.CancelFunc
-	remoteURL    string
-	wg           sync.WaitGroup
-	newStreamCh  chan *VirtualStream
+	config         Config
+	backendPort    int
+	frontendPort   int
+	store          *Store
+	client         *Client
+	log            *slog.Logger
+	cancel         context.CancelFunc
+	remoteURL      string
+	wg             sync.WaitGroup
+	connectTimeout time.Duration
 }
 
 func NewManager(cfg Config, backendPort, frontendPort int, log *slog.Logger) *Manager {
 	return &Manager{
-		config:       cfg,
-		backendPort:  backendPort,
-		frontendPort: frontendPort,
-		store:        NewStore(cfg.DataDir),
-		client:       NewClientWithVersion(cfg.CloudURL, cfg.ClientVersion),
-		log:          log.With("module", "relay"),
-		newStreamCh:  make(chan *VirtualStream),
+		config:         cfg,
+		backendPort:    backendPort,
+		frontendPort:   frontendPort,
+		store:          NewStore(cfg.DataDir),
+		client:         NewClientWithVersion(cfg.CloudURL, cfg.ClientVersion),
+		log:            log.With("module", "relay"),
+		connectTimeout: connectTimeout,
 	}
 }
 
@@ -105,99 +123,67 @@ func (m *Manager) Start(ctx context.Context) (string, error) {
 				logger.LogPanic(r, "relay connection crashed")
 			}
 		}()
-		m.runWithReconnect(relayCtx, storedCfg)
+		r := &reconnector{connect: m.connectAndRun, clock: realClock{}, log: m.log}
+		r.run(relayCtx, storedCfg)
 	}()
 
 	return m.remoteURL, nil
-}
-
-func (m *Manager) runWithReconnect(ctx context.Context, cfg *StoredConfig) {
-	backoff := time.Second
-
-	for ctx.Err() == nil {
-		start := time.Now()
-		err := m.connectAndRun(ctx, cfg)
-		if ctx.Err() != nil {
-			return
-		}
-
-		m.log.Error("relay connection failed", "error", err, "backoff", backoff)
-
-		// Skip wait and reset backoff if connection was stable (> 1 minute)
-		if time.Since(start) > time.Minute {
-			backoff = time.Second
-			continue
-		}
-
-		select {
-		case <-time.After(backoff):
-		case <-ctx.Done():
-			return
-		}
-		backoff = min(backoff*2, 10*time.Second)
-	}
 }
 
 func (m *Manager) connectAndRun(ctx context.Context, cfg *StoredConfig) error {
 	url := buildRelayWSURL(cfg)
 	m.log.Info("connecting to relay", "url", url)
 
-	conn, _, err := websocket.Dial(ctx, url, nil)
+	conn, resp, err := websocket.Dial(ctx, url, m.uplinkDialOptions(cfg.RelayToken))
 	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("relay rejected relay_token: %w", err)
+		}
 		return fmt.Errorf("dial: %w", err)
 	}
-	conn.SetReadLimit(10 * 1024 * 1024) // 10MB for HTTP responses
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	if err := m.register(ctx, conn, cfg.RelayToken); err != nil {
-		return fmt.Errorf("register: %w", err)
-	}
+	defer conn.CloseNow()
 
 	m.log.Info("connected to relay")
 
-	httpHandler := NewHTTPHandler(m.backendPort, m.frontendPort, m.log)
-	mux := NewMultiplexer(conn, m.newStreamCh, httpHandler, m.log)
-	return mux.Run(ctx)
+	// NetConn disables the WebSocket read limit, which is what a byte-stream
+	// tunnel wants: size limits belong to the HTTP layer above it.
+	tunnel := tunnelConn{Conn: websocket.NetConn(ctx, conn, websocket.MessageBinary), ws: conn}
+	return serveTunnel(ctx, tunnel, newLocalProxy(m.backendPort, m.frontendPort, m.log), m.log)
 }
 
-type registerRequest struct {
-	JSONRPC string            `json:"jsonrpc"`
-	Method  string            `json:"method"`
-	Params  map[string]string `json:"params"`
-	ID      int               `json:"id"`
+// uplinkDialOptions puts the relay token on the upgrade request itself, so the
+// cloud can reject an unauthorized server with a plain 401. Past the 101 the
+// connection carries nothing but the yamux session.
+func (m *Manager) uplinkDialOptions(relayToken string) *websocket.DialOptions {
+	return &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": {"Bearer " + relayToken}},
+		// HTTPClient.Timeout is the library-supported way to bound the
+		// handshake: coder/websocket turns it into a context it cancels the
+		// moment Dial returns, so it bounds the wait for the 101 without ever
+		// truncating the tunnel that follows. That second half is not obvious
+		// and getting it wrong would drop every tunnel on a timer, so
+		// TestUplinkDialOptionsDoNotTruncateTheTunnel pins it.
+		HTTPClient:      &http.Client{Timeout: m.connectTimeout},
+		CompressionMode: tunnelCompression,
+	}
 }
 
-type registerResponse struct {
-	Result *struct {
-		Status string `json:"status"`
-	} `json:"result"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error"`
+// tunnelConn is the byte stream yamux runs on. Its Close hangs up rather than
+// running a WebSocket close handshake: yamux closes the connection when the
+// session ends, which is precisely when the peer has stopped answering, and a
+// handshake nobody completes costs the reconnect loop up to 25 s of the
+// library's internal timeouts.
+type tunnelConn struct {
+	net.Conn
+	ws *websocket.Conn
 }
 
-func (m *Manager) register(ctx context.Context, conn *websocket.Conn, relayToken string) error {
-	req := registerRequest{
-		JSONRPC: "2.0",
-		Method:  "register",
-		Params:  map[string]string{"relay_token": relayToken},
-		ID:      1,
-	}
-
-	if err := wsjson.Write(ctx, conn, req); err != nil {
-		return fmt.Errorf("write register: %w", err)
-	}
-
-	var resp registerResponse
-	if err := wsjson.Read(ctx, conn, &resp); err != nil {
-		return fmt.Errorf("read register response: %w", err)
-	}
-
-	if resp.Error != nil {
-		return fmt.Errorf("register failed: %s", resp.Error.Message)
-	}
-
-	return nil
+func (c tunnelConn) Close() error {
+	err := c.ws.CloseNow()
+	// The wrapped net.Conn still owns the deadline timers and contexts it set
+	// up; it finds the WebSocket already closed and returns at once.
+	c.Conn.Close()
+	return err
 }
 
 func (m *Manager) Stop() {
@@ -205,16 +191,11 @@ func (m *Manager) Stop() {
 		m.cancel()
 	}
 	m.wg.Wait()
-	close(m.newStreamCh)
 	m.log.Info("relay stopped")
 }
 
 func (m *Manager) RemoteURL() string {
 	return m.remoteURL
-}
-
-func (m *Manager) NewStreams() <-chan *VirtualStream {
-	return m.newStreamCh
 }
 
 func buildRemoteURL(cfg *StoredConfig) string {

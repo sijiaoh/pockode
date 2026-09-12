@@ -42,6 +42,65 @@ func (e EventType) AwaitsUserInput() bool {
 	}
 }
 
+// IndicatesAgentActivity returns true for the events that only arrive while a
+// turn is under way. These move the process state to running.
+//
+// It is a whitelist because being wrong is not symmetric. An event wrongly
+// counted as activity marks a session running with nothing running, and nothing
+// corrects that until the idle reaper collects the process hours later — the
+// startup warning Codex emits for a session it cannot resume did exactly that.
+// An event wrongly left out costs at most one missed transition, because the
+// send that started the turn has already set running.
+//
+// Excluded, and why they are not oversights: AwaitsUserInput events end or pause
+// the turn, so they drive idle instead (the two predicates never overlap);
+// warning is how a session-level problem is reported, which can happen before the
+// first message; request_cancelled withdraws a prompt the user may never have
+// answered, so the process is likely idle already; process_ended is an obituary.
+// The remaining types are only ever replayed from history, never streamed.
+//
+// System events belong here but not in ActivatesSession: they only appear once a
+// turn is running, yet they are not the agent contributing anything to it.
+func (e EventType) IndicatesAgentActivity() bool {
+	return e == EventTypeSystem || e.ActivatesSession()
+}
+
+// ActivatesSession returns true for the events that put something on the agent's
+// side of the conversation, which is what makes a session "started": there is now
+// context that switching backends would throw away.
+//
+// Narrower than IndicatesAgentActivity on purpose. That predicate answers "is a
+// turn under way", and a turn can be under way from start to finish without the
+// agent ever contributing to it: a first message sent through an expired login or
+// a dead endpoint gets an init, a stream of system/api_retry, the CLI's own
+// account of the failure, and a result flagged as an error — every one of them
+// produced without the model being reached (measured on claude 2.1.259 against a
+// refused port and against a local endpoint answering 401). Note the result frame
+// carries subtype "success" and reports the failure through is_error, so look at
+// the flag rather than the subtype when reproducing this. Treating the turn as a
+// started session would lock it to the agent that just failed, which is the one
+// situation where being able to switch agents is the only way out.
+//
+// That the CLI's account of the failure lands outside this set is not automatic.
+// Claude delivers it as an assistant message, and only claude.syntheticNotice
+// keeping those off the text path stops it from starting the session here.
+//
+// The bias here is the opposite of IndicatesAgentActivity's: counting an event
+// too eagerly costs the user their escape hatch, while missing one only leaves a
+// session switchable slightly longer than it should be, until the agent's next
+// output. The borderline cases (a local command's output, output we could not
+// parse) are in anyway, despite that bias: neither can come from a turn that
+// failed to start, so including them cannot cost anyone the escape hatch.
+func (e EventType) ActivatesSession() bool {
+	switch e {
+	case EventTypeText, EventTypeToolCall, EventTypeToolResult,
+		EventTypeCommandOutput, EventTypeRaw:
+		return true
+	default:
+		return false
+	}
+}
+
 // PermissionBehavior represents the permission action.
 type PermissionBehavior string
 
@@ -130,19 +189,25 @@ type AgentEvent interface {
 
 type TextEvent struct {
 	Content string
+	// ProviderMessageID names the agent message this text came out of, when the
+	// agent gives its messages ids. See EventRecord.ProviderMessageID.
+	ProviderMessageID string
 }
 
 func (TextEvent) EventType() EventType { return EventTypeText }
 func (TextEvent) isAgentEvent()        {}
 
 func (e TextEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Content: e.Content}
+	return EventRecord{Type: e.EventType(), Content: e.Content, ProviderMessageID: e.ProviderMessageID}
 }
 
 type ToolCallEvent struct {
 	ToolName  string
 	ToolInput json.RawMessage
 	ToolUseID string
+	// ProviderMessageID names the agent message this call came out of, when the
+	// agent gives its messages ids. See EventRecord.ProviderMessageID.
+	ProviderMessageID string
 }
 
 func (ToolCallEvent) EventType() EventType { return EventTypeToolCall }
@@ -150,16 +215,23 @@ func (ToolCallEvent) isAgentEvent()        {}
 
 func (e ToolCallEvent) ToRecord() EventRecord {
 	return EventRecord{
-		Type:      e.EventType(),
-		ToolName:  e.ToolName,
-		ToolInput: e.ToolInput,
-		ToolUseID: e.ToolUseID,
+		Type:              e.EventType(),
+		ToolName:          e.ToolName,
+		ToolInput:         e.ToolInput,
+		ToolUseID:         e.ToolUseID,
+		ProviderMessageID: e.ProviderMessageID,
 	}
 }
 
 type ToolResultEvent struct {
 	ToolUseID  string
 	ToolResult string
+	// IsError reports that the tool call failed. Best-effort: only set when the
+	// agent CLI says so, never inferred from the result text.
+	IsError bool
+	// ProviderMessageID names the agent message this result came out of, when
+	// the agent gives its messages ids. See EventRecord.ProviderMessageID.
+	ProviderMessageID string
 }
 
 func (ToolResultEvent) EventType() EventType { return EventTypeToolResult }
@@ -167,9 +239,11 @@ func (ToolResultEvent) isAgentEvent()        {}
 
 func (e ToolResultEvent) ToRecord() EventRecord {
 	return EventRecord{
-		Type:       e.EventType(),
-		ToolUseID:  e.ToolUseID,
-		ToolResult: e.ToolResult,
+		Type:              e.EventType(),
+		ToolUseID:         e.ToolUseID,
+		ToolResult:        e.ToolResult,
+		IsError:           e.IsError,
+		ProviderMessageID: e.ProviderMessageID,
 	}
 }
 
@@ -304,17 +378,35 @@ const (
 	MessageOriginSystem MessageOrigin = "system"
 )
 
-// StepInfo is the step context shown in a system message's collapsed summary.
+// StepInfo is a 1-indexed step position carried by a system message's summary.
 type StepInfo struct {
 	Current int `json:"current"`
 	Total   int `json:"total"`
 }
 
+// ChildInfo identifies the child work whose completion triggered a child_done
+// system message.
+type ChildInfo struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
 // MessageMeta carries summary data for a system-origin message so the frontend
-// can render the collapsed bar without parsing the prompt body.
+// can render it without parsing the prompt body.
 type MessageMeta struct {
-	Title string    `json:"title,omitempty"`
-	Step  *StepInfo `json:"step,omitempty"`
+	// WorkID is the work that owns the session this message was delivered to —
+	// the receiver, never the subject. A child_done message is delivered to the
+	// parent's session, so its WorkID is the parent's. The frontend groups
+	// messages by this key into one card per work; a subject id here would
+	// shatter that card.
+	WorkID string `json:"work_id,omitempty"`
+	// WorkType is the receiving work's type ("story" or "task").
+	WorkType string `json:"work_type,omitempty"`
+	Title    string `json:"title,omitempty"`
+	// Step is where the work stood when this message was sent — a historical
+	// fact, not a live position. See docs/code/work-system.md.
+	Step  *StepInfo  `json:"step,omitempty"`
+	Child *ChildInfo `json:"child,omitempty"`
 }
 
 // MessageEvent represents a message sent to the agent. Used for:

@@ -98,10 +98,43 @@ The index files contain all items in a flat array:
 Writes use the **write → fsync → rename** pattern to prevent corruption:
 
 1. Marshal JSON to `index.json.tmp` (same directory = same filesystem)
-2. `fsync` the temp file to ensure data hits disk
+2. `fsync` the temp file so the bytes are on disk before anything points at them
 3. Atomically `rename` temp file to `index.json`
 
 A crash at any point leaves either the old file intact or the new file fully written — never a partial file.
+
+The parent directory is deliberately *not* fsynced: a rename lost to a power
+failure rolls back to the previous valid file rather than a corrupt one, and the
+extra fsync adds a second full disk round-trip to every index write (measured on
+a slow disk: ~150ms → ~220ms).
+
+The same primitive (`filestore.WriteFileAtomic`) backs every file the server
+rewrites whole: the stores built on `filestore.File` (work, agent-role,
+settings, the cluster node registry), the session and command indexes, plus
+`server.json`, `relay.json`, `mcp-config.json` and the per-session Claude resume
+file. Files whose mode matters pass it explicitly — `server.json` and
+`relay.json` stay `0600` because they hold tokens.
+
+Session history is the one piece of state not rewritten whole: it is appended a
+record at a time through `filestore.AppendJSONL`, which gives up the whole-file
+guarantee for a per-record one. See
+[agent-integration.md](../code/agent-integration.md) for that trade-off.
+
+Four writes are deliberately left non-atomic. The reasons are unobvious enough
+that each is also recorded at its call site, because "fixing" one of these to
+use `WriteFileAtomic` would make things worse, not better:
+
+| Write | Why not atomic |
+| ----- | -------------- |
+| `contents.WriteFile` — files in the user's own project | A rename would break hard links, reset an executable script to `0644`, swap the inode out from under editors and watchers, and leave `.tmp`/`.lock` files sitting in the working tree |
+| `.git-credentials` | git's own `credential-store` helper locks that path with the same `<file>.lock` name `WriteFileAtomic` uses; a leftover lock file makes git fail with `unable to get credential storage lock` |
+| The worktree setup hook template | Everything after `set -eu` is comments, so any prefix a crash could leave is still a valid no-op script |
+| `server.log` | Append-only and tolerant of a truncated last line, and too hot a path to fsync |
+
+When a JSON state file fails to parse, `filestore.ReadJSONOrQuarantine` moves it
+to `<path>.corrupt` and the store starts from empty instead of failing — damaged
+state must never make the server unbootable or a session unreachable, and the
+quarantined copy keeps the original bytes for hand recovery.
 
 ### Atomic persistence
 
@@ -111,12 +144,15 @@ write coordination to manage. The agent-role index has one additional writer:
 the user editing it directly on disk (same as `settings.json`), which the
 server picks up via the fsnotify reload described below.
 
-**File lock:** A dedicated lock file (`index.json.lock`) guards each read/write
-so a reader never observes a half-written file. Reads acquire a shared lock;
-writes acquire an exclusive lock. A separate lock file is used because atomic
-rename replaces the data file, which would detach a lock held on the data file
-itself. The lock is `flock(2)` on unix and `LockFileEx` on Windows, behind one
-interface in `filestore`.
+**File lock:** A dedicated lock file (`index.json.lock`) serializes writers
+against each other and against the read half of a read-modify-write. Reads
+acquire a shared lock; writes acquire an exclusive lock. What the lock does
+*not* do is make a reader see a whole file — the atomic rename already
+guarantees that, which is why code that only wants to inspect a file (such as
+`serverinfo.Read`) reads it without locking. A separate lock file is used
+because atomic rename replaces the data file, which would detach a lock held on
+the data file itself. The lock is `flock(2)` on unix and `LockFileEx` on
+Windows, behind one interface in `filestore`.
 
 > To surface those external edits, the settings and agent-role stores watch
 > their files via the `filestore` fsnotify primitive: a disk change is reloaded
@@ -147,16 +183,16 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 
 | Method        | Signature                              | Behavior                                                         |
 | ------------- | -------------------------------------- | ---------------------------------------------------------------- |
-| Start         | `(ctx, id, sessionID) → (Work, error)` | Transitions to `in_progress`, sets sessionID                    |
-| Stop          | `(ctx, id) → error`                    | Transitions `in_progress`/`needs_input` → `stopped`             |
-| StepDone      | `(ctx, id, totalSteps) → (bool, error)` | Work items advance to the next step or close when no steps remain |
-| MarkNeedsInput| `(ctx, id) → error`                    | Transitions `in_progress` → `needs_input`                       |
-| MarkWaiting   | `(ctx, id) → error`                    | Transitions `in_progress` → `waiting`                           |
-| Resume        | `(ctx, id) → error`                    | Transitions `needs_input` → `in_progress`                       |
-| ResumeFromWaiting | `(ctx, id) → error`                | Transitions `waiting` → `in_progress`                           |
-| Reactivate    | `(ctx, id) → error`                    | Transitions `stopped` → `in_progress` (preserves sessionID)     |
+| Start         | `(ctx, id, sessionID) → (Work, error)` | Transitions to `in_progress`, sets sessionID; rejected when already `in_progress` or `closed` |
+| Stop          | `(ctx, id) → error`                    | Transitions any live status → `stopped`                         |
+| StepDone      | `(ctx, id, totalSteps) → (bool, error)` | Work items advance to the next step or close when no steps remain; an advance also restores `in_progress` |
+| MarkNeedsInput| `(ctx, id) → error`                    | Transitions any live status → `needs_input`                     |
+| MarkWaiting   | `(ctx, id) → error`                    | Transitions any live status → `waiting`                         |
+| MarkRunning   | `(ctx, id) → error`                    | Transitions any live status → `in_progress` (preserves sessionID) |
 | Reopen        | `(ctx, id) → error`                    | Transitions `closed` → `in_progress` (reopens closed item)      |
-| RollbackStart | `(ctx, id, wasRestart) → error`        | Reverts a failed Start (fresh → `open`; restart → `stopped`)   |
+| RollbackStart | `(ctx, id, wasRestart) → error`        | Reverts a failed Start from `in_progress` (fresh → `open`; restart → `stopped`) |
+
+"live" is any of `in_progress` / `needs_input` / `waiting` / `stopped` — see [workflow-engine.md](workflow-engine.md#status-transitions).
 
 **Comments and events:**
 

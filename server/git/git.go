@@ -2,6 +2,7 @@
 package git
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -135,6 +136,10 @@ func setupLocalCredential(dir, host, token string) error {
 
 	// x-access-token is GitHub's required username for PAT authentication
 	credContent := fmt.Sprintf("https://x-access-token:%s@%s\n", token, host)
+	// Deliberately a plain write, not filestore.WriteFileAtomic: git's own
+	// credential-store helper locks this path with "<file>.lock", the same name
+	// WriteFileAtomic leaves behind, and git then dies with "unable to get
+	// credential storage lock". A one-shot write of one line is the smaller risk.
 	if err := os.WriteFile(credFile, []byte(credContent), 0600); err != nil {
 		return fmt.Errorf("failed to write credentials file: %w", err)
 	}
@@ -301,10 +306,18 @@ func Status(dir string) (*GitStatus, error) {
 // computed, letting callers that also need the paths (Diff) avoid re-forking
 // `git config --file .gitmodules` for the same directory.
 func statusWithSubmodules(dir string, submodules []string) (*GitStatus, error) {
-	cmd := gitCommand(dir, "--no-optional-locks", "status", "--porcelain=v1", "-z", "-uall", "--ignore-submodules=none")
+	// Not execGit: it trims the output, and a leading space is significant here
+	// (" M file" is an unstaged modification). stderr is captured by hand for the
+	// same reason — without it a refusal like "detected dubious ownership in
+	// repository at ..." reaches the panel as "exit status 128".
+	args := []string{"--no-optional-locks", "status", "--porcelain=v1", "-z", "-uall", "--ignore-submodules=none"}
+	cmd := gitCommand(dir, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("git status failed: %w", err)
+		return nil, newCommandError(args, stderr.String(), err)
 	}
 
 	result := &GitStatus{
@@ -426,18 +439,6 @@ func getSubmodulePaths(dir string) []string {
 	return paths
 }
 
-// gitCommand builds a git command running in dir with core.quotePath disabled.
-//
-// git's default core.quotePath=true C-escapes non-ASCII paths (rendering "中"
-// as "\344\270\255") in human-readable output such as diff headers. Disabling
-// it keeps those paths as real UTF-8; paths containing quotes, backslashes or
-// control characters are still quoted by git regardless of this setting.
-func gitCommand(dir string, args ...string) *exec.Cmd {
-	cmd := exec.Command("git", append([]string{"-c", "core.quotePath=false"}, args...)...)
-	cmd.Dir = dir
-	return cmd
-}
-
 // DiffOptions contains options for git diff operations.
 type DiffOptions struct {
 	Staged         bool
@@ -484,7 +485,11 @@ func diffWith(dir, path string, opts DiffOptions, submodules []string) (string, 
 	if opts.HideWhitespace {
 		args = append(args, "-w")
 	}
-	args = append(args, "--", relativePath)
+	pathspec, err := literalPathspec(relativePath)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, path)
+	}
+	args = append(args, "--", pathspec)
 
 	cmd := gitCommand(actualDir, args...)
 	output, err := cmd.CombinedOutput()
@@ -663,14 +668,13 @@ func Add(dir, path string) error {
 	}
 
 	actualDir, relativePath := resolveSubmodulePath(dir, path)
-
-	cmd := exec.Command("git", "add", "--", relativePath)
-	cmd.Dir = actualDir
-	output, err := cmd.CombinedOutput()
+	pathspec, err := literalPathspec(relativePath)
 	if err != nil {
-		return fmt.Errorf("git add failed: %w (output: %s)", err, string(output))
+		return fmt.Errorf("%w: %s", err, path)
 	}
-	return nil
+
+	_, err = execGit(actualDir, "add", "--", pathspec)
+	return err
 }
 
 // Reset unstages a file from the git index.
@@ -682,14 +686,13 @@ func Reset(dir, path string) error {
 	}
 
 	actualDir, relativePath := resolveSubmodulePath(dir, path)
-
-	cmd := exec.Command("git", "restore", "--staged", "--", relativePath)
-	cmd.Dir = actualDir
-	output, err := cmd.CombinedOutput()
+	pathspec, err := literalPathspec(relativePath)
 	if err != nil {
-		return fmt.Errorf("git restore --staged failed: %w (output: %s)", err, string(output))
+		return fmt.Errorf("%w: %s", err, path)
 	}
-	return nil
+
+	_, err = execGit(actualDir, "restore", "--staged", "--", pathspec)
+	return err
 }
 
 // validatePath checks that a repository-relative path stays inside the
@@ -942,7 +945,11 @@ func ShowFileDiff(dir, hash, path string, hideWhitespace bool) (*DiffResult, err
 	if hideWhitespace {
 		args = append(args, "-w")
 	}
-	args = append(args, "--", path)
+	pathspec, err := literalPathspec(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, path)
+	}
+	args = append(args, "--", pathspec)
 
 	cmd := gitCommand(dir, args...)
 	output, err := cmd.Output()

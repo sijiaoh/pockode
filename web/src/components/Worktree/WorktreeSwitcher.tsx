@@ -6,13 +6,13 @@ import WorktreeCreateSheet from "./WorktreeCreateSheet";
 import WorktreeDropdown from "./WorktreeDropdown";
 
 interface Props {
-	/** Called when close button is clicked (mobile only) */
+	/** Called when close button is clicked (drawer only) */
 	onClose?: () => void;
-	/** Whether in desktop mode */
-	isDesktop?: boolean;
+	/** Two columns fit, so the sidebar is a persistent column with no close button. */
+	isExpanded?: boolean;
 }
 
-function WorktreeSwitcher({ onClose, isDesktop = true }: Props) {
+function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
 	const [isOpen, setIsOpen] = useState(false);
 	const [isCreateOpen, setIsCreateOpen] = useState(false);
 	const buttonRef = useRef<HTMLButtonElement>(null);
@@ -93,11 +93,11 @@ function WorktreeSwitcher({ onClose, isDesktop = true }: Props) {
 	);
 
 	// Close button component (reused in multiple places)
-	const closeButton = !isDesktop && onClose && (
+	const closeButton = !isExpanded && onClose && (
 		<button
 			type="button"
 			onClick={onClose}
-			className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
+			className="flex size-9 shrink-0 pointer-coarse:size-11 items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
 			aria-label="Close sidebar"
 		>
 			<X className="h-5 w-5" aria-hidden="true" />
@@ -166,7 +166,7 @@ function WorktreeSwitcher({ onClose, isDesktop = true }: Props) {
 				onClose={() => setIsOpen(false)}
 				getDisplayName={getDisplayName}
 				triggerRef={buttonRef}
-				isDesktop={isDesktop}
+				isExpanded={isExpanded}
 				isCurrent={isCurrent}
 			/>
 
@@ -176,7 +176,6 @@ function WorktreeSwitcher({ onClose, isDesktop = true }: Props) {
 					onCreate={handleCreate}
 					isCreating={isCreating}
 					setupHookSkip={setupHookSkip}
-					isDesktop={isDesktop}
 				/>
 			)}
 		</div>

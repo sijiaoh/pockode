@@ -16,6 +16,8 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  UI State Layer                                                 │
 │  ├─ themeStore ◀─────── subscribeThemeRegistry              │   │
 │  ├─ inputStore (localStorage)                               │   │
+│  ├─ filesSearchStore (localStorage)                         │   │
+│  ├─ gitPanelStore                                           │   │
 │  └─ worktreeStore + listeners                               │   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Domain Data Layer                                              │
@@ -46,10 +48,12 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | settingsStore | App settings | State/Actions interface split |
 | authStore | Auth token | localStorage init |
 | inputStore | Draft text | persist middleware |
+| filesSearchStore | File search options | localStorage init |
+| gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
 | worktreeStore | Current worktree, and whether the server can run the setup hook | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |
 
-### Why wsStore is Large (858 lines)
+### Why wsStore is Large
 
 wsStore manages WebSocket connection, JSON-RPC channels, and subscription callbacks in one place. This is intentional:
 
@@ -59,6 +63,11 @@ wsStore manages WebSocket connection, JSON-RPC channels, and subscription callba
 
 The alternative (each store managing its own connection) would lead to duplicate connections and lifecycle conflicts.
 
+Reconnect policy lives here too — an unbounded backoff retry rather than a fixed
+attempt count, because the connection may be a relay tunnel the server itself
+takes the better part of a minute to notice is dead. See
+[websocket-rpc.md](websocket-rpc.md#auto-reconnect).
+
 ### Store Patterns
 
 **Pattern A: State/Actions Interface Split** — Most domain stores use this pattern for type safety:
@@ -67,8 +76,9 @@ The alternative (each store managing its own connection) would lead to duplicate
 interface SessionState {
   sessions: SessionListItem[];
   isLoading: boolean;
-  // Set during a worktree switch: sessions are retained but marked stale so the
-  // UI shows them as a placeholder while the new worktree's list loads.
+  // Set during a worktree switch: sessions are retained but marked stale, so the
+  // sidebar can go on rendering them without letting the user act on a list that
+  // belongs to the worktree being left.
   isReloading: boolean;
 }
 interface SessionActions { setSessions(s: SessionListItem[]): void; }
@@ -111,6 +121,61 @@ subscribeThemeRegistry(() => {
 });
 ```
 
+### Why a Store for Panel UI State
+
+`gitPanelStore` holds one field — whether the Git panel's `History` group is
+expanded — which looks like a case for `useState` in `DiffTab`. It is in the
+store instead, because **the decision has to outlive the component, and how long
+the component lives is not this panel's to decide.**
+
+Today it usually survives: `TabbedSidebar` renders all four tabs at once and
+each hides itself with a class, and the drawer form does the same (`Sidebar`
+says why — CSS hiding preserves scroll position). But that is a layout
+implementation detail, not a contract, and it does not hold everywhere:
+crossing the `expanded` breakpoint (1024) swaps `Sidebar` between two structurally
+different trees and remounts everything inside, and an extension that registers
+`SidebarContent` replaces the tabbed sidebar outright. Component state would
+quietly revert the user's explicit choice in exactly those cases, and would
+break the moment someone changes a tab from `hidden` to conditional
+rendering.
+
+The field is `boolean | null`, not `boolean`. `null` means "still following the
+change count" and a boolean means "the user has decided"; `useHistoryExpanded`
+resolves it as `override ?? changeCount === 0`. Storing the resolved boolean
+instead would erase the difference between a default that happens to be
+collapsed and a user who chose collapsed — and a section that keeps re-deciding
+for someone who has already decided is worse than one occasionally in the wrong
+state.
+
+It is deliberately **not** persisted. The default is derived from the working
+tree, which is where the answer usually comes from; a stale choice restored
+across restarts would outlive the situation that produced it. See
+[git-ui.md](../git-ui.md#history).
+
+## Server Cache vs Store
+
+Not every piece of server data belongs in a store. Data the client fetches
+request/response — directory contents, git status, commit diffs, file search
+results — lives in the react-query cache instead, so staleness, in-flight state
+and deduplication come with it rather than being re-implemented per store.
+Stores hold what the app itself owns (UI preferences) and what arrives as a
+stream of subscription notifications. A watcher notification and a cached query
+compose: `*.changed` says something moved, and the query refetches.
+
+One fetch sits outside both: `agent.list`, which reports what each registered
+agent declares about being forked. Its answer comes from the implementations
+compiled into the server, so it cannot change while that server runs — there is
+no staleness to manage and nothing to invalidate, and `lib/rpc/agent.ts` caches
+the promise for the tab instead. That hand-rolled cache is the price, and it is
+only worth paying for a value that is constant by construction; anything that can
+change server-side belongs in react-query with the rest.
+
+The catch is scope: those caches are keyed by query key, not by worktree, so
+`queryClient.ts` invalidates every key in `WORKTREE_DEPENDENT_QUERY_KEYS` once a
+switch completes. A worktree-scoped query missing from that list keeps serving
+the previous worktree's data — paths that look fine until they 404 on open —
+and it is the easy step to forget when adding a query.
+
 ## Message Reducer
 
 `messageReducer.ts` is a pure function (not a store) that transforms server events into message state. This separation enables history replay, unit testing, and flexible composition.
@@ -123,6 +188,94 @@ ServerNotification (snake_case)
     → applyServerEvent() → Message[]
       → Component state (via useSubscription hook)
 ```
+
+### Message Variants
+
+`Message` is wider than the two roles a chat obviously needs. Alongside
+`UserMessage` and `AssistantMessage` it holds `WorkCardMessage` and
+`StepDividerMessage`, which render a work item's progress inline in the
+transcript rather than in a panel beside it (see
+[work-system.md](work-system.md#rendering-in-the-transcript) for why).
+
+The consequence to know before touching the reducer: **`status` is not a common
+field.** Only assistant messages carry one, so anything asking about it has to
+narrow on `role === "assistant"` first.
+
+### Turn Boundaries and Late Events
+
+A turn starts from a `message` event and ends on `done` / `interrupted` /
+`error` / `process_ended`, leaving its message at the matching status
+(`complete` for `done`). Every prompt is persisted and broadcast by the
+server, so the client always sees the `message` that opens a turn — and a turn
+cut short takes its pending permission and question dialogs down with it, so no
+answer can resume it either. That makes the rule for content arriving after an
+ending unambiguous: it belongs to the turn that just ended.
+
+That matters because the CLI keeps talking for a moment after a turn is cut
+short — a Task subagent's last output is the usual source. Such content is
+appended to the ended message and leaves its status alone; without that it
+would open a fresh `streaming` bubble, and `isStreaming` — read off the last
+message's status, gated on the process still being alive — would report the
+stopped turn as running and keep the input blocked. An interrupt is exactly
+the case that gate does not catch: it ends the turn, not the process.
+
+The same lateness decides where a fork can cut. A message carries the `anchorSeq`
+of the last history record folded into it, and the reducer stamps it on the
+newest message only — `applyServerEvent` is the one path both replayed
+history and live notifications take, so the two cannot disagree about where a
+cut lands. A record that lands in an earlier message goes unstamped rather than
+raise that message's anchor past the messages below it, which would make "keep
+everything up to and including this message" quietly keep more than the user can
+see. The client is free to leave records unaddressable because it only anchors
+on ones the server gave it a seq for; what it must never do is number them
+itself ([agent-integration.md](agent-integration.md#history-storage)).
+
+`complete` is deliberately excluded from that rule: when a background wait runs
+out of budget Pockode delivers the `done` itself
+([agent-integration.md](agent-integration.md#background-waits)), and output
+resuming afterwards is a genuinely live turn.
+
+### Task Groups
+
+The subagent tool (named `Agent` today, `Task` in older CLIs and in history
+recorded by them) is the one tool whose calls do not each get their own part.
+Every Task of one turn folds into a single `task_group` part, anchored where the
+first of them landed, because a turn can spawn a dozen and one strip per call
+buries the conversation they belong to.
+
+The part holds each Task's **current state** — `running` / `done` / `failed` /
+`interrupted` — and the reducer is its only author; the UI renders that state
+and infers nothing of its own. Four rules keep it honest:
+
+- The same `toolUseId` can arrive twice (Claude Code resends a `tool_call` after
+  permission approval). The second call refreshes the input it describes and
+  leaves the Task's state alone.
+- A turn that ended as `interrupted` / `error` / `process_ended` settles the
+  Tasks still running in it: nothing can report back on them, and a spinner
+  that never stops is a lie. The rule keys on the turn's resulting **status**,
+  not on the event, so a Task whose call trails in after the ending is settled
+  too rather than born spinning forever. `complete` is deliberately excluded —
+  a background Task outlives the turn that started it
+  ([agent-integration.md](agent-integration.md#background-waits)) and reports
+  back later.
+- Replay adds no settling of its own — it feeds history through this same
+  reducer — so a Task still running at the end of a history stays running,
+  which is right while the session is live. What history cannot show is a
+  process killed while Pockode was down, since no `process_ended` was ever
+  recorded for it: `useChatMessages` settles once on load when the server
+  reports the session already ended, next to the call that expires the dialogs
+  orphaned the same way.
+- An interrupted Task whose result finally arrives keeps its `interrupted`
+  status and records `resultAfterInterrupt`. The content is kept and readable;
+  what it cannot do is make the UI claim the Task finished normally. This is the
+  "events are events, state is state" rule applied to a single part.
+
+Failure comes from the CLI's `is_error` flag
+([agent-integration.md](agent-integration.md#eventrecord-unified-event-format)),
+never from the report text. So `failed` means the Task *call* failed — an
+unknown `subagent_type`, say. A subagent that ran fine and reported that it
+could not do the job is `done`, and the report says the rest; the UI does not
+get to grade it.
 
 ### Why Pure Function Instead of Store
 
@@ -257,7 +410,7 @@ Built-in themes are typed (`ThemeName`), custom themes are runtime-registered.
 Allows extensions to replace UI components:
 
 ```typescript
-// web/src/lib/registries/chatUIRegistry.ts:40-67
+// web/src/lib/registries/chatUIRegistry.ts:41-68
 export interface ChatUIConfig {
   UserAvatar?: ComponentType<AvatarProps>;
   AssistantAvatar?: ComponentType<AvatarProps>;
@@ -279,7 +432,7 @@ const Avatar = config.UserAvatar || DefaultAvatar;
 `useSubscription` manages WebSocket subscription lifecycle:
 
 ```typescript
-// web/src/hooks/useSubscription.ts:45-52
+// web/src/hooks/useSubscription.ts:54-61
 export function useSubscription<TNotification, TInitial>(
   subscribe: (callback) => Promise<{ id: string; initial?: TInitial }>,
   unsubscribe: (id: string) => Promise<void>,
@@ -292,17 +445,19 @@ Key features:
 
 1. **Generation counter** — prevents race conditions when multiple subscribes overlap
 2. **Worktree switch handling** — the server invalidates worktree-scoped subscriptions on switch, so the hook resubscribes. Rather than clearing data (`onReset`), a switch is a soft refresh: previous data stays on screen and is swapped out by `onSubscribed` when the new worktree's snapshot arrives (see [subscription-system.md](subscription-system.md#why-worktree-switch-is-a-soft-refresh-not-a-reset))
-3. **Connection state** — triggers reset on disconnect, resubscribes on reconnect
+3. **Connection state** — resets on disconnect, but deliberately keeps data during `reconnecting` and resubscribes once the connection is back
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `web/src/lib/wsStore.ts` | WebSocket + RPC + subscription management |
+| `web/src/lib/queryClient.ts` | react-query setup + worktree-dependent invalidation |
 | `web/src/lib/messageReducer.ts` | Event → Message state transformation |
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |
+| `web/src/lib/gitPanelStore.ts` | Git panel UI state that must outlive remounts |
 | `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |
 

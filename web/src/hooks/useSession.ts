@@ -1,8 +1,9 @@
 import { useMutation } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { prependSession, useSessionStore } from "../lib/sessionStore";
 import { collectWorkSessionIds, useWorkStore } from "../lib/workStore";
 import { wsActions } from "../lib/wsStore";
+import type { SessionListItem } from "../types/message";
 import { useSessionSubscription } from "./useSessionSubscription";
 
 interface UseSessionOptions {
@@ -48,6 +49,21 @@ export function useSession({
 		},
 	});
 
+	// Every entry point to session creation goes through here, so a second caller
+	// arriving while a create is in flight joins that one instead of starting
+	// another: a double tap on "+" would otherwise leave a stray session behind,
+	// and an effect that re-runs mid-request would do the same.
+	const createInFlight = useRef<Promise<SessionListItem> | null>(null);
+	const { mutateAsync: runCreate } = createMutation;
+	const createSession = useCallback(() => {
+		if (!createInFlight.current) {
+			createInFlight.current = runCreate().finally(() => {
+				createInFlight.current = null;
+			});
+		}
+		return createInFlight.current;
+	}, [runCreate]);
+
 	const deleteMutation = useMutation({
 		mutationFn: wsActions.deleteSession,
 	});
@@ -81,7 +97,9 @@ export function useSession({
 		redirectSessionId,
 		needsNewSession,
 		refresh,
-		createSession: () => createMutation.mutateAsync(),
+		createSession,
+		createError: createMutation.error,
+		clearCreateError: createMutation.reset,
 		deleteSession: (id: string) => deleteMutation.mutateAsync(id),
 		updateTitle: (id: string, title: string) =>
 			updateTitleMutation.mutate({ id, title }),

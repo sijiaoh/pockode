@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/pockode/server/filestore"
 	"github.com/pockode/server/internal/fsperm"
 )
 
@@ -42,26 +43,28 @@ func Write(dataDir string, port int, localURL, remoteURL, token string) error {
 		Token:     token,
 	}
 
-	data, err := json.MarshalIndent(info, "", "  ")
+	data, err := filestore.MarshalIndex(info)
 	if err != nil {
 		return err
 	}
 
-	// server.json holds the local API token (a credential). The mode below only
-	// covers unix — on Windows the protection comes from the restricted data
-	// directory above, which the file inherits. Chmod as well, since WriteFile
-	// does not alter the mode of an already-existing file (e.g. a stale file
-	// left by a previous crash).
-	path := filepath.Join(dataDir, filename)
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0600)
+	// Written atomically: a truncated server.json leaves every MCP subprocess
+	// unable to reach the local API, and unlike most state it is not re-read
+	// from a source of truth — this write is the source of truth.
+	// 0600 because it holds the local API token (a credential). WriteFileAtomic
+	// always applies the mode, including over a stale file left by a crash. The
+	// mode only covers unix; on Windows the protection comes from the restricted
+	// data directory above, which the file inherits.
+	return filestore.WriteFileAtomic(filepath.Join(dataDir, filename), data, 0600)
 }
 
 // Read reads the server.json file from the given data directory.
 // Returns (nil, nil) if the file doesn't exist.
 func Read(dataDir string) (*Info, error) {
+	// A plain read is enough, and deliberately so: Write replaces this file by
+	// rename, so a reader always sees one whole version, and taking a lock here
+	// would make every reader create a lock file in a data dir it only wants to
+	// inspect.
 	data, err := os.ReadFile(filepath.Join(dataDir, filename))
 	if err != nil {
 		if os.IsNotExist(err) {

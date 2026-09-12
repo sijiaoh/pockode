@@ -38,12 +38,16 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 5. Events are broadcast to all WebSocket subscribers and persisted to session history
 6. On `Done` event, process transitions to `idle`
 
-Besides user-typed messages, the Work system pushes automatic prompts to the same session via `Client.SendSystemMessage`; these are tagged `origin: "system"` so the frontend renders them as a collapsed banner rather than a user bubble. See [agent-event.md](agent-event.md#message-origin-user-vs-system) and [code/work-system.md](code/work-system.md#system-origin-message-tagging).
+Besides user-typed messages, the Work system pushes automatic prompts to the same session via `Client.SendSystemMessage`; these are tagged `origin: "system"` with a `meta` summary naming the work, so the frontend can fold them into that work's progress card instead of rendering user bubbles. See [agent-event.md](agent-event.md#message-origin-user-vs-system) and [code/work-system.md](code/work-system.md#work-messages-in-chat).
 
 ## Agent Events
 
 See [agent-event.md](agent-event.md) for the full event type catalog, data flow, and frontend processing pipeline.
 
+An `AskUserQuestion` blocks the agent until it is answered, yet its card is easily pushed out of view by whatever the agent streams next. How chat keeps an unanswered question reachable is in [pending-question-entry.md](pending-question-entry.md).
+
 ## Session Persistence
 
-Session metadata and chat history are stored under the session data directory. History is JSON Lines of `EventRecord`s appended on each event. Claude resumes only when `claude_resume.json` contains a provider-side session ID; otherwise the next process starts a new Claude session for the same Pockode session.
+Session metadata and chat history are stored under the session data directory. History is JSON Lines of `EventRecord`s appended on each event. Claude records its provider-side session ID in `claude_resume.json` as soon as the CLI reports it, and falls back through a recovery ladder (plain resume → fork → new session) when a launch turns out to be unresumable, so a session cannot be permanently stuck by a first turn that failed ([code/agent-integration.md](code/agent-integration.md#session-recovery-ladder)). Codex never resumes — its CLI keeps a thread only in the memory of the process that created it, so a restarted session gets a new thread and a warning that the agent no longer has the earlier turns ([code/agent-integration.md](code/agent-integration.md#no-session-recovery)). Pockode's own transcript survives either way; what a resume decides is whether the *agent* still has the context.
+
+A session can also be **forked**: `session.fork` copies a session's transcript up to a record the user picked and starts a new session from it, leaving the source untouched. Whether the agent comes along is that agent's own declared answer, and it is a stronger question than resuming: Claude can follow a fork to a chosen message inside a conversation, while a Codex session cannot be forked at all and the request is refused rather than handing back a session whose agent has never seen the conversation filling its screen ([code/agent-integration.md](code/agent-integration.md#session-forking), UI in [session-fork-ui.md](session-fork-ui.md)).

@@ -16,6 +16,7 @@ const mockSession = (id: string, title = "Test Session"): SessionListItem => ({
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default",
 	agent_type: "codex",
+	activated: false,
 	state: "ended",
 	needs_input: false,
 	unread: false,
@@ -245,6 +246,65 @@ describe("useSession", () => {
 
 				expect(result.current.sessions.length).toBe(2);
 				expect(result.current.sessions[0].id).toBe("new-id");
+			});
+
+			// Two taps on "+" before the first request answers used to create two
+			// sessions; the second caller now joins the request already in flight.
+			it("shares one request between concurrent callers", async () => {
+				const newSession = mockSession("new-id", "New");
+				mockCreateSession.mockResolvedValue(newSession);
+
+				mockSessions = [mockSession("1")];
+
+				const { result } = renderHook(
+					() => useSession({ routeSessionId: "1" }),
+					{ wrapper: createWrapper(queryClient) },
+				);
+
+				await waitFor(() => {
+					expect(result.current.sessions.length).toBe(1);
+				});
+
+				await act(async () => {
+					const [first, second] = await Promise.all([
+						result.current.createSession(),
+						result.current.createSession(),
+					]);
+					expect(first).toBe(second);
+				});
+
+				expect(mockCreateSession).toHaveBeenCalledTimes(1);
+				expect(result.current.sessions.length).toBe(2);
+			});
+
+			it("reports the failure reason and clears it on demand", async () => {
+				mockCreateSession.mockRejectedValue(new Error("no worktree"));
+
+				const { result } = renderHook(() => useSession(), {
+					wrapper: createWrapper(queryClient),
+				});
+
+				await waitFor(() => {
+					expect(result.current.isSuccess).toBe(true);
+				});
+
+				await act(async () => {
+					await expect(result.current.createSession()).rejects.toThrow(
+						"no worktree",
+					);
+				});
+
+				await waitFor(() => {
+					expect(result.current.createError?.message).toBe("no worktree");
+				});
+
+				act(() => {
+					result.current.clearCreateError();
+				});
+
+				await waitFor(() => {
+					expect(result.current.createError).toBeNull();
+				});
 			});
 		});
 	});

@@ -1,6 +1,6 @@
+import { hasCoarsePointer } from "@pockode/shared";
 import { useEffect, useMemo, useRef } from "react";
 import type { Command } from "../../lib/rpc";
-import { hasCoarsePointer } from "../../utils/breakpoints";
 
 interface Props {
 	commands: Command[];

@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 
 interface Props {
-	title: string;
-	subtitle?: string;
+	title: ReactNode;
+	subtitle?: ReactNode;
 	isActive: boolean;
 	hasChanges?: boolean;
 	needsInput?: boolean;
@@ -67,7 +67,13 @@ function SidebarListItem({
 					)
 				)}
 			</button>
-			{actions && <div className="flex items-center gap-1 pr-2">{actions}</div>}
+			{/* Wider on a coarse pointer: two 36px actions grow to 44px there, and
+			    4px between them would leave their hit areas touching. */}
+			{actions && (
+				<div className="flex items-center gap-1 pr-2 pointer-coarse:gap-2">
+					{actions}
+				</div>
+			)}
 		</div>
 	);
 }

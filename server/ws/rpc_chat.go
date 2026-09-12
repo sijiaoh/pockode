@@ -24,7 +24,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	// Verify session exists and get mode
 	meta, found, err := wt.SessionStore.Get(params.SessionID)
 	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to get session")
+		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
 		return
 	}
 	if !found {
@@ -73,7 +73,7 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 	wt.SessionListWatcher.ClearNeedsInput(params.SessionID)
 
 	if err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier()); err != nil {
-		h.replyErrorForChat(ctx, conn, req.ID, err)
+		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
 
@@ -92,7 +92,7 @@ func (h *rpcMethodHandler) handleInterrupt(ctx context.Context, conn *jsonrpc2.C
 	log := h.log.With("sessionId", params.SessionID)
 
 	if err := wt.ChatClient.Interrupt(ctx, params.SessionID); err != nil {
-		h.replyErrorForChat(ctx, conn, req.ID, err)
+		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
 
@@ -123,7 +123,7 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 	wt.SessionListWatcher.ClearNeedsInput(params.SessionID)
 
 	if err := wt.ChatClient.SendPermissionResponse(ctx, params.SessionID, data, choice); err != nil {
-		h.replyErrorForChat(ctx, conn, req.ID, err)
+		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
 
@@ -151,7 +151,7 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 	wt.SessionListWatcher.ClearNeedsInput(params.SessionID)
 
 	if err := wt.ChatClient.SendQuestionResponse(ctx, params.SessionID, data, params.Answers); err != nil {
-		h.replyErrorForChat(ctx, conn, req.ID, err)
+		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
 
@@ -162,12 +162,26 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 	}
 }
 
-// replyErrorForChat handles chat-specific errors with appropriate RPC codes.
-func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error) {
+// replyErrorForChat maps the errors chat.Client returns to RPC codes. Used by the
+// chat methods and by session.fork, which goes through the same client.
+func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, sessionID string, err error) {
 	if errors.Is(err, chat.ErrSessionNotFound) {
-		h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, "session not found")
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+	} else if errors.Is(err, chat.ErrSessionNotRunning) ||
+		errors.Is(err, chat.ErrForkAnchorOutOfRange) ||
+		errors.Is(err, chat.ErrForkUnsupported) {
+		// The request does not fit the session's history, state or agent — a prompt
+		// whose process is gone, a fork anchored past the end of the history, a fork
+		// of a session whose agent cannot be forked. The message names what was
+		// wrong, and none of them is a server fault.
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {
-		h.replyError(ctx, conn, id, jsonrpc2.CodeInternalError, err.Error())
+		// The reply carries the cause, but this is the branch a failing agent
+		// startup takes and the client may give up on its own clock first. The
+		// log is the trace that does not depend on that; it names the method
+		// because the dispatcher only logs that at Debug.
+		h.log.With("sessionId", sessionID).Error("chat request failed", "method", req.Method, "error", err)
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 	}
 }
 

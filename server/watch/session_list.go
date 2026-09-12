@@ -60,13 +60,13 @@ func (w *SessionListWatcher) SetWorkNeedsInputSyncer(s WorkNeedsInputSyncer) {
 }
 
 func (w *SessionListWatcher) Start() error {
-	go w.eventLoop()
+	w.Go(w.eventLoop)
 	slog.Info("SessionListWatcher started")
 	return nil
 }
 
 func (w *SessionListWatcher) Stop() {
-	w.Cancel()
+	w.CancelAndWait()
 	slog.Info("SessionListWatcher stopped")
 }
 

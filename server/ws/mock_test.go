@@ -120,6 +120,19 @@ func (m *mockAgent) starts() []startCall {
 	return append([]startCall(nil), m.startCalls...)
 }
 
+// forkableMockAgent is a mockAgent that can be forked. Implementing
+// agent.SessionForker is the whole declaration, so the plain mockAgent — the one
+// the tests that have nothing to do with forking use — cannot be forked at all.
+type forkableMockAgent struct{ *mockAgent }
+
+func (forkableMockAgent) ForkSupport() agent.ForkSupport { return agent.ForkFromAnyMessage }
+
+// ForkSession carries nothing across, the answer that leaves the fork's warning
+// in the new session's history.
+func (forkableMockAgent) ForkSession(context.Context, agent.ForkOptions) (bool, error) {
+	return false, nil
+}
+
 func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	m.mu.Lock()
 	m.startCalls = append(m.startCalls, startCall{sessionID: opts.SessionID, resume: opts.Resume, mode: opts.Mode})

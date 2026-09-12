@@ -1,7 +1,18 @@
 import type { AgentType } from "./settings";
+import type { WorkType } from "./work";
 
 export type SessionMode = "default" | "yolo";
 export type ProcessState = "idle" | "running" | "ended";
+
+/**
+ * Where a forked session came from. Only the parent's id: the client resolves
+ * it against the session list it already holds, and a parent that is gone from
+ * that list is exactly the "forked from a deleted session" case. Copying the
+ * title here instead would keep showing the old one after a rename.
+ */
+export interface ForkOrigin {
+	session_id: string;
+}
 
 export interface SessionListItem {
 	id: string;
@@ -10,10 +21,22 @@ export interface SessionListItem {
 	updated_at: string;
 	mode: SessionMode;
 	agent_type: AgentType;
+	/** True once the agent has produced output in this session. */
+	activated: boolean;
 	state: ProcessState;
 	needs_input: boolean;
 	unread: boolean;
+	/** Absent on a session that was created rather than forked. */
+	forked_from?: ForkOrigin;
 }
+
+/**
+ * One history record's address: its 1-based position in the session's history,
+ * assigned by the server and only ever quoted back. Never counted client-side —
+ * some records are written without being broadcast, so a local counter drifts
+ * and a fork would then cut in the wrong place (docs/session-fork-ui.md).
+ */
+export type HistorySeq = number;
 
 export type MessageStatus =
 	| "sending"
@@ -34,6 +57,30 @@ export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
 
 export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired";
 
+export type TaskRunStatus = "running" | "done" | "failed" | "interrupted";
+
+/**
+ * The current state of one Claude Task (subagent) call. Maintained solely by
+ * the message reducer, so the UI never has to infer a Task's state from the
+ * events that produced it.
+ */
+export interface TaskRun {
+	toolUseId: string;
+	/** Task input.description, falling back to subagentType, then "Task". */
+	description: string;
+	subagentType?: string;
+	/** Task input.prompt — the only place the subagent's brief is visible. */
+	prompt?: string;
+	status: TaskRunStatus;
+	result?: string;
+	/**
+	 * A result that arrived after the turn was cut short. The content is kept,
+	 * but the status stays interrupted: a late result cannot make the UI claim
+	 * the Task finished normally.
+	 */
+	resultAfterInterrupt?: boolean;
+}
+
 export type ContentPart =
 	| { type: "text"; content: string }
 	| { type: "tool_call"; tool: ToolCall }
@@ -50,6 +97,14 @@ export type ContentPart =
 			status: QuestionStatus;
 			answers?: Record<string, string>;
 	  }
+	| {
+			/**
+			 * Every Task of one turn, folded into a single part anchored where the
+			 * first of them landed.
+			 */
+			type: "task_group";
+			tasks: TaskRun[];
+	  }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
 
@@ -62,11 +117,28 @@ export interface SystemMessageStep {
 	total: number;
 }
 
-// Summary data for a system-origin message, used to render the collapsed bar
-// without parsing the prompt body.
+export interface SystemMessageChild {
+	id: string;
+	title: string;
+}
+
+// Summary data for a system-origin message, used to render it without parsing
+// the prompt body. Mirrors agent.MessageMeta on the server.
 export interface SystemMessageMeta {
+	/**
+	 * The work whose session received this message — the aggregation key for the
+	 * work card. Absent on history recorded before the card existed, which falls
+	 * back to a standalone banner.
+	 */
+	work_id?: string;
+	work_type?: WorkType;
 	title?: string;
+	/**
+	 * Where the work stood when this message was sent. A historical fact: use it
+	 * for timeline wording, never as the work's current position.
+	 */
 	step?: SystemMessageStep;
+	child?: SystemMessageChild;
 }
 
 export interface UserMessage {
@@ -75,6 +147,13 @@ export interface UserMessage {
 	content: string;
 	status: MessageStatus;
 	createdAt: Date;
+	/**
+	 * The last history record folded into this message, and so the cut point a
+	 * fork anchored here uses. Absent when no record the client saw carries one:
+	 * a message this client sent itself (the server does not echo it back), or
+	 * one replayed from history written before seqs existed.
+	 */
+	anchorSeq?: HistorySeq;
 	// Present only for system-driven messages; absent means a user-typed message.
 	source?: MessageOrigin;
 	subtype?: string;
@@ -88,9 +167,55 @@ export interface AssistantMessage {
 	status: MessageStatus;
 	error?: string;
 	createdAt: Date;
+	/** See `UserMessage.anchorSeq`. */
+	anchorSeq?: HistorySeq;
 }
 
-export type Message = UserMessage | AssistantMessage;
+/** One system message, folded into the card's collapsed timeline. */
+export interface WorkTimelineEntry {
+	id: string;
+	subtype?: string;
+	/** The full prompt body, so nothing the old banner showed is lost. */
+	content: string;
+	step?: SystemMessageStep;
+	child?: SystemMessageChild;
+}
+
+/**
+ * Every system message of one work, collapsed into a single card anchored where
+ * the first of them landed. It deliberately carries no status: the card reads
+ * that live from the work store, because a work can change state (an interrupt,
+ * for one) without producing any message at all.
+ */
+export interface WorkCardMessage {
+	id: string;
+	role: "work";
+	workId: string;
+	/** Recorded at anchor time; only used when the work is gone from the store. */
+	workType?: WorkType;
+	title?: string;
+	entries: WorkTimelineEntry[];
+	createdAt: Date;
+}
+
+/**
+ * A hairline in the stream marking where the work moved to a new step. It says
+ * only "the step changed here" — carrying no status, it can never contradict
+ * the card.
+ */
+export interface StepDividerMessage {
+	id: string;
+	role: "step_divider";
+	workId: string;
+	step: SystemMessageStep;
+	createdAt: Date;
+}
+
+export type Message =
+	| UserMessage
+	| AssistantMessage
+	| WorkCardMessage
+	| StepDividerMessage;
 
 export type PermissionBehavior = "allow" | "deny" | "ask";
 
@@ -219,6 +344,14 @@ export interface AuthResult {
 	version: string;
 	title: string;
 	work_dir: string;
+	/**
+	 * Ceiling on one upload request, in bytes, sent so a client can refuse an
+	 * oversized file before spending a slow link on it instead of keeping its
+	 * own copy of the number. The same on every route — the relay tunnel
+	 * streams a request body and imposes no ceiling of its own — but still read
+	 * from this reply rather than hard-coded (see docs/file.md#transfer).
+	 */
+	max_upload_size: number;
 }
 
 export interface MessageParams {
@@ -253,6 +386,14 @@ export interface SessionDeleteParams {
 export interface SessionUpdateTitleParams {
 	session_id: string;
 	title: string;
+}
+
+export interface SessionForkParams {
+	session_id: string;
+	/** Inclusive: the new session keeps every record up to and including this one. */
+	anchor_seq: HistorySeq;
+	/** Empty copies the source session's title. */
+	title?: string;
 }
 
 export interface SessionListSubscribeResult {
@@ -329,6 +470,8 @@ export type ServerNotification =
 			type: "tool_result";
 			tool_use_id: string;
 			tool_result: string;
+			/** Absent unless the agent CLI reported the tool call as failed. */
+			is_error?: boolean;
 	  }
 	| {
 			type: "warning";

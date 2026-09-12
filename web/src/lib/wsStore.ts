@@ -1,4 +1,10 @@
-import { JSONRPCClient, type JSONRPCRequester } from "json-rpc-2.0";
+import {
+	createJSONRPCErrorResponse,
+	JSONRPCClient,
+	JSONRPCErrorException,
+	type JSONRPCID,
+	type JSONRPCRequester,
+} from "json-rpc-2.0";
 import { create } from "zustand";
 import type {
 	AgentRole,
@@ -32,9 +38,11 @@ import type {
 } from "../types/work";
 import { getWebSocketUrl } from "../utils/config";
 import {
+	type AgentActions,
 	type AgentRoleActions,
 	type ChatActions,
 	type CommandActions,
+	createAgentActions,
 	createAgentRoleActions,
 	createChatActions,
 	createCommandActions,
@@ -65,6 +73,8 @@ export type ConnectionStatus =
 interface ConnectionActions {
 	connect: (token: string) => void;
 	disconnect: () => void;
+	/** Skip the remaining backoff and attempt to reconnect immediately. */
+	retryNow: () => void;
 }
 
 // TODO: Implement retry logic for watcher subscriptions.
@@ -122,6 +132,7 @@ export interface WatchActions {
 }
 
 type RPCActions = ConnectionActions &
+	AgentActions &
 	AgentRoleActions &
 	ChatActions &
 	CommandActions &
@@ -135,17 +146,23 @@ type RPCActions = ConnectionActions &
 
 interface WSState {
 	status: ConnectionStatus;
+	/**
+	 * Consecutive failed reconnects. Because reconnection never gives up,
+	 * "reconnecting" on its own looks the same after one second as after ten
+	 * minutes; the count is what lets the UI escalate.
+	 */
+	reconnectAttempts: number;
 	projectTitle: string;
 	workDir: string;
+	/** See `AuthResult.max_upload_size`; 0 until an auth reply has arrived. */
+	maxUploadSize: number;
 	actions: RPCActions;
 }
 
 // Module-level state for mutable objects (not reactive)
 let ws: WebSocket | null = null;
-let rpcReceiver: JSONRPCClient | null = null;
-let rpcRequester: JSONRPCRequester<void> | null = null;
+let rpcClients: RPCClients | null = null;
 let currentToken: string | null = null;
-let reconnectAttempts = 0;
 let reconnectTimeout: number | undefined;
 // Worktree-scoped watch callbacks.
 // Their server-side watchers live on the worktree and are torn down when the
@@ -228,18 +245,129 @@ export function setOnWorktreeSwitched(callback: (() => void) | null) {
 	onWorktreeSwitched = callback;
 }
 
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_INTERVAL = 3000;
+// Retry forever, backing off. A client that gives up after a fixed handful of
+// attempts is guaranteed to be gone before a real outage ends: the server's own
+// uplink can be down for the better part of a minute before its keepalive
+// notices, and it then reconnects with a backoff of its own. What that left was
+// a dead page only a manual refresh recovered — after a lift, a shut lid, or a
+// server restart. Backing off keeps the cost of a long outage to one attempt
+// per RECONNECT_MAX_DELAY_MS rather than a hot loop, while a brief blip still
+// recovers within a second.
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+// Every client of a restarting server begins its backoff at the same instant
+// and would otherwise retry in lockstep, arriving as one burst.
+const RECONNECT_JITTER = 0.2;
+
+/** Milliseconds to wait before reconnect attempt `attempt`, counting from 0. */
+function reconnectDelay(attempt: number): number {
+	const base = Math.min(
+		RECONNECT_BASE_DELAY_MS * 2 ** attempt,
+		RECONNECT_MAX_DELAY_MS,
+	);
+	return Math.round(base * (1 + RECONNECT_JITTER * (2 * Math.random() - 1)));
+}
+
+/**
+ * The browser knows a retry is worth attempting before the timer does: regained
+ * connectivity, or a backgrounded tab coming back, both mean waiting out the
+ * rest of a 30 second backoff is pointless.
+ *
+ * The "reconnecting" check is not just throttling. connect() does not guard
+ * against "auth_failed", and the token outlives the rejection, so without it
+ * every wake-up would re-offer a token the server has already refused.
+ */
+function listenForRecovery(): void {
+	if (typeof window === "undefined") return;
+
+	const retryIfWaiting = () => {
+		const store = useWSStore.getState();
+		if (store.status === "reconnecting") {
+			store.actions.retryNow();
+		}
+	};
+	window.addEventListener("online", retryIfWaiting);
+	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "visible") retryIfWaiting();
+	});
+}
+
+/**
+ * Whether a rejected auth request means the server actually turned us away.
+ *
+ * json-rpc-2.0 surfaces its own client-side timeout as a JSON-RPC error too,
+ * but with DefaultErrorCode (0); a real rejection always carries a genuine
+ * (negative) JSON-RPC code, and a dead transport rejects with a plain Error.
+ * The distinction matters because "auth_failed" is terminal: misreading a
+ * timeout as bad credentials strands the user whenever the tunnel is merely
+ * slow or down.
+ */
+function isAuthRejection(error: unknown): boolean {
+	return error instanceof JSONRPCErrorException && error.code !== 0;
+}
 
 function getClient(): JSONRPCRequester<void> | null {
-	return rpcRequester;
+	return rpcClients?.withTimeout ?? null;
+}
+
+function getAgentStartClient(): JSONRPCRequester<void> | null {
+	return rpcClients?.withAgentStartTimeout ?? null;
 }
 
 const RPC_TIMEOUT_MS = 30000;
 
+const RPC_TIMEOUT_MESSAGE = "Request timed out";
+
+/**
+ * Whether a request was given up on by our own clock rather than answered.
+ *
+ * The server may well still be working on it, so a caller that retries a timeout
+ * stacks a second copy of the same work on top of the first — which is how one
+ * slow response turns into four.
+ */
+export function isRPCTimeout(error: unknown): boolean {
+	// Code 0 first: the server can word an error however it likes, and only a
+	// client-side failure carries DefaultErrorCode. See isAuthRejection.
+	return (
+		error instanceof JSONRPCErrorException &&
+		error.code === 0 &&
+		error.message === RPC_TIMEOUT_MESSAGE
+	);
+}
+
+// Where: server/agent/codex/codex.go's versionProbeTimeout (10s) and
+// handshakeTimeout (30s), which run in series inside codex.Start.
+const CODEX_START_BUDGET_MS = 10000 + 30000;
+
+/**
+ * Timeout for the RPCs that are given room to wait out an agent CLI start:
+ * `chat.message` and `work.start`.
+ *
+ * Both reach `GetOrCreateProcess` -> `Agent.Start` on their own request path —
+ * `chat.message` directly, `work.start` through the kickoff (or restart) message
+ * it awaits before replying. Requests that only address a process already there
+ * (permission, question, interrupt) keep RPC_TIMEOUT_MS.
+ *
+ * Why it must exceed CODEX_START_BUDGET_MS: the server ends a hung start with an
+ * error naming the step that stalled ("codex did not answer the MCP handshake
+ * within 30s"). Give up before that error is written and the user gets
+ * "Request timed out" instead — every time, not occasionally, since the two
+ * deadlines are fixed. The extra margin covers what those two constants don't:
+ * spawning the process and building its pipes, the file writes a request makes
+ * around that (`work.start` claims the work item and creates its session first),
+ * a loaded disk, the round trip.
+ *
+ * Overshooting costs little: a dead socket rejects everything still pending at
+ * once (see `onclose`) rather than leaving it to sit out the clock, so the extra
+ * seconds are only ever spent on a server that is genuinely still working.
+ */
+const AGENT_START_RPC_TIMEOUT_MS = CODEX_START_BUDGET_MS + 20000;
+
 interface RPCClients {
 	base: JSONRPCClient;
 	withTimeout: JSONRPCRequester<void>;
+	/** For agent-starting requests only; see AGENT_START_RPC_TIMEOUT_MS. */
+	withAgentStartTimeout: JSONRPCRequester<void>;
 }
 
 function createRPCClient(socket: WebSocket): RPCClients {
@@ -249,7 +377,16 @@ function createRPCClient(socket: WebSocket): RPCClients {
 		}
 		socket.send(JSON.stringify(request));
 	});
-	return { base, withTimeout: base.timeout(RPC_TIMEOUT_MS) };
+	// Code 0 is json-rpc-2.0's DefaultErrorCode, the same one it uses for its own
+	// timeouts; isAuthRejection reads that code as "the transport gave up", as
+	// opposed to a genuine (negative) code meaning the server said no.
+	const timedOut = (id: JSONRPCID) =>
+		createJSONRPCErrorResponse(id, 0, RPC_TIMEOUT_MESSAGE);
+	return {
+		base,
+		withTimeout: base.timeout(RPC_TIMEOUT_MS, timedOut),
+		withAgentStartTimeout: base.timeout(AGENT_START_RPC_TIMEOUT_MS, timedOut),
+	};
 }
 
 function stripNamespace(method: string): string {
@@ -336,14 +473,15 @@ function handleNotification(method: string, params: unknown): void {
 }
 
 // Create namespace-specific actions
+const agentActions = createAgentActions(getClient);
 const agentRoleActions = createAgentRoleActions(getClient);
-const chatActions = createChatActions(getClient);
+const chatActions = createChatActions(getClient, getAgentStartClient);
 const commandActions = createCommandActions(getClient);
 const sessionActions = createSessionActions(getClient);
 const settingsActions = createSettingsActions(getClient);
 const fileActions = createFileActions(getClient);
 const gitActions = createGitActions(getClient);
-const workActions = createWorkActions(getClient);
+const workActions = createWorkActions(getClient, getAgentStartClient);
 const worktreeRpcActions = createWorktreeActions(getClient);
 
 // Listener for worktree deleted notification
@@ -371,13 +509,17 @@ export function setWorktreeNotFoundListener(
 
 export const useWSStore = create<WSState>((set, get) => ({
 	status: "disconnected",
+	reconnectAttempts: 0,
 	projectTitle: "",
 	workDir: "",
+	maxUploadSize: 0,
 
 	actions: {
 		connect: (token: string) => {
 			const currentStatus = get().status;
-			// "error" is a terminal state requiring user intervention (page refresh)
+			// "error" now means only "no token to connect with", which genuinely
+			// needs the user; a connection that keeps failing stays in
+			// "reconnecting" and retries on its own.
 			if (
 				currentStatus === "connecting" ||
 				currentStatus === "connected" ||
@@ -389,6 +531,14 @@ export const useWSStore = create<WSState>((set, get) => ({
 			if (!token) {
 				set({ status: "error" });
 				return;
+			}
+
+			// A retry is already armed while status is "reconnecting"; leaving it
+			// there would open a second socket a moment from now and orphan this
+			// one. Mirrors web-cluster's connectInternal.
+			if (reconnectTimeout) {
+				clearTimeout(reconnectTimeout);
+				reconnectTimeout = undefined;
 			}
 
 			const isReconnecting = currentStatus === "reconnecting";
@@ -403,12 +553,11 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 			socket.onopen = async () => {
 				const clients = createRPCClient(socket);
-				rpcReceiver = clients.base;
-				rpcRequester = clients.withTimeout;
+				rpcClients = clients;
 
 				try {
 					const currentWorktree = worktreeActions.getCurrent();
-					const result = (await rpcRequester.request("auth", {
+					const result = (await clients.withTimeout.request("auth", {
 						token,
 						worktree: currentWorktree || undefined,
 					} as AuthParams)) as AuthResult;
@@ -425,11 +574,21 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 					set({
 						status: "connected",
+						reconnectAttempts: 0,
 						projectTitle: result.title,
 						workDir: result.work_dir,
+						maxUploadSize: result.max_upload_size,
 					});
-					reconnectAttempts = 0;
 				} catch (error) {
+					// Not a rejection: the request timed out or the socket died
+					// mid-auth. Close (a no-op if it is already gone) and let onclose
+					// run the normal reconnect path.
+					if (!isAuthRejection(error)) {
+						console.warn("WebSocket auth did not complete, retrying:", error);
+						socket.close(1000, "auth_incomplete");
+						return;
+					}
+
 					const currentWorktree = worktreeActions.getCurrent();
 					// If auth failed with a specific worktree, reset to main and retry
 					if (currentWorktree) {
@@ -456,7 +615,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 					// JSON-RPC 2.0 response (has id)
 					if ("id" in data && data.id !== null) {
-						rpcReceiver?.receive(data);
+						rpcClients?.base.receive(data);
 						return;
 					}
 
@@ -474,9 +633,23 @@ export const useWSStore = create<WSState>((set, get) => ({
 			};
 
 			socket.onclose = () => {
+				// A newer socket may already have replaced this one. Closing is not
+				// instant — the handshake against a dead relay drags on for seconds —
+				// and reconnectWebSocket() opens the replacement only 100ms after
+				// asking for the close, so a superseded socket routinely outlives its
+				// successor's setup. Without this guard it would then strip the live
+				// connection of its RPC client and subscriptions and demote it to
+				// "reconnecting", leaving a healthy socket that nothing can reach and
+				// that disconnect() can no longer close.
+				if (ws !== socket) {
+					return;
+				}
+
 				ws = null;
-				rpcReceiver = null;
-				rpcRequester = null;
+				// Their answers can only have come down this socket, so waiting out
+				// the RPC timeout would just be a slower way of failing.
+				rpcClients?.base.rejectAllPendingRequests("Connection lost");
+				rpcClients = null;
 				clearAllWatchSubscriptions();
 
 				const currentStatus = get().status;
@@ -488,19 +661,20 @@ export const useWSStore = create<WSState>((set, get) => ({
 					return;
 				}
 
-				// Retry if we have attempts left and a token
-				if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && currentToken) {
-					// Use "reconnecting" to preserve UI state; "disconnected" is for intentional disconnect
-					set({ status: "reconnecting" });
-					reconnectAttempts += 1;
-					reconnectTimeout = window.setTimeout(() => {
-						if (currentToken) {
-							get().actions.connect(currentToken);
-						}
-					}, RECONNECT_INTERVAL);
-				} else {
+				// Without a token there is nothing to retry with; that needs the user.
+				if (!currentToken) {
 					set({ status: "error" });
+					return;
 				}
+
+				// Use "reconnecting" to preserve UI state; "disconnected" is for intentional disconnect
+				const attempts = get().reconnectAttempts;
+				set({ status: "reconnecting", reconnectAttempts: attempts + 1 });
+				reconnectTimeout = window.setTimeout(() => {
+					if (currentToken) {
+						get().actions.connect(currentToken);
+					}
+				}, reconnectDelay(attempts));
 			};
 
 			ws = socket;
@@ -512,15 +686,35 @@ export const useWSStore = create<WSState>((set, get) => ({
 				reconnectTimeout = undefined;
 			}
 			currentToken = null;
-			reconnectAttempts = MAX_RECONNECT_ATTEMPTS; // Prevent auto-reconnect
-			// Set status BEFORE closing so onclose sees correct state
-			set({ status: "disconnected" });
+			// Set status BEFORE closing so onclose sees "disconnected" and does
+			// not treat an intentional close as a drop worth reconnecting.
+			//
+			// Auto-reconnect is already off: onclose bails on "disconnected" and
+			// the pending timer checks currentToken. Reset the attempt count so a
+			// later connect() starts at the short end of the backoff.
+			set({ status: "disconnected", reconnectAttempts: 0 });
 			if (ws) {
 				ws.close(1000, "disconnect");
 				ws = null;
-				rpcReceiver = null;
-				rpcRequester = null;
+				// onclose will ignore this socket for the same reason it ignores any
+				// superseded one, so nothing else is going to settle these.
+				rpcClients?.base.rejectAllPendingRequests("Connection lost");
+				rpcClients = null;
+				// onclose used to do this on its way past; it now ignores a socket
+				// that is no longer the current one, and this one just stopped being
+				// it. Doing it here also frees the callbacks immediately rather than
+				// whenever the close handshake happens to finish.
+				clearAllWatchSubscriptions();
 			}
+		},
+
+		retryNow: () => {
+			if (!currentToken) return;
+			// connect() disarms the pending retry itself. The attempt counter is
+			// deliberately left alone: an immediate retry that also fails should
+			// resume the backoff where it was, not restart it, or a series of
+			// recovery events could retry without limit.
+			get().actions.connect(currentToken);
 		},
 
 		fsSubscribe: async (path: string, callback: () => void) => {
@@ -789,6 +983,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		},
 
 		// Spread namespace-specific actions
+		...agentActions,
 		...agentRoleActions,
 		...chatActions,
 		...commandActions,
@@ -818,16 +1013,19 @@ export function reconnectWebSocket(): void {
 // Expose actions for non-React contexts (e.g., authStore logout)
 export const wsActions = useWSStore.getState().actions;
 
+listenForRecovery();
+
 type SwitchResult = "success" | "not_connected" | "failed";
 
 // Switch worktree on existing connection
 async function switchWorktreeRPC(name: string): Promise<SwitchResult> {
-	if (!rpcRequester) {
+	const client = getClient();
+	if (!client) {
 		return "not_connected";
 	}
 
 	try {
-		const result = (await rpcRequester.request("worktree.switch", {
+		const result = (await client.request("worktree.switch", {
 			name,
 		})) as { work_dir: string; worktree_name: string };
 
@@ -860,14 +1058,12 @@ export function resetWSStore() {
 		ws.close(1000, "disconnect");
 		ws = null;
 	}
-	rpcReceiver = null;
-	rpcRequester = null;
+	rpcClients = null;
 	currentToken = null;
 	if (reconnectTimeout) {
 		clearTimeout(reconnectTimeout);
 		reconnectTimeout = undefined;
 	}
-	reconnectAttempts = 0;
 	fsWatchCallbacks.clear();
 	gitWatchCallbacks.clear();
 	gitDiffWatchCallbacks.clear();
@@ -882,6 +1078,7 @@ export function resetWSStore() {
 	onWorktreeSwitched = null;
 	useWSStore.setState({
 		status: "disconnected",
+		reconnectAttempts: 0,
 		projectTitle: "",
 		workDir: "",
 	});

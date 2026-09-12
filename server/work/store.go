@@ -27,43 +27,42 @@ type Store interface {
 	// encapsulates validation, sessionID management, and side effects.
 
 	// Start transitions a work item to in_progress and assigns an explicit
-	// sessionID. Allowed from: open, stopped, needs_input. Use Reactivate for
-	// process-running detection. To start an agent session use Claim, which
-	// decides the sessionID atomically; Start is the lower-level primitive.
+	// sessionID. Allowed from any status ValidateStartable admits — everything
+	// but in_progress and closed. Use MarkRunning when the session is already
+	// live and only the status is stale. To start an agent session use Claim,
+	// which decides the sessionID atomically; Start is the lower-level primitive.
 	Start(ctx context.Context, id string, sessionID string) (Work, error)
 
 	// Claim atomically transitions a work item to in_progress for starting an
 	// agent session. The restart decision and sessionID assignment happen under
-	// the store lock so concurrent claims cannot race: on restart (current status
-	// stopped/needs_input) the existing sessionID is reused to preserve chat
-	// history; otherwise a fresh sessionID is generated. The returned restart
+	// the store lock so concurrent claims cannot race: on restart (the work
+	// already has a session) that sessionID is reused to preserve chat history;
+	// otherwise a fresh sessionID is generated. The returned restart
 	// flag tells the caller how to RollbackStart if the kickoff later fails.
 	Claim(ctx context.Context, id string) (w Work, restart bool, err error)
 
-	// Stop transitions in_progress/needs_input → stopped.
+	// Stop records that the work's agent session ended. Allowed from any live
+	// status.
 	Stop(ctx context.Context, id string) error
 
-	// MarkNeedsInput transitions in_progress → needs_input.
+	// MarkNeedsInput records that the agent is waiting for user confirmation.
 	MarkNeedsInput(ctx context.Context, id string) error
 
-	// MarkWaiting transitions in_progress → waiting.
-	// Used when the agent is waiting for child work to complete.
+	// MarkWaiting records that the agent is waiting for child work to complete.
 	MarkWaiting(ctx context.Context, id string) error
 
-	// Resume transitions needs_input → in_progress.
-	Resume(ctx context.Context, id string) error
-
-	// ResumeFromWaiting transitions waiting → in_progress.
-	// Used when a child work completes or user sends input.
-	ResumeFromWaiting(ctx context.Context, id string) error
-
-	// Reactivate transitions stopped → in_progress without changing sessionID.
-	// Used for process-running detection (user sends message to stopped session).
-	Reactivate(ctx context.Context, id string) error
+	// MarkRunning records that the work's agent session is live again, from any
+	// live status (needs_input after user input, waiting after a child closed,
+	// stopped after process-running detection). SessionID is left untouched.
+	// Rejected only for open (never started; use Start) and closed (use Reopen).
+	MarkRunning(ctx context.Context, id string) error
 
 	// StepDone marks current work progress as complete.
 	// Work advances CurrentStep while more steps remain; otherwise it closes.
 	// Returns hasMoreSteps=true if there are remaining steps after advancement.
+	// Allowed from any live status: the calling agent is proof its session runs,
+	// so an advance also clears a stale needs_input/waiting/stopped back to
+	// in_progress.
 	StepDone(ctx context.Context, id string, totalSteps int) (hasMoreSteps bool, err error)
 
 	// RollbackStart reverts a failed Start. Fresh starts roll back to open
@@ -326,9 +325,9 @@ func (s *FileStore) Start(_ context.Context, id string, sessionID string) (Work,
 	}
 
 	w := &s.works[idx]
-	if !ValidateTransition(w.Status, StatusInProgress) {
+	if err := ValidateStartable(w.Status); err != nil {
 		s.worksMu.Unlock()
-		return Work{}, fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusInProgress)
+		return Work{}, fmt.Errorf("cannot start work %s: %w", id, err)
 	}
 
 	prev := s.snapshotWorks()
@@ -358,16 +357,18 @@ func (s *FileStore) Claim(_ context.Context, id string) (Work, bool, error) {
 	}
 
 	w := &s.works[idx]
-	if !ValidateTransition(w.Status, StatusInProgress) {
+	if err := ValidateStartable(w.Status); err != nil {
 		s.worksMu.Unlock()
-		return Work{}, false, fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusInProgress)
+		return Work{}, false, fmt.Errorf("cannot start work %s: %w", id, err)
 	}
 
-	// Decide restart and sessionID under the lock from the current status, so a
-	// concurrent transition cannot make us reuse a stale snapshot's decision.
-	restart := w.Status == StatusStopped || w.Status == StatusNeedsInput
+	// Any work that already owns a session is a restart: reusing that session
+	// preserves the chat history. Only a never-started work (or one rolled back
+	// to open, which clears the session) gets a fresh one. Decided under the
+	// lock so a concurrent transition cannot make us act on a stale snapshot.
 	sessionID := w.SessionID
-	if !restart || sessionID == "" {
+	restart := sessionID != ""
+	if !restart {
 		sessionID = uuid.Must(uuid.NewV7()).String()
 	}
 
@@ -387,7 +388,11 @@ func (s *FileStore) Claim(_ context.Context, id string) (Work, bool, error) {
 	return result, restart, nil
 }
 
-func (s *FileStore) Stop(_ context.Context, id string) error {
+// setLiveStatus moves a work between the live statuses. Every live status is a
+// valid source (see ValidateProgress); action names the intent for the error
+// message. Re-setting the status a work already has is a no-op, so a repeated
+// liveness signal does not fire a redundant change event.
+func (s *FileStore) setLiveStatus(id string, target WorkStatus, action string) error {
 	s.worksMu.Lock()
 
 	idx := s.findIndex(id)
@@ -397,138 +402,38 @@ func (s *FileStore) Stop(_ context.Context, id string) error {
 	}
 
 	w := &s.works[idx]
-	if !ValidateTransition(w.Status, StatusStopped) {
+	if err := ValidateProgress(w.Status); err != nil {
 		s.worksMu.Unlock()
-		return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusStopped)
+		return fmt.Errorf("cannot %s work %s: %w", action, id, err)
+	}
+	if w.Status == target {
+		s.worksMu.Unlock()
+		return nil
 	}
 
 	prev := s.snapshotWorks()
 
-	w.Status = StatusStopped
+	w.Status = target
 	w.UpdatedAt = time.Now()
 
 	modified := map[string]bool{id: true}
 	return s.persistAndNotifyUpdates(prev, modified)
+}
+
+func (s *FileStore) Stop(_ context.Context, id string) error {
+	return s.setLiveStatus(id, StatusStopped, "stop")
 }
 
 func (s *FileStore) MarkNeedsInput(_ context.Context, id string) error {
-	s.worksMu.Lock()
-
-	idx := s.findIndex(id)
-	if idx < 0 {
-		s.worksMu.Unlock()
-		return ErrWorkNotFound
-	}
-
-	w := &s.works[idx]
-	if !ValidateTransition(w.Status, StatusNeedsInput) {
-		s.worksMu.Unlock()
-		return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusNeedsInput)
-	}
-
-	prev := s.snapshotWorks()
-
-	w.Status = StatusNeedsInput
-	w.UpdatedAt = time.Now()
-
-	modified := map[string]bool{id: true}
-	return s.persistAndNotifyUpdates(prev, modified)
-}
-
-func (s *FileStore) Resume(_ context.Context, id string) error {
-	s.worksMu.Lock()
-
-	idx := s.findIndex(id)
-	if idx < 0 {
-		s.worksMu.Unlock()
-		return ErrWorkNotFound
-	}
-
-	w := &s.works[idx]
-	if w.Status != StatusNeedsInput {
-		s.worksMu.Unlock()
-		return fmt.Errorf("%w: invalid transition %s → %s (Resume requires needs_input)", ErrInvalidWork, w.Status, StatusInProgress)
-	}
-
-	prev := s.snapshotWorks()
-
-	w.Status = StatusInProgress
-	w.UpdatedAt = time.Now()
-
-	modified := map[string]bool{id: true}
-	return s.persistAndNotifyUpdates(prev, modified)
+	return s.setLiveStatus(id, StatusNeedsInput, "mark as needing input")
 }
 
 func (s *FileStore) MarkWaiting(_ context.Context, id string) error {
-	s.worksMu.Lock()
-
-	idx := s.findIndex(id)
-	if idx < 0 {
-		s.worksMu.Unlock()
-		return ErrWorkNotFound
-	}
-
-	w := &s.works[idx]
-	if !ValidateTransition(w.Status, StatusWaiting) {
-		s.worksMu.Unlock()
-		return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusWaiting)
-	}
-
-	prev := s.snapshotWorks()
-
-	w.Status = StatusWaiting
-	w.UpdatedAt = time.Now()
-
-	modified := map[string]bool{id: true}
-	return s.persistAndNotifyUpdates(prev, modified)
+	return s.setLiveStatus(id, StatusWaiting, "mark as waiting for child work")
 }
 
-func (s *FileStore) ResumeFromWaiting(_ context.Context, id string) error {
-	s.worksMu.Lock()
-
-	idx := s.findIndex(id)
-	if idx < 0 {
-		s.worksMu.Unlock()
-		return ErrWorkNotFound
-	}
-
-	w := &s.works[idx]
-	if w.Status != StatusWaiting {
-		s.worksMu.Unlock()
-		return fmt.Errorf("%w: invalid transition %s → %s (ResumeFromWaiting requires waiting)", ErrInvalidWork, w.Status, StatusInProgress)
-	}
-
-	prev := s.snapshotWorks()
-
-	w.Status = StatusInProgress
-	w.UpdatedAt = time.Now()
-
-	modified := map[string]bool{id: true}
-	return s.persistAndNotifyUpdates(prev, modified)
-}
-
-func (s *FileStore) Reactivate(_ context.Context, id string) error {
-	s.worksMu.Lock()
-
-	idx := s.findIndex(id)
-	if idx < 0 {
-		s.worksMu.Unlock()
-		return ErrWorkNotFound
-	}
-
-	w := &s.works[idx]
-	if w.Status != StatusStopped {
-		s.worksMu.Unlock()
-		return fmt.Errorf("%w: invalid transition %s → %s (Reactivate requires stopped)", ErrInvalidWork, w.Status, StatusInProgress)
-	}
-
-	prev := s.snapshotWorks()
-
-	w.Status = StatusInProgress
-	w.UpdatedAt = time.Now()
-
-	modified := map[string]bool{id: true}
-	return s.persistAndNotifyUpdates(prev, modified)
+func (s *FileStore) MarkRunning(_ context.Context, id string) error {
+	return s.setLiveStatus(id, StatusInProgress, "mark as running")
 }
 
 func (s *FileStore) StepDone(_ context.Context, id string, totalSteps int) (bool, error) {
@@ -541,15 +446,19 @@ func (s *FileStore) StepDone(_ context.Context, id string, totalSteps int) (bool
 	}
 
 	w := &s.works[idx]
-	if w.Status != StatusInProgress {
+	if err := ValidateProgress(w.Status); err != nil {
 		s.worksMu.Unlock()
-		return false, fmt.Errorf("%w: StepDone requires in_progress status, got %s", ErrInvalidWork, w.Status)
+		return false, fmt.Errorf("cannot complete a step of work %s: %w", id, err)
 	}
 
 	prev := s.snapshotWorks()
 
 	if totalSteps > 0 && w.CurrentStep < totalSteps-1 {
 		w.CurrentStep++
+		// The agent just reported progress, so it is running whatever a stale
+		// needs_input/waiting/stopped says — and the next-step prompt is only
+		// delivered to in_progress work.
+		w.Status = StatusInProgress
 		w.UpdatedAt = time.Now()
 
 		modified := map[string]bool{id: true}
@@ -579,21 +488,20 @@ func (s *FileStore) RollbackStart(_ context.Context, id string, wasRestart bool)
 	}
 
 	w := &s.works[idx]
+	// Only the in_progress a failed start left behind may be rolled back. If the
+	// agent has meanwhile moved the work on, the kickoff was not a clean failure
+	// and undoing it would clobber live state.
+	if w.Status != StatusInProgress {
+		s.worksMu.Unlock()
+		return fmt.Errorf("%w: cannot roll back start of work %s: it is %s, not in_progress", ErrInvalidWork, id, w.Status)
+	}
+
 	prev := s.snapshotWorks()
 
 	if wasRestart {
-		// Restart rollback: in_progress → stopped, preserve sessionID
-		if !ValidateTransition(w.Status, StatusStopped) {
-			s.worksMu.Unlock()
-			return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusStopped)
-		}
+		// Restart rollback preserves the sessionID so the chat history survives.
 		w.Status = StatusStopped
 	} else {
-		// Fresh start rollback: in_progress → open, clear sessionID
-		if !ValidateTransition(w.Status, StatusOpen) {
-			s.worksMu.Unlock()
-			return fmt.Errorf("%w: invalid transition %s → %s", ErrInvalidWork, w.Status, StatusOpen)
-		}
 		w.Status = StatusOpen
 		w.SessionID = ""
 	}

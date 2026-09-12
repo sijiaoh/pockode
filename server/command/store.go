@@ -2,14 +2,14 @@
 package command
 
 import (
-	"encoding/json"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/pockode/server/filestore"
 )
 
 // namePattern validates slash command names per Claude Code naming conventions.
@@ -67,17 +67,16 @@ func (s *Store) filePath() string {
 }
 
 func (s *Store) readFromDisk() ([]RecentCommand, error) {
-	data, err := os.ReadFile(s.filePath())
-	if os.IsNotExist(err) {
-		return []RecentCommand{}, nil
-	}
+	// NewStore's error aborts server startup, so a commands.json damaged by a
+	// crash would make the whole server unbootable over nothing but slash
+	// command history: quarantine it and start from empty instead.
+	var recent []RecentCommand
+	found, err := filestore.ReadJSONOrQuarantine(s.filePath(), "command history", &recent)
 	if err != nil {
 		return nil, err
 	}
-
-	var recent []RecentCommand
-	if err := json.Unmarshal(data, &recent); err != nil {
-		return nil, err
+	if !found {
+		return []RecentCommand{}, nil
 	}
 
 	// Deduplicate for legacy data; new entries are deduplicated in Use().
@@ -100,11 +99,11 @@ func deduplicateCommands(commands []RecentCommand) []RecentCommand {
 }
 
 func (s *Store) persist() error {
-	data, err := json.MarshalIndent(s.recent, "", "  ")
+	data, err := filestore.MarshalIndex(s.recent)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.filePath(), data, 0644)
+	return filestore.WriteFileAtomic(s.filePath(), data, 0644)
 }
 
 // List returns commands sorted by most recently used, with unused builtins appended at the end.

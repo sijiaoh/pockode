@@ -3,12 +3,13 @@ module github.com/pockode/server
 go 1.25.4
 
 require (
-	github.com/coder/websocket v1.8.14
+	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.6.0
 )
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/hashicorp/yamux v0.1.2
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/sourcegraph/jsonrpc2 v0.2.1
 	golang.org/x/sys v0.29.0

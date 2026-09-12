@@ -1,12 +1,11 @@
 // Package filestore provides infrastructure for JSON-file-backed stores:
-// atomic file I/O (file lock + write-temp-fsync-rename), fsnotify-based
-// external change detection with debounce, and writeGen-based stale reload
-// prevention.
+// atomic file I/O (file lock + write-temp-fsync-rename), crash-tolerant JSONL
+// append and read, fsnotify-based external change detection with debounce, and
+// writeGen-based stale reload prevention.
 package filestore
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -65,62 +64,18 @@ func New(cfg Config) (*File, error) {
 
 // --- File I/O ---
 
-func (f *File) lockPath() string {
-	return f.path + ".lock"
-}
-
 // Read reads the index file under a shared lock and returns the raw bytes.
 // Returns nil, nil if the file does not exist.
 func (f *File) Read() ([]byte, error) {
-	lock, err := acquireLock(f.lockPath(), false)
-	if err != nil {
-		return nil, err
-	}
-	defer lock.release()
-
-	data, err := os.ReadFile(f.path)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	return data, err
+	return ReadFileLocked(f.path)
 }
 
 // Write atomically writes data using write-temp-fsync-rename under an
 // exclusive lock. Increments writeGen on success.
 func (f *File) Write(data []byte) error {
-	lock, err := acquireLock(f.lockPath(), true)
-	if err != nil {
+	if err := WriteFileAtomic(f.path, data, filePerm); err != nil {
 		return err
 	}
-	defer lock.release()
-
-	tmpPath := f.path + ".tmp"
-
-	tmpF, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-
-	if _, err := tmpF.Write(data); err != nil {
-		tmpF.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := tmpF.Sync(); err != nil {
-		tmpF.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("fsync temp file: %w", err)
-	}
-	if err := tmpF.Close(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("close temp file: %w", err)
-	}
-
-	if err := renameFile(tmpPath, f.path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("rename temp to index: %w", err)
-	}
-
 	f.writeGen.Add(1)
 	return nil
 }

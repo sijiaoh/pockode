@@ -60,7 +60,9 @@ func (o StartOptions) MCPDir() string {
 	return o.DataDir
 }
 
-// Agent defines the interface for an AI agent.
+// Agent defines the interface for an AI agent. What an agent can do beyond
+// starting a session is said by the optional interfaces it implements, not by
+// declarations here — SessionForker is the one that exists today.
 type Agent interface {
 	// Start launches a persistent agent process and returns a Session.
 	// The process stays alive until the context is cancelled or Close is called.
@@ -72,11 +74,19 @@ type Agent interface {
 type Session interface {
 	// Events returns the channel that streams all events from the agent process.
 	// The channel remains open until the process terminates.
-	// EventTypeDone signals the current message response is complete.
+	// A turn ends with exactly one event whose type AwaitsUserInput: done when it
+	// completed, error when it failed, interrupted when it was aborted, or a
+	// permission/question request when it is blocked on the user.
+	//
+	// Nothing is promised about how long a turn takes or how often it produces
+	// events. A turn can span a wait for background work, over which no event
+	// arrives at all for as long as that work runs — so silence must never be
+	// read as an ending (see BackgroundWaiter).
 	Events() <-chan AgentEvent
 
-	// SendMessage sends a new message to the agent.
-	// It should only be called after the previous message is complete (received EventTypeDone).
+	// SendMessage sends a new message to the agent. Callers may send before the
+	// current turn has ended; what happens then is up to the CLI (Claude queues
+	// the message, Codex aborts the running turn and replaces it).
 	SendMessage(prompt string) error
 
 	// SendPermissionResponse sends a permission response to the agent.
@@ -92,4 +102,22 @@ type Session interface {
 
 	// Close terminates the agent process and releases resources.
 	Close()
+}
+
+// BackgroundWaiter is implemented by sessions whose turn can be held open while
+// no events flow at all.
+//
+// A Claude turn that started a background task ends with a result frame the CLI
+// later continues from on its own; Pockode swallows that ending so the turn
+// reads as one long thought. Nothing is emitted for the length of the wait, so
+// anything that measures liveness by events alone — the idle reaper — would
+// conclude the process is abandoned and kill it, taking the background tasks
+// with it.
+//
+// Optional: agents without the concept simply do not implement it.
+type BackgroundWaiter interface {
+	// WaitingForBackgroundWork reports whether the session is currently holding
+	// a turn open for background work. It is always eventually false: the wait
+	// has a budget, after which the turn ends the ordinary way.
+	WaitingForBackgroundWork() bool
 }

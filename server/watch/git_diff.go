@@ -39,13 +39,13 @@ func NewGitDiffWatcher(workDir string) *GitDiffWatcher {
 }
 
 func (w *GitDiffWatcher) Start() error {
-	go w.pollLoop()
+	w.Go(w.pollLoop)
 	slog.Info("GitDiffWatcher started", "workDir", w.workDir, "pollInterval", gitDiffPollInterval)
 	return nil
 }
 
 func (w *GitDiffWatcher) Stop() {
-	w.Cancel()
+	w.CancelAndWait()
 	slog.Info("GitDiffWatcher stopped")
 }
 

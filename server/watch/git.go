@@ -37,13 +37,13 @@ func (w *GitWatcher) Start() error {
 	w.lastState = state
 	w.stateMu.Unlock()
 
-	go w.pollLoop()
+	w.Go(w.pollLoop)
 	slog.Info("GitWatcher started", "workDir", w.workDir, "pollInterval", gitPollInterval)
 	return nil
 }
 
 func (w *GitWatcher) Stop() {
-	w.Cancel()
+	w.CancelAndWait()
 	slog.Info("GitWatcher stopped")
 }
 
@@ -78,6 +78,12 @@ func (w *GitWatcher) pollLoop() {
 
 func (w *GitWatcher) checkAndNotify() {
 	newState := w.pollGitState()
+	// A cancelled context aborts the git commands, so the poll reports an empty
+	// tree rather than the truth: comparing it would announce a change nobody
+	// made, on a watcher that is being torn down anyway.
+	if w.Context().Err() != nil {
+		return
+	}
 
 	w.stateMu.Lock()
 	changed := newState != w.lastState
@@ -94,7 +100,10 @@ func (w *GitWatcher) checkAndNotify() {
 // pollGitState returns git status + HEAD hash for detecting changes.
 // This detects both working tree changes and HEAD changes (commit, checkout, etc).
 func (w *GitWatcher) pollGitState() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Bound by the watcher's context, not just the timeout: Stop waits for this
+	// loop, and a git command left running against a work tree that is being
+	// removed has nothing left to report anyway.
+	ctx, cancel := context.WithTimeout(w.Context(), 10*time.Second)
 	defer cancel()
 
 	// Run both commands in parallel to reduce latency

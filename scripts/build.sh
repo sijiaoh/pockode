@@ -24,20 +24,19 @@ done
 
 echo "Building Pockode $VERSION"
 
+# One workspace, one install: web and web-cluster both resolve @pockode/shared
+# through the root lockfile.
+echo "Installing frontend dependencies..."
+pnpm install --frozen-lockfile
+
 # Build main frontend directly to server/static
 echo "Building main frontend..."
-cd web
-pnpm install --frozen-lockfile
-pnpm run build:release
-cd ..
+pnpm --filter ./web run build:release
 touch server/static/.keep
 
 # Build cluster frontend directly to server/cluster/static
 echo "Building cluster frontend..."
-cd web-cluster
-pnpm install --frozen-lockfile
-pnpm run build:release
-cd ..
+pnpm --filter ./web-cluster run build:release
 touch server/cluster/static/.keep
 
 # Cross-compile for multiple platforms, or only the local one with --local

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pockode/server/internal/proctree"
 	"github.com/pockode/server/logger"
 )
 
@@ -46,7 +47,7 @@ const outputDrainTimeout = 3 * time.Second
 //     direct child, and reaps it concurrently with the drain.
 type Process struct {
 	cmd   *exec.Cmd
-	group *processGroup
+	group *proctree.Tree
 	log   *slog.Logger
 
 	// Stdin is the write end of the child's stdin. Closing it is how a CLI is
@@ -113,10 +114,13 @@ func StartProcess(ctx context.Context, log *slog.Logger, name string, args []str
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
 
-	group := newProcessGroup(cmd)
+	// KillOnClose because a session outlives the call that started it: if the
+	// server crashes, nothing is left to run Terminate, and the CLI and its
+	// descendants would hold the worktree open indefinitely.
+	group := proctree.New(cmd, proctree.KillOnClose())
 
 	if err := cmd.Start(); err != nil {
-		group.close()
+		group.Close()
 		closeFiles(stdinR, stdinW, stdoutR, stdoutW, stderrR, stderrW)
 		return nil, err
 	}
@@ -138,7 +142,7 @@ func StartProcess(ctx context.Context, log *slog.Logger, name string, args []str
 	p.Stdout = pipeReader{f: stdoutR, closed: &p.pipesClosed}
 	p.Stderr = pipeReader{f: stderrR, closed: &p.pipesClosed}
 
-	if err := group.adopt(cmd); err != nil {
+	if err := group.Adopt(cmd); err != nil {
 		// Not fatal: the direct child can still be killed, we just lose the
 		// guarantee about its descendants. Surface it so orphans are explainable.
 		log.Warn("failed to attach process tree tracking", "error", err, "pid", cmd.Process.Pid)
@@ -183,7 +187,7 @@ func (p *Process) OutputDone() {
 // than once and after the child has already exited.
 func (p *Process) Terminate() {
 	p.terminateOnce.Do(func() {
-		if err := p.group.terminate(); err != nil {
+		if err := p.group.Terminate(); err != nil {
 			// Fall back to the direct child so the session cannot hang on a
 			// platform mechanism that failed to initialise. Its descendants may
 			// survive, which is worth saying out loud: they are the explanation
@@ -221,7 +225,7 @@ func (p *Process) reap() {
 	// Release the tree handle before the pipes: termination is asynchronous, so
 	// a straggler may still be exiting, and on Windows releasing the job is what
 	// finishes it off — which in turn frees the pipe ends we are about to close.
-	p.group.close()
+	p.group.Close()
 
 	p.pipesClosed.Store(true)
 	closeFiles(p.stdoutR, p.stderrR)

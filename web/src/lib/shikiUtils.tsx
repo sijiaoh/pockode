@@ -1,5 +1,5 @@
 import { getDiffViewHighlighter } from "@git-diff-view/shiki";
-import { useIsDesktop } from "@pockode/shared";
+import { useIsExpanded } from "@pockode/shared";
 import { Check, Copy } from "lucide-react";
 import * as React from "react";
 import { useShikiHighlighter } from "react-shiki";
@@ -76,16 +76,26 @@ const cssVarTheme = createCssVariablesTheme({
 export function CodeHighlighter({
 	children,
 	language,
+	plain = false,
 }: {
 	children: string;
 	language?: string;
+	/** Render the code as-is. Use for input too large to tokenize on the main thread. */
+	plain?: boolean;
 }) {
-	const isDesktop = useIsDesktop();
-	const fontSize = isDesktop ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
+	const isExpanded = useIsExpanded();
+	const fontSize = isExpanded ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
 	const [copied, setCopied] = React.useState(false);
 	const timerRef = React.useRef<number | undefined>(undefined);
 
-	const highlighted = useShikiHighlighter(children, language, cssVarTheme);
+	// Highlighting is synchronous CPU work proportional to the input, and awaiting
+	// it does not spare the main thread — so the oversized input is withheld from
+	// shiki rather than merely having its result discarded.
+	const highlighted = useShikiHighlighter(
+		plain ? "" : children,
+		plain ? undefined : language,
+		cssVarTheme,
+	);
 
 	React.useEffect(() => {
 		return () => clearTimeout(timerRef.current);
@@ -105,13 +115,17 @@ export function CodeHighlighter({
 			<button
 				type="button"
 				onClick={handleCopy}
-				className="code-copy-button"
+				className="code-copy-button touch-target"
 				aria-label={copied ? "Copied" : "Copy code"}
 			>
 				{copied ? <Check size={14} /> : <Copy size={14} />}
 			</button>
 			<pre className="code-block" style={style}>
-				{highlighted ?? <code>{children}</code>}
+				{plain ? (
+					<code>{children}</code>
+				) : (
+					(highlighted ?? <code>{children}</code>)
+				)}
 			</pre>
 		</div>
 	);

@@ -41,7 +41,7 @@ export default function NotesTab() {
 					type="button"
 					onClick={handleAdd}
 					disabled={!input.trim()}
-					className="rounded bg-th-accent p-1.5 text-th-accent-text disabled:opacity-50"
+					className="flex size-9 items-center justify-center rounded bg-th-accent text-th-accent-text disabled:opacity-50 pointer-coarse:size-11"
 					aria-label="Add note"
 				>
 					<Plus className="size-4" />
@@ -64,7 +64,7 @@ export default function NotesTab() {
 							<button
 								type="button"
 								onClick={() => handleRemove(i)}
-								className="shrink-0 text-th-text-muted hover:text-th-error"
+								className="flex size-9 shrink-0 items-center justify-center text-th-text-muted hover:text-th-error pointer-coarse:size-11"
 								aria-label="Remove note"
 							>
 								<Trash2 className="size-3.5" />

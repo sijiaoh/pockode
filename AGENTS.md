@@ -47,6 +47,7 @@ React SPA (Frontend)
 
 - **Locate before you code** — Determine where code belongs before writing it; especially for reusable logic, proper placement enables discovery and reuse
 - **Everything in its place** — Utility functions go in utility modules, business logic goes in business modules, follow the existing project structure
+- **Events are events, state is state** — An event record is immutable history: it says what was true at one moment. Live state belongs to the store that owns it. Never put state into an event record, and never read current state back out of one — the record cannot change when the state does, so it starts lying (worked example: [docs/code/work-system.md](docs/code/work-system.md#work-messages-in-chat))
 
 ### Shared Code (`@pockode/shared`)
 
@@ -64,13 +65,18 @@ The `packages/shared` package contains UI components, hooks, stores, and utiliti
 
 **Available exports**:
 - Components: `Spinner`, `ConfirmDialog`
-- Hooks: `useIsDesktop`
+- Hooks: `useMediaQuery`, `useOutsideClick`, `useIsExpanded`, `useHasCoarsePointer`, `useHasFinePointer`
 - Stores: `createAuthStore` (factory function for auth store with configurable token key)
-- Utils: `getWebSocketUrl`
+- Utils: `getWebSocketUrl`, `BREAKPOINTS`, `MEDIA_QUERIES`, `hasCoarsePointer`
+
+The responsive exports are the single source for the width ladder and the two
+pointer gates; both stylesheets are checked against them. Width decides where
+things go, pointer decides whether they can be reached — see
+`packages/shared/src/utils/responsive.ts`.
 
 **Usage**:
 ```typescript
-import { Spinner, ConfirmDialog, useIsDesktop, createAuthStore, getWebSocketUrl } from "@pockode/shared";
+import { Spinner, ConfirmDialog, useIsExpanded, createAuthStore, getWebSocketUrl } from "@pockode/shared";
 ```
 
 **Workflow**:
@@ -97,6 +103,14 @@ import { Spinner, ConfirmDialog, useIsDesktop, createAuthStore, getWebSocketUrl 
 - **Keep in sync** — Outdated comments are worse than none; update comments when changing code
 - **TODOs need context** — e.g., `// TODO: Remove after upstream API supports X`
 - **Design docs go in docs/** — System-level architecture explanations don't belong in code comments
+
+### Public Repository Boundary
+
+This repository is public; the cloud service it connects to is developed in a separate private repository. Everything written here — code, comments, docs, commit messages — is published.
+
+- **Never disclose the private repository's internals** — its file paths, file names, design document names, directory layout, or internal technology choices (which edge proxy, which database, ...). They are worthless to a reader who cannot open them, and they expose the closed-source layout.
+- **Do document the interoperability contract** — transport protocol, authentication scheme, timeout and grace-period values, compression negotiation. Anyone self-hosting the other side needs these facts, and they are the reason the constants here have the values they do.
+- **Refer to the other side neutrally** — "the cloud's relay implementation", "the cloud's relay design document", "the cloud's tunnel grace period". Keep the fact and the number, drop the path.
 
 ### Git Guidelines
 

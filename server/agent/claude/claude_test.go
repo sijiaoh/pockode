@@ -8,8 +8,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/pockode/server/agent"
 )
@@ -17,6 +20,20 @@ import (
 // parseTestLine mirrors streamOutput's decode-then-parse path so tests can feed
 // raw lines (including empty and malformed JSON) directly to parseLine.
 func parseTestLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
+	return parseTestLineWithDecline(log, line, pendingRequests, func(string, string) {})
+}
+
+func parseTestLineWithDecline(log *slog.Logger, line []byte, pendingRequests *sync.Map, decline declineFunc) []agent.AgentEvent {
+	return parseTestLineFull(log, line, pendingRequests, &backgroundTaskTracker{}, decline)
+}
+
+// parseTestLineWithTracker feeds lines through a caller-owned background task
+// tracker, so a test can replay a whole sequence against one CLI process.
+func parseTestLineWithTracker(log *slog.Logger, line []byte, backgroundTasks *backgroundTaskTracker) []agent.AgentEvent {
+	return parseTestLineFull(log, line, &sync.Map{}, backgroundTasks, func(string, string) {})
+}
+
+func parseTestLineFull(log *slog.Logger, line []byte, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc) []agent.AgentEvent {
 	if len(line) == 0 {
 		return nil
 	}
@@ -24,7 +41,7 @@ func parseTestLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []a
 	if err := json.Unmarshal(line, &event); err != nil {
 		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
 	}
-	return parseLine(log, line, event, pendingRequests)
+	return parseLine(log, line, event, pendingRequests, backgroundTasks, decline)
 }
 
 // observeLine decodes a raw line and forwards it to observe (test helper).
@@ -63,19 +80,62 @@ func TestParseLine(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:     "system non-init event is forwarded",
+			name:     "system compact_boundary is forwarded",
 			input:    `{"type":"system","subtype":"compact_boundary"}`,
 			expected: []agent.AgentEvent{agent.SystemEvent{Content: `{"type":"system","subtype":"compact_boundary"}`}},
 		},
 		{
+			name:     "system task_started is filtered",
+			input:    `{"type":"system","subtype":"task_started","task_id":"bg1","task_type":"local_bash"}`,
+			expected: nil,
+		},
+		{
+			name:     "system task_notification is filtered",
+			input:    `{"type":"system","subtype":"task_notification","task_id":"bg1","status":"completed"}`,
+			expected: nil,
+		},
+		{
+			name:     "system local_command_output becomes command output",
+			input:    `{"type":"system","subtype":"local_command_output","content":"## Context Usage"}`,
+			expected: []agent.AgentEvent{agent.CommandOutputEvent{Content: "## Context Usage"}},
+		},
+		{
 			name:     "result event success",
-			input:    `{"type":"result","subtype":"success","result":"Hello"}`,
+			input:    `{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","result":"Hello"}`,
 			expected: []agent.AgentEvent{agent.DoneEvent{}},
 		},
 		{
-			name:     "result event interrupted",
+			name:     "result event aborted by terminal_reason",
+			input:    `{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_tools","errors":["[ede_diagnostic] stop_reason=tool_use"]}`,
+			expected: []agent.AgentEvent{agent.InterruptedEvent{}},
+		},
+		{
+			// An abort reason this code predates still has to stop the work item
+			// rather than let it auto-continue.
+			name:     "result event aborted by an unknown aborted_ reason",
+			input:    `{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_by_something_new"}`,
+			expected: []agent.AgentEvent{agent.InterruptedEvent{}},
+		},
+		{
+			name:     "result event interrupted without terminal_reason",
 			input:    `{"type":"result","subtype":"error_during_execution","errors":["Error: Request was aborted."]}`,
 			expected: []agent.AgentEvent{agent.InterruptedEvent{}},
+		},
+		{
+			name:     "result event failure surfaces error",
+			input:    `{"type":"result","subtype":"error_max_turns","is_error":true,"terminal_reason":"max_turns","errors":["Reached maximum number of turns (10)"]}`,
+			expected: []agent.AgentEvent{agent.ErrorEvent{Error: "Reached maximum number of turns (10)"}},
+		},
+		{
+			name:     "result event success flagged is_error uses result text",
+			input:    `{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","result":"API Error: overloaded"}`,
+			expected: []agent.AgentEvent{agent.ErrorEvent{Error: "API Error: overloaded"}},
+		},
+		{
+			// Blank entries must not leak a bare separator as the error text.
+			name:     "result event failure without usable detail falls back to subtype",
+			input:    `{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"model_error","errors":["","  "]}`,
+			expected: []agent.AgentEvent{agent.ErrorEvent{Error: "Claude ended the turn with an error (error_during_execution)"}},
 		},
 		{
 			name:     "assistant text message",
@@ -93,12 +153,57 @@ func TestParseLine(t *testing.T) {
 			expected: nil,
 		},
 		{
+			// How Claude reports a turn that never reached the model: an assistant
+			// message it wrote itself, marked by the <synthetic> model. Captured from
+			// claude 2.1.259 against a local endpoint answering 401.
+			name:  "synthetic assistant message becomes a warning labelled by the CLI",
+			input: `{"type":"assistant","message":{"id":"58516ac7","model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"Invalid API key \u00b7 Fix external API key"}]},"session_id":"08165e10","error":"authentication_failed","is_api_error_message":true}`,
+			expected: []agent.AgentEvent{agent.WarningEvent{
+				Message: "Invalid API key \u00b7 Fix external API key",
+				Code:    "authentication_failed",
+			}},
+		},
+		{
+			// The CLI answers its own resume continuation prompt with this, and does
+			// not label it. Still not the agent talking, so it takes the same path.
+			name:  "synthetic assistant message without a label falls back to a generic code",
+			input: `{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"No response requested."}]}}`,
+			expected: []agent.AgentEvent{agent.WarningEvent{
+				Message: "No response requested.",
+				Code:    "synthetic_message",
+			}},
+		},
+		{
 			name:  "assistant tool_use message",
 			input: `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_123","name":"Read","input":{"file":"test.go"}}]}}`,
 			expected: []agent.AgentEvent{agent.ToolCallEvent{
 				ToolUseID: "toolu_123",
 				ToolName:  "Read",
 				ToolInput: json.RawMessage(`{"file":"test.go"}`),
+			}},
+		},
+		{
+			// The uuid is what a fork names its cut point with, so it has to reach
+			// every record one CLI message produces — the cut can fall between them.
+			name:  "the CLI message uuid reaches every event the message produces",
+			input: `{"type":"assistant","uuid":"msg-uuid","message":{"content":[{"type":"text","text":"reading"},{"type":"tool_use","id":"toolu_9","name":"Read","input":{"path":"a.go"}}]}}`,
+			expected: []agent.AgentEvent{
+				agent.TextEvent{Content: "reading", ProviderMessageID: "msg-uuid"},
+				agent.ToolCallEvent{
+					ToolUseID:         "toolu_9",
+					ToolName:          "Read",
+					ToolInput:         json.RawMessage(`{"path":"a.go"}`),
+					ProviderMessageID: "msg-uuid",
+				},
+			},
+		},
+		{
+			name:  "tool_result carries the uuid of the user message it arrived in",
+			input: `{"type":"user","uuid":"result-uuid","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_9","content":"done"}]}}`,
+			expected: []agent.AgentEvent{agent.ToolResultEvent{
+				ToolUseID:         "toolu_9",
+				ToolResult:        "done",
+				ProviderMessageID: "result-uuid",
 			}},
 		},
 		{
@@ -155,11 +260,32 @@ func TestParseLine(t *testing.T) {
 			}},
 		},
 		{
-			name:  "user tool_result with non-image array content",
+			// The Agent (subagent) tool reports this way and its report is
+			// Markdown: the UI has to receive the text, not the JSON around it.
+			name:  "user tool_result with text array content is joined",
 			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_arr","content":[{"type":"text","text":"line 1"},{"type":"text","text":"line 2"}]}]}}`,
 			expected: []agent.AgentEvent{agent.ToolResultEvent{
 				ToolUseID:  "toolu_arr",
-				ToolResult: `[{"type":"text","text":"line 1"},{"type":"text","text":"line 2"}]`,
+				ToolResult: "line 1\nline 2",
+			}},
+		},
+		{
+			// Anything that is not a pure text array stays raw rather than being
+			// silently reduced to the parts we happen to understand.
+			name:  "user tool_result with mixed array content stays raw",
+			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_mix","content":[{"type":"text","text":"line 1"},{"type":"other","text":"line 2"}]}]}}`,
+			expected: []agent.AgentEvent{agent.ToolResultEvent{
+				ToolUseID:  "toolu_mix",
+				ToolResult: `[{"type":"text","text":"line 1"},{"type":"other","text":"line 2"}]`,
+			}},
+		},
+		{
+			name:  "user tool_result carries the CLI's error flag",
+			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_err","content":"Agent type not found","is_error":true}]}}`,
+			expected: []agent.AgentEvent{agent.ToolResultEvent{
+				ToolUseID:  "toolu_err",
+				ToolResult: "Agent type not found",
+				IsError:    true,
 			}},
 		},
 		{
@@ -184,6 +310,16 @@ func TestParseLine(t *testing.T) {
 		{
 			name:     "progress event is intentionally ignored",
 			input:    `{"type":"progress","data":{"type":"bash_progress","output":"","fullOutput":"","elapsedTimeSeconds":2,"totalLines":0},"toolUseID":"bash-progress-0"}`,
+			expected: nil,
+		},
+		{
+			name:     "tool_progress event is intentionally ignored",
+			input:    `{"type":"tool_progress","tool_use_id":"toolu_1","session_id":"s1"}`,
+			expected: nil,
+		},
+		{
+			name:     "rate_limit_event is intentionally ignored",
+			input:    `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"},"session_id":"s1"}`,
 			expected: nil,
 		},
 		{
@@ -216,16 +352,6 @@ func TestParseLine(t *testing.T) {
 					},
 				},
 			}},
-		},
-		{
-			name:     "control_request non-permission request ignored",
-			input:    `{"type":"control_request","request_id":"req-456","request":{"subtype":"other_type"}}`,
-			expected: nil,
-		},
-		{
-			name:     "control_request with nil request ignored",
-			input:    `{"type":"control_request","request_id":"req-789"}`,
-			expected: nil,
 		},
 		{
 			name:     "system init event with session_id is filtered",
@@ -345,8 +471,64 @@ func agentEventEqual(a, b agent.AgentEvent) bool {
 	case agent.RawEvent:
 		bv, ok := b.(agent.RawEvent)
 		return ok && av.Content == bv.Content
+	case agent.CommandOutputEvent:
+		bv, ok := b.(agent.CommandOutputEvent)
+		return ok && av.Content == bv.Content
 	default:
 		return false
+	}
+}
+
+// TestParseLine_FailedFirstTurnLeavesSessionSwitchable replays a whole turn that
+// never reached the model and holds the property the transcript exists to
+// protect: nothing in it may start the session, so a user whose login expired can
+// still move the session to another agent.
+//
+// Where the report comes from: claude 2.1.259, ANTHROPIC_BASE_URL pointed at a
+// local endpoint answering 401 to everything, run until the CLI exhausted its
+// retries and exited on its own (3m15s). Shortened here to two retry banners; the
+// assistant and result frames are the measured ones.
+//
+// The assistant frame is why this test is not redundant with the ones over
+// hand-built event slices: reading it as agent output is what made the escape
+// hatch unreachable in exactly the scenario it was built for, and only a test
+// that goes through the parser can catch that.
+func TestParseLine_FailedFirstTurnLeavesSessionSwitchable(t *testing.T) {
+	report := []string{
+		`{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":611,"error_status":401,"error":"authentication_failed","session_id":"08165e10"}`,
+		`{"type":"system","subtype":"api_retry","attempt":10,"max_retries":10,"retry_delay_ms":38000,"error_status":401,"error":"authentication_failed","session_id":"08165e10"}`,
+		`{"type":"assistant","message":{"id":"58516ac7","model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","type":"message","content":[{"type":"text","text":"Invalid API key \u00b7 Fix external API key"}]},"session_id":"08165e10","error":"authentication_failed","is_api_error_message":true}`,
+		`{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","api_error_status":401,"result":"Invalid API key \u00b7 Fix external API key","session_id":"08165e10"}`,
+	}
+
+	var events []agent.AgentEvent
+	for _, line := range report {
+		events = append(events, parseTestLine(testLogger(), []byte(line), &sync.Map{})...)
+	}
+
+	if len(events) == 0 {
+		t.Fatal("expected the failed turn to be reported to the user")
+	}
+	for _, e := range events {
+		if e.EventType().ActivatesSession() {
+			t.Errorf("a turn that never reached the model must not start the session, got %s from %#v",
+				e.EventType(), e)
+		}
+	}
+
+	// Silently dropping the CLI's account of the failure would trade one bug for
+	// another, so it has to survive the change of event type. Asserted as its own
+	// warning rather than by searching every event for the words: in this report
+	// the trailing result repeats them verbatim, so a search would still pass with
+	// the notice thrown away.
+	var found bool
+	for _, e := range events {
+		if w, ok := e.(agent.WarningEvent); ok && strings.Contains(w.Message, "Invalid API key") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected the CLI's account of the failure to reach the user, got %#v", events)
 	}
 }
 
@@ -378,6 +560,119 @@ func TestParseLine_AskUserQuestionStoresPendingInput(t *testing.T) {
 	}
 	if len(parsed.Questions) != 1 || parsed.Questions[0].Question != "q?" {
 		t.Errorf("stored input does not preserve questions: %+v", parsed.Questions)
+	}
+}
+
+// The CLI blocks the turn until a request it originates is answered, so every
+// control request that is not can_use_tool has to be answered with an error.
+// Leaving any of these shapes unanswered hangs the session for good, which is why
+// they are covered together rather than one per known subtype.
+func TestParseLine_UnservableControlRequestIsDeclined(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string // request id the CLI must be answered on
+	}{
+		{
+			name:  "subtype Pockode cannot serve",
+			input: `{"type":"control_request","request_id":"req-dialog","request":{"subtype":"request_user_dialog","dialog_kind":"plan"}}`,
+			want:  "req-dialog",
+		},
+		{
+			// Where an unknown subtype comes from is a CLI newer than this code.
+			name:  "subtype this code has never seen",
+			input: `{"type":"control_request","request_id":"req-unknown","request":{"subtype":"some_future_subtype"}}`,
+			want:  "req-unknown",
+		},
+		{
+			name:  "request without a body",
+			input: `{"type":"control_request","request_id":"req-empty"}`,
+			want:  "req-empty",
+		},
+		{
+			// Unreadable is not unanswerable: the id survives a body of the
+			// wrong shape, and answering matters more than understanding.
+			name:  "request whose body is not an object",
+			input: `{"type":"control_request","request_id":"req-broken","request":"nonsense"}`,
+			want:  "req-broken",
+		},
+		{
+			// The one shape that reaches here through can_use_tool: a question
+			// whose input the CLI has restructured.
+			name:  "AskUserQuestion with unreadable input",
+			input: `{"type":"control_request","request_id":"req-q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":"not-a-list"}}}`,
+			want:  "req-q",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotRequestID, gotMessage string
+			decline := func(requestID, message string) {
+				gotRequestID, gotMessage = requestID, message
+			}
+
+			results := parseTestLineWithDecline(testLogger(), []byte(tt.input), &sync.Map{}, decline)
+
+			if len(results) != 1 {
+				t.Fatalf("expected 1 event, got %+v", results)
+			}
+			warning, ok := results[0].(agent.WarningEvent)
+			if !ok {
+				t.Fatalf("expected WarningEvent, got %T", results[0])
+			}
+			if warning.Code != "unsupported_control_request" {
+				t.Errorf("warning code = %q, want unsupported_control_request", warning.Code)
+			}
+			if gotRequestID != tt.want {
+				t.Errorf("declined request id = %q, want %q", gotRequestID, tt.want)
+			}
+			if gotMessage == "" {
+				t.Error("expected a non-empty decline message")
+			}
+		})
+	}
+}
+
+// An unreadable request with no id left cannot be answered at all; the only thing
+// that must not happen is a bogus response on an empty id.
+func TestParseLine_ControlRequestWithoutIDIsNotDeclined(t *testing.T) {
+	declined := false
+	decline := func(string, string) { declined = true }
+
+	input := `{"type":"control_request","request_id":123,"request":{"subtype":"whatever"}}`
+	results := parseTestLineWithDecline(testLogger(), []byte(input), &sync.Map{}, decline)
+
+	if declined {
+		t.Error("must not answer a request whose id could not be read")
+	}
+	if len(results) != 0 {
+		t.Errorf("expected no events, got %+v", results)
+	}
+}
+
+func TestSession_DeclineControlRequest(t *testing.T) {
+	var buf bytes.Buffer
+	sess := &cliSession{
+		log:             testLogger(),
+		stdin:           nopWriteCloser{&buf},
+		pendingRequests: &sync.Map{},
+	}
+
+	sess.declineControlRequest("req-1", "not supported")
+
+	var response controlErrorResponse
+	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if response.Response.Subtype != "error" {
+		t.Errorf("subtype = %q, want error", response.Response.Subtype)
+	}
+	if response.Response.RequestID != "req-1" {
+		t.Errorf("request_id = %q, want req-1", response.Response.RequestID)
+	}
+	if response.Response.Error != "not supported" {
+		t.Errorf("error = %q, want 'not supported'", response.Response.Error)
 	}
 }
 
@@ -421,94 +716,94 @@ func TestParseLine_ControlResponseWithPendingInterrupt(t *testing.T) {
 
 func TestClaudeResumeStateResolve(t *testing.T) {
 	tests := []struct {
-		name        string
-		resume      bool
-		stateID     string
-		history     []agent.AgentEvent
-		wantID      string
-		wantResume  bool
-		wantStateID string
-		wantNoState bool
+		name  string
+		state *claudeResumeState
+		// resume mirrors opts.Resume (the session was activated before).
+		resume bool
+		want   claudeLaunch
+		// wantMintedID expects a freshly minted UUID instead of want.sessionID.
+		wantMintedID bool
 	}{
 		{
-			name:       "new session uses pockode session id",
-			wantID:     "pockode-session",
-			wantResume: false,
+			name: "new session claims the pockode session id",
+			want: claudeLaunch{sessionID: "pockode-session"},
 		},
 		{
-			name:        "missing resume state starts new session",
-			resume:      true,
-			wantID:      "pockode-session",
-			wantResume:  false,
-			wantNoState: true,
+			name:   "activated session without recorded id is forked",
+			resume: true,
+			want:   claudeLaunch{sessionID: "pockode-session", resume: true, fork: true},
 		},
 		{
-			name:        "user-only history still starts new session",
-			resume:      true,
-			history:     []agent.AgentEvent{agent.MessageEvent{Content: "hello"}},
-			wantID:      "pockode-session",
-			wantResume:  false,
-			wantNoState: true,
+			// A forked session's transcript is not its own conversation, so
+			// activation must not send it off to resume one.
+			name:   "an unstarted session starts a provider session of its own",
+			state:  &claudeResumeState{Unstarted: true},
+			resume: true,
+			want:   claudeLaunch{sessionID: "pockode-session"},
 		},
 		{
-			name:        "existing resume state resumes provider session",
-			resume:      true,
-			stateID:     "claude-session",
-			wantID:      "claude-session",
-			wantResume:  true,
-			wantStateID: "claude-session",
+			name:   "recorded id is resumed",
+			state:  &claudeResumeState{SessionID: "claude-session"},
+			resume: true,
+			want:   claudeLaunch{sessionID: "claude-session", resume: true},
 		},
 		{
-			name:        "legacy assistant history migrates pockode session id",
-			resume:      true,
-			history:     []agent.AgentEvent{agent.MessageEvent{Content: "hello"}, agent.TextEvent{Content: "hi"}},
-			wantID:      "pockode-session",
-			wantResume:  true,
-			wantStateID: "pockode-session",
+			name:   "fork stage resumes with fork",
+			state:  &claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork},
+			resume: true,
+			want:   claudeLaunch{sessionID: "claude-session", resume: true, fork: true},
+		},
+		{
+			// What a fork taken in the middle of a conversation seeds: the same
+			// replay, cut short at the message the fork was taken from.
+			name:   "fork stage carries the message to stop the replay at",
+			state:  &claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork, ResumeAt: "msg-7"},
+			resume: true,
+			want:   claudeLaunch{sessionID: "claude-session", resume: true, fork: true, resumeAt: "msg-7"},
+		},
+		{
+			name:         "fresh stage starts a new provider session",
+			state:        &claudeResumeState{SessionID: "claude-session", Recovery: recoveryFresh},
+			resume:       true,
+			wantMintedID: true,
+		},
+		{
+			name:   "unknown stage falls back to a plain resume",
+			state:  &claudeResumeState{SessionID: "claude-session", Recovery: "bogus"},
+			resume: true,
+			want:   claudeLaunch{sessionID: "claude-session", resume: true},
+		},
+		{
+			// A recorded id proves the CLI already owns that session, which
+			// makes --session-id fatal no matter what the session store thinks.
+			name:  "recorded id wins over a session that looks unactivated",
+			state: &claudeResumeState{SessionID: "claude-session"},
+			want:  claudeLaunch{sessionID: "claude-session", resume: true},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			opts := agent.StartOptions{
-				DataDir:   dir,
-				SessionID: "pockode-session",
-				Resume:    tt.resume,
-			}
-			manager := newClaudeResumeStateManager(opts, testLogger())
-			if tt.stateID != "" {
-				manager.save(tt.stateID)
-			}
-			writeHistory(t, dir, opts.SessionID, tt.history)
-
-			gotID, gotResume := manager.resolve()
-			if gotID != tt.wantID {
-				t.Fatalf("provider session id = %q, want %q", gotID, tt.wantID)
-			}
-			if gotResume != tt.wantResume {
-				t.Fatalf("resume = %v, want %v", gotResume, tt.wantResume)
+			manager := newTestResumeManager(t, tt.resume)
+			if tt.state != nil {
+				writeResumeState(t, manager, *tt.state)
 			}
 
-			data, err := os.ReadFile(manager.path())
-			if tt.wantNoState {
-				if !os.IsNotExist(err) {
-					t.Fatalf("resume state should not exist, read err = %v", err)
+			got := manager.resolve()
+			if tt.wantMintedID {
+				if _, err := uuid.Parse(got.sessionID); err != nil {
+					t.Fatalf("minted session id %q is not a UUID: %v", got.sessionID, err)
+				}
+				if got.sessionID == "pockode-session" || got.sessionID == "claude-session" {
+					t.Fatalf("fresh stage reused session id %q", got.sessionID)
+				}
+				if got.resume || got.fork {
+					t.Fatalf("fresh stage must not resume, got %+v", got)
 				}
 				return
 			}
-			if tt.wantStateID == "" {
-				return
-			}
-			if err != nil {
-				t.Fatalf("read resume state: %v", err)
-			}
-			var state claudeResumeState
-			if err := json.Unmarshal(data, &state); err != nil {
-				t.Fatalf("parse resume state: %v", err)
-			}
-			if state.SessionID != tt.wantStateID {
-				t.Fatalf("saved session id = %q, want %q", state.SessionID, tt.wantStateID)
+			if got != tt.want {
+				t.Fatalf("launch = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
@@ -531,13 +826,7 @@ func TestClaudeResumeStateResolveIgnoresInvalidState(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			opts := agent.StartOptions{
-				DataDir:   dir,
-				SessionID: "pockode-session",
-				Resume:    true,
-			}
-			manager := newClaudeResumeStateManager(opts, testLogger())
+			manager := newTestResumeManager(t, true)
 			path := manager.path()
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				t.Fatalf("create resume dir: %v", err)
@@ -546,33 +835,197 @@ func TestClaudeResumeStateResolveIgnoresInvalidState(t *testing.T) {
 				t.Fatalf("write resume state: %v", err)
 			}
 
-			gotID, gotResume := manager.resolve()
-			if gotID != "pockode-session" {
-				t.Fatalf("provider session id = %q, want pockode-session", gotID)
-			}
-			if gotResume {
-				t.Fatal("resume should be false for invalid resume state")
+			want := claudeLaunch{sessionID: "pockode-session", resume: true, fork: true}
+			if got := manager.resolve(); got != want {
+				t.Fatalf("launch = %+v, want %+v", got, want)
 			}
 		})
 	}
 }
 
-func TestClaudeResumeStateObserveLineSavesOnFirstAssistant(t *testing.T) {
-	dir := t.TempDir()
-	opts := agent.StartOptions{
-		DataDir:   dir,
-		SessionID: "pockode-session",
+func TestClaudeResumeStateSavesOnInit(t *testing.T) {
+	manager := newTestResumeManager(t, false)
+	manager.resolve()
+
+	if _, err := os.Stat(manager.path()); !os.IsNotExist(err) {
+		t.Fatalf("resume state should not exist before init, stat err = %v", err)
 	}
-	manager := newClaudeResumeStateManager(opts, testLogger())
 
 	manager.observeLine([]byte(`{"type":"system","subtype":"init","session_id":"claude-session"}`))
-	if _, err := os.Stat(manager.path()); !os.IsNotExist(err) {
-		t.Fatalf("resume state should not exist before assistant event, stat err = %v", err)
+	if got := readResumeState(t, manager); got != (claudeResumeState{SessionID: "claude-session"}) {
+		t.Fatalf("resume state = %+v, want sessionId claude-session", got)
+	}
+}
+
+func TestClaudeResumeStateInitDoesNotRewriteUnchangedState(t *testing.T) {
+	manager := newTestResumeManager(t, true)
+	// Formatting a save() would not reproduce, so any rewrite is visible in the
+	// bytes on disk rather than only in a coarse-grained mtime.
+	seeded := []byte("{\n  \"sessionId\": \"claude-session\"\n}\n")
+	if err := os.MkdirAll(filepath.Dir(manager.path()), 0755); err != nil {
+		t.Fatalf("create resume dir: %v", err)
+	}
+	if err := os.WriteFile(manager.path(), seeded, 0644); err != nil {
+		t.Fatalf("write resume state: %v", err)
+	}
+	manager.resolve()
+
+	// The CLI repeats init at the start of every turn.
+	for range 3 {
+		manager.observeLine([]byte(`{"type":"system","subtype":"init","session_id":"claude-session"}`))
 	}
 
-	manager.observeLine([]byte(`{"type":"assistant","session_id":"claude-session","message":{"content":[{"type":"text","text":"hi"}]}}`))
-
 	data, err := os.ReadFile(manager.path())
+	if err != nil {
+		t.Fatalf("read resume state: %v", err)
+	}
+	if !bytes.Equal(data, seeded) {
+		t.Fatalf("resume state was rewritten for an unchanged session id: %s", data)
+	}
+}
+
+// The CLI does not always keep the id it was handed: resuming a session that
+// another process still holds open silently forks it and reports a new id
+// through init. Verified against claude 2.1.259.
+func TestClaudeResumeStateInitAdoptsAReassignedID(t *testing.T) {
+	manager := newTestResumeManager(t, true)
+	writeResumeState(t, manager, claudeResumeState{SessionID: "claude-session"})
+	if got := manager.resolve(); !got.resume || got.fork {
+		t.Fatalf("launch = %+v, want a plain resume", got)
+	}
+
+	manager.observeLine([]byte(`{"type":"system","subtype":"init","session_id":"reassigned-session"}`))
+
+	if got := readResumeState(t, manager); got != (claudeResumeState{SessionID: "reassigned-session"}) {
+		t.Fatalf("resume state = %+v, want the id the CLI reported back", got)
+	}
+}
+
+func TestClaudeResumeStateInitClearsRecovery(t *testing.T) {
+	manager := newTestResumeManager(t, true)
+	writeResumeState(t, manager, claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork})
+	manager.resolve()
+
+	// A fork mints a new provider session id, reported through init.
+	manager.observeLine([]byte(`{"type":"system","subtype":"init","session_id":"forked-session"}`))
+
+	if got := readResumeState(t, manager); got != (claudeResumeState{SessionID: "forked-session"}) {
+		t.Fatalf("resume state = %+v, want forked-session with cleared recovery", got)
+	}
+	// A later exit must not re-escalate a session that already succeeded.
+	manager.processExited(false)
+	if got := readResumeState(t, manager); got.Recovery != recoveryNone {
+		t.Fatalf("recovery = %q after a successful launch, want empty", got.Recovery)
+	}
+}
+
+func TestClaudeResumeStateEscalatesOnExitWithoutInit(t *testing.T) {
+	tests := []struct {
+		name  string
+		state *claudeResumeState
+		want  claudeResumeState
+	}{
+		{
+			name: "new session escalates to fork",
+			want: claudeResumeState{SessionID: "pockode-session", Recovery: recoveryFork},
+		},
+		{
+			name:  "resume escalates to fork",
+			state: &claudeResumeState{SessionID: "claude-session"},
+			want:  claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork},
+		},
+		{
+			name:  "fork escalates to fresh",
+			state: &claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork},
+			want:  claudeResumeState{SessionID: "claude-session", Recovery: recoveryFresh},
+		},
+		{
+			name:  "fresh is terminal",
+			state: &claudeResumeState{SessionID: "claude-session", Recovery: recoveryFresh},
+			want:  claudeResumeState{SessionID: "claude-session", Recovery: recoveryFresh},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := newTestResumeManager(t, tt.state != nil)
+			if tt.state != nil {
+				writeResumeState(t, manager, *tt.state)
+			}
+			manager.resolve()
+			manager.processExited(false)
+
+			if got := readResumeState(t, manager); got != tt.want {
+				t.Fatalf("resume state = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudeResumeStateDoesNotEscalateWhenCancelled(t *testing.T) {
+	manager := newTestResumeManager(t, true)
+	writeResumeState(t, manager, claudeResumeState{SessionID: "claude-session"})
+	manager.resolve()
+
+	manager.processExited(true)
+
+	if got := readResumeState(t, manager); got.Recovery != recoveryNone {
+		t.Fatalf("recovery = %q after our own shutdown, want empty", got.Recovery)
+	}
+}
+
+func TestClaudeResumeStatePendingWarningOnlyForFreshStage(t *testing.T) {
+	manager := newTestResumeManager(t, true)
+	writeResumeState(t, manager, claudeResumeState{SessionID: "claude-session", Recovery: recoveryFork})
+	manager.resolve()
+	if _, ok := manager.pendingWarning(); ok {
+		t.Fatal("fork stage should not warn: it keeps the agent-side context")
+	}
+
+	manager = newTestResumeManager(t, true)
+	writeResumeState(t, manager, claudeResumeState{SessionID: "claude-session", Recovery: recoveryFresh})
+	manager.resolve()
+
+	warning, ok := manager.pendingWarning()
+	if !ok {
+		t.Fatal("fresh stage should warn that the earlier context is gone")
+	}
+	if warning.Code != "session_not_resumable" {
+		t.Fatalf("warning code = %q, want session_not_resumable", warning.Code)
+	}
+	if _, ok := manager.pendingWarning(); ok {
+		t.Fatal("warning should be delivered only once")
+	}
+}
+
+func newTestResumeManager(t *testing.T, resume bool) *claudeResumeStateManager {
+	t.Helper()
+	return newClaudeResumeStateManager(agent.StartOptions{
+		DataDir:   t.TempDir(),
+		SessionID: "pockode-session",
+		Resume:    resume,
+	}, testLogger())
+}
+
+// writeResumeState seeds claude_resume.json as a previous process would have
+// left it, without going through the manager that is under test.
+func writeResumeState(t *testing.T, m *claudeResumeStateManager, state claudeResumeState) {
+	t.Helper()
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal resume state: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(m.path()), 0755); err != nil {
+		t.Fatalf("create resume dir: %v", err)
+	}
+	if err := os.WriteFile(m.path(), data, 0644); err != nil {
+		t.Fatalf("write resume state: %v", err)
+	}
+}
+
+func readResumeState(t *testing.T, m *claudeResumeStateManager) claudeResumeState {
+	t.Helper()
+	data, err := os.ReadFile(m.path())
 	if err != nil {
 		t.Fatalf("read resume state: %v", err)
 	}
@@ -580,34 +1033,7 @@ func TestClaudeResumeStateObserveLineSavesOnFirstAssistant(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatalf("parse resume state: %v", err)
 	}
-	if state.SessionID != "claude-session" {
-		t.Fatalf("saved session id = %q, want claude-session", state.SessionID)
-	}
-}
-
-func writeHistory(t *testing.T, dataDir, sessionID string, events []agent.AgentEvent) {
-	t.Helper()
-	if len(events) == 0 {
-		return
-	}
-	path := filepath.Join(dataDir, "sessions", sessionID, "history.jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatalf("create history dir: %v", err)
-	}
-	file, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("create history: %v", err)
-	}
-	defer file.Close()
-	for _, event := range events {
-		data, err := json.Marshal(agent.NewEventRecord(event))
-		if err != nil {
-			t.Fatalf("marshal history: %v", err)
-		}
-		if _, err := file.Write(append(data, '\n')); err != nil {
-			t.Fatalf("write history: %v", err)
-		}
-	}
+	return state
 }
 
 // nopWriteCloser wraps a Writer to implement WriteCloser

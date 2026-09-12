@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 const SIDEBAR_WIDTH_KEY = "pockode:sidebar-width";
 const MIN_WIDTH = 240;
@@ -20,17 +20,16 @@ interface Props {
 	isOpen: boolean;
 	onClose: () => void;
 	children: React.ReactNode;
-	isDesktop: boolean;
+	isExpanded: boolean;
 }
 
-function Sidebar({ isOpen, onClose, children, isDesktop }: Props) {
+function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 	const [width, setWidth] = useState(getInitialWidth);
 	const [isDragging, setIsDragging] = useState(false);
-	const widthRef = useRef(width);
 
-	// Close on Escape key (mobile only)
+	// Escape closes the drawer; in the expanded tier the column is not dismissable.
 	useEffect(() => {
-		if (isDesktop) return;
+		if (isExpanded) return;
 
 		const handleKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape" && isOpen) {
@@ -39,55 +38,83 @@ function Sidebar({ isOpen, onClose, children, isDesktop }: Props) {
 		};
 		document.addEventListener("keydown", handleKeyDown);
 		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, [isOpen, onClose, isDesktop]);
+	}, [isOpen, onClose, isExpanded]);
 
-	const handleMouseDown = useCallback((e: React.MouseEvent) => {
-		e.preventDefault();
-		setIsDragging(true);
-		document.body.style.cursor = "col-resize";
-		document.body.style.userSelect = "none";
-	}, []);
-
+	// The handle exists only in the expanded tier, so a viewport shrinking out of
+	// it takes the drag with it: the element is gone before any pointerup or
+	// pointercancel can reach it, and without this the drag stays live forever.
 	useEffect(() => {
-		widthRef.current = width;
-	}, [width]);
+		if (!isExpanded) setIsDragging(false);
+	}, [isExpanded]);
 
+	// The page-wide cursor and selection lock belong to an effect so React
+	// guarantees the undo. Applied imperatively on pointerdown they outlive a
+	// drag that ends without a release — leaving the whole app wearing a
+	// col-resize cursor with no text selectable, permanently.
 	useEffect(() => {
 		if (!isDragging) return;
 
-		const handleMouseMove = (e: MouseEvent) => {
-			const newWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, e.clientX));
-			setWidth(newWidth);
-		};
-
-		const handleMouseUp = () => {
-			setIsDragging(false);
+		document.body.style.cursor = "col-resize";
+		document.body.style.userSelect = "none";
+		return () => {
 			document.body.style.cursor = "";
 			document.body.style.userSelect = "";
-			localStorage.setItem(SIDEBAR_WIDTH_KEY, widthRef.current.toString());
-		};
-
-		document.addEventListener("mousemove", handleMouseMove);
-		document.addEventListener("mouseup", handleMouseUp);
-
-		return () => {
-			document.removeEventListener("mousemove", handleMouseMove);
-			document.removeEventListener("mouseup", handleMouseUp);
 		};
 	}, [isDragging]);
 
-	// Desktop: always visible as part of flex layout
-	if (isDesktop) {
+	// Pointer events rather than mouse events, and pointer capture rather than
+	// document-level listeners: the drag then follows a finger or a stylus as
+	// well as a mouse, and the browser routes every move and the release back to
+	// the handle even when the pointer outruns it.
+	const handlePointerDown = useCallback((e: React.PointerEvent) => {
+		e.preventDefault();
+		e.currentTarget.setPointerCapture(e.pointerId);
+		setIsDragging(true);
+	}, []);
+
+	const handlePointerMove = useCallback(
+		(e: React.PointerEvent) => {
+			if (!isDragging) return;
+			setWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, e.clientX)));
+		},
+		[isDragging],
+	);
+
+	// Also the pointercancel handler: the gesture can be taken away mid-drag (the
+	// browser claiming it for a scroll), and the width reached by then is the one
+	// the user last saw.
+	const handlePointerEnd = useCallback(() => {
+		if (!isDragging) return;
+		setIsDragging(false);
+		localStorage.setItem(SIDEBAR_WIDTH_KEY, width.toString());
+	}, [isDragging, width]);
+
+	// Expanded: a persistent column in the flex layout
+	if (isExpanded) {
 		return (
 			<div
 				className="relative flex h-dvh shrink-0 flex-col border-r border-th-border bg-th-bg-secondary"
 				style={{ width }}
 			>
 				<div className="flex flex-1 flex-col overflow-hidden">{children}</div>
-				{/* biome-ignore lint/a11y/noStaticElementInteractions: Resize handle is mouse-only UI */}
+				{/*
+				 * touch-pan-y, not touch-none: the handle claims horizontal drags
+				 * only, so it does not become an 8px strip that swallows scrolling.
+				 *
+				 * Deliberately left at 8px rather than widened to the 44px coarse
+				 * floor. Sidebar width is a preference, not an operation (P2 in
+				 * docs/responsive-ui.md), and a 44px drag strip would lie over the
+				 * right edge of every row in the list — where Delete sits — turning
+				 * taps that work today into drags. The floor is there to make
+				 * operations reachable, not to make a preference easier at the cost
+				 * of one.
+				 */}
 				<div
-					onMouseDown={handleMouseDown}
-					className="group absolute top-0 right-0 z-10 h-full w-2 translate-x-1/2 cursor-col-resize"
+					onPointerDown={handlePointerDown}
+					onPointerMove={handlePointerMove}
+					onPointerUp={handlePointerEnd}
+					onPointerCancel={handlePointerEnd}
+					className="group absolute top-0 right-0 z-10 h-full w-2 translate-x-1/2 cursor-col-resize touch-pan-y"
 				>
 					<div
 						className={`absolute left-1/2 h-full w-0.5 -translate-x-1/2 transition-colors group-hover:bg-th-accent ${isDragging ? "bg-th-accent" : "bg-transparent"}`}
@@ -97,7 +124,7 @@ function Sidebar({ isOpen, onClose, children, isDesktop }: Props) {
 		);
 	}
 
-	// Mobile: overlay drawer (use CSS hiding to preserve scroll position)
+	// Compact and regular: overlay drawer (use CSS hiding to preserve scroll position)
 	return (
 		<div className={isOpen ? undefined : "hidden"}>
 			<button

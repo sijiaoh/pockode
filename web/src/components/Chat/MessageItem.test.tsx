@@ -392,4 +392,20 @@ describe("MessageItem", () => {
 			).toBeInTheDocument();
 		});
 	});
+
+	it("marks a step change with a bare step counter", () => {
+		const message: Message = {
+			id: "div-1",
+			role: "step_divider",
+			workId: "work-1",
+			step: { current: 2, total: 3 },
+			createdAt: new Date(),
+		};
+
+		render(<MessageItem message={message} />);
+		expect(screen.getByText("Step 2/3")).toBeInTheDocument();
+		// The divider says only where the work moved to; a status here could
+		// contradict the card that owns it.
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+	});
 });

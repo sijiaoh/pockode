@@ -17,7 +17,7 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 	s := h.settingsStore.Get()
 	sess, err := wt.SessionStore.Create(ctx, sessionID, s.DefaultAgentType, s.DefaultMode)
 	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to create session")
+		h.replyInternalError(ctx, conn, req.ID, "failed to create session", err, "sessionId", sessionID)
 		return
 	}
 
@@ -33,6 +33,30 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 	}
 }
 
+func (h *rpcMethodHandler) handleSessionFork(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.SessionForkParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	meta, err := wt.ChatClient.Fork(ctx, params.SessionID, params.AnchorSeq, params.Title)
+	if err != nil {
+		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
+		return
+	}
+
+	// Not logged here: chat.Client already logged the fork with what it did.
+	result := rpc.SessionListItem{
+		SessionMeta: meta,
+		State:       wt.ProcessManager.GetProcessState(meta.ID),
+	}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send session fork response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleSessionDelete(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
 	var params rpc.SessionDeleteParams
 	if err := unmarshalParams(req, &params); err != nil {
@@ -42,7 +66,7 @@ func (h *rpcMethodHandler) handleSessionDelete(ctx context.Context, conn *jsonrp
 
 	wt.ProcessManager.Close(params.SessionID)
 	if err := wt.SessionStore.Delete(ctx, params.SessionID); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to delete session")
+		h.replyInternalError(ctx, conn, req.ID, "failed to delete session", err, "sessionId", params.SessionID)
 		return
 	}
 
@@ -70,7 +94,7 @@ func (h *rpcMethodHandler) handleSessionUpdateTitle(ctx context.Context, conn *j
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
 			return
 		}
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to update session")
+		h.replyInternalError(ctx, conn, req.ID, "failed to update session", err, "sessionId", params.SessionID)
 		return
 	}
 
@@ -95,7 +119,7 @@ func (h *rpcMethodHandler) handleSessionSetAgentType(ctx context.Context, conn *
 
 	meta, found, err := wt.SessionStore.Get(params.SessionID)
 	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to get session")
+		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
 		return
 	}
 	if !found {
@@ -107,8 +131,15 @@ func (h *rpcMethodHandler) handleSessionSetAgentType(ctx context.Context, conn *
 		return
 	}
 
+	// An unactivated session can still have a live process — the CLI that was
+	// spawned for a first turn nobody heard back from is exactly the case this
+	// switch exists for. GetOrCreateProcess reuses a process by session ID
+	// without looking at its agent type, so leaving it running would silently
+	// send the next message to the agent the user just switched away from.
+	wt.ProcessManager.Close(params.SessionID)
+
 	if err := wt.SessionStore.SetAgentType(ctx, params.SessionID, params.AgentType); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to set agent type")
+		h.replyInternalError(ctx, conn, req.ID, "failed to set agent type", err, "sessionId", params.SessionID)
 		return
 	}
 
@@ -139,7 +170,7 @@ func (h *rpcMethodHandler) handleSessionSetMode(ctx context.Context, conn *jsonr
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
 			return
 		}
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to set mode")
+		h.replyInternalError(ctx, conn, req.ID, "failed to set mode", err, "sessionId", params.SessionID)
 		return
 	}
 
@@ -154,7 +185,7 @@ func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn 
 	notifier := h.state.getNotifier()
 	id, sessions, err := wt.SessionListWatcher.Subscribe(notifier)
 	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to subscribe")
+		h.replyInternalError(ctx, conn, req.ID, "failed to subscribe to session list", err)
 		return
 	}
 	h.state.trackSubscription(id, wt.SessionListWatcher)

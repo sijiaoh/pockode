@@ -10,6 +10,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/search"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
@@ -27,6 +28,12 @@ type AuthResult struct {
 	Title        string `json:"title"`
 	WorkDir      string `json:"work_dir"`
 	WorktreeName string `json:"worktree_name"`
+	// MaxUploadSize is the ceiling on one HTTP upload request, in bytes, sent so
+	// a client can refuse an oversized file before spending a slow link on it
+	// instead of keeping its own copy of the number (see docs/file.md#transfer).
+	// It is the same on every route: the relay tunnel streams a request body and
+	// imposes no ceiling of its own.
+	MaxUploadSize int64 `json:"max_upload_size"`
 }
 
 type MessageParams struct {
@@ -75,6 +82,19 @@ type SessionSetModeParams struct {
 	Mode      session.Mode `json:"mode"`
 }
 
+// SessionForkParams asks for a new session holding this session's conversation
+// up to and including one record of its history.
+type SessionForkParams struct {
+	SessionID string `json:"session_id"` // the session to fork
+	// AnchorSeq is the seq of the last history record the new session keeps —
+	// the number the server put on that record, in the replayed history or in the
+	// live notification that delivered it. Inclusive, and it need not be the end
+	// of a turn.
+	AnchorSeq session.HistorySeq `json:"anchor_seq"`
+	// Title names the new session. Empty copies the source's title.
+	Title string `json:"title,omitempty"`
+}
+
 type SessionMarkReadParams struct {
 	SessionID string `json:"session_id"`
 }
@@ -96,9 +116,32 @@ type FileWriteParams struct {
 	Content string `json:"content"`
 }
 
+// FileCreateParams creates an empty file or directory. Kept apart from
+// FileWrite because creation must fail on an existing path where a write must
+// not.
+type FileCreateParams struct {
+	Path string             `json:"path"`
+	Type contents.EntryType `json:"type"`
+}
+
 type FileDeleteParams struct {
 	Path string `json:"path"`
 }
+
+type FileSearchParams struct {
+	Query string `json:"query"`
+	// Mode is "name" (default) or "content".
+	Mode string `json:"mode"`
+	// Path limits the search to a subdirectory of the work directory.
+	Path string `json:"path"`
+	// RespectGitignore defaults to true when omitted, so clients opt in to
+	// searching ignored files rather than accidentally scanning build output.
+	RespectGitignore *bool `json:"respect_gitignore"`
+	CaseSensitive    bool  `json:"case_sensitive"`
+	MaxResults       int   `json:"max_results"`
+}
+
+type FileSearchResult = search.Result
 
 // Git namespace
 
@@ -123,9 +166,16 @@ type GitDiffUnsubscribeParams struct {
 	ID string `json:"id"`
 }
 
-// GitPathsParams is used for git.add and git.reset operations.
+// GitPathsParams is used for git.add, git.reset and git.discard operations.
 type GitPathsParams struct {
 	Paths []string `json:"paths"`
+}
+
+// GitCommitParams is the params for git.commit request.
+type GitCommitParams struct {
+	Message string `json:"message"`
+	// Amend replaces the previous commit rather than adding one.
+	Amend bool `json:"amend"`
 }
 
 // GitLogParams is the params for git.log request.
@@ -155,6 +205,43 @@ type GitShowDiffParams struct {
 
 // GitShowDiffResult is the result of git.show.diff request.
 type GitShowDiffResult = git.DiffResult
+
+// GitShowFileParams is the params for git.show.file request.
+type GitShowFileParams struct {
+	Hash string `json:"hash"`
+	Path string `json:"path"`
+}
+
+// GitShowFileResult is the result of git.show.file request. It is the same
+// shape file.get returns for a file, so the client renders both the same way.
+type GitShowFileResult = contents.FileContent
+
+// GitBranchesResult is the result of git.branches request.
+type GitBranchesResult = git.BranchList
+
+// GitCheckoutParams is the params for git.checkout request.
+type GitCheckoutParams struct {
+	Branch string `json:"branch"`
+}
+
+// GitBranchCreateParams is the params for git.branch.create request.
+type GitBranchCreateParams struct {
+	Name string `json:"name"`
+}
+
+// GitPullResult is the result of git.pull request.
+type GitPullResult struct {
+	// Commits is how many the fast-forward brought in, measured by the server:
+	// pull fetches first, so the panel's behind count can be out of date.
+	Commits int `json:"commits"`
+}
+
+// GitPushParams is the params for git.push request.
+type GitPushParams struct {
+	// Force pushes with --force-with-lease. The UI offers it only where a plain
+	// push cannot succeed, behind a confirmation.
+	Force bool `json:"force"`
+}
 
 // Command namespace
 
@@ -302,6 +389,22 @@ type AskUserQuestionParams struct {
 	RequestID string                  `json:"request_id"`
 	ToolUseID string                  `json:"tool_use_id"`
 	Questions []agent.AskUserQuestion `json:"questions"`
+}
+
+// Agent namespace
+
+// AgentInfo describes one registered agent type: what the server knows about it
+// that a client cannot work out from its name.
+type AgentInfo struct {
+	Type session.AgentType `json:"type"`
+	// ForkSupport is the agent's own declaration of whether it can follow a fork
+	// of a conversation, and from where, sent so that the frontend asks what an
+	// agent can do instead of keeping a second copy of the answer per agent name.
+	ForkSupport agent.ForkSupport `json:"fork_support"`
+}
+
+type AgentListResult struct {
+	Agents []AgentInfo `json:"agents"`
 }
 
 // Settings namespace

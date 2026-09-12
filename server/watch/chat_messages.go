@@ -38,13 +38,13 @@ func NewChatMessagesWatcher(store session.Store) *ChatMessagesWatcher {
 }
 
 func (w *ChatMessagesWatcher) Start() error {
-	go w.messageLoop()
+	w.Go(w.messageLoop)
 	slog.Info("ChatMessagesWatcher started")
 	return nil
 }
 
 func (w *ChatMessagesWatcher) Stop() {
-	w.Cancel()
+	w.CancelAndWait()
 	slog.Info("ChatMessagesWatcher stopped")
 }
 
@@ -76,11 +76,11 @@ func (w *ChatMessagesWatcher) messageLoop() {
 }
 
 func (w *ChatMessagesWatcher) notifyMessage(msg process.ChatMessage) {
-	w.notifyEvent(msg.SessionID, msg.Event.ToRecord(), nil)
+	w.notifyEvent(msg.SessionID, msg.Event.ToRecord(), msg.Seq, nil)
 }
 
 // notifyEvent broadcasts an event to session subscribers, optionally excluding one notifier.
-func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRecord, exclude Notifier) {
+func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRecord, seq session.HistorySeq, exclude Notifier) {
 	w.sessionMu.RLock()
 	ids := make([]string, len(w.sessionToIDs[sessionID]))
 	copy(ids, w.sessionToIDs[sessionID])
@@ -100,6 +100,7 @@ func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRe
 
 		params := notifyParams{
 			ID:          sub.ID,
+			Seq:         seq,
 			EventRecord: record,
 		}
 
@@ -116,6 +117,11 @@ func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRe
 // notifyParams embeds EventRecord with subscription ID for routing.
 type notifyParams struct {
 	ID string `json:"id"`
+	// Seq is the record's address in the session's history, the same number
+	// StampHistorySeq writes into replayed history, so a client cannot tell a
+	// live record from a replayed one when it names it later. Omitted for an
+	// event that was never persisted.
+	Seq session.HistorySeq `json:"seq,omitempty"`
 	agent.EventRecord
 }
 
@@ -146,7 +152,7 @@ func (w *ChatMessagesWatcher) Subscribe(
 		return "", nil, err
 	}
 
-	return id, history, nil
+	return id, session.StampHistorySeq(history), nil
 }
 
 // Unsubscribe removes a subscription.
@@ -188,6 +194,6 @@ func (w *ChatMessagesWatcher) IsViewing(sessionID string) bool {
 // NotifyMessage broadcasts a user message to all session subscribers except the sender.
 // This is used when a client sends a message to notify other clients (e.g., other tabs)
 // watching the same session.
-func (w *ChatMessagesWatcher) NotifyMessage(sessionID string, event agent.MessageEvent, exclude Notifier) {
-	w.notifyEvent(sessionID, event.ToRecord(), exclude)
+func (w *ChatMessagesWatcher) NotifyMessage(sessionID string, event agent.MessageEvent, seq session.HistorySeq, exclude Notifier) {
+	w.notifyEvent(sessionID, event.ToRecord(), seq, exclude)
 }

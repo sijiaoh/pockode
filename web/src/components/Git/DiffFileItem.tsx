@@ -1,16 +1,20 @@
-import { Loader2, Minus, Plus } from "lucide-react";
+import { Loader2, Minus, Plus, Undo2 } from "lucide-react";
 import { memo } from "react";
 import { type FileStatus, GIT_STATUS_INFO } from "../../types/git";
 import { splitPath } from "../../utils/path";
 import SidebarListItem from "../common/SidebarListItem";
+import { iconButtonClass } from "../ui/iconButtonClass";
 
 interface Props {
 	file: FileStatus;
 	staged: boolean;
 	onSelect: (path: string, staged: boolean) => void;
 	onToggleStage: (path: string, staged: boolean) => void;
+	/** Absent on staged rows: unstage first, which the button beside it does. */
+	onDiscard?: (file: FileStatus) => void;
 	isActive: boolean;
 	isToggling?: boolean;
+	isDiscarding?: boolean;
 }
 
 const DiffFileItem = memo(function DiffFileItem({
@@ -18,14 +22,18 @@ const DiffFileItem = memo(function DiffFileItem({
 	staged,
 	onSelect,
 	onToggleStage,
+	onDiscard,
 	isActive,
 	isToggling,
+	isDiscarding,
 }: Props) {
 	const statusInfo = GIT_STATUS_INFO[file.status] ?? GIT_STATUS_INFO["?"];
 	const { fileName, directory } = splitPath(file.path);
 
 	const Icon = staged ? Minus : Plus;
 	const actionLabel = staged ? "Unstage file" : "Stage file";
+	// Either action leaves the other with a stale idea of the file.
+	const isBusy = Boolean(isToggling || isDiscarding);
 
 	return (
 		<SidebarListItem
@@ -43,26 +51,49 @@ const DiffFileItem = memo(function DiffFileItem({
 				</span>
 			}
 			actions={
-				<button
-					type="button"
-					onClick={(e) => {
-						e.stopPropagation();
-						onToggleStage(file.path, staged);
-					}}
-					disabled={isToggling}
-					className={`flex items-center justify-center min-h-[36px] min-w-[36px] rounded-md transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
-						isToggling
-							? "opacity-50 cursor-not-allowed text-th-text-muted"
-							: "text-th-text-secondary hover:text-th-text-primary active:scale-95"
-					}`}
-					aria-label={actionLabel}
-				>
-					{isToggling ? (
-						<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-					) : (
-						<Icon className="h-4 w-4" aria-hidden="true" />
+				<>
+					{/*
+					 * Inboard of the stage button on purpose: staging is frequent and
+					 * benign, so it keeps the rightmost, most thumb-reachable slot,
+					 * while the destructive action sits where it is harder to hit.
+					 */}
+					{onDiscard && (
+						<button
+							type="button"
+							onClick={(e) => {
+								e.stopPropagation();
+								onDiscard(file);
+							}}
+							disabled={isBusy}
+							className={iconButtonClass(isBusy)}
+							aria-label={
+								file.status === "?" ? "Delete file" : "Discard changes"
+							}
+						>
+							{isDiscarding ? (
+								<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+							) : (
+								<Undo2 className="h-4 w-4" aria-hidden="true" />
+							)}
+						</button>
 					)}
-				</button>
+					<button
+						type="button"
+						onClick={(e) => {
+							e.stopPropagation();
+							onToggleStage(file.path, staged);
+						}}
+						disabled={isBusy}
+						className={iconButtonClass(isBusy)}
+						aria-label={actionLabel}
+					>
+						{isToggling ? (
+							<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+						) : (
+							<Icon className="h-4 w-4" aria-hidden="true" />
+						)}
+					</button>
+				</>
 			}
 		/>
 	);

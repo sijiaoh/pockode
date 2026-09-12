@@ -20,9 +20,11 @@ import (
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/apiroute"
 	"github.com/pockode/server/authtoken"
 	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/internal/fsperm"
 	"github.com/pockode/server/internal/netutil"
@@ -47,7 +49,7 @@ var version = "dev"
 //go:embed static/*
 var staticFS embed.FS
 
-func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler) http.Handler {
+func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +63,11 @@ func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler, mcpHandler
 	})
 
 	mux.Handle("GET /ws", wsHandler)
+
+	// Whole-file transfer stays off the WebSocket connection; see the
+	// filetransfer package for why.
+	mux.HandleFunc("GET /api/files/download", transferHandler.Download)
+	mux.HandleFunc("POST /api/files/upload", transferHandler.Upload)
 
 	// Local MCP API. middleware.Auth bypasses this exact route; mcpHandler
 	// self-auths with the locally-generated MCP token instead of the user
@@ -87,7 +94,7 @@ func newSPAHandler(apiHandler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
-		if strings.HasPrefix(path, "/api") || path == "/ws" || path == "/health" {
+		if apiroute.IsAPI(path) {
 			apiHandler.ServeHTTP(w, r)
 			return
 		}
@@ -325,7 +332,8 @@ Flags:
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, workAutoResumer, settingsStore), mcpToken)
 
 	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
-	handler := newHandler(token, devMode, wsHandler, mcpHandler)
+	transferHandler := filetransfer.NewHandler(registry, slog.Default())
+	handler := newHandler(token, devMode, wsHandler, mcpHandler, transferHandler)
 
 	portStr := strconv.Itoa(port)
 	srv := &http.Server{
@@ -337,7 +345,6 @@ Flags:
 
 	// Initialize relay if enabled
 	var relayManager *relay.Manager
-	var cancelRelayStreams context.CancelFunc
 	var remoteURL string
 	relayEnabled := *relayFlag
 	if relayEnabled {
@@ -362,14 +369,6 @@ Flags:
 		}
 
 		slog.Info("remote access enabled", "url", remoteURL)
-
-		var relayStreamCtx context.Context
-		relayStreamCtx, cancelRelayStreams = context.WithCancel(context.Background())
-		go func() {
-			for stream := range relayManager.NewStreams() {
-				go wsHandler.HandleStream(relayStreamCtx, stream, stream.ConnectionID())
-			}
-		}()
 	}
 
 	// Start listening for exit requests before publishing server.json: that file
@@ -393,14 +392,17 @@ Flags:
 		exitRequests.Stop()
 
 		slog.Info("shutting down server")
+		// Close the relay before draining srv, not after: every relayed request
+		// is served by srv, so a tunnel still delivering traffic into a server
+		// that has stopped accepting would turn those requests into errors, and
+		// long-lived relayed WebSockets would hold Shutdown until its deadline.
+		if relayManager != nil {
+			relayManager.Stop()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			slog.Error("server shutdown error", "error", err)
-		}
-		if relayManager != nil {
-			cancelRelayStreams()
-			relayManager.Stop()
 		}
 		wsHandler.Stop()
 		workAutoResumer.Stop()

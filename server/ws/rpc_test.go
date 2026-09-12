@@ -16,6 +16,8 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/contents"
+	"github.com/pockode/server/internal/unwritabletest"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -29,30 +31,51 @@ var bgCtx = context.Background()
 // opTimeout bounds one websocket send or receive. Large enough that a slow
 // machine never trips it, small enough that a genuinely stuck server fails with
 // the operation named rather than hanging until the test binary panics.
-const opTimeout = 30 * time.Second
+//
+// The floor is the heaviest single operation in the suite, not the typical one:
+// TestFileWrite_AcceptsTheCeilingEvenWhenEveryByteEscapes pushes a ~12 MiB
+// deflated frame, and under -race on a loaded machine that alone has been
+// measured at ~38s. Anything tighter turns that test into a coin flip while
+// proving nothing about a stuck server, which this still catches two orders of
+// magnitude before the test binary's own 10-minute panic.
+const opTimeout = 60 * time.Second
 
-func mockRegistry(mock *mockAgent) *agent.Registry {
+// dialTestClient dials with compression negotiated, so the suite runs over the
+// connection production actually builds rather than one it never uses. It is
+// not browser-shaped — this dialer offers a bare permessage-deflate — so the
+// tests that turn on the browser's own offer hand-roll a client instead, in
+// rpc_compression_test.go.
+func dialTestClient(ctx context.Context, serverURL string) (*websocket.Conn, error) {
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(serverURL, "http"),
+		&websocket.DialOptions{CompressionMode: clientCompression})
+	return conn, err
+}
+
+func mockRegistry(ag agent.Agent) *agent.Registry {
 	r := agent.NewRegistry()
-	r.Register(session.AgentTypeClaude, mock)
+	r.Register(session.AgentTypeClaude, ag)
 	return r
 }
 
 type testEnv struct {
 	t               *testing.T
+	dataDir         string
 	mock            *mockAgent
 	worktreeManager *worktree.Manager
 	workStore       work.Store
 	testRoleID      string // pre-created agent role ID for tests
+	handler         *RPCHandler
 	server          *httptest.Server
 	conn            *websocket.Conn
 	ctx             context.Context
 	cancel          context.CancelFunc
 	reqID           int
-	// pending holds notifications that arrived while waiting for an RPC
-	// response. The server is free to push an agent's output before it answers
-	// the request that triggered it, so dropping them on the floor would lose
-	// exactly the notifications a test is about to assert on.
-	pending []rpcNotification
+	authResult      rpc.AuthResult
+	// buffered holds frames read while waiting for a reply that had not arrived
+	// yet. A notification can overtake the reply to the request that caused it,
+	// so call() has to read past it — and dropping it would leave every later
+	// readNotification one frame short, waiting for a frame already delivered.
+	buffered [][]byte
 }
 
 func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
@@ -60,6 +83,21 @@ func newTestEnv(t *testing.T, mock *mockAgent) *testEnv {
 }
 
 func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testEnv {
+	return newTestEnvWithAgent(t, mock, mock, workDir)
+}
+
+// newForkableTestEnv registers an agent whose sessions can be forked. Forking is
+// declared by implementing agent.SessionForker, so it takes a different type
+// rather than a field on the plain mock; env.mock still reaches the same
+// recording mock underneath.
+func newForkableTestEnv(t *testing.T) *testEnv {
+	mock := &mockAgent{}
+	return newTestEnvWithAgent(t, mock, forkableMockAgent{mock}, t.TempDir())
+}
+
+// newTestEnvWithAgent registers ag for claude sessions. mock is the same agent in
+// every case but the forkable one, where it is the mock ag records into.
+func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir string) *testEnv {
 	dataDir := t.TempDir()
 	cmdStore, err := command.NewStore(dataDir)
 	if err != nil {
@@ -90,7 +128,7 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 	}
 
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, mockRegistry(mock), dataDir, 10*time.Minute)
+	worktreeManager := worktree.NewManager(registry, mockRegistry(ag), dataDir, 10*time.Minute)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
 	workOps := work.NewOperations(workStore, workStarter, nil)
@@ -98,10 +136,12 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
 	server := httptest.NewServer(h)
 
+	// No deadline of its own: every read and write is bounded individually (see
+	// opCtx). A single test-lifetime deadline turns "this machine is busy" into a
+	// failure once the accumulated work approaches it.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, err := dialTestClient(ctx, server.URL)
 	if err != nil {
 		cancel()
 		server.Close()
@@ -110,10 +150,12 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 
 	env := &testEnv{
 		t:               t,
+		dataDir:         dataDir,
 		mock:            mock,
 		worktreeManager: worktreeManager,
 		workStore:       workStore,
 		testRoleID:      testRole.ID,
+		handler:         h,
 		server:          server,
 		conn:            conn,
 		ctx:             ctx,
@@ -125,6 +167,9 @@ func newTestEnvWithWorkDir(t *testing.T, mock *mockAgent, workDir string) *testE
 	resp := env.call("auth", rpc.AuthParams{Token: "test-token"})
 	if resp.Error != nil {
 		t.Fatalf("auth failed: %s", resp.Error.Message)
+	}
+	if err := json.Unmarshal(resp.Result, &env.authResult); err != nil {
+		t.Fatalf("unmarshal auth result: %v", err)
 	}
 
 	t.Cleanup(func() {
@@ -210,8 +255,11 @@ func (e *testEnv) call(method string, params interface{}) rpcResponse {
 		e.t.Fatalf("failed to send: %v", err)
 	}
 
-	// Read messages until we get the response with matching ID, setting aside
-	// any notifications that overtook it.
+	// Read frames until the reply with the matching ID. Anything read on the way
+	// is a notification that overtook it, and is put back for the test to read.
+	// Straight off the socket, never through readFrame: a frame already buffered
+	// arrived before this request was even sent, so it can never be the reply, and
+	// taking it here would only put it back and spin.
 	for {
 		raw := e.read()
 
@@ -222,26 +270,28 @@ func (e *testEnv) call(method string, params interface{}) rpcResponse {
 		if resp.ID == reqID {
 			return resp
 		}
-
-		var notif rpcNotification
-		if err := json.Unmarshal(raw, &notif); err != nil {
-			e.t.Fatalf("failed to unmarshal notification: %v", err)
-		}
-		e.pending = append(e.pending, notif)
+		e.buffered = append(e.buffered, raw)
 	}
+}
+
+// readFrame returns the next frame the test has not seen yet, taking the ones
+// call() read past before going back to the socket. Frames stay in arrival
+// order: call() appends in the order it read them, and this drains from the front.
+func (e *testEnv) readFrame() []byte {
+	if len(e.buffered) > 0 {
+		data := e.buffered[0]
+		e.buffered = e.buffered[1:]
+		return data
+	}
+
+	return e.read()
 }
 
 func (e *testEnv) readNotification() rpcNotification {
 	e.t.Helper()
 
-	if len(e.pending) > 0 {
-		notif := e.pending[0]
-		e.pending = e.pending[1:]
-		return notif
-	}
-
 	var notif rpcNotification
-	if err := json.Unmarshal(e.read(), &notif); err != nil {
+	if err := json.Unmarshal(e.readFrame(), &notif); err != nil {
 		e.t.Fatalf("failed to unmarshal notification: %v", err)
 	}
 	return notif
@@ -289,6 +339,12 @@ func (e *testEnv) awaitResponseComplete() {
 	e.awaitNotification("chat.done")
 }
 
+func (e *testEnv) skipN(n int) {
+	for i := 0; i < n; i++ {
+		e.readFrame()
+	}
+}
+
 func TestHandler_Auth_InvalidToken(t *testing.T) {
 	dataDir := t.TempDir()
 	workDir := t.TempDir()
@@ -307,11 +363,10 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	server := httptest.NewServer(h)
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, err := dialTestClient(ctx, server.URL)
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -359,11 +414,10 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	server := httptest.NewServer(h)
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, err := dialTestClient(ctx, server.URL)
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
@@ -606,6 +660,86 @@ func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 	}
 }
 
+// TestHandler_FailedFirstTurn_KeepsAgentTypeSwitchable covers the escape hatch a
+// session needs when its very first turn fails before the agent says anything.
+// Nothing was started, so the session must not be treated as started: the user
+// can still move it to another agent instead of being stuck retrying the one
+// whose login expired.
+func TestHandler_FailedFirstTurn_KeepsAgentTypeSwitchable(t *testing.T) {
+	mock := &mockAgent{
+		// What Claude emits for a first message it cannot deliver, measured on
+		// 2.1.259 against an endpoint answering 401: retry banners (system events),
+		// the CLI's own account of the failure, then a result flagged as an error
+		// (subtype "success", is_error set — the flag is what counts). The account
+		// comes over the wire as an assistant message and only reaches this layer
+		// as a warning because the Claude parser keeps synthetic messages off the
+		// text path — read as agent output it would start the session and take the
+		// escape hatch away in precisely this scenario.
+		events: []agent.AgentEvent{
+			agent.SystemEvent{Content: `{"subtype":"api_retry"}`},
+			agent.WarningEvent{
+				Message: "Invalid API key \u00b7 Fix external API key",
+				Code:    "authentication_failed",
+			},
+			agent.ErrorEvent{Error: "Invalid API key \u00b7 Fix external API key"},
+		},
+	}
+	env := newTestEnv(t, mock)
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "failed-session", session.AgentTypeClaude, "")
+
+	env.subscribeChatMessages("failed-session")
+	env.sendMessage("failed-session", "hello")
+	env.skipN(4) // api_retry, warning, error, done
+
+	sess, _, _ := store.Get("failed-session")
+	if sess.Activated {
+		t.Error("expected session to stay unactivated after a turn with no agent output")
+	}
+
+	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
+		SessionID: "failed-session",
+		AgentType: session.AgentTypeCodex,
+	})
+	if resp.Error != nil {
+		t.Errorf("expected agent type change to be allowed, got %s", resp.Error.Message)
+	}
+
+	// The failed turn's process can still be alive — Codex's mcp-server outlives
+	// a turn it could not run. Reusing it would send the next message to the
+	// agent the user just switched away from.
+	if env.getMainWorktree().ProcessManager.HasProcess("failed-session") {
+		t.Error("expected the old agent's process to be closed by the switch")
+	}
+}
+
+// TestHandler_SessionWithAgentOutput_LocksAgentType is the other half: once the
+// agent has actually produced output there is a conversation on the agent's side,
+// and switching backends would silently abandon it.
+func TestHandler_SessionWithAgentOutput_LocksAgentType(t *testing.T) {
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			agent.TextEvent{Content: "Response"},
+			agent.DoneEvent{},
+		},
+	}
+	env := newTestEnv(t, mock)
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "started-session", session.AgentTypeClaude, "")
+
+	env.subscribeChatMessages("started-session")
+	env.sendMessage("started-session", "hello")
+	env.skipN(2) // text, done
+
+	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
+		SessionID: "started-session",
+		AgentType: session.AgentTypeCodex,
+	})
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "cannot change agent type after session has started") {
+		t.Errorf("expected rejection for a session the agent has answered in, got %+v", resp)
+	}
+}
+
 func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
@@ -746,6 +880,28 @@ func TestHandler_SessionCreate(t *testing.T) {
 	}
 }
 
+// A create that fails on disk (full disk, unwritable .pockode) used to reply
+// with a bare "failed to create session" and log nothing, leaving the failure
+// without a trace on either side of the connection.
+func TestHandler_SessionCreate_ReportsUnderlyingCause(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	// A read-only sessions dir stands in for any I/O failure the store hits.
+	unwritabletest.Make(t, filepath.Join(env.dataDir, "sessions"))
+
+	resp := env.call("session.create", nil)
+
+	if resp.Error == nil {
+		t.Fatal("expected an error when the sessions dir is not writable")
+	}
+	if !strings.Contains(resp.Error.Message, "failed to create session") {
+		t.Errorf("expected the message to say what failed, got %q", resp.Error.Message)
+	}
+	if !strings.Contains(resp.Error.Message, "permission denied") {
+		t.Errorf("expected the message to carry the underlying cause, got %q", resp.Error.Message)
+	}
+}
+
 func TestHandler_SessionDelete(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
@@ -879,6 +1035,117 @@ func TestHandler_SessionSetAgentType_NotFound(t *testing.T) {
 	}
 }
 
+// TestHandler_SessionFork covers the wiring: a fork asked for over the wire comes
+// back as a session of its own, carrying the anchored conversation and pointing at
+// the session it came from.
+func TestHandler_SessionFork(t *testing.T) {
+	env := newForkableTestEnv(t)
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
+	store.Update(bgCtx, "source", "Fix the parser")
+	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
+	store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "drop me"})
+
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
+	if resp.Error != nil {
+		t.Fatalf("fork failed: %s", resp.Error.Message)
+	}
+
+	var forked rpc.SessionListItem
+	if err := json.Unmarshal(resp.Result, &forked); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	if forked.ID == "source" || forked.ID == "" {
+		t.Fatalf("forked session ID = %q, want a new one", forked.ID)
+	}
+	if forked.Title != "Fix the parser" || forked.Mode != session.ModeYolo {
+		t.Errorf("title/mode = %q/%q, want the source's", forked.Title, forked.Mode)
+	}
+	if forked.ForkedFrom == nil || forked.ForkedFrom.SessionID != "source" {
+		t.Errorf("forkedFrom = %+v, want the source", forked.ForkedFrom)
+	}
+
+	history, err := store.GetHistory(bgCtx, forked.ID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	// The anchored record, plus the warning that this agent brought no context with
+	// it — the mock answers carried == false.
+	if len(history) != 2 {
+		t.Fatalf("forked history has %d records, want 2: %s", len(history), history)
+	}
+	if !strings.Contains(string(history[0]), "keep me") {
+		t.Errorf("first record = %s, want the anchored one", history[0])
+	}
+}
+
+// TestHandler_SessionFork_AnchorOutOfRange: the reply has to say what was wrong
+// with the request, since the sheet shows the server's message to the user.
+func TestHandler_SessionFork_AnchorOutOfRange(t *testing.T) {
+	env := newForkableTestEnv(t)
+	env.getMainWorktree().SessionStore.Create(bgCtx, "source", session.AgentTypeClaude, "")
+
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: 7})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "outside the session's history") {
+		t.Errorf("expected an out-of-range error, got %+v", resp)
+	}
+}
+
+// TestHandler_SessionFork_AgentCannotFork: the method refuses a fork its agent
+// cannot follow, with InvalidParams rather than an internal error — nothing
+// failed, the request asked for something this agent does not do — and a message
+// the sheet can show as-is.
+func TestHandler_SessionFork_AgentCannotFork(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
+	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
+
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "does not support forking") {
+		t.Fatalf("expected a refusal naming the missing capability, got %+v", resp)
+	}
+	if resp.Error.Code != jsonrpc2.CodeInvalidParams {
+		t.Errorf("error code = %d, want InvalidParams (%d)", resp.Error.Code, jsonrpc2.CodeInvalidParams)
+	}
+
+	sessions, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Errorf("sessions = %+v, want only the source", sessions)
+	}
+}
+
+// TestHandler_AgentList: the frontend decides what to offer from this table, so
+// every registered agent has to appear in it with a declaration it can read.
+func TestHandler_AgentList(t *testing.T) {
+	env := newForkableTestEnv(t)
+
+	resp := env.call("agent.list", struct{}{})
+	if resp.Error != nil {
+		t.Fatalf("agent.list failed: %s", resp.Error.Message)
+	}
+
+	var result rpc.AgentListResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	if len(result.Agents) != 1 {
+		t.Fatalf("agents = %+v, want the one registered agent", result.Agents)
+	}
+	if result.Agents[0].Type != session.AgentTypeClaude {
+		t.Errorf("agent type = %q, want the registered one", result.Agents[0].Type)
+	}
+	if result.Agents[0].ForkSupport != agent.ForkFromAnyMessage {
+		t.Errorf("forkSupport = %q, want the agent's own declaration", result.Agents[0].ForkSupport)
+	}
+}
+
 func TestHandler_ChatMessagesSubscribe_History(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
@@ -976,6 +1243,38 @@ func TestHandler_FileGet_ReadFile(t *testing.T) {
 	if result.File.Content != "world" {
 		t.Errorf("expected content 'world', got %q", result.File.Content)
 	}
+	if result.File.Size != 5 || result.File.MIME == "" {
+		t.Errorf("expected size and mime, got size %d mime %q", result.File.Size, result.File.MIME)
+	}
+}
+
+func TestHandler_FileGet_BinaryFileReturnsMetadataOnly(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	os.WriteFile(filepath.Join(workDir, "app.wasm"), []byte("\x00asm\x01\x00\x00\x00"), 0644)
+
+	resp := env.call("file.get", rpc.FileGetParams{Path: "app.wasm"})
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result rpc.FileGetResult
+	json.Unmarshal(resp.Result, &result)
+
+	if result.File == nil {
+		t.Fatal("expected file metadata")
+	}
+	if result.File.Encoding != contents.EncodingNone || result.File.Omitted != contents.OmitBinary {
+		t.Errorf("got encoding %q omitted %q, want %q/%q",
+			result.File.Encoding, result.File.Omitted, contents.EncodingNone, contents.OmitBinary)
+	}
+	if result.File.Content != "" {
+		t.Errorf("expected no content, got %q", result.File.Content)
+	}
+	if result.File.MIME != "application/wasm" {
+		t.Errorf("got mime %q, want application/wasm", result.File.MIME)
+	}
 }
 
 func TestHandler_FileGet_NotFound(t *testing.T) {
@@ -1051,6 +1350,79 @@ func TestHandler_FileWrite_InvalidPath(t *testing.T) {
 	}
 	if !strings.Contains(resp.Error.Message, "invalid path") {
 		t.Errorf("expected 'invalid path' error, got %q", resp.Error.Message)
+	}
+}
+
+func TestHandler_FileCreate(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+
+	if resp := env.call("file.create", rpc.FileCreateParams{Path: "docs/notes.md", Type: contents.TypeFile}); resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+	if resp := env.call("file.create", rpc.FileCreateParams{Path: "pkg", Type: contents.TypeDir}); resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	info, err := os.Stat(filepath.Join(workDir, "docs/notes.md"))
+	if err != nil {
+		t.Fatalf("failed to stat created file: %v", err)
+	}
+	if info.IsDir() {
+		t.Error("expected docs/notes.md to be a file")
+	}
+
+	info, err = os.Stat(filepath.Join(workDir, "pkg"))
+	if err != nil {
+		t.Fatalf("failed to stat created directory: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("expected pkg to be a directory")
+	}
+}
+
+func TestHandler_FileCreate_Exists(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	os.WriteFile(filepath.Join(workDir, "taken.txt"), []byte("content"), 0644)
+
+	resp := env.call("file.create", rpc.FileCreateParams{Path: "taken.txt", Type: contents.TypeFile})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "already exists") {
+		t.Errorf("expected 'already exists' error, got %q", resp.Error.Message)
+	}
+}
+
+func TestHandler_FileCreate_InvalidPath(t *testing.T) {
+	env := newWorkDirTestEnv(t, t.TempDir())
+
+	resp := env.call("file.create", rpc.FileCreateParams{Path: "../escape", Type: contents.TypeDir})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "invalid path") {
+		t.Errorf("expected 'invalid path' error, got %q", resp.Error.Message)
+	}
+}
+
+func TestHandler_FileCreate_InvalidType(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+
+	resp := env.call("file.create", rpc.FileCreateParams{Path: "thing", Type: "symlink"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "type must be") {
+		t.Errorf("expected type error, got %q", resp.Error.Message)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "thing")); !os.IsNotExist(err) {
+		t.Error("expected nothing to be created")
 	}
 }
 

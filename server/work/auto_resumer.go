@@ -52,6 +52,12 @@ type StepProvider interface {
 //
 // Step advance / reopen follow-ups: NotifyStepDone and NotifyReopen send the
 // next-step and reopen prompts after the MCP API mutates a work item in-process.
+//
+// None of the message-driven senders (step advance, reopen, child closure) check
+// whether the session is holding a turn open for background work; they send
+// immediately, exactly as a user typing during that wait would. That is a
+// deliberate trade-off, not an oversight — see docs/code/work-system.md,
+// "Follow-ups During a Background Wait".
 type AutoResumer struct {
 	workStore    Store
 	resolver     atomic.Pointer[SenderResolver]
@@ -59,10 +65,21 @@ type AutoResumer struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	retryMu      sync.Mutex
-	retries      map[string]int  // sessionID → retry count
-	continuing   map[string]bool // sessionID → auto-continuation pending
-	maxRetries   int
-	settleDelay  time.Duration // delay before checking work status after process stop
+	retries      map[string]int    // sessionID → retry count
+	continuing   map[string]bool   // sessionID → auto-continuation pending
+	activations  map[string]uint64 // sessionID → sequence number of the session's latest start
+	// Numbers activations globally rather than per session, so that an entry
+	// dropped by forgetSession is never re-created with a number some pending
+	// follow-up captured before the drop — that would make a stale event look
+	// current and stop work the session is running right now.
+	activationSeq uint64
+	maxRetries    int
+	settleDelay   time.Duration // delay before checking work status after process stop
+	// Tracks every follow-up goroutine so Stop can wait for the writes they make.
+	// spawnMu orders registration against cancellation: without it a follow-up
+	// scheduled just as Stop runs could add to wg after Stop began waiting.
+	spawnMu sync.Mutex
+	wg      sync.WaitGroup
 }
 
 // defaultSettleDelay is the time to wait after a process goes idle/ends before
@@ -80,15 +97,44 @@ func NewAutoResumer(workStore Store, maxRetries int) *AutoResumer {
 		cancel:      cancel,
 		retries:     make(map[string]int),
 		continuing:  make(map[string]bool),
+		activations: make(map[string]uint64),
 		maxRetries:  maxRetries,
 		settleDelay: defaultSettleDelay,
 	}
 }
 
-// Stop cancels all pending goroutines (settle delays and in-flight sends).
+// Stop cancels all pending goroutines (settle delays and in-flight sends) and
+// waits for them to return, so that a stopped resumer is no longer writing to
+// the work store or sending messages into agent sessions.
 func (r *AutoResumer) Stop() {
+	r.spawnMu.Lock()
 	r.cancel()
+	r.spawnMu.Unlock()
+
+	r.wg.Wait()
 }
+
+// goFollowUp runs a delayed follow-up as a goroutine tracked by Stop.
+func (r *AutoResumer) goFollowUp(fn func()) {
+	r.spawnMu.Lock()
+	defer r.spawnMu.Unlock()
+	if r.ctx.Err() != nil {
+		return
+	}
+
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		fn()
+	}()
+}
+
+// orphanedWorkComment explains a stop nobody asked for. Background tasks are
+// called out because they are the part a user is least likely to expect to have
+// died: they were started to outlive a turn, and they do — but not the process.
+const orphanedWorkComment = "Stopped automatically: the Pockode server restarted while this work was still open. " +
+	"No agent process survives a restart, so anything that was running for this work — including background tasks — " +
+	"is gone and no result is coming from it. Reopen the work to continue it."
 
 // StopOrphanedWork transitions all in_progress, needs_input, and waiting work items to stopped.
 // Call this at server startup before any sessions are created, so that work
@@ -106,8 +152,13 @@ func (r *AutoResumer) StopOrphanedWork() {
 		}
 		if err := r.stopWork(w.ID); err != nil {
 			slog.Warn("failed to stop orphaned work", "workId", w.ID, "error", err)
-		} else {
-			slog.Info("stopped orphaned work on startup", "workId", w.ID, "sessionId", w.SessionID)
+			continue
+		}
+		slog.Info("stopped orphaned work on startup", "workId", w.ID, "sessionId", w.SessionID)
+		// Say why, or the work is simply found stopped with no explanation and
+		// no hint that whatever the agent had running is gone too.
+		if _, err := r.workStore.AddComment(r.ctx, w.ID, orphanedWorkComment); err != nil {
+			slog.Warn("failed to explain why orphaned work was stopped", "workId", w.ID, "error", err)
 		}
 	}
 }
@@ -171,6 +222,22 @@ func (r *AutoResumer) getStepProvider() StepProvider {
 	return nil
 }
 
+// stepCount is the number of steps the work's role defines, or 0 when that is
+// unknown. Unknown and stepless are deliberately the same answer: both mean
+// "no step context to report", and a missing provider must not block a message.
+func (r *AutoResumer) stepCount(w Work) int {
+	sp := r.getStepProvider()
+	if sp == nil {
+		return 0
+	}
+	steps, err := sp.GetSteps(w.AgentRoleID)
+	if err != nil {
+		slog.Warn("failed to get steps for message meta", "agentRoleId", w.AgentRoleID, "error", err)
+		return 0
+	}
+	return len(steps)
+}
+
 // HandleProcessStateChange syncs work status with process lifecycle:
 //   - running → reactivate stopped work to in_progress.
 //   - idle → send auto-continuation message for in_progress work.
@@ -184,9 +251,10 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 	if state == "ended" {
 		r.retryMu.Lock()
 		pending := r.continuing[sessionID]
+		activation := r.activations[sessionID]
 		r.retryMu.Unlock()
 		if !pending {
-			go r.handleProcessEnded(sessionID)
+			r.goFollowUp(func() { r.handleProcessEnded(sessionID, activation) })
 		}
 		return
 	}
@@ -195,13 +263,22 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 	// This covers the case where a user sends a message to a session
 	// whose work was stopped (e.g. after process exit), bypassing work_start.
 	if state == "running" {
+		r.retryMu.Lock()
+		r.activationSeq++
+		r.activations[sessionID] = r.activationSeq
+		r.retryMu.Unlock()
 		r.handleProcessRunning(sessionID)
 		return
 	}
 
-	// User-initiated interrupt: stop work without auto-continuation.
+	// The turn was aborted rather than finished — a user interrupt, a denied
+	// permission, a turn replaced by the next one. Stop the work instead of
+	// nudging the agent to carry on with something it was told to abandon.
 	if interrupted {
-		go r.handleProcessEnded(sessionID)
+		r.retryMu.Lock()
+		activation := r.activations[sessionID]
+		r.retryMu.Unlock()
+		r.goFollowUp(func() { r.handleProcessEnded(sessionID, activation) })
 		return
 	}
 
@@ -217,20 +294,52 @@ func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInp
 
 	r.retryMu.Lock()
 	r.continuing[sessionID] = true
+	activation := r.activations[sessionID]
 	r.retryMu.Unlock()
 
-	go r.handleAutoContinuation(sessionID)
+	r.goFollowUp(func() { r.handleAutoContinuation(sessionID, activation) })
+}
+
+// settled waits out the settle delay and reports whether the lifecycle event
+// that started the wait still describes the session.
+//
+// Both delayed handlers decide what to do about a session that stopped, and a
+// session can start running again inside the delay: an aborted turn is followed
+// immediately by its replacement, and a user can answer a dead session's prompt,
+// which builds a new process. Acting on the older event would then stop or nudge
+// work that is running right now. activation is the number read when the event
+// arrived; HandleProcessStateChange assigns a new one on every running, so any
+// change — including the entry being dropped — means the event is stale.
+func (r *AutoResumer) settled(sessionID string, activation uint64) bool {
+	select {
+	case <-time.After(r.settleDelay):
+	case <-r.ctx.Done():
+		return false
+	}
+
+	r.retryMu.Lock()
+	current := r.activations[sessionID]
+	r.retryMu.Unlock()
+
+	if current != activation {
+		slog.Info("session active again, skipping stale lifecycle follow-up", "sessionId", sessionID)
+		return false
+	}
+	return true
 }
 
 // handleProcessEnded transitions in_progress/needs_input/waiting work to stopped when its process terminates.
 // This catches cases like user interrupt or unexpected process exit.
-func (r *AutoResumer) handleProcessEnded(sessionID string) {
+func (r *AutoResumer) handleProcessEnded(sessionID string, activation uint64) {
 	// Use the same settle delay as auto-continuation to allow step_done to propagate.
-	select {
-	case <-time.After(r.settleDelay):
-	case <-r.ctx.Done():
+	if !r.settled(sessionID, activation) {
 		return
 	}
+
+	// The session stopped and never came back within the settle window, so nothing
+	// is left to follow up on. This is the only cleanup a session without a work
+	// item ever gets — OnWorkChange never fires for one.
+	defer r.forgetSession(sessionID)
 
 	w := r.findWorkBySessionID(sessionID, StatusInProgress, StatusNeedsInput, StatusWaiting)
 	if w == nil {
@@ -244,10 +353,15 @@ func (r *AutoResumer) handleProcessEnded(sessionID string) {
 	} else {
 		slog.Info("work stopped after process ended", "workId", w.ID, "sessionId", sessionID)
 	}
+}
 
-	// Clean up retry tracking
+// forgetSession drops all per-session tracking once nothing is following up on
+// the session. Safe to call while a follow-up is still in flight: the dropped
+// activation reads back as 0, which that follow-up sees as a mismatch and skips.
+func (r *AutoResumer) forgetSession(sessionID string) {
 	r.retryMu.Lock()
 	delete(r.retries, sessionID)
+	delete(r.activations, sessionID)
 	r.retryMu.Unlock()
 }
 
@@ -260,7 +374,7 @@ func (r *AutoResumer) handleProcessRunning(sessionID string) {
 		return
 	}
 
-	if err := r.workStore.Reactivate(r.ctx, w.ID); err != nil {
+	if err := r.workStore.MarkRunning(r.ctx, w.ID); err != nil {
 		if r.ctx.Err() == nil {
 			slog.Warn("failed to reactivate stopped work on process running", "workId", w.ID, "error", err)
 		}
@@ -275,7 +389,7 @@ func (r *AutoResumer) handleProcessRunning(sessionID string) {
 	slog.Info("stopped work reactivated by process running", "workId", w.ID, "sessionId", sessionID)
 }
 
-func (r *AutoResumer) handleAutoContinuation(sessionID string) {
+func (r *AutoResumer) handleAutoContinuation(sessionID string, activation uint64) {
 	defer func() {
 		r.retryMu.Lock()
 		delete(r.continuing, sessionID)
@@ -283,10 +397,8 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string) {
 	}()
 
 	// Let an in-flight step_done's in-process retry reset land before we read
-	// the retry count below. Use select so we abort immediately on shutdown.
-	select {
-	case <-time.After(r.settleDelay):
-	case <-r.ctx.Done():
+	// the retry count below.
+	if !r.settled(sessionID, activation) {
 		return
 	}
 
@@ -318,19 +430,17 @@ func (r *AutoResumer) handleAutoContinuation(sessionID string) {
 
 	// Build message with step context if available.
 	var msg string
-	var meta *agent.MessageMeta
+	totalSteps := 0
 	if sp := r.getStepProvider(); sp != nil {
 		if steps, err := sp.GetSteps(w.AgentRoleID); err == nil && len(steps) > 0 {
 			msg = BuildAutoContinuationMessageWithSteps(*w, steps, w.CurrentStep)
-			meta = NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
+			totalSteps = len(steps)
 		}
 	}
 	if msg == "" {
 		msg = BuildAutoContinuationMessage(*w)
 	}
-	if meta == nil {
-		meta = NewMessageMeta(w.Title, 0, 0)
-	}
+	meta := NewMessageMeta(*w, w.CurrentStep+1, totalSteps)
 
 	if err := sender.SendSystemMessage(r.ctx, sessionID, msg, MessageSubtypeAutoContinue, meta); err != nil {
 		if r.ctx.Err() != nil {
@@ -347,9 +457,7 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 	// Clean up tracking state on delete
 	if event.Op == OperationDelete {
 		if event.Work.SessionID != "" {
-			r.retryMu.Lock()
-			delete(r.retries, event.Work.SessionID)
-			r.retryMu.Unlock()
+			r.forgetSession(event.Work.SessionID)
 		}
 		return
 	}
@@ -358,12 +466,11 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 		return
 	}
 
-	// Reset retries when work completes or stops
+	// Drop tracking when work completes or stops; a later turn on the same session
+	// starts from a clean retry count and a fresh activation number.
 	if event.Work.Status == StatusClosed || event.Work.Status == StatusStopped {
 		if event.Work.SessionID != "" {
-			r.retryMu.Lock()
-			delete(r.retries, event.Work.SessionID)
-			r.retryMu.Unlock()
+			r.forgetSession(event.Work.SessionID)
 		}
 	}
 
@@ -375,7 +482,7 @@ func (r *AutoResumer) OnWorkChange(event ChangeEvent) {
 		return
 	}
 
-	go r.handleParentReactivation(event.Work)
+	r.goFollowUp(func() { r.handleParentReactivation(event.Work) })
 }
 
 // NotifyStepDone sends the next-step prompt after an in-process step advance.
@@ -390,7 +497,7 @@ func (r *AutoResumer) NotifyStepDone(w Work) {
 	if r.getResolver() == nil || sp == nil || w.SessionID == "" || w.Status != StatusInProgress {
 		return
 	}
-	go r.sendStepAdvance(w, sp)
+	r.goFollowUp(func() { r.sendStepAdvance(w, sp) })
 }
 
 // NotifyReopen sends the reopen message after an in-process work_reopen.
@@ -398,7 +505,7 @@ func (r *AutoResumer) NotifyReopen(w Work) {
 	if r.getResolver() == nil || w.SessionID == "" {
 		return
 	}
-	go r.sendReopen(w)
+	r.goFollowUp(func() { r.sendReopen(w) })
 }
 
 // sendStepAdvance sends the next-step prompt to the agent session after a step
@@ -429,7 +536,7 @@ func (r *AutoResumer) sendStepAdvance(w Work, sp StepProvider) {
 	r.retryMu.Unlock()
 
 	msg := BuildStepAdvanceMessage(w, steps[w.CurrentStep], w.CurrentStep+1, len(steps))
-	meta := NewMessageMeta(w.Title, w.CurrentStep+1, len(steps))
+	meta := NewMessageMeta(w, w.CurrentStep+1, len(steps))
 	if err := sender.SendSystemMessage(r.ctx, w.SessionID, msg, MessageSubtypeStepAdvance, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return
@@ -454,7 +561,8 @@ func (r *AutoResumer) sendReopen(w Work) {
 	r.retryMu.Unlock()
 
 	msg := BuildReopenMessage(w)
-	if err := sender.SendSystemMessage(r.ctx, w.SessionID, msg, MessageSubtypeReopen, NewMessageMeta(w.Title, 0, 0)); err != nil {
+	meta := NewMessageMeta(w, w.CurrentStep+1, r.stepCount(w))
+	if err := sender.SendSystemMessage(r.ctx, w.SessionID, msg, MessageSubtypeReopen, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}
@@ -496,7 +604,7 @@ func (r *AutoResumer) handleParentReactivation(child Work) {
 
 	// Handle waiting parent: transition to in_progress
 	if parent.Status == StatusWaiting {
-		if err := r.workStore.ResumeFromWaiting(r.ctx, parent.ID); err != nil {
+		if err := r.workStore.MarkRunning(r.ctx, parent.ID); err != nil {
 			if r.ctx.Err() != nil {
 				return
 			}
@@ -512,7 +620,11 @@ func (r *AutoResumer) handleParentReactivation(child Work) {
 
 	// Send child completion message to parent (StatusInProgress, StatusNeedsInput, StatusWaiting->InProgress, StatusStopped)
 	msg := BuildChildCompletionMessage(parent, child.Title, child.ID)
-	if err := sender.SendSystemMessage(r.ctx, parent.SessionID, msg, MessageSubtypeChildDone, NewMessageMeta(parent.Title, 0, 0)); err != nil {
+	// Addressed to the parent's session, so the meta describes the parent; the
+	// child rides along in its own field.
+	meta := NewMessageMeta(parent, parent.CurrentStep+1, r.stepCount(parent))
+	meta.Child = &agent.ChildInfo{ID: child.ID, Title: child.Title}
+	if err := sender.SendSystemMessage(r.ctx, parent.SessionID, msg, MessageSubtypeChildDone, meta); err != nil {
 		if r.ctx.Err() != nil {
 			return
 		}

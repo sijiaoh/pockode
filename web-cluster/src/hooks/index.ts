@@ -1,1 +1,1 @@
-export { useIsDesktop } from "@pockode/shared";
+export { useIsExpanded } from "@pockode/shared";

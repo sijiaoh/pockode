@@ -1,3 +1,4 @@
+import { useHasCoarsePointer } from "@pockode/shared";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Mock } from "vitest";
@@ -5,10 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useInputStore } from "../../lib/inputStore";
 import InputBar from "./InputBar";
 
-vi.mock("../../utils/breakpoints", () => ({
-	isMobile: vi.fn(() => false),
-	hasCoarsePointer: vi.fn(() => false),
+vi.mock("../../utils/platform", () => ({
 	isMac: false,
+}));
+
+// Only the pointer gates are faked; the width hooks read the setup's matchMedia
+// stub, which answers no to every min-width query (i.e. the compact tier).
+vi.mock("@pockode/shared", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@pockode/shared")>()),
+	hasCoarsePointer: vi.fn(() => false),
+	useHasCoarsePointer: vi.fn(() => false),
 }));
 
 // Mock textarea-caret for Y coordinate detection in history navigation
@@ -54,6 +61,7 @@ describe("InputBar", () => {
 		mockListCommands.mockResolvedValue(mockCommands);
 		mockInvalidateCommandCache.mockClear();
 		mockGetCaretCoordinates.mockReturnValue({ top: 0, left: 0, height: 20 });
+		vi.mocked(useHasCoarsePointer).mockReturnValue(false);
 	});
 
 	afterEach(() => {
@@ -133,7 +141,7 @@ describe("InputBar", () => {
 	});
 
 	it("does not send on Enter with coarse pointer (touch device)", async () => {
-		const { hasCoarsePointer } = await import("../../utils/breakpoints");
+		const { hasCoarsePointer } = await import("@pockode/shared");
 		vi.mocked(hasCoarsePointer).mockReturnValue(true);
 
 		const onSend = vi.fn();
@@ -695,6 +703,25 @@ describe("InputBar", () => {
 
 			// Input should still be "/" (not "previous message" from history)
 			expect(textarea).toHaveValue("/");
+		});
+	});
+
+	// Autofocus follows the pointer, not the width: what makes it welcome is a
+	// physical keyboard, and a mini pad has a wide viewport without one — the
+	// on-screen keyboard used to eat half the conversation the moment it opened.
+	describe("autofocus", () => {
+		it("focuses the input when the primary pointer is fine", () => {
+			vi.mocked(useHasCoarsePointer).mockReturnValue(false);
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			expect(screen.getByRole("textbox")).toHaveFocus();
+		});
+
+		it("leaves the input alone when the primary pointer is coarse", () => {
+			vi.mocked(useHasCoarsePointer).mockReturnValue(true);
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+			expect(screen.getByRole("textbox")).not.toHaveFocus();
 		});
 	});
 });

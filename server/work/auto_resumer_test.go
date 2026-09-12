@@ -199,6 +199,79 @@ func TestAutoResumer_InterruptStopsWork(t *testing.T) {
 	}
 }
 
+// widenSettleDelay lengthens the wait before a lifecycle follow-up fires, and
+// returns a duration that outlasts it. A test that reports the session running
+// again needs that report to land inside the window, and the default 10ms is
+// short enough that a loaded machine fires the follow-up first.
+func widenSettleDelay(resumer *AutoResumer) (outlastDelay time.Duration) {
+	resumer.settleDelay = 200 * time.Millisecond
+	return 2 * resumer.settleDelay
+}
+
+// TestAutoResumer_InterruptDoesNotStopResumedSession covers the gap between a
+// lifecycle event and the delayed decision it triggers. Codex aborts the running
+// turn when a second message replaces it, which reaches this as an interrupt
+// immediately followed by the replacement turn starting. Stopping the work then
+// would kill a work item whose agent is right now doing what it was asked to.
+func TestAutoResumer_InterruptDoesNotStopResumedSession(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	outlast := widenSettleDelay(resumer)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, true)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+
+	time.Sleep(outlast)
+	if w := getWork(t, store, story.ID); w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q for a session that is running again", w.Status, StatusInProgress)
+	}
+	if len(sender.getMessages()) != 0 {
+		t.Error("should not send a continuation message after an interrupt")
+	}
+}
+
+// TestAutoResumer_ProcessEndedDoesNotStopRestartedSession is the same guard for
+// a dead process: answering a prompt on a reaped session builds a new process,
+// and the old process's stop must not follow the new one into the grave.
+func TestAutoResumer_ProcessEndedDoesNotStopRestartedSession(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	outlast := widenSettleDelay(resumer)
+	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+
+	time.Sleep(outlast)
+	if w := getWork(t, store, story.ID); w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q for a session that restarted", w.Status, StatusInProgress)
+	}
+}
+
+// TestAutoResumer_NoContinuationForResumedSession keeps the nudge from piling on
+// top of a turn somebody else already started during the settle delay.
+func TestAutoResumer_NoContinuationForResumedSession(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	outlast := widenSettleDelay(resumer)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+
+	time.Sleep(outlast)
+	if msgs := sender.getMessages(); len(msgs) != 0 {
+		t.Errorf("expected no continuation for a session already running, got %v", msgs)
+	}
+}
+
 func TestAutoResumer_IgnoresNeedsInput(t *testing.T) {
 	store, resumer, sender := setupResumerTest(t)
 
@@ -242,8 +315,9 @@ func TestAutoResumer_RetryLimit_TransitionsToStopped(t *testing.T) {
 		waitFor(t, func() bool { return len(sender.getMessages()) >= i+1 })
 	}
 
-	// The attempt past the limit stops the work instead of resuming it. Waiting
-	// on that transition rather than on a duration is what makes this reliable:
+	// The next idle is over the limit: it stops the work instead of nudging again.
+	// Waiting for that transition rather than on a duration is what settles the
+	// message count — a fourth nudge would have been sent before the stop — and
 	// the settle delay plus a store write is not something a fixed sleep can
 	// outlast on a loaded machine.
 	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
@@ -492,6 +566,30 @@ func TestAutoResumer_StopOrphanedWork_IncludesWaiting(t *testing.T) {
 	got := getWork(t, store, story.ID)
 	if got.Status != StatusStopped {
 		t.Errorf("status = %q, want stopped", got.Status)
+	}
+}
+
+// A stop nobody asked for has to say so somewhere the user will find it: the
+// work is left stopped mid-flight, and whatever the agent had running in the
+// background died with the server that was running it.
+func TestAutoResumer_StopOrphanedWork_ExplainsItself(t *testing.T) {
+	store := newTestStore(t)
+	resumer := NewAutoResumer(store, 3)
+
+	story := createStory(t, store, "S")
+	startWorkWithSession(t, store, story.ID, "s1")
+
+	resumer.StopOrphanedWork()
+
+	comments, err := store.ListComments(story.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 {
+		t.Fatalf("expected exactly one comment explaining the stop, got %d", len(comments))
+	}
+	if comments[0].Body != orphanedWorkComment {
+		t.Errorf("unexpected comment body: %q", comments[0].Body)
 	}
 }
 
@@ -899,6 +997,114 @@ func TestAutoResumer_ProcessEndedNoopWhenWorkWaiting(t *testing.T) {
 	w := getWork(t, store, story.ID)
 	if w.Status != StatusStopped {
 		t.Errorf("status = %q, want %q (waiting work should be stopped)", w.Status, StatusStopped)
+	}
+}
+
+// --- session tracking cleanup ---
+
+// trackedSessions reports how many sessions the resumer still holds state for.
+func trackedSessions(r *AutoResumer) (retries, activations int) {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	return len(r.retries), len(r.activations)
+}
+
+// continuationPending reports whether an auto-continuation is still in flight.
+// A pending one suppresses the process-ended handler, so a test that wants that
+// handler to run must wait this out first.
+func continuationPending(r *AutoResumer, sessionID string) bool {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	return r.continuing[sessionID]
+}
+
+func TestAutoResumer_ProcessEndedForgetsSessionTracking(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	// One activation and one consumed retry to clean up.
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
+	waitFor(t, func() bool { return !continuationPending(resumer, sid) })
+
+	if retries, activations := trackedSessions(resumer); retries != 1 || activations != 1 {
+		t.Fatalf("precondition: tracked %d retries and %d activations, want 1 each", retries, activations)
+	}
+
+	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
+
+	waitFor(t, func() bool {
+		retries, activations := trackedSessions(resumer)
+		return retries == 0 && activations == 0
+	})
+}
+
+// TestAutoResumer_ProcessEndedForgetsSessionWithoutWork covers the only tracking
+// a work-less session ever gets: no work item means no OnWorkChange to clean up
+// after it.
+func TestAutoResumer_ProcessEndedForgetsSessionWithoutWork(t *testing.T) {
+	_, resumer, _ := setupResumerTest(t)
+
+	sid := "session-without-work"
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
+
+	waitFor(t, func() bool {
+		_, activations := trackedSessions(resumer)
+		return activations == 0
+	})
+}
+
+func TestAutoResumer_WorkChangeForgetsSessionTracking(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		event ChangeEvent
+	}{
+		{"closed", ChangeEvent{Op: OperationUpdate, Work: Work{ID: "w1", Status: StatusClosed, SessionID: "session-1"}}},
+		{"stopped", ChangeEvent{Op: OperationUpdate, Work: Work{ID: "w1", Status: StatusStopped, SessionID: "session-1"}}},
+		{"deleted", ChangeEvent{Op: OperationDelete, Work: Work{ID: "w1", Status: StatusInProgress, SessionID: "session-1"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, resumer, _ := setupResumerTest(t)
+
+			resumer.HandleProcessStateChange("session-1", "running", false, false, false)
+			resumer.OnWorkChange(tc.event)
+
+			if retries, activations := trackedSessions(resumer); retries != 0 || activations != 0 {
+				t.Errorf("tracked %d retries and %d activations, want none after %s", retries, activations, tc.name)
+			}
+		})
+	}
+}
+
+// TestAutoResumer_ForgottenSessionGetsFreshActivationNumber pins the reason
+// activation numbers are globally unique. A follow-up captured before the
+// cleanup must still see the session's next turn as a newer activation — a
+// counter restarting at 1 would look identical to it and stop work that is
+// running right now.
+func TestAutoResumer_ForgottenSessionGetsFreshActivationNumber(t *testing.T) {
+	store, resumer, _ := setupResumerTest(t)
+
+	story := createStory(t, store, "Story")
+	sid := "session-1"
+	startWorkWithSession(t, store, story.ID, sid)
+
+	outlast := widenSettleDelay(resumer)
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+	resumer.HandleProcessStateChange(sid, "idle", false, false, true)
+
+	// A stop inside the settle window drops the session's tracking, and the
+	// session then starts a new turn. The pending interrupt must read that turn
+	// as a newer activation and leave the work alone.
+	resumer.OnWorkChange(ChangeEvent{Op: OperationUpdate, Work: Work{ID: story.ID, Status: StatusStopped, SessionID: sid}})
+	resumer.HandleProcessStateChange(sid, "running", false, false, false)
+
+	time.Sleep(outlast)
+	if w := getWork(t, store, story.ID); w.Status != StatusInProgress {
+		t.Errorf("status = %q, want %q for a session running again after cleanup", w.Status, StatusInProgress)
 	}
 }
 
@@ -1437,7 +1643,7 @@ func TestAutoResumer_NotifyReopen_NoSessionNoMessage(t *testing.T) {
 	}
 }
 
-// --- Work-origin tagging: subtype + collapsed-bar meta ---
+// --- Work-origin tagging: subtype + card meta ---
 
 func TestAutoResumer_StepAdvance_TagsSubtypeAndStepMeta(t *testing.T) {
 	_, resumer, sender := setupResumerTest(t)
@@ -1504,9 +1710,59 @@ func TestAutoResumer_ChildCompletion_TagsSubtype(t *testing.T) {
 	}
 }
 
+// The message goes to the parent's session, so it must be filed under the
+// parent. Naming the child here would scatter the parent's card into orphans.
+func TestAutoResumer_ChildCompletion_MetaAddressesParent(t *testing.T) {
+	store, resumer, sender := setupResumerTest(t)
+
+	story := createStory(t, store, "Parent story")
+	task := createTask(t, store, story.ID, "Task")
+	parentSid := "parent-session"
+	startWorkWithSession(t, store, story.ID, parentSid)
+	startWork(t, store, task.ID)
+
+	resumer.OnWorkChange(ChangeEvent{
+		Op:   OperationUpdate,
+		Work: Work{ID: task.ID, Status: StatusClosed, ParentID: story.ID, Title: "Task"},
+	})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+	got := sender.getMessages()[0]
+	if got.Meta == nil || got.Meta.WorkID != story.ID {
+		t.Fatalf("meta work id = %+v, want parent id %q", got.Meta, story.ID)
+	}
+	if got.Meta.WorkType != string(WorkTypeStory) {
+		t.Errorf("meta work type = %q, want %q", got.Meta.WorkType, WorkTypeStory)
+	}
+	if got.Meta.Child == nil || got.Meta.Child.ID != task.ID || got.Meta.Child.Title != "Task" {
+		t.Errorf("meta child = %+v, want the closed task", got.Meta.Child)
+	}
+}
+
+func TestAutoResumer_Reopen_CarriesStepMeta(t *testing.T) {
+	_, resumer, sender := setupResumerTest(t)
+	resumer.SetStepProvider(&mockStepProvider{steps: map[string][]string{
+		testRoleID: {"Plan the work", "Build the thing"},
+	}})
+
+	resumer.NotifyReopen(Work{ID: "w1", Type: WorkTypeTask, Status: StatusInProgress, SessionID: "s1", AgentRoleID: testRoleID, Title: "My work", CurrentStep: 1})
+
+	waitFor(t, func() bool { return len(sender.getMessages()) >= 1 })
+	got := sender.getMessages()[0]
+	if got.Meta == nil || got.Meta.WorkID != "w1" || got.Meta.WorkType != string(WorkTypeTask) {
+		t.Fatalf("meta = %+v, want the reopened work identified", got.Meta)
+	}
+	if got.Meta.Step == nil || got.Meta.Step.Current != 2 || got.Meta.Step.Total != 2 {
+		t.Errorf("meta step = %+v, want current 2 total 2", got.Meta.Step)
+	}
+}
+
 func TestNewMessageMeta_OmitsStepWhenNoSteps(t *testing.T) {
-	meta := NewMessageMeta("T", 1, 0)
-	if meta.Title != "T" || meta.Step != nil {
-		t.Errorf("meta = %+v, want title-only with no step", meta)
+	meta := NewMessageMeta(Work{ID: "w1", Type: WorkTypeTask, Title: "T"}, 1, 0)
+	if meta.WorkID != "w1" || meta.WorkType != string(WorkTypeTask) || meta.Title != "T" {
+		t.Errorf("meta = %+v, want the work identified", meta)
+	}
+	if meta.Step != nil {
+		t.Errorf("meta step = %+v, want none for a stepless work", meta.Step)
 	}
 }

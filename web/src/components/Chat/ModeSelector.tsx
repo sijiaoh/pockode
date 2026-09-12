@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { SESSION_MODE_INFO, SESSION_MODES } from "../../lib/sessionMode";
+import { getSessionModeInfo, SESSION_MODES } from "../../lib/sessionMode";
 import type { SessionMode } from "../../types/message";
+import type { AgentType } from "../../types/settings";
 
 interface Props {
 	mode: SessionMode;
+	agentType: AgentType;
 	onModeChange: (mode: SessionMode) => Promise<void>;
 	disabled?: boolean;
 }
@@ -22,7 +24,12 @@ const ICON_COLORS: Record<
 	},
 };
 
-function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
+function ModeSelector({
+	mode,
+	agentType,
+	onModeChange,
+	disabled = false,
+}: Props) {
 	const [isOpen, setIsOpen] = useState(false);
 
 	const handleSelect = async (newMode: SessionMode) => {
@@ -36,7 +43,7 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 		setIsOpen(false);
 	};
 
-	const currentInfo = SESSION_MODE_INFO[mode] ?? SESSION_MODE_INFO.default;
+	const currentInfo = getSessionModeInfo(mode, agentType);
 	const currentColors = ICON_COLORS[mode] ?? ICON_COLORS.default;
 
 	// Close dropdown on Escape key
@@ -59,7 +66,7 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 				type="button"
 				onClick={() => setIsOpen(!isOpen)}
 				disabled={disabled}
-				className="group flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary h-8 w-8 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50"
+				className="group flex items-center justify-center rounded border border-th-border bg-th-bg-tertiary size-9 pointer-coarse:size-11 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50"
 				aria-label={currentInfo.label}
 			>
 				<currentInfo.icon
@@ -77,7 +84,7 @@ function ModeSelector({ mode, onModeChange, disabled = false }: Props) {
 					/>
 					<div className="absolute bottom-full left-0 z-50 mb-1 min-w-52 overflow-hidden rounded-lg border border-th-border bg-th-bg-secondary shadow-lg">
 						{SESSION_MODES.map((modeKey) => {
-							const info = SESSION_MODE_INFO[modeKey];
+							const info = getSessionModeInfo(modeKey, agentType);
 							const colors = ICON_COLORS[modeKey];
 							const isSelected = mode === modeKey;
 							return (

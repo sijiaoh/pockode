@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/settings"
@@ -80,14 +81,60 @@ func (h *RPCHandler) Stop() {
 	h.agentRoleListWatcher.Stop()
 }
 
+// clientCompression negotiates permessage-deflate with the browser.
+//
+// The relay tunnel compresses too, but that hop ends at the cloud; this is the
+// only one that covers the phone's own link.
+//
+// The mode is a real choice, not a memory-for-ratio dial. A session's history
+// arrives as one large message and compresses the same either way; the streamed
+// events that follow are individually small, so they only compress against a
+// window shared with the messages before them. Giving up context takeover gives
+// up exactly the half that matters.
+//
+// The cost is on the order of a megabyte per connection, held until it closes.
+// Nothing in this package bounds how many connections there are; for a phone
+// reaching pockode through the relay, the relay's per-tunnel stream limit does.
+// Browsers that do not offer the extension keep working, uncompressed.
+//
+// Measurements and the trade-off: docs/websocket-rpc-design.md.
+const clientCompression = websocket.CompressionContextTakeover
+
+// maxClientMessage bounds a single message from the client. It is a backstop,
+// not the product limit: where a method sets a ceiling of its own, that is the
+// one a user is meant to meet and it answers with an error, and this only has
+// to sit far enough above it that an acceptable request never reaches it.
+//
+// Of those ceilings file.write's is by far the largest and the one this has to
+// clear: contents.MaxFileSize (2 MiB) of content carried as a JSON string,
+// where escaping costs at most six bytes per source byte (\u00XX for a control
+// character). 16 MiB clears that whole escaped range for any content at all,
+// not only the well-behaved kind. A request far past 2 MiB that also escapes
+// that badly can still land here and be closed on, which is what a backstop is
+// for.
+//
+// Nothing else that arrives comes near: paths, options, and typed text such as
+// a chat message or a work body. Those set no ceiling of their own, so for
+// them this is the one that applies. Being the whole connection's ceiling it
+// likewise bounds what an unauthenticated peer may send and what pockode holds
+// while reading one message; both cost bytes actually transmitted rather than
+// reserved, on a machine already running agent subprocesses that cost far more.
+//
+// Deleting the call does not fall back to something sane: coder/websocket's
+// default is 32 KiB, well under what file.write accepts, and a transport limit
+// does not reply — it closes the connection with StatusMessageTooBig.
+const maxClientMessage = 16 << 20 // 16 MiB
+
 func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: h.devMode,
+		CompressionMode:    clientCompression,
 	})
 	if err != nil {
 		slog.Error("failed to accept websocket", "error", err)
 		return
 	}
+	conn.SetReadLimit(maxClientMessage)
 
 	h.handleConnection(r.Context(), conn)
 }
@@ -95,10 +142,10 @@ func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *RPCHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
 	stream := NewWebSocketStream(wsConn)
 	connID := uuid.Must(uuid.NewV7()).String()
-	h.HandleStream(ctx, stream, connID)
+	h.handleStream(ctx, stream, connID)
 }
 
-func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStream, connID string) {
+func (h *RPCHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStream, connID string) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.LogPanic(r, "websocket connection crashed", "connId", connID)
@@ -111,6 +158,7 @@ func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 	state := &rpcConnState{
 		connID: connID,
 		log:    log,
+		ready:  make(chan struct{}),
 		// worktree is set after auth
 	}
 
@@ -121,6 +169,10 @@ func (h *RPCHandler) HandleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 		authenticated: false,
 	}
 
+	// NewConn starts its read loop before returning, so a request can be
+	// dispatched before setConn runs. That is not hypothetical on a relay
+	// stream: the cloud's first message is often already buffered by the time
+	// this goroutine gets here. state.ready makes handlers wait for the wiring.
 	rpcConn := jsonrpc2.NewConn(ctx, stream, jsonrpc2.AsyncHandler(handler))
 	state.setConn(rpcConn)
 
@@ -140,6 +192,12 @@ type rpcConnState struct {
 	worktree      *worktree.Worktree       // set after auth
 	subscriptions map[string]watch.Watcher // subID → watcher for cleanup
 	closed        bool                     // set by cleanup; guards against binds/subscribes racing disconnect
+	// ready is closed by setConn. Handlers must wait on it before touching the
+	// state: a handler that runs first would subscribe the still-nil notifier
+	// to the worktree — an entry cleanup can never find (it unsubscribes the
+	// real one), so it outlives the connection and panics the next watcher that
+	// notifies it — and would write to the still-nil subscriptions map.
+	ready chan struct{}
 }
 
 // bindWorktree atomically binds wt to the connection, subscribing the
@@ -187,6 +245,12 @@ func (s *rpcConnState) setConn(conn *jsonrpc2.Conn) {
 	s.notifier = NewJSONRPCNotifier(conn)
 	s.subscriptions = make(map[string]watch.Watcher)
 	s.mu.Unlock()
+	close(s.ready)
+}
+
+// waitReady blocks until the state is wired to its jsonrpc2 connection.
+func (s *rpcConnState) waitReady() {
+	<-s.ready
 }
 
 func (s *rpcConnState) getNotifier() watch.Notifier {
@@ -278,6 +342,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		}
 	}()
 
+	h.state.waitReady()
+
 	h.log.Debug("received request", "method", req.Method, "id", req.ID)
 
 	// Auth must be the first request
@@ -313,6 +379,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "command.list":
 		h.handleCommandList(ctx, conn, req)
+		return
+	case "agent.list":
+		h.handleAgentList(ctx, conn, req)
 		return
 	case "settings.subscribe":
 		h.handleSettingsSubscribe(ctx, conn, req)
@@ -414,6 +483,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSessionSetAgentType(ctx, conn, req, wt)
 	case "session.set_mode":
 		h.handleSessionSetMode(ctx, conn, req, wt)
+	case "session.fork":
+		h.handleSessionFork(ctx, conn, req, wt)
 	case "session.mark_read":
 		h.handleSessionMarkRead(ctx, conn, req, wt)
 	case "session.list.subscribe":
@@ -425,8 +496,12 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleFileGet(ctx, conn, req, wt)
 	case "file.write":
 		h.handleFileWrite(ctx, conn, req, wt)
+	case "file.create":
+		h.handleFileCreate(ctx, conn, req, wt)
 	case "file.delete":
 		h.handleFileDelete(ctx, conn, req, wt)
+	case "file.search":
+		h.handleFileSearch(ctx, conn, req, wt)
 	// git namespace
 	case "git.status":
 		h.handleGitStatus(ctx, conn, req, wt)
@@ -442,12 +517,30 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleGitAdd(ctx, conn, req, wt)
 	case "git.reset":
 		h.handleGitReset(ctx, conn, req, wt)
+	case "git.discard":
+		h.handleGitDiscard(ctx, conn, req, wt)
+	case "git.commit":
+		h.handleGitCommit(ctx, conn, req, wt)
 	case "git.log":
 		h.handleGitLog(ctx, conn, req, wt)
 	case "git.show":
 		h.handleGitShow(ctx, conn, req, wt)
 	case "git.show.diff":
 		h.handleGitShowDiff(ctx, conn, req, wt)
+	case "git.show.file":
+		h.handleGitShowFile(ctx, conn, req, wt)
+	case "git.branches":
+		h.handleGitBranches(ctx, conn, req, wt)
+	case "git.checkout":
+		h.handleGitCheckout(ctx, conn, req, wt)
+	case "git.branch.create":
+		h.handleGitBranchCreate(ctx, conn, req, wt)
+	case "git.fetch":
+		h.handleGitFetch(ctx, conn, req, wt)
+	case "git.pull":
+		h.handleGitPull(ctx, conn, req, wt)
+	case "git.push":
+		h.handleGitPush(ctx, conn, req, wt)
 	// fs namespace
 	case "fs.subscribe":
 		h.handleFSSubscribe(ctx, conn, req, wt)
@@ -518,14 +611,25 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 
 	title := filepath.Base(h.worktreeManager.Registry().MainDir())
 	result := rpc.AuthResult{
-		Version:      h.version,
-		Title:        title,
-		WorkDir:      wt.WorkDir,
-		WorktreeName: wt.Name,
+		Version:       h.version,
+		Title:         title,
+		WorkDir:       wt.WorkDir,
+		WorktreeName:  wt.Name,
+		MaxUploadSize: filetransfer.MaxUploadSize,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send auth response", "error", err)
 	}
+}
+
+// replyInternalError reports a server-side failure to both the server log and
+// the client. Users here are developers working on their own machine, so the
+// underlying cause (disk full, unwritable data dir, ...) travels with the reply
+// rather than being dropped — a bare "failed to X" leaves a real failure
+// without a trace on either side. logArgs add locating context (session ID).
+func (h *rpcMethodHandler) replyInternalError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, message string, err error, logArgs ...any) {
+	h.log.With(logArgs...).Error(message, "error", err)
+	h.replyError(ctx, conn, id, jsonrpc2.CodeInternalError, message+": "+err.Error())
 }
 
 func (h *rpcMethodHandler) replyError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, code int64, message string) {

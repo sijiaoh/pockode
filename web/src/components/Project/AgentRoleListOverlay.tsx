@@ -174,7 +174,7 @@ function RoleRow({
 
 	return (
 		<>
-			<div className="group flex min-h-[44px] items-center gap-1.5 rounded-lg px-2 hover:bg-th-bg-tertiary">
+			<div className="group flex min-h-[44px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary">
 				<button
 					type="button"
 					onClick={() => onToggleDefault(roleId)}

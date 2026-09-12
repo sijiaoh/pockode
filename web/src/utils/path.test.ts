@@ -70,6 +70,8 @@ describe("formatFilePath", () => {
 		).toBe("README.md");
 	});
 
+	// Codex reports patches with absolute paths that can sit anywhere, so this
+	// branch carries the status header for every out-of-project change.
 	it("shows only the parent directory for files outside the work dir", () => {
 		expect(formatFilePath("/etc/hosts", posixWorkDir)).toBe("hosts (etc)");
 		expect(

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useIsDesktop } from "../hooks";
+import { useIsExpanded } from "../hooks";
 import type { Node } from "../types/node";
 import { baseName } from "../utils/path";
 import { ConfirmDialog, ResponsivePanel, Spinner } from "./ui";
@@ -29,7 +29,7 @@ export function NodeForm({ isOpen, onClose, onSubmit, editingNode }: Props) {
 	const [saving, setSaving] = useState(false);
 	const [confirmCreateDir, setConfirmCreateDir] = useState(false);
 	const pathInputRef = useRef<HTMLInputElement>(null);
-	const isDesktop = useIsDesktop();
+	const isExpanded = useIsExpanded();
 
 	const isEditing = !!editingNode;
 
@@ -101,7 +101,7 @@ export function NodeForm({ isOpen, onClose, onSubmit, editingNode }: Props) {
 			isOpen={isOpen}
 			onClose={onClose}
 			title={isEditing ? "Edit Node" : "Add Node"}
-			isDesktop={isDesktop}
+			isExpanded={isExpanded}
 		>
 			<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 				{/* Path field */}

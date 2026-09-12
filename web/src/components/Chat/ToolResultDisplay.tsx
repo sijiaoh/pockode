@@ -2,7 +2,14 @@ import { AnsiUp } from "ansi_up";
 import { createPatch } from "diff";
 import { Check, Circle, Loader2 } from "lucide-react";
 import { useMemo } from "react";
+import {
+	type CodexChangeView,
+	parseCodexChanges,
+} from "../../lib/codexChanges";
 import { parseReadResult } from "../../lib/toolResultParser";
+import { useWSStore } from "../../lib/wsStore";
+import { GIT_STATUS_INFO } from "../../types/git";
+import { formatFilePath } from "../../utils/path";
 import { DiffViewer, FileContentDisplay } from "../ui";
 
 const ansiUp = new AnsiUp();
@@ -19,17 +26,6 @@ interface EditInput {
 	old_string: string;
 	new_string: string;
 	replace_all?: boolean;
-}
-
-interface CodexEditChange {
-	type: string;
-	unified_diff: string;
-	move_path: string | null;
-}
-
-interface CodexEditInput {
-	changes: Record<string, CodexEditChange>;
-	file_path?: string;
 }
 
 interface WriteInput {
@@ -76,18 +72,45 @@ function EditResultDisplay({ input }: { input: EditInput }) {
 	return <DiffViewer fileName={input.file_path} hunks={[unifiedDiff]} />;
 }
 
-function CodexEditResultDisplay({ input }: { input: CodexEditInput }) {
-	const entries = useMemo(() => {
-		return Object.entries(input.changes).map(([filePath, change]) => {
-			const diff = `--- a/${filePath}\n+++ b/${filePath}\n${change.unified_diff}`;
-			return { filePath, diff };
-		});
-	}, [input.changes]);
+function CodexEditResultDisplay({ changes }: { changes: CodexChangeView[] }) {
+	const workDir = useWSStore((s) => s.workDir);
 
 	return (
-		<div className="space-y-2">
-			{entries.map(({ filePath, diff }) => (
-				<DiffViewer key={filePath} fileName={filePath} hunks={[diff]} />
+		<div className="space-y-3">
+			{changes.map((change) => (
+				<div key={change.path} className="space-y-1">
+					<div className="flex items-center gap-2 text-sm">
+						<span
+							className={`shrink-0 font-mono ${GIT_STATUS_INFO[change.status].color}`}
+							// "?" means an unknown change type here, not git's "Untracked".
+							title={
+								change.status === "?"
+									? change.note
+									: GIT_STATUS_INFO[change.status].label
+							}
+						>
+							{change.status}
+						</span>
+						<span
+							className="truncate text-th-text-primary"
+							title={change.newPath}
+						>
+							{formatFilePath(change.newPath, workDir)}
+						</span>
+					</div>
+					{change.newPath !== change.path && (
+						<div className="text-th-text-muted text-xs" title={change.path}>
+							from {formatFilePath(change.path, workDir)}
+						</div>
+					)}
+					{change.patch ? (
+						<DiffViewer fileName={change.newPath} hunks={[change.patch]} />
+					) : (
+						<p className="text-th-text-muted">
+							{change.note ?? "No diff to show"}
+						</p>
+					)}
+				</div>
 			))}
 		</div>
 	);
@@ -175,19 +198,6 @@ function isEditInput(input: unknown): input is EditInput {
 	);
 }
 
-function isCodexEditInput(input: unknown): input is CodexEditInput {
-	const i = input as Record<string, unknown>;
-	if (!i?.changes || typeof i.changes !== "object" || Array.isArray(i.changes))
-		return false;
-	const changes = i.changes as Record<string, unknown>;
-	return Object.values(changes).some(
-		(v) =>
-			v != null &&
-			typeof v === "object" &&
-			typeof (v as Record<string, unknown>).unified_diff === "string",
-	);
-}
-
 function isWriteInput(input: unknown): input is WriteInput {
 	const i = input as Record<string, unknown>;
 	return typeof i?.file_path === "string" && typeof i?.content === "string";
@@ -211,6 +221,9 @@ function ToolResultDisplay({
 	const input = toolInput as Record<string, unknown>;
 	const filePath =
 		typeof input?.file_path === "string" ? input.file_path : undefined;
+	// Memoized because building add/delete patches diffs whole file contents,
+	// and a streaming session re-renders this tree while it stays expanded.
+	const codexChanges = useMemo(() => parseCodexChanges(toolInput), [toolInput]);
 
 	switch (toolName) {
 		case "Read":
@@ -220,8 +233,8 @@ function ToolResultDisplay({
 			if (isEditInput(toolInput)) {
 				return <EditResultDisplay input={toolInput} />;
 			}
-			if (isCodexEditInput(toolInput)) {
-				return <CodexEditResultDisplay input={toolInput} />;
+			if (codexChanges) {
+				return <CodexEditResultDisplay changes={codexChanges} />;
 			}
 			return <pre className="text-th-text-muted">{result}</pre>;
 

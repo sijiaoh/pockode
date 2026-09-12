@@ -9,7 +9,7 @@ Index of Pockode code explanation documents. These documents focus on "why it's 
 | [WebSocket JSON-RPC](websocket-rpc.md) | Frontend-backend communication protocol design | `server/ws/`, `web/src/lib/wsStore.ts` |
 | [Authentication & Access Control](authentication.md) | Trust model, token surfaces, and hardening | `server/authtoken/`, `server/middleware/`, `server/mcp/` |
 | [AI Agent Integration](agent-integration.md) | Claude/Codex subprocess management | `server/agent/`, `server/process/` |
-| [Work/Project Management](work-system.md) | Task decomposition and coordination | `server/work/`, `server/mcp/` |
+| [Work/Project Management](work-system.md) | Task decomposition and coordination | `server/work/`, `server/mcp/`, `web/src/lib/workStore.ts` |
 | [Real-time Subscription System](subscription-system.md) | Watcher architecture and backpressure handling | `server/watch/`, `web/src/hooks/useSubscription.ts` |
 | [Frontend State Management](frontend-state.md) | Zustand stores and extension system | `web/src/lib/` |
 | [Relay NAT Traversal](relay-system.md) | Mobile access to local PC | `server/relay/` |

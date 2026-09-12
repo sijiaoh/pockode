@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, UserMessage } from "../types/message";
+import type {
+	AssistantMessage,
+	ContentPart,
+	Message,
+	StepDividerMessage,
+	TaskRun,
+	UserMessage,
+	WorkCardMessage,
+} from "../types/message";
 import {
 	applyEventToParts,
 	applyServerEvent,
@@ -7,12 +15,21 @@ import {
 	expirePendingDialogs,
 	normalizeEvent,
 	replayHistory,
+	settleRunningTasks,
 } from "./messageReducer";
 
-// Mock UUID for deterministic tests
-vi.mock("../utils/uuid", () => ({
-	generateUUID: () => "test-uuid",
-}));
+// Deterministic but distinct ids: whether a message keeps its id or gets a
+// fresh one is itself under test (a new id would remount the work card).
+const uuidMock = vi.hoisted(() => {
+	let counter = 0;
+	return {
+		generateUUID: () => `test-uuid-${++counter}`,
+		reset: () => {
+			counter = 0;
+		},
+	};
+});
+vi.mock("../utils/uuid", () => ({ generateUUID: uuidMock.generateUUID }));
 
 // Shared test fixtures
 const sampleQuestions = [
@@ -54,6 +71,7 @@ describe("messageReducer", () => {
 				type: "tool_result",
 				toolUseId: "tool-1",
 				toolResult: "file.txt",
+				isError: false,
 			});
 		});
 
@@ -225,6 +243,18 @@ describe("messageReducer", () => {
 			});
 		});
 
+		it("normalizes question_response event without answers key (cancelled)", () => {
+			const event = normalizeEvent({
+				type: "question_response",
+				request_id: "q-1",
+			});
+			expect(event).toEqual({
+				type: "question_response",
+				requestId: "q-1",
+				answers: null,
+			});
+		});
+
 		it("normalizes request_cancelled event", () => {
 			const event = normalizeEvent({
 				type: "request_cancelled",
@@ -311,6 +341,52 @@ describe("messageReducer", () => {
 			]);
 		});
 
+		it("replaces the AskUserQuestion tool_call with the question part", () => {
+			const withToolCall = applyEventToParts([], {
+				type: "tool_call",
+				toolUseId: "toolu_q_1",
+				toolName: "AskUserQuestion",
+				toolInput: { questions: sampleQuestions },
+			});
+			const parts = applyEventToParts(withToolCall, {
+				type: "ask_user_question",
+				requestId: "q-1",
+				toolUseId: "toolu_q_1",
+				questions: sampleQuestions,
+			});
+			expect(parts).toEqual([
+				{
+					type: "ask_user_question",
+					request: {
+						requestId: "q-1",
+						toolUseId: "toolu_q_1",
+						questions: sampleQuestions,
+					},
+					status: "pending",
+				},
+			]);
+		});
+
+		it("keeps unrelated tool_calls when the question part is added", () => {
+			const parts = applyEventToParts(
+				[
+					{
+						type: "tool_call",
+						tool: { id: "tool-1", name: "Bash", input: { command: "ls" } },
+					},
+				],
+				{
+					type: "ask_user_question",
+					requestId: "q-1",
+					toolUseId: "toolu_q_1",
+					questions: sampleQuestions,
+				},
+			);
+			expect(parts).toHaveLength(2);
+			expect(parts[0]).toMatchObject({ type: "tool_call" });
+			expect(parts[1]).toMatchObject({ type: "ask_user_question" });
+		});
+
 		it("adds warning as new part", () => {
 			const parts = applyEventToParts([{ type: "text", content: "Text" }], {
 				type: "warning",
@@ -329,10 +405,12 @@ describe("messageReducer", () => {
 	});
 
 	describe("applyServerEvent", () => {
-		const createStreamingMessage = (): AssistantMessage => ({
+		const createStreamingMessage = (
+			parts: ContentPart[] = [],
+		): AssistantMessage => ({
 			id: "msg-1",
 			role: "assistant",
-			parts: [],
+			parts,
 			status: "streaming",
 			createdAt: new Date(),
 		});
@@ -370,9 +448,13 @@ describe("messageReducer", () => {
 			event,
 			expectedStatus,
 		}) => {
-			const initial = [createStreamingMessage()];
+			// With content: a turn that ends on `done` having written nothing is
+			// dropped rather than kept as a blank bubble, which is its own test.
+			const initial = [
+				createStreamingMessage([{ type: "text", content: "Answer" }]),
+			];
 			const messages = applyServerEvent(initial, event);
-			expect(messages[0].status).toBe(expectedStatus);
+			expect((messages[0] as AssistantMessage).status).toBe(expectedStatus);
 		});
 
 		it("marks message as error with error message", () => {
@@ -904,6 +986,7 @@ describe("messageReducer", () => {
 				type: "tool_result",
 				toolUseId: "tool-1",
 				toolResult: "file.txt",
+				isError: false,
 			});
 			expect(messages).toHaveLength(1);
 			const updated = messages[0] as AssistantMessage;
@@ -925,9 +1008,88 @@ describe("messageReducer", () => {
 				type: "tool_result",
 				toolUseId: "nonexistent",
 				toolResult: "result",
+				isError: false,
 			});
 			expect(messages).toHaveLength(1);
 			expect(messages[0]).toBe(completed);
+		});
+
+		describe("late events after an ended turn", () => {
+			const endedMessage = (
+				status: AssistantMessage["status"],
+			): AssistantMessage => ({
+				id: "msg-1",
+				role: "assistant",
+				parts: [{ type: "text", content: "Working..." }],
+				status,
+				createdAt: new Date(),
+			});
+
+			it.each([
+				"interrupted",
+				"error",
+				"process_ended",
+			] as const)("keeps a %s turn ended when a Task's closing text arrives late", (status) => {
+				const ended = endedMessage(status);
+				const messages = applyServerEvent([ended], {
+					type: "text",
+					content: "Task done",
+				});
+				expect(messages).toHaveLength(1);
+				const updated = messages[0] as AssistantMessage;
+				expect(updated.status).toBe(status);
+				expect(updated.parts).toEqual([
+					{ type: "text", content: "Working...Task done" },
+				]);
+			});
+
+			it("folds a late tool_call into the interrupted message", () => {
+				const messages = applyServerEvent([endedMessage("interrupted")], {
+					type: "tool_call",
+					toolUseId: "tool-1",
+					toolName: "Task",
+					toolInput: {},
+				});
+				expect(messages).toHaveLength(1);
+				const updated = messages[0] as AssistantMessage;
+				expect(updated.status).toBe("interrupted");
+				expect(updated.parts).toHaveLength(2);
+			});
+
+			it("starts a live turn again once a new message arrives", () => {
+				let messages = applyServerEvent([endedMessage("interrupted")], {
+					type: "text",
+					content: "Task done",
+				});
+				messages = applyServerEvent(messages, {
+					type: "message",
+					content: "carry on",
+				});
+				messages = applyServerEvent(messages, {
+					type: "text",
+					content: "Sure",
+				});
+				const last = messages[messages.length - 1] as AssistantMessage;
+				expect(last.status).toBe("streaming");
+			});
+
+			// Pockode ends the turn itself when a background wait runs out of
+			// budget; output resuming after that is a live turn, not late output.
+			it("opens a live turn for output after a completed turn", () => {
+				const completed: AssistantMessage = {
+					id: "msg-1",
+					role: "assistant",
+					parts: [{ type: "text", content: "Done" }],
+					status: "complete",
+					createdAt: new Date(),
+				};
+				const messages = applyServerEvent([completed], {
+					type: "text",
+					content: "Back from the background task",
+				});
+				expect(messages).toHaveLength(2);
+				expect((messages[1] as AssistantMessage).status).toBe("streaming");
+			});
 		});
 
 		describe("consecutive sends", () => {
@@ -975,7 +1137,7 @@ describe("messageReducer", () => {
 				const messages = applyServerEvent([a1, a2], { type: "done" });
 				expect(messages).toHaveLength(1); // a1 removed
 				expect(messages[0].id).toBe("a2");
-				expect(messages[0].status).toBe("complete");
+				expect((messages[0] as AssistantMessage).status).toBe("complete");
 			});
 
 			it("removes empty sending and creates new message when last is not active", () => {
@@ -1035,7 +1197,7 @@ describe("messageReducer", () => {
 				});
 				expect(messages).toHaveLength(3);
 				expect(messages[0].role).toBe("assistant");
-				expect(messages[0].status).toBe("complete"); // finalized
+				expect((messages[0] as AssistantMessage).status).toBe("complete"); // finalized
 				expect(messages[1].role).toBe("user");
 				expect((messages[1] as UserMessage).content).toBe(
 					"New message from another tab",
@@ -1101,6 +1263,309 @@ describe("messageReducer", () => {
 		});
 	});
 
+	describe("work card aggregation", () => {
+		const systemEvent = (
+			content: string,
+			subtype: string,
+			meta: Record<string, unknown>,
+		) =>
+			normalizeEvent({
+				type: "message",
+				content,
+				origin: "system",
+				subtype,
+				meta,
+			});
+
+		const kickoff = systemEvent("kickoff prompt", "kickoff", {
+			work_id: "work-1",
+			work_type: "task",
+			title: "Ship the card",
+			step: { current: 1, total: 3 },
+		});
+
+		const stepAdvance = systemEvent("next step prompt", "step_advance", {
+			work_id: "work-1",
+			work_type: "task",
+			title: "Ship the card",
+			step: { current: 2, total: 3 },
+		});
+
+		it("anchors a card at the work's first system message", () => {
+			const messages = applyServerEvent([], kickoff);
+
+			const card = messages[0] as WorkCardMessage;
+			expect(card.role).toBe("work");
+			expect(card.workId).toBe("work-1");
+			expect(card.workType).toBe("task");
+			expect(card.title).toBe("Ship the card");
+			expect(card.entries).toHaveLength(1);
+			expect(card.entries[0]).toMatchObject({
+				subtype: "kickoff",
+				content: "kickoff prompt",
+				step: { current: 1, total: 3 },
+			});
+			// The system message still drives the agent, so a reply placeholder
+			// follows it exactly as it would a user message.
+			expect(messages[1].role).toBe("assistant");
+		});
+
+		it("carries no status of its own", () => {
+			const card = applyServerEvent([], kickoff)[0] as WorkCardMessage;
+			expect(card).not.toHaveProperty("status");
+		});
+
+		it("folds later messages into the same card without moving or renaming it", () => {
+			const first = applyServerEvent([], kickoff);
+			const cardId = (first[0] as WorkCardMessage).id;
+
+			const second = applyServerEvent(first, stepAdvance);
+			const card = second[0] as WorkCardMessage;
+
+			expect(second.filter((m) => m.role === "work")).toHaveLength(1);
+			expect(card.id).toBe(cardId);
+			expect(card.entries.map((e) => e.subtype)).toEqual([
+				"kickoff",
+				"step_advance",
+			]);
+		});
+
+		it("keeps a card per work", () => {
+			const other = systemEvent("other kickoff", "kickoff", {
+				work_id: "work-2",
+				work_type: "story",
+				title: "Another",
+			});
+
+			const messages = applyServerEvent(applyServerEvent([], kickoff), other);
+			const cards = messages.filter(
+				(m): m is WorkCardMessage => m.role === "work",
+			);
+			expect(cards.map((c) => c.workId)).toEqual(["work-1", "work-2"]);
+		});
+
+		it("files child_done under the receiving parent, with the child named", () => {
+			const childDone = systemEvent("child done prompt", "child_done", {
+				work_id: "work-1",
+				work_type: "task",
+				title: "Ship the card",
+				child: { id: "child-9", title: "Sub task" },
+			});
+
+			const messages = applyServerEvent(
+				applyServerEvent([], kickoff),
+				childDone,
+			);
+			const cards = messages.filter(
+				(m): m is WorkCardMessage => m.role === "work",
+			);
+
+			expect(cards).toHaveLength(1);
+			expect(cards[0].entries[1].child).toEqual({
+				id: "child-9",
+				title: "Sub task",
+			});
+		});
+
+		it("marks a step advance with a divider in the stream", () => {
+			const messages = applyServerEvent(
+				applyServerEvent([], kickoff),
+				stepAdvance,
+			);
+			const divider = messages.find(
+				(m): m is StepDividerMessage => m.role === "step_divider",
+			);
+
+			expect(divider).toMatchObject({
+				workId: "work-1",
+				step: { current: 2, total: 3 },
+			});
+			// It sits after the card it belongs to, not at the end of the transcript.
+			expect(messages.indexOf(divider as StepDividerMessage)).toBeLessThan(
+				messages.length - 1,
+			);
+		});
+
+		it("finalizes a streaming assistant before the card", () => {
+			const streaming = applyServerEvent([], { type: "text", content: "hi" });
+			const messages = applyServerEvent(streaming, kickoff);
+
+			expect((messages[0] as AssistantMessage).status).toBe("complete");
+			expect(messages[1].role).toBe("work");
+		});
+
+		it("leaves pre-card history as standalone banners", () => {
+			const legacy = normalizeEvent({
+				type: "message",
+				content: "kickoff prompt",
+				origin: "system",
+				subtype: "kickoff",
+				meta: { title: "Ship the card" },
+			});
+
+			const messages = applyServerEvent([], legacy);
+			const banner = messages[0] as UserMessage;
+			expect(banner.role).toBe("user");
+			expect(banner.source).toBe("system");
+			expect(messages.some((m) => m.role === "work")).toBe(false);
+		});
+
+		it("replays history into the same cards live streaming builds", () => {
+			const records = [
+				{
+					type: "message",
+					content: "kickoff prompt",
+					origin: "system",
+					subtype: "kickoff",
+					meta: {
+						work_id: "work-1",
+						work_type: "task",
+						title: "Ship the card",
+						step: { current: 1, total: 3 },
+					},
+				},
+				{
+					type: "message",
+					content: "next step prompt",
+					origin: "system",
+					subtype: "step_advance",
+					meta: {
+						work_id: "work-1",
+						work_type: "task",
+						title: "Ship the card",
+						step: { current: 2, total: 3 },
+					},
+				},
+			];
+
+			uuidMock.reset();
+			const replayed = replayHistory(records);
+			uuidMock.reset();
+			const streamed = applyServerEvent(
+				applyServerEvent([], normalizeEvent(records[0])),
+				normalizeEvent(records[1]),
+			);
+
+			expect(replayed.map((m) => m.role)).toEqual(streamed.map((m) => m.role));
+			expect(
+				(replayed.find((m) => m.role === "work") as WorkCardMessage).entries,
+			).toEqual(
+				(streamed.find((m) => m.role === "work") as WorkCardMessage).entries,
+			);
+		});
+	});
+
+	// Every incoming message leaves a placeholder for the reply it provokes. When
+	// the agent answers with nothing at all, that placeholder renders as a blank
+	// bubble — visible on both message paths, and back to back once work cards
+	// removed the banners that used to sit between them.
+	describe("placeholders the agent never wrote into", () => {
+		const placeholder = (
+			status: AssistantMessage["status"],
+			extra: Partial<AssistantMessage> = {},
+		): AssistantMessage => ({
+			id: "placeholder-1",
+			role: "assistant",
+			parts: [],
+			status,
+			createdAt: new Date(),
+			...extra,
+		});
+
+		const systemMessage = normalizeEvent({
+			type: "message",
+			content: "auto continue",
+			origin: "system",
+			subtype: "auto_continue",
+			meta: { work_id: "work-1", work_type: "task", title: "Ship the card" },
+		});
+
+		it("drops the empty one preceding a user message", () => {
+			const messages = applyUserMessage([placeholder("complete")], "Follow up");
+
+			expect(messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+		});
+
+		it("drops the empty one preceding a system message", () => {
+			const messages = applyServerEvent(
+				[placeholder("complete")],
+				systemMessage,
+			);
+
+			expect(messages.map((m) => m.role)).toEqual(["work", "assistant"]);
+		});
+
+		it("drops one the agent left mid-turn without writing to", () => {
+			const messages = applyUserMessage(
+				[placeholder("streaming")],
+				"Follow up",
+			);
+
+			expect(messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+		});
+
+		it("keeps one the agent did write into", () => {
+			const answered = placeholder("complete", {
+				parts: [{ type: "text", content: "Done" }],
+			});
+
+			const messages = applyUserMessage([answered], "Follow up");
+
+			expect(messages.map((m) => m.role)).toEqual([
+				"assistant",
+				"user",
+				"assistant",
+			]);
+		});
+
+		// These three say everything they have to say in the status line, so an
+		// empty body is exactly when they matter. Dropping them would swallow an
+		// aborted turn — and an interrupt is the case that produces them most.
+		it.each([
+			"interrupted",
+			"error",
+			"process_ended",
+		] as const)("keeps an empty %s turn, whose status is the whole message", (status) => {
+			const messages = applyUserMessage([placeholder(status)], "Follow up");
+
+			expect(messages.map((m) => m.role)).toEqual([
+				"assistant",
+				"user",
+				"assistant",
+			]);
+			expect((messages[0] as AssistantMessage).status).toBe(status);
+		});
+
+		it("leaves no blank bubble between two system messages", () => {
+			let messages = applyServerEvent([], systemMessage);
+			messages = applyServerEvent(messages, systemMessage);
+
+			expect(messages.map((m) => m.role)).toEqual(["work", "assistant"]);
+		});
+
+		// A turn can also end at the tail of the transcript with nothing written:
+		// an auto-continue the agent answers with silence does exactly that, right
+		// before the retry limit stops the work.
+		it("drops a turn that ends on done having written nothing", () => {
+			const messages = applyServerEvent([placeholder("streaming")], {
+				type: "done",
+			});
+
+			expect(messages).toEqual([]);
+		});
+
+		it.each([
+			{ type: "interrupted" } as const,
+			{ type: "process_ended" } as const,
+			{ type: "error", error: "boom" } as const,
+		])("keeps a turn that ends as $type with nothing written", (event) => {
+			const messages = applyServerEvent([placeholder("streaming")], event);
+
+			expect(messages).toHaveLength(1);
+			expect((messages[0] as AssistantMessage).status).toBe(event.type);
+		});
+	});
+
 	describe("applyUserMessage", () => {
 		it("adds user message and empty assistant message", () => {
 			const messages = applyUserMessage([], "Hello AI");
@@ -1122,9 +1587,69 @@ describe("messageReducer", () => {
 				createdAt: new Date(),
 			};
 			const messages = applyUserMessage([streaming], "Follow up");
-			expect(messages[0].status).toBe("complete");
+			expect((messages[0] as AssistantMessage).status).toBe("complete");
 			expect(messages[1].role).toBe("user");
 			expect(messages[2].role).toBe("assistant");
+		});
+	});
+
+	// The address a fork cuts at. It has to come from the server, and it has to
+	// land on the message the user is looking at — a seq on the wrong message
+	// cuts the transcript in the wrong place, silently.
+	describe("anchor seqs", () => {
+		it("gives each message the seq of the last record folded into it", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "Hello", seq: 1 },
+				{ type: "text", content: "Hi", seq: 2 },
+				{ type: "text", content: " there", seq: 3 },
+				{ type: "done", seq: 4 },
+			]);
+
+			expect(messages).toHaveLength(2);
+			// The user message, not the empty placeholder the turn opens with.
+			expect((messages[0] as UserMessage).anchorSeq).toBe(1);
+			expect((messages[1] as AssistantMessage).anchorSeq).toBe(4);
+		});
+
+		it("leaves a message with no seq unaddressable", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "Hello" },
+				{ type: "text", content: "Hi" },
+			]);
+
+			expect((messages[0] as UserMessage).anchorSeq).toBeUndefined();
+			expect((messages[1] as AssistantMessage).anchorSeq).toBeUndefined();
+		});
+
+		// Anchors that ran backwards would make "everything up to and including
+		// this message" keep messages shown below the anchor.
+		it("does not move an earlier message's anchor past a later one", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "Run it", seq: 1 },
+				{
+					type: "tool_call",
+					tool_name: "Bash",
+					tool_input: { command: "ls" },
+					tool_use_id: "tool-1",
+					seq: 2,
+				},
+				{ type: "interrupted", seq: 3 },
+				{ type: "message", content: "Never mind", seq: 4 },
+				// The interrupted turn's tool finally reports back, into a message
+				// that is no longer the last one.
+				{
+					type: "tool_result",
+					tool_use_id: "tool-1",
+					tool_result: "file.txt",
+					seq: 5,
+				},
+			]);
+
+			const interrupted = messages.find(
+				(m): m is AssistantMessage =>
+					m.role === "assistant" && m.status === "interrupted",
+			);
+			expect(interrupted?.anchorSeq).toBe(3);
 		});
 	});
 
@@ -1296,6 +1821,44 @@ describe("messageReducer", () => {
 			});
 		});
 
+		it("replays the full AskUserQuestion tool sequence as a single part", () => {
+			const history = [
+				{ type: "message", content: "Help me choose" },
+				{
+					type: "tool_call",
+					tool_name: "AskUserQuestion",
+					tool_input: { questions: sampleQuestions },
+					tool_use_id: "toolu_q_1",
+				},
+				{
+					type: "ask_user_question",
+					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
+					questions: sampleQuestions,
+				},
+				{
+					type: "question_response",
+					request_id: "q-1",
+					answers: { "Which library?": "React" },
+				},
+				{
+					type: "tool_result",
+					tool_use_id: "toolu_q_1",
+					tool_result:
+						'Your questions have been answered: "Which library?"="React".',
+				},
+				{ type: "done" },
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts).toHaveLength(1);
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "answered",
+				answers: { "Which library?": "React" },
+			});
+		});
+
 		it("replays ask_user_question with cancelled response", () => {
 			const history = [
 				{ type: "message", content: "Help me choose" },
@@ -1306,6 +1869,28 @@ describe("messageReducer", () => {
 					questions: sampleQuestions,
 				},
 				{ type: "question_response", request_id: "q-1", answers: null },
+				{ type: "interrupted" },
+			];
+			const messages = replayHistory(history);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.parts[0]).toMatchObject({
+				type: "ask_user_question",
+				status: "cancelled",
+			});
+		});
+
+		// What the server actually persists on cancel: a nil answers map, which
+		// `omitempty` then strips from the record.
+		it("replays ask_user_question as cancelled when answers key is absent", () => {
+			const history = [
+				{ type: "message", content: "Help me choose" },
+				{
+					type: "ask_user_question",
+					request_id: "q-1",
+					tool_use_id: "toolu_q_1",
+					questions: sampleQuestions,
+				},
+				{ type: "question_response", request_id: "q-1" },
 				{ type: "interrupted" },
 			];
 			const messages = replayHistory(history);
@@ -1398,6 +1983,283 @@ describe("messageReducer", () => {
 				type: "ask_user_question",
 				status: "expired",
 			});
+		});
+
+		// Reopening the session must not resurrect the turn the user stopped:
+		// history ends on the Task's late output, and the last message's status
+		// is what tells the UI whether the agent is still going.
+		it("replays a turn interrupted before its Task finished as interrupted", () => {
+			const history = [
+				{ type: "message", content: "Do something" },
+				{ type: "text", content: "Working" },
+				{ type: "interrupted" },
+				{ type: "text", content: "Task done" },
+			];
+			const messages = replayHistory(history);
+			expect(messages).toHaveLength(2);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.status).toBe("interrupted");
+		});
+	});
+
+	// The Task (subagent) tool is the one tool whose calls collapse into a
+	// single part: a turn can spawn a dozen, and one strip per call buries the
+	// conversation they belong to.
+	describe("Task grouping", () => {
+		const streaming = (parts: ContentPart[] = []): AssistantMessage => ({
+			id: "msg-1",
+			role: "assistant",
+			parts,
+			status: "streaming",
+			createdAt: new Date(),
+		});
+
+		const taskCall = (
+			toolUseId: string,
+			description: string,
+			subagentType = "Explore",
+			toolName = "Agent",
+		) => ({
+			type: "tool_call" as const,
+			toolUseId,
+			toolName,
+			toolInput: { description, subagent_type: subagentType, prompt: "go" },
+		});
+
+		const taskResult = (
+			toolUseId: string,
+			toolResult: string,
+			isError = false,
+		) => ({ type: "tool_result" as const, toolUseId, toolResult, isError });
+
+		const tasksOf = (message: Message): TaskRun[] => {
+			const assistant = message as AssistantMessage;
+			const group = assistant.parts.find((part) => part.type === "task_group");
+			if (group?.type !== "task_group") throw new Error("no task_group part");
+			return group.tasks;
+		};
+
+		it("folds every Task of one turn into a single group", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "find usages"));
+			messages = applyServerEvent(messages, taskCall("t2", "write plan"));
+
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.parts).toHaveLength(1);
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "t1", description: "find usages", status: "running" },
+				{ toolUseId: "t2", description: "write plan", status: "running" },
+			]);
+		});
+
+		// Older CLIs named the subagent tool "Task"; stored history still holds
+		// that name and has to land in the same group.
+		it("groups the legacy Task tool name alongside Agent", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(
+				messages,
+				taskCall("t1", "old name", "Explore", "Task"),
+			);
+			messages = applyServerEvent(messages, taskCall("t2", "new name"));
+			expect(tasksOf(messages[0])).toHaveLength(2);
+		});
+
+		it("keeps a resent tool_call from duplicating or resetting the Task", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "find usages"));
+			messages = applyServerEvent(messages, taskResult("t1", "report"));
+			messages = applyServerEvent(messages, taskCall("t1", "find usages"));
+
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "t1", status: "done", result: "report" },
+			]);
+		});
+
+		it("settles only the Task its result names", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(messages, taskCall("t2", "second"));
+			messages = applyServerEvent(messages, taskResult("t2", "second report"));
+
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "t1", status: "running" },
+				{ toolUseId: "t2", status: "done", result: "second report" },
+			]);
+		});
+
+		it("marks a Task the CLI flagged as an error failed", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(
+				messages,
+				taskResult("t1", "Agent type not found", true),
+			);
+
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "t1", status: "failed", result: "Agent type not found" },
+			]);
+		});
+
+		// An interrupt is a fact about what the user did; the result that shows up
+		// afterwards is kept, but it cannot make the UI claim the Task finished.
+		it("keeps an interrupted Task interrupted when its result arrives late", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(messages, { type: "interrupted" });
+			expect(tasksOf(messages[0])).toMatchObject([{ status: "interrupted" }]);
+
+			messages = applyServerEvent(messages, taskResult("t1", "late report"));
+			expect(tasksOf(messages[0])).toMatchObject([
+				{
+					status: "interrupted",
+					result: "late report",
+					resultAfterInterrupt: true,
+				},
+			]);
+		});
+
+		it("settles a running Task when the turn ends in an error", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(messages, { type: "error", error: "boom" });
+
+			expect(tasksOf(messages[0])).toMatchObject([{ status: "interrupted" }]);
+		});
+
+		// The CLI keeps talking for a moment after a turn is cut short, and that
+		// can include a whole Task call. Born running inside a turn that already
+		// ended, it would spin forever: nothing is left to deliver its result.
+		it("never adds a running Task to a turn that already ended", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, { type: "interrupted" });
+			messages = applyServerEvent(messages, taskCall("late", "trailing"));
+
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.status).toBe("interrupted");
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "late", status: "interrupted" },
+			]);
+		});
+
+		// A background Task reports back in a later turn, so a turn ending
+		// normally must leave it alone.
+		it("leaves a Task running when the turn merely completes", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "background"));
+			messages = applyServerEvent(messages, { type: "done" });
+
+			expect(tasksOf(messages[0])).toMatchObject([{ status: "running" }]);
+
+			messages = applyServerEvent(messages, taskResult("t1", "report"));
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ status: "done", result: "report" },
+			]);
+		});
+
+		// The whole reason `complete` cannot settle a Task: a background one
+		// reports back turns later, and its result has to find the group it was
+		// started in rather than the turn that happens to be open.
+		it("lands a background Task's result back in the turn that started it", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("bg", "background"));
+			messages = applyServerEvent(messages, { type: "done" });
+			messages = applyServerEvent(messages, {
+				type: "message",
+				content: "meanwhile",
+			});
+			messages = applyServerEvent(messages, taskCall("t2", "foreground"));
+			messages = applyServerEvent(
+				messages,
+				taskResult("bg", "background report"),
+			);
+
+			expect(tasksOf(messages[0])).toMatchObject([
+				{ toolUseId: "bg", status: "done", result: "background report" },
+			]);
+			const last = messages[messages.length - 1] as AssistantMessage;
+			expect(tasksOf(last)).toMatchObject([
+				{ toolUseId: "t2", status: "running" },
+			]);
+		});
+
+		it("settles Tasks still running in older turns when the process ends", () => {
+			const stale: AssistantMessage = {
+				id: "msg-0",
+				role: "assistant",
+				parts: [
+					{
+						type: "task_group",
+						tasks: [
+							{ toolUseId: "old", description: "stale", status: "running" },
+						],
+					},
+				],
+				status: "complete",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent(
+				[stale, streaming([{ type: "text", content: "hi" }])],
+				{ type: "process_ended" },
+			);
+
+			expect(tasksOf(messages[0])).toMatchObject([{ status: "interrupted" }]);
+		});
+
+		it("starts a fresh group for the next turn", () => {
+			let messages: Message[] = [streaming()];
+			messages = applyServerEvent(messages, taskCall("t1", "first"));
+			messages = applyServerEvent(messages, { type: "done" });
+			messages = applyServerEvent(messages, {
+				type: "message",
+				content: "next",
+			});
+			messages = applyServerEvent(messages, taskCall("t2", "second"));
+
+			const last = messages[messages.length - 1] as AssistantMessage;
+			expect(tasksOf(last)).toMatchObject([{ toolUseId: "t2" }]);
+			expect(tasksOf(messages[0])).toMatchObject([{ toolUseId: "t1" }]);
+		});
+
+		// Replay is the same path, so a history that ends mid-Task replays as a
+		// running Task. The caller settles it only when the process is known to
+		// be gone — see useChatMessages.
+		it("replays an unfinished Task as running until it is settled", () => {
+			const history = [
+				{ type: "message", content: "Do something" },
+				{
+					type: "tool_call",
+					tool_use_id: "t1",
+					tool_name: "Agent",
+					tool_input: { description: "explore", subagent_type: "Explore" },
+				},
+			];
+			const replayed = replayHistory(history);
+			expect(tasksOf(replayed[replayed.length - 1])).toMatchObject([
+				{ status: "running" },
+			]);
+
+			const settled = settleRunningTasks(replayed);
+			expect(tasksOf(settled[settled.length - 1])).toMatchObject([
+				{ status: "interrupted" },
+			]);
+		});
+
+		it("carries a Task's report through history replay", () => {
+			const history = [
+				{ type: "message", content: "Do something" },
+				{
+					type: "tool_call",
+					tool_use_id: "t1",
+					tool_name: "Agent",
+					tool_input: { description: "explore", subagent_type: "Explore" },
+				},
+				{ type: "tool_result", tool_use_id: "t1", tool_result: "# Report" },
+				{ type: "done" },
+			];
+			const replayed = replayHistory(history);
+			expect(tasksOf(replayed[replayed.length - 1])).toMatchObject([
+				{ status: "done", result: "# Report" },
+			]);
 		});
 	});
 });

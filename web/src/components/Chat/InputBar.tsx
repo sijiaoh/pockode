@@ -1,4 +1,9 @@
 import {
+	hasCoarsePointer,
+	useHasCoarsePointer,
+	useOutsideClick,
+} from "@pockode/shared";
+import {
 	type KeyboardEvent,
 	useCallback,
 	useEffect,
@@ -11,7 +16,7 @@ import { useInputHistory } from "../../hooks/useInputHistory";
 import { inputActions, useInputStore } from "../../lib/inputStore";
 import type { Command } from "../../lib/rpc";
 import { useWSStore } from "../../lib/wsStore";
-import { hasCoarsePointer, isMac, isMobile } from "../../utils/breakpoints";
+import { isMac } from "../../utils/platform";
 import CommandPalette, { useFilteredCommands } from "./CommandPalette";
 import CommandTrigger from "./CommandTrigger";
 
@@ -19,14 +24,26 @@ interface Props {
 	sessionId: string;
 	onSend: (content: string) => void;
 	canSend?: boolean;
+	/**
+	 * Session not resolved yet (mid switch). Unlike `canSend={false}`, which only
+	 * blocks sending while the current session's history loads, this closes the
+	 * bar entirely: there is no session to type at yet.
+	 */
+	disabled?: boolean;
 }
 
 // Slash command pattern per Claude Code naming conventions.
 // Keep in sync with server/command/store.go namePattern.
 const COMMAND_PATTERN = /^\/([a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)?)?$/;
 
-function InputBar({ sessionId, onSend, canSend = true }: Props) {
+function InputBar({
+	sessionId,
+	onSend,
+	canSend = true,
+	disabled = false,
+}: Props) {
 	const input = useInputStore((state) => state.inputs[sessionId] ?? "");
+	const isPrimaryPointerCoarse = useHasCoarsePointer();
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const { saveToHistory, getPrevious, getNext, resetNavigation } =
@@ -57,11 +74,22 @@ function InputBar({ sessionId, onSend, canSend = true }: Props) {
 		setSelectedIndex(0);
 	}, [filter]);
 
-	// Focus input on session change (desktop only)
+	// Focus input on session change. Also re-runs when the bar is re-enabled: a
+	// switch disables it before this effect can focus, and without the second
+	// pass the input would stay unfocused on the session just opened.
+	//
+	// Gated on the pointer, not the width: what makes autofocus welcome is a
+	// physical keyboard, and a narrow desktop window has one while a wide tablet
+	// does not — focusing there throws up the on-screen keyboard over half the
+	// conversation the user just opened. The primary pointer is the right
+	// question (a touchscreen laptop is driven by its trackpad and does want
+	// focus), so this is `hasCoarsePointer`, not the any-pointer gate hit areas
+	// use.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when sessionId changes
 	useEffect(() => {
-		if (!isMobile()) textareaRef.current?.focus();
-	}, [sessionId]);
+		if (disabled) return;
+		if (!isPrimaryPointerCoarse) textareaRef.current?.focus();
+	}, [sessionId, disabled]);
 
 	useEffect(() => {
 		if (!isPaletteOpen) return;
@@ -81,28 +109,11 @@ function InputBar({ sessionId, onSend, canSend = true }: Props) {
 	}, []);
 
 	// Outside click detection
-	useEffect(() => {
-		if (!isPaletteOpen) return;
-
-		const handleClickOutside = (e: MouseEvent) => {
-			if (
-				containerRef.current &&
-				!containerRef.current.contains(e.target as Node)
-			) {
-				closePalette();
-			}
-		};
-
-		// Delay to avoid triggering on the click that opened the palette
-		const timeoutId = setTimeout(() => {
-			document.addEventListener("mousedown", handleClickOutside);
-		}, 0);
-
-		return () => {
-			clearTimeout(timeoutId);
-			document.removeEventListener("mousedown", handleClickOutside);
-		};
-	}, [isPaletteOpen, closePalette]);
+	useOutsideClick(isPaletteOpen, (target) => {
+		if (containerRef.current && !containerRef.current.contains(target)) {
+			closePalette();
+		}
+	});
 
 	const handleTriggerClick = useCallback(() => {
 		if (isPaletteOpen) {
@@ -295,8 +306,20 @@ function InputBar({ sessionId, onSend, canSend = true }: Props) {
 					filter={filter}
 				/>
 			)}
+			{/* All three grow together under a thumb. The hit-area floor only
+			    requires the send button to grow, but the row is `items-end`, so
+			    raising it alone would leave a short textarea hanging off the
+			    bottom of a taller row. The textarea is autosized, so its height
+			    is its content rather than its `min-h`: a 16px font on a 1.5 line
+			    box is one 24px line, and the padding makes up the rest of each
+			    floor (`py-1.5` -> 36, `py-2.5` -> 44). More padding than that
+			    stands the box proud of the buttons instead of level with them. */}
 			<div className="flex items-end gap-2">
-				<CommandTrigger onClick={handleTriggerClick} isActive={isPaletteOpen} />
+				<CommandTrigger
+					onClick={handleTriggerClick}
+					isActive={isPaletteOpen}
+					disabled={disabled}
+				/>
 				<TextareaAutosize
 					ref={textareaRef}
 					value={input}
@@ -308,17 +331,18 @@ function InputBar({ sessionId, onSend, canSend = true }: Props) {
 							? "Type a message..."
 							: "Type a message... (Shift+Enter for newline)"
 					}
+					disabled={disabled}
 					spellCheck={false}
 					autoComplete="off"
 					autoCorrect="off"
 					autoCapitalize="off"
-					className="min-h-9 max-h-[40vh] flex-1 resize-none overflow-y-auto rounded-lg bg-th-bg-secondary px-3 py-1.5 text-th-text-primary placeholder:text-th-text-muted focus:outline-none focus:ring-2 focus:ring-th-border-focus sm:max-h-[200px] sm:px-4"
+					className="min-h-9 max-h-[40vh] flex-1 resize-none pointer-coarse:min-h-11 overflow-y-auto rounded-lg bg-th-bg-secondary px-3 py-1.5 pointer-coarse:py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:outline-none focus:ring-2 focus:ring-th-border-focus sm:max-h-[200px] sm:px-4"
 				/>
 				<button
 					type="button"
 					onClick={handleSend}
-					disabled={!canSend || !input.trim()}
-					className="h-9 rounded-lg bg-th-accent px-3 text-th-accent-text hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
+					disabled={disabled || !canSend || !input.trim()}
+					className="h-9 rounded-lg bg-th-accent px-3 pointer-coarse:h-11 text-th-accent-text hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
 				>
 					Send
 				</button>

@@ -203,9 +203,13 @@ The key differs from main mode (`auth_token`) to avoid conflicts when both modes
 The cluster frontend is a mobile-first operations dashboard. Its primary job is
 to show which project nodes are running and expose the next useful action:
 
-- Initial connection uses a full-screen loading state.
-- Reconnection keeps the last known node list visible and shows an inline
-  warning that the status may be stale.
+- Initial connection uses a full-screen loading state. If it never succeeds the
+  screen changes to "Cluster unreachable", because retries run for as long as the
+  tab is open and an indefinite spinner would explain nothing. `version === null`
+  is the test for "never authenticated", since the status alone cannot tell a
+  first connect from a reconnect.
+- Reconnection *after* a successful connect keeps the last known node list visible
+  and shows an inline warning that the status may be stale.
 - Node cards show status, shortened path, runtime metadata, and the primary
   action for the current state: Start, Stop, or Clean Up.
 - Stale nodes are treated as a recoverable state. The UI explains that the
@@ -253,13 +257,13 @@ This provides a consistent user experience across both deployment modes.
 
 When `--relay` is enabled (default), cluster mode registers with the cloud relay server and accepts connections through it. This allows mobile devices to connect without direct network access to the server.
 
-The relay uses the same infrastructure as the main server mode—see [relay.md](relay.md) for details.
+The relay uses the same infrastructure as the main server mode—see [relay.md](relay.md) for the design, and [code/relay-system.md](code/relay-system.md) for how the tunnel detects a dead connection and recovers from one. The cluster frontend's reconnect behaviour mirrors the main web client for the same reasons described there.
 
 ## Development
 
 ### Prerequisites
 
-Install dependencies before running development commands:
+Install dependencies before running development commands. `web`, `web-cluster` and `packages/*` are one pnpm workspace with a single lockfile, so this is run once from the repo root and covers all of them:
 
 ```bash
 pnpm install
@@ -279,7 +283,7 @@ This runs both the Go backend (`go run . cluster`) and the React frontend (`web-
 The cluster frontend lives in `web-cluster/`. To build:
 
 ```bash
-cd web-cluster && pnpm install && pnpm build:release
+pnpm --filter ./web-cluster run build:release
 ```
 
 Built files are embedded into the binary via `server/cluster/embed.go`.

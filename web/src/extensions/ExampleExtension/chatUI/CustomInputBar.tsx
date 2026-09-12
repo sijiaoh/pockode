@@ -48,7 +48,7 @@ export default function CustomInputBar({
 					type="button"
 					onClick={handleSend}
 					disabled={!canSend || !input.trim()}
-					className="rounded-full bg-th-accent p-2 text-th-text-inverse disabled:opacity-50"
+					className="flex size-9 items-center justify-center rounded-full bg-th-accent text-th-text-inverse disabled:opacity-50 pointer-coarse:size-11"
 				>
 					<Send className="size-5" />
 				</button>

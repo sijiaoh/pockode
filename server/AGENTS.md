@@ -20,9 +20,14 @@ go build -o server .
 # Docker 镜像（从仓库根目录执行，build context 需要包含 web/ 和 site/static/images/logo.svg）
 docker build -f server/Dockerfile -t pockode:local .
 
-# 集成测试（消耗 token）
+# 集成测试（消耗 token，需要对应 CLI 已登录）
 go test -tags=integration ./agent/claude -v
+go test -tags=integration ./agent/codex -v
 ```
+
+两端共用 `agent/integration_test_suite.go` 的同一套场景，CLI 之间的差异通过
+`IntegrationTestOptions` 显式表达。往共用套件里加场景意味着它对两个 CLI 都必须成立；
+只对某个 CLI 成立的断言放进该 CLI 自己的 `*_integration_test.go`。
 
 ## 结构
 
@@ -32,16 +37,18 @@ agent/                  # Agent 抽象（接口, 事件, 进程管理, 注册表
   claude/               # Claude CLI 实现
   codex/                # Codex CLI 实现
 agentrole/              # AgentRole 存储 + 类型定义
+apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代理共用）
 chat/                   # Chat 客户端
 command/                # 命令存储
 contents/               # 文件内容获取
-filestore/              # JSON 文件存储基础设施
+filestore/              # 文件存储基础设施（原子写 / 文件锁 / JSONL / 变更监听）
+filetransfer/           # 文件上传 / 下载 HTTP 端点
 git/                    # Git 操作
 logger/                 # 结构化日志 (slog)
 mcp/                    # MCP：stdio 代理客户端 + 服务端 Executor/APIHandler
 middleware/             # Token 认证中间件
 process/                # 进程管理器
-relay/                  # HTTP 中继 / 多路复用（NAT 穿透）
+relay/                  # NAT 穿透：yamux over WSS 隧道 + 本地反向代理
 serverinfo/             # 服务器运行时信息（server.json）
 rpc/                    # RPC 消息类型定义
 session/                # Session 存储 + 清理
@@ -70,7 +77,8 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 |------|----------|
 | `filestore/lock.go` | `lock_{unix,windows}.go` — `flock(2)` / `LockFileEx` |
 | `filestore/rename.go` | `rename_{unix,windows}.go` — Windows 上替换目标可能被临时占用，需重试 |
-| `agent/process.go` | `procgroup_{unix,windows}.go` — 进程组 / Job Object，Windows 另加 `CREATE_NO_WINDOW` |
+| `internal/proctree/proctree.go` | `tree_{unix,windows}.go` — 进程树终止：进程组 / Job Object，Windows 另加 `CREATE_NO_WINDOW` |
+| `git/command.go` | `terminate_{unix,windows}.go` — 超时的 git 怎么停：SIGTERM（git 自己清锁文件）/ 杀进程树（Windows 没有可发的停止请求）|
 | `agent/command.go` | `command_{unix,windows}.go` — AI CLI 的查找兜底目录 + `.cmd` 包装器的命令行构造 |
 | `worktree/setup.go` | `hook_shell_{unix,windows}.go` — setup hook 的解释器（Windows 无 bash，探测 Git for Windows） |
 | `internal/pathutil/pathutil.go` | `equal_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
@@ -89,7 +97,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
 参数一律是**原生路径**。外部来的值默认不是：git 的输出、手写的设置、我们自己 API 里的路径都用 `/`，进来时 `filepath.FromSlash`，出去时 `filepath.ToSlash`。
 
-**启动 AI CLI 一律走 `agent.Command`**，不要直接 `exec.Command(claude.Binary, …)`。它做两件各自都容易漏掉的事：`lookupBinary` 在 PATH 之外补上安装器的默认目录（Windows 上 PATH 是进程启动时定死的，装在 pockode.exe 启动之后的 CLI 就是看不见的），以及在可执行文件是 npm 装出来的 `.cmd` 时自己构造命令行——Windows 跑批处理文件是把命令行交给 cmd.exe，而 `os/exec` 按 `CommandLineToArgvW` 的规则加引号，两套规则对不上（Go 只在文档里提了一句，没有修，见 `agent/cmdline.go`）。
+**启动 AI CLI 一律走 `agent.Command`**，不要直接 `exec.Command(claude.Binary, …)`。它做两件各自都容易漏掉的事：`lookupBinary` 在 PATH 之外补上安装器的默认目录（Windows 上 PATH 是进程启动时定死的，装在 pockode.exe 启动之后的 CLI 就是看不见的），以及在可执行文件是 npm 装出来的 `.cmd` 时自己构造命令行——Windows 跑批处理文件是把命令行交给 cmd.exe，而 `os/exec` 按 `CommandLineToArgvW` 的规则加引号，两套规则对不上（Go 只在文档里提了一句，没有修，见 `agent/cmdline.go`）。需要能放弃的短命探测（如 `codex --version`）走 `agent.CommandContext`，它是同一条路加一个 ctx；会话进程走 `agent.StartProcess`，那边自己持有生命周期。
 
 **存凭据的地方用 `internal/fsperm` 收紧，收紧的对象是目录不是文件**。`os.WriteFile(path, data, 0600)` 在 Windows 上什么也没做——Go 只把 perm 映射到只读属性，实际访问权来自父目录继承来的 ACL，而盘符根下建出来的目录一律继承一条 `BUILTIN\Users` 读权限。收紧目录才有两个逐个收紧文件拿不到的性质：**新建的文件自动继承**（`.pockode` 里的 session 记录、`server.log`、work store 都归它管，不必在每个写入点重复一遍），以及**扛得住 temp+rename**（`filestore` 和 git 的 `store` helper 都是先写临时文件再改名覆盖，改名进来的文件带的是它自己创建时的权限，逐个文件收紧会被下一次写入静默抹掉）。
 
@@ -107,7 +115,17 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
 - **跑 `GOOS=windows GOARCH=amd64 go vet ./...`，不只是 `go build`** —— `go build` 不编译 `_test.go`，而测试文件里的 `syscall` 和路径假设正是最容易在 Windows 上腐化的部分。CI 的 `windows-cross-compile` job 两步都跑。
 - **`git` 的输出永远是正斜杠**，即使在 Windows 上；和原生路径比较前要 `filepath.FromSlash`（见 `worktree/registry.go` 的 `parseWorktreeList`）。反过来，传给 bash 脚本的路径要 `filepath.ToSlash`，因为 bash 里反斜杠是转义符。
-- **平台相关的测试 skip 必须写明理由**。CI 的测试步骤会在末尾打印 skip 清单——全靠 skip 变绿的矩阵腿比没有这条腿更糟。装了 Git for Windows 的 Windows runner 上**目前一条都不应出现**，多出来的每一条都要追。能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
+- **平台相关的测试 skip 必须写明理由**。CI 的测试步骤会在末尾打印 skip 清单——全靠 skip 变绿的矩阵腿比没有这条腿更糟。装了 Git for Windows 的 Windows runner 上**目前只应出现下面这几条**，多出来的每一条都要追：
+
+  | 来源 | 调用点 | 为什么 Windows 上做不到 |
+  |---|---|---|
+  | `internal/fifotest` | `contents`×1、`filetransfer`×2 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
+  | `internal/symlinktest` | `contents`×1、`filetransfer`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
+  | `internal/unwritabletest` | `filestore`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
+
+  **合计 5~7 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 2+3，开了是 3+0。别按单行的数去对账，按合计。
+
+  能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 
 ### 解析外部输出
 
@@ -118,6 +136,26 @@ if err := json.Unmarshal(data, &parsed); err != nil {
     return []Event{{Type: TypeText, Content: string(data)}}
 }
 ```
+
+### 持久化写入
+
+服务器要长期保存的状态文件一律走 `filestore` 的公共 API，**不要直接 `os.WriteFile`**。裸写会先 truncate 再写，断电、`kill -9`、磁盘写满都会留下一个被截断的文件——session 索引损坏、relay 永久起不来、agent 静默失去全部 MCP 工具，都是这么来的。
+
+| 场景 | API |
+|------|-----|
+| 整文件重写 | `filestore.WriteFileAtomic(path, data, perm)`（写临时文件 → fsync → rename；含 token 的传 `0600`，替换后的文件不继承旧权限） |
+| store 读回自己的状态文件 | `filestore.ReadFileLocked(path)`（共享锁；`filestore.New` 的 `File.Read` 走的就是它） |
+| 启动时加载 JSON 状态 | `filestore.ReadJSONOrQuarantine(path, label, v)`——解析失败则隔离为 `<path>.corrupt` 并以空状态启动，**不要**因为一个文件坏了就让服务器起不来 |
+| 只追加的流式记录 | `filestore.AppendJSONL` / `filestore.ReadJSONL`（单次 write 系统调用、**不** fsync，读端跳过坏行；绝不能丢尾部的数据请改用整文件重写） |
+
+用 `filestore.New` 建的 `File` 已经内建这套写入方式，直接用即可。
+
+读这一侧记住一句话：**加锁是为「读-改-写」服务的，不是为「读到一个完整文件」服务的**——后者 rename 本身已经保证了。由此有两个容易踩的点：
+
+- **只是想读一眼某个数据目录（比如探测别的项目的 `server.json`），用 `os.ReadFile`，别加锁。** 锁挡不住「读到的是旧版还是新版」（那取决于时序），却会在一个你只想看一眼的目录里凭空建出 `.lock`。`serverinfo.Read` 正是因此从 `ReadFileLocked` 回退成了普通读。
+- **`ReadFileLocked` 拿的是共享锁，不能让「读-改-写」变成原子的。** 需要那个语义就得整段持排他锁——`ReadJSONOrQuarantine` 就是这么做的：读和隔离在同一把排他锁内，否则会把两次上锁之间别人刚写好的完好文件给隔离掉。
+
+**故意不用的情况**：用户项目里的源码文件（rename 会断链接、改权限、换 inode，还在工作区留 `.tmp`/`.lock`）、追加型日志、以及锁文件名会和外部工具撞车的文件（`.git-credentials`）。这类例外的理由都不直觉，**必须在调用点写注释**说明为什么不能改；完整清单见 [docs/projects/data-model.md](../docs/projects/data-model.md#atomic-writes)。
 
 ## 日志
 
@@ -191,4 +229,4 @@ MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir
 
 ⚠️ **Ask First**: 添加外部依赖 · 修改认证逻辑 · 更改 API 路由
 
-🚫 **Never**: 硬编码密钥 · 忽略错误 · 直接编辑 `go.sum`
+🚫 **Never**: 硬编码密钥 · 忽略错误 · 直接编辑 `go.sum` · 用裸 `os.WriteFile` 写持久化状态文件（见「持久化写入」）

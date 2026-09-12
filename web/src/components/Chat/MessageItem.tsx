@@ -19,13 +19,23 @@ import type {
 	PermissionUpdate,
 	PermissionUpdateDestination,
 	SystemMessageMeta,
+	SystemMessageStep,
 	ToolCall,
 } from "../../types/message";
+import { isForkableMessage } from "../../utils/forkAnchor";
 import { formatFilePath } from "../../utils/path";
+import { systemActionLabel } from "../../utils/systemMessage";
+import {
+	formatStepProgress,
+	recordedStepProgress,
+} from "../../utils/workSteps";
 import { ScrollableContent, Spinner } from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
 import { MarkdownContent } from "./MarkdownContent";
+import MessageActions from "./MessageActions";
+import TaskGroupItem from "./TaskGroupItem";
 import ToolResultDisplay from "./ToolResultDisplay";
+import WorkCardItem from "./WorkCardItem";
 
 interface ToolCallItemProps {
 	tool: ToolCall;
@@ -147,25 +157,6 @@ function SystemItem({ content }: SystemItemProps) {
 	);
 }
 
-// subtype → collapsed-bar action label. Where values come from: the backend
-// system message subtypes in server/work/prompt.go (kickoff, restart, ...).
-const SYSTEM_MESSAGE_LABELS: Record<string, string> = {
-	kickoff: "Kickoff",
-	restart: "Restart",
-	auto_continue: "Auto-continue",
-	step_advance: "Next step",
-	reopen: "Reopen",
-	child_done: "Child task done",
-};
-
-function systemActionLabel(subtype?: string, meta?: SystemMessageMeta): string {
-	const base = (subtype && SYSTEM_MESSAGE_LABELS[subtype]) || "System Message";
-	if (subtype === "step_advance" && meta?.step) {
-		return `${base} (Step ${meta.step.current}/${meta.step.total})`;
-	}
-	return base;
-}
-
 interface SystemMessageItemProps {
 	content: string;
 	subtype?: string;
@@ -173,8 +164,9 @@ interface SystemMessageItemProps {
 }
 
 // SystemMessageItem renders a Pockode system-automation message as a collapsed,
-// low-contrast banner (not a chat bubble). It sits alongside the user/assistant
-// branches in MessageItem. Visual pattern mirrors SystemItem for consistency.
+// low-contrast banner (not a chat bubble). Only reachable for history recorded
+// before meta.work_id existed; anything newer is folded into a WorkCardItem.
+// Visual pattern mirrors SystemItem for consistency.
 function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
 	const [expanded, setExpanded] = useState(false);
 	const actionLabel = systemActionLabel(subtype, meta);
@@ -204,6 +196,25 @@ function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
 					<MarkdownContent content={content} />
 				</ScrollableContent>
 			)}
+		</div>
+	);
+}
+
+interface StepDividerItemProps {
+	step: SystemMessageStep;
+}
+
+// A hairline saying only "the work moved to a new step here". It keeps the
+// transcript's answer to "which output belongs to which step", which the old
+// per-step banner used to carry, without restating any status.
+function StepDividerItem({ step }: StepDividerItemProps) {
+	return (
+		<div className="flex items-center gap-2">
+			<span className="h-px flex-1 bg-th-border" />
+			<span className="shrink-0 text-xs text-th-text-muted">
+				{formatStepProgress(recordedStepProgress(step.current, step.total))}
+			</span>
+			<span className="h-px flex-1 bg-th-border" />
 		</div>
 	);
 }
@@ -537,6 +548,9 @@ function ContentPartItem({
 	if (part.type === "command_output") {
 		return <CommandOutputItem content={part.content} />;
 	}
+	if (part.type === "task_group") {
+		return <TaskGroupItem tasks={part.tasks} />;
+	}
 	return <ToolCallItem tool={part.tool} />;
 }
 
@@ -553,6 +567,9 @@ interface Props {
 		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
+	onOpenWorkDetail?: (workId: string) => void;
+	/** Must be stable: this component is memoized. */
+	onOpenMessageMenu?: (messageId: string) => void;
 }
 
 const MessageItem = memo(function MessageItem({
@@ -562,12 +579,32 @@ const MessageItem = memo(function MessageItem({
 	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
+	onOpenWorkDetail,
+	onOpenMessageMenu,
 }: Props) {
 	const chatUIConfig = useChatUIConfig();
 	const UserAvatar = chatUIConfig.UserAvatar;
 	const AssistantAvatar = chatUIConfig.AssistantAvatar;
 	const userBubbleClass = chatUIConfig.userBubbleClass ?? "";
 	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
+
+	const actions =
+		onOpenMessageMenu && isForkableMessage(message) ? (
+			<MessageActions
+				side={message.role}
+				onOpenMenu={() => onOpenMessageMenu(message.id)}
+			/>
+		) : null;
+
+	if (message.role === "work") {
+		return (
+			<WorkCardItem message={message} onOpenWorkDetail={onOpenWorkDetail} />
+		);
+	}
+
+	if (message.role === "step_divider") {
+		return <StepDividerItem step={message.step} />;
+	}
 
 	if (message.role === "user") {
 		// System-driven messages render as a collapsed banner instead of a bubble.
@@ -581,67 +618,78 @@ const MessageItem = memo(function MessageItem({
 			);
 		}
 		return (
-			<div className="flex items-end justify-end gap-2">
-				<div
-					className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-user-bubble p-2.5 text-th-user-bubble-text sm:p-3 ${userBubbleClass}`}
-				>
-					<p className="whitespace-pre-wrap">{message.content}</p>
+			<>
+				<div className="flex items-end justify-end gap-2">
+					<div
+						className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-user-bubble p-2.5 text-th-user-bubble-text sm:p-3 ${userBubbleClass}`}
+					>
+						<p className="whitespace-pre-wrap">{message.content}</p>
+					</div>
+					{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
 				</div>
-				{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
-			</div>
+				{actions}
+			</>
 		);
 	}
 
 	// Assistant message
 	return (
-		<div className="flex items-end justify-start gap-2">
-			{AssistantAvatar && <AssistantAvatar className="size-10 shrink-0" />}
-			<div
-				className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3 ${assistantBubbleClass}`}
-			>
-				{message.parts.length > 0 && (
-					<div className="space-y-2">
-						{message.parts.map((part, index) => {
-							const key =
-								part.type === "permission_request"
-									? part.request.requestId
-									: part.type === "ask_user_question"
+		<>
+			<div className="flex items-end justify-start gap-2">
+				{AssistantAvatar && <AssistantAvatar className="size-10 shrink-0" />}
+				<div
+					className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3 ${assistantBubbleClass}`}
+				>
+					{message.parts.length > 0 && (
+						<div className="space-y-2">
+							{message.parts.map((part, index) => {
+								const key =
+									part.type === "permission_request"
 										? part.request.requestId
-										: part.type === "tool_call"
-											? // Index suffix: Claude Code resends tool_call after permission approval
-												`${part.tool.id}-${index}`
-											: `${part.type}-${index}`;
-							return (
-								<ContentPartItem
-									key={key}
-									part={part}
-									isCodex={isCodex}
-									onPermissionRespond={onPermissionRespond}
-									onQuestionRespond={onQuestionRespond}
-								/>
-							);
-						})}
-					</div>
-				)}
+										: part.type === "ask_user_question"
+											? part.request.requestId
+											: part.type === "tool_call"
+												? // Index suffix: Claude Code resends tool_call after permission approval
+													`${part.tool.id}-${index}`
+												: part.type === "task_group"
+													? // Keyed on the anchor Task so a newly spawned one grows
+														// the group instead of remounting it and dropping what
+														// the user had expanded.
+														part.tasks[0].toolUseId
+													: `${part.type}-${index}`;
+								return (
+									<ContentPartItem
+										key={key}
+										part={part}
+										isCodex={isCodex}
+										onPermissionRespond={onPermissionRespond}
+										onQuestionRespond={onQuestionRespond}
+									/>
+								);
+							})}
+						</div>
+					)}
 
-				{/* Status indicator */}
-				{message.status === "sending" && (
-					<Spinner variant="current" className="mt-2" />
-				)}
-				{message.status === "streaming" && isLast && isProcessRunning && (
-					<Spinner variant="current" className="mt-2" />
-				)}
-				{message.status === "error" && (
-					<p className="mt-2 text-sm text-th-error">{message.error}</p>
-				)}
-				{message.status === "interrupted" && (
-					<p className="mt-2 text-sm text-th-text-muted">Interrupted</p>
-				)}
-				{message.status === "process_ended" && (
-					<p className="mt-2 text-sm text-th-warning">Process ended</p>
-				)}
+					{/* Status indicator */}
+					{message.status === "sending" && (
+						<Spinner variant="current" className="mt-2" />
+					)}
+					{message.status === "streaming" && isLast && isProcessRunning && (
+						<Spinner variant="current" className="mt-2" />
+					)}
+					{message.status === "error" && (
+						<p className="mt-2 text-sm text-th-error">{message.error}</p>
+					)}
+					{message.status === "interrupted" && (
+						<p className="mt-2 text-sm text-th-text-muted">Interrupted</p>
+					)}
+					{message.status === "process_ended" && (
+						<p className="mt-2 text-sm text-th-warning">Process ended</p>
+					)}
+				</div>
 			</div>
-		</div>
+			{actions}
+		</>
 	);
 });
 

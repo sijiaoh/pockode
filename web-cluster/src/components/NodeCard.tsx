@@ -1,6 +1,6 @@
 import { ConfirmDialog, Spinner } from "@pockode/shared";
 import { useId, useState } from "react";
-import { useIsDesktop } from "../hooks";
+import { useIsExpanded } from "../hooks";
 import type { NodeStatus, NodeWithStatus } from "../types/node";
 import { ResponsivePanel } from "./ui";
 
@@ -66,7 +66,7 @@ export function NodeCard({ node, onEdit, onDelete, onStart, onStop }: Props) {
 	const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
 	const [token, setToken] = useState("");
 	const [actionLoading, setActionLoading] = useState(false);
-	const isDesktop = useIsDesktop();
+	const isExpanded = useIsExpanded();
 
 	const status = node.status.status;
 	const displayPath = node.path.replace(/^\/(?:Users|home)\/[^/]+/, "~");
@@ -144,7 +144,7 @@ export function NodeCard({ node, onEdit, onDelete, onStart, onStop }: Props) {
 					<button
 						type="button"
 						onClick={() => setMenuOpen(true)}
-						className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-th-text-secondary hover:bg-th-overlay-hover hover:text-th-text-primary"
+						className="flex size-11 shrink-0 items-center justify-center rounded-lg text-th-text-secondary hover:bg-th-overlay-hover hover:text-th-text-primary"
 						aria-label="More options"
 					>
 						<svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
@@ -168,7 +168,7 @@ export function NodeCard({ node, onEdit, onDelete, onStart, onStop }: Props) {
 										href={node.status.local_url}
 										target="_blank"
 										rel="noopener noreferrer"
-										className="min-h-[36px] rounded-lg border border-th-border px-3 py-2 text-xs font-medium text-th-accent hover:bg-th-overlay-hover"
+										className="inline-flex min-h-[36px] items-center rounded-lg border border-th-border px-3 py-2 text-xs font-medium text-th-accent hover:bg-th-overlay-hover pointer-coarse:min-h-11"
 									>
 										Local
 									</a>
@@ -178,7 +178,7 @@ export function NodeCard({ node, onEdit, onDelete, onStart, onStop }: Props) {
 										href={node.status.remote_url}
 										target="_blank"
 										rel="noopener noreferrer"
-										className="min-h-[36px] rounded-lg border border-th-border px-3 py-2 text-xs font-medium text-th-accent hover:bg-th-overlay-hover"
+										className="inline-flex min-h-[36px] items-center rounded-lg border border-th-border px-3 py-2 text-xs font-medium text-th-accent hover:bg-th-overlay-hover pointer-coarse:min-h-11"
 									>
 										Remote
 									</a>
@@ -221,9 +221,9 @@ export function NodeCard({ node, onEdit, onDelete, onStart, onStop }: Props) {
 				isOpen={menuOpen}
 				onClose={() => setMenuOpen(false)}
 				title={node.name}
-				isDesktop={isDesktop}
+				isExpanded={isExpanded}
 			>
-				<div className="flex flex-col gap-1">
+				<div className="flex flex-col gap-2">
 					<button
 						type="button"
 						onClick={handleEdit}
@@ -309,7 +309,7 @@ function StartNodePanel({
 	onConfirm,
 	onCancel,
 }: StartNodePanelProps) {
-	const isDesktop = useIsDesktop();
+	const isExpanded = useIsExpanded();
 	const inputId = useId();
 
 	return (
@@ -317,7 +317,7 @@ function StartNodePanel({
 			isOpen={isOpen}
 			onClose={onCancel}
 			title={`Start ${nodeName}`}
-			isDesktop={isDesktop}
+			isExpanded={isExpanded}
 		>
 			<div className="flex flex-col gap-4">
 				<p className="text-sm text-th-text-secondary">

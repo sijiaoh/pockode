@@ -8,6 +8,10 @@ import { useCallback, useMemo } from "react";
 import { useSession } from "../../hooks/useSession";
 import { useSidebarUIConfig } from "../../lib/registries/sidebarUIRegistry";
 import { SidebarContainerContext } from "../../lib/sidebarContainerContext";
+import {
+	useHasUnfinishedUploads,
+	useHasUploadActivity,
+} from "../../lib/uploadStore";
 import { FilesTab } from "../Files";
 import { DiffTab } from "../Git";
 import { Sidebar, TabbedSidebar, type TabConfig } from "../Layout";
@@ -23,14 +27,23 @@ interface Props {
 	onCreateSession: () => void;
 	onDeleteSession: (id: string) => void;
 	onSelectDiffFile: (path: string, staged: boolean) => void;
+	/** Closes the content area when the diff it shows is discarded away. */
+	onCloseDiffFile: () => void;
 	activeDiffFile: { path: string; staged: boolean } | null;
 	onSelectCommit: (hash: string) => void;
 	activeCommitHash: string | null;
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
+	/** Closes the content area when the file it shows is deleted from the tree. */
+	onCloseFile: () => void;
 	onOpenWorkList: () => void;
 	onOpenAgentRoleList: () => void;
-	isDesktop: boolean;
+	isExpanded: boolean;
+	/**
+	 * The URL already points at another worktree while the store, and therefore
+	 * the session list, still holds the previous one's.
+	 */
+	isSwitchingWorktree: boolean;
 }
 
 function SessionSidebar({
@@ -41,17 +54,25 @@ function SessionSidebar({
 	onCreateSession,
 	onDeleteSession,
 	onSelectDiffFile,
+	onCloseDiffFile,
 	activeDiffFile,
 	onSelectCommit,
 	activeCommitHash,
 	onSelectFile,
 	activeFilePath,
+	onCloseFile,
 	onOpenWorkList,
 	onOpenAgentRoleList,
-	isDesktop,
+	isExpanded,
+	isSwitchingWorktree,
 }: Props) {
 	const { hasAnyUnread } = useSession();
 	const { SidebarContent } = useSidebarUIConfig();
+	// The upload queue lives inside the Files tab and is hidden from every other
+	// one, so this is the only sign an upload is still running or has failed.
+	const hasUploadActivity = useHasUploadActivity();
+	// Narrower than the badge, and deliberately so — see `handleSelectFile`.
+	const hasUnfinishedUploads = useHasUnfinishedUploads();
 
 	const tabs: TabConfig[] = useMemo(
 		() => [
@@ -61,54 +82,68 @@ function SessionSidebar({
 				icon: MessageSquare,
 				showBadge: hasAnyUnread,
 			},
-			{ id: "files", label: "Files", icon: FolderOpen },
+			{
+				id: "files",
+				label: "Files",
+				icon: FolderOpen,
+				showBadge: hasUploadActivity,
+			},
 			{ id: "git", label: "Git", icon: GitCompare },
 			{ id: "project", label: "Project", icon: ListChecks },
 		],
-		[hasAnyUnread],
+		[hasAnyUnread, hasUploadActivity],
 	);
 
 	const handleSelectSession = useCallback(
 		(id: string) => {
 			onSelectSession(id);
-			if (!isDesktop) onClose();
+			if (!isExpanded) onClose();
 		},
-		[onSelectSession, isDesktop, onClose],
+		[onSelectSession, isExpanded, onClose],
 	);
 
 	const handleSelectDiffFile = useCallback(
 		(path: string, staged: boolean) => {
 			onSelectDiffFile(path, staged);
-			if (!isDesktop) onClose();
+			if (!isExpanded) onClose();
 		},
-		[onSelectDiffFile, isDesktop, onClose],
+		[onSelectDiffFile, isExpanded, onClose],
 	);
 
 	const handleSelectCommit = useCallback(
 		(hash: string) => {
 			onSelectCommit(hash);
-			if (!isDesktop) onClose();
+			if (!isExpanded) onClose();
 		},
-		[onSelectCommit, isDesktop, onClose],
+		[onSelectCommit, isExpanded, onClose],
 	);
 
 	const handleSelectFile = useCallback(
 		(path: string) => {
 			onSelectFile(path);
-			if (!isDesktop) onClose();
+			// Closing the drawer on a phone takes the upload queue — and the tab bar
+			// that badges it — off screen with it, leaving a running upload with
+			// nothing to report to. The file still opens behind the drawer.
+			//
+			// Only while something is still running: a failure has already reported
+			// and stays on the queue until it is dismissed, so waiting on that would
+			// hold the drawer open on every file tapped from then on, with no moment
+			// at which it starts closing again. The badge stays lit for it, which is
+			// how the row is found once the file has been read.
+			if (!isExpanded && !hasUnfinishedUploads) onClose();
 		},
-		[onSelectFile, isDesktop, onClose],
+		[onSelectFile, isExpanded, onClose, hasUnfinishedUploads],
 	);
 
 	const containerContext = useMemo(
-		() => ({ isOpen, onClose, isDesktop }),
-		[isOpen, onClose, isDesktop],
+		() => ({ isOpen, onClose, isExpanded }),
+		[isOpen, onClose, isExpanded],
 	);
 
 	if (SidebarContent) {
 		return (
 			<SidebarContainerContext.Provider value={containerContext}>
-				<Sidebar isOpen={isOpen} onClose={onClose} isDesktop={isDesktop}>
+				<Sidebar isOpen={isOpen} onClose={onClose} isExpanded={isExpanded}>
 					<SidebarContent />
 				</Sidebar>
 			</SidebarContainerContext.Provider>
@@ -121,9 +156,9 @@ function SessionSidebar({
 			onClose={onClose}
 			tabs={tabs}
 			defaultTab="sessions"
-			isDesktop={isDesktop}
-			renderHeader={({ onClose, isDesktop }) => (
-				<WorktreeSwitcher onClose={onClose} isDesktop={isDesktop} />
+			isExpanded={isExpanded}
+			renderHeader={({ onClose, isExpanded }) => (
+				<WorktreeSwitcher onClose={onClose} isExpanded={isExpanded} />
 			)}
 		>
 			<SessionsTab
@@ -131,14 +166,17 @@ function SessionSidebar({
 				onSelectSession={handleSelectSession}
 				onCreateSession={onCreateSession}
 				onDeleteSession={onDeleteSession}
+				isSwitchingWorktree={isSwitchingWorktree}
 			/>
 			<FilesTab
 				onSelectFile={handleSelectFile}
 				activeFilePath={activeFilePath}
+				onCloseFile={onCloseFile}
 			/>
 			<DiffTab
 				onSelectFile={handleSelectDiffFile}
 				onSelectCommit={handleSelectCommit}
+				onCloseFile={onCloseDiffFile}
 				activeFile={activeDiffFile}
 				activeCommitHash={activeCommitHash}
 			/>

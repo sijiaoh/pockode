@@ -1,4 +1,20 @@
 /**
+ * The directory holding `fullPath`, without a trailing slash; empty is the root.
+ *
+ * Not `splitPath().directory`, which keeps the slash: this form is what the
+ * upload endpoint and the contents query key both expect for a directory.
+ */
+export function parentDir(fullPath: string): string {
+	const lastSlash = fullPath.lastIndexOf("/");
+	return lastSlash === -1 ? "" : fullPath.slice(0, lastSlash);
+}
+
+/** Whether `path` is `root` itself or something inside it. */
+export function isAtOrUnder(path: string, root: string): boolean {
+	return path === root || path.startsWith(`${root}/`);
+}
+
+/**
  * Split a slash-separated path into its file name and directory prefix.
  *
  * Use this for paths in Pockode's own API (git diffs, file listings), which are

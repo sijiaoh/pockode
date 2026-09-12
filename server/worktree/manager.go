@@ -46,6 +46,13 @@ func NewManager(registry *Registry, agents *agent.Registry, dataDir string, idle
 	}
 }
 
+// AgentForkSupports returns what every registered agent declares about being
+// forked. Agents are registered once per process, so the answer is the same for
+// every worktree.
+func (m *Manager) AgentForkSupports() map[session.AgentType]agent.ForkSupport {
+	return m.agents.ForkSupports()
+}
+
 func (m *Manager) Registry() *Registry {
 	return m.registry
 }
@@ -97,21 +104,34 @@ func (m *Manager) Get(name string) (*Worktree, error) {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Another goroutine may have created it while we were creating
 	if existing, ok := m.worktrees[name]; ok {
-		wt.Stop()
 		existing.refCount++
 		slog.Debug("worktree ref incremented (race)", "name", name, "refCount", existing.refCount)
+		m.mu.Unlock()
+		// Discarded outside the lock for the same reason it was created outside
+		// it: Stop waits for the worktree's goroutines, and no other caller of
+		// this manager should have to queue behind that.
+		wt.Stop()
 		return existing, nil
 	}
 
 	m.worktrees[name] = wt
 	wt.refCount = 1
 	slog.Info("worktree created", "name", name, "workDir", workDir)
+	m.mu.Unlock()
 
 	return wt, nil
+}
+
+// RefCount reports how many holders wt currently has. The counter is the only
+// record that a Get was matched by a Release, so without an accessor a leaked
+// reference is invisible from outside this package.
+func (m *Manager) RefCount(wt *Worktree) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return wt.refCount
 }
 
 // Release decrements the reference count and schedules cleanup after idleReleaseDelay.
@@ -206,12 +226,12 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	})
 
 	chatClient := chat.NewClient(sessionStore, processManager)
-	chatClient.SetBroadcaster(func(sessionID string, event agent.MessageEvent, exclude any) {
+	chatClient.SetBroadcaster(func(sessionID string, event agent.MessageEvent, seq session.HistorySeq, exclude any) {
 		var n watch.Notifier
 		if exclude != nil {
 			n = exclude.(watch.Notifier)
 		}
-		chatMessagesWatcher.NotifyMessage(sessionID, event, n)
+		chatMessagesWatcher.NotifyMessage(sessionID, event, seq, n)
 	})
 
 	wt := &Worktree{

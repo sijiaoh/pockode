@@ -28,9 +28,11 @@ type Watcher interface {
 }
 ```
 
+`Stop()` is synchronous: it returns only once the loops the watcher started via `Go` have exited (see [code/subscription-system.md](code/subscription-system.md#why-stop-waits-instead-of-just-cancelling)).
+
 ### BaseWatcher
 
-Shared subscription management: ID generation (with type-specific prefix), thread-safe subscription map, context/cancel for lifecycle. Most watchers embed this.
+Shared subscription management: ID generation (with type-specific prefix), thread-safe subscription map, and goroutine lifecycle — `Go` starts a tracked loop, `CancelAndWait` cancels the context and waits for those loops. Most watchers embed this.
 
 ### Notifier
 

@@ -25,7 +25,7 @@ function WorktreeItem({
 		/* biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/useFocusableInteractive: Keyboard navigation handled by listbox parent */
 		<div
 			onClick={isCurrent ? undefined : onSelect}
-			className={`group flex w-full items-center gap-3 px-3 py-2.5 transition-colors ${
+			className={`group flex min-h-11 w-full items-center gap-3 px-3 py-2.5 transition-colors ${
 				isCurrent ? "bg-th-accent/10" : "cursor-pointer hover:bg-th-bg-tertiary"
 			}`}
 			role="option"
@@ -55,7 +55,6 @@ function WorktreeItem({
 					itemType="worktree"
 					onDelete={onDelete}
 					confirmMessage={`This will remove the worktree "${displayName}" and its working directory. This action cannot be undone.`}
-					className="shrink-0 rounded p-1 text-th-text-muted transition-all hover:bg-th-error/10 hover:text-th-error sm:opacity-0 sm:group-hover:opacity-100"
 				/>
 			)}
 		</div>
