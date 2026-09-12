@@ -162,12 +162,13 @@ when the other three moved onto the role, so there is no `role.mode` to look
 for.
 
 All four go to `SessionStore.Create` as a `CreateSpec`, which checks the model
-and the effort against the agent type before the session exists. A rejection therefore means no session was made at
-all, and the error has a path all the way out: `WorkStarter` wraps it with the
-role's name and id, `Operations.StartWork` rolls the claim back, and the ws and
-MCP callers surface the text. That chain is what makes a role pinned to a
-retired model a reportable failure rather than a silent one — the role is named
-because that is where the value has to be fixed.
+and the effort against the agent type before the session exists. A rejection
+therefore means no session was made at all, and the error has a path all the way
+out: `WorkStarter` wraps it with the role's name and id,
+`Operations.StartWork` rolls the claim back, and the ws and MCP callers surface
+the text. That chain is what makes a role pinned to a retired model a reportable
+failure rather than a silent one — the role is named because that is where the
+value has to be fixed.
 
 **Only a fresh start reads the role.** The restart path leaves the existing
 session's engine alone, so editing a role changes what the *next* session gets,
