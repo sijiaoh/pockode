@@ -21,9 +21,21 @@ export interface ModeSelectorProps {
 	disabled?: boolean;
 }
 
-export interface AgentSelectorProps {
+/**
+ * Agent, model and effort are one control: both lists are decided by the agent,
+ * and the action bar has no room for a second, wider button.
+ */
+export interface EngineSelectorProps {
 	agentType: "claude" | "codex";
+	/** Empty means "let the CLI pick". */
+	model: string;
+	/** Empty means "let the CLI keep its own default". */
+	effort: string;
 	onAgentTypeChange: (type: "claude" | "codex") => Promise<void>;
+	onModelChange: (model: string) => Promise<void>;
+	onEffortChange: (effort: string) => Promise<void>;
+	isSessionResolved?: boolean;
+	isSessionActivated?: boolean;
 	disabled?: boolean;
 }
 
@@ -55,8 +67,8 @@ export interface ChatUIConfig {
 	/** Custom ModeSelector component (set to null to hide) */
 	ModeSelector?: ComponentType<ModeSelectorProps> | null;
 
-	/** Custom AgentSelector component (set to null to hide) */
-	AgentSelector?: ComponentType<AgentSelectorProps> | null;
+	/** Custom EngineSelector (agent + model + effort) component (set to null to hide) */
+	EngineSelector?: ComponentType<EngineSelectorProps> | null;
 
 	/** Custom StopButton component (set to null to hide) */
 	StopButton?: ComponentType<StopButtonProps> | null;

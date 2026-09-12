@@ -73,6 +73,14 @@ func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.EventRecord)
 	if err := store.Update(ctx, "source", "Fix the parser"); err != nil {
 		t.Fatalf("Update title: %v", err)
 	}
+	// The source picks a model and an effort level so a fork has something to
+	// inherit beyond the agent and mode it is created with.
+	if err := store.SetModel(ctx, "source", session.ModelsForAgent(session.AgentTypeClaude)[0].ID); err != nil {
+		t.Fatalf("SetModel: %v", err)
+	}
+	if err := store.SetEffort(ctx, "source", session.EffortsForAgent(session.AgentTypeClaude)[0].ID); err != nil {
+		t.Fatalf("SetEffort: %v", err)
+	}
 	var seqs []session.HistorySeq
 	for _, rec := range history {
 		seq, err := store.AppendToHistory(ctx, "source", rec)
@@ -103,8 +111,9 @@ func forkedHistory(t *testing.T, store session.Store, sessionID string) []agent.
 }
 
 // TestFork_CopiesConversationAndMeta is the contract a fork is for: a separate
-// session that reads as the source did up to the fork point, on the same agent
-// and in the same mode, with nothing after the fork point carried over.
+// session that reads as the source did up to the fork point, on the same engine
+// — agent, mode, model and effort — with nothing after the fork point carried
+// over.
 func TestFork_CopiesConversationAndMeta(t *testing.T) {
 	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
 		{Type: agent.EventTypeMessage, Content: "first"},
@@ -127,6 +136,14 @@ func TestFork_CopiesConversationAndMeta(t *testing.T) {
 	}
 	if meta.AgentType != session.AgentTypeClaude || meta.Mode != session.ModeYolo {
 		t.Errorf("agentType/mode = %q/%q, want claude/yolo", meta.AgentType, meta.Mode)
+	}
+	// A fork that answered on a different model than the conversation it copied
+	// would not be a continuation of it, for the same reason one on a different
+	// agent would not be.
+	source, _, _ := f.store.Get("source")
+	if meta.Model != source.Model || meta.Effort != source.Effort {
+		t.Errorf("model/effort = %q/%q, want the source's %q/%q",
+			meta.Model, meta.Effort, source.Model, source.Effort)
 	}
 	// The copied history holds the agent's output, so the fork is a session that
 	// has already run: switching its agent type would throw that context away.
@@ -370,8 +387,12 @@ func TestFork_WhileSourceIsRunning(t *testing.T) {
 		{Type: agent.EventTypeMessage, Content: "second"},
 	})
 
-	proc, _, err := f.client.pm.GetOrCreateProcess(
-		context.Background(), "source", true, session.AgentTypeClaude, session.ModeYolo)
+	proc, _, err := f.client.pm.GetOrCreateProcess(context.Background(), session.SessionMeta{
+		ID:        "source",
+		Activated: true,
+		AgentType: session.AgentTypeClaude,
+		Mode:      session.ModeYolo,
+	})
 	if err != nil {
 		t.Fatalf("GetOrCreateProcess: %v", err)
 	}

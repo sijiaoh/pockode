@@ -135,7 +135,7 @@ const gitPollInterval = 3 * time.Second
 ### Why Parallel Git Commands?
 
 ```go
-// server/watch/git.go:101-115
+// server/watch/git.go:110-124
 var head, status string
 var wg sync.WaitGroup
 wg.Add(2)
@@ -186,7 +186,7 @@ So teardown is synchronous on all three sides: watchers wait on their loops, the
 ### Why Generation Counter?
 
 ```typescript
-// web/src/hooks/useSubscription.ts:78-98
+// web/src/hooks/useSubscription.ts:92-128
 const doSubscribe = useCallback(async () => {
     const generation = ++generationRef.current;
     const isStale = () => generationRef.current !== generation;

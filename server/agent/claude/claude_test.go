@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1522,5 +1523,97 @@ func TestStart_MCPConfigUsesServerDir(t *testing.T) {
 	// It must NOT be written to the per-worktree session dir.
 	if _, err := os.Stat(filepath.Join(sessionDir, "mcp-config.json")); err == nil {
 		t.Errorf("mcp-config unexpectedly written to session dir %s", sessionDir)
+	}
+}
+
+// hasFlagValue reports whether args contains flag followed by value.
+func hasFlagValue(args []string, flag, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildArgs_ModelAndEffort(t *testing.T) {
+	args := buildArgs(agent.StartOptions{Model: "opus", Effort: "xhigh"}, claudeLaunch{})
+
+	if !hasFlagValue(args, "--model", "opus") {
+		t.Errorf("expected --model opus in %v", args)
+	}
+	if !hasFlagValue(args, "--effort", "xhigh") {
+		t.Errorf("expected --effort xhigh in %v", args)
+	}
+
+	// Nothing selected must leave both flags out entirely, so the CLI keeps its
+	// own defaults instead of being handed an empty value.
+	args = buildArgs(agent.StartOptions{}, claudeLaunch{})
+	for _, flag := range []string{"--model", "--effort"} {
+		if slices.Contains(args, flag) {
+			t.Errorf("expected no %s when nothing is selected, got %v", flag, args)
+		}
+	}
+}
+
+// TestBuildArgs_Launch covers how a resolved launch reaches the CLI: which of
+// --session-id and --resume is chosen, and that the fork rung's two flags travel
+// with it. They are the only arguments assembled from state rather than fixed,
+// so a rung that lost a flag here would start a CLI that silently continued the
+// wrong conversation.
+func TestBuildArgs_Launch(t *testing.T) {
+	tests := []struct {
+		name    string
+		launch  claudeLaunch
+		want    []string
+		unwant  []string
+		wantVal map[string]string
+	}{
+		{
+			name:    "fresh session names itself",
+			launch:  claudeLaunch{sessionID: "sess-1"},
+			unwant:  []string{"--resume", "--fork-session", "--resume-session-at"},
+			wantVal: map[string]string{"--session-id": "sess-1"},
+		},
+		{
+			name:    "resume reopens by id",
+			launch:  claudeLaunch{sessionID: "sess-1", resume: true},
+			unwant:  []string{"--session-id", "--fork-session", "--resume-session-at"},
+			wantVal: map[string]string{"--resume": "sess-1"},
+		},
+		{
+			name:    "fork resumes at a point under a new id",
+			launch:  claudeLaunch{sessionID: "sess-1", resume: true, fork: true, resumeAt: "msg-7"},
+			want:    []string{"--fork-session"},
+			unwant:  []string{"--session-id"},
+			wantVal: map[string]string{"--resume": "sess-1", "--resume-session-at": "msg-7"},
+		},
+		{
+			name:   "no session id leaves every launch flag out",
+			launch: claudeLaunch{},
+			unwant: []string{"--session-id", "--resume", "--fork-session", "--resume-session-at"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := buildArgs(agent.StartOptions{}, tt.launch)
+
+			for _, flag := range tt.want {
+				if !slices.Contains(args, flag) {
+					t.Errorf("expected %s in %v", flag, args)
+				}
+			}
+			for _, flag := range tt.unwant {
+				if slices.Contains(args, flag) {
+					t.Errorf("expected no %s, got %v", flag, args)
+				}
+			}
+			for flag, value := range tt.wantVal {
+				if !hasFlagValue(args, flag, value) {
+					t.Errorf("expected %s %s in %v", flag, value, args)
+				}
+			}
+		})
 	}
 }

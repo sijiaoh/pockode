@@ -101,6 +101,8 @@ const session = (id: string): SessionListItem => ({
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default" as const,
 	agent_type: "codex",
+	model: "",
+	effort: "",
 	activated: false,
 	state: "ended" as const,
 	needs_input: false,
@@ -121,6 +123,8 @@ const mockSubscribe = vi.fn(
 	},
 );
 const mockUnsubscribe = vi.fn(async () => {});
+const mockListModels = vi.fn(async () => ({ claude: [], codex: [] }));
+const mockListEfforts = vi.fn(async () => ({ claude: [], codex: [] }));
 
 const ws = vi.hoisted(() => ({ status: "connected" }));
 
@@ -131,6 +135,8 @@ vi.mock("../lib/wsStore", () => ({
 			actions: {
 				sessionListSubscribe: mockSubscribe,
 				sessionListUnsubscribe: mockUnsubscribe,
+				listModels: mockListModels,
+				listEfforts: mockListEfforts,
 			},
 		}),
 	wsActions: {
