@@ -55,6 +55,9 @@ func (h *rpcMethodHandler) handleAgentRoleUpdate(ctx context.Context, conn *json
 		Name:       params.Name,
 		RolePrompt: params.RolePrompt,
 		Steps:      params.Steps,
+		AgentType:  params.AgentType,
+		Model:      params.Model,
+		Effort:     params.Effort,
 	}
 	if err := h.agentRoleStore.Update(ctx, params.ID, fields); err != nil {
 		h.replyAgentRoleError(ctx, conn, req.ID, err, "failed to update agent role")

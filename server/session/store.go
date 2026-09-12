@@ -22,7 +22,7 @@ type Store interface {
 	Get(sessionID string) (SessionMeta, bool, error)
 
 	// Session metadata (with I/O)
-	Create(ctx context.Context, sessionID string, agentType AgentType, mode Mode) (SessionMeta, error)
+	Create(ctx context.Context, sessionID string, spec CreateSpec) (SessionMeta, error)
 	// CreateFork creates a session that begins life as a copy of another one.
 	CreateFork(ctx context.Context, sessionID string, fork ForkSpec) (SessionMeta, error)
 	Delete(ctx context.Context, sessionID string) error
@@ -171,16 +171,28 @@ func (s *FileStore) Get(sessionID string) (SessionMeta, bool, error) {
 	return SessionMeta{}, false, nil
 }
 
-func (s *FileStore) Create(ctx context.Context, sessionID string, agentType AgentType, mode Mode) (SessionMeta, error) {
+func (s *FileStore) Create(ctx context.Context, sessionID string, spec CreateSpec) (SessionMeta, error) {
 	if err := ctx.Err(); err != nil {
 		return SessionMeta{}, err
 	}
 
+	agentType := spec.AgentType
 	if agentType == "" {
 		agentType = AgentTypeClaude
 	}
+	mode := spec.Mode
 	if mode == "" {
 		mode = ModeDefault
+	}
+
+	// Judged before the session exists rather than through SetModel/SetEffort
+	// afterwards: a session that is briefly listed with a model its agent cannot
+	// run is one a client can see, and one the kickoff message can race.
+	if !IsValidModel(agentType, spec.Model) {
+		return SessionMeta{}, fmt.Errorf("%w: model %q, agent %q", ErrModelNotAvailable, spec.Model, agentType)
+	}
+	if !IsValidEffort(agentType, spec.Effort) {
+		return SessionMeta{}, fmt.Errorf("%w: effort %q, agent %q", ErrEffortNotAvailable, spec.Effort, agentType)
 	}
 
 	s.mu.Lock()
@@ -194,6 +206,8 @@ func (s *FileStore) Create(ctx context.Context, sessionID string, agentType Agen
 		UpdatedAt: now,
 		AgentType: agentType,
 		Mode:      mode,
+		Model:     spec.Model,
+		Effort:    spec.Effort,
 	}
 
 	if err := s.insertLocked(session); err != nil {

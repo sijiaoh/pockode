@@ -139,12 +139,40 @@ identical.
 2. Acquire the work's worktree (`w.Worktree`; empty = main), so the session, its
    process, and cwd live in the worktree the work is bound to.
 3. Check if a session with the `sessionID` already exists. If not (fresh start):
-4. Create a new chat session, set its title (best-effort).
+4. Create a new chat session on the role's engine, set its title (best-effort).
 5. Send `BuildKickoffMessage`. On failure, the session is cleaned up (deleted).
 
 **Restart sequence** (session already exists, e.g. stopped work restarted):
 1–3 same as above, but the existing session is detected, so:
 4. Send `BuildRestartMessage` to the existing session instead of creating a new one.
+
+### Role Engine to Session Engine
+
+A session started for a work item takes its engine from the work's agent role
+([engine fields](data-model.md#engine-fields)):
+
+| Session field | Comes from |
+|---|---|
+| `agent_type` | `role.agent_type`, or `settings.DefaultAgentType` if the role set none |
+| `model` / `effort` | `role.model` / `role.effort` verbatim |
+| `mode` | `settings.DefaultMode` — always global, never the role |
+
+Mode is the one launch-time setting a role does not carry — it stayed global
+when the other three moved onto the role, so there is no `role.mode` to look
+for.
+
+All four go to `SessionStore.Create` as a `CreateSpec`, which checks the model
+and the effort against the agent type before the session exists. A rejection therefore means no session was made at
+all, and the error has a path all the way out: `WorkStarter` wraps it with the
+role's name and id, `Operations.StartWork` rolls the claim back, and the ws and
+MCP callers surface the text. That chain is what makes a role pinned to a
+retired model a reportable failure rather than a silent one — the role is named
+because that is where the value has to be fixed.
+
+**Only a fresh start reads the role.** The restart path leaves the existing
+session's engine alone, so editing a role changes what the *next* session gets,
+never a conversation already running; the chat's engine selector is what changes
+an existing one.
 
 > Source: `server/worktree/work_starter.go`.
 

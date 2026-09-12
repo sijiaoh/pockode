@@ -34,7 +34,8 @@ A note attached to a work item, used for progress reports and results.
 
 ### AgentRole
 
-Defines an agent persona with a system prompt and optional execution steps.
+Defines an agent persona with a system prompt, optional execution steps, and the
+engine its sessions run on.
 
 | Field       | Type       | Description                                  |
 | ----------- | ---------- | -------------------------------------------- |
@@ -42,6 +43,9 @@ Defines an agent persona with a system prompt and optional execution steps.
 | name        | string     | Display name (required)                      |
 | role_prompt | string     | System prompt for the agent                  |
 | steps       | []string   | Optional ordered list of step instructions   |
+| agent_type  | AgentType  | Agent to run on; empty = the global default  |
+| model       | string     | Agent-specific model id; empty = CLI decides |
+| effort      | string     | Agent-specific effort; empty = CLI decides   |
 | created_at  | time       | Creation timestamp                           |
 | updated_at  | time       | Last modification timestamp                  |
 
@@ -51,6 +55,33 @@ When `steps` is non-empty, tasks using this role execute in sequential steps:
 1. On task start, the agent receives step 1 instructions
 2. When the agent calls `step_done`, the task advances to the next step if more steps remain
 3. When the final step completes, `step_done` closes the work item
+
+#### Engine Fields
+
+The three fields are one choice, not three: [models and effort levels belong to
+an agent](../code/agent-integration.md#session-models) and no id is shared
+between agents, so a model is only meaningful next to the agent it was picked
+for. They are therefore stored together, validated together against the agent
+type the role ends up with, and `model`/`effort` are dropped whenever
+`agent_type` changes. A client switching agents sends `agent_type` alone and
+lets that reset happen server-side.
+
+**The two empties do not mean the same thing.** An empty `agent_type` defers to
+a value the user set and can go read — the global default agent type in
+Settings. An empty `model` or `effort` defers to the CLI. The UI names them
+*Follow settings* and *Auto* accordingly; one word for both would send users
+looking for a setting that governs the model.
+
+**An unavailable combination is an error, not a reset** (`ErrInvalidRole`, whole
+update rolled back), the opposite of `session.SetAgentType`, which quietly drops
+a model the new agent cannot run. The two differ because a role's engine is what
+the user is editing at that moment, while a session's is collateral damage from
+a switch. The consequence to design around: a role may hold a model the server
+has since retired, and that value is kept rather than rewritten to Auto, so
+validation must not make the role read-only — an update touching none of the
+three fields is not judged by them. The retired value surfaces where it actually
+bites, at [work start](workflow-engine.md#workstarter), in an error naming the
+role to fix.
 
 ## Hierarchy
 
@@ -209,7 +240,7 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | List               | `() → ([]AgentRole, error)`                            | Returns all roles                                                     |
 | Get                | `(id) → (AgentRole, bool, error)`                      | Returns a single role; bool indicates found                           |
 | Create             | `(ctx, AgentRole) → (AgentRole, error)`                | Validates name, assigns ID and timestamps                             |
-| Update             | `(ctx, id, UpdateFields) → error`                      | Partial update; name cannot be empty                                  |
+| Update             | `(ctx, id, UpdateFields) → error`                      | Partial update; name cannot be empty; engine fields validated together |
 | Delete             | `(ctx, id) → error`                                    | Removes the role                                                      |
 | ResetDefaults      | `(ctx) → error`                                        | Deletes all roles and recreates built-in defaults                     |
 | AddOnChangeListener| `(OnChangeListener)`                                   | Registers a listener for create/update/delete events                  |

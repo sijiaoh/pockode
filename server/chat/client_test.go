@@ -91,7 +91,7 @@ func TestClient_RequestsNeedingLiveProcess(t *testing.T) {
 			pm := newTestManager(t, store)
 			defer pm.Shutdown()
 
-			if _, err := store.Create(context.Background(), "sess", session.AgentTypeClaude, session.ModeDefault); err != nil {
+			if _, err := store.Create(context.Background(), "sess", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
 				t.Fatalf("Create session: %v", err)
 			}
 
@@ -143,7 +143,7 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 	pm := newTestManager(t, store)
 	defer pm.Shutdown()
 
-	if _, err := store.Create(context.Background(), "sess", session.AgentTypeClaude, session.ModeDefault); err != nil {
+	if _, err := store.Create(context.Background(), "sess", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
 		t.Fatalf("Create session: %v", err)
 	}
 

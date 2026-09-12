@@ -43,7 +43,7 @@ func TestFileStore_CorruptIndex_StartsEmptyAndKeepsBackup(t *testing.T) {
 	}
 
 	// The store must be usable afterwards.
-	if _, err := store.Create(ctx, "s2", "", ""); err != nil {
+	if _, err := store.Create(ctx, "s2", CreateSpec{}); err != nil {
 		t.Fatalf("Create after recovery failed: %v", err)
 	}
 	reopened, err := NewFileStore(dir)
@@ -65,7 +65,7 @@ func TestFileStore_GetHistory_PartialLine(t *testing.T) {
 	}
 
 	sessionID := "crashed-session"
-	if _, err := store.Create(ctx, sessionID, "", ""); err != nil {
+	if _, err := store.Create(ctx, sessionID, CreateSpec{}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 	if _, err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "hello"}); err != nil {
@@ -127,7 +127,7 @@ func TestFileStore_DamagedHistory_KeepsSeqsUnique(t *testing.T) {
 	}
 
 	sessionID := "damaged-session"
-	if _, err := store.Create(ctx, sessionID, "", ""); err != nil {
+	if _, err := store.Create(ctx, sessionID, CreateSpec{}); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 	if _, err := store.AppendToHistory(ctx, sessionID, map[string]string{"type": "text", "content": "kept"}); err != nil {

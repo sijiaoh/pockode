@@ -469,7 +469,7 @@ func TestStreamedNotificationsShareACompressionWindow(t *testing.T) {
 
 	sessionID := "01a06f8e-0000-7000-8000-000000000001"
 	wt := env.getMainWorktree()
-	if _, err := wt.SessionStore.Create(bgCtx, sessionID, session.AgentTypeClaude, session.ModeDefault); err != nil {
+	if _, err := wt.SessionStore.Create(bgCtx, sessionID, session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	c.call(2, "chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{SessionID: sessionID})

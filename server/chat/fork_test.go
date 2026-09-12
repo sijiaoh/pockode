@@ -67,7 +67,7 @@ func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.EventRecord)
 	t.Cleanup(pm.Shutdown)
 
 	ctx := context.Background()
-	if _, err := store.Create(ctx, "source", session.AgentTypeClaude, session.ModeYolo); err != nil {
+	if _, err := store.Create(ctx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo}); err != nil {
 		t.Fatalf("Create session: %v", err)
 	}
 	if err := store.Update(ctx, "source", "Fix the parser"); err != nil {

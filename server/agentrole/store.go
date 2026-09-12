@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/filestore"
+	"github.com/pockode/server/session"
 )
 
 // Store provides CRUD operations and change notifications for AgentRole items.
@@ -29,9 +30,12 @@ type Store interface {
 
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
 type UpdateFields struct {
-	Name       *string   `json:"name,omitempty"`
-	RolePrompt *string   `json:"role_prompt,omitempty"`
-	Steps      *[]string `json:"steps,omitempty"`
+	Name       *string            `json:"name,omitempty"`
+	RolePrompt *string            `json:"role_prompt,omitempty"`
+	Steps      *[]string          `json:"steps,omitempty"`
+	AgentType  *session.AgentType `json:"agent_type,omitempty"`
+	Model      *string            `json:"model,omitempty"`
+	Effort     *string            `json:"effort,omitempty"`
 }
 
 type indexData struct {
@@ -194,6 +198,9 @@ func (s *FileStore) Create(_ context.Context, r AgentRole) (AgentRole, error) {
 	if r.Name == "" {
 		return AgentRole{}, fmt.Errorf("%w: name is required", ErrInvalidRole)
 	}
+	if err := validateEngine(r); err != nil {
+		return AgentRole{}, err
+	}
 
 	s.rolesMu.Lock()
 
@@ -203,6 +210,9 @@ func (s *FileStore) Create(_ context.Context, r AgentRole) (AgentRole, error) {
 		Name:       r.Name,
 		RolePrompt: r.RolePrompt,
 		Steps:      r.Steps,
+		AgentType:  r.AgentType,
+		Model:      r.Model,
+		Effort:     r.Effort,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -247,6 +257,11 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) er
 	}
 	if fields.Steps != nil {
 		r.Steps = *fields.Steps
+	}
+	if err := applyEngineFields(r, fields); err != nil {
+		*r = prev
+		s.rolesMu.Unlock()
+		return err
 	}
 	r.UpdatedAt = now
 
@@ -417,6 +432,9 @@ func diffRoles(old, updated []AgentRole) []ChangeEvent {
 func roleChanged(a, b AgentRole) bool {
 	return a.Name != b.Name ||
 		a.RolePrompt != b.RolePrompt ||
+		a.AgentType != b.AgentType ||
+		a.Model != b.Model ||
+		a.Effort != b.Effort ||
 		!stepsEqual(a.Steps, b.Steps) ||
 		!a.UpdatedAt.Equal(b.UpdatedAt)
 }
@@ -431,6 +449,54 @@ func stepsEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// applyEngineFields writes the agent/model/effort trio onto a role, rejecting a
+// combination the agent could not run with. Unlike session.SetAgentType, an
+// invalid model or effort is an error rather than a silent reset: a role's
+// engine is a configuration the user is editing right now, so a value that
+// cannot be honoured has to be said out loud.
+//
+// The one reset that does happen is the same one sessions perform — changing the
+// agent type drops the model and effort, because neither survives a move to an
+// agent whose lists do not contain them. Doing it here means the UI sends one
+// field, not two requests.
+func applyEngineFields(r *AgentRole, fields UpdateFields) error {
+	if fields.AgentType == nil && fields.Model == nil && fields.Effort == nil {
+		// An update that does not touch the engine must not be judged by it. A
+		// role can legitimately hold a model the server has since retired — it is
+		// left there deliberately, so that the value the user chose is still what
+		// they see — and renaming such a role is not the moment to refuse.
+		return nil
+	}
+	if fields.AgentType != nil && *fields.AgentType != r.AgentType {
+		r.AgentType = *fields.AgentType
+		r.Model = ""
+		r.Effort = ""
+	}
+	if fields.Model != nil {
+		r.Model = *fields.Model
+	}
+	if fields.Effort != nil {
+		r.Effort = *fields.Effort
+	}
+
+	// Judged against the agent type the role ends up with, not the one it had:
+	// an update may set the agent and its model in a single call.
+	return validateEngine(*r)
+}
+
+func validateEngine(r AgentRole) error {
+	if r.AgentType != "" && !r.AgentType.IsValid() {
+		return fmt.Errorf("%w: unknown agent type %q", ErrInvalidRole, r.AgentType)
+	}
+	if !session.IsValidModel(r.AgentType, r.Model) {
+		return fmt.Errorf("%w: model %q is not available for agent %q", ErrInvalidRole, r.Model, r.AgentType)
+	}
+	if !session.IsValidEffort(r.AgentType, r.Effort) {
+		return fmt.Errorf("%w: effort %q is not available for agent %q", ErrInvalidRole, r.Effort, r.AgentType)
+	}
+	return nil
 }
 
 // --- Helpers ---

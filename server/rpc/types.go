@@ -530,6 +530,13 @@ type AgentRoleUpdateParams struct {
 	Name       *string   `json:"name,omitempty"`
 	RolePrompt *string   `json:"role_prompt,omitempty"`
 	Steps      *[]string `json:"steps,omitempty"`
+	// Changing agent_type clears model and effort, which are only valid next to
+	// the agent they were chosen for — so a client switching agents sends this
+	// field alone rather than three. Re-sending the agent a role already has
+	// changes nothing and leaves both in place.
+	AgentType *session.AgentType `json:"agent_type,omitempty"`
+	Model     *string            `json:"model,omitempty"`
+	Effort    *string            `json:"effort,omitempty"`
 }
 
 type AgentRoleDeleteParams struct {
