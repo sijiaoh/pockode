@@ -107,25 +107,25 @@ var defaultRoles = []struct {
 		Steps: []string{
 			"创建任务\n始终在最后追加文档维护任务(文档撰写者)和整体审查任务(审查者)",
 			"推进任务\n\n- 通过 MCP 启动任务，将自己置为 waiting 状态，等待完成汇报\n- 根据任务结束时的汇报，必要时调整任务。但不要触碰已经开始的任务\n- 始终确保最后是文档维护任务(文档撰写者)和整体审查任务(审查者)",
-			"/commit",
+			"commit",
 		},
 	},
 	{
 		Name:       "工程师",
 		RolePrompt: "世界级的工程师\n不commit",
-		Steps:      []string{"实现", "/hard-review"},
+		Steps:      []string{"实现", "审查并且修复到没有问题"},
 	},
 	{
 		Name: "UI设计师",
-		RolePrompt: "精通AI短剧以及视频制作软件的最佳实践\n" +
+		RolePrompt: "世界级UI设计师\n" +
 			"将设计方案在投稿step中投稿至story comment\n\n" +
 			"不commit",
-		Steps: []string{"设计", "/hard-review", "投稿"},
+		Steps: []string{"设计", "审查并且修复到没有问题", "投稿"},
 	},
 	{
 		Name:       "文档撰写者",
 		RolePrompt: "世界级的开发者\n不commit",
-		Steps:      []string{"维护文档", "/hard-review"},
+		Steps:      []string{"维护文档", "审查并且修复到没有问题"},
 	},
 	{
 		Name: "审查者",
@@ -133,7 +133,7 @@ var defaultRoles = []struct {
 			"只直接修复一些小问题，大问题写入审查结果提交\n" +
 			"将审查结果在投稿step中投稿至story comment\n\n" +
 			"不commit",
-		Steps: []string{"审查，小问题可以直接修复", "/hard-review", "投稿"},
+		Steps: []string{"审查，小问题可以直接修复", "审查并且修复到没有问题", "投稿"},
 	},
 }
 
