@@ -5,11 +5,13 @@ on:
     branches: [main]
     paths:
       - "site/static/install.ps1"
+      - "site/static/install.sh"
       - ".github/workflows/install.yml"
   pull_request:
     branches: [main]
     paths:
       - "site/static/install.ps1"
+      - "site/static/install.sh"
       - ".github/workflows/install.yml"
   workflow_dispatch:
 
@@ -203,3 +205,44 @@ jobs:
           if ($raw -notlike '*%USERPROFILE%\ci-canary*') {
             throw "the uninstall took other PATH entries with it: $raw"
           }
+
+  # install.sh cannot be run end to end anywhere here - it writes to
+  # /usr/local/bin with sudo - but the Windows shells it now has to recognise are
+  # reachable by faking uname, and that branch returns before it touches
+  # anything. What would otherwise break silently is the pattern itself: a
+  # MINGW64_NT-* uname falling through to "Unsupported OS", or worse, matching
+  # Linux and installing a binary the shell cannot run.
+  git-bash-branch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: install.sh points Git Bash, MSYS and Cygwin at install.ps1
+        run: |
+          mkdir -p fake-bin
+          # If the branch ever regresses into the Linux path, the script must not
+          # be able to actually download and sudo-install on the runner - it has
+          # to fail in a way the assertions below can name.
+          printf '#!/bin/sh\necho "curl must not be reached on a Windows shell" >&2\nexit 99\n' > fake-bin/curl
+          printf '#!/bin/sh\necho "sudo must not be reached on a Windows shell" >&2\nexit 99\n' > fake-bin/sudo
+          chmod +x fake-bin/curl fake-bin/sudo
+          for kernel in MINGW64_NT-10.0-26100 MINGW32_NT-6.2 MSYS_NT-10.0-19045 CYGWIN_NT-10.0; do
+            printf '#!/bin/sh\necho %s\n' "$kernel" > fake-bin/uname
+            chmod +x fake-bin/uname
+            set +e
+            output=$(PATH="$PWD/fake-bin:$PATH" sh site/static/install.sh 2>&1)
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              echo "$kernel: install.sh should not report success on Windows"; exit 1
+            fi
+            case "$output" in
+              *install.ps1*) ;;
+              *) echo "$kernel: the message does not point at install.ps1: $output"; exit 1 ;;
+            esac
+            case "$output" in
+              *Unsupported*) echo "$kernel: fell through to the unsupported-OS branch: $output"; exit 1 ;;
+            esac
+          done
