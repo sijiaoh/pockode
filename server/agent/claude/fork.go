@@ -139,7 +139,7 @@ func carriableProviderSession(opts agent.ForkOptions, log *slog.Logger) (provide
 // kept history normally ends on the agent's turn and the replay stops where the
 // transcript does. The mismatch survives wherever the record before the anchor
 // names no message either — two prompts sent back to back while the agent
-// worked, or a message Pockode wrote itself, a work card say, sitting in front
+// worked, or a message Pockode wrote itself, a work event say, sitting in front
 // of the anchor.
 //
 // The message is kept whole. One CLI message can become several Pockode records

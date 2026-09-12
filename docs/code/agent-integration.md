@@ -425,7 +425,7 @@ and its companions are absent from `claude --help`, so their semantics come from
 running them, not from reading it. Which version renamed it from
 `Task` was not established and does not matter — history recorded by older CLIs
 still says `Task`, so both names have to keep working
-([frontend-state.md](frontend-state.md#task-groups)).
+([frontend-state.md](frontend-state.md#task-parts)).
 
 The versions are written down because these findings expire. When a mapping stops
 working, the useful question is which version changed what, and the way to answer
@@ -665,7 +665,7 @@ the cut means*), so the kept history normally ends on the agent's turn and the
 replay stops exactly where the transcript does. **Normally, not always** — the
 mismatch survives wherever the record *before* the anchor also names no message:
 two prompts sent back to back while the agent worked, or a message Pockode wrote
-itself — a work card, say — sitting in front of the anchor. Do not read the
+itself — a work event, say — sitting in front of the anchor. Do not read the
 change as having removed it.
 
 Two situations carry nothing, both reported the same honest way —

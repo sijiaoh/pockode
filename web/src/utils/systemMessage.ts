@@ -1,79 +1,55 @@
-import type { SystemMessageMeta, WorkTimelineEntry } from "../types/message";
+import type { SystemMessageMeta } from "../types/message";
+import { formatStepProgress, recordedStepProgress } from "./workSteps";
 
-// subtype → action label. Where values come from: the backend system message
+// subtype → action word. Where values come from: the backend system message
 // subtypes in server/work/prompt.go (kickoff, restart, ...).
 const SYSTEM_MESSAGE_LABELS: Record<string, string> = {
-	kickoff: "Kickoff",
-	restart: "Restart",
-	auto_continue: "Auto-continue",
+	kickoff: "Started",
+	restart: "Restarted",
+	auto_continue: "Continued",
+	// Only reached when the message recorded no step; otherwise the step itself
+	// is the action word.
 	step_advance: "Next step",
-	reopen: "Reopen",
-	child_done: "Child task done",
+	reopen: "Reopened",
+	child_done: "Subtask done",
 };
 
-function baseLabel(subtype?: string): string {
-	return (subtype && SYSTEM_MESSAGE_LABELS[subtype]) || "System Message";
+/** How one work event reads in the stream. */
+export interface WorkEventWording {
+	/** What happened, stated as a finished fact — never a live status. */
+	label: string;
+	/** The secondary line, empty when repeating a title would say nothing. */
+	summary: string;
 }
 
-/** Label for a standalone system banner (history without a work card). */
-export function systemActionLabel(
-	subtype?: string,
-	meta?: SystemMessageMeta,
-): string {
-	const base = baseLabel(subtype);
+/**
+ * Both halves of a work event's collapsed line, decided together: which title
+ * belongs on the line depends on the same subtype the action word does.
+ */
+export function workEventWording(
+	subtype: string | undefined,
+	meta: SystemMessageMeta | undefined,
+): WorkEventWording {
+	const label = (subtype && SYSTEM_MESSAGE_LABELS[subtype]) || "System Message";
+
 	if (subtype === "step_advance" && meta?.step) {
-		return `${base} (Step ${meta.step.current}/${meta.step.total})`;
+		// Through the same formatter as everywhere else, so step wording has one
+		// source. The action word *is* the step here: reaching it is the event.
+		return {
+			label: formatStepProgress(
+				recordedStepProgress(meta.step.current, meta.step.total),
+			),
+			summary: meta.title ?? "",
+		};
 	}
-	return base;
-}
-
-/**
- * Label for one row of a work card's timeline. Shorter than the banner's: the
- * card header already names the work, so a row only has to say what happened.
- */
-export function timelineEntryLabel(entry: WorkTimelineEntry): string {
-	const base = baseLabel(entry.subtype);
-	if (entry.subtype === "step_advance" && entry.step) {
-		return `${base} ${entry.step.current}`;
+	// This message went to the parent but reports on the child; the parent's own
+	// title is noise next to it.
+	if (subtype === "child_done") {
+		return { label, summary: meta?.child?.title ?? "" };
 	}
-	if (entry.subtype === "child_done" && entry.child) {
-		return `${base}: ${entry.child.title}`;
-	}
-	return base;
-}
+	// Auto-continues repeat, and repeating one title is the least informative
+	// line there is. Left blank so they stay visually weightless.
+	if (subtype === "auto_continue") return { label, summary: "" };
 
-/**
- * One timeline row. Usually one entry, but a consecutive run of auto-continues
- * collapses into a single counted row: it is the only subtype that repeats in
- * practice, and a stack of identical "Auto-continue" rows is the noisiest,
- * least informative part of the timeline.
- */
-export interface TimelineGroup {
-	/** The first entry's id — stable across appends, so React keys hold. */
-	id: string;
-	entries: WorkTimelineEntry[];
-}
-
-export function groupTimelineEntries(
-	entries: WorkTimelineEntry[],
-): TimelineGroup[] {
-	const groups: TimelineGroup[] = [];
-	for (const entry of entries) {
-		const last = groups[groups.length - 1];
-		if (
-			entry.subtype === "auto_continue" &&
-			last?.entries[0].subtype === "auto_continue"
-		) {
-			last.entries.push(entry);
-			continue;
-		}
-		groups.push({ id: entry.id, entries: [entry] });
-	}
-	return groups;
-}
-
-/** Group label, with a repeat count when the run holds more than one entry. */
-export function timelineGroupLabel(group: TimelineGroup): string {
-	const label = timelineEntryLabel(group.entries[0]);
-	return group.entries.length > 1 ? `${label} ×${group.entries.length}` : label;
+	return { label, summary: meta?.title ?? "" };
 }

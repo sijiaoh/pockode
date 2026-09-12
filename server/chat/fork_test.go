@@ -254,7 +254,7 @@ func TestFork_UserMessageAnchorStopsBeforeIt(t *testing.T) {
 }
 
 // TestFork_SystemMessageAnchorIsKept: EventTypeMessage also carries Pockode's own
-// annotations — a work card, a step advance — and those are not something the
+// annotations — a work kickoff, a step advance — and those are not something the
 // user said, so the "return to before they said it" rule does not apply. The
 // server decides this from the record's origin rather than trusting a client not
 // to anchor on one.

@@ -387,7 +387,7 @@ func choiceToString(choice agent.PermissionChoice) string {
 // isUserMessageRecord reports whether a history record is a message the user
 // sent, as opposed to one Pockode wrote itself.
 //
-// EventTypeMessage carries both — a typed prompt and a work card or step
+// EventTypeMessage carries both — a typed prompt and a work kickoff or step
 // advance — and only Origin tells them apart. Today's clients offer no fork
 // action on Pockode's own annotations, but the rule about where a fork cuts is
 // this function's to state, not something to infer from what a client happens

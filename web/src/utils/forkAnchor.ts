@@ -29,9 +29,7 @@ import { hasMessageActions } from "./messageActions";
  * the transcript: a user message that opens the session has nothing behind it
  * to keep. `resolveForkAnchor` is where that is decided.
  */
-export function isForkableMessage(
-	message: Message,
-): message is UserMessage | AssistantMessage {
+export function isForkableMessage(message: Message): boolean {
 	if (!hasMessageActions(message)) return false;
 	if (message.anchorSeq === undefined) return false;
 	// Only an assistant turn can be holding one: the requests are the agent's.
@@ -103,8 +101,8 @@ export function resolveForkAnchor(
 
 	const message = messages[index];
 	if (!isForkableMessage(message)) return null;
-	// Narrowed but not proven: `isForkableMessage` checks this too, and the type
-	// system cannot carry that across the call.
+	// Checked but not proven: `isForkableMessage` asks the same question, and the
+	// type system cannot carry the answer across the call.
 	const anchorSeq = message.anchorSeq;
 	if (anchorSeq === undefined) return null;
 

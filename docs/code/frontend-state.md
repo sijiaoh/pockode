@@ -212,11 +212,12 @@ ServerNotification (snake_case)
 
 ### Message Variants
 
-`Message` is wider than the two roles a chat obviously needs. Alongside
-`UserMessage` and `AssistantMessage` it holds `WorkCardMessage` and
-`StepDividerMessage`, which render a work item's progress inline in the
-transcript rather than in a panel beside it (see
-[work-system.md](work-system.md#rendering-in-the-transcript) for why).
+`Message` is exactly `UserMessage | AssistantMessage`. Pockode's own annotations
+— the prompts the Work engine sends — are not a third variant: they are user
+messages tagged `source: "system"`, rendered as a collapsed line instead of a
+bubble (see
+[work-system.md](work-system.md#rendering-in-the-transcript) for why the
+transcript holds no aggregate of them).
 
 The consequence to know before touching the reducer: **`status` is not a common
 field.** Only assistant messages carry one, so anything asking about it has to
@@ -267,15 +268,17 @@ a fork of the joined message has to cut. The older half's anchor stands in only
 when the newer one never got one, a message without an anchor being one the user
 cannot fork from at all.
 
-### Task Groups
+### Task Parts
 
 The subagent tool (named `Agent` today, `Task` in older CLIs and in history
-recorded by them) is the one tool whose calls do not each get their own part.
-Every Task of one turn folds into a single `task_group` part, anchored where the
-first of them landed, because a turn can spawn a dozen and one strip per call
-buries the conversation they belong to.
+recorded by them) gets a part of its own — `{ type: "task" }` — appended where
+its `tool_call` landed, so a Task reads at the point in the turn that spawned
+it, in among the text it was spawned between. Nothing groups them: a summary
+across several Tasks can only restate what the individual rows already say, and
+it costs the one thing a transcript is for, which is knowing when each thing
+happened.
 
-The part holds each Task's **current state** — `running` / `done` / `failed` /
+The part holds the Task's **current state** — `running` / `done` / `failed` /
 `interrupted` — and the reducer is its only author; the UI renders that state
 and infers nothing of its own. Four rules keep it honest:
 
