@@ -38,7 +38,7 @@ Your powerful dev machine sits at home. With Pockode, you can use it from anywhe
 # Install
 curl -fsSL https://pockode.com/install.sh | sh
 
-# Run (on your dev machine)
+# Run (on your dev machine, in your project directory)
 pockode -auth-token YOUR_PASSWORD
 ```
 
@@ -48,11 +48,11 @@ pockode -auth-token YOUR_PASSWORD
 # Install
 irm https://pockode.com/install.ps1 | iex
 
-# Run (from your project directory)
+# Run (on your dev machine, in your project directory)
 pockode -auth-token YOUR_PASSWORD
 ```
 
-No administrator rights needed. Open a new terminal after installing so `PATH` picks it up.
+The Windows installer needs no administrator rights; open a new terminal afterwards so `PATH` picks it up.
 
 Scan the QR code with your phone. Done.
 

@@ -63,15 +63,25 @@ deliberate difference from `install.sh` and its `sudo` write to `/usr/local/bin`
 
 Re-running the same command upgrades in place.
 
-Piping into `iex` cannot pass arguments, so pinning a version and uninstalling go
+Piping into `iex` cannot pass arguments, so anything but a default install goes
 through a script block instead:
 
 ```powershell
 & ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -Version v0.12.1
+& ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -InstallDir D:\tools\pockode
+& ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -Url https://mirror.example/pockode-windows-amd64.exe
 & ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -Uninstall
 ```
 
-Uninstalling removes `pockode.exe` and the `PATH` entry. It deliberately leaves
+`-Url` takes the binary from somewhere other than a GitHub release — a mirror, or
+a build that has not been released yet. `-InstallDir` has to be repeated on every
+later run, `-Uninstall` included: the script only knows about the directory it is
+given. Leave it off and an upgrade installs a second copy in the default location
+while `pockode` keeps resolving to the first one — the custom directory went onto
+`PATH` earlier, so it still wins.
+
+Uninstalling removes `pockode.exe` and the `PATH` entry, plus the install
+directory itself if nothing else is left in it. It deliberately leaves
 the `.pockode` directory in each of your projects alone — sessions, settings and
 work items stay where they are.
 
