@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { Message } from "../types/message";
 import { hasMessageActions } from "./messageActions";
 
 describe("hasMessageActions", () => {
@@ -51,7 +50,7 @@ describe("hasMessageActions", () => {
 		).toBe(false);
 	});
 
-	it("gives no row to Pockode's own annotations", () => {
+	it("gives no row to a system-driven message", () => {
 		expect(
 			hasMessageActions({
 				id: "u1",
@@ -62,14 +61,5 @@ describe("hasMessageActions", () => {
 				createdAt: new Date(),
 			}),
 		).toBe(false);
-
-		const workCard: Message = {
-			id: "w1",
-			role: "work",
-			workId: "work-1",
-			entries: [],
-			createdAt: new Date(),
-		};
-		expect(hasMessageActions(workCard)).toBe(false);
 	});
 });

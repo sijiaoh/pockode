@@ -1117,81 +1117,10 @@ describe("ChatPanel", () => {
 		});
 	});
 
-	// The top bar is the authoritative view of whether the task is still alive:
-	// it reads the live work store, never the transcript, so an interrupt shows up
-	// here immediately even in a session the user never scrolled up in.
-	describe("linked work status", () => {
-		it("shows the work status and step alongside the title", async () => {
-			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
-
-			render(<ChatPanel {...defaultProps} />);
-			await waitForHistoryLoad();
-
-			expect(
-				screen.getByRole("button", {
-					name: "In Progress, Ship the status bar, Step 2/3",
-				}),
-			).toBeInTheDocument();
-		});
-
-		it("follows the work store when the work is stopped", async () => {
-			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
-
-			render(<ChatPanel {...defaultProps} />);
-			await waitForHistoryLoad();
-
-			setWorkStatus("stopped");
-
-			expect(
-				screen.getByRole("button", { name: /^Stopped, Ship the status bar/ }),
-			).toBeInTheDocument();
-		});
-
-		it("omits the step when the role defines none", async () => {
-			seedWork({ status: "in_progress", current_step: 0 });
-
-			render(<ChatPanel {...defaultProps} />);
-			await waitForHistoryLoad();
-
-			const button = screen.getByRole("button", {
-				name: /Ship the status bar/,
-			});
-			expect(button).toBeInTheDocument();
-			expect(button).not.toHaveTextContent(/Step/);
-		});
-
-		it("opens the work detail when clicked", async () => {
-			const user = userEvent.setup();
-			const onOpenWorkDetail = vi.fn();
-			seedWork({ status: "waiting", current_step: 0 }, ["a", "b"]);
-
-			render(
-				<ChatPanel {...defaultProps} onOpenWorkDetail={onOpenWorkDetail} />,
-			);
-			await waitForHistoryLoad();
-
-			await user.click(
-				screen.getByRole("button", { name: /Ship the status bar/ }),
-			);
-
-			expect(onOpenWorkDetail).toHaveBeenCalledWith("work-1");
-		});
-
-		it("shows nothing when no work is linked to the session", async () => {
-			render(<ChatPanel {...defaultProps} />);
-			await waitForHistoryLoad();
-
-			expect(
-				screen.queryByRole("button", { name: /Ship the status bar/ }),
-			).not.toBeInTheDocument();
-		});
-	});
-
-	// A work's life and its chat process are two separate clocks. The bug this
-	// guards against is reading one off the other: an interrupt stops the work
-	// without emitting any message, so a transcript that infers "still going"
-	// from its last banner is lying, and it lies exactly when the user most needs
-	// the truth.
+	// A work's life and its chat process are two separate clocks, and the chat
+	// now reads neither off the other: an interrupt stops the work without
+	// emitting any message, so anything in the transcript claiming to know the
+	// work's state would be lying exactly when the user most needs the truth.
 	describe("when a work and its chat process end at different times", () => {
 		const emit = (...notifications: ServerNotification[]) => {
 			act(() => {
@@ -1212,43 +1141,51 @@ describe("ChatPanel", () => {
 			},
 		};
 
-		const card = (name: RegExp) => screen.getByRole("button", { name });
+		// The only way into the work from the chat now that the top bar is gone,
+		// so the whole path from the event line to the host has to hold.
+		it("opens the work detail from the event it happened to", async () => {
+			const user = userEvent.setup();
+			const onOpenWorkDetail = vi.fn();
+			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+			render(
+				<ChatPanel {...defaultProps} onOpenWorkDetail={onOpenWorkDetail} />,
+			);
+			await waitForHistoryLoad();
 
-		it("states the interrupt on the card, the strip and the turn, each in its own terms", async () => {
+			emit(autoContinue);
+
+			await user.click(screen.getByText("Pockode · Continued"));
+			await user.click(screen.getByRole("button", { name: "Details" }));
+
+			expect(onOpenWorkDetail).toHaveBeenCalledWith("work-1");
+		});
+
+		it("leaves the work's status out of the chat entirely", async () => {
 			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			// The nudge that used to be the last thing in the transcript, reading
-			// like "I just started it up again".
 			emit(autoContinue);
 			// The user interrupts before the agent writes a word.
 			emit({ type: "interrupted" });
 
 			// The turn speaks only for the agent's output.
 			expect(screen.getByText("Interrupted")).toBeInTheDocument();
-			// The server takes a settle delay before it stops the work, and until it
-			// does, neither card nor strip pretends to know. Nothing spins meanwhile:
-			// in_progress is a resting state here, not a turn in flight.
-			expect(card(/^Task, In Progress, Step 2\/3/)).toBeInTheDocument();
+			// The event says what happened, in the past tense, and stops there.
+			expect(screen.getByText("Pockode · Continued")).toBeInTheDocument();
 			expect(
 				screen.queryByRole("status", { name: "Loading" }),
 			).not.toBeInTheDocument();
 
+			// The work stopping changes nothing on screen: no element was reporting
+			// its status to begin with.
 			setWorkStatus("stopped");
 
-			expect(card(/^Task, Stopped, Step 2\/3/)).toBeInTheDocument();
+			expect(screen.getByText("Pockode · Continued")).toBeInTheDocument();
+			expect(screen.queryByText(/Stopped/)).not.toBeInTheDocument();
 			expect(
-				screen.getByRole("button", { name: "Restart" }),
-			).toBeInTheDocument();
-			expect(
-				screen.getByRole("button", { name: /^Stopped, Ship the status bar/ }),
-			).toBeInTheDocument();
-			// The auto-continue is history now, folded into the card rather than
-			// left at the tail of the transcript speaking for the task.
-			expect(screen.getAllByRole("button", { name: /^Task, / })).toHaveLength(
-				1,
-			);
+				screen.queryByRole("button", { name: "Restart" }),
+			).not.toBeInTheDocument();
 			expect(screen.getByText("Interrupted")).toBeInTheDocument();
 		});
 
@@ -1261,7 +1198,6 @@ describe("ChatPanel", () => {
 
 			setWorkStatus("closed");
 
-			expect(card(/^Task, Closed, 3\/3/)).toBeInTheDocument();
 			// The turn is untouched by the work reaching its end: still streaming,
 			// still spinning, still showing what the agent wrote.
 			expect(screen.getByText("wrapping up")).toBeInTheDocument();

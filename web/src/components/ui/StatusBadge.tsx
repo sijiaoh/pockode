@@ -9,16 +9,6 @@ export const statusLabels: Record<WorkStatus, string> = {
 	closed: "Closed",
 };
 
-/** Dot fill for compact spots where a full chip does not fit. */
-export const statusDotStyles: Record<WorkStatus, string> = {
-	open: "bg-th-text-muted",
-	in_progress: "bg-th-accent",
-	waiting: "bg-th-accent",
-	needs_input: "bg-th-warning",
-	stopped: "bg-th-error",
-	closed: "bg-th-text-muted",
-};
-
 const styles: Record<WorkStatus, string> = {
 	open: "bg-th-bg-tertiary text-th-text-muted",
 	in_progress: "bg-th-accent/10 text-th-accent",

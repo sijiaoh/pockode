@@ -13,8 +13,8 @@ function partPreview(part: ContentPart): string {
 			return part.message;
 		case "tool_call":
 			return part.tool.name;
-		case "task_group":
-			return part.tasks[0]?.description ?? "";
+		case "task":
+			return part.task.description;
 		case "permission_request":
 			return part.request.toolName;
 		case "ask_user_question":
@@ -39,8 +39,6 @@ export function messagePreview(message: Message): string {
 	const raw =
 		message.role === "user"
 			? message.content
-			: message.role === "assistant"
-				? message.parts.map(partPreview).filter(Boolean).join(" ")
-				: "";
+			: message.parts.map(partPreview).filter(Boolean).join(" ");
 	return raw.replace(/\s+/g, " ").trim();
 }

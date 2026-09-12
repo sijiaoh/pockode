@@ -117,11 +117,10 @@ files that say which is which: `utils/messageActions.ts` answers the first,
 
 **1. Does this message have an action row?** (`hasMessageActions`)
 
-- Work cards (`role: "work"`), step dividers (`role: "step_divider"`), and
-  system-origin user messages (`source === "system"`, which already render as a
-  collapsed banner rather than a bubble) get none. They are not conversation
-  turns; they are Pockode's own annotations, and they have no bubble to hang a
-  row under.
+- System-origin messages (`source === "system"`, the Work engine's prompts,
+  which render as a collapsed one-line event rather than a bubble) get none.
+  They are not conversation turns; they are Pockode's own annotations, and they
+  have no bubble to hang a row under.
 - A message still `sending` or `streaming` gets none either — it is not yet a
   turn, and a row appearing mid-word would make the line twitch as the agent
   types.
@@ -317,8 +316,8 @@ Three things to be exact about:
 Shown in exactly two places, both on the child.
 
 **Top of the child's transcript** — `ForkOriginBanner`, the first item in
-`MessageList`, in the low-contrast hairline style of `StepDividerItem` and
-`SystemMessageItem`, with a `GitBranch` icon:
+`MessageList`, in the low-contrast hairline style of the collapsed work event
+line (`WorkEventItem`), with a `GitBranch` icon:
 
 ```
 Forked from "Refactor the session store"
@@ -524,9 +523,12 @@ rule locks the agent half of its engine selector, and that is the behaviour we
 want: the inherited transcript was produced by that agent. Model and effort stay
 changeable, as on any activated session. `unread` and `needs_input` start false.
 
-A fork of a session that belongs to a work is **not** linked to that work. A
-work owns one session, and a second one claiming the same work would make
-`LinkedWorkButton`'s lookup ambiguous. The fork is an ordinary session.
+A fork of a session that belongs to a work is **not** linked to that work. The
+link is a single field on the work (`Work.session_id`), so a second session
+claiming the same work has nowhere to be recorded — and everything that goes
+from a work to *its* session would have two candidates and no rule for picking
+one: the work list's Chat shortcut, and `AutoResumer`, which sends the next
+nudge to that id. The fork is an ordinary session.
 
 **3. Who can be forked at all.** The transcript has to know, before it draws a
 single action row, whether this session's agent can follow a fork — and it must

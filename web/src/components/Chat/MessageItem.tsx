@@ -3,7 +3,8 @@ import {
 	Check,
 	ChevronRight,
 	CircleHelp,
-	Workflow,
+	ExternalLink,
+	ListTodo,
 	X,
 } from "lucide-react";
 import { memo, useMemo, useState } from "react";
@@ -19,17 +20,12 @@ import type {
 	PermissionUpdate,
 	PermissionUpdateDestination,
 	SystemMessageMeta,
-	SystemMessageStep,
 	ToolCall,
 } from "../../types/message";
 import { isForkableMessage } from "../../utils/forkAnchor";
 import { hasMessageActions } from "../../utils/messageActions";
 import { formatFilePath } from "../../utils/path";
-import { systemActionLabel } from "../../utils/systemMessage";
-import {
-	formatStepProgress,
-	recordedStepProgress,
-} from "../../utils/workSteps";
+import { workEventWording } from "../../utils/systemMessage";
 import {
 	CollapsibleBody,
 	ScrollableContent,
@@ -39,9 +35,8 @@ import {
 import AskUserQuestionItem from "./AskUserQuestionItem";
 import { MarkdownContent } from "./MarkdownContent";
 import MessageActions from "./MessageActions";
-import TaskGroupItem from "./TaskGroupItem";
+import TaskItem from "./TaskItem";
 import ToolResultDisplay from "./ToolResultDisplay";
-import WorkCardItem from "./WorkCardItem";
 
 interface ToolCallItemProps {
 	tool: ToolCall;
@@ -165,20 +160,30 @@ function SystemItem({ content }: SystemItemProps) {
 	);
 }
 
-interface SystemMessageItemProps {
+interface WorkEventItemProps {
 	content: string;
 	subtype?: string;
 	meta?: SystemMessageMeta;
+	onOpenWorkDetail?: (workId: string) => void;
 }
 
-// SystemMessageItem renders a Pockode system-automation message as a collapsed,
-// low-contrast banner (not a chat bubble). Only reachable for history recorded
-// before meta.work_id existed; anything newer is folded into a WorkCardItem.
-// Visual pattern mirrors SystemItem for consistency.
-function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
+/**
+ * One thing that happened to a Pockode work, at the point in the stream where
+ * it happened. It says only that — no status, no history, no live data: the
+ * event is over, and what the work is doing now lives behind Details.
+ */
+function WorkEventItem({
+	content,
+	subtype,
+	meta,
+	onOpenWorkDetail,
+}: WorkEventItemProps) {
 	const [expanded, setExpanded] = useState(false);
-	const actionLabel = systemActionLabel(subtype, meta);
-	const summary = meta?.title;
+	const { label, summary } = workEventWording(subtype, meta);
+	const workId = meta?.work_id;
+	// The work's own title, even where the collapsed line names something else
+	// (a finished child): expanded, it sits next to the link into that work.
+	const title = meta?.title;
 
 	return (
 		<div className="rounded bg-th-bg-secondary text-xs">
@@ -191,8 +196,8 @@ function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
 				<ChevronRight
 					className={`size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
 				/>
-				<Workflow className="size-3 shrink-0 text-th-text-muted" />
-				<span className="shrink-0 text-th-text-muted">{`Pockode · ${actionLabel}`}</span>
+				<ListTodo className="size-3 shrink-0 text-th-text-muted" />
+				<span className="shrink-0 text-th-text-muted">{`Pockode · ${label}`}</span>
 				{summary && (
 					<span className="min-w-0 truncate text-th-text-muted opacity-70">
 						{summary}
@@ -200,29 +205,27 @@ function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
 				)}
 			</button>
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+				<ScrollableContent className="max-h-[60vh] space-y-2 overflow-auto border-t border-th-border p-2">
+					{(title || (workId && onOpenWorkDetail)) && (
+						<div className="flex items-start gap-2">
+							<p className="min-w-0 flex-1 break-words text-sm text-th-text-primary">
+								{title}
+							</p>
+							{workId && onOpenWorkDetail && (
+								<button
+									type="button"
+									onClick={() => onOpenWorkDetail(workId)}
+									className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-th-accent hover:bg-th-overlay-hover"
+								>
+									<ExternalLink className="size-3" />
+									Details
+								</button>
+							)}
+						</div>
+					)}
 					<MarkdownContent content={content} />
 				</ScrollableContent>
 			</CollapsibleBody>
-		</div>
-	);
-}
-
-interface StepDividerItemProps {
-	step: SystemMessageStep;
-}
-
-// A hairline saying only "the work moved to a new step here". It keeps the
-// transcript's answer to "which output belongs to which step", which the old
-// per-step banner used to carry, without restating any status.
-function StepDividerItem({ step }: StepDividerItemProps) {
-	return (
-		<div className="flex items-center gap-2">
-			<span className="h-px flex-1 bg-th-border" />
-			<span className="shrink-0 text-xs text-th-text-muted">
-				{formatStepProgress(recordedStepProgress(step.current, step.total))}
-			</span>
-			<span className="h-px flex-1 bg-th-border" />
 		</div>
 	);
 }
@@ -566,8 +569,8 @@ function ContentPartItem({
 	if (part.type === "command_output") {
 		return <CommandOutputItem content={part.content} />;
 	}
-	if (part.type === "task_group") {
-		return <TaskGroupItem tasks={part.tasks} />;
+	if (part.type === "task") {
+		return <TaskItem task={part.task} />;
 	}
 	return <ToolCallItem tool={part.tool} />;
 }
@@ -643,24 +646,15 @@ const MessageItem = memo(function MessageItem({
 		/>
 	) : null;
 
-	if (message.role === "work") {
-		return (
-			<WorkCardItem message={message} onOpenWorkDetail={onOpenWorkDetail} />
-		);
-	}
-
-	if (message.role === "step_divider") {
-		return <StepDividerItem step={message.step} />;
-	}
-
 	if (message.role === "user") {
-		// System-driven messages render as a collapsed banner instead of a bubble.
+		// System-driven messages render as a collapsed event line, not a bubble.
 		if (message.source === "system") {
 			return (
-				<SystemMessageItem
+				<WorkEventItem
 					content={message.content}
 					subtype={message.subtype}
 					meta={message.meta}
+					onOpenWorkDetail={onOpenWorkDetail}
 				/>
 			);
 		}
@@ -698,11 +692,8 @@ const MessageItem = memo(function MessageItem({
 											: part.type === "tool_call"
 												? // Index suffix: Claude Code resends tool_call after permission approval
 													`${part.tool.id}-${index}`
-												: part.type === "task_group"
-													? // Keyed on the anchor Task so a newly spawned one grows
-														// the group instead of remounting it and dropping what
-														// the user had expanded.
-														part.tasks[0].toolUseId
+												: part.type === "task"
+													? part.task.toolUseId
 													: `${part.type}-${index}`;
 								return (
 									<ContentPartItem

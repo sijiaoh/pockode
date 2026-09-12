@@ -4,7 +4,7 @@ How chat keeps an unanswered `AskUserQuestion` reachable after it has scrolled a
 
 ## The problem
 
-`AskUserQuestion` renders as a card in the message stream. An agent usually keeps producing output after asking (tool calls, text, work cards), and the list auto-scrolls while the user sits at the bottom, so the card is pushed out of view within seconds. The user loses the one signal that matters — *there is a question waiting on me* — and the agent looks hung when it is in fact blocked on an answer.
+`AskUserQuestion` renders as a card in the message stream. An agent usually keeps producing output after asking (tool calls, text, work events), and the list auto-scrolls while the user sits at the bottom, so the card is pushed out of view within seconds. The user loses the one signal that matters — *there is a question waiting on me* — and the agent looks hung when it is in fact blocked on an answer.
 
 ## What it is
 

@@ -1,88 +1,48 @@
 import { describe, expect, it } from "vitest";
-import type { WorkTimelineEntry } from "../types/message";
-import {
-	groupTimelineEntries,
-	systemActionLabel,
-	timelineEntryLabel,
-	timelineGroupLabel,
-} from "./systemMessage";
+import { workEventWording } from "./systemMessage";
 
-const entry = (
-	id: string,
-	subtype: string,
-	extra: Partial<WorkTimelineEntry> = {},
-): WorkTimelineEntry => ({ id, subtype, content: "", ...extra });
-
-describe("systemActionLabel", () => {
-	it("names the subtype", () => {
-		expect(systemActionLabel("kickoff")).toBe("Kickoff");
+describe("workEventWording", () => {
+	it("names what happened, in the past tense", () => {
+		expect(workEventWording("kickoff", { title: "Ship it" })).toEqual({
+			label: "Started",
+			summary: "Ship it",
+		});
 	});
 
-	it("spells out the step for a step advance", () => {
+	it("makes the step itself the action word", () => {
 		expect(
-			systemActionLabel("step_advance", { step: { current: 2, total: 3 } }),
-		).toBe("Next step (Step 2/3)");
+			workEventWording("step_advance", {
+				title: "Ship it",
+				step: { current: 2, total: 3 },
+			}),
+		).toEqual({ label: "Step 2/3", summary: "Ship it" });
+	});
+
+	it("falls back when a step advance recorded no step", () => {
+		expect(workEventWording("step_advance", { title: "Ship it" }).label).toBe(
+			"Next step",
+		);
+	});
+
+	it("names the child rather than the work the message went to", () => {
+		expect(
+			workEventWording("child_done", {
+				title: "Parent story",
+				child: { id: "c1", title: "Sub task" },
+			}),
+		).toEqual({ label: "Subtask done", summary: "Sub task" });
+	});
+
+	it("leaves an auto-continue's summary blank", () => {
+		expect(workEventWording("auto_continue", { title: "Ship it" })).toEqual({
+			label: "Continued",
+			summary: "",
+		});
 	});
 
 	it("falls back for an unknown subtype", () => {
-		expect(systemActionLabel("something_new")).toBe("System Message");
-	});
-});
-
-describe("timelineEntryLabel", () => {
-	it("numbers a step advance", () => {
-		expect(
-			timelineEntryLabel(
-				entry("1", "step_advance", { step: { current: 2, total: 3 } }),
-			),
-		).toBe("Next step 2");
-	});
-
-	it("names the child that finished", () => {
-		expect(
-			timelineEntryLabel(
-				entry("1", "child_done", { child: { id: "c", title: "Sub task" } }),
-			),
-		).toBe("Child task done: Sub task");
-	});
-});
-
-describe("groupTimelineEntries", () => {
-	it("collapses a run of auto-continues into one counted row", () => {
-		const groups = groupTimelineEntries([
-			entry("1", "kickoff"),
-			entry("2", "auto_continue"),
-			entry("3", "auto_continue"),
-			entry("4", "auto_continue"),
-			entry("5", "step_advance", { step: { current: 2, total: 3 } }),
-		]);
-
-		expect(groups.map(timelineGroupLabel)).toEqual([
-			"Kickoff",
-			"Auto-continue ×3",
-			"Next step 2",
-		]);
-	});
-
-	it("keeps runs separate when something happens between them", () => {
-		const groups = groupTimelineEntries([
-			entry("1", "auto_continue"),
-			entry("2", "reopen"),
-			entry("3", "auto_continue"),
-		]);
-
-		expect(groups.map(timelineGroupLabel)).toEqual([
-			"Auto-continue",
-			"Reopen",
-			"Auto-continue",
-		]);
-	});
-
-	it("keys a group by its first entry, so appending does not remount it", () => {
-		const entries = [entry("1", "auto_continue"), entry("2", "auto_continue")];
-		expect(groupTimelineEntries(entries)[0].id).toBe("1");
-		expect(
-			groupTimelineEntries([...entries, entry("3", "auto_continue")])[0].id,
-		).toBe("1");
+		expect(workEventWording("something_new", undefined).label).toBe(
+			"System Message",
+		);
 	});
 });

@@ -292,4 +292,4 @@ Step N of M
 
 ### System-Origin Tagging
 
-Every builder's output reaches the agent through `chat.Client.SendSystemMessage` (not the user path), tagging the `message` event with `origin: "system"`, a per-builder `subtype`, and a `{work_id, work_type, title, step?, child?}` meta summary. Keyed on `work_id`, the frontend folds every prompt one work produced into a single progress card instead of a run of user bubbles. See [code/work-system.md](../code/work-system.md#work-messages-in-chat) for the subtype catalog and rendering flow.
+Every builder's output reaches the agent through `chat.Client.SendSystemMessage` (not the user path), tagging the `message` event with `origin: "system"`, a per-builder `subtype`, and a `{work_id, work_type, title, step?, child?}` meta summary. The frontend renders each prompt as a one-line work event at the point in the transcript where it was sent, rather than as a user bubble; `work_id` is what its *Details* link opens. See [code/work-system.md](../code/work-system.md#work-messages-in-chat) for the subtype catalog and rendering flow.

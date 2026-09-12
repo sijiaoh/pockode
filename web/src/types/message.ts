@@ -101,14 +101,7 @@ export type ContentPart =
 			status: QuestionStatus;
 			answers?: Record<string, string>;
 	  }
-	| {
-			/**
-			 * Every Task of one turn, folded into a single part anchored where the
-			 * first of them landed.
-			 */
-			type: "task_group";
-			tasks: TaskRun[];
-	  }
+	| { type: "task"; task: TaskRun }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
 
@@ -130,16 +123,15 @@ export interface SystemMessageChild {
 // the prompt body. Mirrors agent.MessageMeta on the server.
 export interface SystemMessageMeta {
 	/**
-	 * The work whose session received this message — the aggregation key for the
-	 * work card. Absent on history recorded before the card existed, which falls
-	 * back to a standalone banner.
+	 * The work whose session received this message. Absent on history recorded
+	 * before it was sent, which then offers no way into the work's detail view.
 	 */
 	work_id?: string;
 	work_type?: WorkType;
 	title?: string;
 	/**
-	 * Where the work stood when this message was sent. A historical fact: use it
-	 * for timeline wording, never as the work's current position.
+	 * Where the work stood when this message was sent. A historical fact: it is
+	 * what this event's own wording says, never the work's current position.
 	 */
 	step?: SystemMessageStep;
 	child?: SystemMessageChild;
@@ -177,51 +169,7 @@ export interface AssistantMessage {
 	anchorSeq?: HistorySeq;
 }
 
-/** One system message, folded into the card's collapsed timeline. */
-export interface WorkTimelineEntry {
-	id: string;
-	subtype?: string;
-	/** The full prompt body, so nothing the old banner showed is lost. */
-	content: string;
-	step?: SystemMessageStep;
-	child?: SystemMessageChild;
-}
-
-/**
- * Every system message of one work, collapsed into a single card anchored where
- * the first of them landed. It deliberately carries no status: the card reads
- * that live from the work store, because a work can change state (an interrupt,
- * for one) without producing any message at all.
- */
-export interface WorkCardMessage {
-	id: string;
-	role: "work";
-	workId: string;
-	/** Recorded at anchor time; only used when the work is gone from the store. */
-	workType?: WorkType;
-	title?: string;
-	entries: WorkTimelineEntry[];
-	createdAt: Date;
-}
-
-/**
- * A hairline in the stream marking where the work moved to a new step. It says
- * only "the step changed here" — carrying no status, it can never contradict
- * the card.
- */
-export interface StepDividerMessage {
-	id: string;
-	role: "step_divider";
-	workId: string;
-	step: SystemMessageStep;
-	createdAt: Date;
-}
-
-export type Message =
-	| UserMessage
-	| AssistantMessage
-	| WorkCardMessage
-	| StepDividerMessage;
+export type Message = UserMessage | AssistantMessage;
 
 export type PermissionBehavior = "allow" | "deny" | "ask";
 

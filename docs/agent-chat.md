@@ -39,7 +39,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 5. Events are broadcast to all WebSocket subscribers and persisted to session history
 6. On `Done` event, process transitions to `idle`
 
-Besides user-typed messages, the Work system pushes automatic prompts to the same session via `Client.SendSystemMessage`; these are tagged `origin: "system"` with a `meta` summary naming the work, so the frontend can fold them into that work's progress card instead of rendering user bubbles. See [agent-event.md](agent-event.md#message-origin-user-vs-system) and [code/work-system.md](code/work-system.md#work-messages-in-chat).
+Besides user-typed messages, the Work system pushes automatic prompts to the same session via `Client.SendSystemMessage`; these are tagged `origin: "system"` with a `meta` summary naming the work, so the frontend can render each as a one-line work event where it happened instead of as a user bubble. See [agent-event.md](agent-event.md#message-origin-user-vs-system) and [code/work-system.md](code/work-system.md#work-messages-in-chat).
 
 ## Agent Events
 
@@ -117,15 +117,22 @@ reappears as an ordinary finished one on the way back up — with its error text
 gone and any Task it was running still spinning. Output that trails such a turn
 cannot reopen it, at a page seam for the same reason it cannot in one stream.
 
-**A page boundary can fall between two records that the reducer folds into one
-thing.** Three foldings span more than one record, and each is rejoined when the
-pages meet:
+**A page boundary can fall inside one turn.** The older page trails off
+mid-answer and the page above opens on content that no `message` event preceded;
+the reducer produces a leading assistant message in that one case only, which is
+what makes joining the two halves safe. Text at the seam goes through the same
+rule streaming uses, so a sentence — or a fenced code block — cut in two comes
+back as one part.
 
-| Folded | Split boundary looks like | Rejoined by |
-|---|---|---|
-| A turn | the older page trails off mid-answer; the page above opens on content no message event preceded | the reducer produces a leading assistant message in that one case only, which is what makes the join safe. Text at the seam goes through the same rule streaming uses, so a sentence — or a fenced code block — cut in two comes back as one part |
-| A turn's `task_group` | each half grew a group of its own | the older group keeps its place (it is where the turn spawned its first Task) and absorbs the newer half's tasks |
-| A work card | the same work shows as two cards | the older card keeps its place (it is anchored at the work's first system message, [code/work-system.md](code/work-system.md#rendering-in-the-transcript)) and takes the newer card's `id`, so the node on screen moves up rather than being remounted |
+A turn is the *only* thing a boundary can split. Nothing else in the transcript
+spans more than one record: a Claude Task is one part where its call landed
+([code/frontend-state.md](code/frontend-state.md#task-parts)) and a work event is
+one message where it happened
+([code/work-system.md](code/work-system.md#rendering-in-the-transcript)), so
+neither can arrive as two halves needing to be folded back together. That is not
+an accident of how they happen to be rendered, it is a reason for rendering them
+that way: anything aggregated across records has to be found and re-anchored at
+every seam, and an event left where it landed never does.
 
 Reconnecting re-subscribes and so lands back on the newest page: pages already
 scrolled in are dropped rather than stitched back together, since the cursor

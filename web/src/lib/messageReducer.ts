@@ -9,18 +9,15 @@ import type {
 	PermissionUpdate,
 	QuestionStatus,
 	ServerNotification,
-	StepDividerMessage,
 	SystemMessageMeta,
 	TaskRun,
 	UserMessage,
-	WorkCardMessage,
-	WorkTimelineEntry,
 } from "../types/message";
 import { generateUUID } from "../utils/uuid";
 
 // Legacy history recorded system messages with origin "work" before the
 // concept was renamed to "system". Map the old value so old sessions still
-// take the system path (a standalone banner, since they predate meta.work_id).
+// take the system path.
 function normalizeOrigin(raw: unknown): MessageOrigin | undefined {
 	if (raw === "system" || raw === "work") return "system";
 	if (raw === "user") return "user";
@@ -222,7 +219,7 @@ export function normalizeEvent(
 /**
  * The subagent tool goes by two names: the CLI renamed `Task` to `Agent`
  * (2.1.x emits `Agent`), and stored history holds whichever name was current
- * when it was recorded. Both fold into the same group.
+ * when it was recorded. Both render as the same part.
  */
 function isTaskTool(toolName: string): boolean {
 	return toolName === "Task" || toolName === "Agent";
@@ -247,8 +244,8 @@ function parseTaskInput(input: unknown): Omit<TaskRun, "toolUseId" | "status"> {
 }
 
 /**
- * Folds a Task call into the turn's single task_group, creating the group at
- * this position the first time the turn spawns one.
+ * Appends a Task part where the call landed, so each Task reads in the order
+ * the turn spawned it.
  *
  * Claude Code resends a tool_call after permission approval, so the same
  * toolUseId can arrive twice: the second one refreshes the input it describes
@@ -260,33 +257,20 @@ function applyTaskCall(
 	toolInput: unknown,
 ): ContentPart[] {
 	const input = parseTaskInput(toolInput);
-	const groupIndex = parts.findIndex((part) => part.type === "task_group");
-	if (groupIndex === -1) {
+	const isThisTask = (
+		part: ContentPart,
+	): part is Extract<ContentPart, { type: "task" }> =>
+		part.type === "task" && part.task.toolUseId === toolUseId;
+
+	if (!parts.some(isThisTask)) {
 		return [
 			...parts,
-			{
-				type: "task_group",
-				tasks: [{ toolUseId, status: "running", ...input }],
-			},
+			{ type: "task", task: { toolUseId, status: "running", ...input } },
 		];
 	}
-
-	const group = parts[groupIndex];
-	if (group.type !== "task_group") return parts; // Type guard - never happens
-
-	const existing = group.tasks.findIndex(
-		(task) => task.toolUseId === toolUseId,
+	return parts.map((part) =>
+		isThisTask(part) ? { ...part, task: { ...part.task, ...input } } : part,
 	);
-	const tasks =
-		existing === -1
-			? [...group.tasks, { toolUseId, status: "running" as const, ...input }]
-			: group.tasks.map((task, i) =>
-					i === existing ? { ...task, ...input } : task,
-				);
-
-	const updated = [...parts];
-	updated[groupIndex] = { ...group, tasks };
-	return updated;
 }
 
 export function applyEventToParts(
@@ -415,7 +399,6 @@ function stampAnchorSeq(
 	// terminal event can drop an empty placeholder, and the message left behind
 	// is then an old one that this record did not touch.
 	if (last === before[index]) return after;
-	if (last.role !== "user" && last.role !== "assistant") return after;
 
 	const updated = [...after];
 	updated[index] = { ...last, anchorSeq: seq };
@@ -447,11 +430,8 @@ export function stampMessageAnchorSeq(
 	const index = messages.findIndex((m) => m.id === messageId);
 	if (index === -1) return messages;
 
-	const message = messages[index];
-	if (message.role !== "user" && message.role !== "assistant") return messages;
-
 	const updated = [...messages];
-	updated[index] = { ...message, anchorSeq: seq };
+	updated[index] = { ...messages[index], anchorSeq: seq };
 	return updated;
 }
 
@@ -464,19 +444,6 @@ export function applyServerEvent(
 ): Message[] {
 	// User message or system-driven message (history replay or broadcast)
 	if (event.type === "message") {
-		// Aggregation lives here rather than on a history-only path so that replay
-		// and live streaming cannot drift apart: replayHistory feeds this same
-		// function. Messages predating meta.work_id fall through to the standalone
-		// banner they were recorded for.
-		if (event.origin === "system" && event.meta?.work_id) {
-			return applyWorkCardMessage(
-				messages,
-				event.content,
-				event.meta.work_id,
-				event.subtype,
-				event.meta,
-			);
-		}
 		// Stamped inside applyUserMessage rather than by stampAnchorSeq: the turn
 		// this message opens leaves an empty assistant placeholder behind it, so
 		// the last element is not the one holding the record.
@@ -806,8 +773,7 @@ function updateToolResult(
 		const partIndex = msg.parts.findIndex(
 			(part) =>
 				(part.type === "tool_call" && part.tool.id === toolUseId) ||
-				(part.type === "task_group" &&
-					part.tasks.some((task) => task.toolUseId === toolUseId)),
+				(part.type === "task" && part.task.toolUseId === toolUseId),
 		);
 		if (partIndex === -1) continue;
 
@@ -815,14 +781,10 @@ function updateToolResult(
 		let settled: ContentPart;
 		if (part.type === "tool_call") {
 			settled = { ...part, tool: { ...part.tool, result: toolResult } };
-		} else if (part.type === "task_group") {
+		} else if (part.type === "task") {
 			settled = {
 				...part,
-				tasks: part.tasks.map((task) =>
-					task.toolUseId === toolUseId
-						? settleTaskRun(task, toolResult, isError)
-						: task,
-				),
+				task: settleTaskRun(part.task, toolResult, isError),
 			};
 		} else {
 			continue; // Type guard - never happens
@@ -847,17 +809,9 @@ function updateToolResult(
 function settleRunningTaskParts(parts: ContentPart[]): ContentPart[] {
 	let changed = false;
 	const updated = parts.map((part) => {
-		if (part.type !== "task_group") return part;
-		if (!part.tasks.some((task) => task.status === "running")) return part;
+		if (part.type !== "task" || part.task.status !== "running") return part;
 		changed = true;
-		return {
-			...part,
-			tasks: part.tasks.map((task) =>
-				task.status === "running"
-					? { ...task, status: "interrupted" as const }
-					: task,
-			),
-		};
+		return { ...part, task: { ...part.task, status: "interrupted" as const } };
 	});
 	return changed ? updated : parts;
 }
@@ -914,72 +868,6 @@ export function closePreviousTurn(messages: Message[]): Message[] {
 			return m;
 		})
 		.filter((m) => !isEmptyPlaceholder(m));
-}
-
-/**
- * Folds a system message into its work's card, creating the card at this
- * position the first time the work is seen.
- *
- * A system message drives the agent, so it keeps the surrounding turn handling
- * of a user message: finalize the running assistant, then leave a placeholder
- * for the reply it provokes.
- */
-function applyWorkCardMessage(
-	messages: Message[],
-	content: string,
-	workId: string,
-	subtype: string | undefined,
-	meta: SystemMessageMeta,
-): Message[] {
-	const entry: WorkTimelineEntry = {
-		id: generateUUID(),
-		subtype,
-		content,
-		step: meta.step,
-		child: meta.child,
-	};
-
-	const updated = closePreviousTurn(messages);
-
-	let anchorIndex = -1;
-	let anchor: WorkCardMessage | undefined;
-	for (let i = updated.length - 1; i >= 0; i--) {
-		const m = updated[i];
-		if (m.role === "work" && m.workId === workId) {
-			anchorIndex = i;
-			anchor = m;
-			break;
-		}
-	}
-
-	if (anchor) {
-		// Reuse the card's id: MessageList keys on it and does not virtualize, so
-		// a fresh id would remount the card and throw away what the user expanded.
-		updated[anchorIndex] = { ...anchor, entries: [...anchor.entries, entry] };
-	} else {
-		updated.push({
-			id: generateUUID(),
-			role: "work",
-			workId,
-			workType: meta.work_type,
-			title: meta.title,
-			entries: [entry],
-			createdAt: new Date(),
-		});
-	}
-
-	if (subtype === "step_advance" && meta.step) {
-		const divider: StepDividerMessage = {
-			id: generateUUID(),
-			role: "step_divider",
-			workId,
-			step: meta.step,
-			createdAt: new Date(),
-		};
-		updated.push(divider);
-	}
-
-	return [...updated, createAssistantMessage()];
 }
 
 // Finalizes any streaming assistant before adding new user message
@@ -1071,72 +959,15 @@ function joinTurnParts(
 	// code block — cut in two by the boundary comes back as one part rather than
 	// two that render side by side.
 	const first = after[0];
-	const joined =
-		first?.type === "text"
-			? [
-					...applyEventToParts(before, {
-						type: "text",
-						content: first.content,
-					}),
-					...after.slice(1),
-				]
-			: [...before, ...after];
-
-	// A turn has one task_group, anchored where it spawned its first Task, and
-	// each half grew one of its own.
-	const anchor = joined.findIndex((part) => part.type === "task_group");
-	const stray = joined.findLastIndex((part) => part.type === "task_group");
-	if (anchor === stray) return joined;
-
-	const anchorGroup = joined[anchor];
-	const strayGroup = joined[stray];
-	if (anchorGroup.type !== "task_group" || strayGroup.type !== "task_group") {
-		return joined;
-	}
-	const folded = joined.filter((_, index) => index !== stray);
-	folded[anchor] = {
-		...anchorGroup,
-		tasks: [...anchorGroup.tasks, ...strayGroup.tasks],
-	};
-	return folded;
-}
-
-/**
- * Folds each of the older page's work cards into the card the loaded pages
- * already show for that work.
- *
- * A work card is anchored where the work's first system message landed and
- * updated in place from then on (docs/code/work-system.md), so a work whose life
- * spans a page boundary would otherwise appear twice. The anchor is in the older
- * page by definition, which is why the entries move up rather than the card
- * moving down.
- */
-function foldWorkCards(older: Message[], current: Message[]): Message[] {
-	const anchors = new Map<string, number>();
-	older.forEach((message, index) => {
-		if (message.role === "work") anchors.set(message.workId, index);
-	});
-	if (anchors.size === 0) return [...older, ...current];
-
-	const merged = [...older];
-	const rest = current.filter((message) => {
-		if (message.role !== "work") return true;
-		const index = anchors.get(message.workId);
-		if (index === undefined) return true;
-		const anchor = merged[index];
-		if (anchor.role !== "work") return true;
-		merged[index] = {
-			// Everything but the identity comes from the anchor, whose title and
-			// type were recorded when the work was first seen. The id is the card
-			// already on screen: MessageList keys on it, so keeping it moves that
-			// node up instead of remounting a new card in its place.
-			...anchor,
-			id: message.id,
-			entries: [...anchor.entries, ...message.entries],
-		};
-		return false;
-	});
-	return [...merged, ...rest];
+	return first?.type === "text"
+		? [
+				...applyEventToParts(before, {
+					type: "text",
+					content: first.content,
+				}),
+				...after.slice(1),
+			]
+		: [...before, ...after];
 }
 
 /** What a page could not know had happened to it after it was written. */
@@ -1217,7 +1048,7 @@ export function prependHistoryPage(
 	const tail = closed[closed.length - 1];
 	const head = current[0];
 	if (tail.role !== "assistant" || head?.role !== "assistant") {
-		return foldWorkCards(closed, current);
+		return [...closed, ...current];
 	}
 
 	// A turn that already ended this way keeps the status it ended with, and what
@@ -1244,9 +1075,7 @@ export function prependHistoryPage(
 			? { anchorSeq: tail.anchorSeq }
 			: {}),
 	};
-	// The two halves are one message from here on, so the fold sees the turn the
-	// way the rest of the transcript does.
-	return foldWorkCards([...closed.slice(0, -1), merged], current.slice(1));
+	return [...closed.slice(0, -1), merged, ...current.slice(1)];
 }
 
 export function replayHistory(records: unknown[]): Message[] {

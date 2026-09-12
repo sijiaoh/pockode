@@ -1,4 +1,4 @@
-import type { AssistantMessage, Message, UserMessage } from "../types/message";
+import type { Message } from "../types/message";
 
 /**
  * Whether a message gets the thin action row under its bubble.
@@ -8,15 +8,12 @@ import type { AssistantMessage, Message, UserMessage } from "../types/message";
  * a missing seq, an unanswered request — must not take the row, and with it
  * every other action, away.
  *
- * Work cards, step dividers and system-origin messages are Pockode's own
- * annotations rather than conversation turns, and a message still being written
- * is not yet a turn either. Nothing about them is a message the user said or
- * the agent answered, so there is no action to offer on one.
+ * A system-origin message is Pockode's own annotation rather than a
+ * conversation turn, and a message still being written is not yet a turn
+ * either. Neither is something the user said or the agent answered, so there is
+ * no action to offer on one.
  */
-export function hasMessageActions(
-	message: Message,
-): message is UserMessage | AssistantMessage {
-	if (message.role !== "user" && message.role !== "assistant") return false;
+export function hasMessageActions(message: Message): boolean {
 	if (message.status === "sending" || message.status === "streaming") {
 		return false;
 	}
