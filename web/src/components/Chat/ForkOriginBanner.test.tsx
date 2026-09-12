@@ -11,6 +11,8 @@ const parent: SessionListItem = {
 	updated_at: "2024-01-01T00:00:00Z",
 	mode: "default",
 	agent_type: "claude",
+	model: "",
+	effort: "",
 	activated: true,
 	state: "idle",
 	needs_input: false,

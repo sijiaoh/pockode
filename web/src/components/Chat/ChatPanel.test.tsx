@@ -6,7 +6,7 @@ import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useInputStore } from "../../lib/inputStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
-import type { ServerNotification } from "../../types/message";
+import type { ServerNotification, SessionListItem } from "../../types/message";
 import type { Work } from "../../types/work";
 import ChatPanel from "./ChatPanel";
 
@@ -1307,15 +1307,20 @@ describe("ChatPanel", () => {
 			{ type: "done", seq: 6 },
 		];
 
-		const forkedSession = {
+		// Typed rather than inferred: the store this is spread into holds
+		// SessionListItems, so a field added to the wire shape has to be answered
+		// here too.
+		const forkedSession: SessionListItem = {
 			id: "forked-session",
 			title: "Test Chat (fork)",
 			created_at: "2024-01-01T00:00:00Z",
 			updated_at: "2024-01-01T00:00:00Z",
-			mode: "default" as const,
-			agent_type: "claude" as const,
+			mode: "default",
+			agent_type: "claude",
+			model: "",
+			effort: "",
 			activated: true,
-			state: "idle" as const,
+			state: "idle",
 			needs_input: false,
 			unread: false,
 			forked_from: { session_id: "test-session" },
