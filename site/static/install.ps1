@@ -120,7 +120,12 @@ function Split-PathValue([string]$value) {
 }
 
 function Test-SamePath([string]$a, [string]$b) {
-    return $a.Trim().TrimEnd('\', '/') -ieq $b.Trim().TrimEnd('\', '/')
+    # Compared expanded, even though entries are read and written back raw (see
+    # Read-RawUserPath): a raw comparison would miss our own directory when it is
+    # on PATH as %LOCALAPPDATA%\Programs\Pockode and append a second copy of it.
+    $left = [Environment]::ExpandEnvironmentVariables($a).Trim().TrimEnd('\', '/')
+    $right = [Environment]::ExpandEnvironmentVariables($b).Trim().TrimEnd('\', '/')
+    return $left -ieq $right
 }
 
 function Add-UserPathEntry([string]$dir) {
@@ -186,13 +191,19 @@ if ($Uninstall) {
 
     # Only clean up the install directory if uninstalling left it empty - a user
     # who pointed -InstallDir at a directory of their own keeps the rest of it.
+    # A failure here must not abort the uninstall: an empty directory left behind
+    # is cosmetic, a PATH entry pointing at nothing is not.
     if ((Test-Path -LiteralPath $InstallDir) -and -not (Get-ChildItem -LiteralPath $InstallDir -Force)) {
-        Remove-Item -LiteralPath $InstallDir -Force
+        try {
+            Remove-Item -LiteralPath $InstallDir -Force
+        } catch {
+            Write-Warning "Could not remove the empty directory ${InstallDir}: $($_.Exception.Message)"
+        }
     }
 
     if (Remove-UserPathEntry $InstallDir) {
         Publish-EnvironmentChange
-        Write-Host "Removed $InstallDir from your PATH."
+        Write-Host "Removed $InstallDir from your PATH. Terminals already open keep it until you restart them."
     }
 
     Write-Host "Project data is untouched: each project keeps its own .pockode directory."

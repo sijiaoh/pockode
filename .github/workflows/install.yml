@@ -17,7 +17,8 @@ jobs:
   # install.ps1 rewrites the user's PATH in the registry, and it is the only
   # supported way onto Windows. Neither of those can be checked by reading the
   # script, and no machine in this project runs Windows, so it is exercised end
-  # to end: install, upgrade over it, uninstall.
+  # to end: install, upgrade over it, uninstall, then the same cycle against a
+  # custom -InstallDir.
   windows:
     runs-on: windows-latest
     timeout-minutes: 15
@@ -149,12 +150,55 @@ jobs:
           if (Test-Path (Join-Path $installDir 'pockode.exe')) {
             throw "pockode.exe is still in $installDir"
           }
+          # Nothing else was ever put there, so the directory itself should be gone.
+          if (Test-Path $installDir) {
+            throw "$installDir was left behind although it is empty"
+          }
 
           $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
           $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
           $key.Close()
           if ($raw -split ';' | Where-Object { $_.TrimEnd('\') -ieq $installDir.TrimEnd('\') }) {
             throw "$installDir is still on PATH: $raw"
+          }
+          if ($raw -notlike '*%USERPROFILE%\ci-canary*') {
+            throw "the uninstall took other PATH entries with it: $raw"
+          }
+
+      # -InstallDir is the one parameter a user has to keep repeating, and the
+      # docs say why: the script only ever touches the directory it was told
+      # about. Run last so it starts from a clean PATH and a clean default
+      # location, and cleans up after itself.
+      - name: A custom -InstallDir is installed to, and uninstalled from, on its own
+        run: |
+          $custom = Join-Path $env:RUNNER_TEMP 'pockode-custom'
+          $default = Join-Path $env:LOCALAPPDATA 'Programs\Pockode'
+
+          ./site/static/install.ps1 -InstallDir $custom -Url http://127.0.0.1:8000/pockode-windows-amd64.exe
+          if (-not (Test-Path (Join-Path $custom 'pockode.exe'))) {
+            throw "pockode.exe is not in $custom"
+          }
+          if (Test-Path $default) {
+            throw "-InstallDir was given but the default location $default was used too"
+          }
+
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          $key.Close()
+          if (-not ($raw -split ';' | Where-Object { $_.TrimEnd('\') -ieq $custom.TrimEnd('\') })) {
+            throw "$custom did not land on the user PATH: $raw"
+          }
+
+          ./site/static/install.ps1 -Uninstall -InstallDir $custom
+          if (Test-Path $custom) {
+            throw "the uninstall left $custom behind although it is empty"
+          }
+
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          $key.Close()
+          if ($raw -split ';' | Where-Object { $_.TrimEnd('\') -ieq $custom.TrimEnd('\') }) {
+            throw "$custom is still on PATH: $raw"
           }
           if ($raw -notlike '*%USERPROFILE%\ci-canary*') {
             throw "the uninstall took other PATH entries with it: $raw"
