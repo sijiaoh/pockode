@@ -66,11 +66,19 @@ type the role ends up with, and `model`/`effort` are dropped whenever
 `agent_type` changes. A client switching agents sends `agent_type` alone and
 lets that reset happen server-side.
 
-**The two empties do not mean the same thing.** An empty `agent_type` defers to
-a value the user set and can go read — the global default agent type in
-Settings. An empty `model` or `effort` defers to the CLI. The UI names them
-*Follow settings* and *Auto* accordingly; one word for both would send users
-looking for a setting that governs the model.
+**Every empty defers to Settings, and only then to the CLI.** An empty
+`agent_type` means *follow the global default agent*; an empty `model` or
+`effort` takes the global default chosen for that agent, and reaches the CLI's
+own default only when Settings has none to give. The full rule — including when
+a role is given nothing from Settings — is [Role Engine to Session
+Engine](workflow-engine.md#role-engine-to-session-engine).
+
+**A role's empty `agent_type` is not the built-in default agent**, though the
+global setting's empty is: an unset global default still has to start sessions on
+some agent, so it is read as the built-in one. Here empty is a deferral to a
+value the user set and can go change. Resolving it in place would pin the role to
+whatever agent is built in today and stop it following Settings, which is the one
+thing it was left empty to do.
 
 **An unavailable combination is an error, not a reset** (`ErrInvalidRole`, whole
 update rolled back), the opposite of `session.SetAgentType`, which quietly drops

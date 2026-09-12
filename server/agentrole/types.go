@@ -32,6 +32,17 @@ type AgentRole struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Engine is the role's preference for the sessions started under it. An empty
+// AgentType means the role expresses no preference and the global default
+// applies; see settings.Settings.ResolveEngine for how the two combine.
+func (r AgentRole) Engine() session.Engine {
+	return session.Engine{
+		AgentType: r.AgentType,
+		Model:     r.Model,
+		Effort:    r.Effort,
+	}
+}
+
 type Operation string
 
 const (

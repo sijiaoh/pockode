@@ -21,6 +21,13 @@ export interface Settings {
 	default_agent_role_id?: string;
 	default_agent_type?: AgentType;
 	default_mode?: SessionMode;
+	// The model and effort new sessions start with, both belonging to
+	// `default_agent_type`: each is picked from that agent's own list, so the
+	// server refuses a pair left over from the agent the user just switched away
+	// from. Switching the agent must send all three fields, the latter two empty.
+	// Empty = no flag is passed and the CLI decides.
+	default_model?: string;
+	default_effort?: string;
 	// Empty = default (`../<repo>-worktrees`). Non-empty may be an absolute path,
 	// a repo-relative `./`/`../` path, or a home-relative `~/` path; the backend
 	// validates and rejects invalid values.

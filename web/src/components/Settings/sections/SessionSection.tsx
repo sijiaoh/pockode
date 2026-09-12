@@ -1,9 +1,11 @@
-import { AGENT_TYPE_INFO, AGENT_TYPES } from "../../../lib/agentType";
+import { useGlobalEngine } from "../../../hooks/useGlobalEngine";
+import { AUTO_ID } from "../../../lib/agentOptions";
 import { getSessionModeInfo, SESSION_MODES } from "../../../lib/sessionMode";
 import { useSettingsStore } from "../../../lib/settingsStore";
 import { useWSStore } from "../../../lib/wsStore";
 import type { SessionMode } from "../../../types/message";
 import type { AgentType } from "../../../types/settings";
+import EngineField from "../../ui/EngineField";
 
 function ToggleGroup<T extends string>({
 	label,
@@ -25,7 +27,11 @@ function ToggleGroup<T extends string>({
 }) {
 	return (
 		<div className="space-y-1.5">
-			<p className="text-xs font-medium text-th-text-muted">{label}</p>
+			{/* Uppercase, as the Engine field beside it labels itself: the two are
+			    fields of one section and a label style each would read as two. */}
+			<p className="text-xs font-medium uppercase text-th-text-muted">
+				{label}
+			</p>
 			{/* biome-ignore lint/a11y/useSemanticElements: fieldset is for forms; this is an instant-apply toggle group */}
 			<div
 				role="group"
@@ -61,9 +67,7 @@ function ToggleGroup<T extends string>({
 }
 
 export default function SessionSection() {
-	const agentType = useSettingsStore(
-		(s) => s.settings?.default_agent_type ?? "claude",
-	);
+	const { engine } = useGlobalEngine();
 	const defaultMode = useSettingsStore(
 		(s) => s.settings?.default_mode ?? "default",
 	);
@@ -71,20 +75,36 @@ export default function SessionSection() {
 
 	return (
 		<div className="space-y-4">
-			<ToggleGroup<AgentType>
-				label="Agent"
-				items={AGENT_TYPES}
-				selected={agentType}
-				onSelect={(type) => updateSettings({ default_agent_type: type })}
-				getInfo={(type) => AGENT_TYPE_INFO[type]}
-			/>
+			<div className="space-y-1.5">
+				<EngineField
+					agentType={engine.agentType}
+					model={engine.model}
+					effort={engine.effort}
+					// The model and effort go with the agent: both are picked from its own
+					// list, and the server judges the three as one and refuses a leftover
+					// rather than quietly dropping it.
+					onSelectAgent={(type) =>
+						updateSettings({
+							default_agent_type: type as AgentType,
+							default_model: AUTO_ID,
+							default_effort: AUTO_ID,
+						})
+					}
+					onSelectModel={(id) => updateSettings({ default_model: id })}
+					onSelectEffort={(id) => updateSettings({ default_effort: id })}
+				/>
+				<p className="text-xs text-th-text-muted">
+					New sessions start with this engine. An agent role on another agent
+					uses its own.
+				</p>
+			</div>
 			<ToggleGroup<SessionMode>
 				label="Mode"
 				items={SESSION_MODES}
 				selected={defaultMode}
 				onSelect={(mode) => updateSettings({ default_mode: mode })}
-				getInfo={(mode) => getSessionModeInfo(mode, agentType)}
-				hint={getSessionModeInfo(defaultMode, agentType).description}
+				getInfo={(mode) => getSessionModeInfo(mode, engine.agentType)}
+				hint={getSessionModeInfo(defaultMode, engine.agentType).description}
 			/>
 		</div>
 	);

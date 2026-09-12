@@ -186,6 +186,12 @@ they are untouched by a worktree switch. The one thing that can change the answe
 is a reconnect to a server upgraded in the meantime, which `useAgentOptions`
 covers by fetching on every `connected` rather than once per app load.
 
+The fetch hangs off `AppShell` rather than off the panel that needs it because
+three screens now read the same lists: the chat's engine selector, the agent role
+page, and the global defaults in Settings. Each of them also needs the lists of
+the agent it is *about to* switch to, not only the current one, so per-panel
+fetching would buy nothing and cost a round trip per open.
+
 Both lists sit in that one store behind a **single** `error`, and
 `useAgentOptions` fetches them in one `Promise.allSettled`, even though the
 server answers them as two methods (`session.models`, `session.efforts`). That is
