@@ -99,7 +99,7 @@ telling the sender where its own message landed in the history. It needs one
 because the sender is deliberately left out of the broadcast that carries every
 other record's `seq` (it has already echoed the message into its own
 transcript), so the reply is the only place that address can reach it. What it
-is for is in [session-fork-ui.md](../session-fork-ui.md#which-messages-get-the-row-and-when-fork-is-on-it):
+is for is in [session-fork-ui.md](../session-fork-ui.md#which-messages-get-a-menu-and-when-fork-is-on-it):
 a record a client cannot name is a record it cannot fork from.
 
 That method used to answer a bare `{}`, and growing it needed **no coordinated

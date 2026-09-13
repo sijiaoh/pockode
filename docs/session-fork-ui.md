@@ -54,76 +54,168 @@ is a live fact.
 
 ## Entry point
 
-Every message that is a conversation turn carries a thin action row **under**
-the bubble, aligned to the bubble's own side — right for user messages, left for
-assistant messages. Fork stands on that row directly, as a `GitBranch` icon; a
-row with no action to hold is not drawn at all. One fork concept gets one glyph:
-the origin banner and the sidebar marker already use `GitBranch`, so the row
-introduces no second one. The icon uses the app's existing inline icon action —
-36px of visual weight, borderless, muted until hovered, grown to a 44px hit area
-where a finger may land
-([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) — so it reads as an
-affordance and not as content. That class is `ui/iconButtonClass`, already
-shared by the Git and Files panels; the chat row is a third caller, not a reason
-to move it. (Not `ui/ContentView`'s `actionIconButtonClass`: it carries a border
-and a filled background, which is the right weight for a toolbar and far too
-loud repeated under forty bubbles.)
+Every row of a session that can fork reserves a **36px slot beside the bubble,
+on the inside** — the side facing the middle of the conversation, so right of an
+assistant bubble and left of a user one — 8px clear of it, 44px of the row's
+width in all. In the slot stands a `MoreHorizontal` `…`; pressing it opens a
+`Sheet` in which fork is a row.
+
+The inside is where the slot goes because the outside is the avatar's, and
+because the inside is space the message was leaving empty anyway. One sentence
+covers both sides: **the trigger always hugs the bubble's edge that faces the
+middle of the conversation.** The two sides are mirrored by that rule, which
+cost something under a row of icons read left to right and costs nothing now — a
+menu has one way in and no reading order to get backwards.
+
+It hugs the bubble rather than aligning to a fixed vertical rule down the edge
+of the row. Pinning it out there would buy a tidy column of dots, at the price
+of a two-word user message whose `…` floats half a screen from anything it
+belongs to. **Belonging beats alignment.**
+
+Vertically it sits at the bubble's **top** (`self-start`, while the row itself
+stays `items-end` so the avatar still sits on the baseline). A bubble can be
+several screens tall — a diff, a long tool call — and a control pinned to its
+bottom asks the user to scroll to the end of a message before they may act on
+it. The top edge is where the message identifies itself.
+
+`MoreHorizontal` rather than `GitBranch`: the file tree, the Git log and the
+files panel already say *this thing has a menu* with these three dots, and chat
+is the fourth caller of a mark a reader takes for chrome. Forty copies of a
+*feature's* own glyph read as forty announcements of that feature — the
+objection that built the first `…` menu, answered head-on here rather than
+capped. `GitBranch` has not gone anywhere; it moved one layer in, onto the menu
+row, so one fork concept still has exactly one glyph across the row, the origin
+banner and the sidebar marker.
+
+Width changes none of this. The slot's size, position and visibility are the
+same on a phone and on a desktop; only the menu's shape varies, and `Sheet`
+already decides that for every sheet in the app. No second threshold is written
+here.
+
+### The slot's weight, and what it costs the bubble
+
+The trigger takes its box, focus ring and press feedback from
+`ui/iconButtonClass({ grow: false })` — the app's inline icon action, the same
+weight the Git and Files panels use. `grow: false` is the part worth recording:
+the hit area is laid **over** the 36px box instead of growing it, because this
+box's width is what the bubble is measured against and layout may not change
+with the pointer ([responsive-ui.md](responsive-ui.md#which-technique-and-when)).
+Growing it would also have spent 8px of width on a phone to save height on a
+phone.
+
+At rest the glyph is at **half opacity**, rising to full on hover, on
+`focus-visible`, and for as long as its menu is open. The dimming is opacity
+rather than a quieter colour token: `iconButtonClass` already writes
+`text-th-text-secondary` into the same class list, so a `text-th-text-muted` at
+the call site would be a same-specificity override whose winner is whichever
+rule Tailwind happened to emit second — correct until an upgrade silently
+reverses it.
+
+Not `ui/ContentView`'s `actionIconButtonClass`, the other icon action in the
+app: it carries a border and a filled background, which is the right weight in a
+toolbar and far too loud repeated beside forty bubbles.
+
+The glyph **fades in** when the message settles (`animate-message-menu-in`,
+150ms, off under `prefers-reduced-motion`). An animation and not a transition,
+because the glyph is mounted rather than restyled: a transition has no
+before-value to move from, so writing one would have produced no animation at
+all. Nothing else moves — the slot was already there while the message streamed,
+and the fade happens at the top of the bubble while the agent's last words land
+at the bottom.
+
+**The trade, priced:** every message gives back the 36–44px of height a standing
+action row spent, and every bubble is at most 44px narrower for it. Diffs, code
+blocks and option cards inside a bubble get that much less width on a phone; all
+of them already scroll sideways, and vertical space has no second source.
+
+That maximum width is never computed anywhere. The slot is a `shrink-0` flex
+item that is always present and the bubble is `min-w-0 max-w-full` beside it, so
+flex hands over the difference on its own — which is why no file has to know how
+wide the slot is.
+
+### Which rows reserve a slot
+
+Two levels, and they are what makes the slot steady:
+
+- **Session level.** A slot exists only where per-message actions exist at all
+  — where `ChatPanel` passed `onForkMessage` down, meaning the host can navigate
+  and the agent's `fork_support` is not `"none"`. A session that can never fork
+  should not pay 44px a row for a glyph that will never come.
+- **Message level.** Inside such a session **every** row draws the slot: settled
+  bubbles, streaming and sending ones, and the collapsed one-line Work events.
+  Only what stands in the slot differs.
+  - For bubbles the reason is constant geometry: a message going from streaming
+    to settled does not move a pixel.
+  - For event lines the reason is the opposite one — their state never changes —
+    and it is the **content edge**. A full-bleed line with no slot runs 44px past
+    the widest bubble and leaves the right edge of the transcript ragged.
 
 Why not a long-press on the bubble: chat bubbles are the one place in this app
 where users select and copy text, and long-press is how a phone starts a
 selection. Why not tapping the bubble: bubbles already contain links, code
 blocks and expandable tool calls, so the bubble itself has no free tap.
 
-Standing on the row rather than behind a `…` that opens a single-row sheet,
-which is what shipped first. Fork is a primary action and this app's main
-pointer is a thumb, so the first rung of
-[responsive-ui.md](responsive-ui.md#where-a-p1-goes-when-there-is-no-hover) —
-always visible — is the answer; the sheet charged two taps to reach the only
-thing it held. The argument that built the `…` ("a branch glyph under forty
-bubbles reads as decoration") is not wrong, and it survives — but as a limit on
-*how many* icons the row may carry and on *which sessions* get one at all, not
-as a reason to hide the first one.
-
-Nor is the icon revealed on hover, which
+Nor is the glyph revealed on hover, which
 [responsive-ui.md](responsive-ui.md#the-one-authorized-form) would have allowed.
-A control revealed that way is already always visible to a thumb, so the only
-thing the form would buy is a quieter desktop — paid for by fork being easy to
-find on one pointer and invisible on the other, which is exactly the split the
-row was changed to close.
+The old reason stands — a control revealed that way is easy to find under one
+pointer and invisible under the other — and there is now a harder one: the
+slot's width is paid whether or not anything is drawn in it, so hiding the glyph
+saves ink and not one pixel of layout.
 
-Rules for the row, settled once so it is not redesigned per icon:
+### Why this is not the standing action row
 
-- **Order is append-only.** A new action goes last; existing ones never move.
-  What that protects is muscle memory, which is why no second rule is allowed on
-  top of it — "most used first" and "destructive last" both require reordering,
-  and two rules that contradict each other are no rule.
-- **Both sides read left to right, not mirrored.** Mirroring for the user side
-  would put the same action in a different relative place depending on who
-  spoke, and scanning costs more than alignment saves.
-- **Three standing icons is the ceiling.** Past that the first two stay and the
-  rest fold behind a `…` into an overflow sheet — rung 2, and the deleted
-  `MessageMenu` can come back out of git history to be it, this time as "what
-  did not fit" rather than "everything this message can do". The ceiling is
-  visual noise, not width: this row has no title whose truncation room icons
-  could eat, which is the criterion rung 2 is actually written against.
+A thin row of icons under every bubble is what shipped before this, and the
+argument for it was that fork is a primary action, this app's main pointer is a
+thumb, and therefore rung 1 of
+[responsive-ui.md](responsive-ui.md#where-a-p1-goes-when-there-is-no-hover) —
+always visible — settled the question; a `…` opening a single-row sheet charged
+two taps and handed back one thing.
 
-### Which messages get the row, and when fork is on it
+Where that argument gave way:
 
-Two separate questions, and they must stay separate. The row belongs to every
+- **The cost was booked in the wrong place.** The `…` was charged a tap and the
+  row was charged nothing. A row's real price is 36–44px of height per message,
+  against the 12–16px that separates them — close to an extra bubble each, spent
+  on the axis a phone has least of.
+- **Rung 1 is about reach, and the slot still meets it.** Always drawn, 44px of
+  target, never hover-gated. What moved behind a tap is the list of actions, not
+  the way in.
+- **The second tap now buys something.** It buys a whole sentence saying why
+  fork cannot run here — which an icon could only murmur into `aria-label`,
+  since a `title` never fires on a touch device. The layout that spent the
+  vertical space was the one that could not speak.
+- **The ceiling admitted it.** Three standing icons was the cap, but a row pays
+  its full height for the *first* icon. A container whose rule bills for three
+  and carries one is the wrong container.
+
+Three decisions came through unchanged: long-press and tapping the bubble are
+both taken (above), and **a running turn does not grey out the messages above
+it** (*Which messages get a menu*).
+
+What may be added to the menu later — two append-only groups, no mirroring, one
+level deep, disable rather than remove — is written at the top of
+`MessageMenu.tsx`, beside the list it governs. The row's three-icon ceiling is
+gone with the row: noise no longer grows with the number of actions, because the
+transcript shows one `…` however many rows stand behind it.
+
+### Which messages get a menu, and when fork is on it
+
+Two separate questions, and they must stay separate. The menu belongs to every
 per-message action, so a reason **fork in particular** does not apply must not
-take the row — and with it every future action — away. The split lives in two
+take the menu — and with it every future action — away. The split lives in two
 files that say which is which: `utils/messageActions.ts` answers the first,
 `utils/forkAnchor.ts` the second.
 
-**1. Does this message have an action row?** (`hasMessageActions`)
+**1. Is this message a turn with a menu at all?** (`hasMessageActions`)
 
 - System-origin messages (`source === "system"`, the Work engine's prompts,
   which render as a collapsed one-line event rather than a bubble) get none.
-  They are not conversation turns; they are Pockode's own annotations, and they
-  have no bubble to hang a row under.
+  They are not conversation turns; they are Pockode's own annotations, and there
+  is nothing a user does *to* one. They keep the empty slot all the same, for
+  the edge it lines up (*Which rows reserve a slot*).
 - A message still `sending` or `streaming` gets none either — it is not yet a
-  turn, and a row appearing mid-word would make the line twitch as the agent
-  types.
+  turn. Here too the slot stays, which is what lets the glyph arrive when the
+  turn ends without moving the bubble the agent has been writing into.
 
 **2. Can fork run on this message?** (`isForkableMessage` +
 `resolveForkAnchor`)
@@ -144,35 +236,41 @@ files that say which is which: `utils/messageActions.ts` answers the first,
   `isFirst` are given that flag rather than trusting index zero.
 
 Neither of the first two is a verdict on the message itself, so they leave the
-icon in place and quiet rather than removing it (*Blocked and failed*). Neither
-is on a clock either — an answer settles the request, a reload names what the
-old server would not — so the label promises no more than that this is not how
-the message will stay. It is stretched furthest by a record that failed to
-persist, which this session will never name: that message does not survive a
-reload either, so the label outlives its subject rather than lying to anyone
-who can still act on it. Were the two questions still one, as they were while
-`isForkableMessage` gated the row itself, a missing `seq` would silently cost
-the message every other action it will ever be given.
+fork row in the menu and disable it rather than removing it (*Blocked and
+failed*). Neither is on a clock either — an answer settles the request, a reload
+names what the old server would not — so the sentence on the row promises no
+more than that this is not how the message will stay. It is stretched furthest
+by a record that failed to persist, which this session will never name: that
+message does not survive a reload either, so the sentence outlives its subject
+rather than lying to anyone who can still act on it. Were the two questions
+still one, as they were while `isForkableMessage` gated the entry point itself,
+a missing `seq` would silently cost the message every other action it will ever
+be given.
 
 **A message the user just sent is not in that set, and closing that hole is why
 `chat.message` has a reply at all.** The server leaves a sender out of the
 broadcast carrying every other record's `seq` — it has already echoed the message
 into its own transcript — so the reply is the one place it can learn where its
 own message landed (`rpc.MessageResult`). Without it every prompt typed since the
-page loaded wore a greyed-out fork icon until a reload, which is precisely the
-message this feature exists to fork from, at precisely the moment the user wants
-to: just after reading an answer they did not like. Rewording the label would
-have described that state more honestly without making it any less useless.
+page loaded offered a fork row it could not run until a reload, which is
+precisely the message this feature exists to fork from, at precisely the moment
+the user wants to: just after reading an answer they did not like. Rewording the
+sentence would have described that state more honestly without making it any
+less useless.
 
 A running turn does **not** disable anything above it. Forking an older, settled
 message is well defined while the agent writes — everything the fork keeps is
 already final, and everything still arriving falls after the anchor and is
-dropped anyway. So the icon neither blinks out for the length of every turn nor
-opens onto a refusal; only the unsettled message itself is unforkable.
+dropped anyway. So an older message's `…` neither blinks out for the length of
+every turn nor opens onto a refusal; only the unsettled message itself is
+unforkable.
 
 ## The fork sheet
 
-`ForkSessionSheet`, a `Sheet` titled **Fork session**:
+`ForkSessionSheet`, a `Sheet` titled **Fork session**. The menu closes as it
+opens, so the two sheets **replace** one another rather than stacking: the
+confirmation is what the user is looking at next, and the menu has nothing left
+to say. (`useLockBodyScroll` counts its holders for exactly this handover.)
 
 1. **Anchor preview** — the anchor message quoted read-only, clamped to three
    lines, prefixed by its role — `You`, or the agent's label from
@@ -219,7 +317,7 @@ server sends the resulting table to the frontend (`agent.list`), so the UI asks
 ([code/agent-integration.md](code/agent-integration.md#session-forking)).
 
 - **`"none"`** — the agent cannot reopen an earlier conversation at all, so there
-  is no fork to have memory in: the session gets no fork icon at all and the
+  is no fork to have memory in: the session shows no `…` at all and the
   backend refuses the request (*Blocked and failed* below). Codex is this case —
   a thread lives in the memory of the process that created it
   ([code/agent-integration.md](code/agent-integration.md#no-forking)).
@@ -241,13 +339,14 @@ in at all, which has no memory to carry in any case. Both get the same warning a
 any other fork that could not carry memory.
 
 **The fork sheet promises nothing about memory, and that is deliberate.** An agent
-that cannot follow a fork never gets that far — the icon is never drawn, so the
-sheet never opens. For one that can, a fork can still come back with nothing for
-server-side facts no client can see: a source that never ran that agent, or whose
-provider conversation the agent already gave up on. The UI does not guess at
-those. The backend states the fact where it cannot be missed instead — a history
-record in the forked transcript (`chat.Client.Fork`, written on the `carried ==
-false` answer described in `server/agent/fork.go`, `SessionForker`), rendered
+that cannot follow a fork never gets that far — there is no `…` to press, so
+neither sheet ever opens. For one that can, a fork can still come back with
+nothing, for server-side facts no client can see: a source that never ran that
+agent, or whose provider conversation the agent already gave up on. The UI does
+not guess at those. The backend states the fact where it cannot be missed
+instead — a history record in the forked transcript (`chat.Client.Fork`, written
+on the `carried == false` answer described in `server/agent/fork.go`,
+`SessionForker`), rendered
 through the existing `WarningItem`, the same shape Codex's restart warning uses:
 
 > **<Agent> will not remember this conversation.** The new session keeps the
@@ -358,50 +457,62 @@ the distinction the two cases below turn on.
 
 **The agent cannot fork at all** — the frontend is sent `fork_support: "none"` for
 it, the server's answer for an agent that implements no `agent.SessionForker`;
-Codex is that agent. **The whole session renders no fork icon** — and since fork
-is the row's only occupant today, no action row either. Not a disabled icon: a
-branch glyph hanging under all forty bubbles of a Codex transcript, grey
-and permanently unpressable, is exactly the decoration this document argued
-against — in its worst form, since it is noise that never becomes usable. Fork is
-not an action being refused in these sessions; it is a feature that has never
-applied to them. `session.fork` refuses the same case on the backend
-(`ErrForkUnsupported`): hiding it here is the experience, refusing it there is
-the contract.
+Codex is that agent. **The whole session renders no `…`** — and since fork is the
+menu's only row today, no slot either: the bubbles get the 44px back
+(*Which rows reserve a slot*). Not a menu holding a permanently dead row: a
+Codex transcript whose every message opens onto the same refusal is noise that
+never becomes usable. Fork is not an action being refused in these sessions; it
+is a feature that has never applied to them. `session.fork` refuses the same
+case on the backend (`ErrForkUnsupported`): hiding it here is the experience,
+refusing it there is the contract.
 
 The cost of that choice, recorded because it is deliberate: the sentence *"Codex
 cannot reopen an earlier conversation, so its sessions cannot be forked"* now has
 nowhere in the frontend to be said, and the helper that produced it
-(`forkBlockedReason` in `lib/agentType.ts`) is gone. A branch icon under every
-bubble was the wrong place to say it. If it is worth saying, the place is
-somewhere session-scoped — settings, or the engine selector — said once.
+(`forkBlockedReason` in `lib/agentType.ts`) is gone. A per-message menu was the
+wrong place to say it — it is a fact about the session, and it would have been
+said forty times. If it is worth saying, the place is somewhere session-scoped —
+settings, or the engine selector — said once.
 
-**Fork applies to this message but cannot run on it** — the icon stays exactly
-where it is and goes quiet (`disabled`, `iconButtonClass(true)`). A control that
-vanishes from under the user's thumb is worse than one that says no. There are
-two of these, and they must not share a sentence, because one of them is waiting
-for something and the other is not:
+**Fork applies to this message but cannot run on it** — the row stays exactly
+where it is in the menu, dimmed, and says why in a second line under its label.
+A control that vanishes from under the user's thumb is worse than one that says
+no. This is the menu's largest single gain over the icon that preceded it: an
+icon could carry the reason only in `aria-label`, which a screen reader reads
+and nobody else does — and a `title` never fires on a touch device at all. There
+are two of these, and they must not share a sentence, because one of them is
+waiting for something and the other is not:
 
-| | Reason | `aria-label` |
+| | Reason | Second line |
 | --- | --- | --- |
-| **Not yet** | A pending permission request or question, or the rare message no record names | *"Fork from here, not available yet"* |
-| **Permanent** | A user message that opens the session: nothing before it to keep | *"Fork from here, nothing before this message to keep"* |
+| **Not yet** | A pending permission request or question, or the rare message no record names | *"This message can't be a fork point yet."* |
+| **Permanent** | A user message that opens the session: nothing before it to keep | *"Nothing before this message to keep."* |
+
+*Not yet* has to be true of two unrelated causes at once: a message waiting on
+an answer is unfinished business, while a message with no seq was finished long
+ago and merely has no address. What both share is that the message cannot be
+**named** as the cut point, which is why the sentence says that and not "still
+being written". It promises impermanence and no more — and for the same reason
+the permanent one must never say "yet".
 
 The permanent reason is asked **first** (`forkBlockedReason` in
 `MessageItem.tsx`). The two can land on the same message — an opening prompt
 whose record failed to persist is both — and "yet" would there be promising a
 wait that never ends.
 
-Neither opens a sheet, and `ForkSessionSheet` has no blocked variant: the first
-is not the message's permanent state, which does not earn that machinery, and
-the second is fully stated by its label. The reason rides the label rather than
-a `title`, because a tooltip never fires on a touch device — anything living
-only there is out of a finger's reach ([responsive-ui.md](responsive-ui.md)).
+Neither opens `ForkSessionSheet`, which has no blocked variant: the first is not
+the message's permanent state, which does not earn that machinery, and the
+second is fully stated where it stands. The row is `aria-disabled` rather than
+natively `disabled` — a natively disabled button takes no focus and screen
+readers step over it, which would hide the very sentence that was the point of
+saying no in words.
 
 "Nothing before this message to keep" is stated in three layers, on purpose:
 `chat.Client.Fork` refuses it (correctness), `resolveForkAnchor` returns no
-anchor (so the sheet cannot open onto a request that must fail), and the icon
-carries the label (so the user is told without pressing). Three copies of one
-rule is a maintenance debt worth naming — change one and check the other two.
+anchor (so the sheet cannot open onto a request that must fail), and the menu
+row says it in words (so the user learns it on the way to the action rather than
+from a failure). Three copies of one rule is a maintenance debt worth naming —
+change one and check the other two.
 
 **The request fails.** The sheet stays open and becomes dismissible again, the
 server's message renders above the footer in `text-th-error`, and `Fork` returns
@@ -415,23 +526,34 @@ New, all in `web/src/components/Chat/` unless noted:
 
 | File | Role |
 | --- | --- |
-| `MessageActions.tsx` | The action row under a bubble. Props: `{ side: "user" \| "assistant"; onFork?: () => void; forkBlocked?: "not-yet" \| "nothing-before" }`. No `onFork` means fork is not on offer in this session at all — see `ChatPanel` below for the two reasons — and with no action left to draw the row renders nothing, an empty row being a line of padding with nothing in it |
+| `MessageMenuTrigger.tsx` | The slot beside a bubble and the `…` in it, plus whether its menu is open. Props: `{ side: "user" \| "assistant"; onFork?: () => void; forkBlocked?: "not-yet" \| "nothing-before" }`. No `onFork` means this message is not a turn — the slot renders, the glyph does not. It also owns the `ForkBlocked` type; `MessageMenu` imports it back, as a type, which is erased at compile time and so is not a runtime cycle |
+| `MessageMenu.tsx` | The `Sheet` behind the `…`: everything this message can do, titled by speaker — **Your message** / **Agent message**, since a sheet here names its subject the way `Fork session` and a file's own name do. The rules for adding the second row live at its top, where the list is |
 | `ForkSessionSheet.tsx` | The confirm sheet above. Props: `{ anchor, droppedCount, agentType, defaultTitle, isForking, error, onFork, onClose }` |
 | `ForkOriginBanner.tsx` | The lineage row at the top of `MessageList` |
-| `ui/iconButtonClass.ts` | Reused as-is; the chat row is its third caller after the Git and Files panels |
 
-`MessageMenu.tsx` was the `…` sheet and is **deleted** with it. `common/MenuRow`
-stays — `Files/FileEntryMenu` is still built out of it — but it is once again one
-menu's component rather than a shared one, and `menuRowClass` is no longer
-exported: the disabled row that needed the bare class went with the menu.
+`MessageActions.tsx`, the standing row, is **deleted**; `MessageMenuTrigger` took
+its place and its props. `MessageMenu.tsx` is the once-deleted `…` sheet brought
+back out of git history with a different job: "everything this message can do"
+rather than "what did not fit". `common/MenuRow` is a shared component again —
+`Files/FileEntryMenu` and this menu are both built out of it — which is why
+`disabled` and `description` landed on it rather than on a row written for chat
+alone.
 
 Changed:
 
-- `MessageItem.tsx` — renders `MessageActions` for every conversation turn, and
-  decides fork's blocked reason. New optional props `onForkMessage?: (messageId:
-  string) => void` (stable, since the component is `memo`) and `isFirst?:
-  boolean` — first in the *whole* session, not in the pages loaded so far, since
-  that is what decides whether a fork here has anything behind it to keep.
+- `ui/iconButtonClass.ts` — the signature became an options object and gained
+  `grow` (see *The slot's weight*). Chat is its third caller after the Git and
+  Files panels, and the only one that asks for `grow: false`; the remaining call
+  sites changed shape and nothing else.
+- `common/MenuRow.tsx` — `disabled` and `description`, both for the blocked fork
+  row (*Blocked and failed*). `description` renders inside the button, so it
+  joins the row's accessible name without an `aria-describedby`.
+- `MessageItem.tsx` — renders `MessageMenuTrigger` on every row of a forkable
+  session, as a flex sibling on the bubble's inside, and decides fork's blocked
+  reason. Optional props `onForkMessage?: (messageId: string) => void` (stable,
+  since the component is `memo`) and `isFirst?: boolean` — first in the *whole*
+  session, not in the pages loaded so far, since that is what decides whether a
+  fork here has anything behind it to keep.
 - `MessageList.tsx` — the origin banner, and threading `onForkMessage` and
   `isFirst`. The top of the loaded transcript is the session's start only once
   `hasMoreHistory` is false; with older pages still unread, the first rendered
@@ -443,12 +565,12 @@ Changed:
   a portal and the RPC is a session-level concern; neither belongs inside a
   message. It is also where `onForkMessage` is withheld — from a host that
   cannot navigate, or an agent that cannot be forked — because both facts are
-  session-wide, and a second copy of that policy inside `MessageActions` would
-  one day disagree with this one.
+  session-wide, and a second copy of that policy inside `MessageMenuTrigger`
+  would one day disagree with this one.
 - `Session/SessionItem.tsx` — the `GitBranch` glyph in `leftSlot`.
 
 Outside the component tree, because none of it is about rendering: which messages
-get an action row at all (`utils/messageActions.ts` — deliberately not in
+have a menu at all (`utils/messageActions.ts` — deliberately not in
 `forkAnchor.ts`, whose name would start lying the moment a second action lands),
 the anchor and what forking there costs (`utils/forkAnchor.ts`), the `(fork N)`
 title (`utils/forkTitle.ts`), the request with its in-flight and error state
@@ -530,9 +652,9 @@ from a work to *its* session would have two candidates and no rule for picking
 one: the work list's Chat shortcut, and `AutoResumer`, which sends the next
 nudge to that id. The fork is an ordinary session.
 
-**3. Who can be forked at all.** The transcript has to know, before it draws a
-single action row, whether this session's agent can follow a fork — and it must
-not know it by name:
+**3. Who can be forked at all.** The transcript has to know, before it reserves
+a single slot, whether this session's agent can follow a fork — and it must not
+know it by name:
 
 ```
 agent.list  {}  ->  { agents: [{ type, fork_support }] }
@@ -543,16 +665,27 @@ table of its own — a second copy of this fact would disagree the day an agent
 learns something new — and it is not a subscription: the answers come from the
 implementations compiled into the server and cannot change while it runs. Until
 the answer arrives, forking is offered; the reasoning for that default and for
-retrying it after a reconnect is with the hook. Standing icons make that default
-visible — in a session that turns out to answer `"none"`, the icons appear and
-then go away once. Accepted, and not patched over with a second default inside
-the component, which would be a copy of the hook's policy waiting to disagree
-with it.
+retrying it after a reconnect is with the hook. Reserving the slot makes that
+default visible — in a session that turns out to answer `"none"`, the slots
+appear and then go away once, widening every bubble as they do. Accepted, and
+not patched over with a second default inside the component, which would be a
+copy of the hook's policy waiting to disagree with it.
 
-Accessibility: `Sheet` moves no focus of its own, anywhere in this app, so
-opening the fork sheet by keyboard leaves focus on the icon behind it. That gap
-is inherited here rather than patched in one feature — same position
-`Files/FileEntryMenu` already takes.
+Accessibility, beyond the sentence a blocked row says out loud (*Blocked and
+failed*):
+
+- **The `…` names its speaker** — *"Actions for your message"* or *"Actions for
+  the agent's message"*, plus `aria-haspopup="dialog"` and `aria-expanded`.
+  There is one of these per message, and a screen reader's button list — or a
+  voice command naming one — is unusable when every entry reads "Message
+  actions". The menu's title names the speaker again for whoever arrives after
+  it has opened.
+- **Focus is `Sheet`'s, not this feature's.** `Sheet` takes focus on open,
+  cycles Tab inside itself and hands focus back to whatever opened it; the fork
+  sheet's own title field wins over the box `Sheet` would otherwise take. Both
+  sheets here rely on that and neither writes any focus code of its own — the
+  menu's `…` gets focus back on close, and a second copy of the logic would one
+  day disagree with `Sheet`'s.
 
 ## Considered and not done
 
@@ -563,9 +696,10 @@ is inherited here rather than patched in one feature — same position
   session's input bar is one tap away — and on the case this would have helped
   most, forking off one's own prompt, the text is already sitting in it
   (*The dropped prompt*).
-- **`Copy text` on the action row.** Genuinely useful on a phone, and the row is
-  built to take it — the *Which messages get the row* split exists precisely so
+- **`Copy text` in the menu.** Genuinely useful on a phone, and the menu is
+  built to take it — the *Which messages get a menu* split exists precisely so
   that the second action does not inherit fork's reasons for being unavailable.
-  It is still not this feature. No placeholder was left for it either; the row is
-  the placeholder.
+  It is still not this feature. No placeholder was left for it either; the menu
+  is the placeholder, and it is the reason the second action costs no layout at
+  all now.
 - **A marker on the parent.** Rejected on the grounds in *The rule*.

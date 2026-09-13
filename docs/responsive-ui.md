@@ -422,13 +422,21 @@ an inline parent.
 The shared definitions, so the common cases cannot drift apart:
 
 - `web/src/components/ui/iconButtonClass.ts` — the inline icon action inside a
-  list row, a group header or the row under a chat bubble (36 / coarse 44).
+  list row, a group header or the slot beside a chat bubble (36 / coarse 44).
   Shared by both sidebar panels and chat; it moved out of `Git/` once the file
-  tree stopped writing its own copy.
+  tree stopped writing its own copy. It takes `grow`, which picks **which of the
+  two techniques above** pays for the coarse floor: growing the box by default,
+  or `size-9 touch-target` when the box may not change size. Chat's `…` is the
+  one caller of the second branch, because the width of its box is what the
+  bubble beside it is measured against — a layout number, which a pointer may
+  not decide — and because growing it would turn 44px of a phone's row into
+  52px, on the axis the menu exists to give back
+  ([session-fork-ui.md](session-fork-ui.md#the-slots-weight-and-what-it-costs-the-bubble)).
+  Splitting it in two also cost the scan below its grip on this helper, which is
+  why `web/tests/iconButtonClass.test.ts` now reads the branches directly.
 - `web/src/components/common/MenuRow.tsx`'s `MenuRow` — a full-bleed row of a
-  menu sheet (48, clear of the floor for either pointer). Only the file entry
-  menu uses it today; the message menu it was extracted for is gone, its one row
-  now an icon standing on the bubble's action row
+  menu sheet (48, clear of the floor for either pointer). The file entry menu
+  and the message menu are both built out of it
   ([session-fork-ui.md](session-fork-ui.md#entry-point)).
 - `web/src/components/ui/ContentView.tsx`'s `actionIconButtonClass` — the
   bordered icon action in the bar under a file or a diff (36 / coarse 44). It was
@@ -566,7 +574,8 @@ of the source — and it has to hold for components nobody has written yet.
 | `web/tests/widthLadder.test.ts` | No retired rung (`md:` / `xl:` / `2xl:`, stacked or interpolated) appears in source. A retired rung compiles to nothing, which is silent; this makes it loud |
 | `web/tests/hoverReveal.test.ts` | Hover-revealed visibility carries no width prefix; both halves share one gate; every reveal pair has a `group-focus-within` twin and does not hide with `display` |
 | `web/tests/pointerEvents.test.ts` | Nothing tracks a gesture with mouse events (a bare `onMouseDown` prop is allowed — see the exception above) |
-| `web/tests/touchTarget.test.ts` | Every interactive element — `<button>`, `<a>`, or anything with `role="button"` — is held to the floors as far as its source can be read ([scope](#which-controls-the-floor-is-asked-of)): an icon-only one states a box on both axes, one with text is held to whatever height it wrote down itself, and a tag that is inline by default has to blockify or the size it wrote does not count. Neighbouring controls sit ≥8px apart, over that same set of tags, wherever their container states a gap at all |
+| `web/tests/touchTarget.test.ts` | Every interactive element — `<button>`, `<a>`, or anything with `role="button"` — is held to the floors as far as its source can be read ([scope](#which-controls-the-floor-is-asked-of)): an icon-only one states a box on both axes, one with text is held to whatever height it wrote down itself, and a tag that is inline by default has to blockify or the size it wrote does not count. Neighbouring controls sit ≥8px apart, over that same set of tags, wherever their container states a gap at all. **It no longer speaks for `iconButtonClass`'s callers** — see the row below |
+| `web/tests/iconButtonClass.test.ts` | Both branches of `iconButtonClass` state the floors themselves — the grown one 36 and `pointer-coarse:` 44 on both axes, the fixed one `size-9` plus the overlay. It exists because the scan above cannot read this helper any more: it splices the body into every call site and stops at the word `touch-target`, which one branch now contains, so a caller taking the *other* branch is waved through on a class it never receives. Verified by mutation — deleting either branch's floors turns it red |
 | `web/src/components/AppShell.test.tsx` | The hamburger and the sidebar's shape come from one source and can never disagree |
 | `web/src/components/ui/Sheet.test.tsx` | Drawer sits at the bottom, modal is centred, and both follow the one hook |
 | `web/src/test/outsideClick.test.tsx` | A click outside dismisses and one inside does not; touch scrolling does not; the click that opened the overlay does not; the listener survives a host re-render |
@@ -611,6 +620,14 @@ Known blind spots, recorded as they are rather than as they should be:
    a reason it cannot verify, and that is worth knowing before the third one is
    written. (`w-full` / `flex-1` are credited the same way on the width axis,
    where a control that fills its row is rarely the one a thumb misses.)
+6. **One `touch-target` anywhere in a class helper's body clears every caller
+   of it.** The scan splices a helper's whole source in and treats that word as
+   both floors satisfied, without asking which branch a given call site takes.
+   `iconButtonClass` is the shape that exposes this — one branch overlays, the
+   other grows — and the branch that grows is now checked by
+   `web/tests/iconButtonClass.test.ts` instead. Any future helper with a
+   conditional box has the same hole and needs the same kind of direct test; the
+   scan will not say so.
 
 ### The manual check that cannot be automated
 
