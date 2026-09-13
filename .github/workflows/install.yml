@@ -206,10 +206,11 @@ jobs:
             throw "the uninstall took other PATH entries with it: $raw"
           }
 
-  # install.sh cannot be run end to end anywhere here - it writes to
-  # /usr/local/bin with sudo - but the Windows shells it now has to recognise are
-  # reachable by faking uname, and that branch returns before it touches
-  # anything. What would otherwise break silently is the pattern itself: a
+  # The Windows shells install.sh has to recognise are reached by faking uname
+  # rather than by finding a real one: the windows runner has Git Bash but never
+  # MSYS or Cygwin, and all four kernel spellings are the same branch. It returns
+  # before touching anything, so this needs none of the real root the end-to-end
+  # job sets up. What would otherwise break silently is the pattern itself: a
   # MINGW64_NT-* uname falling through to "Unsupported OS", or worse, matching
   # Linux and installing a binary the shell cannot run.
   git-bash-branch:
@@ -254,12 +255,29 @@ jobs:
   install-sh-version:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Option parsing and what `echo` does to a backslash are exactly where the
+    # shells a `curl ... | sh` can land in differ, and this job is all option
+    # parsing. The end-to-end job covers the same three from the other side.
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [dash, bash, busybox ash]
 
     steps:
       - uses: actions/checkout@v6
 
+      # busybox is not on the runner, and $SH is used unquoted below because
+      # `busybox ash` is two words.
+      - name: Run everything below under ${{ matrix.shell }}
+        run: |
+          command -v busybox >/dev/null || { sudo apt-get update; sudo apt-get install -y busybox-static; }
+          echo 'SH=${{ matrix.shell }}' >> "$GITHUB_ENV"
+
       # On PATH for the rest of the job, so every step below runs install.sh
       # against the same fakes. Nothing after this point wants the real tools.
+      # The uname is what pins the asset name the assertions expect; busybox ash
+      # answers uname from its own applet without looking at PATH, so that leg
+      # gets the runner's real linux/amd64, which is what the fake says anyway.
       - name: Fake curl, sudo and uname
         run: |
           mkdir -p fake-bin
@@ -309,35 +327,35 @@ jobs:
           base=https://github.com/sijiaoh/pockode/releases
 
           # The old `curl ... | sh` has to keep installing the latest release.
-          expect "$base/latest/download/$asset" sh site/static/install.sh
-          expect "$base/latest/download/$asset" POCKODE_VERSION=latest sh site/static/install.sh
+          expect "$base/latest/download/$asset" $SH site/static/install.sh
+          expect "$base/latest/download/$asset" POCKODE_VERSION=latest $SH site/static/install.sh
           # An empty value is how an unset variable of the user's own arrives.
-          expect "$base/latest/download/$asset" POCKODE_VERSION= sh site/static/install.sh
+          expect "$base/latest/download/$asset" POCKODE_VERSION= $SH site/static/install.sh
 
           # Both spellings of a version, through both ways of passing one.
-          expect "$base/download/v0.12.1/$asset" POCKODE_VERSION=0.12.1 sh site/static/install.sh
-          expect "$base/download/v0.12.1/$asset" POCKODE_VERSION=v0.12.1 sh site/static/install.sh
-          expect "$base/download/v0.12.1/$asset" sh site/static/install.sh --version 0.12.1
-          expect "$base/download/v0.12.1/$asset" sh site/static/install.sh --version=v0.12.1
+          expect "$base/download/v0.12.1/$asset" POCKODE_VERSION=0.12.1 $SH site/static/install.sh
+          expect "$base/download/v0.12.1/$asset" POCKODE_VERSION=v0.12.1 $SH site/static/install.sh
+          expect "$base/download/v0.12.1/$asset" $SH site/static/install.sh --version 0.12.1
+          expect "$base/download/v0.12.1/$asset" $SH site/static/install.sh --version=v0.12.1
 
           # An explicit flag overrides the environment rather than the reverse.
-          expect "$base/download/v9.9.9/$asset" POCKODE_VERSION=0.12.1 sh site/static/install.sh --version 9.9.9
+          expect "$base/download/v9.9.9/$asset" POCKODE_VERSION=0.12.1 $SH site/static/install.sh --version 9.9.9
 
           # A version is interpolated into a URL, so anything that could steer
           # the download elsewhere, or is plainly not a tag, stops the script.
-          expect no-download sh site/static/install.sh --version "0.12.1/../../evil"
-          expect no-download sh site/static/install.sh --version "http://example.com/x"
-          expect no-download sh site/static/install.sh --version ""
-          expect no-download sh site/static/install.sh --version
-          expect no-download sh site/static/install.sh --wat
+          expect no-download $SH site/static/install.sh --version "0.12.1/../../evil"
+          expect no-download $SH site/static/install.sh --version "http://example.com/x"
+          expect no-download $SH site/static/install.sh --version ""
+          expect no-download $SH site/static/install.sh --version
+          expect no-download $SH site/static/install.sh --wat
           # A forgotten value must not be filled in by the next option.
-          expect no-download sh site/static/install.sh --version --help
+          expect no-download $SH site/static/install.sh --version --help
 
           # Rejecting them is not enough. Left to themselves, a bare --version
           # dies on a message about `shift`, and --version --help on a 404 for
           # a release; neither tells the user what they actually got wrong.
           says_missing_value() {
-            output=$(sh site/static/install.sh "$@" 2>&1 || true)
+            output=$($SH site/static/install.sh "$@" 2>&1 || true)
             case "$output" in
               *"Missing value for --version"*) ;;
               *) echo "[$*] did not say the value is missing: $output"; exit 1 ;;
@@ -346,9 +364,9 @@ jobs:
           says_missing_value --version
           says_missing_value --version --help
 
-          # Reported back the way it was typed: `sh` here is dash, whose echo
+          # Reported back the way it was typed: dash's echo, and busybox ash's,
           # would turn the backslash in it into a line break.
-          output=$(sh site/static/install.sh --version 'a\nb' 2>&1 || true)
+          output=$($SH site/static/install.sh --version 'a\nb' 2>&1 || true)
           case "$output" in
             *'Invalid version: a\nb'*) ;;
             *) echo "the rejected version was not quoted back verbatim: $output"; exit 1 ;;
@@ -357,7 +375,7 @@ jobs:
           # The version asked for has to appear in what the script says it is
           # doing - it is the one thing the user cannot check any other way
           # until the install finishes.
-          output=$(sh site/static/install.sh --version 0.12.1 2>&1 || true)
+          output=$($SH site/static/install.sh --version 0.12.1 2>&1 || true)
           case "$output" in
             *"Downloading Pockode v0.12.1 for linux/amd64"*) ;;
             *) echo "a requested version is not named in the output: $output"; exit 1 ;;
@@ -365,7 +383,7 @@ jobs:
 
           # The other side of that: a plain `curl ... | sh` still says exactly
           # what it always said, down to the wording.
-          output=$(sh site/static/install.sh 2>&1 || true)
+          output=$($SH site/static/install.sh 2>&1 || true)
           case "$output" in
             "Downloading Pockode for linux/amd64..."*) ;;
             *) echo "the default run changed what it prints: $output"; exit 1 ;;
@@ -377,17 +395,396 @@ jobs:
           # Reading the script from stdin is the only form the docs give, and it
           # is the form that can break on its own: `sh -s --` has to leave the
           # script's stdin alone and still pass the arguments through.
-          cat site/static/install.sh | sh -s -- --version 0.12.1 || true
+          cat site/static/install.sh | $SH -s -- --version 0.12.1 || true
           if ! grep -q '^https://github.com/sijiaoh/pockode/releases/download/v0.12.1/pockode-linux-amd64$' "$CURL_LOG"; then
             echo "piping the script into sh -s -- --version did not reach the tagged URL: $(cat "$CURL_LOG")"; exit 1
           fi
 
       - name: --help explains both ways of asking for a version
         run: |
-          output=$(sh site/static/install.sh --help)
+          output=$($SH site/static/install.sh --help)
           for form in 'POCKODE_VERSION=' 'sh -s -- --version'; do
             case "$output" in
               *"$form"*) ;;
               *) echo "--help does not mention $form: $output"; exit 1 ;;
             esac
           done
+
+  # What install.sh does with root cannot be read off the script: that what
+  # lands in /usr/local/bin is executable by users other than the one who
+  # installed it, that a download which fails or is interrupted leaves a working
+  # install alone, and that nothing goes through a path someone else could have
+  # got to first. Those need a real root and a real rename, so this installs for
+  # real - the runner's sudo is passwordless and its /usr/local/bin is
+  # root-owned, which is the situation a user runs the script in.
+  install-sh-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: server/.go-version
+          cache-dependency-path: server/go.sum
+
+      # The real binary, not a stub: the install is only proven if what lands on
+      # PATH runs and answers -version. The frontend is not built here - the
+      # embed directories ship a .keep, which is all `go build` needs.
+      - name: Build the release asset
+        working-directory: server
+        run: |
+          mkdir -p ../.ci-serve/latest/download
+          go build -o ../.ci-serve/latest/download/pockode-linux-amd64 .
+
+      # The released asset does not exist until this branch ships, and pointing
+      # the test at a real release would test GitHub rather than the script. The
+      # served tree mirrors the release URL layout, so a tag that lost its "v"
+      # still 404s here rather than quietly installing the latest build.
+      - name: Serve the asset locally
+        run: |
+          # Logging to a file, not to the step's stderr: that pipe is closed
+          # when this step ends, and the next request would then kill the server
+          # halfway through the job.
+          nohup python3 -m http.server 8000 --bind 127.0.0.1 --directory .ci-serve > http.log 2>&1 &
+          url=http://127.0.0.1:8000/latest/download/pockode-linux-amd64
+          for _ in $(seq 30); do
+            if curl -fsS -o /dev/null "$url"; then exit 0; fi
+            sleep 0.5
+          done
+          echo "the local file server never came up at $url"; exit 1
+
+      # install.sh has no -Url of its own, so curl is the only seam. This is the
+      # real curl with the release host swapped for the local server, which
+      # leaves the URL the script builds under test, and it records where the
+      # download was told to land - the only way to observe a temporary path
+      # that the script deletes on its way out.
+      - name: Fake curl that maps release URLs onto the local server
+        run: |
+          # The fake hands over by absolute path, so that it cannot find itself.
+          test -x /usr/bin/curl
+          mkdir -p fake-bin fake-fail-bin
+          cat > fake-bin/curl <<'CURL'
+          #!/bin/sh
+          # Holds the download open for the interrupt cases below, and says so
+          # first: a signal sent before the script reached curl would be testing
+          # the shell's default handling instead of the script's trap.
+          if [ -n "$FAKE_CURL_DELAY" ]; then
+            : > "$FAKE_CURL_STARTED"
+            sleep "$FAKE_CURL_DELAY"
+          fi
+          releases=https://github.com/sijiaoh/pockode/releases/
+          # Rewriting one argument means rebuilding the whole list, and $n is
+          # what stops the rotation from lapping onto what it just appended.
+          n=$#
+          while [ "$n" -gt 0 ]; do
+            arg=$1
+            shift
+            case "$arg" in
+              "$releases"*) arg="http://127.0.0.1:8000/${arg#"$releases"}" ;;
+            esac
+            set -- "$@" "$arg"
+            n=$((n - 1))
+          done
+          prev=
+          for arg in "$@"; do
+            if [ "$prev" = -o ]; then
+              printf '%s %s\n' "$(stat -c %a "$(dirname "$arg")")" "$arg" >> "$DOWNLOAD_LOG"
+            fi
+            prev=$arg
+          done
+          exec /usr/bin/curl "$@"
+          CURL
+          # The stream assertions need a run that fails without downloading: the
+          # default run has no stderr to look at unless something goes wrong.
+          printf '#!/bin/sh\nexit 22\n' > fake-fail-bin/curl
+          chmod +x fake-bin/curl fake-fail-bin/curl
+          echo "$PWD/fake-bin" >> "$GITHUB_PATH"
+          echo "DOWNLOAD_LOG=$PWD/download.log" >> "$GITHUB_ENV"
+          echo "FAKE_CURL_STARTED=$PWD/curl-started" >> "$GITHUB_ENV"
+
+      # Every step below runs the same three shells against the same clean
+      # slate, and a copy of either that drifted would quietly stop testing one
+      # of them.
+      - name: The three shells, and the helpers every step below shares
+        run: |
+          command -v busybox >/dev/null || { sudo apt-get update; sudo apt-get install -y busybox-static; }
+          cat > ci-lib.sh <<'LIB'
+          fail() { printf '%s\n' "FAIL [$SH]: $*" >&2; exit 1; }
+
+          INSTALL_DIR=/usr/local/bin
+          TARGET=$INSTALL_DIR/pockode
+          ASSET=.ci-serve/latest/download/pockode-linux-amd64
+          # The two paths the script used to use, kept here because several
+          # steps have to show that nothing goes to either any more: the
+          # download's, and the staged copy's before it got an unguessable name.
+          PREDICTABLE=/tmp/pockode
+          PREDICTABLE_STAGED=$INSTALL_DIR/pockode.download
+          # Where mktemp creates things: the shared directory the download has
+          # to end up in a private subdirectory of, rather than directly in.
+          TMPBASE=${TMPDIR:-/tmp}
+          TMPBASE=${TMPBASE%/}
+
+          # `curl ... | sh` lands in whatever /bin/sh is, which across macOS and
+          # the Linux distributions is at least these three. `busybox ash` is two
+          # words, so callers run `$SH site/static/install.sh` unquoted.
+          for_each_shell() {
+            for SH in dash bash 'busybox ash'; do
+              "$@"
+            done
+          }
+
+          # Runs start from nothing installed, so no step can pass on what an
+          # earlier one left behind.
+          reset_install() {
+            sudo rm -f "$TARGET" "$INSTALL_DIR"/pockode.*
+            rm -rf "$PREDICTABLE" "$TMPBASE"/pockode-install.*
+            : > "$DOWNLOAD_LOG"
+          }
+
+          install_sh() { $SH site/static/install.sh "$@"; }
+
+          assert_installed() {
+            if [ -L "$TARGET" ]; then fail "$TARGET is a symlink"; fi
+            [ -f "$TARGET" ] || fail "$TARGET is not a regular file"
+            mode=$(stat -c %a "$TARGET")
+            [ "$mode" = 755 ] || fail "$TARGET is mode $mode, not 755"
+            cmp -s "$ASSET" "$TARGET" || fail "$TARGET is not the asset that was served"
+            # Quiet: this runs a few dozen times, and a failure has fail to
+            # speak through.
+            pockode -version > /dev/null || fail "the installed pockode does not run"
+            # Installed by one user, runnable by all the others: nothing but the
+            # explicit chmod on the staged copy makes this true.
+            sudo -u nobody "$TARGET" -version > /dev/null ||
+              fail "a user who did not install it cannot run $TARGET"
+          }
+
+          # By shape, not by name: the staged copy is called something different
+          # every run, so there is no one path to look for.
+          assert_no_leftovers() {
+            staged=$(find "$INSTALL_DIR" -maxdepth 1 -name 'pockode.*')
+            [ -z "$staged" ] || fail "a staged file was left behind: $staged"
+            leftover=$(find "$TMPBASE" -maxdepth 1 -name 'pockode-install.*')
+            [ -z "$leftover" ] || fail "a temporary directory was left behind: $leftover"
+          }
+
+          # Where the last download was told to land, and the mode of the
+          # directory it was in, both as recorded by the fake curl.
+          download_path() { awk 'END { print $2 }' "$DOWNLOAD_LOG"; }
+          download_dir_mode() { awk 'END { print $1 }' "$DOWNLOAD_LOG"; }
+          LIB
+
+      - name: An install is executable by a user who did not install it
+        run: |
+          . ./ci-lib.sh
+          check() {
+            reset_install
+            install_sh || fail "the install failed"
+            assert_installed
+            assert_no_leftovers
+
+            # Also the upgrade case. Under a restrictive umask the download is
+            # readable by the user who ran the script and no one else, which is
+            # where installing it by moving it into place leaves a binary the
+            # rest of the machine cannot run.
+            (umask 077; install_sh) || fail "the upgrade failed"
+            assert_installed
+            assert_no_leftovers
+          }
+          for_each_shell check
+
+      # A fixed /tmp/pockode is a path any other user on the machine can create,
+      # or point somewhere of their choosing, before the install runs.
+      - name: The download lands somewhere private and unpredictable
+        run: |
+          . ./ci-lib.sh
+          check() {
+            reset_install
+            install_sh
+            first=$(download_path)
+            mode=$(download_dir_mode)
+            dir=$(dirname "$first")
+            case "$dir" in
+              "$TMPBASE"|/tmp|/var/tmp|/) fail "the download went straight into $dir" ;;
+            esac
+            [ "$mode" = 700 ] || fail "the download directory $dir is mode $mode, not 700"
+
+            install_sh
+            [ "$first" != "$(download_path)" ] || fail "two runs downloaded to the same path $first"
+            assert_no_leftovers
+          }
+          for_each_shell check
+
+      - name: A planted /tmp/pockode is not written through
+        run: |
+          . ./ci-lib.sh
+          check() {
+            reset_install
+            printf 'someone else\n' > canary
+            ln -s "$PWD/canary" "$PREDICTABLE"
+            install_sh
+            assert_installed
+            assert_no_leftovers
+            [ -L "$PREDICTABLE" ] || fail "$PREDICTABLE is no longer the symlink it was"
+            grep -q 'someone else' canary || fail "the download was written through $PREDICTABLE"
+          }
+          for_each_shell check
+
+      # /usr/local/bin is root-only on Linux but group-writable on a default
+      # macOS, where anyone in the admin group can leave a symlink at a staged
+      # name they can predict and have the install follow it as root. Planted in
+      # a loop, the way it would be for real: deleting the name before writing
+      # to it leaves a gap between the two commands that this wins on the first
+      # install, so only a name that cannot be guessed passes this.
+      - name: The staged name cannot be planted, not even in a loop
+        run: |
+          . ./ci-lib.sh
+          # An assertion that fires leaves the step without reaching the line
+          # that stops the loop, and a root-owned spin left running would follow
+          # the job into every step after this one.
+          trap 'rm -f plant-flag' EXIT
+          check() {
+            reset_install
+            printf 'someone else\n' > canary
+            # Standing in for a user who can write $INSTALL_DIR - the runner's
+            # is root-only, so reaching it at all needs sudo here. The flag file
+            # stops the loop: killing it by pid would only reach the sudo.
+            : > plant-flag
+            sudo sh -c 'while [ -e "$1" ]; do ln -sfn "$2" "$3"; done' \
+              plant "$PWD/plant-flag" "$PWD/canary" "$PREDICTABLE_STAGED" &
+            attempt=0
+            while [ "$attempt" -lt 5 ]; do
+              install_sh || fail "the install failed"
+              assert_installed
+              grep -q 'someone else' canary ||
+                fail "the install was written through a symlink planted at $PREDICTABLE_STAGED"
+              attempt=$((attempt + 1))
+            done
+            rm -f plant-flag
+            wait
+            sudo rm -f "$PREDICTABLE_STAGED"
+            assert_no_leftovers
+          }
+          for_each_shell check
+
+      # The twin of the install.ps1 case above: a tag that was never released
+      # 404s on the local server, so this is a download that really fails
+      # halfway through the run rather than one told to fail.
+      - name: A failed download leaves the existing install alone
+        run: |
+          . ./ci-lib.sh
+          check() {
+            reset_install
+            install_sh
+            if install_sh --version 0.0.0-no-such-release; then
+              fail "installing a version that does not exist should have failed"
+            fi
+            assert_installed
+            assert_no_leftovers
+          }
+          for_each_shell check
+
+      # An interrupted download is the one failure no error handling around the
+      # curl call can see, so the cleanup and the exit status come from traps.
+      # Ctrl-C signals the whole foreground process group, and that shape is the
+      # only one that reaches them: a `cmd &` in a non-interactive shell
+      # inherits SIGINT ignored, and POSIX then makes the trap a no-op too, so
+      # the obvious way to write this test passes whatever the script does.
+      - name: An interrupted download leaves the existing install alone
+        run: |
+          . ./ci-lib.sh
+          cat > signal-run.py <<'PY'
+          import os, signal, subprocess, sys, time
+
+          name, marker, *command = sys.argv[1:]
+          if os.path.exists(marker):
+              os.remove(marker)
+          child = subprocess.Popen(command, start_new_session=True)
+          deadline = time.monotonic() + 60
+          while not os.path.exists(marker):
+              if child.poll() is not None:
+                  sys.exit(f"the script exited ({child.returncode}) before the download started")
+              if time.monotonic() > deadline:
+                  child.kill()
+                  sys.exit("the download never started")
+              time.sleep(0.05)
+          os.killpg(os.getpgid(child.pid), getattr(signal, name))
+          status = child.wait()
+          # A shell that died from the signal rather than running its trap is a
+          # different outcome from one that exited 128+signo, so do not report it
+          # as the same number.
+          sys.exit(status if status >= 0 else 200 - status)
+          PY
+          check() {
+            reset_install
+            install_sh
+            for signal in SIGHUP:129 SIGINT:130 SIGTERM:143; do
+              status=0
+              FAKE_CURL_DELAY=60 python3 signal-run.py "${signal%:*}" "$FAKE_CURL_STARTED" \
+                $SH site/static/install.sh || status=$?
+              [ "$status" = "${signal#*:}" ] ||
+                fail "${signal%:*} during the download exited $status, wanted ${signal#*:}"
+              assert_installed
+              assert_no_leftovers
+            done
+          }
+          for_each_shell check
+
+      # The failure messages have to be on stderr - a user who sends stdout
+      # somewhere still has to be told why nothing installed - and the progress
+      # lines have to stay on stdout. The assertions in the jobs above merge the
+      # two with 2>&1 and cannot tell them apart.
+      - name: Failures go to stderr and progress stays on stdout
+        run: |
+          . ./ci-lib.sh
+          fake_uname() {
+            mkdir -p fake-uname-bin
+            printf '#!/bin/sh\ncase "$1" in -s) echo %s ;; -m) echo %s ;; esac\n' "$1" "$2" > fake-uname-bin/uname
+            chmod +x fake-uname-bin/uname
+          }
+          # $1 is stdout in full, $2 something stderr has to contain, then the
+          # uname -s and uname -m that select the branch under test.
+          expect_streams() {
+            fake_uname "$3" "$4"
+            status=0
+            PATH="$PWD/fake-fail-bin:$PWD/fake-uname-bin:$PATH" \
+              $SH site/static/install.sh > out.txt 2> err.txt || status=$?
+            [ "$status" != 0 ] || fail "[$3 $4] should not have reported success"
+            [ "$(cat out.txt)" = "$1" ] || fail "[$3 $4] stdout was '$(cat out.txt)', wanted '$1'"
+            grep -qF "$2" err.txt || fail "[$3 $4] stderr does not say '$2': $(cat err.txt)"
+          }
+          # The successful run is the output nearly every user ever sees, and its
+          # last line is the command the README tells them to run next. Compared
+          # in full: every other assertion in this workflow looks at a run that
+          # failed, so an extra line here, or a reworded one, would go unnoticed.
+          expect_success_stdout() {
+            reset_install
+            install_sh > out.txt 2> err.txt || fail "the install failed: $(cat err.txt)"
+            printf '%s\n' 'Downloading Pockode for linux/amd64...' \
+              "Installing to $TARGET..." \
+              "Done! Run 'pockode -auth-token YOUR_PASSWORD' to get started." > wanted.txt
+            diff -u wanted.txt out.txt || fail "a successful install changed what it prints"
+          }
+          check() {
+            expect_success_stdout
+
+            # The one line a failed default run is allowed to put on stdout.
+            expect_streams 'Downloading Pockode for linux/amd64...' 'Download failed:' Linux x86_64
+
+            # The branches below need a uname the runner does not have, and
+            # busybox ash answers uname from its own applet without consulting
+            # PATH - a fake cannot reach it, so the other two shells carry these
+            # three. Asked rather than assumed: a shell that starts or stops
+            # doing this changes what runs here without anyone editing it.
+            fake_uname Plan9 x86_64
+            if [ "$(PATH="$PWD/fake-uname-bin:$PATH" $SH -c 'uname -s')" != Plan9 ]; then
+              echo "$SH answers uname itself; leaving the faked-uname branches to the other shells"
+              return 0
+            fi
+            expect_streams '' 'install.ps1' MINGW64_NT-10.0-26100 x86_64
+            expect_streams '' 'Unsupported OS: Plan9' Plan9 x86_64
+            expect_streams '' 'Unsupported architecture: riscv64' Linux riscv64
+          }
+          for_each_shell check

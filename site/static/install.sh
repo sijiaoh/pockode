@@ -79,10 +79,10 @@ case "$OS" in
   # this in. They can run the script but not the binary it installs, so point at
   # the PowerShell installer instead of failing with a raw uname string.
   MINGW*|MSYS*|CYGWIN*)
-    echo "This installs the macOS/Linux build. On Windows, run this in PowerShell:"
-    echo "  irm https://pockode.com/install.ps1 | iex"
+    echo "This installs the macOS/Linux build. On Windows, run this in PowerShell:" >&2
+    echo "  irm https://pockode.com/install.ps1 | iex" >&2
     exit 1 ;;
-  *)      echo "Unsupported OS: $OS"; exit 1 ;;
+  *)      echo "Unsupported OS: $OS" >&2; exit 1 ;;
 esac
 
 # Detect architecture
@@ -91,7 +91,7 @@ case "$ARCH" in
   x86_64)  ARCH="amd64" ;;
   aarch64) ARCH="arm64" ;;
   arm64)   ARCH="arm64" ;;
-  *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
+  *)       echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
 
 ASSET="pockode-$OS-$ARCH"
@@ -114,9 +114,41 @@ else
   echo "Downloading Pockode $TAG for $OS/$ARCH..."
 fi
 
+# The download lands in a directory only this run can write to. A fixed name
+# under /tmp is a path anyone on the machine can create - or symlink - first,
+# and the install would then hand root whatever they left there.
+TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pockode-install.XXXXXX")
+TMP_BINARY="$TMP_DIR/$BINARY_NAME"
+# Set once there is a staged file to remove, which is also what tells cleanup
+# whether it has to reach for sudo at all.
+STAGED=""
+
+# Cleanup runs from a trap, which is after the failure messages below rather
+# than between them: a removal that fails itself cannot make set -e cut the
+# explanation short. It also covers an interrupted download, which no amount of
+# error handling on the curl call would.
+cleanup() {
+  if [ -n "$TMP_DIR" ]; then
+    rm -rf "$TMP_DIR" || :
+    TMP_DIR=""
+  fi
+  # A run that failed before staging anything must not ask for a password just
+  # to clean up.
+  if [ -n "$STAGED" ]; then
+    sudo rm -f "$STAGED" || :
+    STAGED=""
+  fi
+}
+trap cleanup EXIT
+# A signal does not run the EXIT trap on its own, and 128+signal is the status a
+# shell killed by one would have reported.
+trap 'cleanup; exit 129' HUP
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
 # curl's own message for a missing release is a bare "The requested URL returned
 # error: 404", which names neither the version nor the URL it was built from.
-CURL_ERROR=$(curl -fsSL "$DOWNLOAD_URL" -o "/tmp/$BINARY_NAME" 2>&1) && CURL_STATUS=0 || CURL_STATUS=$?
+CURL_ERROR=$(curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BINARY" 2>&1) && CURL_STATUS=0 || CURL_STATUS=$?
 if [ "$CURL_STATUS" -ne 0 ]; then
   echo "Download failed: $DOWNLOAD_URL" >&2
   if [ -n "$CURL_ERROR" ]; then
@@ -131,14 +163,29 @@ if [ "$CURL_STATUS" -ne 0 ]; then
       echo "Check that release $TAG exists and has a $ASSET asset: https://github.com/$REPO/releases" >&2
     fi
   fi
-  # Last, so that a /tmp left unwritable by someone else cannot make set -e cut
-  # the explanation short.
-  rm -f "/tmp/$BINARY_NAME"
   exit 1
 fi
 
 echo "Installing to $INSTALL_DIR/$BINARY_NAME..."
-sudo mv "/tmp/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
-sudo chmod +x "$INSTALL_DIR/$BINARY_NAME"
+# Staged beside the target so the install itself is a rename within one
+# directory, the way install.ps1 does it. A rename is only atomic within one
+# volume, and /tmp usually is not the volume $INSTALL_DIR is on: staging here is
+# what keeps a failed or interrupted run from leaving a half-written binary
+# where a working one was.
+#
+# mktemp rather than a fixed "$BINARY_NAME.download": $INSTALL_DIR is root-only
+# on Linux but group-writable on a default macOS, so a fixed name there is one
+# more path someone can leave a symlink at for the cp below to follow as root.
+# Deleting it first would only narrow that to the gap between the two commands -
+# a gap wide enough to lose. An exclusive create under a name nobody can guess
+# has no such gap.
+STAGED=$(sudo mktemp "$INSTALL_DIR/$BINARY_NAME.XXXXXX")
+sudo cp "$TMP_BINARY" "$STAGED"
+# A rename preserves the mode bits, so the mode has to be right before it, and
+# it has to be spelled out: mktemp creates the staged file readable by root
+# alone, and a `chmod +x` on that would install a binary no one else can run.
+sudo chmod 0755 "$STAGED"
+sudo mv "$STAGED" "$INSTALL_DIR/$BINARY_NAME"
+STAGED=""
 
 echo "Done! Run 'pockode -auth-token YOUR_PASSWORD' to get started."
