@@ -169,13 +169,18 @@ func TestBackgroundWait_SurvivesAnEmptyTaskList(t *testing.T) {
 	events := make(chan agent.AgentEvent, 4)
 
 	tracker := &backgroundTaskTracker{}
-	tracker.wait.start(testLogger(), events, func(string) {}, 20*time.Millisecond)
+	tracker.wait.start(testLogger(), events, func(string) {}, time.Hour)
 	defer tracker.wait.stopWaiting()
 
 	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
 	parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
 	parseTestLineWithTracker(testLogger(), []byte(noLiveTasks), tracker)
 
+	if waitDeadline(&tracker.wait).IsZero() {
+		t.Fatal("the task list emptying ended the wait, leaving nothing to end the turn")
+	}
+
+	expireDeadline(&tracker.wait)
 	if _, ok := awaitEvent(t, events).(agent.WarningEvent); !ok {
 		t.Fatal("expected the fallback to still fire after the task list emptied")
 	}
@@ -303,7 +308,7 @@ func TestBackgroundWait_OutputPushesTheDeadlineOut(t *testing.T) {
 
 	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
 	parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
-	armed := backdateDeadline(&tracker.wait)
+	armed := rewindDeadline(t, &tracker.wait)
 
 	// The task finished and the CLI resumed output on its own.
 	parseTestLineWithTracker(testLogger(), []byte(noLiveTasks), tracker)
@@ -320,15 +325,52 @@ func waitDeadline(wait *backgroundWait) time.Time {
 	return wait.deadline
 }
 
-// backdateDeadline rewinds the armed deadline and returns the new value, so
+// expireDeadline makes the armed budget run out now instead of waiting for it.
+//
+// A test that needs the fallback to fire could arm a budget of a few
+// milliseconds instead, but then every assertion about the state *before* it
+// fires races the machine: under load the budget runs out first, and the test
+// either fails or — worse — passes having observed only the aftermath. Moving
+// the deadline to now and waking the runner is what the expiring timer does
+// anyway, so the wait ends for exactly the same reason, on the test's schedule.
+//
+// TestBackgroundWait_DeliversTheEndingAfterTheBudget keeps a real short budget
+// so the timer path itself stays covered; it asserts nothing about the state
+// beforehand, so it has no race to lose.
+func expireDeadline(wait *backgroundWait) {
+	wait.deadlineMu.Lock()
+	wait.deadline = time.Now()
+	wait.deadlineMu.Unlock()
+
+	wait.wakeRunner()
+}
+
+// rewindDeadline pulls the armed deadline back and returns the new value, so
 // that "output pushed the deadline out" can be asserted independently of the
 // wall clock's resolution: on Windows two consecutive time.Now() calls
 // routinely return the same instant, which makes a strict After() against the
 // deadline armed a moment earlier fail even though refresh did its job.
-func backdateDeadline(wait *backgroundWait) time.Time {
+//
+// The rewind has to leave the deadline in the future, which is why it is a
+// minute — far beyond any clock's resolution, far short of the budget the
+// caller arms with — and why that is checked rather than left to the next
+// person who edits the budget. An expired deadline is a state the
+// implementation never produces (extend and refresh both arm from time.Now()),
+// and the runner re-reads the deadline whenever it is woken, so it would see
+// the expired one, correctly fire the fallback and clear the deadline before
+// refresh ever ran.
+func rewindDeadline(t *testing.T, wait *backgroundWait) time.Time {
+	t.Helper()
+
+	const rewind = time.Minute
+
 	wait.deadlineMu.Lock()
 	defer wait.deadlineMu.Unlock()
-	wait.deadline = wait.deadline.Add(-time.Hour)
+
+	wait.deadline = wait.deadline.Add(-rewind)
+	if !wait.deadline.After(time.Now()) {
+		t.Fatalf("rewinding by %v expired the deadline; arm this wait with a budget well above it", rewind)
+	}
 	return wait.deadline
 }
 
@@ -361,7 +403,7 @@ func TestBackgroundTaskTracker_ReapExemptionLastsExactlyAsLongAsTheWait(t *testi
 	events := make(chan agent.AgentEvent, 4)
 
 	tracker := &backgroundTaskTracker{}
-	tracker.wait.start(testLogger(), events, func(string) {}, 20*time.Millisecond)
+	tracker.wait.start(testLogger(), events, func(string) {}, time.Hour)
 	defer tracker.wait.stopWaiting()
 
 	if tracker.waitingForBackgroundWork() {
@@ -380,6 +422,7 @@ func TestBackgroundTaskTracker_ReapExemptionLastsExactlyAsLongAsTheWait(t *testi
 
 	// The fallback ends the wait, and with it the exemption — even though the
 	// task list never emptied.
+	expireDeadline(&tracker.wait)
 	awaitEvent(t, events)
 	awaitEvent(t, events)
 	if tracker.waitingForBackgroundWork() {
