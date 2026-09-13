@@ -24,7 +24,7 @@ COPY site/static/images/logo.svg ./web/public/favicon.svg
 RUN pnpm --filter web run build
 
 # Stage 2: Build backend
-FROM golang:1.25.4-alpine AS backend-builder
+FROM golang:1.27.1-alpine AS backend-builder
 
 WORKDIR /app
 RUN apk add --no-cache git ca-certificates
