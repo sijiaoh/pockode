@@ -1,10 +1,13 @@
 package node
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 )
 
 func newTestStore(t *testing.T) *FileStore {
@@ -156,6 +159,33 @@ func TestCreate_DuplicatePath(t *testing.T) {
 	}
 }
 
+// Windows resolves paths case-insensitively, so `...\Project` and
+// `...\project` name one directory there and two directories everywhere else.
+// Both verdicts matter: registering the same project twice gives the user two
+// nodes racing over one .pockode directory, while refusing a genuinely distinct
+// sibling locks them out of it.
+func TestCreate_DuplicatePath_DifferentCase(t *testing.T) {
+	s := newTestStore(t)
+	dir := createTestDir(t, "Project")
+	variant := filepath.Join(filepath.Dir(dir), "project")
+
+	createNode(t, s, dir, "First")
+
+	if runtime.GOOS == "windows" {
+		if _, err := s.Create(variant, "Second", false); !errors.Is(err, ErrDuplicatePath) {
+			t.Fatalf("Create(%q) error = %v, want ErrDuplicatePath", variant, err)
+		}
+		return
+	}
+
+	if err := os.MkdirAll(variant, 0755); err != nil {
+		t.Fatalf("create sibling dir: %v", err)
+	}
+	if _, err := s.Create(variant, "Second", false); err != nil {
+		t.Fatalf("Create(%q) failed, but it is a different directory here: %v", variant, err)
+	}
+}
+
 func TestList(t *testing.T) {
 	s := newTestStore(t)
 
@@ -191,6 +221,14 @@ func TestUpdate_Name(t *testing.T) {
 	dir := createTestDir(t, "project")
 	node := createNode(t, s, dir, "Old")
 
+	// Rewind so the assertion below is about Update refreshing UpdatedAt rather
+	// than about the wall clock's resolution: on Windows two time.Now() calls
+	// microseconds apart routinely return the same instant.
+	s.nodesMu.Lock()
+	backdated := node.UpdatedAt.Add(-time.Hour)
+	s.nodes[s.findIndex(node.ID)].UpdatedAt = backdated
+	s.nodesMu.Unlock()
+
 	newName := "New"
 	updated, err := s.Update(node.ID, UpdateFields{Name: &newName}, false)
 	if err != nil {
@@ -200,8 +238,8 @@ func TestUpdate_Name(t *testing.T) {
 	if updated.Name != "New" {
 		t.Errorf("name = %q, want %q", updated.Name, "New")
 	}
-	if updated.UpdatedAt.Equal(node.UpdatedAt) {
-		t.Error("expected updated_at to change")
+	if !updated.UpdatedAt.After(backdated) {
+		t.Error("expected Update to refresh updated_at")
 	}
 }
 
@@ -467,6 +505,19 @@ func TestExpandTilde(t *testing.T) {
 		{"dot with slash", "./subdir", "./subdir"},
 		{"dot dot", "..", ".."},
 	}
+
+	// A Windows user types `~\projects`, and no shell there expands it for us.
+	// On Unix the backslash is an ordinary filename character, so the same
+	// string must survive untouched rather than being read as home-relative.
+	backslash := struct {
+		name   string
+		input  string
+		expect string
+	}{"tilde with backslash", `~\projects`, `~\projects`}
+	if runtime.GOOS == "windows" {
+		backslash.expect = filepath.Join(home, "projects")
+	}
+	tests = append(tests, backslash)
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

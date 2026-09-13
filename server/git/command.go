@@ -5,11 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -146,18 +146,34 @@ func execGitNetworkTimeout(dir string, timeout time.Duration, args ...string) er
 		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
 	}
 
-	// Ask git to stop rather than killing it outright. git removes its lock files
-	// (index.lock, FETCH_HEAD.lock) on SIGTERM but cannot on SIGKILL, and a lock
-	// left behind by a timeout would break every later git command in the
-	// worktree — a worse outcome than the hang the timeout exists to prevent.
-	// WaitDelay is the backstop for a git that ignores it.
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	// Stop git as gracefully as the platform allows rather than killing it
+	// outright. Where git can be asked to stop it removes its lock files
+	// (index.lock, FETCH_HEAD.lock) on the way out, and a lock left behind by a
+	// timeout would break every later git command in the worktree — a worse
+	// outcome than the hang the timeout exists to prevent. What "as gracefully
+	// as allowed" means differs per platform, and on Windows it is not much; see
+	// terminate_windows.go.
+	term := newTerminator(cmd)
+	defer term.close()
+	cmd.Cancel = func() error { return term.stop(cmd) }
+	// The backstop for a git that ignores the request.
 	cmd.WaitDelay = terminateGrace
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return newCommandError(args, stderr.String(), err)
+	}
+	if err := term.adopt(cmd); err != nil {
+		// Not fatal: git itself can still be stopped, only the guarantee about the
+		// helpers it starts is lost. Worth saying out loud — a straggler holding
+		// the stderr pipe is the explanation for a deadline that then takes
+		// WaitDelay to land.
+		slog.Warn("failed to attach process tree tracking to git", "error", err, "pid", cmd.Process.Pid)
+	}
+
+	if err := cmd.Wait(); err != nil {
 		cmdErr := newCommandError(args, stderr.String(), err)
 		cmdErr.TimedOut = ctx.Err() == context.DeadlineExceeded
 		cmdErr.Timeout = timeout

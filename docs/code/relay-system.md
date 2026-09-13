@@ -193,11 +193,17 @@ The same-origin check is now the *only* origin defence for mobile clients — th
 
 ```go
 func (s *Store) Save(cfg *StoredConfig) error {
-    return os.WriteFile(s.path, data, 0600)  // Owner-only access
+    if err := fsperm.RestrictDir(filepath.Dir(s.path)); err != nil {
+        return err
+    }
+    // ...
+    return filestore.WriteFileAtomic(s.path, data, 0600)
 }
 ```
 
-The relay token is the credential for reaching the user's PC. Permission 0600 keeps it readable only by its owner.
+The relay token is a credential for reaching the user's PC — whoever holds it can register the user's subdomain and receive the requests their phone makes, auth header included — so `relay.json` must not be readable by other local users.
+
+The mode alone does not achieve that. `0600` is owner-only on unix, but on Windows it is inert: Go maps the `perm` argument only to the read-only attribute, and the file takes its access rights from the parent directory's ACL instead. `Save` therefore restricts the **directory** first, which is what actually protects the token there and what survives the atomic rewrite. See [Authentication → Credentials on Disk](authentication.md#credentials-on-disk) for the full reasoning and `server/internal/fsperm/` for the implementation.
 
 ### Version Check
 

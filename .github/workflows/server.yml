@@ -15,8 +15,19 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Windows is a release target with platform-specific implementations (file
+    # locking, process groups, hook shell lookup, path comparison). Those only
+    # have a regression net if their tests run on a real Windows machine —
+    # cross-compiling proves they build, not that they work. macOS is the other
+    # released platform and is cheap to keep honest at the same time.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+    # Windows runs git-backed worktree tests noticeably slower than Linux.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: server
@@ -30,7 +41,9 @@ jobs:
           go-version-file: server/.go-version
           cache-dependency-path: server/go.sum
 
+      # gofmt output does not vary by platform, so checking it once is enough.
       - name: Check formatting
+        if: matrix.os == 'ubuntu-latest'
         run: |
           if [ -n "$(gofmt -l .)" ]; then
             echo "Code is not formatted. Run 'gofmt -w .'"
@@ -41,8 +54,52 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # Verbose, and with the skips listed at the end. A matrix leg that goes
+      # green because every platform-specific test skipped itself is worse than
+      # no leg at all, so what ran has to be visible and not just the verdict.
       - name: Test
-        run: go test ./...
+        shell: bash
+        run: |
+          # The status is carried by hand because this shell runs with -e: a
+          # failing test run would otherwise abort the step before the report
+          # below, and a red first run on a new platform is exactly when the
+          # list of what did not run is worth the most.
+          status=0
+          go test -v ./... 2>&1 | tee test.log || status=$?
+          echo "--- skipped tests ---"
+          # POSIX character class, not \s: macOS ships BSD grep, where \s is not
+          # an ERE escape and the report would silently come back empty.
+          grep -E '^[[:space:]]*--- SKIP' test.log || echo "(none)"
+          exit $status
 
       - name: Build
         run: go build -o server .
+
+  # Windows binaries ship in every release, so the windows-only files must keep
+  # compiling. Cross-compiling on Linux is far cheaper than a Windows runner.
+  windows-cross-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: server
+    env:
+      GOOS: windows
+      GOARCH: amd64
+      CGO_ENABLED: "0"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: server/.go-version
+          cache-dependency-path: server/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      # vet type-checks _test.go files too, which `go build` skips
+      - name: Vet
+        run: go vet ./...

@@ -32,15 +32,31 @@ Your powerful dev machine sits at home. With Pockode, you can use it from anywhe
 
 ## Quick Start
 
+**macOS / Linux**
+
 ```bash
 # Install
 curl -fsSL https://pockode.com/install.sh | sh
 
-# Run (on your dev machine)
+# Run (on your dev machine, in your project directory)
 pockode -auth-token YOUR_PASSWORD
 ```
 
+**Windows**
+
+```powershell
+# Install
+irm https://pockode.com/install.ps1 | iex
+
+# Run (on your dev machine, in your project directory)
+pockode -auth-token YOUR_PASSWORD
+```
+
+The Windows installer needs no administrator rights; open a new terminal afterwards so `PATH` picks it up.
+
 Scan the QR code with your phone. Done.
+
+> Every prebuilt binary, and what Windows needs installed alongside it: [platform support](docs/platforms.md).
 
 > Need to manage multiple projects? Use [cluster mode](docs/cluster.md) — an orchestrator that registers project nodes and starts/stops their servers on demand.
 

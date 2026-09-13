@@ -378,7 +378,6 @@ body {
 
 .install-code {
   padding: 1.5rem;
-  padding-right: 5rem;
   margin: 0;
   background: transparent;
   font-family: ui-monospace, 'SF Mono', 'Cascadia Code', monospace;
@@ -399,6 +398,12 @@ body {
   position: absolute;
   top: 1rem;
   right: 1rem;
+  display: none;
+  /* Wide enough for "Copied" / "Failed" so the feedback does not resize the
+     button, narrow enough to stay clear of the longest comment line in the code
+     block at 375px - that is why the failure text is "Failed" and not "Copy
+     failed". */
+  min-width: 5rem;
   padding: 0.5rem 0.875rem;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -415,11 +420,104 @@ body {
   color: var(--text);
 }
 
+.has-clipboard .copy-btn {
+  display: block;
+}
+
+.has-clipboard .install-code {
+  padding-right: 6.5rem; /* clears the button: right 1rem + min-width 5rem */
+}
+
+.install-os {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0; /* fieldset defaults to min-width:min-content, which breaks narrow screens */
+}
+
+.install-radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.install-tablist {
+  display: flex;
+  gap: 0.25rem;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 auto 1rem;
+  padding: 0.25rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.install-tab {
+  padding: 0.5rem 1rem;
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  -webkit-user-select: none; /* Safari only dropped the prefix in 17 */
+  user-select: none;
+  text-align: center;
+  transition: background 0.2s, color 0.2s;
+}
+
+.install-tab:hover {
+  color: var(--text);
+}
+
+#os-unix:checked ~ .install-tablist [for="os-unix"],
+#os-win:checked ~ .install-tablist [for="os-win"] {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+#os-unix:focus-visible ~ .install-tablist [for="os-unix"],
+#os-win:focus-visible ~ .install-tablist [for="os-win"] {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.install-panel {
+  display: none;
+}
+
+#os-unix:checked ~ .install-panel[data-os="unix"],
+#os-win:checked ~ .install-panel[data-os="win"] {
+  display: block;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .install-note {
   text-align: center;
   margin-top: 1.5rem;
   font-size: 1rem;
   color: var(--text-muted);
+}
+
+.install-note a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.install-note a:hover {
+  text-decoration: underline;
 }
 
 /* Footer */
@@ -605,6 +703,15 @@ body {
 
   .feature-list {
     align-items: center;
+  }
+
+  .install-tablist {
+    width: 100%;
+  }
+
+  .install-tab {
+    flex: 1;
+    padding: 0.75rem 0.5rem; /* 44px+ touch target */
   }
 
   .footer-links {

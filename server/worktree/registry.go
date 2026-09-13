@@ -11,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pockode/server/internal/pathutil"
+	"github.com/pockode/server/settings"
 )
 
 var (
@@ -69,6 +72,12 @@ func (r *Registry) MainDir() string {
 	return r.mainDir
 }
 
+// CheckSetupHook reports why the next Create would skip the setup hook, or nil
+// if it would run.
+func (r *Registry) CheckSetupHook() *SetupHookSkip {
+	return CheckSetupHook(r.dataDir)
+}
+
 // SetBaseDirProvider wires a source for the configurable worktree base
 // directory. The provider returns a value validated at the settings boundary:
 // absolute, `./`/`../` (repo-relative), `~`/`~/...` (home-relative), or "" for
@@ -93,20 +102,21 @@ func (r *Registry) worktreesDir() string {
 //   - absolute     → used as-is
 //   - `./`/`../`   → relative to the repository root (main worktree)
 func (r *Registry) expandBaseDir(base string) string {
-	switch {
-	case base == "~" || strings.HasPrefix(base, "~/"):
+	base = settings.NormalizeWorktreeBaseDir(base)
+
+	if rest, ok := pathutil.TrimTildePrefix(base); ok {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			// Home directory is unknown; fall back to a cleaned literal so the
 			// path stays deterministic rather than silently using the default.
 			return filepath.Clean(base)
 		}
-		return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(base, "~"), "/"))
-	case filepath.IsAbs(base):
-		return filepath.Clean(base)
-	default:
-		return filepath.Join(r.mainDir, base)
+		return filepath.Join(home, rest)
 	}
+	if filepath.IsAbs(base) {
+		return filepath.Clean(base)
+	}
+	return filepath.Join(r.mainDir, base)
 }
 
 // resolveExistingPrefix resolves symlinks in the longest existing prefix of
@@ -171,18 +181,22 @@ func (r *Registry) List() []Info {
 	return result
 }
 
-func (r *Registry) Create(name, branch, baseBranch string) (Info, error) {
+// Create adds a worktree and runs the setup hook in it. The returned
+// SetupHookSkip is non-nil when the worktree exists but its setup hook could not
+// run, which the caller must report: the worktree is otherwise indistinguishable
+// from one that was fully set up.
+func (r *Registry) Create(name, branch, baseBranch string) (Info, *SetupHookSkip, error) {
 	if name == "" {
-		return Info{}, errors.New("name cannot be empty")
+		return Info{}, nil, errors.New("name cannot be empty")
 	}
 	if branch == "" {
-		return Info{}, errors.New("branch cannot be empty")
+		return Info{}, nil, errors.New("branch cannot be empty")
 	}
 
 	worktreesDir := r.worktreesDir()
 	worktreePath := filepath.Join(worktreesDir, name)
-	if !strings.HasPrefix(worktreePath, worktreesDir+string(filepath.Separator)) {
-		return Info{}, errors.New("invalid name: path traversal detected")
+	if _, inside := pathutil.ChildName(worktreePath, worktreesDir); !inside {
+		return Info{}, nil, errors.New("invalid name: path traversal detected")
 	}
 
 	r.refreshIfNeeded()
@@ -193,10 +207,10 @@ func (r *Registry) Create(name, branch, baseBranch string) (Info, error) {
 	r.cacheMu.RUnlock()
 
 	if !isGitRepo {
-		return Info{}, ErrNotGitRepo
+		return Info{}, nil, ErrNotGitRepo
 	}
 	if exists {
-		return Info{}, ErrWorktreeAlreadyExist
+		return Info{}, nil, ErrWorktreeAlreadyExist
 	}
 
 	// Try without -b first (works for existing local/remote branches),
@@ -212,7 +226,7 @@ func (r *Registry) Create(name, branch, baseBranch string) (Info, error) {
 		cmd = exec.Command("git", args...)
 		cmd.Dir = r.mainDir
 		if output, err := cmd.CombinedOutput(); err != nil {
-			return Info{}, fmt.Errorf("git worktree add: %w: %s", err, strings.TrimSpace(string(output)))
+			return Info{}, nil, fmt.Errorf("git worktree add: %w: %s", err, strings.TrimSpace(string(output)))
 		}
 	}
 
@@ -224,17 +238,18 @@ func (r *Registry) Create(name, branch, baseBranch string) (Info, error) {
 	r.cacheMu.RUnlock()
 
 	if !ok {
-		return Info{}, errors.New("worktree created but not found in list")
+		return Info{}, nil, errors.New("worktree created but not found in list")
 	}
 
-	if err := RunSetupHook(r.dataDir, r.mainDir, info.Path, name); err != nil {
+	skipped, err := RunSetupHook(r.dataDir, r.mainDir, info.Path, name)
+	if err != nil {
 		if delErr := r.Delete(name); delErr != nil {
 			slog.Warn("failed to cleanup worktree after setup hook failure", "name", name, "error", delErr)
 		}
-		return Info{}, fmt.Errorf("setup hook failed: %w", err)
+		return Info{}, nil, fmt.Errorf("setup hook failed: %w", err)
 	}
 
-	return info, nil
+	return info, skipped, nil
 }
 
 func (r *Registry) Delete(name string) error {
@@ -305,18 +320,30 @@ func (r *Registry) refresh() {
 	}
 
 	r.isGitRepo = true
+	r.cache = r.parseWorktreeList(string(output))
+	r.cacheTime = time.Now()
+}
+
+// parseWorktreeList turns `git worktree list --porcelain` output into the cache,
+// keyed by worktree name, dropping worktrees Pockode does not manage.
+func (r *Registry) parseWorktreeList(output string) map[string]Info {
 	worktrees := make(map[string]Info)
 
 	var currentPath, currentBranch string
 	worktreesDir := r.worktreesDir()
 
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		line := scanner.Text()
 
 		if strings.HasPrefix(line, "worktree ") {
-			// New worktree entry; reset state
-			currentPath = strings.TrimPrefix(line, "worktree ")
+			// New worktree entry; reset state.
+			//
+			// git reports paths with forward slashes on every platform, while
+			// the paths we compare against are native. Without converting, no
+			// Windows worktree ever matches — not even the main one — and the
+			// whole list is discarded as external.
+			currentPath = filepath.FromSlash(strings.TrimPrefix(line, "worktree "))
 			currentBranch = ""
 		} else if strings.HasPrefix(line, "branch ") {
 			branch := strings.TrimPrefix(line, "branch ")
@@ -340,24 +367,22 @@ func (r *Registry) refresh() {
 		}
 	}
 
-	r.cache = worktrees
-	r.cacheTime = time.Now()
+	return worktrees
 }
 
 // createInfo returns Info for a worktree path.
 // Returns nil if the worktree should be skipped (external worktrees not managed by Pockode).
 func (r *Registry) createInfo(path, branch, worktreesDir string) *Info {
-	isMain := path == r.mainDir
+	isMain := pathutil.Equal(path, r.mainDir)
 
 	var name string
-	switch {
-	case isMain:
-		name = ""
-	case strings.HasPrefix(path, worktreesDir+string(filepath.Separator)):
-		name = strings.TrimPrefix(path, worktreesDir+string(filepath.Separator))
-	default:
-		// External worktree: skip
-		return nil
+	if !isMain {
+		child, inside := pathutil.ChildName(path, worktreesDir)
+		if !inside {
+			// External worktree: skip
+			return nil
+		}
+		name = child
 	}
 
 	return &Info{

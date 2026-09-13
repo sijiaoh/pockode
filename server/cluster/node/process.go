@@ -122,7 +122,7 @@ func (pm *ProcessManager) waitForServerInfo(dataDir string) error {
 }
 
 // Stop stops the pockode process for the given node.
-// It first tries graceful shutdown, then force kill after timeout.
+// It first asks the node to exit, then force kills it after a timeout.
 func (pm *ProcessManager) Stop(n Node) error {
 	dataDir := filepath.Join(n.Path, ".pockode")
 
@@ -144,6 +144,14 @@ func (pm *ProcessManager) Stop(n Node) error {
 	// Perform platform-specific process termination
 	if err := terminateProcess(info.PID); err != nil {
 		return fmt.Errorf("failed to terminate process: %w", err)
+	}
+
+	// The process is gone by now (terminateProcess only returns nil once it is).
+	// A node that shut down gracefully already removed its own server.json; one
+	// that had to be killed could not, and the leftover file would report the
+	// node as stale even though the cluster is what stopped it.
+	if err := serverinfo.Delete(dataDir); err != nil {
+		return fmt.Errorf("failed to clean up server.json: %w", err)
 	}
 
 	return nil

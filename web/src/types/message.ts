@@ -263,14 +263,31 @@ export interface WorktreeInfo {
 	is_main: boolean;
 }
 
+/**
+ * Why the worktree setup script does not run on the server's machine.
+ * Absent means it runs.
+ */
+export interface SetupHookSkip {
+	reason: string;
+	hint: string;
+}
+
 export interface WorktreeListResult {
 	worktrees: WorktreeInfo[];
+	/** Set when creating a worktree would skip the setup script. */
+	setup_hook_skip?: SetupHookSkip;
 }
 
 export interface WorktreeCreateParams {
 	name: string;
 	branch: string;
 	base_branch?: string;
+}
+
+export interface WorktreeCreateResult {
+	worktree: WorktreeInfo;
+	/** Set when the worktree was created but its setup script did not run. */
+	setup_hook_skip?: SetupHookSkip;
 }
 
 export interface WorktreeDeleteParams {
@@ -286,11 +303,11 @@ export interface AuthResult {
 	title: string;
 	work_dir: string;
 	/**
-	 * Ceiling on one upload request, in bytes, for the route this connection
-	 * came in on — not a property of the server. A relay connection is bounded
-	 * by what the tunnel can carry, well under what the endpoint would store,
-	 * and one server answers both kinds at once. Read it from this reply and
-	 * replace it on every reconnect (see docs/file.md#transfer).
+	 * Ceiling on one upload request, in bytes, sent so a client can refuse an
+	 * oversized file before spending a slow link on it instead of keeping its
+	 * own copy of the number. The same on every route — the relay tunnel
+	 * streams a request body and imposes no ceiling of its own — but still read
+	 * from this reply rather than hard-coded (see docs/file.md#transfer).
 	 */
 	max_upload_size: number;
 }

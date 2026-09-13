@@ -10,11 +10,11 @@ import { useWSStore } from "./wsStore";
  * Files uploading at the same time.
  *
  * A browser allows six connections per origin, and the tree, the search and
- * every file read compete for them, so uploads must not take the pool. Over a
- * relay the number buys nothing anyway: every request shares one tunnel and is
- * buffered whole before it is forwarded, so parallelism there multiplies the
- * memory in flight without adding throughput. Three overlaps the round trips —
- * the part that is worth overlapping — and leaves the rest of the app moving.
+ * every file read compete for them, so uploads must not take the pool. Three
+ * overlaps the round trips — the part that is worth overlapping — and leaves
+ * the rest of the app moving. The relay does not change the number: it carries
+ * each request on its own yamux stream and forwards the body as it arrives, so
+ * concurrent uploads behave there as they do locally.
  */
 export const UPLOAD_CONCURRENCY = 3;
 

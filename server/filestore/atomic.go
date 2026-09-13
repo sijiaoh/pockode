@@ -8,20 +8,23 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 const (
 	filePerm = 0644
 	dirPerm  = 0755
+
+	// lockSuffix names the sidecar every lock is taken on. See fileLock for why
+	// it cannot be the file itself.
+	lockSuffix = ".lock"
 )
 
-// ReadFileLocked reads path under a shared flock, so a concurrent
+// ReadFileLocked reads path under a shared lock, so a concurrent
 // WriteFileAtomic never exposes a half-written file. Returns nil, nil when the
 // file (or its directory) does not exist.
 func ReadFileLocked(path string) ([]byte, error) {
 	var data []byte
-	err := withFlock(path, syscall.LOCK_SH, func() error {
+	err := withLock(path, false, func() error {
 		var err error
 		data, err = os.ReadFile(path)
 		return err
@@ -43,12 +46,12 @@ func ReadFileLocked(path string) ([]byte, error) {
 // the replacement never inherits the old file's mode.
 //
 // Writers are serialized (and readers excluded) across processes by an
-// exclusive flock on "<path>.lock".
+// exclusive lock on "<path>.lock".
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
-	return withFlock(path, syscall.LOCK_EX, func() error {
+	return withLock(path, true, func() error {
 		return writeAtomic(path, data, perm)
 	})
 }
@@ -68,7 +71,7 @@ func ReadJSONOrQuarantine(path, label string, v any) (bool, error) {
 	// Reading and quarantining happen under a single exclusive lock: with two
 	// locks, a writer could slip a valid file in between them and we would
 	// quarantine that good file over a parse failure we already had in hand.
-	err := withFlock(path, syscall.LOCK_EX, func() error {
+	err := withLock(path, true, func() error {
 		data, err := os.ReadFile(path)
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
@@ -91,7 +94,7 @@ func ReadJSONOrQuarantine(path, label string, v any) (bool, error) {
 		return nil
 	})
 	// A missing file is handled above; this catches the missing *directory*,
-	// where withFlock already fails creating the lock file.
+	// where withLock already fails creating the lock file.
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
@@ -108,7 +111,7 @@ func ReadJSONOrQuarantine(path, label string, v any) (bool, error) {
 // exclusive lock on path.
 func quarantineLocked(path string) (string, error) {
 	backup := path + ".corrupt"
-	if err := os.Rename(path, backup); err != nil {
+	if err := renameFile(path, backup); err != nil {
 		return "", err
 	}
 	return backup, nil
@@ -149,24 +152,19 @@ func writeAtomic(path string, data []byte, perm os.FileMode) error {
 	// power failure rolls back to the previous valid file, never a corrupt one,
 	// and the extra fsync adds a second full disk round-trip to every index
 	// write (measured on a slow disk: ~150ms → ~220ms).
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := renameFile(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 	return nil
 }
 
-func withFlock(path string, how int, fn func() error) error {
-	lockF, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, filePerm)
+func withLock(path string, exclusive bool, fn func() error) error {
+	lock, err := acquireLock(path+lockSuffix, exclusive)
 	if err != nil {
-		return fmt.Errorf("open lock file: %w", err)
+		return err
 	}
-	defer lockF.Close()
-
-	if err := syscall.Flock(int(lockF.Fd()), how); err != nil {
-		return fmt.Errorf("flock: %w", err)
-	}
-	defer syscall.Flock(int(lockF.Fd()), syscall.LOCK_UN)
+	defer lock.release()
 
 	return fn()
 }

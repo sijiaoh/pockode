@@ -86,14 +86,70 @@
 
 <section id="install" class="install">
   <h2 class="section-title">Get Started</h2>
-  <div class="install-box">
-    <pre class="install-code"><code><span class="code-comment"># Install</span>
-curl -fsSL https://pockode.com/install.sh | sh
+
+  <fieldset class="install-os">
+    <legend class="sr-only">Choose your platform</legend>
+
+    <input type="radio" name="install-os" id="os-unix" class="install-radio" autocomplete="off" checked>
+    <input type="radio" name="install-os" id="os-win" class="install-radio" autocomplete="off">
+
+    <div class="install-tablist">
+      <label class="install-tab" for="os-unix">macOS / Linux</label>
+      <label class="install-tab" for="os-win">Windows</label>
+    </div>
+
+    <div class="install-panel" data-os="unix">
+      <div class="install-box">
+        <pre class="install-code"><code><span class="code-comment"># Install</span>
+<span class="install-cmd">curl -fsSL https://pockode.com/install.sh | sh</span>
 
 <span class="code-comment"># Run</span>
 pockode -auth-token YOUR_PASSWORD</code></pre>
-    <button class="copy-btn" onclick="navigator.clipboard.writeText('curl -fsSL https://pockode.com/install.sh | sh')">Copy</button>
-  </div>
+        <button class="copy-btn" type="button">Copy</button>
+      </div>
+    </div>
+
+    <div class="install-panel" data-os="win">
+      <div class="install-box">
+        <pre class="install-code"><code><span class="code-comment"># Install (PowerShell)</span>
+<span class="install-cmd">irm https://pockode.com/install.ps1 | iex</span>
+
+<span class="code-comment"># Run</span>
+pockode -auth-token YOUR_PASSWORD</code></pre>
+        <button class="copy-btn" type="button">Copy</button>
+      </div>
+    </div>
+  </fieldset>
+
+  <script>
+    if (/Win/i.test(navigator.userAgentData?.platform || navigator.platform || "")) {
+      document.getElementById("os-win").checked = true;
+    }
+
+    if (navigator.clipboard) {
+      document.documentElement.classList.add("has-clipboard");
+      for (const btn of document.querySelectorAll(".copy-btn")) {
+        btn.addEventListener("click", () => {
+          const cmd = btn.closest(".install-box").querySelector(".install-cmd").textContent;
+          navigator.clipboard.writeText(cmd).then(
+            () => flash(btn, "Copied"),
+            () => flash(btn, "Failed"),
+          );
+        });
+      }
+    }
+
+    // Without clearing the pending timer, a second click's feedback is wiped by
+    // the first click's timeout instead of lasting its own 1.5s.
+    const flashTimers = new Map();
+
+    function flash(btn, text) {
+      btn.textContent = text;
+      clearTimeout(flashTimers.get(btn));
+      flashTimers.set(btn, setTimeout(() => { btn.textContent = "Copy"; }, 1500));
+    }
+  </script>
+
   <p class="install-note">Scan the QR code on your phone. That's it.</p>
 </section>
 

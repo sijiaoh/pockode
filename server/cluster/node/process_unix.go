@@ -3,11 +3,24 @@
 package node
 
 import (
-	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
+
+	"github.com/pockode/server/internal/shutdown"
+)
+
+const (
+	// gracefulShutdownTimeout is how long a node gets to exit on its own after
+	// being asked to.
+	gracefulShutdownTimeout = 5 * time.Second
+
+	// forcedExitTimeout bounds the wait for SIGKILL to take effect.
+	forcedExitTimeout = 1 * time.Second
+
+	exitPollInterval = 100 * time.Millisecond
 )
 
 // processExists checks if a process with the given PID is running on Unix systems.
@@ -41,50 +54,51 @@ func setProcessDetached(cmd *exec.Cmd) {
 	}
 }
 
-// terminateProcess sends SIGTERM first for graceful shutdown, then SIGKILL after timeout.
+// terminateProcess asks the process to exit, then SIGKILLs it if it will not.
+//
+// It returns nil only once the process is confirmed gone, so callers can clean
+// up the files it left behind without racing it.
 func terminateProcess(pid int) error {
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-
-	// Send SIGTERM for graceful shutdown
-	if err := process.Signal(syscall.SIGTERM); err != nil {
-		// Check if process already exited
+	if err := shutdown.RequestExit(pid); err != nil {
+		// The process may simply have exited on its own in the meantime.
 		if !processExists(pid) {
 			return nil
 		}
 		return err
 	}
 
-	// Wait for process to exit (up to 5 seconds)
-	done := make(chan error, 1)
-	go func() {
-		for i := 0; i < 50; i++ {
-			time.Sleep(100 * time.Millisecond)
-			if !processExists(pid) {
-				done <- nil
-				return
-			}
-		}
-		done <- errors.New("timeout")
-	}()
-
-	select {
-	case err := <-done:
-		if err == nil {
-			return nil
-		}
-		// Timeout, send SIGKILL
-		if err := process.Signal(syscall.SIGKILL); err != nil {
-			if !processExists(pid) {
-				return nil
-			}
-			return err
-		}
-		// Wait briefly for SIGKILL to take effect
-		time.Sleep(100 * time.Millisecond)
+	if waitForExit(pid, gracefulShutdownTimeout) {
+		return nil
 	}
 
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if err := process.Signal(syscall.SIGKILL); err != nil {
+		if !processExists(pid) {
+			return nil
+		}
+		return err
+	}
+
+	if !waitForExit(pid, forcedExitTimeout) {
+		return fmt.Errorf("process %d still running after SIGKILL", pid)
+	}
 	return nil
+}
+
+// waitForExit polls until the process is gone, reporting whether it made it
+// within the timeout.
+func waitForExit(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if !processExists(pid) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(exitPollInterval)
+	}
 }

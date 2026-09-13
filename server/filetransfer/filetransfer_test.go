@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"github.com/pockode/server/internal/fifotest"
+	"github.com/pockode/server/internal/symlinktest"
 )
 
 // resolver maps worktree names to directories the way worktree.Registry does,
@@ -231,9 +233,7 @@ func TestDownload(t *testing.T) {
 	// refused from the stat rather than discovered while serving.
 	t.Run("refuses a named pipe instead of blocking on it", func(t *testing.T) {
 		h, workDir := newTestHandler(t)
-		if err := syscall.Mkfifo(filepath.Join(workDir, "pipe"), 0644); err != nil {
-			t.Skipf("cannot create a fifo here: %v", err)
-		}
+		fifotest.Make(t, workDir, "pipe")
 
 		done := make(chan *httptest.ResponseRecorder, 1)
 		go func() {
@@ -465,27 +465,38 @@ func TestUpload(t *testing.T) {
 		assertError(t, rec, http.StatusBadRequest, CodeNotADirectory)
 	})
 
+	// Both modes, because the open fails differently in each and the answer used
+	// to be read off the error code: EISDIR on unix, ERROR_ACCESS_DENIED on
+	// Windows — where matching EISDIR alone meant a 500 instead of a 409 — and a
+	// plain "exists" from O_EXCL on both. Overwrite is the mode that matters
+	// most, since there "retry with overwrite=true" would be a dead end.
 	t.Run("reports a directory in the way of an uploaded file", func(t *testing.T) {
-		h, workDir := newTestHandler(t)
-		if err := os.Mkdir(filepath.Join(workDir, "a.txt"), 0755); err != nil {
-			t.Fatalf("failed to create directory: %v", err)
+		for _, tt := range []struct{ name, query string }{
+			{"default", ""},
+			{"overwrite", "overwrite=true"},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				h, workDir := newTestHandler(t)
+				if err := os.Mkdir(filepath.Join(workDir, "a.txt"), 0755); err != nil {
+					t.Fatalf("failed to create directory: %v", err)
+				}
+
+				rec := upload(t, h, tt.query, uploadFile{name: "a.txt", content: []byte("x")})
+
+				body := assertError(t, rec, http.StatusConflict, CodeConflict)
+				if !strings.Contains(body.Error, "is a directory") {
+					t.Errorf("error %q does not say what is in the way", body.Error)
+				}
+			})
 		}
-
-		rec := upload(t, h, "", uploadFile{name: "a.txt", content: []byte("x")})
-
-		assertError(t, rec, http.StatusConflict, CodeConflict)
 	})
 
 	// Writing through a link would land outside the workspace, and an O_WRONLY
 	// open of a fifo would block until someone read from it.
 	t.Run("refuses to overwrite anything but a regular file", func(t *testing.T) {
 		h, workDir := newTestHandler(t)
-		if err := os.Symlink("/tmp/target", filepath.Join(workDir, "link.txt")); err != nil {
-			t.Fatalf("failed to create symlink: %v", err)
-		}
-		if err := syscall.Mkfifo(filepath.Join(workDir, "pipe"), 0644); err != nil {
-			t.Skipf("cannot create a fifo here: %v", err)
-		}
+		symlinktest.Make(t, filepath.Join(t.TempDir(), "target"), filepath.Join(workDir, "link.txt"))
+		fifotest.Make(t, workDir, "pipe")
 
 		for _, name := range []string{"link.txt", "pipe"} {
 			req := newUploadRequest(t, "overwrite=true", uploadFile{name: name, content: []byte("x")})

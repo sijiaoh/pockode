@@ -12,7 +12,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -121,7 +120,9 @@ func buildArgs(opts agent.StartOptions, launch claudeLaunch) []string {
 func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	procCtx, cancel := context.WithCancel(ctx)
 
-	resumeState := newClaudeResumeStateManager(opts, slog.With("sessionId", opts.SessionID))
+	log := slog.With("sessionId", opts.SessionID)
+
+	resumeState := newClaudeResumeStateManager(opts, log)
 	claudeArgs := buildArgs(opts, resumeState.resolve())
 
 	// Add MCP config for work management tools (unless disabled for testing).
@@ -136,41 +137,13 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfigPath)
 	}
 
-	cmd := exec.CommandContext(procCtx, Binary, claudeArgs...)
-	cmd.Dir = opts.WorkDir
-
-	// stdin ownership is transferred to session; closed by session.Close()
-	stdin, err := cmd.StdinPipe()
+	proc, err := agent.StartProcess(procCtx, log, Binary, claudeArgs, opts.WorkDir)
 	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		stdin.Close()
-		cancel()
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		stdin.Close()
-		stdout.Close()
-		cancel()
-		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		stdin.Close()
-		stdout.Close()
-		stderr.Close()
 		cancel()
 		return nil, fmt.Errorf("failed to start claude: %w", err)
 	}
 
-	log := slog.With("sessionId", opts.SessionID)
-	log.Info("claude process started", "pid", cmd.Process.Pid, "mode", opts.Mode)
+	log.Info("claude process started", "pid", proc.Pid(), "mode", opts.Mode)
 
 	events := make(chan agent.AgentEvent)
 	pendingRequests := &sync.Map{}
@@ -183,7 +156,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	sess := &cliSession{
 		log:             log,
 		events:          events,
-		stdin:           stdin,
+		stdin:           proc.Stdin,
 		pendingRequests: pendingRequests,
 		backgroundTasks: backgroundTasks,
 		lossStore:       lossStore,
@@ -201,8 +174,8 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	}
 
 	// Stream events from the process.
-	// Note: When procCtx is cancelled (via sess.Close), CommandContext sends SIGKILL,
-	// which terminates the process and closes stdout, causing streamOutput to exit.
+	// Note: When procCtx is cancelled (via sess.Close), Process terminates the
+	// whole CLI process tree, which closes stdout and lets streamOutput exit.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -213,13 +186,11 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		// Before close(events), which the fallback also writes to.
 		defer backgroundTasks.wait.stopWaiting()
 		defer cancel()
-		defer stdout.Close()
-		defer stderr.Close()
 
 		// Drain stderr before anything can block on the event channel: the
 		// warning below waits for a consumer, and a CLI that fills the stderr
 		// pipe meanwhile would wedge instead of starting up.
-		stderrCh := agent.ReadStderr(stderr, "claude")
+		stderrCh := agent.ReadStderr(proc.Stderr, "claude")
 
 		if warning, ok := resumeState.pendingWarning(); ok {
 			select {
@@ -241,8 +212,8 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			}
 		}
 
-		streamOutput(procCtx, log, stdout, events, pendingRequests, resumeState, backgroundTasks, sess.declineControlRequest)
-		agent.WaitForProcess(procCtx, log, cmd, stderrCh, events)
+		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, sess.declineControlRequest)
+		agent.WaitForProcess(procCtx, log, proc, stderrCh, events)
 		resumeState.processExited(procCtx.Err() != nil)
 
 		// A process that died on its own — a crash, the CLI exiting — takes its

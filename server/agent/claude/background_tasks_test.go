@@ -197,7 +197,11 @@ func TestBackgroundWait_CancelledByARealEnding(t *testing.T) {
 			events := make(chan agent.AgentEvent, 4)
 
 			tracker := &backgroundTaskTracker{}
-			tracker.wait.start(testLogger(), events, func(string) {}, 30*time.Millisecond)
+			// A budget that cannot elapse during the test, so what is asserted
+			// below is that the ending disarmed the fallback — not that the
+			// machine got there before a short timer did. With a real budget the
+			// wait would have to lose a race to fail, which it does under load.
+			tracker.wait.start(testLogger(), events, func(string) {}, time.Hour)
 			defer tracker.wait.stopWaiting()
 
 			pending := &sync.Map{}
@@ -205,11 +209,21 @@ func TestBackgroundWait_CancelledByARealEnding(t *testing.T) {
 
 			parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
 			parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
+			// Checked before the ending, or a wait that never armed would make
+			// the rest of this pass without testing anything.
+			if waitDeadline(&tracker.wait).IsZero() {
+				t.Fatal("the end of turn was not held back in the first place")
+			}
+
 			for _, line := range tt.lines {
 				parseTestLineFull(testLogger(), []byte(line), pending, tracker, func(string, string) {})
 			}
 
-			time.Sleep(150 * time.Millisecond)
+			// end() clears the deadline under the lock while the line is being
+			// parsed, so there is nothing to wait for here.
+			if deadline := waitDeadline(&tracker.wait); !deadline.IsZero() {
+				t.Errorf("the fallback is still armed at %s after the turn already ended", deadline)
+			}
 			select {
 			case event := <-events:
 				t.Errorf("expected no fallback after the turn already ended, got %#v", event)
@@ -289,7 +303,7 @@ func TestBackgroundWait_OutputPushesTheDeadlineOut(t *testing.T) {
 
 	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
 	parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
-	armed := waitDeadline(&tracker.wait)
+	armed := backdateDeadline(&tracker.wait)
 
 	// The task finished and the CLI resumed output on its own.
 	parseTestLineWithTracker(testLogger(), []byte(noLiveTasks), tracker)
@@ -303,6 +317,18 @@ func TestBackgroundWait_OutputPushesTheDeadlineOut(t *testing.T) {
 func waitDeadline(wait *backgroundWait) time.Time {
 	wait.deadlineMu.Lock()
 	defer wait.deadlineMu.Unlock()
+	return wait.deadline
+}
+
+// backdateDeadline rewinds the armed deadline and returns the new value, so
+// that "output pushed the deadline out" can be asserted independently of the
+// wall clock's resolution: on Windows two consecutive time.Now() calls
+// routinely return the same instant, which makes a strict After() against the
+// deadline armed a moment earlier fail even though refresh did its job.
+func backdateDeadline(wait *backgroundWait) time.Time {
+	wait.deadlineMu.Lock()
+	defer wait.deadlineMu.Unlock()
+	wait.deadline = wait.deadline.Add(-time.Hour)
 	return wait.deadline
 }
 

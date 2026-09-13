@@ -1,0 +1,10 @@
+# Check these out with LF on every platform.
+#
+# core.autocrlf=true is the Git for Windows default, so a Windows checkout would
+# otherwise rewrite them to CRLF. That is not cosmetic here: Go test files embed
+# bash scripts in raw string literals, and a stray \r ends up inside the script's
+# arguments — `touch hook-ran.txt` starts creating a file whose name ends in a
+# carriage return. The shell scripts under scripts/ and site/ are run by bash on
+# Windows too, and break the same way.
+*.go text eol=lf
+*.sh text eol=lf

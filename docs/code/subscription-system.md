@@ -208,17 +208,18 @@ func (w *WorkListWatcher) eventLoop() {
 Multiple subscriptions can watch the same path, but fsnotify should only monitor it once:
 
 ```go
-// server/watch/fs.go
-if w.pathRefCount[path] == 0 {
+// server/watch/fs.go — Subscribe
+key := subscriptionKey(subPath)
+if w.pathRefCount[key] == 0 {
     if err := w.watcher.Add(fullPath); err != nil {
         w.pathMu.Unlock()
         w.RemoveSubscription(id)
         return err
     }
 }
-w.pathToIDs[path] = append(w.pathToIDs[path], id)
-w.idToPath[id] = path
-w.pathRefCount[path]++
+w.pathToIDs[key] = append(w.pathToIDs[key], id)
+w.idToPath[id] = key
+w.pathRefCount[key]++
 ```
 
 **Rationale:**
@@ -228,6 +229,8 @@ w.pathRefCount[path]++
 2. **Consistent behavior**: All subscribers to the same path receive identical notifications.
 
 3. **Clean teardown**: Unsubscribe decrements the count; the watch is only removed when the last subscriber leaves.
+
+Keys go through `subscriptionKey` (`filepath.ToSlash`) because the two sides of the map have different origins: subscribers name paths with `/`, as the rest of the API does, while filesystem events arrive with the platform's separator. On Windows the un-normalized spellings of `src/main.go` are two distinct keys, so every subscription below the work directory root would go unnotified — silently, with the client showing stale content.
 
 ### Why 100ms Debounce for FSWatcher?
 
@@ -302,7 +305,7 @@ wg.Wait()
 // server/watch/fs.go
 ids := append([]string{}, w.pathToIDs[changedPath]...)
 if changedPath != "" {
-    parent := filepath.Dir(changedPath)
+    parent := path.Dir(changedPath)
     if parent == "." {
         parent = ""
     }
@@ -312,13 +315,15 @@ if changedPath != "" {
 
 **Rationale:** Directory listings need to update when files inside them change. Instead of requiring separate watches on both file and directory, FSWatcher automatically notifies parent directory subscribers.
 
+`path.Dir`, not `filepath.Dir`: subscription keys are slash-separated on every platform, so the parent has to be derived the same way.
+
 ### Why Stop Waits Instead of Just Cancelling?
 
 Every watcher's `Stop` goes through `BaseWatcher.CancelAndWait`, which cancels the context *and* blocks until each loop started through `Go` has returned. Cancelling alone is the smaller implementation, and it is what the watchers did originally — as did `ProcessManager` and `AutoResumer`, both of which returned from teardown while their own goroutines were still running.
 
 The shortcut is hard to see as wrong from inside any one of those files: a cancelled context does stop the loop, just not before the caller moves on. It only reads as a bug once you look at what the caller does next. Stopping a worktree, deleting a session, or ending a test means the directory those goroutines write into is about to disappear, so anything outliving `Stop` writes into a tree already being torn down. That is how this surfaced — never as something a user could see, but as CI failing intermittently, when the event stream of a process that `Shutdown` had cancelled without waiting for wrote the session index into a `t.TempDir()` mid-cleanup.
 
-So teardown is synchronous on all three sides: watchers wait on their loops, the process manager on its event streams, the `AutoResumer` on its follow-ups. FSWatcher's debounce timers are the one deliberate exception — `time.AfterFunc` callbacks are not tracked, so `Stop` can return with one still in flight. They are exempt because of what they do rather than for convenience: they only notify subscribers, never write to a store, and `notifyPath` re-checks the context before it does even that.
+So teardown is synchronous on all three sides: watchers wait on their loops, the process manager on its event streams, the `AutoResumer` on its follow-ups. The process manager's wait is the one with a deadline, because it is the only one waiting on something outside the process: an agent CLI that refuses to close its output would otherwise hold the whole server's shutdown open, so it is reported and abandoned instead. FSWatcher's debounce timers are the one deliberate exception — `time.AfterFunc` callbacks are not tracked, so `Stop` can return with one still in flight. They are exempt because of what they do rather than for convenience: they only notify subscribers, never write to a store, and `notifyPath` re-checks the context before it does even that.
 
 ### Why a Session Is Two Subscriptions
 

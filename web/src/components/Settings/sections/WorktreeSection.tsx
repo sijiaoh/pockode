@@ -3,12 +3,14 @@ import { FileCode, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { overlayToNavigation, SETUP_HOOK_PATH } from "../../../lib/navigation";
 import { useSettingsStore } from "../../../lib/settingsStore";
+import { useWorktreeStore } from "../../../lib/worktreeStore";
 import { useWSStore } from "../../../lib/wsStore";
 
 export default function WorktreeSection() {
 	const navigate = useNavigate();
 
 	const baseDir = useSettingsStore((s) => s.settings?.worktree_base_dir ?? "");
+	const setupHookSkip = useWorktreeStore((s) => s.setupHookSkip);
 	const updateSettings = useWSStore((s) => s.actions.updateSettings);
 
 	const [value, setValue] = useState(baseDir);
@@ -126,19 +128,34 @@ export default function WorktreeSection() {
 				)}
 			</div>
 
-			<button
-				type="button"
-				onClick={handleEditSetupHook}
-				className="flex min-h-14 w-full items-center gap-3 rounded-lg border border-th-border bg-th-bg-secondary px-4 text-left text-sm text-th-text-primary transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent hover:border-th-accent active:scale-[0.99]"
-			>
-				<FileCode className="h-5 w-5 text-th-text-muted" />
-				<div className="flex flex-col gap-0.5">
-					<span>Setup Hook</span>
-					<span className="text-xs text-th-text-muted">
-						Script to run when creating new worktrees
-					</span>
-				</div>
-			</button>
+			<div className="space-y-1.5">
+				<button
+					type="button"
+					onClick={handleEditSetupHook}
+					className="flex min-h-14 w-full items-center gap-3 rounded-lg border border-th-border bg-th-bg-secondary px-4 text-left text-sm text-th-text-primary transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent hover:border-th-accent active:scale-[0.99]"
+				>
+					<FileCode className="h-5 w-5 text-th-text-muted" />
+					<div className="flex flex-col gap-0.5">
+						<span>Setup Hook</span>
+						<span className="text-xs text-th-text-muted">
+							Script to run when creating new worktrees
+						</span>
+					</div>
+				</button>
+				{/* The script is silently skipped when the server has no shell to run
+				    it with, so say so where the script itself is managed. */}
+				{setupHookSkip && (
+					<div className="space-y-1 rounded-lg border border-th-warning/40 bg-th-warning/5 px-3 py-2">
+						<p className="text-xs text-th-warning">
+							This script does not run on the server.
+						</p>
+						<p className="text-xs text-th-text-secondary">
+							{setupHookSkip.reason}
+						</p>
+						<p className="text-xs text-th-text-muted">{setupHookSkip.hint}</p>
+					</div>
+				)}
+			</div>
 		</div>
 	);
 }

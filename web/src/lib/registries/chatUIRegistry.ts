@@ -29,8 +29,7 @@ export interface ModeSelectorProps {
 
 /**
  * Agent, model and effort are one control: both lists are decided by the agent,
- * and the action bar has no room for a second, wider button. Replaces the former
- * `AgentSelectorProps`.
+ * and the action bar has no room for a second, wider button.
  */
 export interface EngineSelectorProps {
 	agentType: "claude" | "codex";

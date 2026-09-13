@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/pockode/server/internal/fspermtest"
 )
 
 func TestStore_LoadSave(t *testing.T) {
@@ -98,7 +100,11 @@ func TestStore_LoadCorruptFile(t *testing.T) {
 	}
 }
 
-func TestStore_FilePermissions(t *testing.T) {
+// The relay token is the one credential here that outlives the process, so what
+// has to hold is that Save leaves neither the file nor the directory it sits in
+// reachable by another local user. Both halves matter: on Windows the file is
+// protected only through the directory it inherits from.
+func TestStore_SaveRestrictsTokenFile(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
@@ -112,13 +118,6 @@ func TestStore_FilePermissions(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	info, err := os.Stat(filepath.Join(dir, "relay.json"))
-	if err != nil {
-		t.Fatalf("Stat() error = %v", err)
-	}
-
-	perm := info.Mode().Perm()
-	if perm&0077 != 0 {
-		t.Errorf("File permissions = %o, want 0600 (no group/other access)", perm)
-	}
+	fspermtest.RequireOwnerOnly(t, dir)
+	fspermtest.RequireOwnerOnly(t, filepath.Join(dir, "relay.json"))
 }

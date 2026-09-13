@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/pockode/server/contents"
+	"github.com/pockode/server/internal/symlinktest"
 )
 
 // writeTree materializes files (relative slash paths → content) under dir.
@@ -370,9 +371,7 @@ func TestSearchSkipsGitDirAndSymlinks(t *testing.T) {
 
 	outside := t.TempDir()
 	writeTree(t, outside, map[string]string{"secret.txt": "needle\n"})
-	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(workDir, "link.txt")); err != nil {
-		t.Skipf("symlinks unsupported: %v", err)
-	}
+	symlinktest.Make(t, filepath.Join(outside, "secret.txt"), filepath.Join(workDir, "link.txt"))
 
 	for _, respectGitignore := range []bool{true, false} {
 		result, err := Search(context.Background(), workDir, Options{

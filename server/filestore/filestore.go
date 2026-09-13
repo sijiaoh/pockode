@@ -1,5 +1,5 @@
 // Package filestore provides infrastructure for JSON-file-backed stores:
-// atomic file I/O (flock + write-temp-fsync-rename), crash-tolerant JSONL
+// atomic file I/O (file lock + write-temp-fsync-rename), crash-tolerant JSONL
 // append and read, fsnotify-based external change detection with debounce, and
 // writeGen-based stale reload prevention.
 package filestore
@@ -64,14 +64,14 @@ func New(cfg Config) (*File, error) {
 
 // --- File I/O ---
 
-// Read reads the index file under a shared flock and returns the raw bytes.
+// Read reads the index file under a shared lock and returns the raw bytes.
 // Returns nil, nil if the file does not exist.
 func (f *File) Read() ([]byte, error) {
 	return ReadFileLocked(f.path)
 }
 
 // Write atomically writes data using write-temp-fsync-rename under an
-// exclusive flock. Increments writeGen on success.
+// exclusive lock. Increments writeGen on success.
 func (f *File) Write(data []byte) error {
 	if err := WriteFileAtomic(f.path, data, filePerm); err != nil {
 		return err

@@ -429,8 +429,12 @@ func TestExecGitNetwork_TimesOut(t *testing.T) {
 	if err == nil {
 		t.Fatal("execGitNetworkTimeout() returned no error for a hung fetch")
 	}
-	if elapsed > 10*time.Second {
-		t.Errorf("took %s to give up on a 500ms deadline", elapsed)
+	// Measured against terminateGrace rather than some round number: WaitDelay is
+	// what ends a git the deadline could not stop, so anything at or past that
+	// grace means the request to stop never landed at all. That is precisely the
+	// failure a platform without SIGTERM falls into.
+	if elapsed >= terminateGrace {
+		t.Errorf("took %s to give up on a 500ms deadline, i.e. the deadline did not stop git and WaitDelay had to", elapsed)
 	}
 
 	var cmdErr *CommandError

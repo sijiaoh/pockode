@@ -8,16 +8,19 @@ import (
 
 	"github.com/mdp/qrterminal/v3"
 	"golang.org/x/term"
+
+	"github.com/pockode/server/agent"
 )
 
 const (
 	// ANSI color codes
-	reset = "\033[0m"
-	bold  = "\033[1m"
-	dim   = "\033[2m"
-	cyan  = "\033[36m"
-	green = "\033[32m"
-	white = "\033[37m"
+	reset  = "\033[0m"
+	bold   = "\033[1m"
+	dim    = "\033[2m"
+	cyan   = "\033[36m"
+	green  = "\033[32m"
+	white  = "\033[37m"
+	yellow = "\033[33m"
 
 	indent = "    "
 )
@@ -26,9 +29,10 @@ const (
 type BannerOptions struct {
 	Version      string
 	LocalURL     string
-	RemoteURL    string // Empty if relay is disabled
-	Announcement string // Message from cloud
-	NoColor      bool   // Disable ANSI color output
+	RemoteURL    string               // Empty if relay is disabled
+	Announcement string               // Message from cloud
+	Agents       []agent.BinaryStatus // AI CLI availability; omitted when empty
+	NoColor      bool                 // Disable ANSI color output
 }
 
 // noColorSet is set by PrintBanner and used by subsequent Print* calls.
@@ -73,7 +77,45 @@ func PrintBanner(opts BannerOptions) {
 		fmt.Printf("%s%s %s\n", indent, color(dim, "▸ Remote"), color(green, opts.RemoteURL))
 	}
 
+	for _, line := range agentLines(opts.Agents) {
+		fmt.Println(line)
+	}
+
 	fmt.Println()
+}
+
+// agentLines renders AI CLI availability for the banner.
+//
+// How loud this gets is decided by what is missing, because the two cases are
+// not the same problem. One CLI missing while another works is a fact to note
+// in passing — the user may well have installed only the one they use. Nothing
+// found at all means no session can run, and the user is otherwise told that
+// only when they start one and it fails, which can be days after the install
+// step it points back to. Neither case stops pockode from starting.
+func agentLines(agents []agent.BinaryStatus) []string {
+	if len(agents) == 0 {
+		return nil
+	}
+
+	var labels, missing []string
+	for _, a := range agents {
+		if a.Found() {
+			labels = append(labels, color(green, a.Name))
+			continue
+		}
+		missing = append(missing, a.Name)
+		labels = append(labels, color(yellow, a.Name+" (not found)"))
+	}
+
+	lines := []string{fmt.Sprintf("%s%s %s", indent, color(dim, "▸ Agents"), strings.Join(labels, "  "))}
+	if len(missing) < len(agents) {
+		return lines
+	}
+	return append(lines,
+		"",
+		fmt.Sprintf("%s%s", indent, color(bold+yellow, "⚠ No AI CLI found — sessions cannot start")),
+		fmt.Sprintf("%s%s", indent, color(dim, "  Install "+strings.Join(missing, " or ")+", then restart pockode")),
+	)
 }
 
 // PrintQRCode prints an indented QR code with a label on the side.

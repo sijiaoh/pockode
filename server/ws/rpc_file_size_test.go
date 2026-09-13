@@ -88,9 +88,11 @@ func TestClientMessage_PastTheBackstopClosesTheConnection(t *testing.T) {
 
 	// A write that big can fail on its own once the peer starts closing, so
 	// the close can surface on either call; both are the outcome under test.
-	failure := env.conn.Write(env.ctx, websocket.MessageText, data)
+	ctx, cancel := env.opCtx()
+	defer cancel()
+	failure := env.conn.Write(ctx, websocket.MessageText, data)
 	if failure == nil {
-		_, _, failure = env.conn.Read(env.ctx)
+		_, _, failure = env.conn.Read(ctx)
 	}
 	if got := websocket.CloseStatus(failure); got != websocket.StatusMessageTooBig {
 		t.Fatalf("got close status %v (err %v), want StatusMessageTooBig", got, failure)
