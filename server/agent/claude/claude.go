@@ -153,6 +153,10 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	backgroundTasks := &backgroundTaskTracker{}
 	lossStore := newBackgroundLossStore(opts)
 
+	// Per-process for the same reason, and a stronger one: the CLI's usage totals
+	// restart with it. See agent.UsageAccumulator.
+	usage := newUsageObserver(log, opts)
+
 	sess := &cliSession{
 		log:             log,
 		events:          events,
@@ -212,7 +216,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			}
 		}
 
-		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, sess.declineControlRequest)
+		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, usage, sess.declineControlRequest)
 		agent.WaitForProcess(procCtx, log, proc, stderrCh, events)
 		resumeState.processExited(procCtx.Err() != nil)
 
@@ -517,7 +521,7 @@ func (s *cliSession) writeStdin(data []byte) error {
 	return err
 }
 
-func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, decline declineFunc) {
+func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, usage *usageObserver, decline declineFunc) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
@@ -542,6 +546,9 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 
 		if resumeState != nil {
 			resumeState.observe(event)
+		}
+		if usage != nil {
+			usage.observe(line, event)
 		}
 
 		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, decline) {

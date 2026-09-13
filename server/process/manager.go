@@ -189,6 +189,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		Mode:         meta.Mode,
 		Model:        meta.Model,
 		Effort:       meta.Effort,
+		OnUsage:      m.usageRecorder(sessionID),
 	}
 	sess, err := ag.Start(m.ctx, opts)
 	if err != nil {
@@ -234,6 +235,30 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 	slog.Info("process created", "sessionId", sessionID, "resume", meta.Activated,
 		"agentType", meta.AgentType, "mode", meta.Mode, "model", meta.Model, "effort", meta.Effort)
 	return proc, true, nil
+}
+
+// usageRecorder builds the callback the agent reports consumption through.
+//
+// It is bound to the session rather than to the Process because the agent is
+// started before the Process exists, and it writes straight to the store: usage
+// is not part of the event stream, so it does not pass through streamEvents (see
+// agent.StartOptions.OnUsage).
+//
+// The manager's context, not a request's: reports keep arriving for as long as
+// the process lives.
+func (m *Manager) usageRecorder(sessionID string) func(session.UsageReport) {
+	return func(report session.UsageReport) {
+		err := m.sessionStore.AddUsage(m.ctx, sessionID, report)
+		switch {
+		case err == nil:
+		case errors.Is(err, session.ErrSessionNotFound), errors.Is(err, context.Canceled):
+			// A session deleted while its last turn was still being metered, or a
+			// server shutting down. Neither is a problem worth an error line.
+			slog.Debug("dropped usage report", "sessionId", sessionID, "reason", err)
+		default:
+			slog.Error("failed to record session usage", "error", err, "sessionId", sessionID)
+		}
+	}
 }
 
 // ForkSupport returns what the agent behind agentType says about being forked,

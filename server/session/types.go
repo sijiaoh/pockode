@@ -200,6 +200,17 @@ type SessionMeta struct {
 	// changes afterwards: where a conversation came from is a fact about its
 	// birth, not a live relationship.
 	ForkedFrom *ForkOrigin `json:"forked_from,omitempty"`
+	// Usage is what this session has consumed, accumulated from what its agent
+	// reported (see usage.go). A fork starts it empty rather than copying the
+	// source's: the tokens behind the copied history were spent by the source,
+	// and counting them in both would make any sum over sessions wrong.
+	//
+	// It can span two agents. A session that burned tokens on a first turn the
+	// agent never answered is still unactivated, and that is exactly the session
+	// whose agent type the user is allowed to change (see
+	// ws.handleSessionSetAgentType) — the spent tokens stay counted, so a cost
+	// recorded before the switch covers only the part the pricing agent ran.
+	Usage Usage `json:"usage"`
 }
 
 // Operation represents the type of change to the session list.
