@@ -30,9 +30,8 @@ interface Props {
  * anchored to the viewport instead, so none of that arises, and it is the right
  * shape on a phone anyway.
  *
- * `Sheet` moves no focus of its own, here or anywhere, so opening this menu by
- * keyboard leaves focus on the `…` behind it. That is a gap in `Sheet` shared
- * by every sheet in the app, inherited here rather than patched in one menu.
+ * Focus is `Sheet`'s job, not this menu's: it takes focus on open, cycles Tab
+ * inside itself and hands focus back to the `…` on close.
  */
 function FileEntryMenu({
 	entry,

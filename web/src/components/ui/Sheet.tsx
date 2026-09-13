@@ -1,6 +1,6 @@
 import { useIsExpanded } from "@pockode/shared";
 import { X } from "lucide-react";
-import { type ReactNode, useEffect, useId } from "react";
+import { type ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 
 interface Props {
@@ -51,6 +51,47 @@ function useLockBodyScroll(): void {
 }
 
 /**
+ * Moves focus into the sheet on open and hands it back on close.
+ *
+ * Focus goes to the dialog element itself, not to the first focusable element.
+ * First in the DOM is the close button, so the alternative opens every sheet
+ * on "Close" — no information, and one stray Enter from dismissing it. The
+ * dialog element is the one carrying `aria-labelledby`, so landing there reads
+ * the title before anything else, and Tab then walks into the body.
+ * `preventScroll` because `focus()` otherwise asks for a scroll into view, and
+ * nothing should move behind a sheet that has just locked the page.
+ *
+ * The handback is skipped when the opener is gone from the document. Sheets
+ * replace one another (a menu closes as a confirm sheet opens), and the row
+ * that opened the first one can unmount with it; focusing a detached node is a
+ * silent no-op that drops focus on the body.
+ */
+function useSheetFocus(ref: React.RefObject<HTMLElement | null>): void {
+	useEffect(() => {
+		const sheet = ref.current;
+		if (!sheet) return;
+
+		const opener = document.activeElement;
+		sheet.focus({ preventScroll: true });
+
+		return () => {
+			if (opener instanceof HTMLElement && opener.isConnected) {
+				opener.focus({ preventScroll: true });
+			}
+		};
+	}, [ref]);
+}
+
+const FOCUSABLE_SELECTOR = [
+	"a[href]",
+	"button:not([disabled])",
+	"input:not([disabled])",
+	"select:not([disabled])",
+	"textarea:not([disabled])",
+	'[tabindex]:not([tabindex="-1"])',
+].join(",");
+
+/**
  * Bottom drawer below the expanded tier, centered modal at and above it.
  *
  * That one decision is read once, from `useIsExpanded`, and drives both the
@@ -77,6 +118,7 @@ function Sheet({
 	const isExpanded = useIsExpanded();
 	const titleId = useId();
 	const asDrawer = !isExpanded;
+	const sheetRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		if (!dismissible) return;
@@ -90,6 +132,49 @@ function Sheet({
 	}, [onClose, dismissible]);
 
 	useLockBodyScroll();
+	useSheetFocus(sheetRef);
+
+	/**
+	 * Keeps Tab inside the sheet. The backdrop already swallows every tap meant
+	 * for the page behind, so Tab would otherwise be the one way left to reach
+	 * and drive a surface the sheet is covering.
+	 */
+	const handleTab = (e: React.KeyboardEvent) => {
+		if (e.key !== "Tab") return;
+		const sheet = sheetRef.current;
+		if (!sheet) return;
+		// A sheet can hold a dialog that portals out of its DOM yet stays a React
+		// child, so that dialog's keys bubble into this handler anyway; the
+		// force-push confirmation in `SyncSheet` does exactly that. The trap
+		// answers only for its own subtree — whatever is drawn on top of the sheet
+		// owns its own keys.
+		if (e.target instanceof Node && !sheet.contains(e.target)) return;
+
+		const stops = Array.from(
+			sheet.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+		);
+		// A sheet whose every control is disabled still traps: focus stays on the
+		// box rather than escaping to the page behind.
+		if (stops.length === 0) {
+			e.preventDefault();
+			return;
+		}
+
+		const first = stops[0];
+		const last = stops[stops.length - 1];
+		const active = document.activeElement;
+
+		if (e.shiftKey) {
+			// The box sits ahead of every stop, so backwards from it wraps too.
+			if (active === first || active === sheet) {
+				e.preventDefault();
+				last.focus();
+			}
+		} else if (active === last) {
+			e.preventDefault();
+			first.focus();
+		}
+	};
 
 	const body = (
 		<>
@@ -104,12 +189,17 @@ function Sheet({
 
 	return createPortal(
 		<div
-			className={`fixed inset-0 z-50 flex justify-center bg-th-bg-overlay ${
+			// outline-none: this element takes focus on open only to announce the
+			// sheet, and a ring around the whole viewport would read as a control.
+			className={`fixed inset-0 z-50 flex justify-center bg-th-bg-overlay outline-none ${
 				asDrawer ? "items-end" : "items-center"
 			}`}
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby={titleId}
+			ref={sheetRef}
+			tabIndex={-1}
+			onKeyDown={handleTab}
 		>
 			{/* Backdrop */}
 			{/* biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: Overlay backdrop - Escape key handled in useEffect */}

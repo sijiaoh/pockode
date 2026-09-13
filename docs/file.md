@@ -638,13 +638,13 @@ offers upload, new file, new folder and delete, a file offers only delete, and
 the root offers everything but delete. Delete is last, `text-th-error`, and
 separated by a rule.
 
-What a sheet does not bring with it is focus. `Sheet` sets `aria-modal` but
-moves no focus of its own — unlike `ConfirmDialog` and the conflict dialog,
-which at least focus a button — so opening the menu by keyboard leaves focus on
-the `…` behind it, and Tab walks the page rather than the menu. That is a gap in
-`Sheet` shared by every sheet in the app, of a piece with the missing focus trap
-recorded under [Uploading](#uploading); it is inherited here rather than patched
-in one menu. `NewEntryDialog` is unaffected because it focuses its own field.
+Focus comes with the sheet. `Sheet` takes focus on open — onto the dialog box
+itself, so the title is read before anything else and the close button is not
+what a stray Enter presses — cycles Tab within itself, and hands focus back to
+the `…` when it closes. None of that is written here: it belongs to every sheet
+in the app, so one menu patching it in would be a second implementation to
+disagree with the first. `NewEntryDialog` still focuses its own field, which
+takes precedence over the box.
 
 The upload item opens the tab's own hidden `<input type="file">`, not one inside
 the menu: the sheet unmounts the moment an item is chosen from it. `click()` is

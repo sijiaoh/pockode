@@ -1,4 +1,7 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import Sheet from "./Sheet";
 
@@ -105,6 +108,162 @@ describe("Sheet", () => {
 			expect(body()).not.toContainElement(
 				screen.getByRole("button", { name: "Footer action" }),
 			);
+		});
+	});
+
+	describe("focus", () => {
+		function renderMenu() {
+			render(
+				<Sheet title="Menu" onClose={() => {}}>
+					<button type="button">Row A</button>
+					<button type="button">Row B</button>
+				</Sheet>,
+			);
+		}
+
+		it("lands on the sheet itself, not on the close button", () => {
+			renderMenu();
+
+			// The box carries the label, so a screen reader reads the title before
+			// anything else; stopping on "Close" would name the one row the user
+			// least wants to press by accident.
+			expect(overlay()).toHaveFocus();
+			expect(screen.getByRole("button", { name: "Close" })).not.toHaveFocus();
+		});
+
+		it("cycles Tab inside the sheet", async () => {
+			const user = userEvent.setup();
+			renderMenu();
+
+			await user.tab();
+			expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+			await user.tab();
+			await user.tab();
+			expect(screen.getByRole("button", { name: "Row B" })).toHaveFocus();
+
+			await user.tab();
+			expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+			await user.tab({ shift: true });
+			expect(screen.getByRole("button", { name: "Row B" })).toHaveFocus();
+		});
+
+		it("hands focus back to whatever opened it", async () => {
+			const user = userEvent.setup();
+
+			function Toggle() {
+				const [open, setOpen] = useState(false);
+				return (
+					<>
+						<button type="button" onClick={() => setOpen(true)}>
+							Actions
+						</button>
+						{open && (
+							<Sheet title="Menu" onClose={() => setOpen(false)}>
+								<button type="button">Row A</button>
+							</Sheet>
+						)}
+					</>
+				);
+			}
+			render(<Toggle />);
+
+			await user.click(screen.getByRole("button", { name: "Actions" }));
+			await user.click(screen.getByRole("button", { name: "Close" }));
+
+			expect(screen.getByRole("button", { name: "Actions" })).toHaveFocus();
+		});
+
+		// Form sheets focus their own field from an effect in the calling
+		// component, which runs after the child Sheet's. Taking the box on open
+		// must not undo that.
+		it("yields to a caller that focuses its own field", () => {
+			function FormSheet() {
+				const inputRef = useRef<HTMLInputElement>(null);
+				useEffect(() => {
+					inputRef.current?.focus();
+				}, []);
+				return (
+					<Sheet title="New branch" onClose={() => {}}>
+						<input ref={inputRef} aria-label="Name" />
+					</Sheet>
+				);
+			}
+			render(<FormSheet />);
+
+			expect(screen.getByLabelText("Name")).toHaveFocus();
+		});
+
+		// SyncSheet holds its force-push confirmation this way: portalled out of
+		// the sheet's DOM, still a React child, and it goes up while the sheet is
+		// non-dismissible — which is also when the sheet can be left with no
+		// focusable of its own. The trap must not answer for the dialog's keys.
+		it("leaves keys alone in a dialog portalled out of it", async () => {
+			const user = userEvent.setup();
+			const host = document.body.appendChild(document.createElement("div"));
+
+			render(
+				<Sheet title="Sync" onClose={() => {}} dismissible={false}>
+					{createPortal(
+						<>
+							<button type="button">Cancel</button>
+							<button type="button">Force push</button>
+						</>,
+						host,
+					)}
+				</Sheet>,
+			);
+
+			screen.getByRole("button", { name: "Cancel" }).focus();
+			await user.tab();
+
+			expect(screen.getByRole("button", { name: "Force push" })).toHaveFocus();
+
+			// Not left behind for the rest of the file: `cleanup` unmounts the
+			// portal's contents but knows nothing about the node hosting them.
+			host.remove();
+		});
+
+		// A row can swap its menu for a confirm sheet and unmount the trigger with
+		// it. The handback must not fire at the detached trigger, which would drop
+		// focus on the body just as the arriving sheet claims it.
+		it("keeps focus in the arriving sheet when one sheet replaces another", async () => {
+			const user = userEvent.setup();
+
+			function Replacing() {
+				const [step, setStep] = useState<"closed" | "menu" | "confirm">(
+					"closed",
+				);
+				// The trigger goes away with the menu, as a row that removes itself
+				// does.
+				if (step === "confirm") {
+					return (
+						<Sheet title="Confirm" onClose={() => {}}>
+							<button type="button">Do it</button>
+						</Sheet>
+					);
+				}
+				return (
+					<>
+						<button type="button" onClick={() => setStep("menu")}>
+							Actions
+						</button>
+						{step === "menu" && (
+							<Sheet title="Menu" onClose={() => {}}>
+								<button type="button" onClick={() => setStep("confirm")}>
+									Fork from here
+								</button>
+							</Sheet>
+						)}
+					</>
+				);
+			}
+			render(<Replacing />);
+
+			await user.click(screen.getByRole("button", { name: "Actions" }));
+			await user.click(screen.getByRole("button", { name: "Fork from here" }));
+
+			expect(screen.getByRole("heading", { name: "Confirm" })).toBeVisible();
+			expect(overlay()).toHaveFocus();
 		});
 	});
 });
