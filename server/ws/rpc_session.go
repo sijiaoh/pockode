@@ -266,17 +266,21 @@ func (h *rpcMethodHandler) handleSessionEfforts(ctx context.Context, conn *jsonr
 }
 
 func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	id, ok := h.subscriptionID(ctx, conn, req)
+	if !ok {
+		return
+	}
+
 	notifier := h.state.getNotifier()
-	id, sessions, err := wt.SessionListWatcher.Subscribe(notifier)
+	sessions, err := wt.SessionListWatcher.Subscribe(id, notifier)
 	if err != nil {
-		h.replyInternalError(ctx, conn, req.ID, "failed to subscribe to session list", err)
+		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to session list")
 		return
 	}
 	h.state.trackSubscription(id, wt.SessionListWatcher)
 	h.log.Debug("subscribed", "watcher", "session list", "watchId", id)
 
 	result := rpc.SessionListSubscribeResult{
-		ID:       id,
 		Sessions: sessions,
 	}
 
@@ -297,8 +301,11 @@ func (h *rpcMethodHandler) handleSessionDetailSubscribe(ctx context.Context, con
 	}
 
 	notifier := h.state.getNotifier()
-	id, meta, err := wt.SessionDetailWatcher.Subscribe(params.SessionID, notifier)
+	meta, err := wt.SessionDetailWatcher.Subscribe(params.ID, params.SessionID, notifier)
 	if err != nil {
+		if h.replySubscriptionIDError(ctx, conn, req.ID, err) {
+			return
+		}
 		if errors.Is(err, session.ErrSessionNotFound) {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
 			return
@@ -306,11 +313,10 @@ func (h *rpcMethodHandler) handleSessionDetailSubscribe(ctx context.Context, con
 		h.replyInternalError(ctx, conn, req.ID, "failed to subscribe to session detail", err, "sessionId", params.SessionID)
 		return
 	}
-	h.state.trackSubscription(id, wt.SessionDetailWatcher)
-	h.log.Debug("subscribed", "watcher", "session detail", "watchId", id, "sessionId", params.SessionID)
+	h.state.trackSubscription(params.ID, wt.SessionDetailWatcher)
+	h.log.Debug("subscribed", "watcher", "session detail", "watchId", params.ID, "sessionId", params.SessionID)
 
 	result := rpc.SessionDetailSubscribeResult{
-		ID:      id,
 		Session: meta,
 	}
 

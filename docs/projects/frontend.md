@@ -61,7 +61,7 @@ On WebSocket close, `clearAllWatchSubscriptions()` clears every callback map (in
 
 Both subscription hooks use the generic `useSubscription` hook (`web/src/hooks/useSubscription.ts`), which manages the full lifecycle:
 
-1. **Subscribe** — On mount (when `enabled && connected`), calls the subscribe function, stores the subscription ID, and invokes `onSubscribed` with initial data
+1. **Subscribe** — On mount (when `enabled && connected`), calls the subscribe function — which registers the callback under the id it generated *before* sending the RPC — and invokes `onSubscribed` with the initial data, replaying anything that arrived in the meantime ([why](../code/subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened))
 2. **Receive notifications** — Routes incremental changes through the notification callback
 3. **Unsubscribe** — On unmount, disable, or disconnect, unsubscribes and calls `onReset`
 4. **Race condition handling** — Uses a generation counter to discard stale responses

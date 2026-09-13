@@ -415,7 +415,6 @@ export interface SessionForkParams {
 }
 
 export interface SessionListSubscribeResult {
-	id: string;
 	sessions: SessionListItem[];
 }
 
@@ -459,7 +458,6 @@ export interface SessionDetail {
 }
 
 export interface SessionDetailSubscribeResult {
-	id: string;
 	session: SessionDetail;
 }
 
@@ -490,7 +488,6 @@ export interface ChatMessagesHistoryPage {
 }
 
 export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
-	id: string;
 	/**
 	 * Whether a process is running for this session. The transcript's own
 	 * subscription reports it because the transcript is what it governs — the

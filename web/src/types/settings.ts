@@ -35,7 +35,6 @@ export interface Settings {
 }
 
 export interface SettingsSubscribeResult {
-	id: string;
 	settings: Settings;
 }
 

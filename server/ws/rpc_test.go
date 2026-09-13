@@ -58,6 +58,7 @@ type testEnv struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	reqID           int
+	subID           int // names each subscription a test opens; see nextSubID
 	authResult      rpc.AuthResult
 	// buffered holds frames read while waiting for a reply that had not arrived
 	// yet. A notification can overtake the reply to the request that caused it,
@@ -269,6 +270,14 @@ func (e *testEnv) readNotification() rpcNotification {
 	return notif
 }
 
+// nextSubID names a subscription the way a client does: the id travels with the
+// *.subscribe request, and a watcher refuses one already in use, so every
+// subscription a test opens needs one of its own.
+func (e *testEnv) nextSubID() string {
+	e.subID++
+	return fmt.Sprintf("client-%d", e.subID)
+}
+
 func (e *testEnv) subscribeChatMessages(sessionID string) rpc.ChatMessagesSubscribeResult {
 	return e.subscribeChatMessagesWithLimit(sessionID, 0)
 }
@@ -392,7 +401,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "chat.messages.subscribe", Params: rpc.ChatMessagesSubscribeParams{SessionID: "sess"}}
+	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "chat.messages.subscribe", Params: rpc.ChatMessagesSubscribeParams{ID: "client-1", SessionID: "sess"}}
 	data, _ := json.Marshal(req)
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 		t.Fatalf("failed to send: %v", err)
@@ -424,9 +433,6 @@ func TestHandler_ChatMessagesSubscribe(t *testing.T) {
 
 	if result.State != "ended" {
 		t.Errorf("expected state=ended before message, got %s", result.State)
-	}
-	if result.ID == "" {
-		t.Error("expected subscription ID")
 	}
 }
 
@@ -461,7 +467,7 @@ func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
 func TestHandler_ChatMessagesSubscribe_InvalidSession(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	resp := env.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{SessionID: "non-existent"})
+	resp := env.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{ID: "client-1", SessionID: "non-existent"})
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
 		t.Errorf("expected session not found error, got %+v", resp)
@@ -478,7 +484,12 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 	env := newTestEnv(t, mock)
 	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
-	env.subscribeChatMessages("sess")
+	const subID = "client-chat"
+	if resp := env.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{
+		ID: subID, SessionID: "sess",
+	}); resp.Error != nil {
+		t.Fatalf("subscribe failed: %s", resp.Error.Message)
+	}
 	env.sendMessage("sess", "Hello AI")
 
 	// Read notifications
@@ -490,6 +501,19 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 	}
 	if notif2.Method != "chat.done" {
 		t.Errorf("expected method 'chat.done', got %q", notif2.Method)
+	}
+	// Addressed to the id the client chose: the client routes chat events by it
+	// alone, and it is the only id either side ever had for this subscription.
+	for _, notif := range []rpcNotification{notif1, notif2} {
+		var params struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(notif.Params, &params); err != nil {
+			t.Fatalf("unmarshal %s params: %v", notif.Method, err)
+		}
+		if params.ID != subID {
+			t.Errorf("%s addressed to %q, want %q", notif.Method, params.ID, subID)
+		}
 	}
 }
 
@@ -854,22 +878,17 @@ func TestHandler_SessionListSubscribe(t *testing.T) {
 	store.Create(bgCtx, "session-1", session.CreateSpec{})
 	store.Create(bgCtx, "session-2", session.CreateSpec{})
 
-	resp := env.call("session.list.subscribe", nil)
+	resp := env.call("session.list.subscribe", rpc.SubscribeParams{ID: "client-1"})
 
 	if resp.Error != nil {
 		t.Errorf("unexpected error: %s", resp.Error.Message)
 	}
 
 	var result struct {
-		ID       string                `json:"id"`
 		Sessions []session.SessionMeta `json:"sessions"`
 	}
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("failed to unmarshal result: %v", err)
-	}
-
-	if result.ID == "" {
-		t.Error("expected non-empty subscription ID")
 	}
 
 	if len(result.Sessions) != 2 {
@@ -882,7 +901,7 @@ func TestHandler_SessionDetailSubscribe(t *testing.T) {
 	store := env.getMainWorktree().SessionStore
 	store.Create(bgCtx, "session-1", session.CreateSpec{})
 
-	resp := env.call("session.detail.subscribe", rpc.SessionDetailSubscribeParams{SessionID: "session-1"})
+	resp := env.call("session.detail.subscribe", rpc.SessionDetailSubscribeParams{ID: "client-1", SessionID: "session-1"})
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
 	}
@@ -891,14 +910,13 @@ func TestHandler_SessionDetailSubscribe(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("failed to unmarshal result: %v", err)
 	}
-	if result.ID == "" {
-		t.Error("expected non-empty subscription ID")
-	}
 	if result.Session.ID != "session-1" {
 		t.Errorf("session = %+v, want session-1", result.Session)
 	}
 
-	if resp := env.call("session.detail.unsubscribe", unsubscribeParams{ID: result.ID}); resp.Error != nil {
+	// The id the client sent is the one the subscription answers to, with nothing
+	// in the reply to learn it from.
+	if resp := env.call("session.detail.unsubscribe", unsubscribeParams{ID: "client-1"}); resp.Error != nil {
 		t.Errorf("unsubscribe failed: %s", resp.Error.Message)
 	}
 }
@@ -906,7 +924,7 @@ func TestHandler_SessionDetailSubscribe(t *testing.T) {
 func TestHandler_SessionDetailSubscribe_UnknownSession(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	resp := env.call("session.detail.subscribe", rpc.SessionDetailSubscribeParams{SessionID: "nope"})
+	resp := env.call("session.detail.subscribe", rpc.SessionDetailSubscribeParams{ID: "client-1", SessionID: "nope"})
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
 		t.Errorf("expected session not found error, got %+v", resp)
@@ -1788,7 +1806,7 @@ func TestHandler_GitDiffSubscribe_Unstaged(t *testing.T) {
 	os.WriteFile(testFile, []byte("modified"), 0644)
 
 	env := newWorkDirTestEnv(t, dir)
-	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "test.txt", Staged: false})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{ID: "client-1", Path: "test.txt", Staged: false})
 
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
@@ -1797,9 +1815,6 @@ func TestHandler_GitDiffSubscribe_Unstaged(t *testing.T) {
 	var result rpc.GitDiffSubscribeResult
 	json.Unmarshal(resp.Result, &result)
 
-	if result.ID == "" {
-		t.Error("expected subscription ID")
-	}
 	if result.OldContent != "original" {
 		t.Errorf("expected old content 'original', got %q", result.OldContent)
 	}
@@ -1822,7 +1837,7 @@ func TestHandler_GitDiffSubscribe_Staged(t *testing.T) {
 	runGitIn(t, dir, "add", "test.txt")
 
 	env := newWorkDirTestEnv(t, dir)
-	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "test.txt", Staged: true})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{ID: "client-1", Path: "test.txt", Staged: true})
 
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
@@ -1831,9 +1846,6 @@ func TestHandler_GitDiffSubscribe_Staged(t *testing.T) {
 	var result rpc.GitDiffSubscribeResult
 	json.Unmarshal(resp.Result, &result)
 
-	if result.ID == "" {
-		t.Error("expected subscription ID")
-	}
 	if result.OldContent != "original" {
 		t.Errorf("expected old content 'original', got %q", result.OldContent)
 	}
@@ -1846,7 +1858,7 @@ func TestHandler_GitDiffSubscribe_PathRequired(t *testing.T) {
 	dir := setupGitRepo(t)
 	env := newWorkDirTestEnv(t, dir)
 
-	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "", Staged: false})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{ID: "client-1", Path: "", Staged: false})
 
 	if resp.Error == nil {
 		t.Fatal("expected error")
@@ -1860,7 +1872,7 @@ func TestHandler_GitDiffSubscribe_InvalidPath(t *testing.T) {
 	dir := setupGitRepo(t)
 	env := newWorkDirTestEnv(t, dir)
 
-	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "../etc/passwd", Staged: false})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{ID: "client-1", Path: "../etc/passwd", Staged: false})
 
 	if resp.Error == nil {
 		t.Fatal("expected error")

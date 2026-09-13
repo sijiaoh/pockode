@@ -26,7 +26,7 @@ type detailEvent struct {
 
 func NewWorkDetailWatcher(store work.Store) *WorkDetailWatcher {
 	w := &WorkDetailWatcher{
-		BaseWatcher: NewBaseWatcher("wd"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan detailEvent, 64),
 	}
@@ -168,33 +168,38 @@ func (w *WorkDetailWatcher) notifySyncAll() {
 	slog.Info("sent full detail sync to subscribers after event drop")
 }
 
-// Subscribe registers a subscriber for a specific work item's detail.
-func (w *WorkDetailWatcher) Subscribe(workID string, notifier Notifier) (string, work.Work, []work.Comment, error) {
-	id := w.GenerateID()
+// Subscribe registers a subscriber for a specific work item's detail, under the
+// client-chosen id.
+//
+// Registered before the store read, so a change landing between the two is
+// notified rather than lost; see BaseWatcher.AddSubscription.
+func (w *WorkDetailWatcher) Subscribe(id, workID string, notifier Notifier) (work.Work, []work.Comment, error) {
 	sub := &Subscription{
 		ID:       id,
 		Key:      workID,
 		Notifier: notifier,
 	}
-	w.AddSubscription(sub)
+	if err := w.AddSubscription(sub); err != nil {
+		return work.Work{}, nil, err
+	}
 
 	item, found, err := w.store.Get(workID)
 	if err != nil {
 		w.RemoveSubscription(id)
-		return "", work.Work{}, nil, err
+		return work.Work{}, nil, err
 	}
 	if !found {
 		w.RemoveSubscription(id)
-		return "", work.Work{}, nil, work.ErrWorkNotFound
+		return work.Work{}, nil, work.ErrWorkNotFound
 	}
 
 	comments, err := w.store.ListComments(workID)
 	if err != nil {
 		w.RemoveSubscription(id)
-		return "", work.Work{}, nil, err
+		return work.Work{}, nil, err
 	}
 
-	return id, item, comments, nil
+	return item, comments, nil
 }
 
 type workDetailChangedParams struct {

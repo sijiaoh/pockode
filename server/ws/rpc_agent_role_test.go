@@ -16,7 +16,7 @@ import (
 func roleOverTheWire(t *testing.T, env *testEnv, id string) agentrole.AgentRole {
 	t.Helper()
 
-	resp := env.call("agent_role.list.subscribe", struct{}{})
+	resp := env.call("agent_role.list.subscribe", rpc.SubscribeParams{ID: env.nextSubID()})
 	if resp.Error != nil {
 		t.Fatalf("agent_role.list.subscribe: %s", resp.Error.Message)
 	}

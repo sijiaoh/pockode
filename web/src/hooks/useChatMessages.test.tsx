@@ -244,6 +244,98 @@ describe("useChatMessages", () => {
 		expect(streaming).toBe(false);
 	});
 
+	// The window this subscription cannot afford to have: the server registers
+	// the subscription before it reads the history, and writes the reply and any
+	// notification from different goroutines. A record written in between is not
+	// in the history that comes back and can arrive before it — applied straight
+	// away it would be wiped out by the older snapshot landing after it, and the
+	// message would be gone from the transcript with nothing left to say so.
+	it("keeps a message that arrives before the history does", async () => {
+		mockState.chatMessagesSubscribe.mockImplementation(
+			async (
+				_sessionId: string,
+				onNotification: (notification: ServerNotification) => void,
+			) => {
+				onNotification({ type: "text", content: "written meanwhile" });
+				return {
+					id: "sub-1",
+					initial: {
+						history: [{ type: "message", content: "Do the thing" }],
+						state: "running",
+					},
+				};
+			},
+		);
+
+		let messages: Message[] = [];
+		function Probe() {
+			messages = useChatMessages({ sessionId: "s1" }).messages;
+			return null;
+		}
+		render(<Probe />);
+
+		await waitFor(() => expect(messages.length).toBeGreaterThan(1));
+		expect(messages[0]).toMatchObject({
+			role: "user",
+			content: "Do the thing",
+		});
+		expect(messages.at(-1)).toMatchObject({
+			role: "assistant",
+			parts: [{ type: "text", content: "written meanwhile" }],
+		});
+	});
+
+	// The same window seen from the other side: a record committed between the
+	// subscription being registered and the history being read comes back in the
+	// page *and* as a notification. Applied twice it would put a second copy of
+	// the message in the transcript, which is what a seq is for — the live record
+	// and the replayed one carry the same one.
+	it("does not apply a record the history page already carried", async () => {
+		mockState.chatMessagesSubscribe.mockImplementation(
+			async (
+				_sessionId: string,
+				onNotification: (notification: ServerNotification) => void,
+			) => {
+				onNotification({
+					type: "message",
+					content: "Do the thing",
+					seq: 5,
+				} as unknown as ServerNotification);
+				onNotification({
+					type: "text",
+					content: "written meanwhile",
+					seq: 6,
+				} as unknown as ServerNotification);
+				return {
+					id: "sub-1",
+					initial: {
+						history: [{ type: "message", content: "Do the thing", seq: 5 }],
+						state: "running",
+					},
+				};
+			},
+		);
+
+		let messages: Message[] = [];
+		function Probe() {
+			messages = useChatMessages({ sessionId: "s1" }).messages;
+			return null;
+		}
+		render(<Probe />);
+
+		await waitFor(() => expect(messages.length).toBeGreaterThan(1));
+		// The user message once, and the record the page did not reach.
+		expect(messages).toHaveLength(2);
+		expect(messages[0]).toMatchObject({
+			role: "user",
+			content: "Do the thing",
+		});
+		expect(messages[1]).toMatchObject({
+			role: "assistant",
+			parts: [{ type: "text", content: "written meanwhile" }],
+		});
+	});
+
 	describe("paging back through history", () => {
 		// Renders the hook and hands the test everything it needs to page.
 		function renderPager() {

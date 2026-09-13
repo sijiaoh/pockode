@@ -28,10 +28,7 @@ const mockSubscribe = vi.fn(
 		notificationCallback = callback;
 		const session = mockDetails[sessionId];
 		if (!session) throw new Error("session not found");
-		return {
-			id: `watch-${sessionId}`,
-			initial: { id: `watch-${sessionId}`, session },
-		};
+		return { id: `watch-${sessionId}`, initial: { session } };
 	},
 );
 const mockUnsubscribe = vi.fn();

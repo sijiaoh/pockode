@@ -126,13 +126,9 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 	w := NewSessionListWatcher(store)
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
-	id, sessions, err := w.Subscribe(nil)
+	sessions, err := w.Subscribe("client-1", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if id == "" {
-		t.Error("expected non-empty subscription ID")
 	}
 
 	if len(sessions) != 2 {
@@ -156,13 +152,13 @@ func TestSessionListWatcher_Unsubscribe(t *testing.T) {
 	w := NewSessionListWatcher(store)
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
-	id, _, _ := w.Subscribe(nil)
+	w.Subscribe("client-1", nil)
 
 	if !w.HasSubscriptions() {
 		t.Error("expected HasSubscriptions to be true")
 	}
 
-	w.Unsubscribe(id)
+	w.Unsubscribe("client-1")
 
 	if w.HasSubscriptions() {
 		t.Error("expected HasSubscriptions to be false")
@@ -207,7 +203,7 @@ func TestSessionListWatcher_Subscribe_ListError(t *testing.T) {
 	w := NewSessionListWatcher(store)
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
-	_, _, err := w.Subscribe(nil)
+	_, err := w.Subscribe("client-1", nil)
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -361,7 +357,7 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 		},
 	}
 	w := &SessionListWatcher{
-		BaseWatcher: NewBaseWatcher("sl"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan session.SessionChangeEvent, 1),
 	}
@@ -369,7 +365,7 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	notifier := &captureNotifier{}
-	w.Subscribe(notifier)
+	w.Subscribe("client-1", notifier)
 
 	// Simulate the dirty flag being set (as if events were dropped)
 	w.dirty.Store(true)

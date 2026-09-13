@@ -27,7 +27,7 @@ type SessionDetailWatcher struct {
 
 func NewSessionDetailWatcher(store session.Store) *SessionDetailWatcher {
 	w := &SessionDetailWatcher{
-		BaseWatcher: NewBaseWatcher("sd"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		// Same source and same size as SessionListWatcher's channel: both are fed
 		// by every session change in the worktree, so a burst one can absorb
@@ -126,30 +126,35 @@ func (w *SessionDetailWatcher) notifySyncAll() {
 	slog.Info("sent full session detail sync to subscribers after event drop")
 }
 
-// Subscribe registers a subscriber for a single session's metadata and returns
-// the current snapshot.
-func (w *SessionDetailWatcher) Subscribe(sessionID string, notifier Notifier) (string, session.SessionMeta, error) {
-	id := w.GenerateID()
+// Subscribe registers a subscriber for a single session's metadata under the
+// client-chosen id and returns the current snapshot.
+//
+// The subscription is registered before the store read so that a change landing
+// between the two is delivered rather than lost. That notification can reach the
+// client before this call's reply does — the two are written by different
+// goroutines — so the client must be able to take a change before it has taken
+// the snapshot. See docs/code/subscription-system.md.
+func (w *SessionDetailWatcher) Subscribe(id, sessionID string, notifier Notifier) (session.SessionMeta, error) {
 	sub := &Subscription{
 		ID:       id,
 		Key:      sessionID,
 		Notifier: notifier,
 	}
-	// Registered before the store read so a change landing between the two is
-	// delivered rather than lost.
-	w.AddSubscription(sub)
+	if err := w.AddSubscription(sub); err != nil {
+		return session.SessionMeta{}, err
+	}
 
 	meta, found, err := w.store.Get(sessionID)
 	if err != nil {
 		w.RemoveSubscription(id)
-		return "", session.SessionMeta{}, err
+		return session.SessionMeta{}, err
 	}
 	if !found {
 		w.RemoveSubscription(id)
-		return "", session.SessionMeta{}, session.ErrSessionNotFound
+		return session.SessionMeta{}, session.ErrSessionNotFound
 	}
 
-	return id, meta, nil
+	return meta, nil
 }
 
 // sessionDetailChangedParams reports a session's new state, or its removal.

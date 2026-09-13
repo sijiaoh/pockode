@@ -32,7 +32,9 @@ type Watcher interface {
 
 ### BaseWatcher
 
-Shared subscription management: ID generation (with type-specific prefix), thread-safe subscription map, and goroutine lifecycle — `Go` starts a tracked loop, `CancelAndWait` cancels the context and waits for those loops. Most watchers embed this.
+Shared subscription management: a thread-safe subscription map keyed by the id the client chose (`AddSubscription` refuses an id already in use rather than displacing it), and goroutine lifecycle — `Go` starts a tracked loop, `CancelAndWait` cancels the context and waits for those loops. Most watchers embed this.
+
+The server generates no subscription ids. Why the client names its own subscription — and what that buys during the window while one is being opened — is in [code/subscription-system.md](code/subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened).
 
 ### Notifier
 
@@ -97,10 +99,10 @@ These watchers implement store listener interfaces and use async buffered channe
 
 ### Backend
 
-1. Client sends subscribe RPC (e.g. `fs.subscribe`)
+1. Client sends subscribe RPC (e.g. `fs.subscribe`) carrying the subscription id it chose. The id is required; a request without one is rejected as invalid params
 2. Server creates `JSONRPCNotifier` from the connection
-3. Watcher's `Subscribe()` registers subscription, returns ID + initial data
-4. Subscription tracked in `rpcState` for cleanup on disconnect
+3. Watcher's `Subscribe()` registers the subscription under that id, then reads the initial data. The reply carries the data only — never an id, since the client already has it
+4. Subscription tracked in `rpcState` for cleanup on disconnect, keyed by **watcher + id** (an id is unique only within its watcher)
 5. Watcher sends notifications via the notifier when changes occur
 6. Client sends unsubscribe RPC — watcher removes subscription
 7. On disconnect: all tracked subscriptions auto-unsubscribed
@@ -109,7 +111,7 @@ These watchers implement store listener interfaces and use async buffered channe
 
 `web/src/lib/wsStore.ts` — Module-level `Map<string, callback>` per watcher type.
 
-1. Component calls `actions.fsSubscribe(path, callback)` → sends RPC, stores callback by subscription ID
+1. Component calls `actions.fsSubscribe(path, callback)` → `openSubscription` generates the subscription id, stores the callback under it, *then* sends the RPC. Registering first is what makes a change landing mid-subscribe deliverable
 2. WebSocket `onmessage` routes notifications by method name → looks up callback by subscription ID → invokes it
 3. On unmount or unsubscribe: callback removed, unsubscribe RPC sent
 4. On worktree switch: `clearWorktreeWatchSubscriptions()` clears only the worktree-scoped maps (fs, git, git-diff, session list, session detail, chat). App-level maps (work list/detail, agent role list, settings, worktree) are kept, mirroring the Manager-level watchers the server preserves across switches (see Worktree Integration below)

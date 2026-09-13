@@ -145,7 +145,7 @@ const seedSessionDetail = (overrides: Partial<SessionDetail> = {}) => {
 	});
 	mockState.sessionDetailSubscribe.mockImplementation(async () => ({
 		id: "detail-1",
-		initial: { id: "detail-1", session: mockState.sessionDetail },
+		initial: { session: mockState.sessionDetail },
 	}));
 };
 

@@ -58,12 +58,9 @@ func TestWorkDetailWatcher_Subscribe(t *testing.T) {
 	}
 	w := NewWorkDetailWatcher(store)
 
-	id, item, comments, err := w.Subscribe("w1", nil)
+	item, comments, err := w.Subscribe("client-1", "w1", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if id == "" {
-		t.Error("expected non-empty subscription ID")
 	}
 	if item.ID != "w1" {
 		t.Errorf("work ID = %q, want %q", item.ID, "w1")
@@ -80,7 +77,7 @@ func TestWorkDetailWatcher_SubscribeNotFound(t *testing.T) {
 	store := &mockDetailStore{}
 	w := NewWorkDetailWatcher(store)
 
-	_, _, _, err := w.Subscribe("nonexistent", nil)
+	_, _, err := w.Subscribe("client-1", "nonexistent", nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent work")
 	}
@@ -92,8 +89,8 @@ func TestWorkDetailWatcher_Unsubscribe(t *testing.T) {
 	}
 	w := NewWorkDetailWatcher(store)
 
-	id, _, _, _ := w.Subscribe("w1", nil)
-	w.Unsubscribe(id)
+	w.Subscribe("client-1", "w1", nil)
+	w.Unsubscribe("client-1")
 
 	if w.HasSubscriptions() {
 		t.Error("expected HasSubscriptions to be false")
@@ -109,7 +106,7 @@ func TestWorkDetailWatcher_NotifyOnCommentChange(t *testing.T) {
 	defer w.Stop()
 
 	notifier := &captureNotifier{}
-	w.Subscribe("w1", notifier)
+	w.Subscribe("client-1", "w1", notifier)
 
 	// Add the comment so store reflects it
 	store.comments = append(store.comments, work.Comment{ID: "c1", WorkID: "w1", Body: "new comment"})
@@ -143,7 +140,7 @@ func TestWorkDetailWatcher_NotifyOnWorkChange(t *testing.T) {
 	defer w.Stop()
 
 	notifier := &captureNotifier{}
-	w.Subscribe("w1", notifier)
+	w.Subscribe("client-1", "w1", notifier)
 
 	// Update the work in the mock store
 	store.works[0].Title = "updated"
@@ -179,8 +176,8 @@ func TestWorkDetailWatcher_NotifyFilteredByWorkID(t *testing.T) {
 
 	n1 := &captureNotifier{}
 	n2 := &captureNotifier{}
-	w.Subscribe("w1", n1)
-	w.Subscribe("w2", n2)
+	w.Subscribe("client-1", "w1", n1)
+	w.Subscribe("client-2", "w2", n2)
 
 	w.OnCommentChange(work.CommentEvent{
 		Comment: work.Comment{ID: "c1", WorkID: "w1", Body: "for w1"},
@@ -208,7 +205,7 @@ func TestWorkDetailWatcher_DirtyFlag_SyncsAll(t *testing.T) {
 		},
 	}
 	w := &WorkDetailWatcher{
-		BaseWatcher: NewBaseWatcher("wd"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan detailEvent, 1),
 	}
@@ -217,8 +214,8 @@ func TestWorkDetailWatcher_DirtyFlag_SyncsAll(t *testing.T) {
 
 	n1 := &captureNotifier{}
 	n2 := &captureNotifier{}
-	w.Subscribe("w1", n1)
-	w.Subscribe("w2", n2)
+	w.Subscribe("client-1", "w1", n1)
+	w.Subscribe("client-2", "w2", n2)
 
 	// Simulate the dirty flag being set (as if events were dropped)
 	w.dirty.Store(true)

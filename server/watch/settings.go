@@ -19,7 +19,7 @@ type SettingsWatcher struct {
 
 func NewSettingsWatcher(store *settings.Store) *SettingsWatcher {
 	w := &SettingsWatcher{
-		BaseWatcher: NewBaseWatcher("st"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan struct{}, 16),
 	}
@@ -67,17 +67,18 @@ func (w *SettingsWatcher) notifyChange(s settings.Settings) {
 	slog.Debug("notified settings change")
 }
 
-// Subscribe registers a subscriber and returns the subscription ID along with
-// the current settings.
-func (w *SettingsWatcher) Subscribe(notifier Notifier) (string, settings.Settings) {
-	id := w.GenerateID()
+// Subscribe registers a subscriber under the client-chosen id and returns the
+// current settings.
+func (w *SettingsWatcher) Subscribe(id string, notifier Notifier) (settings.Settings, error) {
 	sub := &Subscription{
 		ID:       id,
 		Notifier: notifier,
 	}
-	w.AddSubscription(sub)
+	if err := w.AddSubscription(sub); err != nil {
+		return settings.Settings{}, err
+	}
 
-	return id, w.store.Get()
+	return w.store.Get(), nil
 }
 
 type settingsChangedParams struct {

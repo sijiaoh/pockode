@@ -57,7 +57,7 @@ the rest costs transport, parsing and memory for records nobody looks at.
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `chat.messages.subscribe` | `session_id`, `limit?` | `id`, `history`, `has_more`, `next_before_seq?`, `state` |
+| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `state` |
 | `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?` |
 
 - `history` is the page, **oldest record first**, each record stamped with its

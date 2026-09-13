@@ -2,11 +2,28 @@ package watch
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/pockode/server/session"
 )
+
+// mockSessionStoreWithGetHook runs onGet inside the store read, which is how a
+// test reaches the moment between a subscription being registered and the
+// snapshot it replies with being taken.
+type mockSessionStoreWithGetHook struct {
+	mockSessionStore
+	onGet func()
+}
+
+func (m *mockSessionStoreWithGetHook) Get(sessionID string) (session.SessionMeta, bool, error) {
+	if m.onGet != nil {
+		m.onGet()
+	}
+	return m.mockSessionStore.Get(sessionID)
+}
 
 func TestSessionDetailWatcher_Subscribe(t *testing.T) {
 	store := &mockSessionStore{
@@ -17,12 +34,12 @@ func TestSessionDetailWatcher_Subscribe(t *testing.T) {
 	}
 	w := NewSessionDetailWatcher(store)
 
-	id, meta, err := w.Subscribe("sess-1", nil)
+	meta, err := w.Subscribe("client-1", "sess-1", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if id == "" {
-		t.Error("expected non-empty subscription ID")
+	if sub := w.GetSubscription("client-1"); sub == nil {
+		t.Error("subscription must be registered under the id the client chose")
 	}
 	if meta.Model != "opus" || meta.Effort != "high" {
 		t.Errorf("snapshot missing detail fields: %+v", meta)
@@ -36,7 +53,7 @@ func TestSessionDetailWatcher_SubscribeNotFound(t *testing.T) {
 	store := &mockSessionStore{}
 	w := NewSessionDetailWatcher(store)
 
-	if _, _, err := w.Subscribe("missing", nil); err != session.ErrSessionNotFound {
+	if _, err := w.Subscribe("client-1", "missing", nil); err != session.ErrSessionNotFound {
 		t.Errorf("err = %v, want ErrSessionNotFound", err)
 	}
 	if w.HasSubscriptions() {
@@ -48,8 +65,8 @@ func TestSessionDetailWatcher_Unsubscribe(t *testing.T) {
 	store := &mockSessionStore{sessions: []session.SessionMeta{{ID: "sess-1"}}}
 	w := NewSessionDetailWatcher(store)
 
-	id, _, _ := w.Subscribe("sess-1", nil)
-	w.Unsubscribe(id)
+	w.Subscribe("client-1", "sess-1", nil)
+	w.Unsubscribe("client-1")
 
 	if w.HasSubscriptions() {
 		t.Error("expected HasSubscriptions to be false after unsubscribe")
@@ -63,7 +80,7 @@ func TestSessionDetailWatcher_NotifyOnUpdate(t *testing.T) {
 	defer w.Stop()
 
 	notifier := &captureNotifier{}
-	w.Subscribe("sess-1", notifier)
+	w.Subscribe("client-1", "sess-1", notifier)
 
 	w.OnSessionChange(session.SessionChangeEvent{
 		Op:      session.OperationUpdate,
@@ -88,7 +105,7 @@ func TestSessionDetailWatcher_NotifyOnDelete(t *testing.T) {
 	defer w.Stop()
 
 	notifier := &captureNotifier{}
-	w.Subscribe("sess-1", notifier)
+	w.Subscribe("client-1", "sess-1", notifier)
 
 	w.OnSessionChange(session.SessionChangeEvent{
 		Op:      session.OperationDelete,
@@ -116,8 +133,8 @@ func TestSessionDetailWatcher_FiltersBySessionID(t *testing.T) {
 
 	watched := &captureNotifier{}
 	other := &captureNotifier{}
-	w.Subscribe("sess-1", watched)
-	w.Subscribe("sess-2", other)
+	w.Subscribe("client-1", "sess-1", watched)
+	w.Subscribe("client-2", "sess-2", other)
 
 	w.OnSessionChange(session.SessionChangeEvent{
 		Op:      session.OperationUpdate,
@@ -139,10 +156,12 @@ func TestSessionDetailWatcher_DirtyFlag_SyncsFromStore(t *testing.T) {
 
 	live := &captureNotifier{}
 	gone := &captureNotifier{}
-	w.Subscribe("sess-1", live)
+	w.Subscribe("client-1", "sess-1", live)
 	// Subscribed while the session still existed; the store no longer has it,
 	// standing in for a delete whose event was dropped.
-	w.AddSubscription(&Subscription{ID: "sd-gone", Key: "sess-removed", Notifier: gone})
+	if err := w.AddSubscription(&Subscription{ID: "sd-gone", Key: "sess-removed", Notifier: gone}); err != nil {
+		t.Fatalf("add subscription: %v", err)
+	}
 
 	w.dirty.Store(true)
 	w.Start()
@@ -195,16 +214,16 @@ func TestSessionDetailWatcher_ConcurrentSubscribeUnsubscribe(t *testing.T) {
 		if i%2 == 1 {
 			sessionID = "sess-2"
 		}
+		subID := fmt.Sprintf("client-%d", i)
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			id, _, err := w.Subscribe(sessionID, &captureNotifier{})
-			if err != nil {
+			if _, err := w.Subscribe(subID, sessionID, &captureNotifier{}); err != nil {
 				t.Errorf("subscribe failed: %v", err)
 				return
 			}
-			w.Unsubscribe(id)
+			w.Unsubscribe(subID)
 		}()
 
 		wg.Add(1)
@@ -220,6 +239,63 @@ func TestSessionDetailWatcher_ConcurrentSubscribeUnsubscribe(t *testing.T) {
 
 	if w.HasSubscriptions() {
 		t.Error("expected every subscription to be removed")
+	}
+}
+
+// The window this pins: the subscription is registered, the snapshot has not
+// been read yet, and a write lands. The notification must reach the subscriber,
+// addressed to the id the client already has — with a server-generated id the
+// client could not learn before the reply, this notification had no receiver and
+// left the client on a stale snapshot with nothing to correct it.
+func TestSessionDetailWatcher_NotifiesChangeLandingDuringSubscribe(t *testing.T) {
+	store := &mockSessionStoreWithGetHook{}
+	store.sessions = []session.SessionMeta{{ID: "sess-1", Title: "before"}}
+	w := NewSessionDetailWatcher(store)
+	w.Start()
+	defer w.Stop()
+
+	notifier := &captureNotifier{}
+	store.onGet = func() {
+		w.OnSessionChange(session.SessionChangeEvent{
+			Op:      session.OperationUpdate,
+			Session: session.SessionMeta{ID: "sess-1", Title: "during subscribe"},
+		})
+	}
+
+	meta, err := w.Subscribe("client-1", "sess-1", notifier)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta.Title != "before" {
+		t.Errorf("snapshot = %q, want the state the store read saw", meta.Title)
+	}
+
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+
+	params := decodeSessionDetailParams(t, notifier.last())
+	if params.ID != "client-1" {
+		t.Errorf("notification addressed to %q, want the client's own id", params.ID)
+	}
+	if params.Session == nil || params.Session.Title != "during subscribe" {
+		t.Errorf("unexpected session in notification: %+v", params.Session)
+	}
+}
+
+// What the id space refuses is BaseWatcher's business (see base_test.go); what
+// this pins is that a refusal is passed on rather than swallowed, leaving the
+// client believing it has a subscription the watcher never made.
+func TestSessionDetailWatcher_SubscribeReportsUnusableID(t *testing.T) {
+	store := &mockSessionStore{
+		sessions: []session.SessionMeta{{ID: "sess-1"}, {ID: "sess-2"}},
+	}
+	w := NewSessionDetailWatcher(store)
+
+	if _, err := w.Subscribe("client-1", "sess-1", &captureNotifier{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := w.Subscribe("client-1", "sess-2", &captureNotifier{}); !errors.Is(err, ErrSubscriptionIDInUse) {
+		t.Errorf("err = %v, want ErrSubscriptionIDInUse", err)
 	}
 }
 

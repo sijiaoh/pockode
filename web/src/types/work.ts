@@ -52,7 +52,6 @@ export interface Comment {
 }
 
 export interface WorkListSubscribeResult {
-	id: string;
 	items: Work[];
 }
 
@@ -62,7 +61,6 @@ export type WorkListChangedNotification =
 	| { id: string; operation: "sync"; works: Work[] };
 
 export interface WorkDetailSubscribeResult {
-	id: string;
 	work: Work;
 	comments: Comment[];
 }

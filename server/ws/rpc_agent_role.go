@@ -138,17 +138,21 @@ func (h *rpcMethodHandler) handleAgentRoleResetDefaults(ctx context.Context, con
 }
 
 func (h *rpcMethodHandler) handleAgentRoleListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	id, ok := h.subscriptionID(ctx, conn, req)
+	if !ok {
+		return
+	}
+
 	notifier := h.state.getNotifier()
-	id, items, err := h.agentRoleListWatcher.Subscribe(notifier)
+	items, err := h.agentRoleListWatcher.Subscribe(id, notifier)
 	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to subscribe")
+		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to agent role list")
 		return
 	}
 	h.state.trackSubscription(id, h.agentRoleListWatcher)
 	h.log.Debug("subscribed", "watcher", "agent role list", "watchId", id)
 
 	result := rpc.AgentRoleListSubscribeResult{
-		ID:    id,
 		Items: items,
 	}
 

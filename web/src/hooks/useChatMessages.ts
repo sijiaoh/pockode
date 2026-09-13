@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
 	applyServerEvent,
 	closePreviousTurn,
@@ -20,6 +20,7 @@ import {
 import { type ConnectionStatus, useWSStore } from "../lib/wsStore";
 import type {
 	AssistantMessage,
+	ChatMessagesSubscribeResult,
 	HistorySeq,
 	Message,
 	PermissionResponseParams,
@@ -31,6 +32,7 @@ import type {
 } from "../types/message";
 import type { AgentType } from "../types/settings";
 import { generateUUID } from "../utils/uuid";
+import { useSubscription } from "./useSubscription";
 
 export type { ConnectionStatus } from "../lib/wsStore";
 
@@ -128,6 +130,19 @@ function leadingTurnTerminal(history: unknown[]): unknown {
 	return isTurnTerminal(first) ? first : undefined;
 }
 
+/**
+ * The newest record's seq in a history page, or undefined if the page addresses
+ * none. Records are appended in seq order, so this is the last one that has a
+ * seq at all — a page can end on records that were never persisted.
+ */
+function newestSeq(history: unknown[]): HistorySeq | undefined {
+	for (let i = history.length - 1; i >= 0; i--) {
+		const seq = readHistorySeq(history[i]);
+		if (seq !== undefined) return seq;
+	}
+	return undefined;
+}
+
 export function useChatMessages({
 	sessionId,
 	enabled = true,
@@ -140,7 +155,6 @@ export function useChatMessages({
 	const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
 	const [historyError, setHistoryError] = useState<string | null>(null);
 	const [loadedHistoryPages, setLoadedHistoryPages] = useState(0);
-	const subscriptionIdRef = useRef<string | null>(null);
 	// Cursor for the next page back, straight from the server: a record it could
 	// not address carries no seq, so one derived here would eventually name
 	// nothing. Undefined means the start of the session has been reached.
@@ -157,6 +171,11 @@ export function useChatMessages({
 	// older page from here rather than through the back-references; one that ends
 	// while connected broadcasts the record and travels with them.
 	const processGoneRef = useRef(false);
+	// The newest record the loaded page holds. A live notification for a record
+	// the page already carries is the one thing the subscription can deliver
+	// twice: the server registers the subscription before it reads the history,
+	// so a record committed in between is in both. See `handleNotification`.
+	const newestHistorySeqRef = useRef<HistorySeq | undefined>(undefined);
 	// Identifies which transcript a page request was made against. A session
 	// switch or a re-subscribe replaces the transcript wholesale, and a page still
 	// in flight would otherwise be spliced into the one that took its place.
@@ -188,13 +207,28 @@ export function useChatMessages({
 	const isSessionActivated = sessionDetail?.activated ?? false;
 
 	const handleNotification = useCallback((notification: ServerNotification) => {
+		const seq = readHistorySeq(notification);
+		// Already on screen: this record came back in the history page too, and
+		// applying it again would put a second copy of the message in the
+		// transcript. Only a record the page actually reaches is skipped — seqs
+		// grow with the session, so anything newer is a record the page never had.
+		// A record with no seq is not addressable at all (never persisted, or a
+		// server too old to say), so it cannot be matched against the page and is
+		// applied — the duplicate the whole subscription has always tolerated.
+		if (
+			seq !== undefined &&
+			newestHistorySeqRef.current !== undefined &&
+			seq <= newestHistorySeqRef.current
+		) {
+			return;
+		}
+
 		setIsProcessRunning(notification.type !== "process_ended");
 
 		if (isBackReference(notification)) {
 			backReferencesRef.current.push(notification);
 		}
 		const event = normalizeEvent(notification);
-		const seq = readHistorySeq(notification);
 		setMessages((prev) => applyServerEvent(prev, event, seq));
 	}, []);
 
@@ -217,88 +251,86 @@ export function useChatMessages({
 		nextBeforeSeqRef.current = undefined;
 		backReferencesRef.current = [];
 		boundaryTerminalRef.current = undefined;
+		newestHistorySeqRef.current = undefined;
 		processGoneRef.current = false;
 		isLoadingMoreRef.current = false;
 		historyGenerationRef.current++;
 	}
 
-	// Subscribe to chat events when connected.
+	// The transcript's own subscription, opened through the common layer like
+	// every other one: a record written between the subscription being registered
+	// and this page of history being read reaches the callback before the page
+	// does, and would be applied and then overwritten by it. `useSubscription`
+	// holds such a record until the page is in and replays it after — and this is
+	// the one subscription where losing that record loses a message outright, as
+	// it is newer than the history that just came back.
+	//
 	// Loading state is managed by the initial value and the reset above, so
 	// re-subscribing on reconnect won't flash the spinner. It also stays true for
 	// as long as `enabled` is false, which is what makes "waiting for the session
 	// to resolve" and "waiting for its history" a single continuous wait for
 	// callers timing a loading indicator against it.
-	useEffect(() => {
-		if (!enabled || status !== "connected") {
-			return;
-		}
+	const subscribe = useCallback(
+		(onNotification: (notification: ServerNotification) => void) =>
+			chatMessagesSubscribe(sessionId, onNotification),
+		[sessionId],
+	);
 
-		let cancelled = false;
+	const handleSubscribed = useCallback(
+		(initial: ChatMessagesSubscribeResult) => {
+			setIsProcessRunning(initial.state !== "ended");
+			// Subscribing hands back the newest page only, and a re-subscribe
+			// hands it back again: pages paged in before a reconnect are gone, so
+			// the paging state starts over with them.
+			historyGenerationRef.current++;
+			isLoadingMoreRef.current = false;
+			// Keyed on the cursor rather than on `has_more`: the cursor is what
+			// an earlier page is actually asked for with, so the sentinel can
+			// never be left offering a page there is no way to request.
+			setHasMoreHistory(initial.next_before_seq !== undefined);
+			setLoadedHistoryPages(0);
+			setHistoryError(null);
+			nextBeforeSeqRef.current = initial.next_before_seq;
+			backReferencesRef.current = initial.history.filter(isBackReference);
+			boundaryTerminalRef.current = leadingTurnTerminal(initial.history);
+			newestHistorySeqRef.current = newestSeq(initial.history);
+			processGoneRef.current = initial.state === "ended";
+			const replayed = replayHistory(initial.history);
+			// After server restart, history won't contain process_ended events
+			// for processes that were killed. Use the authoritative process
+			// state instead — older pages get the same treatment from
+			// `processGoneRef` as they are paged in.
+			setMessages(
+				processGoneRef.current ? settleAfterProcessGone(replayed) : replayed,
+			);
+			setIsLoadingHistory(false);
+		},
+		[],
+	);
 
-		async function subscribe() {
-			try {
-				const result = await chatMessagesSubscribe(
-					sessionId,
-					handleNotification,
-				);
-				if (cancelled) {
-					// Cleanup if component unmounted during subscribe
-					await chatMessagesUnsubscribe(result.id);
-					return;
-				}
-				subscriptionIdRef.current = result.id;
-				if (result.initial) {
-					setIsProcessRunning(result.initial.state !== "ended");
-					// Subscribing hands back the newest page only, and a re-subscribe
-					// hands it back again: pages paged in before a reconnect are gone, so
-					// the paging state starts over with them.
-					historyGenerationRef.current++;
-					isLoadingMoreRef.current = false;
-					// Keyed on the cursor rather than on `has_more`: the cursor is what
-					// an earlier page is actually asked for with, so the sentinel can
-					// never be left offering a page there is no way to request.
-					setHasMoreHistory(result.initial.next_before_seq !== undefined);
-					setLoadedHistoryPages(0);
-					setHistoryError(null);
-					nextBeforeSeqRef.current = result.initial.next_before_seq;
-					backReferencesRef.current =
-						result.initial.history.filter(isBackReference);
-					boundaryTerminalRef.current = leadingTurnTerminal(
-						result.initial.history,
-					);
-					processGoneRef.current = result.initial.state === "ended";
-					const replayed = replayHistory(result.initial.history);
-					// After server restart, history won't contain process_ended events
-					// for processes that were killed. Use the authoritative process
-					// state instead — older pages get the same treatment from
-					// `processGoneRef` as they are paged in.
-					setMessages(
-						processGoneRef.current
-							? settleAfterProcessGone(replayed)
-							: replayed,
-					);
-				}
-			} catch (err) {
-				console.error("Failed to subscribe to chat messages:", err);
-			} finally {
-				if (!cancelled) {
-					setIsLoadingHistory(false);
-				}
-			}
-		}
+	const handleSubscribeError = useCallback((err: unknown) => {
+		console.error("Failed to subscribe to chat messages:", err);
+		// The wait is over either way: leaving the spinner up would promise a
+		// transcript that is not coming.
+		setIsLoadingHistory(false);
+	}, []);
 
-		subscribe();
-
-		return () => {
-			cancelled = true;
-			if (subscriptionIdRef.current) {
-				chatMessagesUnsubscribe(subscriptionIdRef.current).catch(() => {
-					// Ignore errors (connection might be closed)
-				});
-				subscriptionIdRef.current = null;
-			}
-		};
-	}, [enabled, status, sessionId, handleNotification]);
+	useSubscription<ServerNotification, ChatMessagesSubscribeResult>(
+		subscribe,
+		chatMessagesUnsubscribe,
+		handleNotification,
+		{
+			enabled,
+			// A session belongs to its worktree, so switching does end this
+			// subscription server-side — but it ends the session with it, and
+			// `enabled` has already gone false by then. Resubscribing on switch
+			// would only ask the new worktree about a session id it has never heard
+			// of. See useSessionDetailSubscription, which is gated the same way.
+			resubscribeOnWorktreeChange: false,
+			onSubscribed: handleSubscribed,
+			onError: handleSubscribeError,
+		},
+	);
 
 	const loadMoreHistory = useCallback(async () => {
 		const beforeSeq = nextBeforeSeqRef.current;

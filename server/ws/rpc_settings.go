@@ -10,13 +10,21 @@ import (
 )
 
 func (h *rpcMethodHandler) handleSettingsSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	id, ok := h.subscriptionID(ctx, conn, req)
+	if !ok {
+		return
+	}
+
 	notifier := h.state.getNotifier()
-	id, settings := h.settingsWatcher.Subscribe(notifier)
+	settings, err := h.settingsWatcher.Subscribe(id, notifier)
+	if err != nil {
+		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to settings")
+		return
+	}
 	h.state.trackSubscription(id, h.settingsWatcher)
 	h.log.Debug("subscribed to settings", "watchId", id)
 
 	result := rpc.SettingsSubscribeResult{
-		ID:       id,
 		Settings: settings,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {

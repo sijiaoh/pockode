@@ -1,10 +1,6 @@
 import { useCallback, useState } from "react";
 import { useWSStore } from "../lib/wsStore";
-import type {
-	GitDiffChangedNotification,
-	GitDiffData,
-	GitDiffSubscribeResult,
-} from "../types/git";
+import type { GitDiffChangedNotification, GitDiffData } from "../types/git";
 import { useSubscription } from "./useSubscription";
 
 interface UseGitDiffWatchOptions {
@@ -53,13 +49,13 @@ export function useGitDiffWatch({
 		});
 	}, []);
 
-	useSubscription<GitDiffChangedNotification, GitDiffSubscribeResult>(
+	useSubscription<GitDiffChangedNotification, GitDiffData>(
 		subscribe,
 		gitDiffUnsubscribe,
 		onNotification,
 		{
 			enabled: enabled && !!path,
-			onSubscribed: (initial: GitDiffSubscribeResult) => {
+			onSubscribed: (initial: GitDiffData) => {
 				setData({
 					diff: initial.diff,
 					old_content: initial.old_content,
