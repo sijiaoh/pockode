@@ -33,11 +33,19 @@ var bgCtx = context.Background()
 // machine never trips it, small enough that a genuinely stuck server fails with
 // the operation named rather than hanging until the test binary panics.
 //
-// The floor is the heaviest single operation in the suite, not the typical one:
+// The number is measured, not guessed, from the heaviest exchange in the suite:
 // TestFileWrite_AcceptsTheCeilingEvenWhenEveryByteEscapes pushes a ~12 MiB
-// deflated frame, and under -race on a loaded machine that alone has been
-// measured at ~38s. Anything tighter turns that test into a coin flip while
-// proving nothing about a stuck server, which this still catches two orders of
+// deflated frame. On an 8-core machine it takes 6-8s run on its own under
+// -race, and 14s/29s/33s/35s/38s over five `go test -race ./...` runs — `-p`
+// defaults to GOMAXPROCS, so the spread is how many other test binaries it is
+// sharing the machine with, and the budget has to cover the unlucky end.
+//
+// Most of that wall clock is not under this deadline, which is why 60s is a
+// wide margin and not a tight one. Instrumenting the exchange put the send at
+// 0.2-2.0s and the reply read — the one that waits out the server's inflate and
+// file write — at 5.3-9.7s; the seconds either side are the client marshalling
+// 12 MiB of JSON, which no opCtx bounds. So 60s is ~6x the slowest single
+// operation observed, and still names a genuinely stuck server an order of
 // magnitude before the test binary's own 10-minute panic.
 const opTimeout = 60 * time.Second
 
