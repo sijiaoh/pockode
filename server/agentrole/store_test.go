@@ -271,10 +271,15 @@ func TestExternalChange_NotifiesListener(t *testing.T) {
 
 	var mu sync.Mutex
 	var events []ChangeEvent
+	notified := make(chan struct{}, 1)
 	s.AddOnChangeListener(listenerFunc(func(e ChangeEvent) {
 		mu.Lock()
 		defer mu.Unlock()
 		events = append(events, e)
+		select {
+		case notified <- struct{}{}:
+		default:
+		}
 	}))
 
 	if err := s.StartWatching(); err != nil {
@@ -294,8 +299,22 @@ func TestExternalChange_NotifiesListener(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Wait for fsnotify debounce (100ms) + processing time.
-	time.Sleep(300 * time.Millisecond)
+	// Waiting on the listener rather than sleeping a fixed span: the delay here is
+	// bounded from below (fsnotify's 100ms debounce) but never from above, so any
+	// fixed wait is a bet on how loaded the machine is — the 300ms this used to
+	// sleep lost that bet whenever the package ran alongside the rest of ./...
+	//
+	// The bound below is a backstop for a watcher that never fires, not a
+	// deadline the healthy path comes near: over 10 -race runs each, the
+	// notification landed 100-160ms after the write on an idle 8-core box, and
+	// 67ms-1.05s with 8 busy loops pinning every core. 10s is ~10x that worst
+	// case, deliberately far from the observed spread rather than just above it.
+	const notifyTimeout = 10 * time.Second
+	select {
+	case <-notified:
+	case <-time.After(notifyTimeout):
+		t.Fatalf("no change notification within %v after the external write", notifyTimeout)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
