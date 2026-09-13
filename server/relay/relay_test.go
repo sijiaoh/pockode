@@ -194,7 +194,17 @@ func TestUplinkDialOptionsDoNotTruncateTheTunnel(t *testing.T) {
 	}))
 	defer server.Close()
 
-	const dialTimeout = 200 * time.Millisecond
+	// Unlike TestUplinkDialOptionsBoundTheHandshake, which wants this budget to
+	// run out, here the dial has to succeed — so the budget is a backstop, not
+	// the thing under test, and sizing it tight makes the test fail for the one
+	// reason it is not about. A local handshake runs 1-6ms at the median but
+	// spikes to 48-107ms — 120 dials over four runs on a box already at load
+	// ~22, three of them with eight busy loops on top. No idle window was
+	// available, so those are loaded numbers only. The 200ms this used to use
+	// was barely 2x the worst of them and duly timed out under `go test ./...`.
+	// 1s is ~10x it; the test costs twice this in wall clock, which is the
+	// reason not to go higher still.
+	const dialTimeout = time.Second
 	m := newTestManager(dialTimeout)
 	conn, _, err := websocket.Dial(context.Background(),
 		"ws"+strings.TrimPrefix(server.URL, "http"), m.uplinkDialOptions("token"))
