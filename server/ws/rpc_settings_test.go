@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -43,14 +42,7 @@ func TestHandler_SessionCreate_UsesGlobalEngine(t *testing.T) {
 		t.Fatalf("settings.update: %s", resp.Error.Message)
 	}
 
-	resp = env.call("session.create", nil)
-	if resp.Error != nil {
-		t.Fatalf("session.create: %s", resp.Error.Message)
-	}
-	var created session.SessionMeta
-	if err := json.Unmarshal(resp.Result, &created); err != nil {
-		t.Fatalf("unmarshal result: %v", err)
-	}
+	_, created := env.createSession()
 
 	if created.Model != "opus" || created.Effort != "high" {
 		t.Errorf("session engine = %q/%q, want opus/high", created.Model, created.Effort)
@@ -72,14 +64,7 @@ func TestHandler_SettingsUpdate_AcceptsAModelWithNoAgentSet(t *testing.T) {
 		t.Fatalf("a model for the built-in default agent was refused: %s", resp.Error.Message)
 	}
 
-	resp = env.call("session.create", nil)
-	if resp.Error != nil {
-		t.Fatalf("session.create: %s", resp.Error.Message)
-	}
-	var created session.SessionMeta
-	if err := json.Unmarshal(resp.Result, &created); err != nil {
-		t.Fatalf("unmarshal result: %v", err)
-	}
+	_, created := env.createSession()
 
 	if created.AgentType != session.DefaultAgentType || created.Model != "opus" {
 		t.Errorf("session engine = %q/%q, want %q/opus", created.AgentType, created.Model, session.DefaultAgentType)

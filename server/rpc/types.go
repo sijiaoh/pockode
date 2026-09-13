@@ -1,9 +1,23 @@
 // Package rpc defines JSON-RPC 2.0 wire format types for WebSocket communication.
 // These types represent the params and result structures for all RPC methods.
+//
+// Where a wire type is a deliberate narrowing of a domain type rather than a
+// copy of it, the narrowing lives here too (NewSessionListItem), so that what a
+// client is told is decided in one place instead of at each handler.
+//
+// Subscribe results carry no subscription id: the client named the subscription
+// in the request, and echoing it back would invite code that trusts the echo
+// over the id it chose itself. A result left with nothing else to say is absent
+// too — the handler replies with an empty object.
+//
+// Unsubscribe params are deliberately absent: every unsubscribe carries the
+// same lone subscription id, so the ws package unmarshals them all with one
+// internal type instead of one wire type per watcher.
 package rpc
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
@@ -17,6 +31,15 @@ import (
 )
 
 // Client → Server
+
+// SubscribeParams is the whole of a *.subscribe request for a watcher that
+// needs nothing but the subscription id, and the documentation of that id for
+// the requests that carry more: it is chosen by the client, so that its
+// notification callback is in place before the request goes out. See
+// watch.BaseWatcher.AddSubscription for why it is not the server's to pick.
+type SubscribeParams struct {
+	ID string `json:"id"`
+}
 
 type AuthParams struct {
 	Token    string `json:"token"`
@@ -199,20 +222,17 @@ type GitStatusResult = git.GitStatus
 // Git diff watch (subscription for file-specific diff changes)
 
 type GitDiffSubscribeParams struct {
+	// ID is the subscription id; see SubscribeParams.
+	ID             string `json:"id"`
 	Path           string `json:"path"`
 	Staged         bool   `json:"staged"`
 	HideWhitespace bool   `json:"hide_whitespace"`
 }
 
 type GitDiffSubscribeResult struct {
-	ID         string `json:"id"`
 	Diff       string `json:"diff"`
 	OldContent string `json:"old_content"`
 	NewContent string `json:"new_content"`
-}
-
-type GitDiffUnsubscribeParams struct {
-	ID string `json:"id"`
 }
 
 // GitPathsParams is used for git.add, git.reset and git.discard operations.
@@ -301,56 +321,73 @@ type CommandListResult struct {
 // FS namespace
 
 type FSSubscribeParams struct {
+	// ID is the subscription id; see SubscribeParams.
+	ID   string `json:"id"`
 	Path string `json:"path"`
-}
-
-type FSSubscribeResult struct {
-	ID string `json:"id"`
-}
-
-type FSUnsubscribeParams struct {
-	ID string `json:"id"`
-}
-
-// Git namespace
-
-type GitSubscribeResult struct {
-	ID string `json:"id"`
-}
-
-type GitUnsubscribeParams struct {
-	ID string `json:"id"`
-}
-
-// Worktree watch (subscription for worktree list changes)
-
-type WorktreeSubscribeResult struct {
-	ID string `json:"id"`
-}
-
-type WorktreeUnsubscribeParams struct {
-	ID string `json:"id"`
 }
 
 // Session list watch (subscription for session list changes)
 
+// SessionListItem is one row of the session list: what drawing a row needs, and
+// nothing more.
+//
+// The rest of a session's metadata — mode, agent type, model, effort, activated,
+// CreatedAt — is reported by session.detail.subscribe, for the one session a
+// client has open. It is not here because the list goes to every subscriber on
+// every change, and a model chosen in one session is not news to a client
+// reading another.
+//
+// Two fields appear on both sides, and neither can drift: State is volatile
+// process state that the list owns outright and detail never carries
+// (server/watch/session_detail.go), and ForkedFrom is fixed at the session's
+// birth and never written again.
 type SessionListItem struct {
-	session.SessionMeta
-	State string `json:"state"` // "idle" | "running" | "ended"
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// UpdatedAt is the row's subtitle, and what the list is ordered by.
+	UpdatedAt  time.Time           `json:"updated_at"`
+	State      string              `json:"state"` // "idle" | "running" | "ended"
+	NeedsInput bool                `json:"needs_input"`
+	Unread     bool                `json:"unread"`
+	ForkedFrom *session.ForkOrigin `json:"forked_from,omitempty"`
+}
+
+// NewSessionListItem builds the row for a session in a given process state.
+// Every producer of a row goes through here so that narrowing SessionMeta down
+// to a row is decided in one place.
+func NewSessionListItem(meta session.SessionMeta, state string) SessionListItem {
+	return SessionListItem{
+		ID:         meta.ID,
+		Title:      meta.Title,
+		UpdatedAt:  meta.UpdatedAt,
+		State:      state,
+		NeedsInput: meta.NeedsInput,
+		Unread:     meta.Unread,
+		ForkedFrom: meta.ForkedFrom,
+	}
 }
 
 type SessionListSubscribeResult struct {
-	ID       string            `json:"id"`
 	Sessions []SessionListItem `json:"sessions"`
 }
 
-type SessionListUnsubscribeParams struct {
-	ID string `json:"id"`
+// Session detail watch (subscription for a single session's metadata)
+
+type SessionDetailSubscribeParams struct {
+	// ID is the subscription id; see SubscribeParams.
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+}
+
+type SessionDetailSubscribeResult struct {
+	Session session.SessionMeta `json:"session"`
 }
 
 // Chat messages watch (subscription for chat messages)
 
 type ChatMessagesSubscribeParams struct {
+	// ID is the subscription id; see SubscribeParams.
+	ID        string `json:"id"`
 	SessionID string `json:"session_id"`
 	// Limit caps how many of the newest history records come back. Zero asks for
 	// session.DefaultHistoryPageSize; anything above session.MaxHistoryPageSize is
@@ -359,7 +396,6 @@ type ChatMessagesSubscribeParams struct {
 }
 
 type ChatMessagesSubscribeResult struct {
-	ID string `json:"id"`
 	// History is the newest page of the session's history, oldest record first.
 	// Earlier pages are fetched with chat.messages.history.
 	History []json.RawMessage `json:"history"`
@@ -369,10 +405,6 @@ type ChatMessagesSubscribeResult struct {
 	// HasMore is false. See ChatMessagesHistoryParams.BeforeSeq.
 	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
 	State         string             `json:"state"` // "idle" | "running" | "ended"
-	Mode          session.Mode       `json:"mode"`
-	AgentType     session.AgentType  `json:"agent_type"`
-	Model         string             `json:"model"`
-	Effort        string             `json:"effort"`
 }
 
 // ChatMessagesHistoryParams asks for the page of history older than one the
@@ -396,10 +428,6 @@ type ChatMessagesHistoryResult struct {
 	History       []json.RawMessage  `json:"history"`
 	HasMore       bool               `json:"has_more"`
 	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
-}
-
-type ChatMessagesUnsubscribeParams struct {
-	ID string `json:"id"`
 }
 
 // Worktree namespace
@@ -482,7 +510,6 @@ type AgentListResult struct {
 // Settings namespace
 
 type SettingsSubscribeResult struct {
-	ID       string            `json:"id"`
 	Settings settings.Settings `json:"settings"`
 }
 
@@ -524,7 +551,6 @@ type WorkReopenParams struct {
 }
 
 type WorkListSubscribeResult struct {
-	ID    string      `json:"id"`
 	Items []work.Work `json:"items"`
 }
 
@@ -542,11 +568,12 @@ type WorkCommentUpdateParams struct {
 }
 
 type WorkDetailSubscribeParams struct {
+	// ID is the subscription id; see SubscribeParams.
+	ID     string `json:"id"`
 	WorkID string `json:"work_id"`
 }
 
 type WorkDetailSubscribeResult struct {
-	ID       string         `json:"id"`
 	Work     work.Work      `json:"work"`
 	Comments []work.Comment `json:"comments"`
 }
@@ -578,6 +605,5 @@ type AgentRoleDeleteParams struct {
 }
 
 type AgentRoleListSubscribeResult struct {
-	ID    string                `json:"id"`
 	Items []agentrole.AgentRole `json:"items"`
 }

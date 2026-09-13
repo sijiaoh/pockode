@@ -18,7 +18,7 @@ type WorkListWatcher struct {
 
 func NewWorkListWatcher(store work.Store) *WorkListWatcher {
 	w := &WorkListWatcher{
-		BaseWatcher: NewBaseWatcher("wl"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan work.ChangeEvent, 64),
 	}
@@ -97,23 +97,27 @@ func (w *WorkListWatcher) notifySync() {
 	slog.Info("sent full sync to subscribers after event drop")
 }
 
-// Subscribe registers a subscriber and returns the current work list.
-func (w *WorkListWatcher) Subscribe(notifier Notifier) (string, []work.Work, error) {
-	id := w.GenerateID()
+// Subscribe registers a subscriber under the client-chosen id and returns the
+// current work list.
+//
+// Registered before the list is read, so a change landing between the two is
+// notified rather than lost; see BaseWatcher.AddSubscription.
+func (w *WorkListWatcher) Subscribe(id string, notifier Notifier) ([]work.Work, error) {
 	sub := &Subscription{
 		ID:       id,
 		Notifier: notifier,
 	}
-	// Add subscription BEFORE getting the list to avoid missing events.
-	w.AddSubscription(sub)
+	if err := w.AddSubscription(sub); err != nil {
+		return nil, err
+	}
 
 	works, err := w.store.List()
 	if err != nil {
 		w.RemoveSubscription(id)
-		return "", nil, err
+		return nil, err
 	}
 
-	return id, works, nil
+	return works, nil
 }
 
 type workListChangedParams struct {

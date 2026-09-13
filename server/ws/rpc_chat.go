@@ -22,8 +22,9 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	// Verify session exists and get mode
-	meta, found, err := wt.SessionStore.Get(params.SessionID)
+	// Verify the session exists. Its settings are not read here: they belong to
+	// session.detail.subscribe, which the client runs alongside this one.
+	_, found, err := wt.SessionStore.Get(params.SessionID)
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
 		return
@@ -34,10 +35,14 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	}
 
 	notifier := h.state.getNotifier()
-	id, page, err := wt.ChatMessagesWatcher.Subscribe(notifier, params.SessionID, params.Limit)
+	page, err := wt.ChatMessagesWatcher.Subscribe(params.ID, notifier, params.SessionID, params.Limit)
 	if err != nil {
-		// A limit the client cannot ask for is its mistake; anything else Subscribe
-		// fails on is a history the server could not read.
+		// An unusable subscription id or a limit the client cannot ask for are its
+		// mistakes; anything else Subscribe fails on is a history the server could
+		// not read.
+		if h.replySubscriptionIDError(ctx, conn, req.ID, err) {
+			return
+		}
 		if errors.Is(err, session.ErrInvalidHistoryLimit) {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 			return
@@ -45,20 +50,15 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		h.replyInternalError(ctx, conn, req.ID, "failed to read session history", err, "sessionId", params.SessionID)
 		return
 	}
-	h.state.trackSubscription(id, wt.ChatMessagesWatcher)
+	h.state.trackSubscription(params.ID, wt.ChatMessagesWatcher)
 
 	wt.SessionListWatcher.MarkRead(params.SessionID)
 
 	result := rpc.ChatMessagesSubscribeResult{
-		ID:            id,
 		History:       page.Records,
 		HasMore:       page.HasMore,
 		NextBeforeSeq: page.NextBeforeSeq,
 		State:         wt.ProcessManager.GetProcessState(params.SessionID),
-		Mode:          meta.Mode,
-		AgentType:     meta.AgentType,
-		Model:         meta.Model,
-		Effort:        meta.Effort,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)
@@ -66,7 +66,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	}
 
 	log.Info("subscribed to chat messages",
-		"subscriptionId", id, "state", result.State, "mode", meta.Mode,
+		"subscriptionId", params.ID, "state", result.State,
 		"records", len(page.Records), "hasMore", page.HasMore)
 }
 

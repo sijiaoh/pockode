@@ -44,6 +44,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 |-------|---------|-------------|
 | wsStore | WebSocket, RPC, subscriptions | Single hub for all communication |
 | sessionStore | Chat session list | State/Actions interface split |
+| sessionDetailStore | The open session's own metadata | One session at a time, read through a selector that checks whose it is |
 | workStore | Work items | State/Actions interface split |
 | agentRoleStore | AI roles | State/Actions interface split |
 | agentOptionsStore | Selectable models and effort levels per agent | Fetched once per connection, not subscribed |
@@ -476,7 +477,7 @@ const Avatar = config.UserAvatar || DefaultAvatar;
 `useSubscription` manages WebSocket subscription lifecycle:
 
 ```typescript
-// web/src/hooks/useSubscription.ts:45-52
+// web/src/hooks/useSubscription.ts
 export function useSubscription<TNotification, TInitial>(
   subscribe: (callback) => Promise<{ id: string; initial?: TInitial }>,
   unsubscribe: (id: string) => Promise<void>,
@@ -490,6 +491,7 @@ Key features:
 1. **Generation counter** — prevents race conditions when multiple subscribes overlap
 2. **Worktree switch handling** — the server invalidates worktree-scoped subscriptions on switch, so the hook resubscribes. Rather than clearing data (`onReset`), a switch is a soft refresh: previous data stays on screen and is swapped out by `onSubscribed` when the new worktree's snapshot arrives (see [subscription-system.md](subscription-system.md#why-worktree-switch-is-a-soft-refresh-not-a-reset))
 3. **Connection state** — resets on disconnect, but deliberately keeps data during `reconnecting` and resubscribes once the connection is back
+4. **Nothing lost while opening** — the callback is registered under the client-generated id before the request goes out, and notifications arriving before the initial snapshot is applied are held and replayed after it (see [subscription-system.md](subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened))
 
 ## Key Files
 

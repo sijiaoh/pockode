@@ -4,9 +4,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentOptionsStore } from "../../lib/agentOptionsStore";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useInputStore } from "../../lib/inputStore";
+import { useSessionDetailStore } from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
-import type { ServerNotification, SessionListItem } from "../../types/message";
+import {
+	makeSessionDetail,
+	makeSessionListItem,
+} from "../../test/sessionFixtures";
+import type {
+	ServerNotification,
+	SessionDetail,
+	SessionMode,
+} from "../../types/message";
+import type { AgentType } from "../../types/settings";
 import type { Work } from "../../types/work";
 import ChatPanel from "./ChatPanel";
 
@@ -33,10 +43,22 @@ const mockState = vi.hoisted(() => ({
 	questionResponse: vi.fn(() => Promise.resolve()),
 	chatMessagesSubscribe: vi.fn(),
 	chatMessagesUnsubscribe: vi.fn(),
-	setSessionMode: vi.fn(() => Promise.resolve()),
-	setSessionAgentType: vi.fn(() => Promise.resolve()),
-	setSessionModel: vi.fn(() => Promise.resolve()),
-	setSessionEffort: vi.fn(() => Promise.resolve()),
+	// Typed as the real actions are: the default implementations, set in
+	// beforeEach, answer the way the server does — by pushing the new value back.
+	setSessionMode: vi.fn(
+		(_sessionId: string, _mode: SessionMode): Promise<void> =>
+			Promise.resolve(),
+	),
+	setSessionAgentType: vi.fn(
+		(_sessionId: string, _agentType: AgentType): Promise<void> =>
+			Promise.resolve(),
+	),
+	setSessionModel: vi.fn(
+		(_sessionId: string, _model: string): Promise<void> => Promise.resolve(),
+	),
+	setSessionEffort: vi.fn(
+		(_sessionId: string, _effort: string): Promise<void> => Promise.resolve(),
+	),
 	startWork: vi.fn(() => Promise.resolve()),
 	forkSession: vi.fn(),
 	// The agents the server declares. The fork UI here is tested on an agent that
@@ -44,10 +66,14 @@ const mockState = vi.hoisted(() => ({
 	listAgents: vi.fn(() =>
 		Promise.resolve([{ type: "claude", fork_support: "any_message" }]),
 	),
+	sessionDetailSubscribe: vi.fn(),
+	sessionDetailUnsubscribe: vi.fn(() => Promise.resolve()),
 	onNotification: null as ((notification: ServerNotification) => void) | null,
+	onDetailNotification: null as
+		| ((params: { id: string; session: SessionDetail }) => void)
+		| null,
+	sessionDetail: null as SessionDetail | null,
 	mockHistory: [] as unknown[],
-	mockModel: "",
-	mockEffort: "",
 	uuidCounter: 0,
 }));
 
@@ -67,6 +93,14 @@ vi.mock("../../lib/wsStore", () => {
 			return mockState.chatMessagesSubscribe(_sessionId, listener);
 		},
 		chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
+		sessionDetailSubscribe: (
+			sessionId: string,
+			listener: (params: { id: string; session: SessionDetail }) => void,
+		) => {
+			mockState.onDetailNotification = listener;
+			return mockState.sessionDetailSubscribe(sessionId, listener);
+		},
+		sessionDetailUnsubscribe: mockState.sessionDetailUnsubscribe,
 		markSessionRead: vi.fn(() => Promise.resolve()),
 		setSessionMode: mockState.setSessionMode,
 		setSessionAgentType: mockState.setSessionAgentType,
@@ -77,31 +111,57 @@ vi.mock("../../lib/wsStore", () => {
 		listAgents: mockState.listAgents,
 	});
 
-	const mockStore = ((selector: (state: unknown) => unknown) => {
-		const state = {
-			status: "connected",
-			actions: createMockActions(),
-		};
-		return selector(state);
-	}) as unknown as {
+	// One actions object for the whole file, not a fresh one per read: a hook
+	// that resubscribes when its subscribe function changes identity — as the
+	// session detail subscription does — would never stop.
+	const actions = createMockActions();
+	const state = { status: "connected", actions };
+
+	const mockStore = ((selector: (state: unknown) => unknown) =>
+		selector(state)) as unknown as {
 		(selector: (state: unknown) => unknown): unknown;
-		getState: () => {
-			status: string;
-			actions: ReturnType<typeof createMockActions>;
-		};
+		getState: () => typeof state;
 	};
 
-	mockStore.getState = () => ({
-		status: "connected",
-		actions: createMockActions(),
-	});
+	mockStore.getState = () => state;
 
-	return { useWSStore: mockStore, wsActions: createMockActions() };
+	return { useWSStore: mockStore, wsActions: actions };
 });
 
 vi.mock("../../utils/uuid", () => ({
 	generateUUID: () => `uuid-${++mockState.uuidCounter}`,
 }));
+
+/**
+ * What `session.detail.subscribe` answers with — the only source of the
+ * session's agent, model, effort, mode and activation, and of where it was
+ * forked from.
+ */
+const seedSessionDetail = (overrides: Partial<SessionDetail> = {}) => {
+	mockState.sessionDetail = makeSessionDetail({
+		id: "test-session",
+		title: "Test Chat",
+		...overrides,
+	});
+	mockState.sessionDetailSubscribe.mockImplementation(async () => ({
+		id: "detail-1",
+		initial: { session: mockState.sessionDetail },
+	}));
+};
+
+/**
+ * A setting the server took, arriving the only way one does: as a push on the
+ * session's own subscription. Nothing applies a setting locally, so a fake that
+ * merely resolved would leave the control showing the old value forever.
+ */
+const acceptSetting = (overrides: Partial<SessionDetail>) => {
+	if (!mockState.sessionDetail) throw new Error("no session detail seeded");
+	mockState.sessionDetail = { ...mockState.sessionDetail, ...overrides };
+	mockState.onDetailNotification?.({
+		id: "detail-1",
+		session: mockState.sessionDetail,
+	});
+};
 
 describe("ChatPanel", () => {
 	const defaultProps = {
@@ -117,8 +177,21 @@ describe("ChatPanel", () => {
 		mockState.onNotification = null;
 		mockState.uuidCounter = 0;
 		mockState.mockHistory = [];
-		mockState.mockModel = "";
-		mockState.mockEffort = "";
+		useSessionDetailStore.getState().clear();
+		mockState.onDetailNotification = null;
+		seedSessionDetail();
+		mockState.setSessionMode.mockImplementation(async (_id, mode) =>
+			acceptSetting({ mode }),
+		);
+		mockState.setSessionAgentType.mockImplementation(async (_id, agentType) =>
+			acceptSetting({ agent_type: agentType }),
+		);
+		mockState.setSessionModel.mockImplementation(async (_id, model) =>
+			acceptSetting({ model }),
+		);
+		mockState.setSessionEffort.mockImplementation(async (_id, effort) =>
+			acceptSetting({ effort }),
+		);
 		// Default: subscribe returns empty history and ended state
 		mockState.chatMessagesSubscribe.mockImplementation(() =>
 			Promise.resolve({
@@ -126,15 +199,12 @@ describe("ChatPanel", () => {
 				initial: {
 					history: mockState.mockHistory,
 					state: "ended",
-					mode: "default",
-					agent_type: "claude",
-					model: mockState.mockModel,
-					effort: mockState.mockEffort,
 				},
 			}),
 		);
 		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
 		mockState.forkSession.mockReset();
+		mockState.sessionDetailUnsubscribe.mockResolvedValue(undefined);
 		useSessionStore.setState({ sessions: [] });
 		useInputStore.setState({ inputs: {} });
 		useWorkStore.getState().reset();
@@ -433,18 +503,7 @@ describe("ChatPanel", () => {
 
 		it("shows Always Allow button for Codex sessions", async () => {
 			const user = userEvent.setup();
-			mockState.chatMessagesSubscribe.mockImplementation(() =>
-				Promise.resolve({
-					id: "sub-1",
-					initial: {
-						history: [],
-						state: "ended",
-						mode: "default",
-						agent_type: "codex",
-						model: "",
-					},
-				}),
-			);
+			seedSessionDetail({ agent_type: "codex" });
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
@@ -716,30 +775,8 @@ describe("ChatPanel", () => {
 	});
 
 	describe("engine selector", () => {
-		// The subscription result and the session list carry the same model; a
-		// fixture that disagreed would only be testing which one landed last.
-		const seedSession = (activated: boolean, model = "", effort = "") => {
-			mockState.mockModel = model;
-			mockState.mockEffort = effort;
-			useSessionStore.setState({
-				sessions: [
-					{
-						id: "test-session",
-						title: "Test Chat",
-						created_at: "2024-01-01T00:00:00Z",
-						updated_at: "2024-01-01T00:00:00Z",
-						mode: "default",
-						agent_type: "claude",
-						model,
-						effort,
-						activated,
-						state: "ended",
-						needs_input: false,
-						unread: false,
-					},
-				],
-			});
-		};
+		const seedSession = (activated: boolean, model = "", effort = "") =>
+			seedSessionDetail({ model, effort, activated });
 
 		const openPanel = async (user: ReturnType<typeof userEvent.setup>) => {
 			await user.click(screen.getByRole("button", { name: /^Engine:/ }));
@@ -749,6 +786,32 @@ describe("ChatPanel", () => {
 		// tells them apart, for a screen reader as much as for this test.
 		const section = (title: string) =>
 			within(screen.getByRole("group", { name: title }));
+
+		// The chip is built entirely from the session's own settings — agent
+		// included — and a session that has not described itself yet has none.
+		// Naming a placeholder would describe the session wrongly and then correct
+		// itself a round trip later.
+		it("names nothing until the session's own snapshot arrives", async () => {
+			mockState.sessionDetailSubscribe.mockImplementation(
+				() => new Promise(() => {}),
+			);
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			// Not "Engine: Claude, loading": the agent is a setting too, and Claude
+			// is only the placeholder the session would be misdescribed by.
+			expect(
+				screen.getByRole("button", { name: "Engine: loading" }),
+			).toBeDisabled();
+			// Same for the mode, and here the placeholder is the calm one: a YOLO
+			// session would wear Default's shield until the snapshot landed. The
+			// button is also disabled, because picking the shown mode back would be
+			// taken for "no change" and swallowed.
+			expect(
+				screen.getByRole("button", { name: "Mode: loading" }),
+			).toBeDisabled();
+		});
 
 		// A first turn that failed before the agent said anything leaves messages
 		// in the transcript but never started the session, and switching agents is
@@ -1243,24 +1306,12 @@ describe("ChatPanel", () => {
 			{ type: "done", seq: 6 },
 		];
 
-		// Typed rather than inferred: the store this is spread into holds
-		// SessionListItems, so a field added to the wire shape has to be answered
-		// here too.
-		const forkedSession: SessionListItem = {
+		const forkedSession = makeSessionListItem({
 			id: "forked-session",
 			title: "Test Chat (fork)",
-			created_at: "2024-01-01T00:00:00Z",
-			updated_at: "2024-01-01T00:00:00Z",
-			mode: "default",
-			agent_type: "claude",
-			model: "",
-			effort: "",
-			activated: true,
 			state: "idle",
-			needs_input: false,
-			unread: false,
 			forked_from: { session_id: "test-session" },
-		};
+		});
 
 		// Taps the fork icon under the first assistant answer, one step now that
 		// the action stands on the row instead of behind a `…`. It is the first
@@ -1460,10 +1511,6 @@ describe("ChatPanel", () => {
 					initial: {
 						history: mockState.mockHistory,
 						state: "ended",
-						mode: "default",
-						agent_type: "claude",
-						model: "",
-						effort: "",
 						next_before_seq: 1,
 					},
 				}),
@@ -1571,13 +1618,11 @@ describe("ChatPanel", () => {
 		it("says at the top of the transcript where the session came from", async () => {
 			const user = userEvent.setup();
 			const onSelectSession = vi.fn();
+			seedSessionDetail({ forked_from: { session_id: "parent-session" } });
+			// The parent's title is still resolved from the list: that one is a fact
+			// about another session, which this session's detail cannot report.
 			useSessionStore.setState({
 				sessions: [
-					{
-						...forkedSession,
-						id: "test-session",
-						forked_from: { session_id: "parent-session" },
-					},
 					{ ...forkedSession, id: "parent-session", title: "Parent chat" },
 				],
 			});

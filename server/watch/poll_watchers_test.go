@@ -17,8 +17,8 @@ func TestPollWatchers_StayQuietAfterStop(t *testing.T) {
 		checkAndNotify func()
 		stop           func()
 	}{
-		{"git", func(n Notifier) { gitWatcher.Subscribe(n) }, func() { gitWatcher.lastState = "seeded" }, gitWatcher.checkAndNotify, gitWatcher.Stop},
-		{"worktree", func(n Notifier) { worktreeWatcher.Subscribe(n) }, func() { worktreeWatcher.lastState = "seeded" }, worktreeWatcher.checkAndNotify, worktreeWatcher.Stop},
+		{"git", func(n Notifier) { gitWatcher.Subscribe("client-1", n) }, func() { gitWatcher.lastState = "seeded" }, gitWatcher.checkAndNotify, gitWatcher.Stop},
+		{"worktree", func(n Notifier) { worktreeWatcher.Subscribe("client-1", n) }, func() { worktreeWatcher.lastState = "seeded" }, worktreeWatcher.checkAndNotify, worktreeWatcher.Stop},
 	}
 
 	for _, tt := range tests {

@@ -46,8 +46,11 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 	}
 
 	notifier := h.state.getNotifier()
-	id, result, err := wt.GitDiffWatcher.Subscribe(params.Path, params.Staged, params.HideWhitespace, notifier)
+	result, err := wt.GitDiffWatcher.Subscribe(params.ID, params.Path, params.Staged, params.HideWhitespace, notifier)
 	if err != nil {
+		if h.replySubscriptionIDError(ctx, conn, req.ID, err) {
+			return
+		}
 		if strings.Contains(err.Error(), "file not found") {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 			return
@@ -55,12 +58,11 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
 		return
 	}
-	h.state.trackSubscription(id, wt.GitDiffWatcher)
+	h.state.trackSubscription(params.ID, wt.GitDiffWatcher)
 
-	h.log.Debug("subscribed", "watcher", "git-diff", "watchId", id, "path", params.Path, "staged", params.Staged)
+	h.log.Debug("subscribed", "watcher", "git-diff", "watchId", params.ID, "path", params.Path, "staged", params.Staged)
 
 	response := rpc.GitDiffSubscribeResult{
-		ID:         id,
 		Diff:       result.Diff,
 		OldContent: result.OldContent,
 		NewContent: result.NewContent,
@@ -71,12 +73,20 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 }
 
 func (h *rpcMethodHandler) handleGitSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	id, ok := h.subscriptionID(ctx, conn, req)
+	if !ok {
+		return
+	}
+
 	notifier := h.state.getNotifier()
-	id := wt.GitWatcher.Subscribe(notifier)
+	if err := wt.GitWatcher.Subscribe(id, notifier); err != nil {
+		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to git")
+		return
+	}
 	h.state.trackSubscription(id, wt.GitWatcher)
 	h.log.Debug("subscribed", "watcher", "git", "watchId", id)
 
-	if err := conn.Reply(ctx, req.ID, rpc.GitSubscribeResult{ID: id}); err != nil {
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		h.log.Error("failed to send git subscribe response", "error", err)
 	}
 }

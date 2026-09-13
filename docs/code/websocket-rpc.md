@@ -142,10 +142,10 @@ For data that requires real-time updates, Pockode uses a subscription pattern ra
 │                                                                              │
 │   Client                                Server                               │
 │     │                                     │                                  │
-│     │   *.subscribe { params }            │                                  │
-│     │ ────────────────────────────────▶   │  Create subscription             │
-│     │                                     │  Return initial state            │
-│     │   Response { id, initial }          │                                  │
+│     │   *.subscribe { id, params }        │                                  │
+│     │ ────────────────────────────────▶   │  Register under the client's id  │
+│     │                                     │  Read initial state              │
+│     │   Response { initial }              │                                  │
 │     │ ◀────────────────────────────────   │                                  │
 │     │                                     │                                  │
 │     │                                     │  ┌──────────────────────────┐    │
@@ -162,9 +162,9 @@ For data that requires real-time updates, Pockode uses a subscription pattern ra
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Subscribe**: Client calls `*.subscribe`, server returns subscription ID and initial data
-2. **Notify**: Server sends `*.changed` notification when changes are detected
-3. **Unsubscribe**: Client calls `*.unsubscribe` to release resources
+1. **Subscribe**: Client generates the subscription id, registers its callback under it, then calls `*.subscribe` with that id; the server registers under it and replies with the initial data alone. The id is required — a subscribe without one is rejected as invalid params — and is unique only within the watcher it names, not across watchers ([why the client names it](subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened))
+2. **Notify**: Server sends `*.changed` notification, stamped with that id, when changes are detected
+3. **Unsubscribe**: Client calls `*.unsubscribe` with the same id to release resources
 
 ### Method Naming Convention
 
@@ -181,7 +181,8 @@ For data that requires real-time updates, Pockode uses a subscription pattern ra
 ```go
 // server/watch/base.go
 type Subscription struct {
-    ID       string
+    ID       string // the client's, carried in the subscribe request
+    Key      string // the one resource this subscriber follows; empty on list watchers
     Notifier Notifier
 }
 
@@ -248,14 +249,15 @@ This pattern ensures:
 | Subscription | Returns Initial Data | Recovery Strategy |
 |--------------|---------------------|-------------------|
 | `session.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
+| `session.detail.subscribe` | ✅ Full session metadata | `onSubscribed` replaces state |
 | `work.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
 | `work.detail.subscribe` | ✅ Full details | `onSubscribed` replaces state |
 | `settings.subscribe` | ✅ Full settings | `onSubscribed` replaces state |
 | `agent_role.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
 | `chat.messages.subscribe` | ✅ Newest history page | `onSubscribed` replaces state ([paging](../agent-chat.md#history-paging)) |
 | `git.diff.subscribe` | ✅ Diff data | `onSubscribed` updates state |
-| `fs.subscribe` | ❌ ID only | `onSubscribed` triggers refresh |
-| `git.subscribe` | ❌ ID only | `onSubscribed` triggers refresh |
+| `fs.subscribe` | ❌ Empty reply | `onSubscribed` triggers refresh |
+| `git.subscribe` | ❌ Empty reply | `onSubscribed` triggers refresh |
 
 For subscriptions that don't return initial data, hooks pass their refresh callback to `onSubscribed`, ensuring the latest state is fetched immediately after reconnection.
 
@@ -593,7 +595,7 @@ established that the error never came from the server at all.
    - Add subscribe/unsubscribe methods in RPC handler
 
 3. **Add frontend callback map and subscription methods**
-   - Add callback map in `wsStore.ts`
+   - Add callback map in `wsStore.ts`, in the group matching the watcher's owner — worktree-scoped maps are cleared on a worktree switch, app-level ones only on disconnect (see [subscription-system.md](subscription-system.md#why-app-level-subscriptions-survive-worktree-switches))
    - Handle notification in `watchNotificationHandlers`
    - Expose subscribe/unsubscribe methods
 

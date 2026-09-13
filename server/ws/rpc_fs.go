@@ -16,15 +16,19 @@ func (h *rpcMethodHandler) handleFSSubscribe(ctx context.Context, conn *jsonrpc2
 	}
 
 	notifier := h.state.getNotifier()
-	id, err := wt.FSWatcher.Subscribe(params.Path, notifier)
-	if err != nil {
+	if err := wt.FSWatcher.Subscribe(params.ID, params.Path, notifier); err != nil {
+		if h.replySubscriptionIDError(ctx, conn, req.ID, err) {
+			return
+		}
+		// What is left is a path that could not be watched, reported as the
+		// client's mistake the way this handler has always reported it.
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 		return
 	}
-	h.state.trackSubscription(id, wt.FSWatcher)
-	h.log.Debug("subscribed", "watcher", "fs", "watchId", id, "path", params.Path)
+	h.state.trackSubscription(params.ID, wt.FSWatcher)
+	h.log.Debug("subscribed", "watcher", "fs", "watchId", params.ID, "path", params.Path)
 
-	if err := conn.Reply(ctx, req.ID, rpc.FSSubscribeResult{ID: id}); err != nil {
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		h.log.Error("failed to send fs subscribe response", "error", err)
 	}
 }

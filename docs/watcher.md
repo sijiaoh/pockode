@@ -32,7 +32,9 @@ type Watcher interface {
 
 ### BaseWatcher
 
-Shared subscription management: ID generation (with type-specific prefix), thread-safe subscription map, and goroutine lifecycle — `Go` starts a tracked loop, `CancelAndWait` cancels the context and waits for those loops. Most watchers embed this.
+Shared subscription management: a thread-safe subscription map keyed by the id the client chose (`AddSubscription` refuses an id already in use rather than displacing it), and goroutine lifecycle — `Go` starts a tracked loop, `CancelAndWait` cancels the context and waits for those loops. Most watchers embed this.
+
+The server generates no subscription ids. Why the client names its own subscription — and what that buys during the window while one is being opened — is in [code/subscription-system.md](code/subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened).
 
 ### Notifier
 
@@ -57,7 +59,7 @@ type Notification struct {
 |----------|----------|-----------|
 | OS-level | FSWatcher | `fsnotify` library, 100ms debounce |
 | Polling | GitWatcher, GitDiffWatcher, WorktreeWatcher | 3s interval, state hash comparison |
-| Event-driven | SessionList, ChatMessages, WorkList, WorkDetail, Settings, AgentRoleList | Store `OnChangeListener` callbacks via async channels |
+| Event-driven | SessionList, SessionDetail, ChatMessages, WorkList, WorkDetail, Settings, AgentRoleList | Store `OnChangeListener` callbacks via async channels |
 
 ### OS-Level: FSWatcher
 
@@ -80,6 +82,7 @@ These watchers implement store listener interfaces and use async buffered channe
 | Watcher | File | Listener Interface | Notification |
 |---------|------|--------------------|--------------|
 | SessionListWatcher | `watch/session_list.go` | `session.OnChangeListener` | `session.list.changed` |
+| SessionDetailWatcher | `watch/session_detail.go` | `session.OnChangeListener` | `session.detail.changed` |
 | ChatMessagesWatcher | `watch/chat_messages.go` | `process.ChatMessageListener` | `chat.<event-type>` |
 | WorkListWatcher | `watch/work_list.go` | `work.OnChangeListener` | `work.list.changed` |
 | WorkDetailWatcher | `watch/work_detail.go` | `work.OnChangeListener` + `work.OnCommentChangeListener` | `work.detail.changed` |
@@ -88,16 +91,18 @@ These watchers implement store listener interfaces and use async buffered channe
 
 **Backpressure:** Event channels have fixed capacity (16–256). When full, events are dropped and a `dirty` flag is set. The next delivered event triggers a full sync instead of an incremental update, ensuring clients converge to correct state.
 
-**WorkDetailWatcher** is filtered — it only notifies subscribers watching the affected `work_id`, not all subscribers.
+**Filtered watchers:** WorkDetailWatcher and SessionDetailWatcher each notify only the subscribers watching the affected id, not all subscribers. Both key their subscriptions on `Subscription.Key` and deliver through `BaseWatcher.NotifyForKey`.
+
+**A session is split across two of them.** `SessionListWatcher` pushes rows — `rpc.SessionListItem` carries id, title, `updated_at`, `state`, `needs_input`, `unread`, `forked_from`, and nothing else. `SessionDetailWatcher` pushes one session's `session.SessionMeta` to whoever has it open, which is where the settings (mode, agent type, model, effort, activated) live and where run state deliberately does not. A session removed from the store is reported as `deleted: true` rather than silently going quiet. Why the line falls there — and why `forked_from` on both sides is not a second source of truth — is in [code/subscription-system.md](code/subscription-system.md#why-a-session-is-two-subscriptions).
 
 ## Subscription Lifecycle
 
 ### Backend
 
-1. Client sends subscribe RPC (e.g. `fs.subscribe`)
+1. Client sends subscribe RPC (e.g. `fs.subscribe`) carrying the subscription id it chose. The id is required; a request without one is rejected as invalid params
 2. Server creates `JSONRPCNotifier` from the connection
-3. Watcher's `Subscribe()` registers subscription, returns ID + initial data
-4. Subscription tracked in `rpcState` for cleanup on disconnect
+3. Watcher's `Subscribe()` registers the subscription under that id, then reads the initial data. The reply carries the data only — never an id, since the client already has it
+4. Subscription tracked in `rpcState` for cleanup on disconnect, keyed by **watcher + id** (an id is unique only within its watcher)
 5. Watcher sends notifications via the notifier when changes occur
 6. Client sends unsubscribe RPC — watcher removes subscription
 7. On disconnect: all tracked subscriptions auto-unsubscribed
@@ -106,10 +111,10 @@ These watchers implement store listener interfaces and use async buffered channe
 
 `web/src/lib/wsStore.ts` — Module-level `Map<string, callback>` per watcher type.
 
-1. Component calls `actions.fsSubscribe(path, callback)` → sends RPC, stores callback by subscription ID
+1. Component calls `actions.fsSubscribe(path, callback)` → `openSubscription` generates the subscription id, stores the callback under it, *then* sends the RPC. Registering first is what makes a change landing mid-subscribe deliverable
 2. WebSocket `onmessage` routes notifications by method name → looks up callback by subscription ID → invokes it
 3. On unmount or unsubscribe: callback removed, unsubscribe RPC sent
-4. On worktree switch: `clearWorktreeWatchSubscriptions()` clears only the worktree-scoped maps (fs, git, git-diff, session list, chat). App-level maps (work list/detail, agent role list, settings, worktree) are kept, mirroring the Manager-level watchers the server preserves across switches (see Worktree Integration below)
+4. On worktree switch: `clearWorktreeWatchSubscriptions()` clears only the worktree-scoped maps (fs, git, git-diff, session list, session detail, chat). App-level maps (work list/detail, agent role list, settings, worktree) are kept, mirroring the Manager-level watchers the server preserves across switches (see Worktree Integration below)
 5. On disconnect: `clearAllWatchSubscriptions()` clears all callback maps; `useSubscription` hook resubscribes on reconnect
 
 ## Worktree Integration
@@ -117,7 +122,7 @@ These watchers implement store listener interfaces and use async buffered channe
 `server/worktree/worktree.go` — Each `Worktree` instance owns its watchers:
 
 - FSWatcher, GitWatcher, GitDiffWatcher (worktree-specific paths)
-- SessionListWatcher, ChatMessagesWatcher (worktree-specific sessions)
+- SessionListWatcher, SessionDetailWatcher, ChatMessagesWatcher (worktree-specific sessions)
 
 Manager-level watchers (WorkList, WorkDetail, Settings, AgentRoleList, Worktree) are shared across all connections.
 
@@ -134,6 +139,7 @@ Watchers start with the worktree and stop on cleanup. Worktrees are reference-co
 | `server/watch/git.go` | GitWatcher (polling) |
 | `server/watch/git_diff.go` | GitDiffWatcher (polling with content) |
 | `server/watch/session_list.go` | SessionListWatcher |
+| `server/watch/session_detail.go` | SessionDetailWatcher (filtered) |
 | `server/watch/chat_messages.go` | ChatMessagesWatcher |
 | `server/watch/work_list.go` | WorkListWatcher |
 | `server/watch/work_detail.go` | WorkDetailWatcher (filtered) |

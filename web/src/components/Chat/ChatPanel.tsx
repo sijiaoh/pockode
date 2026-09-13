@@ -4,8 +4,13 @@ import { useChatMessages } from "../../hooks/useChatMessages";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
+import { useSessionDetailSubscription } from "../../hooks/useSessionDetailSubscription";
 import { inputActions } from "../../lib/inputStore";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
+import {
+	selectSessionDetail,
+	useSessionDetailStore,
+} from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
@@ -134,6 +139,16 @@ function ChatPanel({
 	const InputBar = CustomInputBar ?? DefaultInputBar;
 	const Engine = CustomEngineSelector ?? EngineSelector;
 
+	// The panel holds the session's own subscription, and everything below —
+	// `useChatMessages`' settings included — reads what it puts in the store. One
+	// holder for one session: the settings and where the conversation was forked
+	// from are the same snapshot, and two subscriptions would be two of it.
+	//
+	// Gated on the same flag as the chat subscription below, so a worktree switch
+	// ends both at once.
+	useSessionDetailSubscription(sessionId, isSessionResolved);
+	const sessionDetail = useSessionDetailStore(selectSessionDetail(sessionId));
+
 	const {
 		messages,
 		isLoadingHistory,
@@ -149,6 +164,7 @@ function ChatPanel({
 		model,
 		effort,
 		isSessionActivated,
+		isSessionDetailLoaded,
 		status,
 		settingError,
 		clearSettingError,
@@ -166,6 +182,13 @@ function ChatPanel({
 		sessionId,
 		enabled: isSessionResolved,
 	});
+
+	// The three settings controls all read the session's own metadata, which
+	// arrives a round trip after the session resolves. Until it does there is no
+	// value to show and nothing to change: a control offering the placeholder
+	// would report a mode the session is not in, and refuse the very switch that
+	// says so, because the value it is being asked for looks like the current one.
+	const hasSessionSettings = isSessionResolved && isSessionDetailLoaded;
 
 	// One continuous wait, deliberately: resolving the session and loading its
 	// history are two phases of the same gap. Timing them separately would let a
@@ -254,9 +277,10 @@ function ChatPanel({
 	// refusal worth explaining.
 	const forkSupport = useForkSupport(agentType);
 
-	const forkedFromSessionId = useSessionStore(
-		(s) => s.sessions.find((x) => x.id === sessionId)?.forked_from?.session_id,
-	);
+	// From the session's own detail, not from its row in the list: where a
+	// conversation came from is a fact about this session. The list is still read
+	// just below, for the *other* sessions' titles.
+	const forkedFromSessionId = sessionDetail?.forked_from?.session_id;
 
 	const handleStartFork = useCallback(
 		(messageId: string) => {
@@ -444,9 +468,9 @@ function ChatPanel({
 								onAgentTypeChange={setAgentType}
 								onModelChange={setModel}
 								onEffortChange={setEffort}
-								isSessionResolved={isSessionResolved}
+								hasSessionSettings={hasSessionSettings}
 								isSessionActivated={isSessionActivated}
-								disabled={!isSessionResolved || isStreaming}
+								disabled={!hasSessionSettings || isStreaming}
 							/>
 						)}
 						{CustomModeSelector === null ? null : CustomModeSelector ? (
@@ -454,14 +478,16 @@ function ChatPanel({
 								mode={mode}
 								agentType={agentType}
 								onModeChange={setMode}
-								disabled={!isSessionResolved || isStreaming}
+								hasSessionSettings={hasSessionSettings}
+								disabled={!hasSessionSettings || isStreaming}
 							/>
 						) : (
 							<ModeSelector
 								mode={mode}
 								agentType={agentType}
 								onModeChange={setMode}
-								disabled={!isSessionResolved || isStreaming}
+								hasSessionSettings={hasSessionSettings}
+								disabled={!hasSessionSettings || isStreaming}
 							/>
 						)}
 					</div>

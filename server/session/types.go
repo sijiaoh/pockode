@@ -211,7 +211,7 @@ const (
 	OperationDelete Operation = "delete"
 )
 
-// SessionChangeEvent represents a change to the session list.
+// SessionChangeEvent represents a change to one session.
 // For create/update: Session is fully populated.
 // For delete: only Session.ID is valid.
 type SessionChangeEvent struct {
@@ -219,7 +219,13 @@ type SessionChangeEvent struct {
 	Session SessionMeta
 }
 
-// OnChangeListener receives notifications when the session list changes.
+// OnChangeListener receives notifications when a session changes.
+//
+// OnSessionChange is called with the store's lock held, so an implementation
+// must neither block nor call back into the store — do what SessionListWatcher
+// and SessionDetailWatcher do and queue the event. The lock is held on purpose:
+// it is what makes listeners see changes in the order they were written, which
+// the watchers' incremental notifications depend on.
 type OnChangeListener interface {
 	OnSessionChange(event SessionChangeEvent)
 }

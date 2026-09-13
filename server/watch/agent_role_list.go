@@ -17,7 +17,7 @@ type AgentRoleListWatcher struct {
 
 func NewAgentRoleListWatcher(store agentrole.Store) *AgentRoleListWatcher {
 	w := &AgentRoleListWatcher{
-		BaseWatcher: NewBaseWatcher("arl"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan agentrole.ChangeEvent, 64),
 	}
@@ -95,23 +95,27 @@ func (w *AgentRoleListWatcher) notifySync() {
 	slog.Info("sent full agent role sync to subscribers after event drop")
 }
 
-// Subscribe registers a subscriber and returns the current role list.
-func (w *AgentRoleListWatcher) Subscribe(notifier Notifier) (string, []agentrole.AgentRole, error) {
-	id := w.GenerateID()
+// Subscribe registers a subscriber under the client-chosen id and returns the
+// current role list.
+//
+// Registered before the list is read, so a change landing between the two is
+// notified rather than lost; see BaseWatcher.AddSubscription.
+func (w *AgentRoleListWatcher) Subscribe(id string, notifier Notifier) ([]agentrole.AgentRole, error) {
 	sub := &Subscription{
 		ID:       id,
 		Notifier: notifier,
 	}
-	// Add subscription BEFORE getting the list to avoid missing events.
-	w.AddSubscription(sub)
+	if err := w.AddSubscription(sub); err != nil {
+		return nil, err
+	}
 
 	roles, err := w.store.List()
 	if err != nil {
 		w.RemoveSubscription(id)
-		return "", nil, err
+		return nil, err
 	}
 
-	return id, roles, nil
+	return roles, nil
 }
 
 type agentRoleListChangedParams struct {

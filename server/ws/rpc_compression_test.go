@@ -472,7 +472,7 @@ func TestStreamedNotificationsShareACompressionWindow(t *testing.T) {
 	if _, err := wt.SessionStore.Create(bgCtx, sessionID, session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	c.call(2, "chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{SessionID: sessionID})
+	c.call(2, "chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{ID: "client-1", SessionID: sessionID})
 
 	const events = 20
 	event := agent.TextEvent{Content: strings.Repeat("a streamed chat event. ", 6)}

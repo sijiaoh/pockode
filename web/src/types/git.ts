@@ -15,10 +15,6 @@ export interface GitDiffData {
 	new_content: string;
 }
 
-export interface GitDiffSubscribeResult extends GitDiffData {
-	id: string;
-}
-
 export interface GitDiffChangedNotification extends GitDiffData {
 	id: string;
 }

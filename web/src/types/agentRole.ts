@@ -37,7 +37,6 @@ export interface AgentRoleUpdateParams {
 }
 
 export interface AgentRoleListSubscribeResult {
-	id: string;
 	items: AgentRole[];
 }
 

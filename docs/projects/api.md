@@ -65,9 +65,9 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → in_progress) |
 | `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
 | `work.comment.update` | `WorkCommentUpdateParams` | `Comment` | Update a comment's body |
-| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{id, work, comments}` | Subscribe to a single work item + comments |
+| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments}` | Subscribe to a single work item + comments |
 | `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
-| `work.list.subscribe` | — | `{id, items: Work[]}` | Subscribe + get current snapshot |
+| `work.list.subscribe` | `SubscribeParams` | `{items: Work[]}` | Subscribe + get current snapshot |
 | `work.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
 #### Agent Role
@@ -78,7 +78,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `agent_role.update` | `AgentRoleUpdateParams` | `{}` | Update fields |
 | `agent_role.delete` | `AgentRoleDeleteParams` | `{}` | Delete (with referential integrity check) |
 | `agent_role.reset_defaults` | — | `{}` | Delete all roles and recreate defaults |
-| `agent_role.list.subscribe` | — | `{id, items: AgentRole[]}` | Subscribe + get current snapshot |
+| `agent_role.list.subscribe` | `SubscribeParams` | `{items: AgentRole[]}` | Subscribe + get current snapshot |
 | `agent_role.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
 ### Wire Types
@@ -92,7 +92,9 @@ WorkStopParams            { id }
 WorkReopenParams          { id }
 WorkCommentListParams     { work_id }
 WorkCommentUpdateParams   { id, body }
-WorkDetailSubscribeParams { work_id }
+WorkDetailSubscribeParams { id, work_id }
+
+SubscribeParams           { id }   // the whole of a subscribe with no other arguments
 
 AgentRoleCreateParams   { name, role_prompt, steps? }
 AgentRoleUpdateParams   { id, name?, role_prompt?, steps?, agent_type?, model?, effort? }
@@ -150,10 +152,10 @@ Store (mutation)
 
 ### Subscribe/Unsubscribe Flow
 
-1. Client calls `*.list.subscribe` → server registers a `Subscription` (with the connection's `Notifier`), then reads the current list.
-2. Subscription is registered **before** the list read — this guarantees no events are missed between the read and the registration.
-3. Server returns `{id, items}` — the subscription ID and the initial snapshot.
-4. Client calls `*.list.unsubscribe` with the `id` to stop receiving notifications.
+1. Client generates the subscription `id`, registers its local callback under it, then calls `*.list.subscribe` with that id.
+2. Server registers a `Subscription` under the client's id (with the connection's `Notifier`), then reads the current list. Registration comes **before** the list read, so no event between the two is missed — and because the id was the client's to begin with, such an event is routed to a callback that already exists ([why](../code/subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened)).
+3. Server returns `{items}` — the initial snapshot alone; the reply carries no id.
+4. Client calls `*.list.unsubscribe` with the same `id` to stop receiving notifications.
 
 ### Notification Format
 

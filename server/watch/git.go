@@ -26,7 +26,7 @@ type GitWatcher struct {
 
 func NewGitWatcher(workDir string) *GitWatcher {
 	return &GitWatcher{
-		BaseWatcher: NewBaseWatcher("g"),
+		BaseWatcher: NewBaseWatcher(),
 		workDir:     workDir,
 	}
 }
@@ -47,15 +47,12 @@ func (w *GitWatcher) Stop() {
 	slog.Info("GitWatcher stopped")
 }
 
-func (w *GitWatcher) Subscribe(notifier Notifier) string {
-	id := w.GenerateID()
-
-	sub := &Subscription{
+// Subscribe registers a subscriber under the client-chosen id.
+func (w *GitWatcher) Subscribe(id string, notifier Notifier) error {
+	return w.AddSubscription(&Subscription{
 		ID:       id,
 		Notifier: notifier,
-	}
-	w.AddSubscription(sub)
-	return id
+	})
 }
 
 func (w *GitWatcher) pollLoop() {

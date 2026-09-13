@@ -26,7 +26,7 @@ type detailEvent struct {
 
 func NewWorkDetailWatcher(store work.Store) *WorkDetailWatcher {
 	w := &WorkDetailWatcher{
-		BaseWatcher: NewBaseWatcher("wd"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan detailEvent, 64),
 	}
@@ -82,7 +82,7 @@ func (w *WorkDetailWatcher) notifyForWorkID(workID string) {
 	// subscriptions normally exist only for the one work item a client has open.
 	// Skip the store reads (two linear scans + allocation) when nobody is
 	// watching this work_id.
-	if !w.HasSubscriptionForWorkID(workID) {
+	if !w.HasSubscriptionForKey(workID) {
 		return
 	}
 
@@ -101,7 +101,7 @@ func (w *WorkDetailWatcher) notifyForWorkID(workID string) {
 		return
 	}
 
-	w.notifyFiltered(workID, "work.detail.changed", func(sub *Subscription) any {
+	w.NotifyForKey(workID, "work.detail.changed", func(sub *Subscription) any {
 		return workDetailChangedParams{
 			ID:       sub.ID,
 			Work:     item,
@@ -121,7 +121,7 @@ func (w *WorkDetailWatcher) notifySyncAll() {
 	// Collect unique work_ids to avoid redundant store reads.
 	workIDs := make(map[string]struct{})
 	for _, sub := range subs {
-		workIDs[sub.WorkID] = struct{}{}
+		workIDs[sub.Key] = struct{}{}
 	}
 
 	type detail struct {
@@ -148,7 +148,7 @@ func (w *WorkDetailWatcher) notifySyncAll() {
 	}
 
 	for _, sub := range subs {
-		d, ok := cache[sub.WorkID]
+		d, ok := cache[sub.Key]
 		if !ok {
 			continue
 		}
@@ -168,50 +168,38 @@ func (w *WorkDetailWatcher) notifySyncAll() {
 	slog.Info("sent full detail sync to subscribers after event drop")
 }
 
-// notifyFiltered sends a notification only to subscribers watching the given work_id.
-func (w *WorkDetailWatcher) notifyFiltered(workID, method string, makeParams func(sub *Subscription) any) {
-	subs := w.GetAllSubscriptions()
-	for _, sub := range subs {
-		if sub.WorkID != workID {
-			continue
-		}
-		params := makeParams(sub)
-		n := Notification{Method: method, Params: params}
-		if err := sub.Notifier.Notify(w.Context(), n); err != nil {
-			slog.Debug("failed to notify detail subscriber",
-				"id", sub.ID,
-				"error", err)
-		}
-	}
-}
-
-// Subscribe registers a subscriber for a specific work item's detail.
-func (w *WorkDetailWatcher) Subscribe(workID string, notifier Notifier) (string, work.Work, []work.Comment, error) {
-	id := w.GenerateID()
+// Subscribe registers a subscriber for a specific work item's detail, under the
+// client-chosen id.
+//
+// Registered before the store read, so a change landing between the two is
+// notified rather than lost; see BaseWatcher.AddSubscription.
+func (w *WorkDetailWatcher) Subscribe(id, workID string, notifier Notifier) (work.Work, []work.Comment, error) {
 	sub := &Subscription{
 		ID:       id,
-		WorkID:   workID,
+		Key:      workID,
 		Notifier: notifier,
 	}
-	w.AddSubscription(sub)
+	if err := w.AddSubscription(sub); err != nil {
+		return work.Work{}, nil, err
+	}
 
 	item, found, err := w.store.Get(workID)
 	if err != nil {
 		w.RemoveSubscription(id)
-		return "", work.Work{}, nil, err
+		return work.Work{}, nil, err
 	}
 	if !found {
 		w.RemoveSubscription(id)
-		return "", work.Work{}, nil, work.ErrWorkNotFound
+		return work.Work{}, nil, work.ErrWorkNotFound
 	}
 
 	comments, err := w.store.ListComments(workID)
 	if err != nil {
 		w.RemoveSubscription(id)
-		return "", work.Work{}, nil, err
+		return work.Work{}, nil, err
 	}
 
-	return id, item, comments, nil
+	return item, comments, nil
 }
 
 type workDetailChangedParams struct {

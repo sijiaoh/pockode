@@ -31,7 +31,9 @@ func seedHistory(t *testing.T, env *testEnv, sessionID string, n int) *worktree.
 
 func (e *testEnv) subscribeChatMessagesWithLimit(sessionID string, limit int) rpc.ChatMessagesSubscribeResult {
 	e.t.Helper()
-	resp := e.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{SessionID: sessionID, Limit: limit})
+	resp := e.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{
+		ID: e.nextSubID(), SessionID: sessionID, Limit: limit,
+	})
 	if resp.Error != nil {
 		e.t.Fatalf("subscribe failed: %s", resp.Error.Message)
 	}
@@ -115,7 +117,7 @@ func TestChatMessagesSubscribe_RejectsNegativeLimit(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	seedHistory(t, env, "sess", 3)
 
-	resp := env.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{SessionID: "sess", Limit: -1})
+	resp := env.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{ID: "client-1", SessionID: "sess", Limit: -1})
 
 	if resp.Error == nil {
 		t.Fatalf("expected an error, got result %s", resp.Result)

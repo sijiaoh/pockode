@@ -20,9 +20,9 @@ func TestSettingsWatcher_Subscribe(t *testing.T) {
 	store := newTestSettingsStore(t)
 	w := NewSettingsWatcher(store)
 
-	id, s := w.Subscribe(nil)
-	if id == "" {
-		t.Error("expected non-empty subscription ID")
+	s, err := w.Subscribe("client-1", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if s != store.Get() {
 		t.Error("expected settings to match store")
@@ -39,7 +39,7 @@ func TestSettingsWatcher_NotifyChange(t *testing.T) {
 	defer w.Stop()
 
 	notifier := &captureNotifier{}
-	w.Subscribe(notifier)
+	w.Subscribe("client-1", notifier)
 
 	store.Update(settings.Settings{DefaultAgentRoleID: "role-1"})
 
@@ -56,13 +56,13 @@ func TestSettingsWatcher_DirtyFlag_ResendsAfterDrop(t *testing.T) {
 	store := newTestSettingsStore(t)
 	// Don't register as listener — we control the channel manually
 	w := &SettingsWatcher{
-		BaseWatcher: NewBaseWatcher("st"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan struct{}, 1),
 	}
 
 	notifier := &captureNotifier{}
-	w.Subscribe(notifier)
+	w.Subscribe("client-1", notifier)
 
 	// Simulate dirty flag being set (as if events were dropped)
 	w.dirty.Store(true)
@@ -97,7 +97,7 @@ func TestSettingsWatcher_DirtyFlag_ResendsAfterDrop(t *testing.T) {
 func TestSettingsWatcher_OnSettingsChange_BufferFull_SetsDirty(t *testing.T) {
 	store := newTestSettingsStore(t)
 	w := &SettingsWatcher{
-		BaseWatcher: NewBaseWatcher("st"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan struct{}, 1),
 	}
