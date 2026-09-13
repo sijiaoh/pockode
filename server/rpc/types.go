@@ -589,6 +589,9 @@ type WorkDetailSubscribeParams struct {
 type WorkDetailSubscribeResult struct {
 	Work     work.Work      `json:"work"`
 	Comments []work.Comment `json:"comments"`
+	// Usage is the detail's alone, never Work's — see work.Usage. The list
+	// result above carries Work and must stay that way.
+	Usage work.Usage `json:"usage"`
 }
 
 // AgentRole namespace
