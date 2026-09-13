@@ -42,14 +42,70 @@ obstacle — `windows/arm64` is a first-class Go target and GitHub has offered
 a choice to the download page and a variable to every bug report, in exchange for
 something emulation already provides.
 
+## Installing on macOS and Linux
+
+```bash
+curl -fsSL https://pockode.com/install.sh | sh
+```
+
+Then run `pockode` from the project directory you want to work in — that is what
+it operates on by default (`--work`) — and scan the QR code it prints:
+
+```bash
+pockode -auth-token YOUR_PASSWORD
+```
+
+The script downloads the binary for your OS and architecture and moves it into
+`/usr/local/bin`, which is why it asks for `sudo`. Re-running the same command
+upgrades in place, and `sudo rm /usr/local/bin/pockode` is the whole uninstall.
+
+### Installing a specific version
+
+By default you get the latest release. Ask for a particular one — any tag from
+the [releases page](https://github.com/sijiaoh/pockode/releases) — when a new
+version broke something and you need the previous one back, or when several
+machines have to run the same version:
+
+```bash
+curl -fsSL https://pockode.com/install.sh | POCKODE_VERSION=0.12.1 sh
+curl -fsSL https://pockode.com/install.sh | sh -s -- --version 0.12.1
+```
+
+The two are equivalent, and the flag wins if both are set. There are two because
+a pipe gives the script no arguments of its own: `sh -s --` is the shell's way to
+hand them over, and the environment variable is the shorter thing to type in
+front of it. `v0.12.1`, `0.12.1` and `latest` are all accepted — the same
+spellings `install.ps1` takes for `-Version`. Anything else is rejected before
+the download, since the version is pasted into a release URL.
+
+Confirm what you ended up with:
+
+```bash
+pockode -version
+```
+
+A version that has no release, or a release with no binary for your platform,
+fails with the URL it tried rather than a bare 404 — nothing is installed, and
+the copy you already had stays where it is.
+
+`--version` is the only option here, unlike `install.ps1`, which also has
+`-InstallDir`, `-Url` and `-Uninstall`. Those exist there because a Windows
+install has no conventional location, no obvious download fallback and no
+one-line way to undo it. On macOS and Linux each of those is already a single
+command: `/usr/local/bin` is the convention, `curl -o` plus `chmod +x` installs a
+binary from anywhere, and `rm` uninstalls. The full usage text:
+
+```bash
+curl -fsSL https://pockode.com/install.sh | sh -s -- --help
+```
+
 ## Installing on Windows
 
 ```powershell
 irm https://pockode.com/install.ps1 | iex
 ```
 
-Then run `pockode` from the project directory you want to work in — that is what
-it operates on by default (`--work`) — and scan the QR code it prints:
+Then start it in your project directory and scan the QR code, exactly as above:
 
 ```powershell
 pockode -auth-token YOUR_PASSWORD

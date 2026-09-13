@@ -246,3 +246,148 @@ jobs:
               *Unsupported*) echo "$kernel: fell through to the unsupported-OS branch: $output"; exit 1 ;;
             esac
           done
+
+  # The version a user asks for turns into a download URL, and getting that URL
+  # wrong is the whole failure mode of this feature: a silently-latest install,
+  # or a tag that lost its "v". Nothing here downloads anything - a fake curl
+  # records the URL it was handed and fails, which stops the script before sudo.
+  install-sh-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # On PATH for the rest of the job, so every step below runs install.sh
+      # against the same fakes. Nothing after this point wants the real tools.
+      - name: Fake curl, sudo and uname
+        run: |
+          mkdir -p fake-bin
+          printf '#!/bin/sh\nfor a in "$@"; do echo "$a"; done >> "$CURL_LOG"\nexit 22\n' > fake-bin/curl
+          printf '#!/bin/sh\necho "sudo must not be reached" >&2\nexit 99\n' > fake-bin/sudo
+          printf '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n' > fake-bin/uname
+          chmod +x fake-bin/curl fake-bin/sudo fake-bin/uname
+          echo "$PWD/fake-bin" >> "$GITHUB_PATH"
+          echo "CURL_LOG=$PWD/curl.log" >> "$GITHUB_ENV"
+
+      - name: install.sh resolves the requested version into a download URL
+        run: |
+          # $1 is what the download URL must contain, or "no-download" when the
+          # script is expected to reject the input before reaching curl. The rest
+          # is passed through to the script, so a leading VAR=value sets the
+          # environment for that run only.
+          expect() {
+            wanted=$1
+            shift
+            : > "$CURL_LOG"
+            set +e
+            output=$(env "$@" 2>&1)
+            status=$?
+            set -e
+            url=$(grep '^https://' "$CURL_LOG" || true)
+            if [ "$status" -eq 0 ]; then
+              echo "[$*] should not have reported success"; exit 1
+            fi
+            if [ "$wanted" = "no-download" ]; then
+              if [ -n "$url" ]; then
+                echo "[$*] should have been rejected before downloading, but fetched $url"; exit 1
+              fi
+              return 0
+            fi
+            case "$url" in
+              *"$wanted"*) ;;
+              *) echo "[$*] downloaded '$url', expected it to contain '$wanted'"; exit 1 ;;
+            esac
+            # Whatever went wrong, the user has to be able to see which URL it was.
+            case "$output" in
+              *"$url"*) ;;
+              *) echo "[$*] the failure message does not name the URL: $output"; exit 1 ;;
+            esac
+          }
+
+          asset=pockode-linux-amd64
+          base=https://github.com/sijiaoh/pockode/releases
+
+          # The old `curl ... | sh` has to keep installing the latest release.
+          expect "$base/latest/download/$asset" sh site/static/install.sh
+          expect "$base/latest/download/$asset" POCKODE_VERSION=latest sh site/static/install.sh
+          # An empty value is how an unset variable of the user's own arrives.
+          expect "$base/latest/download/$asset" POCKODE_VERSION= sh site/static/install.sh
+
+          # Both spellings of a version, through both ways of passing one.
+          expect "$base/download/v0.12.1/$asset" POCKODE_VERSION=0.12.1 sh site/static/install.sh
+          expect "$base/download/v0.12.1/$asset" POCKODE_VERSION=v0.12.1 sh site/static/install.sh
+          expect "$base/download/v0.12.1/$asset" sh site/static/install.sh --version 0.12.1
+          expect "$base/download/v0.12.1/$asset" sh site/static/install.sh --version=v0.12.1
+
+          # An explicit flag overrides the environment rather than the reverse.
+          expect "$base/download/v9.9.9/$asset" POCKODE_VERSION=0.12.1 sh site/static/install.sh --version 9.9.9
+
+          # A version is interpolated into a URL, so anything that could steer
+          # the download elsewhere, or is plainly not a tag, stops the script.
+          expect no-download sh site/static/install.sh --version "0.12.1/../../evil"
+          expect no-download sh site/static/install.sh --version "http://example.com/x"
+          expect no-download sh site/static/install.sh --version ""
+          expect no-download sh site/static/install.sh --version
+          expect no-download sh site/static/install.sh --wat
+          # A forgotten value must not be filled in by the next option.
+          expect no-download sh site/static/install.sh --version --help
+
+          # Rejecting them is not enough. Left to themselves, a bare --version
+          # dies on a message about `shift`, and --version --help on a 404 for
+          # a release; neither tells the user what they actually got wrong.
+          says_missing_value() {
+            output=$(sh site/static/install.sh "$@" 2>&1 || true)
+            case "$output" in
+              *"Missing value for --version"*) ;;
+              *) echo "[$*] did not say the value is missing: $output"; exit 1 ;;
+            esac
+          }
+          says_missing_value --version
+          says_missing_value --version --help
+
+          # Reported back the way it was typed: `sh` here is dash, whose echo
+          # would turn the backslash in it into a line break.
+          output=$(sh site/static/install.sh --version 'a\nb' 2>&1 || true)
+          case "$output" in
+            *'Invalid version: a\nb'*) ;;
+            *) echo "the rejected version was not quoted back verbatim: $output"; exit 1 ;;
+          esac
+
+          # The version asked for has to appear in what the script says it is
+          # doing - it is the one thing the user cannot check any other way
+          # until the install finishes.
+          output=$(sh site/static/install.sh --version 0.12.1 2>&1 || true)
+          case "$output" in
+            *"Downloading Pockode v0.12.1 for linux/amd64"*) ;;
+            *) echo "a requested version is not named in the output: $output"; exit 1 ;;
+          esac
+
+          # The other side of that: a plain `curl ... | sh` still says exactly
+          # what it always said, down to the wording.
+          output=$(sh site/static/install.sh 2>&1 || true)
+          case "$output" in
+            "Downloading Pockode for linux/amd64..."*) ;;
+            *) echo "the default run changed what it prints: $output"; exit 1 ;;
+          esac
+
+      - name: The documented pipe form accepts a version too
+        run: |
+          : > "$CURL_LOG"
+          # Reading the script from stdin is the only form the docs give, and it
+          # is the form that can break on its own: `sh -s --` has to leave the
+          # script's stdin alone and still pass the arguments through.
+          cat site/static/install.sh | sh -s -- --version 0.12.1 || true
+          if ! grep -q '^https://github.com/sijiaoh/pockode/releases/download/v0.12.1/pockode-linux-amd64$' "$CURL_LOG"; then
+            echo "piping the script into sh -s -- --version did not reach the tagged URL: $(cat "$CURL_LOG")"; exit 1
+          fi
+
+      - name: --help explains both ways of asking for a version
+        run: |
+          output=$(sh site/static/install.sh --help)
+          for form in 'POCKODE_VERSION=' 'sh -s -- --version'; do
+            case "$output" in
+              *"$form"*) ;;
+              *) echo "--help does not mention $form: $output"; exit 1 ;;
+            esac
+          done
