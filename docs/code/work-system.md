@@ -70,6 +70,13 @@ This binding is what lets `WorkStarter`/`WorkStopper` and session cleanup act on
 `worktreeManager.Get(w.Worktree)` instead of always the main worktree, and it is
 the ownership signal behind worktree-deletion protection (below).
 
+One consumer leans on the *normally* in "an entire story subtree normally shares
+one worktree" while nothing here can enforce it: usage aggregation lets an
+unreadable worktree cost a total its share with nothing but a log line, which is
+only tolerable while a split subtree stays the exception noted above. Loosening
+this binding means deciding that degradation again — see [Usage
+Aggregation](#usage-aggregation).
+
 ### Validation Rules
 
 On creation (`server/work/store.go:175-210`):
@@ -543,6 +550,102 @@ before retrying — a bare refusal would not be actionable.
 rejects an empty name earlier (and `registry.Delete("")` returns
 `ErrMainWorktree`), so this check never governs main.
 
+## Usage Aggregation
+
+A work item's detail reports what it consumed: its **own** session's share, and
+the **total** over itself plus every descendant at every depth
+(`work.AggregateUsage`, `server/work/usage.go`). The numbers are the ones the
+sessions already recorded (`session.Usage`, `server/session/usage.go`) —
+nothing in the work layer re-counts tokens, so a work total and a session total
+are the same units added the same way. Where those units come from is [Usage
+Reporting](agent-integration.md#usage-reporting); what a user sees of them is
+[usage-display-ui.md](../usage-display-ui.md).
+
+**It rides on the detail, never on `Work`.** `Work` is the one shape the work
+list and the work detail share, so a `Usage` field on it would make every row of
+a global list carry a subtree aggregation. The field lives on
+`rpc.WorkDetailSubscribeResult` and on the `work.detail.changed` notification
+instead, and a test in `server/rpc/work_usage_test.go` holds the list to that.
+
+Four facts go out:
+
+| Field | Why it is on the wire |
+|---|---|
+| `own` | the work's own session lives in the work's worktree, which is not necessarily the active one — reaching its usage from the work detail would mean a second, cross-worktree session subscription |
+| `total` | the client sees its own work item and its direct children, not the grandchildren the total covers |
+| `descendant_count` | same reason; it is also what decides whether a total is worth showing, a question that must **not** be answered by comparing `total` against `own` — that would make a column appear the moment a child's first turn lands |
+| `unpriced_session_count` | how many sessions in the subtree spent tokens while their agent reported no price. A tree mixing Claude (which prices) and Codex (which never does) would otherwise report a total that looks complete and is not |
+
+No `total_tokens` (the four counters are summed by whoever displays them) and no
+context window at any level: a window is a property of one live conversation, and
+the sum of several means nothing.
+
+**Absent is not zero.** A missing `own`/`total` means nothing was reported —
+no session, a session since cleaned up, or an agent that never reported a token —
+and a missing `cost_usd` means no agent in scope reported a price. Both are
+displayed as "not reported", never as `0`, which would be a claim an agent never
+made. A fork contributes only what it spent itself, since its own usage starts at
+zero on purpose (the tokens behind its copied history were spent by the source
+session, which is very often in the same tree).
+
+**Sessions are read from disk, per worktree.** A subtree can reach into a
+worktree nothing is currently using, and `worktree.Manager.SessionUsages` answers
+for it by reading that worktree's session index (`session.ReadUsages`) rather
+than through its session store. Going through the store would mean *building* the
+worktree — watchers, process manager, git watches — and holding it alive on a
+reference, because someone opened a page showing numbers. The file is current:
+every usage write persists the index before notifying anyone. Each worktree is
+read once per aggregation; one that cannot be read costs the total its share and
+says so in the log, rather than failing the whole detail subscription.
+
+**That silence rests on an accidental premise, not on a guarantee.** Losing a
+worktree's share yields a total that is smaller than the truth with nothing on
+the page to say so — the very thing `unpriced_session_count` exists to prevent.
+It is acceptable today only because of a property of [Worktree
+Binding](#worktree-binding) above: a work tree normally lands entirely in one
+worktree, so an index that cannot be read costs the subtree *all* of its
+sessions rather than a slice of them. Both then come back absent, which the page
+renders as no usage at all rather than as a partially summed number that looks
+complete — "nothing was reported" is a meaning those two fields already carry.
+(A deleted worktree does not even reach this branch: a missing index reads as
+empty and no error, so it lands on the same absent.) The same premise is why the
+cross-worktree lookup here, though real, is used trivially today — one
+aggregation usually reads one index.
+
+Nothing enforces that premise. It is how work happens to be bound to worktrees
+right now, it already has one hole — a task started ahead of its story keeps the
+worktree it inherited, so if the story then starts from a different one, that
+tree is split with today's code — and it goes away entirely the moment work may
+move between worktrees or a tree may deliberately span several. **When that
+changes, `usageLookup.get`'s degradation has to be decided again** — a subtree
+quietly missing one worktree's share would then need the same kind of "this
+total is incomplete" marker that `unpriced_session_count` carries, instead of a
+log line.
+
+**Usage changes without the work item changing**, so `WorkDetailWatcher` also
+listens to every worktree's session store (`Manager.SetSessionChangeListener`)
+and, on a session change, re-sends the detail of the work item owning that
+session **and of every work item above it** — each ancestor's total includes it.
+Sessions belonging to no work item (plain chats) cost nothing, and the walk is
+bounded by a seen set rather than by trusting the parent chain.
+
+Two details of that wiring are load-bearing here, and both generalise past this
+case — the rules are in
+[subscription-system.md](subscription-system.md#why-a-watcher-sometimes-listens-to-a-second-store):
+
+- **The listener is registered on worktrees that already exist, not only on the
+  ones built later.** Worktrees are created lazily by whoever needs one first,
+  and AutoResumer resolves senders for work it restarts while the server is still
+  wiring itself up — so the main worktree can predate the call. Missing it would
+  freeze that worktree's work usage for the whole process, with nothing to show
+  that it happened.
+- **A session change that moved no number sends nothing.** A session is touched
+  at the end of every turn, marked unread, marked as needing input; a detail
+  notification carries the work item and its *entire* comment list. So the
+  watcher compares the fresh aggregation against the last one it sent to that
+  subscription (`work.Usage.Equal`) and stays quiet when they match. Work and
+  comment changes are never filtered this way — their payload is the news.
+
 ## Frontend Integration
 
 ```typescript
@@ -940,6 +1043,8 @@ cached entry needs no additional locking.
 | File store | `server/work/store.go` |
 | State validation | `server/work/validation.go` |
 | Auto resumer | `server/work/auto_resumer.go` |
+| Usage aggregation | `server/work/usage.go` |
+| Per-worktree usage source | `server/worktree/manager.go` (`SessionUsages`), `server/session/usage.go` (`ReadUsages`) |
 | Worktree start/stop handlers | `server/worktree/work_starter.go`, `server/worktree/work_stopper.go` |
 | Worktree manager (sender resolver) | `server/worktree/manager.go` |
 | Worktree delete protection | `server/ws/rpc_worktree.go` |

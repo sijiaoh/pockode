@@ -65,7 +65,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → in_progress) |
 | `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
 | `work.comment.update` | `WorkCommentUpdateParams` | `Comment` | Update a comment's body |
-| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments}` | Subscribe to a single work item + comments |
+| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage}` | Subscribe to a single work item + comments + the token usage of its subtree ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) |
 | `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
 | `work.list.subscribe` | `SubscribeParams` | `{items: Work[]}` | Subscribe + get current snapshot |
 | `work.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
