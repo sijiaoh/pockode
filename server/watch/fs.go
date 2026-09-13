@@ -113,9 +113,9 @@ func (w *FSWatcher) Subscribe(id, subPath string, notifier Notifier) error {
 // Unsubscribe overrides BaseWatcher.Unsubscribe to also clean up fsnotify watches.
 func (w *FSWatcher) Unsubscribe(id string) {
 	w.pathMu.Lock()
-	path, ok := w.idToPath[id]
+	key, ok := w.idToPath[id]
 	if ok {
-		w.removePathMapping(id, path)
+		w.removePathMapping(id, key)
 	}
 	w.pathMu.Unlock()
 
