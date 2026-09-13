@@ -5,7 +5,6 @@ import type {
 	HistorySeq,
 	Message,
 	MessageOrigin,
-	MessageResult,
 	PermissionUpdate,
 	QuestionStatus,
 	ServerNotification,
@@ -107,9 +106,7 @@ export type NormalizedEvent =
  * Not absent for history written before seqs existed: replay stamps every
  * unaddressed record by position (session.StampHistorySeq).
  */
-export function readHistorySeq(
-	e: ServerNotification | MessageResult | Record<string, unknown> | undefined,
-): HistorySeq | undefined {
+export function readHistorySeq(e: unknown): HistorySeq | undefined {
 	const seq = (e as Record<string, unknown> | undefined)?.seq;
 	return typeof seq === "number" && seq > 0 ? seq : undefined;
 }
