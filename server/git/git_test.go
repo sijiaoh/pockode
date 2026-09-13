@@ -1116,6 +1116,7 @@ func TestAddReset_NonASCIIPath(t *testing.T) {
 // ":!important.txt" reads as "everything except important.txt" and stages the
 // rest instead, exiting 0. Discard hit this first; Add and Reset share it.
 func TestAddReset_TreatsPathspecMagicInNamesAsLiteral(t *testing.T) {
+	magic := pathspecMagicName(t)
 	dir, cleanup := setupTestRepo(t)
 	defer cleanup()
 
@@ -1124,10 +1125,10 @@ func TestAddReset_TreatsPathspecMagicInNamesAsLiteral(t *testing.T) {
 	runGit(t, dir, "add", "seed.txt")
 	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
 
-	writeTestFile(t, dir, ":!important.txt", "picked\n")
+	writeTestFile(t, dir, magic, "picked\n")
 	writeTestFile(t, dir, "bystander.txt", "not picked\n")
 
-	if err := Add(dir, ":!important.txt"); err != nil {
+	if err := Add(dir, magic); err != nil {
 		t.Fatalf("Add() error: %v", err)
 	}
 
@@ -1135,8 +1136,8 @@ func TestAddReset_TreatsPathspecMagicInNamesAsLiteral(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() error: %v", err)
 	}
-	if !staged.HasFile(":!important.txt", true) {
-		t.Errorf("expected :!important.txt staged, got %+v", staged.Staged)
+	if !staged.HasFile(magic, true) {
+		t.Errorf("expected %q staged, got %+v", magic, staged.Staged)
 	}
 	if staged.HasFile("bystander.txt", true) {
 		t.Errorf("Add staged bystander.txt as well, got %+v", staged.Staged)
@@ -1145,7 +1146,7 @@ func TestAddReset_TreatsPathspecMagicInNamesAsLiteral(t *testing.T) {
 	if err := Add(dir, "bystander.txt"); err != nil {
 		t.Fatalf("Add(bystander.txt) error: %v", err)
 	}
-	if err := Reset(dir, ":!important.txt"); err != nil {
+	if err := Reset(dir, magic); err != nil {
 		t.Fatalf("Reset() error: %v", err)
 	}
 
@@ -1153,8 +1154,8 @@ func TestAddReset_TreatsPathspecMagicInNamesAsLiteral(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() error: %v", err)
 	}
-	if after.HasFile(":!important.txt", true) {
-		t.Errorf("expected :!important.txt unstaged, got %+v", after.Staged)
+	if after.HasFile(magic, true) {
+		t.Errorf("expected %q unstaged, got %+v", magic, after.Staged)
 	}
 	if !after.HasFile("bystander.txt", true) {
 		t.Errorf("Reset unstaged bystander.txt as well, got %+v", after.Staged)

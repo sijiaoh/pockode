@@ -240,17 +240,18 @@ func TestDiscard_ReportsEmbeddedRepositoryUsingTheRequestedPath(t *testing.T) {
 // one file named ":!important.txt" reads as "everything except important.txt"
 // and takes every other untracked file with it, exiting 0.
 func TestDiscard_TreatsPathspecMagicInNamesAsLiteral(t *testing.T) {
+	magic := pathspecMagicName(t)
 	dir, cleanup := setupDiscardRepo(t)
 	defer cleanup()
 
-	writeTestFile(t, dir, ":!important.txt", "picked\n")
+	writeTestFile(t, dir, magic, "picked\n")
 	writeTestFile(t, dir, "bystander.txt", "not picked\n")
 
-	if err := Discard(dir, []string{":!important.txt"}); err != nil {
+	if err := Discard(dir, []string{magic}); err != nil {
 		t.Fatalf("Discard() error: %v", err)
 	}
 
-	requireGone(t, dir, ":!important.txt")
+	requireGone(t, dir, magic)
 	if got := readTestFile(t, dir, "bystander.txt"); got != "not picked\n" {
 		t.Errorf("bystander.txt = %q, want it untouched", got)
 	}
