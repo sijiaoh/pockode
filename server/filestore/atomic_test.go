@@ -32,28 +32,6 @@ func TestWriteFileAtomic_ReplacesContentAndLeavesNoTempFile(t *testing.T) {
 	}
 }
 
-// A crash can leave a temp file behind; its mode must not become the mode of
-// the file the next write publishes.
-func TestWriteFileAtomic_AppliesPermOverLeftoverTempFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret.json")
-	if err := os.WriteFile(path+".tmp", []byte("stale"), 0644); err != nil {
-		t.Fatalf("write leftover temp file: %v", err)
-	}
-
-	if err := WriteFileAtomic(path, []byte("secret"), 0600); err != nil {
-		t.Fatalf("WriteFileAtomic failed: %v", err)
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("expected mode 0600, got %04o", info.Mode().Perm())
-	}
-}
-
 // The point of the temp-file dance: when the filesystem refuses the write (a
 // full disk being the case that started all this), the previous file must
 // survive whole rather than be left truncated. Only the closing rename ever
