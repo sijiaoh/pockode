@@ -80,8 +80,8 @@ export interface WorkUsage {
 	/**
 	 * Descendants counted into `total`, at any depth; 0 when there are none.
 	 * Always sent, and the only thing that decides whether the page shows one
-	 * column or two: the client sees direct children in its store but never
-	 * grandchildren.
+	 * column or two: `Work` carries no usage, so the client has no consumption
+	 * figure for any item but the one it has open.
 	 */
 	descendant_count: number;
 	/**

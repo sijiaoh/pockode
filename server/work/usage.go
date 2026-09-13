@@ -29,11 +29,12 @@ type Usage struct {
 	Total *UsageTotals `json:"total,omitempty"`
 
 	// DescendantCount is how many work items sit beneath this one, at every
-	// depth. Always sent: a client sees only its own work item and cannot count
-	// its grandchildren, and whether the subtree has any is what decides whether
-	// a total is worth showing at all — a question that must not be answered by
-	// comparing Total against Own, which would make a column appear the moment a
-	// child's first turn lands.
+	// depth. Always sent: usage is not on Work, so a client holds no consumption
+	// figure for any work item but the one it has open and cannot aggregate the
+	// subtree itself. Whether the subtree has anything in it is also what decides
+	// whether a total is worth showing at all — a question that must not be
+	// answered by comparing Total against Own, which would make a column appear
+	// the moment a child's first turn lands.
 	DescendantCount int `json:"descendant_count"`
 
 	// UnpricedSessionCount is how many sessions in the subtree (this work's own

@@ -572,7 +572,7 @@ Four facts go out:
 | Field | Why it is on the wire |
 |---|---|
 | `own` | the work's own session lives in the work's worktree, which is not necessarily the active one — reaching its usage from the work detail would mean a second, cross-worktree session subscription |
-| `total` | the client sees its own work item and its direct children, not the grandchildren the total covers |
+| `total` | usage is not on `Work`, by the rule just above, so the client holds no consumption figure for any work item but the one it has open — it cannot sum its own children even though it has them |
 | `descendant_count` | same reason; it is also what decides whether a total is worth showing, a question that must **not** be answered by comparing `total` against `own` — that would make a column appear the moment a child's first turn lands |
 | `unpriced_session_count` | how many sessions in the subtree spent tokens while their agent reported no price. A tree mixing Claude (which prices) and Codex (which never does) would otherwise report a total that looks complete and is not |
 

@@ -98,8 +98,8 @@ interface WorkUsage {
 	/**
 	 * Descendants counted into `total`, at any depth; 0 when there are none.
 	 * Required, and the only thing that decides whether the page shows one column
-	 * or two — the client sees direct children in its store but never
-	 * grandchildren, so it cannot answer this itself.
+	 * or two — `Work` carries no usage, so the client cannot count or sum the
+	 * subtree itself.
 	 */
 	descendant_count: number;
 	/**
