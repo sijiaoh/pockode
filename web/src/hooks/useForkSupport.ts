@@ -19,11 +19,12 @@ import type { AgentType, ForkSupport } from "../types/settings";
  * `null` only spans that wait. Treating it as "forking is available" is
  * deliberate, and this is the only place that decides it — a second copy of the
  * default in a component would one day disagree with this one. An agent that
- * turns out to answer `"none"` costs a fork icon that was on screen for a moment
- * and then left; starting from "unavailable" would instead pop a row into every
- * bubble once the answer landed, which is the more jarring of the two. A fork
- * that should not have been offered is refused by the server regardless, with a
- * message the sheet shows.
+ * turns out to answer `"none"` costs a `…` that was on screen for a moment and
+ * then left, widening every bubble as it goes; starting from "unavailable" would
+ * instead push a slot into every row once the answer landed, narrowing them all
+ * at once, which is the more jarring of the two. A fork that should not have
+ * been offered is refused by the server regardless, with a message the sheet
+ * shows.
  */
 export function useForkSupport(agentType: AgentType): ForkSupport | null {
 	const status = useWSStore((state) => state.status);
@@ -44,10 +45,11 @@ export function useForkSupport(agentType: AgentType): ForkSupport | null {
 				);
 			})
 			.catch(() => {
-				// Nothing to report: the capability only decides whether a fork icon is
-				// offered, and the request that acts on it answers for itself. An error
-				// here would be a second, unprompted complaint about the connection the
-				// app already shows the state of. The next reconnect retries.
+				// Nothing to report: the capability only decides whether the message
+				// menu is offered, and the request that acts on it answers for
+				// itself. An error here would be a second, unprompted complaint about
+				// the connection the app already shows the state of. The next
+				// reconnect retries.
 			});
 		return () => {
 			active = false;

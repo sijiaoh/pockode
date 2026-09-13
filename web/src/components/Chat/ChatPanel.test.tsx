@@ -1313,38 +1313,54 @@ describe("ChatPanel", () => {
 			forked_from: { session_id: "test-session" },
 		});
 
-		// Taps the fork icon under the first assistant answer, one step now that
-		// the action stands on the row instead of behind a `…`. It is the first
-		// offer in the transcript: the opening prompt above it has nothing behind
-		// it to fork to and carries its own label.
-		const openForkSheet = async (user: ReturnType<typeof userEvent.setup>) => {
-			const forkButtons = screen.getAllByRole("button", {
-				name: "Fork from here",
+		/** Opens the menu beside the nth bubble of one speaker; -1 is the last. */
+		const openMenu = async (
+			user: ReturnType<typeof userEvent.setup>,
+			side: "user" | "assistant",
+			index = 0,
+		) => {
+			const triggers = await screen.findAllByRole("button", {
+				name:
+					side === "user"
+						? "Actions for your message"
+						: "Actions for the agent's message",
 			});
-			await user.click(forkButtons[0]);
+			await user.click(triggers[index < 0 ? triggers.length + index : index]);
 		};
 
-		// An agent that was never forkable has no refusal to explain — a branch
-		// glyph under every bubble that could not once have applied is
-		// decoration. Driven by the server's declaration, not by which agent the
-		// session runs.
-		it("shows no fork icon at all when the agent cannot be forked", async () => {
+		// Two steps now that the action lives in a menu: open the `…` beside the
+		// first assistant answer, then take the fork row. That answer is the first
+		// offer in the transcript — the opening prompt above it has nothing behind
+		// it to fork to.
+		const openForkSheet = async (user: ReturnType<typeof userEvent.setup>) => {
+			await openMenu(user, "assistant");
+			await user.click(screen.getByRole("button", { name: /Fork from here/ }));
+		};
+
+		// An agent that was never forkable has no refusal to explain, so it gets
+		// neither the `…` nor the slot the `…` would have sat in — a session that
+		// can do nothing to its messages should not pay for the room. Driven by
+		// the server's declaration, not by which agent the session runs.
+		it("reserves nothing at all when the agent cannot be forked", async () => {
 			mockState.mockHistory = forkHistory;
 			mockState.listAgents.mockResolvedValueOnce([
 				{ type: "claude", fork_support: "none" },
 			]);
 
-			// The icon exists only where forking can navigate to the result.
-			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
+			// The trigger exists only where forking can navigate to the result.
+			const { container } = render(
+				<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />,
+			);
 			await waitForHistoryLoad();
 
 			// Waited for, not asserted once: the declaration arrives after the
 			// first paint, and `null` until then means "offer it" (useForkSupport).
 			await waitFor(() =>
 				expect(
-					screen.queryAllByRole("button", { name: /Fork from here/ }),
+					screen.queryAllByRole("button", { name: /^Actions for/ }),
 				).toHaveLength(0),
 			);
+			expect(container.querySelectorAll(".size-9.self-start")).toHaveLength(0);
 			// The transcript really is on screen, so the absence above is the
 			// declaration talking and not a render that never happened.
 			expect(screen.getByText("Hi there!")).toBeInTheDocument();
@@ -1453,8 +1469,9 @@ describe("ChatPanel", () => {
 			);
 		});
 
-		// The seq arrives a moment later, so the icon stays where the thumb found
-		// it and goes quiet instead of vanishing.
+		// The seq arrives a moment later, so the row stays where it was and says
+		// why instead of vanishing. `aria-disabled`, not the native attribute:
+		// the reason is worth nothing if focus cannot reach it.
 		it("disables fork on a message that has no settled cut point", async () => {
 			const user = userEvent.setup();
 			mockState.mockHistory = [
@@ -1470,14 +1487,21 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
-			// The reason rides the label: a tooltip never fires under a finger.
-			const fork = screen.getByRole("button", {
-				name: "Fork from here, not available yet",
-			});
-			expect(fork).toBeDisabled();
+			// "Hello", the message with no seq — the one above it opens the session
+			// and is refused for its own reason.
+			await openMenu(user, "user", 1);
+			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			expect(fork).toHaveAttribute("aria-disabled", "true");
+			// Written out where a finger can read it: a tooltip never fires on a
+			// touch screen, so a reason living only in a label is out of reach.
+			expect(fork).toHaveTextContent("This message can't be a fork point yet.");
+			fork.focus();
+			expect(fork).toHaveFocus();
 
 			await user.click(fork);
-			expect(screen.queryByRole("dialog")).toBeNull();
+			// The menu is still the only dialog: nothing replaced it.
+			expect(screen.getByRole("dialog")).toHaveAccessibleName("Your message");
+			expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
 		});
 
 		// A fork anchored on something the user said returns to before they said
@@ -1490,13 +1514,15 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
-			const fork = screen.getByRole("button", {
-				name: "Fork from here, nothing before this message to keep",
-			});
-			expect(fork).toBeDisabled();
+			await openMenu(user, "user", 0);
+			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			expect(fork).toHaveAttribute("aria-disabled", "true");
+			expect(fork).toHaveTextContent("Nothing before this message to keep.");
+			// Permanent, so the sentence must not promise a later.
+			expect(fork).not.toHaveTextContent("yet");
 
 			await user.click(fork);
-			expect(screen.queryByRole("dialog")).toBeNull();
+			expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
 		});
 
 		// The two features meet here: history pages in from the bottom, so the
@@ -1520,16 +1546,15 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
-			expect(
-				screen.queryByRole("button", {
-					name: "Fork from here, nothing before this message to keep",
-				}),
-			).toBeNull();
+			await openMenu(user, "user", 0);
+			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			expect(fork).not.toHaveAttribute("aria-disabled");
+			expect(fork).not.toHaveTextContent("Nothing before this message");
 
-			await user.click(
-				screen.getAllByRole("button", { name: "Fork from here" })[0],
-			);
-			expect(await screen.findByRole("dialog")).toBeInTheDocument();
+			await user.click(fork);
+			expect(
+				await screen.findByRole("button", { name: "Fork" }),
+			).toBeInTheDocument();
 		});
 
 		// The message you just sent is the one you most want to fork from — you
@@ -1552,11 +1577,9 @@ describe("ChatPanel", () => {
 			// Nothing was resubscribed and no history was replayed: the only place
 			// this seq can have come from is the reply to the send itself.
 			expect(mockState.chatMessagesSubscribe).toHaveBeenCalledTimes(1);
-			const forkButtons = await screen.findAllByRole("button", {
-				name: "Fork from here",
-			});
-			const fork = forkButtons[forkButtons.length - 1];
-			expect(fork).toBeEnabled();
+			await openMenu(user, "user", -1);
+			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			expect(fork).not.toHaveAttribute("aria-disabled");
 
 			await user.click(fork);
 			const sheet = within(screen.getByRole("dialog"));
@@ -1584,11 +1607,9 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
-			const forkButtons = screen.getAllByRole("button", {
-				name: "Fork from here",
-			});
 			// "Try again", the second thing the user said.
-			await user.click(forkButtons[1]);
+			await openMenu(user, "user", 1);
+			await user.click(screen.getByRole("button", { name: /Fork from here/ }));
 
 			const sheet = within(screen.getByRole("dialog"));
 			expect(sheet.getByText("Try again")).toBeInTheDocument();

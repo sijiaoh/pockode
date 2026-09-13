@@ -58,7 +58,7 @@ function DiffFileList({
 								onClick={onDiscardAll}
 								disabled={isBusy}
 								aria-label="Discard all changes"
-								className={iconButtonClass(isBusy)}
+								className={iconButtonClass({ busy: isBusy })}
 							>
 								{isDiscardingAny ? (
 									<Loader2
@@ -75,7 +75,7 @@ function DiffFileList({
 							onClick={onToggleAll}
 							disabled={isBusy}
 							aria-label={toggleAllLabel}
-							className={iconButtonClass(isBusy)}
+							className={iconButtonClass({ busy: isBusy })}
 						>
 							{isTogglingAll ? (
 								<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />

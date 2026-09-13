@@ -388,6 +388,119 @@ describe("MessageItem", () => {
 		expect(screen.getByText("init")).toBeInTheDocument();
 	});
 
+	// The slot beside the bubble, and the `…` in it. Queried by class because
+	// what these assert is geometry, and jsdom applies no Tailwind — the same
+	// reason tests/touchTarget.ts reads the source rather than the layout.
+	describe("message menu slot", () => {
+		const slots = (container: HTMLElement) =>
+			Array.from(container.querySelectorAll(".size-9.self-start"));
+
+		const settled = (): Message => ({
+			id: "slot-1",
+			role: "assistant",
+			parts: [{ type: "text", content: "Answer" }],
+			status: "complete",
+			createdAt: new Date(),
+			anchorSeq: 4,
+		});
+
+		// The whole point of reserving the slot: the bubble the user is reading
+		// does not move when the agent finishes writing into it.
+		it("reserves the same slot while streaming and once settled", () => {
+			const streaming = render(
+				<MessageItem
+					message={{ ...settled(), status: "streaming" }}
+					onForkMessage={vi.fn()}
+				/>,
+			);
+			const before = slots(streaming.container);
+			expect(before).toHaveLength(1);
+			// Nothing in it yet: a message still being written is not a turn.
+			expect(
+				screen.queryByRole("button", { name: /^Actions for/ }),
+			).not.toBeInTheDocument();
+
+			const after = render(
+				<MessageItem message={settled()} onForkMessage={vi.fn()} />,
+			);
+			expect(slots(after.container)[0].className).toBe(before[0].className);
+			expect(
+				screen.getByRole("button", { name: "Actions for the agent's message" }),
+			).toBeInTheDocument();
+		});
+
+		// A full-bleed line has no bubble to be narrower than, so without a slot
+		// of its own it would overhang every bubble in the transcript.
+		it("reserves the slot on a work event line too, with nothing in it", () => {
+			const { container } = render(
+				<MessageItem
+					message={{
+						id: "slot-2",
+						role: "user",
+						content: "Started",
+						status: "complete",
+						createdAt: new Date(),
+						source: "system",
+						subtype: "kickoff",
+						meta: { title: "My work" },
+					}}
+					onForkMessage={vi.fn()}
+				/>,
+			);
+			expect(slots(container)).toHaveLength(1);
+			expect(
+				screen.queryByRole("button", { name: /^Actions for/ }),
+			).not.toBeInTheDocument();
+		});
+
+		// Session-level: nothing can be done to any message here, so the room is
+		// not paid for either.
+		it("reserves nothing when the session cannot fork", () => {
+			const { container } = render(<MessageItem message={settled()} />);
+			expect(slots(container)).toHaveLength(0);
+			expect(
+				screen.queryByRole("button", { name: /^Actions for/ }),
+			).not.toBeInTheDocument();
+		});
+
+		it("names the speaker in the trigger and in the menu title", async () => {
+			const user = userEvent.setup();
+			render(
+				<MessageItem
+					message={{
+						id: "slot-3",
+						role: "user",
+						content: "Try again",
+						status: "complete",
+						createdAt: new Date(),
+						anchorSeq: 2,
+					}}
+					onForkMessage={vi.fn()}
+				/>,
+			);
+
+			await user.click(
+				screen.getByRole("button", { name: "Actions for your message" }),
+			);
+			expect(screen.getByRole("dialog")).toHaveAccessibleName("Your message");
+		});
+
+		it("forks the message the menu was opened from", async () => {
+			const user = userEvent.setup();
+			const onForkMessage = vi.fn();
+			render(<MessageItem message={settled()} onForkMessage={onForkMessage} />);
+
+			await user.click(
+				screen.getByRole("button", { name: "Actions for the agent's message" }),
+			);
+			await user.click(screen.getByRole("button", { name: "Fork from here" }));
+
+			expect(onForkMessage).toHaveBeenCalledWith("slot-1");
+			// The menu steps aside for the confirmation that follows it.
+			expect(screen.queryByRole("dialog")).toBeNull();
+		});
+	});
+
 	// The formatting rules themselves are covered in utils/path.test.ts; this only
 	// checks that the tool call's file_path and the work dir reach the formatter.
 	describe("file path display", () => {

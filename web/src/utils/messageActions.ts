@@ -1,11 +1,11 @@
 import type { Message } from "../types/message";
 
 /**
- * Whether a message gets the thin action row under its bubble.
+ * Whether a message has a menu of its own actions.
  *
- * Asked separately from "can this message be forked": the row is shared by
+ * Asked separately from "can this message be forked": the menu is shared by
  * every per-message action, so a reason fork in particular does not apply —
- * a missing seq, an unanswered request — must not take the row, and with it
+ * a missing seq, an unanswered request — must not take the menu, and with it
  * every other action, away.
  *
  * A system-origin message is Pockode's own annotation rather than a

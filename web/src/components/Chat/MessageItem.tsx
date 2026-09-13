@@ -34,7 +34,7 @@ import {
 } from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
 import { MarkdownContent } from "./MarkdownContent";
-import MessageActions from "./MessageActions";
+import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import TaskItem from "./TaskItem";
 import ToolResultDisplay from "./ToolResultDisplay";
 
@@ -612,7 +612,7 @@ interface Props {
 function forkBlockedReason(
 	message: Message,
 	isFirst: boolean | undefined,
-): "not-yet" | "nothing-before" | undefined {
+): ForkBlocked | undefined {
 	// A fork anchored on a message the user sent returns to before they sent it,
 	// so the session's opening prompt has nothing behind it to keep. The
 	// server refuses this one too (chat.ErrForkAnchorNoHistory).
@@ -638,10 +638,16 @@ const MessageItem = memo(function MessageItem({
 	const userBubbleClass = chatUIConfig.userBubbleClass ?? "";
 	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
 
-	const actions = hasMessageActions(message) ? (
-		<MessageActions
+	// Two conditions, one per level. The session decides whether there is a slot
+	// at all — a session nothing can be done to should not pay 44px a row for a
+	// glyph that will never come — and the message decides whether the slot has
+	// anything in it.
+	const slot = onForkMessage ? (
+		<MessageMenuTrigger
 			side={message.role}
-			onFork={onForkMessage && (() => onForkMessage(message.id))}
+			onFork={
+				hasMessageActions(message) ? () => onForkMessage(message.id) : undefined
+			}
 			forkBlocked={forkBlockedReason(message, isFirst)}
 		/>
 	) : null;
@@ -649,7 +655,7 @@ const MessageItem = memo(function MessageItem({
 	if (message.role === "user") {
 		// System-driven messages render as a collapsed event line, not a bubble.
 		if (message.source === "system") {
-			return (
+			const event = (
 				<WorkEventItem
 					content={message.content}
 					subtype={message.subtype}
@@ -657,77 +663,83 @@ const MessageItem = memo(function MessageItem({
 					onOpenWorkDetail={onOpenWorkDetail}
 				/>
 			);
+			// An empty slot, so this full-bleed line ends where the widest bubble
+			// ends rather than reaching 44px past it.
+			return slot ? (
+				<div className="flex items-start gap-2">
+					<div className="min-w-0 flex-1">{event}</div>
+					{slot}
+				</div>
+			) : (
+				event
+			);
 		}
 		return (
-			<>
-				<div className="flex items-end justify-end gap-2">
-					<div
-						className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-user-bubble p-2.5 text-th-user-bubble-text sm:p-3 ${userBubbleClass}`}
-					>
-						<p className="whitespace-pre-wrap">{message.content}</p>
-					</div>
-					{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
+			<div className="flex items-end justify-end gap-2">
+				{slot}
+				<div
+					className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-user-bubble p-2.5 text-th-user-bubble-text sm:p-3 ${userBubbleClass}`}
+				>
+					<p className="whitespace-pre-wrap">{message.content}</p>
 				</div>
-				{actions}
-			</>
+				{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
+			</div>
 		);
 	}
 
 	// Assistant message
 	return (
-		<>
-			<div className="flex items-end justify-start gap-2">
-				{AssistantAvatar && <AssistantAvatar className="size-10 shrink-0" />}
-				<div
-					className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3 ${assistantBubbleClass}`}
-				>
-					{message.parts.length > 0 && (
-						<div className="space-y-2">
-							{message.parts.map((part, index) => {
-								const key =
-									part.type === "permission_request"
+		<div className="flex items-end justify-start gap-2">
+			{AssistantAvatar && <AssistantAvatar className="size-10 shrink-0" />}
+			<div
+				className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3 ${assistantBubbleClass}`}
+			>
+				{message.parts.length > 0 && (
+					<div className="space-y-2">
+						{message.parts.map((part, index) => {
+							const key =
+								part.type === "permission_request"
+									? part.request.requestId
+									: part.type === "ask_user_question"
 										? part.request.requestId
-										: part.type === "ask_user_question"
-											? part.request.requestId
-											: part.type === "tool_call"
-												? // Index suffix: Claude Code resends tool_call after permission approval
-													`${part.tool.id}-${index}`
-												: part.type === "task"
-													? part.task.toolUseId
-													: `${part.type}-${index}`;
-								return (
-									<ContentPartItem
-										key={key}
-										part={part}
-										isCodex={isCodex}
-										onPermissionRespond={onPermissionRespond}
-										onQuestionRespond={onQuestionRespond}
-									/>
-								);
-							})}
-						</div>
-					)}
+										: part.type === "tool_call"
+											? // Index suffix: Claude Code resends tool_call after permission approval
+												`${part.tool.id}-${index}`
+											: part.type === "task"
+												? part.task.toolUseId
+												: `${part.type}-${index}`;
+							return (
+								<ContentPartItem
+									key={key}
+									part={part}
+									isCodex={isCodex}
+									onPermissionRespond={onPermissionRespond}
+									onQuestionRespond={onQuestionRespond}
+								/>
+							);
+						})}
+					</div>
+				)}
 
-					{/* Status indicator */}
-					{message.status === "sending" && (
-						<Spinner variant="current" className="mt-2" />
-					)}
-					{message.status === "streaming" && isLast && isProcessRunning && (
-						<Spinner variant="current" className="mt-2" />
-					)}
-					{message.status === "error" && (
-						<p className="mt-2 text-sm text-th-error">{message.error}</p>
-					)}
-					{message.status === "interrupted" && (
-						<p className="mt-2 text-sm text-th-text-muted">Interrupted</p>
-					)}
-					{message.status === "process_ended" && (
-						<p className="mt-2 text-sm text-th-warning">Process ended</p>
-					)}
-				</div>
+				{/* Status indicator */}
+				{message.status === "sending" && (
+					<Spinner variant="current" className="mt-2" />
+				)}
+				{message.status === "streaming" && isLast && isProcessRunning && (
+					<Spinner variant="current" className="mt-2" />
+				)}
+				{message.status === "error" && (
+					<p className="mt-2 text-sm text-th-error">{message.error}</p>
+				)}
+				{message.status === "interrupted" && (
+					<p className="mt-2 text-sm text-th-text-muted">Interrupted</p>
+				)}
+				{message.status === "process_ended" && (
+					<p className="mt-2 text-sm text-th-warning">Process ended</p>
+				)}
 			</div>
-			{actions}
-		</>
+			{slot}
+		</div>
 	);
 });
 

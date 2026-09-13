@@ -76,7 +76,7 @@ describe("isForkableMessage", () => {
 		expect(isForkableMessage(answered)).toBe(true);
 	});
 
-	it("rejects a message that carries no action row at all", () => {
+	it("rejects a message that has no actions at all", () => {
 		expect(isForkableMessage(userMessage({ source: "system" }))).toBe(false);
 	});
 });

@@ -272,9 +272,10 @@ function ChatPanel({
 	const { forkSession, isForking, forkError, clearForkError } =
 		useForkSession();
 	// The agent's own declaration of whether it can follow a fork of a
-	// conversation. An agent that cannot gets no fork icon anywhere: a branch
-	// glyph under forty bubbles that never once applied is decoration, not a
-	// refusal worth explaining.
+	// conversation. An agent that cannot gets no menu anywhere, and no slot
+	// reserved for one: an entry to an action that never once applied is
+	// decoration, not a refusal worth explaining — and here it would be
+	// decoration charged to every bubble's width.
 	const forkSupport = useForkSupport(agentType);
 
 	// From the session's own detail, not from its row in the list: where a
@@ -373,9 +374,11 @@ function ChatPanel({
 					forkedFromSessionId={forkedFromSessionId}
 					onOpenSession={onSelectSession}
 					// Forking without a way to open the result would leave the user in
-					// the parent with no sign anything happened, so the icon waits for
-					// a host that can navigate. The gate sits on fork alone — the rest
-					// of the row needs no navigation.
+					// the parent with no sign anything happened, so the menu waits for
+					// a host that can navigate. Today that withholds the whole slot,
+					// fork being the only row in the menu; a second action needing no
+					// navigation would move this gate onto fork's own row instead
+					// (docs/session-fork-ui.md, "Which rows reserve a slot").
 					onForkMessage={
 						onSelectSession && forkSupport !== "none"
 							? handleStartFork

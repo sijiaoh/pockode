@@ -924,3 +924,33 @@ samp {
 		transition: none;
 	}
 }
+
+/* =============================================================================
+ * MESSAGE MENU TRIGGER
+ *
+ * The `…` beside a chat bubble is mounted, not revealed: the slot is always
+ * there, but the glyph only arrives once the message settles into a turn. A
+ * transition cannot animate that — there is no before-value on an element that
+ * did not exist — so the entrance is an animation.
+ *
+ * Deliberately only a `from`. The resting opacity is a Tailwind class on the
+ * button, and an explicit `to` would be a second copy of that number, free to
+ * drift from it; with the `to` keyframe left implicit the browser uses whatever
+ * the element's own style says, hovered or not.
+ * ============================================================================= */
+
+@theme {
+	--animate-message-menu-in: message-menu-in 150ms ease-out;
+
+	@keyframes message-menu-in {
+		from {
+			opacity: 0;
+		}
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.animate-message-menu-in {
+		animation: none;
+	}
+}

@@ -65,7 +65,7 @@ const DiffFileItem = memo(function DiffFileItem({
 								onDiscard(file);
 							}}
 							disabled={isBusy}
-							className={iconButtonClass(isBusy)}
+							className={iconButtonClass({ busy: isBusy })}
 							aria-label={
 								file.status === "?" ? "Delete file" : "Discard changes"
 							}
@@ -84,7 +84,7 @@ const DiffFileItem = memo(function DiffFileItem({
 							onToggleStage(file.path, staged);
 						}}
 						disabled={isBusy}
-						className={iconButtonClass(isBusy)}
+						className={iconButtonClass({ busy: isBusy })}
 						aria-label={actionLabel}
 					>
 						{isToggling ? (
