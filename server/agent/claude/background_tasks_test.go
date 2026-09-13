@@ -303,7 +303,7 @@ func TestBackgroundWait_OutputPushesTheDeadlineOut(t *testing.T) {
 
 	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
 	parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
-	armed := waitDeadline(&tracker.wait)
+	armed := backdateDeadline(&tracker.wait)
 
 	// The task finished and the CLI resumed output on its own.
 	parseTestLineWithTracker(testLogger(), []byte(noLiveTasks), tracker)
@@ -317,6 +317,18 @@ func TestBackgroundWait_OutputPushesTheDeadlineOut(t *testing.T) {
 func waitDeadline(wait *backgroundWait) time.Time {
 	wait.deadlineMu.Lock()
 	defer wait.deadlineMu.Unlock()
+	return wait.deadline
+}
+
+// backdateDeadline rewinds the armed deadline and returns the new value, so
+// that "output pushed the deadline out" can be asserted independently of the
+// wall clock's resolution: on Windows two consecutive time.Now() calls
+// routinely return the same instant, which makes a strict After() against the
+// deadline armed a moment earlier fail even though refresh did its job.
+func backdateDeadline(wait *backgroundWait) time.Time {
+	wait.deadlineMu.Lock()
+	defer wait.deadlineMu.Unlock()
+	wait.deadline = wait.deadline.Add(-time.Hour)
 	return wait.deadline
 }
 
