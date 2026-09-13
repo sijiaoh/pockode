@@ -58,28 +58,6 @@ func TestWriteAndDelete(t *testing.T) {
 	}
 }
 
-// server.json carries the local API token, so it must end up owner-only even
-// when a world-readable file from an earlier run is already in place.
-func TestWriteRestrictsPermissions(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, filename)
-	if err := os.WriteFile(path, []byte("{}"), 0644); err != nil {
-		t.Fatalf("seed stale file: %v", err)
-	}
-
-	if err := Write(dir, 9870, "", "", "test-token"); err != nil {
-		t.Fatalf("Write failed: %v", err)
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat failed: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0600 {
-		t.Errorf("permissions = %o, want 600", perm)
-	}
-}
-
 func TestDeleteNonExistent(t *testing.T) {
 	dir := t.TempDir()
 
@@ -107,6 +85,26 @@ func TestWriteRestrictsTokenFile(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", ".pockode")
 
 	if err := Write(dir, 9870, "http://localhost:9870", "", "secret-token"); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	fspermtest.RequireOwnerOnly(t, dir)
+	fspermtest.RequireOwnerOnly(t, filepath.Join(dir, filename))
+}
+
+// A world-readable server.json and a world-readable directory can both be left
+// behind by an installation that predates the restriction; starting the server
+// again has to close them rather than write into them as they are.
+func TestWriteRestrictsWhatAnEarlierRunLeftOpen(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".pockode")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte("{}"), 0644); err != nil {
+		t.Fatalf("seed stale file: %v", err)
+	}
+
+	if err := Write(dir, 9870, "", "", "secret-token"); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
