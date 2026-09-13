@@ -501,7 +501,7 @@ source:
 | `Project/WorkListOverlay.tsx:251`, `WorkDetailOverlay.tsx:699`, `AgentRoleListOverlay.tsx:190` | **20px** | list titles **inside a `min-h-[44px]` row** — the row is 44, the target in it is 20, because `items-center` centres the text rather than stretching it |
 | `Project/WorkListOverlay.tsx:418` | **20px** | the labelled Start chip (its icon-only twin above it is 44) |
 | `AppShell.tsx:523/530`, `ui/ReconnectBanner.tsx:39` | ~**20px** | Retry and dismiss in the session-error banner, Retry now in the reconnect banner |
-| `Worktree/WorktreeCreateSheet.tsx:155` | ~**20px** | the link out of the setup-script note |
+| `Worktree/WorktreeCreateSheet.tsx:225` | ~**20px** | the link out of the setup-script note |
 
 One more is worth naming although it clears the fine floor: `ConfirmDialog`'s
 Cancel and confirm are **36px** (`px-4 py-2` around `text-sm`), and every

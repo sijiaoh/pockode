@@ -50,10 +50,9 @@ function conflictMessage(serverMessage: string): string {
 /**
  * Failures that sending the identical request again cannot get past.
  *
- * `too_large` is the one that matters: on a relay connection an oversized
- * request never reaches the server, it overruns the tunnel's read limit and
- * drops it, so retrying costs the whole connection rather than one request.
- * A `conflict` is offered its own two resolutions instead of a plain retry.
+ * `too_large` cannot pass on a second attempt: the same file is the same size,
+ * and the ceiling is the endpoint's. A `conflict` is offered its own two
+ * resolutions instead of a plain retry.
  */
 const TERMINAL_CODES = new Set(["too_large", "conflict"]);
 

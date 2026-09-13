@@ -361,9 +361,7 @@ func TestHandler_WorkStart(t *testing.T) {
 	}
 
 	// Verify kickoff message references agent role ID (not inline prompt)
-	mock.mu.Lock()
-	msgs := mock.messages
-	mock.mu.Unlock()
+	msgs := mock.sentMessages()
 	if len(msgs) == 0 {
 		t.Fatal("expected at least one message sent to agent")
 	}

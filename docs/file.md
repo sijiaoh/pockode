@@ -216,9 +216,10 @@ storage also keeps workspace files out of the disk cache, which outlives the
 token that could read them.
 
 A `Range` request is answered with `206` and `Content-Range`. That is not just
-an extra: on a relay tunnel, pulling a large file in bounded pieces is what
-keeps any single response from monopolising the shared connection, and it is
-what gives the client a progress indication.
+an extra: it is what gives the client a progress indication, and what lets a
+download be read in bounded pieces rather than held whole. Keeping a large
+response from monopolising a relay tunnel is no longer part of the reason —
+yamux's per-stream windows do that on their own ([Transfer](#transfer)).
 
 | Status | Code | When |
 |--------|------|------|
@@ -275,18 +276,14 @@ reading what the client is still sending. A `too_large` body also carries
 `limit`, the ceiling in bytes, so the UI can name the threshold without keeping
 its own copy of it — as a `too_large` `file.get` result does.
 
-A limit also arrives ahead of time as `max_upload_size` in the `auth` response,
-because the client knows each file's size before it sends anything: refusing an
-oversized file up front reads better than the `413` backstop, which lands only
-after the browser has finished uploading.
-
-The two are not the same number, and which to use is not a preference.
-`max_upload_size` is what **this connection** can carry and is what a client
-checks a file against before sending; the `413`'s `limit` is what the endpoint
-itself refused and is only good for phrasing that particular failure. On a relay
-connection `max_upload_size` is deliberately smaller, for the reason at the end
-of this section — and that is where the difference matters most, because there
-the backstop never fires. Neither is a place for the client to hardcode 32 MiB.
+The same limit also arrives ahead of time as `max_upload_size` in the `auth`
+response, because the client knows each file's size before it sends anything.
+The two carry the same number but are not interchangeable, and the difference is
+*when* they arrive: `max_upload_size` is there before anything is sent, which is
+the only moment at which an oversized file can still be refused cheaply, while
+the `413`'s `limit` describes a request the browser has already finished
+uploading and is good for phrasing that one failure and nothing else. Neither is
+a place for the client to hardcode 32 MiB.
 
 Same-name files are refused rather than replaced: an upload is a bulk action —
 a drop of a dozen files — and silently overwriting a source file in the user's
@@ -838,19 +835,18 @@ ends the session the same way.
 
 **Three files at a time** (`uploadStore.ts`). A browser allows six connections
 per origin and the tree, the search and every file read compete for them, so
-uploads must not take the pool. Over a relay the number buys nothing at all —
-every request shares one tunnel and is buffered whole before being forwarded, so
-parallelism there only multiplies the memory in flight. Three overlaps the round
-trips, which is the part worth overlapping.
+uploads must not take the pool. Three overlaps the round trips, which is the
+part worth overlapping. The relay does not change the number: each request gets
+its own yamux stream whose body is forwarded as it arrives, so concurrent
+uploads behave there as they do locally.
 
 **Size is checked before sending, against the `auth` reply's
-`max_upload_size`** — never the `413`'s `limit`, and never a constant. On a
-relay connection this check is not a nicety but the whole of the error handling
-for that path, since the `413` never fires there ([Transfer](#transfer) says
-why). It is re-read from the store on every attempt, because a reconnect can
-land on a route with a different ceiling. A file refused this way is never
-offered a retry: it cannot get smaller, and retrying over a relay costs the
-connection.
+`max_upload_size`** — never the `413`'s `limit`, and never a constant. It saves
+a slow link the cost of sending a file the endpoint will refuse, and the `413`
+stays the backstop on every route, relay included ([Transfer](#transfer)). It is
+read from the store at each attempt rather than captured once, so the value in
+force is always the one the current connection was told. A file refused this way
+is never offered a retry: it cannot get smaller.
 
 **More than 50 files in one go is refused at the banner**, before anything is
 queued. A selection that large is a mistaken drop rather than an intent, and

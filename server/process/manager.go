@@ -22,6 +22,11 @@ const (
 	ProcessStateEnded   ProcessState = "ended"   // Process has ended (not in map)
 )
 
+// shutdownDrainTimeout caps how long Shutdown waits for sessions to stop
+// streaming. Generous enough that a session closing normally is never cut off,
+// short enough that a stuck agent cannot hold the server open.
+const shutdownDrainTimeout = 10 * time.Second
+
 type StateChangeEvent struct {
 	SessionID   string
 	State       ProcessState
@@ -359,7 +364,10 @@ func (m *Manager) Close(sessionID string) {
 	}
 }
 
-// Shutdown closes all processes and waits for their event streams to finish.
+// Shutdown closes all processes gracefully and returns once their streaming
+// goroutines have finished. Waiting matters because those goroutines still write
+// session history and flip session state: returning early would leave writes
+// landing in a data directory the caller already considers closed.
 func (m *Manager) Shutdown() {
 	m.processesMu.Lock()
 	m.cancel()
@@ -374,8 +382,22 @@ func (m *Manager) Shutdown() {
 		p.closed.Store(true)
 		p.agentSession.Close()
 	}
-	// Only after every agent session is closed: a stream ends when its events
-	// channel does, and that channel closes with the agent behind it.
+	// Waited on only after every agent session is closed: a stream ends when its
+	// events channel does, and that channel closes with the agent behind it.
+	//
+	// Bounded: a session whose agent refuses to let go of its output must not be
+	// able to stall the whole server's shutdown. Report it rather than hang.
+	deadline := time.After(shutdownDrainTimeout)
+	for _, p := range procs {
+		select {
+		case <-p.done:
+		case <-deadline:
+			slog.Warn("shutdown timed out waiting for sessions to stop streaming",
+				"sessionId", p.sessionID, "timeout", shutdownDrainTimeout)
+			return
+		}
+	}
+	// The streams are done; this is the idle reaper, which stops on m.cancel.
 	m.wg.Wait()
 
 	slog.Info("manager shutdown complete", "processesClosed", len(procs))
@@ -402,7 +424,15 @@ func (m *Manager) runIdleReaper() {
 }
 
 func (m *Manager) reapIdle() {
-	now := time.Now()
+	m.reapIdleAsOf(time.Now())
+}
+
+// reapIdleAsOf closes every process whose last activity is older than the idle
+// timeout, measured against the given instant. The instant is a parameter so
+// the reaping rule can be exercised without racing the wall clock: driving it
+// with a synthetic "now" states the elapsed time outright instead of hoping a
+// sleep outlasts a timeout.
+func (m *Manager) reapIdleAsOf(now time.Time) {
 	procs := m.removeWhere(func(p *Process) bool {
 		if now.Sub(p.getLastActive()) <= m.idleTimeout {
 			return false

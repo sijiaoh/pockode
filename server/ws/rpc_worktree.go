@@ -23,12 +23,22 @@ func formatWorktreeBlockedError(name string, blocking []work.Work) string {
 	return b.String()
 }
 
+// toRPCSetupHookSkip converts a skip for the wire, mapping "runs fine" to an
+// absent field.
+func toRPCSetupHookSkip(skip *worktree.SetupHookSkip) *rpc.SetupHookSkip {
+	if skip == nil {
+		return nil
+	}
+	return &rpc.SetupHookSkip{Reason: skip.Reason, Hint: skip.Hint}
+}
+
 func (h *rpcMethodHandler) handleWorktreeList(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	registry := h.worktreeManager.Registry()
 	worktrees := registry.List()
 
 	result := rpc.WorktreeListResult{
-		Worktrees: make([]rpc.WorktreeInfo, len(worktrees)),
+		Worktrees:     make([]rpc.WorktreeInfo, len(worktrees)),
+		SetupHookSkip: toRPCSetupHookSkip(registry.CheckSetupHook()),
 	}
 	for i, wt := range worktrees {
 		result.Worktrees[i] = rpc.WorktreeInfo{
@@ -61,7 +71,7 @@ func (h *rpcMethodHandler) handleWorktreeCreate(ctx context.Context, conn *jsonr
 	}
 
 	registry := h.worktreeManager.Registry()
-	info, err := registry.Create(params.Name, params.Branch, params.BaseBranch)
+	info, setupHookSkip, err := registry.Create(params.Name, params.Branch, params.BaseBranch)
 	if err != nil {
 		switch {
 		case errors.Is(err, worktree.ErrNotGitRepo):
@@ -83,6 +93,7 @@ func (h *rpcMethodHandler) handleWorktreeCreate(ctx context.Context, conn *jsonr
 			Branch: info.Branch,
 			IsMain: info.IsMain,
 		},
+		SetupHookSkip: toRPCSetupHookSkip(setupHookSkip),
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send worktree create response", "error", err)

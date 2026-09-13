@@ -30,12 +30,19 @@ func ValidatePath(workDir, path string) error {
 		return nil
 	}
 
-	cleanPath := filepath.Clean(path)
-	if strings.HasPrefix(cleanPath, "..") || filepath.IsAbs(cleanPath) {
+	// filepath.IsLocal accepts exactly those paths the OS resolves inside the
+	// directory they are joined to: it rejects absolute and `..`-escaping paths
+	// everywhere, and on Windows also the forms filepath.IsAbs calls relative
+	// (`\etc` against the current drive, `C:etc` against that drive's working
+	// directory) and the reserved device names (`NUL`, `COM1`), which name a
+	// device rather than a file under workDir. Same gate as git.validatePath —
+	// ws/rpc_git.go runs both over one path, so they must agree.
+	if !filepath.IsLocal(path) {
 		return fmt.Errorf("%w: %s", ErrInvalidPath, path)
 	}
 
-	fullPath := filepath.Join(workDir, cleanPath)
+	// IsLocal accepts "."; the API spells the work directory itself as "".
+	fullPath := filepath.Join(workDir, path)
 	if !strings.HasPrefix(fullPath, workDir+string(filepath.Separator)) {
 		return fmt.Errorf("%w: %s", ErrInvalidPath, path)
 	}
@@ -438,13 +445,27 @@ func Create(workDir, path string, isDir bool) error {
 		err = createEmptyFile(fullPath)
 	}
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
+		if errors.Is(err, os.ErrExist) || taken(fullPath) {
 			return fmt.Errorf("%s %w", path, ErrExists)
 		}
 		return fmt.Errorf("failed to create %s: %w", path, err)
 	}
 
 	return nil
+}
+
+// taken reports whether something already sits at fullPath, classifying a
+// failed creation after the fact.
+//
+// It is needed because the error for "a name is taken by the other kind of
+// entry" is not ErrExist everywhere: opening a directory as a file comes back
+// as EISDIR on Windows, where unix reports EEXIST for the same O_EXCL call.
+// Leaving that unclassified would hand the UI's "new file" action a raw
+// syscall error where every other taken name gets ErrExists. The creating
+// syscall still owns the race — this only reads the state it just refused.
+func taken(fullPath string) bool {
+	_, err := os.Lstat(fullPath)
+	return err == nil
 }
 
 func createEmptyFile(fullPath string) error {

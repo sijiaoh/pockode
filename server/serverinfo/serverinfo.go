@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/filestore"
+	"github.com/pockode/server/internal/fsperm"
 )
 
 const filename = "server.json"
@@ -29,6 +30,10 @@ type Info struct {
 // Write creates the server.json file in the given data directory.
 // Creates the data directory if it doesn't exist.
 func Write(dataDir string, port int, localURL, remoteURL, token string) error {
+	if err := fsperm.RestrictDir(dataDir); err != nil {
+		return err
+	}
+
 	info := Info{
 		PID:       os.Getpid(),
 		Port:      port,
@@ -47,7 +52,9 @@ func Write(dataDir string, port int, localURL, remoteURL, token string) error {
 	// unable to reach the local API, and unlike most state it is not re-read
 	// from a source of truth — this write is the source of truth.
 	// 0600 because it holds the local API token (a credential). WriteFileAtomic
-	// always applies the mode, including over a stale file left by a crash.
+	// always applies the mode, including over a stale file left by a crash. The
+	// mode only covers unix; on Windows the protection comes from the restricted
+	// data directory above, which the file inherits.
 	return filestore.WriteFileAtomic(filepath.Join(dataDir, filename), data, 0600)
 }
 

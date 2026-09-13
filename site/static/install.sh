@@ -10,6 +10,13 @@ OS=$(uname -s)
 case "$OS" in
   Linux)  OS="linux" ;;
   Darwin) OS="darwin" ;;
+  # Git Bash, MSYS and Cygwin are the shells a Windows user is most likely to try
+  # this in. They can run the script but not the binary it installs, so point at
+  # the PowerShell installer instead of failing with a raw uname string.
+  MINGW*|MSYS*|CYGWIN*)
+    echo "This installs the macOS/Linux build. On Windows, run this in PowerShell:"
+    echo "  irm https://pockode.com/install.ps1 | iex"
+    exit 1 ;;
   *)      echo "Unsupported OS: $OS"; exit 1 ;;
 esac
 

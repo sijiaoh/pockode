@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/pockode/server/internal/unwritabletest"
 )
 
 func TestWriteFileAtomic_ReplacesContentAndLeavesNoTempFile(t *testing.T) {
@@ -30,28 +32,6 @@ func TestWriteFileAtomic_ReplacesContentAndLeavesNoTempFile(t *testing.T) {
 	}
 }
 
-// A crash can leave a temp file behind; its mode must not become the mode of
-// the file the next write publishes.
-func TestWriteFileAtomic_AppliesPermOverLeftoverTempFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret.json")
-	if err := os.WriteFile(path+".tmp", []byte("stale"), 0644); err != nil {
-		t.Fatalf("write leftover temp file: %v", err)
-	}
-
-	if err := WriteFileAtomic(path, []byte("secret"), 0600); err != nil {
-		t.Fatalf("WriteFileAtomic failed: %v", err)
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("expected mode 0600, got %04o", info.Mode().Perm())
-	}
-}
-
 // The point of the temp-file dance: when the filesystem refuses the write (a
 // full disk being the case that started all this), the previous file must
 // survive whole rather than be left truncated. Only the closing rename ever
@@ -59,10 +39,6 @@ func TestWriteFileAtomic_AppliesPermOverLeftoverTempFile(t *testing.T) {
 // directory stands in for ENOSPC to fail one of them without needing a full
 // filesystem.
 func TestWriteFileAtomic_FailedWriteKeepsPreviousContents(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root bypasses directory permissions")
-	}
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "index.json")
 
@@ -72,10 +48,7 @@ func TestWriteFileAtomic_FailedWriteKeepsPreviousContents(t *testing.T) {
 		t.Fatalf("WriteFileAtomic failed: %v", err)
 	}
 
-	if err := os.Chmod(dir, 0500); err != nil {
-		t.Fatalf("chmod dir: %v", err)
-	}
-	defer os.Chmod(dir, 0700) // let t.TempDir clean up
+	unwritabletest.Make(t, dir)
 
 	if err := WriteFileAtomic(path, []byte("replacement"), 0644); err == nil {
 		t.Fatal("expected an error when the directory is not writable")

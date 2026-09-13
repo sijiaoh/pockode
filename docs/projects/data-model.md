@@ -116,10 +116,10 @@ Both Work and AgentRole stores use JSON files:
 <dataDir>/
 ├── works/
 │   ├── index.json        # all Work items + Comments
-│   └── index.json.lock   # flock coordination file
+│   └── index.json.lock   # lock coordination file
 └── agent-roles/
     ├── index.json        # all AgentRole items
-    └── index.json.lock   # flock coordination file
+    └── index.json.lock   # lock coordination file
 ```
 
 The index files contain all items in a flat array:
@@ -183,14 +183,15 @@ write coordination to manage. The agent-role index has one additional writer:
 the user editing it directly on disk (same as `settings.json`), which the
 server picks up via the fsnotify reload described below.
 
-**flock:** A dedicated lock file (`index.json.lock`) serializes writers against
-each other and against the read half of a read-modify-write. Reads acquire a
-shared lock (`LOCK_SH`); writes acquire an exclusive lock (`LOCK_EX`). What the
-lock does *not* do is make a reader see a whole file — the atomic rename already
+**File lock:** A dedicated lock file (`index.json.lock`) serializes writers
+against each other and against the read half of a read-modify-write. Reads
+acquire a shared lock; writes acquire an exclusive lock. What the lock does
+*not* do is make a reader see a whole file — the atomic rename already
 guarantees that, which is why code that only wants to inspect a file (such as
 `serverinfo.Read`) reads it without locking. A separate lock file is used
-because atomic rename changes the data file's inode, which would break flock on
-the data file itself.
+because atomic rename replaces the data file, which would detach a lock held on
+the data file itself. The lock is `flock(2)` on unix and `LockFileEx` on
+Windows, behind one interface in `filestore`.
 
 > To surface those external edits, the settings and agent-role stores watch
 > their files via the `filestore` fsnotify primitive: a disk change is reloaded

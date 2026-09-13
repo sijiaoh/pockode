@@ -53,7 +53,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | inputStore | Draft text, per session | persist middleware |
 | filesSearchStore | File search options | localStorage init |
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
-| worktreeStore | Current worktree | External listener pattern |
+| worktreeStore | Current worktree, and whether the server can run the setup hook | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |
 
 ### Why wsStore is Large
@@ -91,7 +91,7 @@ export type SessionStore = SessionState & SessionActions;
 **Pattern B: Listener Pattern** — worktreeStore uses external listeners for non-React contexts:
 
 ```typescript
-// web/src/lib/worktreeStore.ts:16-21
+// web/src/lib/worktreeStore.ts:24-65 (abridged)
 const changeListeners = new Set<WorktreeChangeListener>();
 
 export const worktreeActions = {
@@ -394,7 +394,7 @@ When `unloadExtension(id)` is called, all registered resources are cleaned up.
 Extensions are auto-discovered via Vite's glob import:
 
 ```typescript
-// web/src/lib/extensions.ts:146-150
+// web/src/lib/extensions.ts:147-150
 const modules = import.meta.glob<ExtensionModule>(
   "../extensions/*/index.ts",
   { eager: true },
@@ -454,7 +454,7 @@ Built-in themes are typed (`ThemeName`), custom themes are runtime-registered.
 Allows extensions to replace UI components:
 
 ```typescript
-// web/src/lib/registries/chatUIRegistry.ts:55-82
+// web/src/lib/registries/chatUIRegistry.ts:64-91
 export interface ChatUIConfig {
   UserAvatar?: ComponentType<AvatarProps>;
   AssistantAvatar?: ComponentType<AvatarProps>;
@@ -504,4 +504,12 @@ Key features:
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |
 | `web/src/lib/gitPanelStore.ts` | Git panel UI state that must outlive remounts |
+| `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |
+
+`worktreeQuery.ts` exists because two hooks (`useWorktree`, `useWorktreeDisplay`)
+read the same react-query cache entry. Key and fetcher living in separate files
+let each hook write its own fetcher, and the moment the response shape changed the
+two disagreed about what that cache entry holds. Keeping them in one module makes
+"same entry, same shape" a property of where the code is, not of everyone
+remembering.

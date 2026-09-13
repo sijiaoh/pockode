@@ -46,6 +46,10 @@ func setupResumerTest(t *testing.T) (*FileStore, *AutoResumer, *mockSender) {
 	resumer := NewAutoResumer(store, 3)
 	resumer.settleDelay = 10 * time.Millisecond
 	resumer.SetSender(sender)
+	// Its work happens on goroutines that outlive the call that scheduled them.
+	// Without stopping it, those goroutines keep writing to the store after the
+	// test's temp directory is gone.
+	t.Cleanup(resumer.Stop)
 	return store, resumer, sender
 }
 
@@ -312,8 +316,10 @@ func TestAutoResumer_RetryLimit_TransitionsToStopped(t *testing.T) {
 	}
 
 	// The next idle is over the limit: it stops the work instead of nudging again.
-	// Waiting for the stop rather than sleeping also settles the message count —
-	// a fourth nudge would have been sent before the stop.
+	// Waiting for that transition rather than on a duration is what settles the
+	// message count — a fourth nudge would have been sent before the stop — and
+	// the settle delay plus a store write is not something a fixed sleep can
+	// outlast on a loaded machine.
 	resumer.HandleProcessStateChange(sid, "idle", false, false, false)
 	waitFor(t, func() bool { return getWork(t, store, story.ID).Status == StatusStopped })
 

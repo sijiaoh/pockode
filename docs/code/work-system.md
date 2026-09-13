@@ -72,7 +72,7 @@ the ownership signal behind worktree-deletion protection (below).
 
 ### Validation Rules
 
-On creation (`server/work/store.go:157-193`):
+On creation (`server/work/store.go:175-210`):
 1. **Type must be valid** — either "story" or "task"
 2. **Title required** — non-empty string
 3. **AgentRoleID required** — must exist in the role store
@@ -199,19 +199,27 @@ serialized by a mutex and persisted atomically.
 server/filestore/atomic.go
 ```
 
-Writes take an exclusive flock and do write-temp → fsync → rename, so a crash or
-a concurrent reader never sees a torn file; reads take a shared flock:
+Writes do write-temp → fsync → rename, which is what makes a crash or a
+concurrent reader never see a torn file. The lock around it — exclusive for a
+write, shared for a read — is for the read-modify-write: it serializes writers
+against each other and against the read half
+([data-model.md](../projects/data-model.md#atomic-persistence) has the full
+division of labour):
 
 ```go
-lockFile := OpenFile(".lock", CREATE|RDWR)
-Flock(lockFile, LOCK_EX)
-defer Flock(lockFile, LOCK_UN)
+lock := acquireLock(path+".lock", exclusive) // blocks until granted
+defer lock.release()
 
 tmpFile := OpenFile(path+".tmp", CREATE|WRONLY|TRUNC, perm)
 tmpFile.Write(data)
-tmpFile.Sync()        // fsync: bytes on disk before anything points at them
-Rename(tmpFile, path) // POSIX atomic operation
+tmpFile.Sync()            // fsync: bytes on disk before anything points at them
+renameFile(tmpFile, path) // atomic replace
 ```
+
+The lock itself is platform-split (`lock_unix.go` / `lock_windows.go`): `flock(2)`
+on unix, `LockFileEx` on Windows. Windows also needs the rename retried, because
+an unrelated opener (antivirus, indexer) can transiently block replacing the
+destination — a failure mode that does not exist under POSIX rename.
 
 The filestore primitive also offers fsnotify-based reload for callers that need
 cross-process change detection (the settings and agent-role stores use it, as
@@ -293,7 +301,10 @@ itself):
   reopen and an AI start/reopen behave identically.
 
 **Authentication**: the server generates a random token at startup and writes
-it to `server.json` (mode `0600`, since it is a credential) alongside the port.
+it to `server.json` alongside the port. Being a credential, it goes into a data
+directory restricted to the current user (see
+[Authentication → Credentials on Disk](authentication.md#credentials-on-disk));
+a `0600` mode would protect it on unix only.
 It is distinct from the user-facing `--auth-token` (which is never written to
 disk) and lives only for the lifetime of the process. `middleware.Auth` bypasses
 the exact `/api/mcp/tools/call` route; the `APIHandler` verifies the local token

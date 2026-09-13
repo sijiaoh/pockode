@@ -23,7 +23,10 @@ type killedClient struct {
 func newKilledClient(t *testing.T, env *testEnv) *killedClient {
 	t.Helper()
 
-	conn, err := dialTestClient(env.ctx, env.server.URL)
+	dialCtx, cancelDial := env.opCtx()
+	defer cancelDial()
+
+	conn, err := dialTestClient(dialCtx, env.server.URL)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -39,11 +42,13 @@ func (c *killedClient) call(method string, params interface{}) rpcResponse {
 	c.t.Helper()
 	c.reqID++
 	data, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: c.reqID, Method: method, Params: params})
-	if err := c.conn.Write(c.env.ctx, websocket.MessageText, data); err != nil {
+	ctx, cancel := c.env.opCtx()
+	defer cancel()
+	if err := c.conn.Write(ctx, websocket.MessageText, data); err != nil {
 		c.t.Fatalf("write %s: %v", method, err)
 	}
 	for {
-		_, respData, err := c.conn.Read(c.env.ctx)
+		_, respData, err := c.conn.Read(ctx)
 		if err != nil {
 			c.t.Fatalf("read %s: %v", method, err)
 		}

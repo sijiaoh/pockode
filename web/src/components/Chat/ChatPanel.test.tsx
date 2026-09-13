@@ -115,7 +115,7 @@ vi.mock("../../lib/wsStore", () => {
 	// that resubscribes when its subscribe function changes identity — as the
 	// session detail subscription does — would never stop.
 	const actions = createMockActions();
-	const state = { status: "connected", actions };
+	const state = { status: "connected", workDir: "", actions };
 
 	const mockStore = ((selector: (state: unknown) => unknown) =>
 		selector(state)) as unknown as {

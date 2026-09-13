@@ -27,7 +27,7 @@ Phone (React SPA) ──► Relay Server ──► User's PC (Go server) ──�
 
 The Go server spawns AI CLI processes (Claude Code, Codex) as subprocesses, streaming their JSON output back to the frontend over WebSocket JSON-RPC 2.0. No SDK bindings — just process management and stream parsing. This keeps AI integration loosely coupled: adding a new AI backend means implementing a process adapter, not integrating an SDK.
 
-Infrastructure docs: [websocket-rpc-design.md](websocket-rpc-design.md) (RPC layer), [relay.md](relay.md) (NAT traversal), [cluster.md](cluster.md) (multi-project node orchestration), [agent-event.md](agent-event.md) (event stream), [watcher.md](watcher.md) (real-time subscriptions).
+Infrastructure docs: [websocket-rpc-design.md](websocket-rpc-design.md) (RPC layer), [relay.md](relay.md) (NAT traversal), [cluster.md](cluster.md) (multi-project node orchestration), [agent-event.md](agent-event.md) (event stream), [watcher.md](watcher.md) (real-time subscriptions), [platforms.md](platforms.md) (which binaries ship, and what Windows needs installed alongside one).
 
 Feature docs: [agent-chat.md](agent-chat.md) (chat), [pending-question-entry.md](pending-question-entry.md) (reaching an unanswered question in chat), [session-fork-ui.md](session-fork-ui.md) (branching a new session off a chosen message), [file.md](file.md) (file ops), [git.md](git.md) (git ops), [git-ui.md](git-ui.md) (the git panel's UI), [sidebar-ui.md](sidebar-ui.md) (the rules the Files and Git panels share), [responsive-ui.md](responsive-ui.md) (the width ladder, the pointer gates, and the hit-area floors — including where they currently stop).
 

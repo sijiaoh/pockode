@@ -1,24 +1,38 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { overlayToNavigation, SETUP_HOOK_PATH } from "../../lib/navigation";
+import type { SetupHookSkip } from "../../types/message";
 import { Sheet } from "../ui";
 
 interface Props {
 	onClose: () => void;
+	/** Resolves to the skipped setup script, or null when it ran. */
 	onCreate: (
 		name: string,
 		branch: string,
 		baseBranch?: string,
-	) => Promise<void>;
+	) => Promise<SetupHookSkip | null>;
 	isCreating: boolean;
+	/** Why the setup script will not run on the server, or null if it will. */
+	setupHookSkip: SetupHookSkip | null;
 }
 
-function WorktreeCreateSheet({ onClose, onCreate, isCreating }: Props) {
+function WorktreeCreateSheet({
+	onClose,
+	onCreate,
+	isCreating,
+	setupHookSkip,
+}: Props) {
 	const navigate = useNavigate();
 	const [name, setName] = useState("");
 	const [branch, setBranch] = useState("");
 	const [baseBranch, setBaseBranch] = useState("");
 	const [error, setError] = useState<string | null>(null);
+	// Set once the worktree exists but its setup script did not run. The sheet
+	// stays open on it: the new worktree is indistinguishable from a prepared
+	// one, so this is the only moment the user can be told.
+	const [skippedAfterCreate, setSkippedAfterCreate] =
+		useState<SetupHookSkip | null>(null);
 	const nameInputRef = useRef<HTMLInputElement>(null);
 
 	// Focus name input on mount
@@ -41,7 +55,14 @@ function WorktreeCreateSheet({ onClose, onCreate, isCreating }: Props) {
 		const trimmedBaseBranch = baseBranch.trim() || undefined;
 
 		try {
-			await onCreate(trimmedName, trimmedBranch, trimmedBaseBranch);
+			const skipped = await onCreate(
+				trimmedName,
+				trimmedBranch,
+				trimmedBaseBranch,
+			);
+			if (skipped) {
+				setSkippedAfterCreate(skipped);
+			}
 		} catch (err) {
 			setError(
 				err instanceof Error ? err.message : "Failed to create worktree",
@@ -50,6 +71,46 @@ function WorktreeCreateSheet({ onClose, onCreate, isCreating }: Props) {
 	};
 
 	const canSubmit = name.trim().length > 0 && !isCreating;
+
+	const handleCustomize = () => {
+		onClose();
+		navigate(
+			overlayToNavigation(
+				{ type: "file", path: SETUP_HOOK_PATH, edit: true },
+				"",
+				null,
+			),
+		);
+	};
+
+	// Created, but the setup script never ran
+	if (skippedAfterCreate) {
+		return (
+			<Sheet
+				title="Setup Script Skipped"
+				onClose={onClose}
+				footer={
+					<button
+						type="button"
+						onClick={onClose}
+						className="flex-1 rounded-lg bg-th-accent px-4 py-2.5 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover"
+					>
+						Done
+					</button>
+				}
+			>
+				<div className="space-y-3 p-4" role="alert">
+					<p className="text-sm text-th-text-primary">
+						Worktree <span className="font-medium">{name.trim()}</span> was
+						created, but its setup script did not run.
+					</p>
+					<div className="space-y-1 rounded-lg border border-th-warning/40 bg-th-warning/5 px-3 py-2">
+						<SetupHookSkipDetails skip={skippedAfterCreate} />
+					</div>
+				</div>
+			</Sheet>
+		);
+	}
 
 	return (
 		<Sheet
@@ -149,26 +210,26 @@ function WorktreeCreateSheet({ onClose, onCreate, isCreating }: Props) {
 					</p>
 				</div>
 
-				{/* Info */}
-				<p className="rounded-lg bg-th-bg-tertiary px-3 py-2 text-sm text-th-text-secondary">
-					Setup script runs after creation.{" "}
+				{/* Setup script */}
+				<div className="space-y-1 rounded-lg bg-th-bg-tertiary px-3 py-2 text-sm text-th-text-secondary">
+					{setupHookSkip ? (
+						<>
+							<p className="text-th-warning">
+								Setup script will not run on the server.
+							</p>
+							<SetupHookSkipDetails skip={setupHookSkip} />
+						</>
+					) : (
+						<p>Setup script runs after creation.</p>
+					)}
 					<button
 						type="button"
-						className="text-th-accent hover:underline"
-						onClick={() => {
-							onClose();
-							navigate(
-								overlayToNavigation(
-									{ type: "file", path: SETUP_HOOK_PATH, edit: true },
-									"",
-									null,
-								),
-							);
-						}}
+						className="text-sm text-th-accent hover:underline"
+						onClick={handleCustomize}
 					>
 						Customize
 					</button>
-				</p>
+				</div>
 
 				{/* Error message */}
 				{error && (
@@ -178,6 +239,16 @@ function WorktreeCreateSheet({ onClose, onCreate, isCreating }: Props) {
 				)}
 			</div>
 		</Sheet>
+	);
+}
+
+/** Server-provided explanation of why the setup script does not run, plus the way out. */
+function SetupHookSkipDetails({ skip }: { skip: SetupHookSkip }) {
+	return (
+		<>
+			<p className="text-xs text-th-text-secondary">{skip.reason}</p>
+			<p className="text-xs text-th-text-muted">{skip.hint}</p>
+		</>
 	);
 }
 

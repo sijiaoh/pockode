@@ -293,7 +293,7 @@ Client                              Server
   server is free to change what it accepts, and the client that has to respect
   the number is the one furthest from the decision. It is the same value on
   every route — the relay tunnel streams a request body and imposes no ceiling
-  of its own
+  of its own.
 
 For where the server's token comes from (`--auth-token` / `POCKODE_AUTH_TOKEN`) and the overall trust model, see [Authentication](authentication.md).
 

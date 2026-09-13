@@ -12,7 +12,7 @@ import (
 )
 
 type mockSession struct {
-	agent         *mockAgent
+	owner         *mockAgent
 	sessionID     string
 	events        chan agent.AgentEvent
 	messageQueue  chan string
@@ -27,13 +27,15 @@ func (s *mockSession) Events() <-chan agent.AgentEvent {
 	return s.events
 }
 
+// SendMessage records the prompt before handing it off. Recording it on the
+// consumer side instead would leave every "was the agent asked to do X?"
+// assertion racing the consumer goroutine, since the RPC that triggered the
+// send returns as soon as the prompt is queued.
 func (s *mockSession) SendMessage(prompt string) error {
+	s.owner.recordMessage(s.sessionID, prompt)
+
 	select {
 	case s.messageQueue <- prompt:
-		// Record here rather than where the queue is drained. A caller that has
-		// returned from SendMessage has sent the message, so a test inspecting
-		// what was sent must not have to race the mock's own goroutine for it.
-		s.agent.recordMessage(s.sessionID, prompt)
 		return nil
 	case <-s.ctx.Done():
 		return s.ctx.Err()
@@ -86,11 +88,36 @@ type mockAgent struct {
 func (m *mockAgent) recordMessage(sessionID, prompt string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	m.messages = append(m.messages, prompt)
 	if m.messagesBySession == nil {
 		m.messagesBySession = make(map[string][]string)
 	}
 	m.messagesBySession[sessionID] = append(m.messagesBySession[sessionID], prompt)
+}
+
+func (m *mockAgent) sentMessages() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.messages...)
+}
+
+func (m *mockAgent) sentMessagesFor(sessionID string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.messagesBySession[sessionID]...)
+}
+
+func (m *mockAgent) sessionFor(sessionID string) *mockSession {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions[sessionID]
+}
+
+func (m *mockAgent) starts() []startCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]startCall(nil), m.startCalls...)
 }
 
 // forkableMockAgent is a mockAgent that can be forked. Implementing
@@ -127,7 +154,7 @@ func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.S
 	}
 
 	sess := &mockSession{
-		agent:        m,
+		owner:        m,
 		sessionID:    effectiveSessionID,
 		events:       eventsChan,
 		messageQueue: messageQueue,

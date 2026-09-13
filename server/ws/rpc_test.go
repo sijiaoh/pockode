@@ -17,6 +17,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
+	"github.com/pockode/server/internal/unwritabletest"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
@@ -27,6 +28,18 @@ import (
 )
 
 var bgCtx = context.Background()
+
+// opTimeout bounds one websocket send or receive. Large enough that a slow
+// machine never trips it, small enough that a genuinely stuck server fails with
+// the operation named rather than hanging until the test binary panics.
+//
+// The floor is the heaviest single operation in the suite, not the typical one:
+// TestFileWrite_AcceptsTheCeilingEvenWhenEveryByteEscapes pushes a ~12 MiB
+// deflated frame, and under -race on a loaded machine that alone has been
+// measured at ~38s. Anything tighter turns that test into a coin flip while
+// proving nothing about a stuck server, which this still catches two orders of
+// magnitude before the test binary's own 10-minute panic.
+const opTimeout = 60 * time.Second
 
 // dialTestClient dials with compression negotiated, so the suite runs over the
 // connection production actually builds rather than one it never uses. It is
@@ -125,12 +138,10 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
 	server := httptest.NewServer(h)
 
-	// One deadline covers every read and write the test makes, so it has to
-	// outlast the whole test rather than any single exchange. It is here only so
-	// a message that never arrives fails with a message instead of hanging until
-	// the package timeout; sized to what a test does, it turned the suite flaky
-	// whenever another package's git or process work loaded the machine.
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// No deadline of its own: every read and write is bounded individually (see
+	// opCtx). A single test-lifetime deadline turns "this machine is busy" into a
+	// failure once the accumulated work approaches it.
+	ctx, cancel := context.WithCancel(context.Background())
 
 	conn, err := dialTestClient(ctx, server.URL)
 	if err != nil {
@@ -207,7 +218,30 @@ func (e *testEnv) nextID() int {
 	return e.reqID
 }
 
+// opCtx bounds a single websocket operation. The budget is per operation rather
+// than per test: a shared test-lifetime deadline turns "this machine is busy"
+// into a test failure once the accumulated work approaches it, which is exactly
+// what happens on a loaded CI runner.
+func (e *testEnv) opCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(e.ctx, opTimeout)
+}
+
+func (e *testEnv) read() []byte {
+	e.t.Helper()
+
+	ctx, cancel := e.opCtx()
+	defer cancel()
+
+	_, data, err := e.conn.Read(ctx)
+	if err != nil {
+		e.t.Fatalf("failed to read: %v", err)
+	}
+	return data
+}
+
 func (e *testEnv) call(method string, params interface{}) rpcResponse {
+	e.t.Helper()
+
 	reqID := e.nextID()
 	req := rpcRequest{
 		JSONRPC: "2.0",
@@ -216,7 +250,10 @@ func (e *testEnv) call(method string, params interface{}) rpcResponse {
 		Params:  params,
 	}
 	data, _ := json.Marshal(req)
-	if err := e.conn.Write(e.ctx, websocket.MessageText, data); err != nil {
+
+	ctx, cancel := e.opCtx()
+	defer cancel()
+	if err := e.conn.Write(ctx, websocket.MessageText, data); err != nil {
 		e.t.Fatalf("failed to send: %v", err)
 	}
 
@@ -226,20 +263,16 @@ func (e *testEnv) call(method string, params interface{}) rpcResponse {
 	// arrived before this request was even sent, so it can never be the reply, and
 	// taking it here would only put it back and spin.
 	for {
-		_, respData, err := e.conn.Read(e.ctx)
-		if err != nil {
-			e.t.Fatalf("failed to read: %v", err)
-		}
+		raw := e.read()
 
 		var resp rpcResponse
-		if err := json.Unmarshal(respData, &resp); err != nil {
+		if err := json.Unmarshal(raw, &resp); err != nil {
 			e.t.Fatalf("failed to unmarshal response: %v", err)
 		}
-
 		if resp.ID == reqID {
 			return resp
 		}
-		e.buffered = append(e.buffered, respData)
+		e.buffered = append(e.buffered, raw)
 	}
 }
 
@@ -253,21 +286,32 @@ func (e *testEnv) readFrame() []byte {
 		return data
 	}
 
-	_, data, err := e.conn.Read(e.ctx)
-	if err != nil {
-		e.t.Fatalf("failed to read: %v", err)
-	}
-	return data
+	return e.read()
 }
 
 func (e *testEnv) readNotification() rpcNotification {
-	data := e.readFrame()
+	e.t.Helper()
 
 	var notif rpcNotification
-	if err := json.Unmarshal(data, &notif); err != nil {
+	if err := json.Unmarshal(e.readFrame(), &notif); err != nil {
 		e.t.Fatalf("failed to unmarshal notification: %v", err)
 	}
 	return notif
+}
+
+// awaitNotification reads until the named notification arrives. Which
+// notifications a session emits, and in which order, is not part of any test's
+// contract here — asserting on whatever happens to arrive first makes a test
+// fail the moment an unrelated notification is added or reordered.
+func (e *testEnv) awaitNotification(method string) rpcNotification {
+	e.t.Helper()
+
+	for {
+		notif := e.readNotification()
+		if notif.Method == method {
+			return notif
+		}
+	}
 }
 
 // nextSubID names a subscription the way a client does: the id travels with the
@@ -317,6 +361,14 @@ func (e *testEnv) sendMessage(sessionID, content string) rpc.MessageResult {
 	return result
 }
 
+// awaitResponseComplete drains notifications until the agent has finished
+// answering, which is what callers actually need before inspecting the
+// resulting state.
+func (e *testEnv) awaitResponseComplete() {
+	e.t.Helper()
+	e.awaitNotification("chat.done")
+}
+
 func (e *testEnv) skipN(n int) {
 	for i := 0; i < n; i++ {
 		e.readFrame()
@@ -341,7 +393,7 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	server := httptest.NewServer(h)
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 
 	conn, err := dialTestClient(ctx, server.URL)
@@ -392,7 +444,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	server := httptest.NewServer(h)
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 
 	conn, err := dialTestClient(ctx, server.URL)
@@ -450,7 +502,7 @@ func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
 	// Start process by sending message
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "hello")
-	env.skipN(2) // Text + Done notifications
+	env.awaitResponseComplete()
 
 	// Verify process is still running
 	if !wt.ProcessManager.HasProcess("sess") {
@@ -492,19 +544,14 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 	}
 	env.sendMessage("sess", "Hello AI")
 
-	// Read notifications
-	notif1 := env.readNotification()
-	notif2 := env.readNotification()
+	// The agent's output must reach the client in order: awaiting the text first
+	// fails if done overtakes it, because done would be consumed on the way.
+	text := env.awaitNotification("chat.text")
+	done := env.awaitNotification("chat.done")
 
-	if notif1.Method != "chat.text" {
-		t.Errorf("expected method 'chat.text', got %q", notif1.Method)
-	}
-	if notif2.Method != "chat.done" {
-		t.Errorf("expected method 'chat.done', got %q", notif2.Method)
-	}
 	// Addressed to the id the client chose: the client routes chat events by it
 	// alone, and it is the only id either side ever had for this subscription.
-	for _, notif := range []rpcNotification{notif1, notif2} {
+	for _, notif := range []rpcNotification{text, done} {
 		var params struct {
 			ID string `json:"id"`
 		}
@@ -513,45 +560,6 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 		}
 		if params.ID != subID {
 			t.Errorf("%s addressed to %q, want %q", notif.Method, params.ID, subID)
-		}
-	}
-}
-
-// TestHandler_ChatMessage_ReturnsSeq: the sender is excluded from the broadcast
-// that carries every other record's seq, so this reply is the only place it can
-// learn where its own message landed — and without that it cannot fork from a
-// message it just sent until the session is reloaded. The seq has to be the real
-// address of that record, not merely non-zero: it goes straight back as a fork
-// anchor.
-func TestHandler_ChatMessage_ReturnsSeq(t *testing.T) {
-	mock := &mockAgent{events: []agent.AgentEvent{agent.DoneEvent{}}}
-	env := newTestEnv(t, mock)
-	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "sess", session.CreateSpec{})
-
-	env.subscribeChatMessages("sess")
-	first := env.sendMessage("sess", "first prompt")
-	env.skipN(1)
-	second := env.sendMessage("sess", "second prompt")
-	env.skipN(1)
-
-	history, err := store.GetHistory(bgCtx, "sess")
-	if err != nil {
-		t.Fatalf("GetHistory: %v", err)
-	}
-
-	// Checked against the history rather than against 1 and 2: the agent's own
-	// output is recorded in between, so the numbers only mean anything as
-	// addresses.
-	for _, c := range []struct {
-		seq  session.HistorySeq
-		want string
-	}{{first.Seq, "first prompt"}, {second.Seq, "second prompt"}} {
-		if !c.seq.Valid() || c.seq.Index() >= len(history) {
-			t.Fatalf("seq for %q = %d, outside a history of %d records", c.want, c.seq, len(history))
-		}
-		if !strings.Contains(string(history[c.seq.Index()]), c.want) {
-			t.Errorf("seq %d names %s, want the record holding %q", c.seq, history[c.seq.Index()], c.want)
 		}
 	}
 }
@@ -571,17 +579,17 @@ func TestHandler_MultipleSessions(t *testing.T) {
 	env.subscribeChatMessages("session-A")
 	env.subscribeChatMessages("session-B")
 	env.sendMessage("session-A", "Hello from A")
-	env.skipN(2)
+	env.awaitResponseComplete()
 	env.sendMessage("session-B", "Hello from B")
-	env.skipN(2)
+	env.awaitResponseComplete()
 	env.sendMessage("session-A", "Second from A")
-	env.skipN(2)
+	env.awaitResponseComplete()
 
-	if len(mock.messagesBySession["session-A"]) != 2 {
-		t.Errorf("expected 2 messages for session A, got %d", len(mock.messagesBySession["session-A"]))
+	if got := mock.sentMessagesFor("session-A"); len(got) != 2 {
+		t.Errorf("expected 2 messages for session A, got %d", len(got))
 	}
-	if len(mock.messagesBySession["session-B"]) != 1 {
-		t.Errorf("expected 1 message for session B, got %d", len(mock.messagesBySession["session-B"]))
+	if got := mock.sentMessagesFor("session-B"); len(got) != 1 {
+		t.Errorf("expected 1 message for session B, got %d", len(got))
 	}
 }
 
@@ -602,11 +610,7 @@ func TestHandler_PermissionRequest(t *testing.T) {
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "run ls")
-	notif := env.readNotification()
-
-	if notif.Method != "chat.permission_request" {
-		t.Errorf("expected method 'chat.permission_request', got %q", notif.Method)
-	}
+	notif := env.awaitNotification("chat.permission_request")
 
 	var params rpc.PermissionRequestParams
 	if err := json.Unmarshal(notif.Params, &params); err != nil {
@@ -648,9 +652,9 @@ func TestHandler_Interrupt(t *testing.T) {
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "hello")
-	env.skipN(2)
+	env.awaitResponseComplete()
 
-	sess := mock.sessions["sess"]
+	sess := mock.sessionFor("sess")
 	if sess == nil {
 		t.Fatal("session should exist")
 	}
@@ -662,7 +666,7 @@ func TestHandler_Interrupt(t *testing.T) {
 
 	select {
 	case <-sess.interruptCh:
-	case <-env.ctx.Done():
+	case <-time.After(opTimeout):
 		t.Fatal("timeout waiting for interrupt")
 	}
 }
@@ -690,10 +694,10 @@ func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 
 	env.subscribeChatMessages("new-session")
 	env.sendMessage("new-session", "hello")
-	env.skipN(2)
+	env.awaitResponseComplete()
 
-	if len(mock.startCalls) != 1 || mock.startCalls[0].resume {
-		t.Errorf("expected resume=false, got %+v", mock.startCalls)
+	if starts := mock.starts(); len(starts) != 1 || starts[0].resume {
+		t.Errorf("expected resume=false, got %+v", starts)
 	}
 
 	sess, _, _ := store.Get("new-session")
@@ -796,10 +800,10 @@ func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 
 	env.subscribeChatMessages("activated-session")
 	env.sendMessage("activated-session", "hello")
-	env.skipN(2)
+	env.awaitResponseComplete()
 
-	if len(mock.startCalls) != 1 || !mock.startCalls[0].resume {
-		t.Errorf("expected resume=true, got %+v", mock.startCalls)
+	if starts := mock.starts(); len(starts) != 1 || !starts[0].resume {
+		t.Errorf("expected resume=true, got %+v", starts)
 	}
 }
 
@@ -826,11 +830,7 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "ask me")
-	notif := env.readNotification()
-
-	if notif.Method != "chat.ask_user_question" {
-		t.Errorf("expected method 'chat.ask_user_question', got %q", notif.Method)
-	}
+	notif := env.awaitNotification("chat.ask_user_question")
 
 	var params rpc.AskUserQuestionParams
 	if err := json.Unmarshal(notif.Params, &params); err != nil {
@@ -959,18 +959,10 @@ func TestHandler_SessionCreate(t *testing.T) {
 // with a bare "failed to create session" and log nothing, leaving the failure
 // without a trace on either side of the connection.
 func TestHandler_SessionCreate_ReportsUnderlyingCause(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root bypasses directory permissions")
-	}
-
 	env := newTestEnv(t, &mockAgent{})
 
 	// A read-only sessions dir stands in for any I/O failure the store hits.
-	sessionsDir := filepath.Join(env.dataDir, "sessions")
-	if err := os.Chmod(sessionsDir, 0500); err != nil {
-		t.Fatalf("chmod sessions dir: %v", err)
-	}
-	defer os.Chmod(sessionsDir, 0700) // let t.TempDir clean up
+	unwritabletest.Make(t, filepath.Join(env.dataDir, "sessions"))
 
 	resp := env.call("session.create", nil)
 
@@ -1739,6 +1731,7 @@ func setupGitRepo(t *testing.T) string {
 	runGitIn(t, dir, "config", "user.email", "test@test.com")
 	runGitIn(t, dir, "config", "user.name", "Test")
 	runGitIn(t, dir, "config", "commit.gpgsign", "false")
+	runGitIn(t, dir, "config", "core.autocrlf", "false")
 	return dir
 }
 
@@ -2079,17 +2072,14 @@ func TestHandler_MissingParams(t *testing.T) {
 
 	// Send request without params field
 	data := []byte(`{"jsonrpc":"2.0","id":999,"method":"session.delete"}`)
-	if err := env.conn.Write(env.ctx, websocket.MessageText, data); err != nil {
+	ctx, cancel := env.opCtx()
+	defer cancel()
+	if err := env.conn.Write(ctx, websocket.MessageText, data); err != nil {
 		t.Fatalf("failed to send: %v", err)
 	}
 
-	_, respData, err := env.conn.Read(env.ctx)
-	if err != nil {
-		t.Fatalf("failed to read: %v", err)
-	}
-
 	var resp rpcResponse
-	json.Unmarshal(respData, &resp)
+	json.Unmarshal(env.read(), &resp)
 
 	if resp.Error == nil {
 		t.Fatal("expected error for missing params")

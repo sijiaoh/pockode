@@ -1,16 +1,23 @@
 import { create } from "zustand";
-import type { WorktreeInfo } from "../types/message";
+import type { SetupHookSkip, WorktreeInfo } from "../types/message";
 
 interface WorktreeState {
 	/** Current worktree name (empty string = main). URL is source of truth. */
 	current: string;
 	/** Whether current project is a git repository */
 	isGitRepo: boolean;
+	/**
+	 * Why the setup script would not run for a new worktree, or null if it runs.
+	 * Reported by the server alongside the worktree list, since only the server
+	 * knows whether its machine has a shell to run the script with.
+	 */
+	setupHookSkip: SetupHookSkip | null;
 }
 
 export const useWorktreeStore = create<WorktreeState>(() => ({
 	current: "",
 	isGitRepo: true,
+	setupHookSkip: null,
 }));
 
 type WorktreeChangeListener = (prev: string, next: string) => void;
@@ -62,10 +69,18 @@ export const worktreeActions = {
 		useWorktreeStore.setState({ isGitRepo });
 	},
 
+	setSetupHookSkip: (setupHookSkip: SetupHookSkip | null) => {
+		useWorktreeStore.setState({ setupHookSkip });
+	},
+
 	getCurrent: () => useWorktreeStore.getState().current,
 
 	reset: () => {
-		useWorktreeStore.setState({ current: "", isGitRepo: true });
+		useWorktreeStore.setState({
+			current: "",
+			isGitRepo: true,
+			setupHookSkip: null,
+		});
 	},
 };
 

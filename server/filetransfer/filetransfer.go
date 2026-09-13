@@ -24,7 +24,6 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
-	"syscall"
 
 	"github.com/pockode/server/contents"
 )
@@ -194,8 +193,8 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
 	// Empty name so ServeContent keeps the Content-Type set above; it still
-	// serves Range requests, which is how a client on a relay tunnel keeps each
-	// response small enough not to monopolise the shared connection.
+	// serves Range requests, which is what lets a client show progress and read
+	// a large file in bounded pieces rather than hold it whole.
 	http.ServeContent(w, r, "", fi.ModTime(), f)
 }
 
@@ -292,6 +291,27 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, uploadResponse{Files: written})
 }
 
+// openConflict turns a failed open of an upload destination into the 409 that
+// describes it, or nil if the failure is not the client's to fix.
+//
+// The directory case is answered by looking at the path rather than at the error
+// code, because no single code identifies it: unix reports EISDIR only for the
+// truncating open, Windows reports ERROR_ACCESS_DENIED, and the O_EXCL open
+// reports a plain "exists" on both. Keying off syscall.EISDIR alone is how this
+// used to answer 500 on Windows. It is checked before "exists" for the third of
+// those cases: "retry with overwrite=true" is advice that can never work on a
+// directory.
+func openConflict(fullPath, relPath string, err error) *apiError {
+	if info, statErr := os.Stat(fullPath); statErr == nil && info.IsDir() {
+		return errf(http.StatusConflict, CodeConflict, "%s is a directory", relPath)
+	}
+	if errors.Is(err, os.ErrExist) {
+		return errf(http.StatusConflict, CodeConflict,
+			"%s already exists; retry with overwrite=true to replace it", relPath)
+	}
+	return nil
+}
+
 // storePart writes one uploaded file and reports how many content bytes it
 // consumed of the request's remaining budget.
 func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overwrite bool, remaining int64) (UploadedFile, int64, *apiError) {
@@ -310,18 +330,17 @@ func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overw
 
 	existing, statErr := os.Lstat(fullPath)
 	existed := statErr == nil
-	// Only a regular file may be replaced, and this is checked with Lstat, so a
-	// symlink is the link itself and not what it points at. An overwrite that
-	// followed one would write outside the workspace; an O_WRONLY open of a fifo
-	// would block until someone read from it, hanging the request for good.
-	if existed {
-		switch {
-		case existing.IsDir():
-			return UploadedFile{}, 0, errf(http.StatusConflict, CodeConflict, "%s is a directory", relPath)
-		case !existing.Mode().IsRegular():
-			return UploadedFile{}, 0, errf(http.StatusConflict, CodeConflict,
-				"%s exists and is not a regular file; refusing to write through it", relPath)
-		}
+	// Only a regular file may be replaced, and this has to be settled before the
+	// open rather than from its error, because for these types the open is the
+	// damage: an O_WRONLY open of a fifo blocks until someone reads from it,
+	// hanging the request for good, and one that followed a symlink would write
+	// outside the workspace. Lstat, so a symlink is the link itself and not what
+	// it points at. A directory needs no such guard — the open fails on it — and
+	// is left to openConflict, which has to recognise it on the racing path
+	// anyway.
+	if existed && !existing.Mode().IsRegular() && !existing.IsDir() {
+		return UploadedFile{}, 0, errf(http.StatusConflict, CodeConflict,
+			"%s exists and is not a regular file; refusing to write through it", relPath)
 	}
 
 	// O_EXCL is what actually decides a conflict: the check above could be
@@ -338,12 +357,8 @@ func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overw
 	}
 	f, err := os.OpenFile(fullPath, flags, 0644)
 	if err != nil {
-		switch {
-		case errors.Is(err, os.ErrExist):
-			return UploadedFile{}, 0, errf(http.StatusConflict, CodeConflict,
-				"%s already exists; retry with overwrite=true to replace it", relPath)
-		case errors.Is(err, syscall.EISDIR):
-			return UploadedFile{}, 0, errf(http.StatusConflict, CodeConflict, "%s is a directory", relPath)
+		if conflict := openConflict(fullPath, relPath, err); conflict != nil {
+			return UploadedFile{}, 0, conflict
 		}
 		h.log.Error("failed to create uploaded file", "path", relPath, "error", err)
 		return UploadedFile{}, 0, errf(http.StatusInternalServerError, CodeInternal, "failed to write %s: %v", relPath, err)
