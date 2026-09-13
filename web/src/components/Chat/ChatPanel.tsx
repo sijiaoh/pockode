@@ -37,6 +37,7 @@ import ForkSessionSheet from "./ForkSessionSheet";
 import DefaultInputBar from "./InputBar";
 import MessageList from "./MessageList";
 import ModeSelector from "./ModeSelector";
+import SessionInfoButton from "./SessionInfoButton";
 
 const noop = () => {};
 
@@ -459,7 +460,9 @@ function ChatPanel({
 			)}
 			{!overlay && (
 				<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
-					<div className="flex min-w-0 items-center gap-1.5">
+					{/* gap-2, not tighter: three neighbouring hit areas now sit in this
+					    row, and 8px between them is the coarse-pointer floor. */}
+					<div className="flex min-w-0 items-center gap-2">
 						{CustomEngineSelector === null ? null : (
 							<Engine
 								agentType={agentType}
@@ -488,6 +491,16 @@ function ChatPanel({
 								onModeChange={setMode}
 								hasSessionSettings={hasSessionSettings}
 								disabled={!hasSessionSettings || isStreaming}
+							/>
+						)}
+						{/* Gated on the route naming a session at all, not on its data:
+						    the button is permanent for the session it belongs to — it
+						    waits through a switch, showing "Loading…" — but there is no
+						    session to describe when the route names none. */}
+						{sessionId !== "" && (
+							<SessionInfoButton
+								usage={sessionDetail?.usage}
+								isForked={sessionDetail?.forked_from !== undefined}
 							/>
 						)}
 					</div>

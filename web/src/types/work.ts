@@ -1,3 +1,5 @@
+import type { TokenUsage } from "./message";
+
 export type WorkType = "story" | "task";
 
 export type WorkStatus =
@@ -60,13 +62,44 @@ export type WorkListChangedNotification =
 	| { id: string; operation: "delete"; workId: string }
 	| { id: string; operation: "sync"; works: Work[] };
 
+/**
+ * What a work item consumed, as the sessions beneath it reported it.
+ *
+ * It rides on the detail result and notification below, never on `Work`: `Work`
+ * is the one shape the list and the detail share, so a field here would ship a
+ * subtree aggregation to every row of the work list.
+ *
+ * No context window at any level — a window belongs to one live conversation,
+ * and the sum of several means nothing.
+ */
+export interface WorkUsage {
+	/** This item's own session. Absent when it has none, or it reported nothing. */
+	own?: TokenUsage;
+	/** This item plus every descendant, at any depth. Absent under the same condition. */
+	total?: TokenUsage;
+	/**
+	 * Descendants counted into `total`, at any depth; 0 when there are none.
+	 * Always sent, and the only thing that decides whether the page shows one
+	 * column or two: the client sees direct children in its store but never
+	 * grandchildren.
+	 */
+	descendant_count: number;
+	/**
+	 * Sessions inside `total` that spent tokens while their agent reported no
+	 * price. Non-zero makes the total cost a floor, and the UI says so.
+	 */
+	unpriced_session_count?: number;
+}
+
 export interface WorkDetailSubscribeResult {
 	work: Work;
 	comments: Comment[];
+	usage: WorkUsage;
 }
 
 export interface WorkDetailChangedNotification {
 	id: string;
 	work: Work;
 	comments: Comment[];
+	usage: WorkUsage;
 }

@@ -31,6 +31,7 @@ import { WorktreeBadge } from "../Worktree";
 import CreateWorkForm from "./CreateWorkForm";
 import StepList from "./StepList";
 import { StartButton } from "./WorkListOverlay";
+import WorkUsageSection from "./WorkUsageSection";
 
 interface Props {
 	workId: string;
@@ -45,7 +46,8 @@ export default function WorkDetailOverlay({
 	onNavigateToSession,
 	onOpenWorkDetail,
 }: Props) {
-	const { work, comments, loading, error } = useWorkDetailSubscription(workId);
+	const { work, comments, usage, loading, error } =
+		useWorkDetailSubscription(workId);
 
 	const works = useWorkStore((s) => s.works);
 	const roles = useAgentRoleStore((s) => s.roles);
@@ -121,6 +123,8 @@ export default function WorkDetailOverlay({
 					<InlineEditableBody work={work} />
 
 					<StepProgressSection work={work} role={role} />
+
+					{usage && <WorkUsageSection type={work.type} usage={usage} />}
 
 					{work.type === "story" && (
 						<ChildrenSection
