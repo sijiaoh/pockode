@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 )
 
 // TokenUsage counts the tokens a conversation consumed, on Anthropic's
@@ -156,7 +155,7 @@ func (u Usage) equal(o Usage) bool {
 //
 // A directory with no index yet has no sessions, which is not an error.
 func ReadUsages(dataDir string) (map[string]Usage, error) {
-	data, err := os.ReadFile(filepath.Join(dataDir, "sessions", "index.json"))
+	data, err := os.ReadFile(indexPath(dataDir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}

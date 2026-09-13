@@ -68,9 +68,10 @@ type StartOptions struct {
 	//
 	// Called synchronously from the goroutine reading the CLI's output, which is
 	// also the goroutine that hands events on, so an implementation holds up the
-	// stream for as long as it takes. process.Manager's writes the session index,
-	// which is the same order of cost as the history append already on that path —
-	// but nothing slower belongs here. nil is allowed and means nobody is counting.
+	// stream for as long as it takes. process.Manager's implementation writes the
+	// session index, which is the same order of cost as the history append already
+	// on that path — but nothing slower belongs here. nil is allowed and means
+	// nobody is counting.
 	OnUsage func(session.UsageReport)
 }
 

@@ -101,7 +101,14 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 }
 
 func (s *FileStore) indexPath() string {
-	return filepath.Join(s.dataDir, "sessions", "index.json")
+	return indexPath(s.dataDir)
+}
+
+// indexPath locates a data directory's session index without a store, so that
+// the store and ReadUsages — which deliberately has none — cannot disagree
+// about where it is.
+func indexPath(dataDir string) string {
+	return filepath.Join(dataDir, "sessions", "index.json")
 }
 
 func (s *FileStore) readIndexFromDisk() (indexData, error) {

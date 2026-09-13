@@ -547,9 +547,7 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		if resumeState != nil {
 			resumeState.observe(event)
 		}
-		if usage != nil {
-			usage.observe(line, event)
-		}
+		usage.observe(line, event)
 
 		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, decline) {
 			select {
