@@ -313,7 +313,7 @@ func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *
 	}
 
 	notifier := h.state.getNotifier()
-	item, comments, err := h.workDetailWatcher.Subscribe(params.ID, params.WorkID, notifier)
+	detail, err := h.workDetailWatcher.Subscribe(params.ID, params.WorkID, notifier)
 	if err != nil {
 		if h.replySubscriptionIDError(ctx, conn, req.ID, err) {
 			return
@@ -325,8 +325,9 @@ func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *
 	h.log.Debug("subscribed", "watcher", "work detail", "watchId", params.ID, "workId", params.WorkID)
 
 	result := rpc.WorkDetailSubscribeResult{
-		Work:     item,
-		Comments: comments,
+		Work:     detail.Work,
+		Comments: detail.Comments,
+		Usage:    detail.Usage,
 	}
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {

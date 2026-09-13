@@ -56,6 +56,22 @@ type StartOptions struct {
 	// its own default.
 	Effort     string
 	DisableMCP bool // skip MCP config (for testing)
+
+	// OnUsage receives what the CLI reports about the session's consumption, as
+	// increments ready to be added to the session's totals. Agents feed it through
+	// UsageAccumulator rather than calling it directly.
+	//
+	// A callback rather than a second event channel: usage is state the session
+	// store owns, not a record of what happened in the conversation, and
+	// everything on the event channel is persisted into history and broadcast to
+	// chat clients. See the "events are events, state is state" rule in AGENTS.md.
+	//
+	// Called synchronously from the goroutine reading the CLI's output, which is
+	// also the goroutine that hands events on, so an implementation holds up the
+	// stream for as long as it takes. process.Manager's writes the session index,
+	// which is the same order of cost as the history append already on that path —
+	// but nothing slower belongs here. nil is allowed and means nobody is counting.
+	OnUsage func(session.UsageReport)
 }
 
 // MCPDir returns the directory to point the MCP proxy at (where server.json

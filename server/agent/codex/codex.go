@@ -89,6 +89,9 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		exe:               exe,
 		pendingRPCResults: &sync.Map{},
 		pendingElicit:     &sync.Map{},
+		// Per-process: Codex's totals count from the start of the mcp-server
+		// process holding the thread. See agent.UsageAccumulator.
+		usage: newUsageObserver(log, opts),
 	}
 
 	if opts.Resume {
@@ -149,6 +152,8 @@ type mcpSession struct {
 
 	idMu     sync.Mutex // protects threadID
 	threadID string
+
+	usage *usageObserver
 
 	closeOnce sync.Once
 }
@@ -607,7 +612,6 @@ var ignoredCodexEvents = map[string]bool{
 	"turn_started":        true, // newer alias of task_started
 	"task_complete":       true, // the tools/call result ends the turn
 	"turn_complete":       true, // newer alias of task_complete
-	"token_count":         true, // usage and rate-limit accounting
 	"shutdown_complete":   true,
 	"context_compacted":   true,
 	"thread_goal_updated": true,
@@ -663,6 +667,11 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage, requestID *int64) {
 	}
 
 	switch codexMsg.Type {
+	case "token_count":
+		// Usage accounting, not a transcript entry: it updates the session's
+		// totals through the observer and produces no event.
+		s.usage.observe(raw)
+
 	case "session_configured":
 		// Start of the session, and the earliest report of the thread id that
 		// every following turn has to be sent to.

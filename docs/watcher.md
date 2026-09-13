@@ -85,7 +85,7 @@ These watchers implement store listener interfaces and use async buffered channe
 | SessionDetailWatcher | `watch/session_detail.go` | `session.OnChangeListener` | `session.detail.changed` |
 | ChatMessagesWatcher | `watch/chat_messages.go` | `process.ChatMessageListener` | `chat.<event-type>` |
 | WorkListWatcher | `watch/work_list.go` | `work.OnChangeListener` | `work.list.changed` |
-| WorkDetailWatcher | `watch/work_detail.go` | `work.OnChangeListener` + `work.OnCommentChangeListener` | `work.detail.changed` |
+| WorkDetailWatcher | `watch/work_detail.go` | `work.OnChangeListener` + `work.OnCommentChangeListener` + every worktree's `session.OnChangeListener` | `work.detail.changed` |
 | SettingsWatcher | `watch/settings.go` | `settings.OnChangeListener` | `settings.changed` |
 | AgentRoleListWatcher | `watch/agent_role_list.go` | `agentrole.OnChangeListener` | `agent_role.list.changed` |
 
@@ -93,7 +93,9 @@ These watchers implement store listener interfaces and use async buffered channe
 
 **Filtered watchers:** WorkDetailWatcher and SessionDetailWatcher each notify only the subscribers watching the affected id, not all subscribers. Both key their subscriptions on `Subscription.Key` and deliver through `BaseWatcher.NotifyForKey`.
 
-**A session is split across two of them.** `SessionListWatcher` pushes rows — `rpc.SessionListItem` carries id, title, `updated_at`, `state`, `needs_input`, `unread`, `forked_from`, and nothing else. `SessionDetailWatcher` pushes one session's `session.SessionMeta` to whoever has it open, which is where the settings (mode, agent type, model, effort, activated) live and where run state deliberately does not. A session removed from the store is reported as `deleted: true` rather than silently going quiet. Why the line falls there — and why `forked_from` on both sides is not a second source of truth — is in [code/subscription-system.md](code/subscription-system.md#why-a-session-is-two-subscriptions).
+**One watcher listens past its own store.** A work detail carries the token usage of the work item's whole subtree, and that changes when a *session* spends tokens — an event the work store never sees. So WorkDetailWatcher is also registered, through the worktree manager, as a change listener on every worktree's session store, and re-sends the affected work item and every ancestor of it. Because a session is touched several times a turn without moving a number, that path re-sends only when the aggregate actually differs from the one that subscription was last sent. Both halves are in [code/subscription-system.md](code/subscription-system.md#why-a-watcher-sometimes-listens-to-a-second-store); what is aggregated is in [code/work-system.md](code/work-system.md#usage-aggregation).
+
+**A session is split across two of them.** `SessionListWatcher` pushes rows — `rpc.SessionListItem` carries id, title, `updated_at`, `state`, `needs_input`, `unread`, `forked_from`, and nothing else. `SessionDetailWatcher` pushes one session's `session.SessionMeta` to whoever has it open, which is where the settings (mode, agent type, model, effort, activated) and the session's token usage live, and where run state deliberately does not. A session removed from the store is reported as `deleted: true` rather than silently going quiet. Why the line falls there — and why `forked_from` on both sides is not a second source of truth — is in [code/subscription-system.md](code/subscription-system.md#why-a-session-is-two-subscriptions).
 
 ## Subscription Lifecycle
 

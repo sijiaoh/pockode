@@ -15,6 +15,34 @@ export interface ForkOrigin {
 }
 
 /**
+ * What the agents reported spending, on Anthropic's convention: `input_tokens`
+ * counts only what was actually sent, with cache reads and cache writes counted
+ * beside it rather than inside it (the Codex parser subtracts its cached tokens
+ * back out, server-side). That is what lets the four be added up — the headline
+ * total is summed here rather than sent, mirroring `session.TokenUsage.Total()`,
+ * because a `total_tokens` on the wire would be a third copy of one fact.
+ *
+ * Nothing here is ever estimated from a price table: a missing number means the
+ * agent reported none, which is not the same as zero.
+ */
+export interface TokenUsage {
+	input_tokens: number;
+	output_tokens: number;
+	cache_read_tokens: number;
+	cache_write_tokens: number;
+	/** Absent when the agent reports no price at all, as Codex does. */
+	cost_usd?: number;
+}
+
+/** A session's usage: the counters above, plus where its conversation sits in the window. */
+export interface SessionUsage extends TokenUsage {
+	/** A level, not a total: compaction makes it fall while the totals climb. */
+	context_tokens?: number;
+	/** The window that level sits in. Absent means this agent never reported one. */
+	context_window?: number;
+}
+
+/**
  * One row of the session list: what drawing a row needs, and nothing more.
  *
  * A session's settings — mode, agent type, model, effort, activated — are not
@@ -420,6 +448,11 @@ export interface SessionDetail {
 	unread: boolean;
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
+	/**
+	 * Always present: a session that has spent nothing carries an empty usage,
+	 * not a missing one, which is what "nothing reported yet" is keyed on.
+	 */
+	usage: SessionUsage;
 }
 
 export interface SessionDetailSubscribeResult {

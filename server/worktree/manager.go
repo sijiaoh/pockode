@@ -28,8 +28,9 @@ type Manager struct {
 	idleTimeout     time.Duration
 	WorktreeWatcher *watch.WorktreeWatcher
 
-	workAutoResumer      *work.AutoResumer
-	workNeedsInputSyncer *work.NeedsInputSyncer
+	workAutoResumer       *work.AutoResumer
+	workNeedsInputSyncer  *work.NeedsInputSyncer
+	sessionChangeListener session.OnChangeListener
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
@@ -77,6 +78,32 @@ func (m *Manager) SetWorkNeedsInputSyncer(s *work.NeedsInputSyncer) {
 	m.workNeedsInputSyncer = s
 }
 
+// SetSessionChangeListener registers a listener on every worktree's session
+// store — the ones already built and the ones built later. For state that is
+// keyed by session but owned elsewhere: the work detail's usage aggregation,
+// which has to be told when a session it sums over changed.
+//
+// The already-built ones are not a formality. Worktrees are created lazily by
+// whoever needs one first, and AutoResumer resolves senders for work it restarts
+// while the server is still wiring itself up — so the main worktree can exist
+// before this call. Skipping it would leave that worktree's usage frozen for the
+// whole process, with nothing to show that it happened.
+//
+// One listener, set once while the server wires itself up. Calling it again would
+// leave the worktrees that already exist holding both.
+func (m *Manager) SetSessionChangeListener(l session.OnChangeListener) {
+	// One lock covers both halves, and Get registers a new worktree inside the
+	// same critical section that inserts it into the map. Otherwise a worktree
+	// being created right now would be missed by both halves or taken by both.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.sessionChangeListener = l
+	for _, wt := range m.worktrees {
+		wt.SessionStore.AddOnChangeListener(l)
+	}
+}
+
 func (m *Manager) Start() error {
 	return m.WorktreeWatcher.Start()
 }
@@ -119,6 +146,11 @@ func (m *Manager) Get(name string) (*Worktree, error) {
 
 	m.worktrees[name] = wt
 	wt.refCount = 1
+	// In the same critical section as the insertion, for the reason
+	// SetSessionChangeListener gives: the two halves must not overlap.
+	if m.sessionChangeListener != nil {
+		wt.SessionStore.AddOnChangeListener(m.sessionChangeListener)
+	}
 	slog.Info("worktree created", "name", name, "workDir", workDir)
 	m.mu.Unlock()
 
@@ -190,13 +222,38 @@ func (m *Manager) Shutdown() {
 	slog.Info("manager shutdown complete", "worktreesClosed", len(worktrees))
 }
 
-func (m *Manager) create(name, workDir string) (*Worktree, error) {
-	var wtDataDir string
+// dataDirFor is where a worktree's own state lives: its session index, its
+// agent session state, its history. The main worktree ("") keeps it directly in
+// the data dir; the others get a subdirectory each.
+func (m *Manager) dataDirFor(name string) string {
 	if name == "" {
-		wtDataDir = m.dataDir
-	} else {
-		wtDataDir = filepath.Join(m.dataDir, "worktrees", name)
+		return m.dataDir
 	}
+	return filepath.Join(m.dataDir, "worktrees", name)
+}
+
+// SessionUsages implements work.SessionUsageSource, so a work item's detail can
+// add up what its subtree consumed even when part of that subtree lives in a
+// worktree nothing is currently using.
+//
+// It reads the index from disk instead of going through the worktree's session
+// store, which is what makes that possible: Get would build the whole worktree —
+// watchers, process manager, git watches — and hold it alive on a reference,
+// because someone opened a page showing numbers.
+func (m *Manager) SessionUsages(name string) (map[string]session.Usage, error) {
+	// The name comes from a stored work item rather than from the registry —
+	// Get/Resolve is what normally vouches for it, and this path deliberately
+	// skips both so that a worktree nobody is using still answers. So the name is
+	// checked here before it becomes a path: filepath.IsLocal rejects both `..`
+	// escapes and Windows device names (see server/AGENTS.md).
+	if name != "" && !filepath.IsLocal(name) {
+		return nil, fmt.Errorf("worktree name %q is not a directory name", name)
+	}
+	return session.ReadUsages(m.dataDirFor(name))
+}
+
+func (m *Manager) create(name, workDir string) (*Worktree, error) {
+	wtDataDir := m.dataDirFor(name)
 
 	sessionStore, err := session.NewFileStore(wtDataDir)
 	if err != nil {

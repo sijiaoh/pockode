@@ -34,6 +34,10 @@ type Store interface {
 	SetEffort(ctx context.Context, sessionID string, effort string) error
 	SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error
 	SetUnread(ctx context.Context, sessionID string, unread bool) error
+	// AddUsage folds one agent report into the session's running consumption.
+	// A report that says nothing (UsageReport.IsEmpty) is a no-op; any other
+	// report for a session that no longer exists returns ErrSessionNotFound.
+	AddUsage(ctx context.Context, sessionID string, report UsageReport) error
 
 	// History persistence
 	GetHistory(ctx context.Context, sessionID string) ([]json.RawMessage, error)
@@ -413,6 +417,28 @@ func (s *FileStore) SetNeedsInput(ctx context.Context, sessionID string, needsIn
 		}
 		meta.NeedsInput = needsInput
 		return true, nil
+	})
+}
+
+// AddUsage records consumption without touching UpdatedAt: spending tokens is
+// not activity in the conversation, and moving the session to the top of the
+// list every time a turn is metered would reorder the list behind the user's
+// back.
+//
+// It does notify, which is how the open session's detail view stays live, and
+// that notification also reaches SessionListWatcher — where it pushes a row
+// whose fields have not changed, because usage is not part of a row
+// (rpc.SessionListItem). Accepted rather than designed around: it is one small
+// message per report (Claude reports once per turn, Codex a handful of times),
+// against the dozens a turn already sends, and the alternative — a second class
+// of listener, or rows diffed against the last ones sent — buys that back with
+// state that has to be kept correct.
+func (s *FileStore) AddUsage(ctx context.Context, sessionID string, report UsageReport) error {
+	if report.IsEmpty() {
+		return nil
+	}
+	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		return meta.Usage.apply(report), nil
 	})
 }
 

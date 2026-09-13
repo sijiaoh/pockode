@@ -32,6 +32,61 @@ func TestIntegration(t *testing.T) {
 	})
 }
 
+// TestIntegration_ReportsCost checks the half of usage accounting that only
+// Claude has. Codex reports rate limits and never a price, so the shared suite
+// cannot require a cost; here it is required, because the alternative — a session
+// silently showing no cost — is indistinguishable from Codex's honest absence.
+func TestIntegration_ReportsCost(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	costs := make(chan float64, 16)
+	sess, err := New().Start(ctx, agent.StartOptions{
+		WorkDir:    t.TempDir(),
+		DataDir:    t.TempDir(),
+		DisableMCP: true,
+		OnUsage: func(report session.UsageReport) {
+			if report.AddedCostUSD != nil {
+				costs <- *report.AddedCostUSD
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer sess.Close()
+
+	if err := sess.SendMessage("Reply with just the word one."); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	for {
+		select {
+		case event, ok := <-sess.Events():
+			if !ok {
+				t.Fatal("channel closed before the turn ended")
+			}
+			switch e := event.(type) {
+			case agent.ErrorEvent:
+				t.Fatalf("error event: %s", e.Error)
+			case agent.DoneEvent:
+				select {
+				case cost := <-costs:
+					t.Logf("turn cost: %v USD", cost)
+					if cost <= 0 {
+						t.Errorf("cost = %v, want the CLI's own positive figure", cost)
+					}
+				default:
+					t.Error("the CLI reported no cost for a completed turn")
+				}
+				return
+			}
+		case <-ctx.Done():
+			t.Fatal("timeout")
+		}
+	}
+}
+
 // TestIntegration_NoInternalSystemNoise locks the system-event allowlist. Even a
 // single bash call makes the CLI emit internal bookkeeping events (init,
 // task_started, task_notification, thinking_tokens); none of them belong in the

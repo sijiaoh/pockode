@@ -1180,6 +1180,40 @@ describe("ChatPanel", () => {
 		});
 	});
 
+	// The panel reads the session's usage off the same detail subscription every
+	// other setting comes from, which is what makes the figures live.
+	describe("session info", () => {
+		it("shows what the session has spent, and keeps up as it spends more", async () => {
+			const user = userEvent.setup();
+			seedSessionDetail({
+				usage: {
+					input_tokens: 800,
+					output_tokens: 200,
+					cache_read_tokens: 0,
+					cache_write_tokens: 0,
+				},
+			});
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByRole("button", { name: "Session info" }));
+			expect(await screen.findByText("1,000")).toBeInTheDocument();
+
+			act(() => {
+				acceptSetting({
+					usage: {
+						input_tokens: 1200,
+						output_tokens: 300,
+						cache_read_tokens: 0,
+						cache_write_tokens: 0,
+					},
+				});
+			});
+
+			expect(await screen.findByText("1,500")).toBeInTheDocument();
+		});
+	});
+
 	// A work's life and its chat process are two separate clocks, and the chat
 	// now reads neither off the other: an interrupt stops the work without
 	// emitting any message, so anything in the transcript claiming to know the

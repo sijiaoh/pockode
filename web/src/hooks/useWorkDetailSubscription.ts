@@ -5,6 +5,7 @@ import type {
 	Work,
 	WorkDetailChangedNotification,
 	WorkDetailSubscribeResult,
+	WorkUsage,
 } from "../types/work";
 import { useSubscription } from "./useSubscription";
 
@@ -16,6 +17,9 @@ export function useWorkDetailSubscription(workId: string) {
 
 	const [work, setWork] = useState<Work | null>(null);
 	const [comments, setComments] = useState<Comment[]>([]);
+	// Null only before the first snapshot: the server always sends a usage, so a
+	// work item that spent nothing carries an empty aggregate rather than none.
+	const [usage, setUsage] = useState<WorkUsage | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 
@@ -26,6 +30,7 @@ export function useWorkDetailSubscription(workId: string) {
 			prevWorkIdRef.current = workId;
 			setWork(null);
 			setComments([]);
+			setUsage(null);
 			setLoading(true);
 			setError(null);
 		}
@@ -41,6 +46,7 @@ export function useWorkDetailSubscription(workId: string) {
 		(params: WorkDetailChangedNotification) => {
 			setWork(params.work);
 			setComments(params.comments);
+			setUsage(params.usage);
 		},
 		[],
 	);
@@ -48,6 +54,7 @@ export function useWorkDetailSubscription(workId: string) {
 	const handleSubscribed = useCallback((initial: WorkDetailSubscribeResult) => {
 		setWork(initial.work);
 		setComments(initial.comments);
+		setUsage(initial.usage);
 		setLoading(false);
 		setError(null);
 	}, []);
@@ -55,6 +62,7 @@ export function useWorkDetailSubscription(workId: string) {
 	const handleReset = useCallback(() => {
 		setWork(null);
 		setComments([]);
+		setUsage(null);
 		setLoading(true);
 		setError(null);
 	}, []);
@@ -78,7 +86,7 @@ export function useWorkDetailSubscription(workId: string) {
 	);
 
 	return useMemo(
-		() => ({ work, comments, loading, error }),
-		[work, comments, loading, error],
+		() => ({ work, comments, usage, loading, error }),
+		[work, comments, usage, loading, error],
 	);
 }

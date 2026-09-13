@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,6 +68,156 @@ func RunIntegrationTests(t *testing.T, newAgent func() Agent, opts IntegrationTe
 	t.Run("Interrupt", func(t *testing.T) {
 		testInterrupt(t, newAgent())
 	})
+	t.Run("Usage", func(t *testing.T) {
+		testUsage(t, newAgent())
+	})
+}
+
+// usageCollector folds a CLI's reports into a real session store, so that what
+// this test reads back is what a user would see rather than a second
+// implementation of the same accumulation. It is also what makes the whole chain
+// — CLI frame, parser, accumulator, store — covered by one assertion.
+//
+// OnUsage is called from the goroutine reading the CLI's output while the test
+// reads from its own, so the report count needs the lock. The store has its own.
+type usageCollector struct {
+	store     session.Store
+	sessionID string
+
+	mu      sync.Mutex
+	reports int
+}
+
+func newUsageCollector(t *testing.T) *usageCollector {
+	t.Helper()
+
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	const sessionID = "usage-under-test"
+	if _, err := store.Create(context.Background(), sessionID, session.CreateSpec{}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	return &usageCollector{store: store, sessionID: sessionID}
+}
+
+func (c *usageCollector) collect(report session.UsageReport) {
+	c.mu.Lock()
+	c.reports++
+	c.mu.Unlock()
+
+	if err := c.store.AddUsage(context.Background(), c.sessionID, report); err != nil {
+		// Not t.Fatalf: this runs on the CLI's goroutine, where Fatalf would stop
+		// the wrong one. The assertions on the stored total catch it.
+		panic("AddUsage failed: " + err.Error())
+	}
+}
+
+func (c *usageCollector) snapshot(t *testing.T) (session.Usage, int) {
+	t.Helper()
+
+	c.mu.Lock()
+	reports := c.reports
+	c.mu.Unlock()
+
+	meta, found, err := c.store.Get(c.sessionID)
+	if err != nil || !found {
+		t.Fatalf("Get: found=%v err=%v", found, err)
+	}
+	return meta.Usage, reports
+}
+
+// testUsage verifies that a real CLI's own accounting reaches the session store:
+// that something is reported at all, that a second turn adds to the stored total
+// instead of replacing it, and that the context window is reported.
+//
+// The figures are read back out of a real session store rather than summed by the
+// test, so the accumulation rules are the ones that actually run.
+//
+// Two turns rather than one, because the failure this guards against is silent
+// with one: both CLIs report cumulative totals, so a second turn storing the
+// reported figure instead of the increment looks perfectly plausible until the
+// numbers are compared across turns.
+//
+// The assertions are all "more than nothing" and "more than before" — the exact
+// figures belong to the model and the prompt, and pinning them would make this
+// test fail on a price change or a system prompt edit.
+func testUsage(t *testing.T, a Agent) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*integrationTimeout)
+	defer cancel()
+
+	collector := newUsageCollector(t)
+	sess, err := a.Start(ctx, StartOptions{
+		WorkDir:    t.TempDir(),
+		DataDir:    t.TempDir(),
+		DisableMCP: true,
+		OnUsage:    collector.collect,
+	})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer sess.Close()
+
+	var afterFirstTurn session.Usage
+	turn := 1
+
+	if err := sess.SendMessage("Reply with just the word one."); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	for {
+		select {
+		case event, ok := <-sess.Events():
+			if !ok {
+				t.Fatalf("channel closed during turn %d", turn)
+			}
+			switch e := event.(type) {
+			case ErrorEvent:
+				t.Fatalf("turn %d error event: %s", turn, e.Error)
+			case DoneEvent:
+				usage, reports := collector.snapshot(t)
+				t.Logf("turn %d: %d reports, usage %+v", turn, reports, usage)
+
+				if reports == 0 {
+					t.Fatalf("turn %d reported no usage at all", turn)
+				}
+				if usage.Total() == 0 {
+					t.Fatalf("turn %d counted no tokens: %+v", turn, usage)
+				}
+				if usage.OutputTokens == 0 {
+					t.Errorf("turn %d counted no output tokens: %+v", turn, usage)
+				}
+				if usage.ContextWindow == 0 {
+					t.Error("no context window reported")
+				}
+				if usage.ContextTokens == 0 {
+					t.Error("no context size reported")
+				}
+				if usage.ContextTokens > usage.ContextWindow {
+					t.Errorf("context %d exceeds the window %d", usage.ContextTokens, usage.ContextWindow)
+				}
+
+				if turn == 2 {
+					if usage.Total() <= afterFirstTurn.Total() {
+						t.Errorf("second turn added nothing: %d tokens after turn 1, %d after turn 2 — "+
+							"the CLI's cumulative total is being stored instead of its increment",
+							afterFirstTurn.Total(), usage.Total())
+					}
+					return
+				}
+
+				afterFirstTurn = usage
+				turn = 2
+				if err := sess.SendMessage("Now reply with just the word two."); err != nil {
+					t.Fatalf("SendMessage failed for the second turn: %v", err)
+				}
+			}
+
+		case <-ctx.Done():
+			t.Fatalf("timeout during turn %d", turn)
+		}
+	}
 }
 
 type chatCase struct {

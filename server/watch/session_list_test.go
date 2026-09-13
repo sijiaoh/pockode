@@ -88,6 +88,10 @@ func (m *mockSessionStore) SetUnread(ctx context.Context, sessionID string, unre
 	return nil
 }
 
+func (m *mockSessionStore) AddUsage(ctx context.Context, sessionID string, report session.UsageReport) error {
+	return nil
+}
+
 func (m *mockSessionStore) AddOnChangeListener(listener session.OnChangeListener) {
 	m.listeners = append(m.listeners, listener)
 }

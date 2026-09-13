@@ -121,6 +121,7 @@ Shows the detail view for a single work item (story or task). Sections:
 - **Role** — Inline-editable select (tap to switch role)
 - **Description** — Inline-editable textarea with Markdown rendering
 - **Steps** — Step progress indicator showing current step position (if agent role has steps defined)
+- **Usage** — Tokens and cost, this item's own beside its whole subtree's, from the same `work.detail` subscription and updating live as its sessions spend ([usage-display-ui.md](../usage-display-ui.md), [aggregation](../code/work-system.md#usage-aggregation))
 - **Tasks** (story only) — List of child tasks with status icons, "Chat" shortcut, and inline task creation
 - **Comments** — Loaded via `work.detail.subscribe` (real-time)
 

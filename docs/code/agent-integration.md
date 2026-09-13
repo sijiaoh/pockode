@@ -1212,6 +1212,82 @@ same failure twice.
 
 Everything else is dropped through an explicit ignore list (`ignoredCodexEvents`) rather than forwarded. Codex emits 70+ event types — per-turn bookkeeping, token deltas, and a second copy of the whole turn in "thread item" shape — so a parser that forwards what it does not recognise fills the transcript with noise every time upstream adds a type. The list also keeps the default branch meaning "type we have never seen", which is what the debug log is for. Events that carry real information Pockode has no surface for yet (`agent_reasoning*`, `plan_update`, `web_search_*`, `turn_diff`) are listed there by choice, not by accident.
 
+## Usage Reporting
+
+Both CLIs say, every turn, how many tokens the conversation has consumed and
+(Claude only) what it cost. Those figures travel a path of their own, running
+beside the event stream rather than through it:
+
+```
+CLI frame (Claude's `result`, Codex's `token_count`)
+  ├─ parser        → AgentEvent → history + broadcast    what was said
+  └─ usageObserver → UsageAccumulator → OnUsage → store  what it cost
+```
+
+A per-backend observer (`claude/usage.go`, `codex/usage.go`) reads the figures out
+of the stream the parser is reading, `agent.UsageAccumulator` turns them into
+increments, and `StartOptions.OnUsage` hands those to the session store, which
+folds them into `SessionMeta.Usage` (`session/usage.go`). A frame need not take
+both branches: Claude's `result` ends a turn and also reports its cost, while
+Codex's `token_count` has nothing to say to the transcript at all.
+
+**Usage is not an event.** Every `AgentEvent` is persisted into history and
+broadcast to chat subscribers, and a history record is fixed at the moment it was
+written — it says what was true then and cannot be corrected. A running total is
+the opposite: one mutable fact the session store owns, which every reader must
+see the current value of. Shipping it as an event would put a number into the
+transcript that goes stale as soon as the next turn lands, and any reader
+recomputing the total would be re-deriving state the store already holds. This is
+the *events are events, state is state* rule in `AGENTS.md`. The parser side of it
+is visible in Codex's `token_count`, handled by an explicit case that feeds the
+usage observer and emits nothing, rather than left in `ignoredCodexEvents`: it is
+not an event Pockode has no surface for, it is not an event at all.
+
+**Increments, not the totals as reported.** Both CLIs count from the start of
+their own *process*, not of the session — a resumed session's counters start
+again at zero (measured on claude 2.1.263 and codex-cli 0.153.0). A session
+outlives many processes, so storing what was reported would drop everything spent
+before the last restart, and adding it every turn would count each turn again for
+every later turn. One accumulator per process, contributing only what is new,
+does neither. Two consequences are worth knowing: usage before Pockode started
+counting is unrecoverable, and a counter that moves backwards mid-process is
+clamped to no increment and warned about once — the honest response to a case
+neither CLI has been seen to produce, where guessing would mean choosing
+double-counting or under-counting on no evidence.
+
+**One convention across backends.** Counts are stored Anthropic-style, with
+cache reads and cache writes beside the input count rather than inside it. Codex
+reports the other convention, so its parser subtracts them back out and then
+checks its normalised sum against Codex's own `total_tokens`, warning once if
+they disagree — the assumption cannot be proven against the one provider
+available for testing, so it is wired to announce itself if it ever goes stale.
+Without a single convention, adding two sessions' totals would add up two
+different things, which is exactly what the work-level aggregation does
+([work-system.md](work-system.md#usage-aggregation)).
+
+**Cost is what an agent charged, or nothing at all.** Claude prices its own
+turns; Codex reports rate limits, plan and credits and never a price. So an
+absent cost means *this agent does not price*, not zero, and it stays absent all
+the way to the screen — Pockode estimates none from a price list, because a
+number we invented is indistinguishable, once displayed, from the one the
+provider will bill. Two visible consequences: a session whose agent type was
+switched — possible only while it is unactivated, and a session can burn tokens
+before it activates — carries tokens from both agents and a price from at most
+one of them, and a work subtree mixing the two backends reports a floor rather
+than a total ([work-system.md](work-system.md#usage-aggregation)).
+
+**Context size is a level, not a total.** `ContextTokens` / `ContextWindow`
+describe how full one live conversation currently is; compaction makes them fall
+while the totals keep climbing. They belong to a session and are never summed —
+the work aggregate carries no window at any depth.
+
+`SessionMeta.Usage` reaches clients through `session.detail` alone; the list row
+has no use for it and goes to every subscriber on every change
+([why](subscription-system.md#why-a-session-is-two-subscriptions)). Recording
+usage deliberately does not touch `UpdatedAt` — every counted turn would
+otherwise reorder the sidebar — and a fork starts at zero, since the tokens
+behind its copied history were spent by the session it came from.
+
 ## Permission Handling Mechanism
 
 ### Session Modes
@@ -1507,6 +1583,7 @@ type SessionMeta struct {
     NeedsInput bool        // Awaiting user permission/question response
     Unread     bool        // Has unread changes
     ForkedFrom *ForkOrigin // Set on a fork, naming the session it came from
+    Usage      Usage       // Tokens and cost, as the agent reported them
 }
 ```
 
@@ -1516,6 +1593,10 @@ building a process marks the session unread, whether or not the agent said
 anything. `StateChangeEvent.IsInitial` distinguishes that first idle, but only
 `work.AutoResumer` reads it. Noted rather than fixed: what "unread" should mean
 for a session that was merely started is a product question.
+
+`Usage` is the one field here no user action sets and no RPC writes — it is
+accumulated from what the CLI reports, and [Usage
+Reporting](#usage-reporting) covers how.
 
 ### Session Models
 
@@ -1828,4 +1909,6 @@ The following conditions send an `ErrorEvent` and end the session:
 | Chat client | `server/chat/client.go` |
 | Process management | `server/process/manager.go` |
 | Session storage | `server/session/store.go` |
+| Usage collection | `server/agent/usage.go`, `server/agent/claude/usage.go`, `server/agent/codex/usage.go` |
+| Session usage record | `server/session/usage.go` |
 | RPC Handler | `server/ws/rpc_chat.go` |

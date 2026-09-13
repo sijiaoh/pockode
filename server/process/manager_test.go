@@ -34,13 +34,16 @@ type startCall struct {
 	mode         session.Mode
 	dataDir      string
 	mcpServerDir string
+	// onUsage is the callback the manager installed, so a test can report usage
+	// the way the real CLI parsers do.
+	onUsage func(session.UsageReport)
 }
 
 func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.startCalls = append(m.startCalls, startCall{opts.SessionID, opts.Resume, opts.Mode, opts.DataDir, opts.MCPServerDir})
+	m.startCalls = append(m.startCalls, startCall{opts.SessionID, opts.Resume, opts.Mode, opts.DataDir, opts.MCPServerDir, opts.OnUsage})
 
 	if m.sessions == nil {
 		m.sessions = make(map[string]*mockSession)
@@ -52,6 +55,22 @@ func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.S
 	sess.waitingForBackground.Store(m.startWaiting)
 	m.sessions[opts.SessionID] = sess
 	return sess, nil
+}
+
+// usageCallback returns the OnUsage the manager installed for sessionID, so a
+// test can report usage the way the real CLI parsers do. Locked for the same
+// reason session is: Start writes startCalls from the manager's goroutine.
+func (m *mockAgent) usageCallback(t *testing.T, sessionID string) func(session.UsageReport) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, call := range m.startCalls {
+		if call.sessionID == sessionID {
+			return call.onUsage
+		}
+	}
+	t.Fatalf("no agent started for %q", sessionID)
+	return nil
 }
 
 // session returns the session the mock created for sessionID. Start writes the

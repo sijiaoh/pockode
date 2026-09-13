@@ -599,9 +599,14 @@ Known blind spots, recorded as they are rather than as they should be:
    by mutation on a throwaway component with no gapped ancestor. And
    `SidebarListItem` takes its actions as a prop, so none of those tags appear in
    its own source and its `gap` is unguarded either way: packing it back to
-   `gap-1` leaves the suite green. Both kinds have to be read by a person. (A
-   gapped *ancestor* catches some of the first kind by accident, measuring the
-   inner controls against its own gap — accident, not coverage.)
+   `gap-1` leaves the suite green. A row whose children are *components* is the
+   same hole from the other side: the tags in it are capitalised, so none is
+   recognised as a control and nothing is measured between them — the session
+   action bar sat at `gap-1.5` (6px) between two selector components, green, until
+   a third control was added and a reader noticed
+   ([usage-display-ui.md](usage-display-ui.md)). All three kinds have to be read by
+   a person. (A gapped *ancestor* catches some of the first kind by accident,
+   measuring the inner controls against its own gap — accident, not coverage.)
 3. **`sourceScan`'s per-root assertion cannot catch a root being deleted
    outright.** It catches a root pointing at a moved or renamed directory; one
    `it.each` case fewer is not a failure. Only a reviewer catches that.

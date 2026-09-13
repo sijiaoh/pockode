@@ -152,6 +152,49 @@ describe("WorkDetailOverlay", () => {
 		expectToAppearBefore(tasksHeading, commentsHeading);
 	});
 
+	// Usage rides on the detail subscription rather than on Work, so this is also
+	// the assertion that the page reads it from there.
+	it("puts the usage the subscription carries between steps and tasks", () => {
+		mockUseWorkDetailSubscription.mockReturnValue({
+			work: createWork(),
+			comments: [],
+			usage: {
+				own: {
+					input_tokens: 124_000,
+					output_tokens: 0,
+					cache_read_tokens: 0,
+					cache_write_tokens: 0,
+				},
+				total: {
+					input_tokens: 1_200_000,
+					output_tokens: 0,
+					cache_read_tokens: 0,
+					cache_write_tokens: 0,
+				},
+				descendant_count: 5,
+			},
+			loading: false,
+			error: null,
+		});
+
+		render(
+			<WorkDetailOverlay
+				workId="work-1"
+				onBack={vi.fn()}
+				onNavigateToSession={vi.fn()}
+				onOpenWorkDetail={vi.fn()}
+			/>,
+		);
+
+		const stepsHeading = screen.getByRole("heading", { name: /Steps/ });
+		const usageHeading = screen.getByRole("heading", { name: "Usage" });
+		const tasksHeading = screen.getByRole("heading", { name: "Tasks" });
+
+		expect(screen.getByText("1.2M")).toBeInTheDocument();
+		expectToAppearBefore(stepsHeading, usageHeading);
+		expectToAppearBefore(usageHeading, tasksHeading);
+	});
+
 	it("keeps steps below the empty description placeholder", () => {
 		mockUseWorkDetailSubscription.mockReturnValue({
 			work: createWork({ body: undefined }),

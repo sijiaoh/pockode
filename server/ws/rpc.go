@@ -49,8 +49,13 @@ func NewRPCHandler(token, version string, devMode bool, commandStore *command.St
 	workListWatcher := watch.NewWorkListWatcher(workStore)
 	workListWatcher.Start()
 
-	workDetailWatcher := watch.NewWorkDetailWatcher(workStore)
+	// The worktree manager is the usage source: a work item's subtree can reach
+	// into worktrees other than the one it runs in.
+	workDetailWatcher := watch.NewWorkDetailWatcher(workStore, worktreeManager)
 	workDetailWatcher.Start()
+	// Session usage changes without anything about the work item changing, so the
+	// detail subscription has to hear about it from the session stores directly.
+	worktreeManager.SetSessionChangeListener(workDetailWatcher)
 
 	agentRoleListWatcher := watch.NewAgentRoleListWatcher(agentRoleStore)
 	agentRoleListWatcher.Start()

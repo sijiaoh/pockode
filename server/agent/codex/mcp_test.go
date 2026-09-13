@@ -24,6 +24,10 @@ func newTestSession() *mcpSession {
 		cancel:            cancel,
 		pendingRPCResults: &sync.Map{},
 		pendingElicit:     &sync.Map{},
+		// Every session Start builds has one, and token_count is dispatched
+		// straight to it — a test session without one turns the first usage event
+		// into a nil dereference instead of a failed assertion.
+		usage: newUsageObserver(slog.Default(), agent.StartOptions{}),
 	}
 }
 

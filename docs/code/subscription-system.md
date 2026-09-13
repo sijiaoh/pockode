@@ -382,6 +382,37 @@ about the session, and there is nothing truthful to say about it.
 are driven by the same store events, so a burst the list can absorb is a burst
 detail must absorb too, or every burst would send detail alone into a full sync.
 
+### Why a Watcher Sometimes Listens to a Second Store
+
+A watcher's usual shape is one store, one kind of event: the work store changes,
+work detail goes out. That breaks as soon as a payload includes something the
+watcher's own store does not own. Work detail carries the usage of every session
+beneath the work item, and a session spending tokens changes no work item at all —
+so `WorkDetailWatcher` also subscribes to every worktree's session store and
+re-sends the affected details from there
+([work-system.md](work-system.md#usage-aggregation)).
+
+Two rules generalise out of it, and the case that produced them is written up
+where the aggregation is. Both are about the second source rather than about the
+payload, which is why they belong here and not there.
+
+**Register on the instances that already exist, not only on the ones built
+later.** The natural way to hook a listener onto a lazily-created collection is
+from the code that creates one, which skips everything created before the wiring
+ran — and skips it silently, because the subscription still works and merely stops
+hearing from that source. Registration therefore attaches to the existing
+instances as well, inside the same critical section that admits new ones, so a
+member created at that instant is registered exactly once.
+
+**"Already sent" is a fact about a subscription, not about the entity.** A watcher
+that suppresses a re-send because nothing changed has to remember what *it sent to
+whom*: recorded per entity, the second client to subscribe marks the value as sent
+and the first one is never told. Per subscription id, then, and deleted on
+`Unsubscribe`, or the record grows for as long as the connection lives.
+
+Suppression is worth having only where the trigger is noisier than the news, and
+never for the watcher's own store — there the payload *is* the news.
+
 ## Frontend
 
 `useSubscription` owns every subscription's lifecycle; the sections after it are
