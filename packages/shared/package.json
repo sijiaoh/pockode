@@ -4,7 +4,8 @@
 	"private": true,
 	"type": "module",
 	"exports": {
-		".": "./src/index.ts"
+		".": "./src/index.ts",
+		"./vitest": "./vitest-runtime.ts"
 	},
 	"peerDependencies": {
 		"react": "^19.0.0",

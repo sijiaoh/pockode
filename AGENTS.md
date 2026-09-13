@@ -68,6 +68,7 @@ The `packages/shared` package contains UI components, hooks, stores, and utiliti
 - Hooks: `useMediaQuery`, `useOutsideClick`, `useIsExpanded`, `useHasCoarsePointer`, `useHasFinePointer`
 - Stores: `createAuthStore` (factory function for auth store with configurable token key)
 - Utils: `getWebSocketUrl`, `BREAKPOINTS`, `MEDIA_QUERIES`, `hasCoarsePointer`
+- `@pockode/shared/vitest`: `vitestRuntimeOptions` — the worker and timeout settings both `vitest.config.ts` files spread in. A separate subpath because it needs Node types, which the browser entry must not pull in; it lives outside `src` for the same reason.
 
 The responsive exports are the single source for the width ladder and the two
 pointer gates; both stylesheets are checked against them. Width decides where

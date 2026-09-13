@@ -5,8 +5,8 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
-		"build": "tsc && vite build",
-		"build:release": "tsc && vite build --outDir ../server/cluster/static --emptyOutDir",
+		"build": "tsc -b && vite build",
+		"build:release": "tsc -b && vite build --outDir ../server/cluster/static --emptyOutDir",
 		"preview": "vite preview",
 		"lint": "biome check src",
 		"format": "biome format --write src",
