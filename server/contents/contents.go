@@ -445,13 +445,27 @@ func Create(workDir, path string, isDir bool) error {
 		err = createEmptyFile(fullPath)
 	}
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
+		if errors.Is(err, os.ErrExist) || taken(fullPath) {
 			return fmt.Errorf("%s %w", path, ErrExists)
 		}
 		return fmt.Errorf("failed to create %s: %w", path, err)
 	}
 
 	return nil
+}
+
+// taken reports whether something already sits at fullPath, classifying a
+// failed creation after the fact.
+//
+// It is needed because the error for "a name is taken by the other kind of
+// entry" is not ErrExist everywhere: opening a directory as a file comes back
+// as EISDIR on Windows, where unix reports EEXIST for the same O_EXCL call.
+// Leaving that unclassified would hand the UI's "new file" action a raw
+// syscall error where every other taken name gets ErrExists. The creating
+// syscall still owns the race — this only reads the state it just refused.
+func taken(fullPath string) bool {
+	_, err := os.Lstat(fullPath)
+	return err == nil
 }
 
 func createEmptyFile(fullPath string) error {
