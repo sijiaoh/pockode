@@ -14,19 +14,23 @@ export interface ForkOrigin {
 	session_id: string;
 }
 
+/**
+ * One row of the session list: what drawing a row needs, and nothing more.
+ *
+ * A session's settings — mode, agent type, model, effort, activated — are not
+ * here. They come from `session.detail.subscribe`, for the one session that is
+ * open; the list goes to every client on every change, and a model chosen in one
+ * session is not news to a client reading another.
+ *
+ * Two fields are also on `SessionDetail`, and neither can drift: `state` is
+ * volatile process state the list owns outright and detail never carries, and
+ * `forked_from` is fixed when the session is born and never written again.
+ */
 export interface SessionListItem {
 	id: string;
 	title: string;
-	created_at: string;
+	/** The row's subtitle, and what the list is ordered by. */
 	updated_at: string;
-	mode: SessionMode;
-	agent_type: AgentType;
-	/** Empty means "pass no model flag, let the CLI pick". */
-	model: string;
-	/** Empty means "pass no effort flag, let the CLI keep its default". */
-	effort: string;
-	/** True once the agent has produced output in this session. */
-	activated: boolean;
 	state: ProcessState;
 	needs_input: boolean;
 	unread: boolean;
@@ -101,14 +105,7 @@ export type ContentPart =
 			status: QuestionStatus;
 			answers?: Record<string, string>;
 	  }
-	| {
-			/**
-			 * Every Task of one turn, folded into a single part anchored where the
-			 * first of them landed.
-			 */
-			type: "task_group";
-			tasks: TaskRun[];
-	  }
+	| { type: "task"; task: TaskRun }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
 
@@ -130,16 +127,15 @@ export interface SystemMessageChild {
 // the prompt body. Mirrors agent.MessageMeta on the server.
 export interface SystemMessageMeta {
 	/**
-	 * The work whose session received this message — the aggregation key for the
-	 * work card. Absent on history recorded before the card existed, which falls
-	 * back to a standalone banner.
+	 * The work whose session received this message. Absent on history recorded
+	 * before it was sent, which then offers no way into the work's detail view.
 	 */
 	work_id?: string;
 	work_type?: WorkType;
 	title?: string;
 	/**
-	 * Where the work stood when this message was sent. A historical fact: use it
-	 * for timeline wording, never as the work's current position.
+	 * Where the work stood when this message was sent. A historical fact: it is
+	 * what this event's own wording says, never the work's current position.
 	 */
 	step?: SystemMessageStep;
 	child?: SystemMessageChild;
@@ -154,8 +150,10 @@ export interface UserMessage {
 	/**
 	 * The last history record folded into this message, and so the cut point a
 	 * fork anchored here uses. Absent when no record the client saw carries one:
-	 * a message this client sent itself (the server does not echo it back), or
-	 * one replayed from history written before seqs existed.
+	 * a record that could not be persisted, or a message this client sent itself
+	 * talking to a server too old to answer `chat.message` with a seq (see
+	 * `MessageResult`). Not history written before seqs existed — replay stamps
+	 * those by position.
 	 */
 	anchorSeq?: HistorySeq;
 	// Present only for system-driven messages; absent means a user-typed message.
@@ -175,51 +173,7 @@ export interface AssistantMessage {
 	anchorSeq?: HistorySeq;
 }
 
-/** One system message, folded into the card's collapsed timeline. */
-export interface WorkTimelineEntry {
-	id: string;
-	subtype?: string;
-	/** The full prompt body, so nothing the old banner showed is lost. */
-	content: string;
-	step?: SystemMessageStep;
-	child?: SystemMessageChild;
-}
-
-/**
- * Every system message of one work, collapsed into a single card anchored where
- * the first of them landed. It deliberately carries no status: the card reads
- * that live from the work store, because a work can change state (an interrupt,
- * for one) without producing any message at all.
- */
-export interface WorkCardMessage {
-	id: string;
-	role: "work";
-	workId: string;
-	/** Recorded at anchor time; only used when the work is gone from the store. */
-	workType?: WorkType;
-	title?: string;
-	entries: WorkTimelineEntry[];
-	createdAt: Date;
-}
-
-/**
- * A hairline in the stream marking where the work moved to a new step. It says
- * only "the step changed here" — carrying no status, it can never contradict
- * the card.
- */
-export interface StepDividerMessage {
-	id: string;
-	role: "step_divider";
-	workId: string;
-	step: SystemMessageStep;
-	createdAt: Date;
-}
-
-export type Message =
-	| UserMessage
-	| AssistantMessage
-	| WorkCardMessage
-	| StepDividerMessage;
+export type Message = UserMessage | AssistantMessage;
 
 export type PermissionBehavior = "allow" | "deny" | "ask";
 
@@ -363,6 +317,23 @@ export interface MessageParams {
 	content: string;
 }
 
+/**
+ * The reply to `chat.message`: where the server put the message just sent.
+ *
+ * This client is left out of the broadcast that carries every other record's
+ * seq — it already echoed the message into its own transcript — so this reply is
+ * the only place it learns the address of its own message, and without it that
+ * message could not be forked from until the session was reloaded.
+ *
+ * `seq` is absent when the record was not persisted, and from servers too old to
+ * send it at all. Both mean the same thing here and neither is an error: the
+ * message stays unaddressable, which is what every locally sent message used to
+ * be.
+ */
+export interface MessageResult {
+	seq?: HistorySeq;
+}
+
 export interface InterruptParams {
 	session_id: string;
 }
@@ -394,19 +365,22 @@ export interface SessionUpdateTitleParams {
 
 export interface SessionForkParams {
 	session_id: string;
-	/** Inclusive: the new session keeps every record up to and including this one. */
+	/**
+	 * The seq of the message the user picked, quoted back unchanged.
+	 *
+	 * How much the fork keeps is the server's to decide, not this client's: an
+	 * agent message is kept, a message the user sent is not, because the fork
+	 * returns to before they sent it. Never do arithmetic on this — a seq is an
+	 * address the server handed out, not an index (see `chat.Client.Fork` and
+	 * docs/session-fork-ui.md, *The rule*).
+	 */
 	anchor_seq: HistorySeq;
 	/** Empty copies the source session's title. */
 	title?: string;
 }
 
 export interface SessionListSubscribeResult {
-	id: string;
 	sessions: SessionListItem[];
-}
-
-export interface SessionListUnsubscribeParams {
-	id: string;
 }
 
 export type SessionListChangedNotification =
@@ -414,20 +388,87 @@ export type SessionListChangedNotification =
 	| { id: string; operation: "delete"; sessionId: string }
 	| { id: string; operation: "sync"; sessions: SessionListItem[] };
 
-export interface ChatMessagesSubscribeParams {
-	session_id: string;
-}
-
-export interface ChatMessagesSubscribeResult {
+/**
+ * One session's persistent metadata, as `session.detail.subscribe` reports it
+ * (the server's `session.SessionMeta`).
+ *
+ * No process state: whether an agent is running is volatile state the server
+ * pushes through the session list, and a second copy of it here would arrive in
+ * an order neither side controls, leaving no way to tell which of the two is
+ * current (server/watch/session_detail.go).
+ *
+ * Spelled out rather than derived from `SessionListItem`: the two are separate
+ * wire shapes answering different questions — what a session is, versus what a
+ * row of the list draws — and the list carries only the handful of fields a row
+ * needs. Deriving one from the other would make every future change to a row
+ * silently change what a session is.
+ */
+export interface SessionDetail {
 	id: string;
-	history: unknown[];
-	state: ProcessState;
+	title: string;
+	created_at: string;
+	updated_at: string;
 	mode: SessionMode;
 	agent_type: AgentType;
+	/** Empty means "pass no model flag, let the CLI pick". */
 	model: string;
 	/** Empty means "pass no effort flag, let the CLI keep its default". */
 	effort: string;
+	/** True once the agent has produced output in this session. */
+	activated: boolean;
+	needs_input: boolean;
+	unread: boolean;
+	/** Absent on a session that was created rather than forked. */
+	forked_from?: ForkOrigin;
 }
+
+export interface SessionDetailSubscribeResult {
+	session: SessionDetail;
+}
+
+/** A deleted session reports no metadata; `deleted` is set exactly then. */
+export type SessionDetailChangedNotification =
+	| { id: string; session: SessionDetail; deleted?: false }
+	| { id: string; session?: undefined; deleted: true };
+
+export interface ChatMessagesSubscribeParams {
+	session_id: string;
+	/** Omitted asks for the server's default page size. */
+	limit?: number;
+}
+
+/**
+ * One page of history, oldest record first.
+ *
+ * `next_before_seq` is the cursor for the page before this one and is absent
+ * once `has_more` is false. It is the only way to ask for an earlier page: a
+ * record the server could not address carries no seq, so a cursor derived from
+ * `history[0]` would eventually name nothing. The two fields say the same thing,
+ * and the client reads the cursor — the one of them it can act on.
+ */
+export interface ChatMessagesHistoryPage {
+	history: unknown[];
+	has_more: boolean;
+	next_before_seq?: HistorySeq;
+}
+
+export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
+	/**
+	 * Whether a process is running for this session. The transcript's own
+	 * subscription reports it because the transcript is what it governs — the
+	 * session's settings come from `session.detail.subscribe` instead.
+	 */
+	state: ProcessState;
+}
+
+export interface ChatMessagesHistoryParams {
+	session_id: string;
+	/** Exclusive: the reply holds the records immediately older than this one. */
+	before_seq?: HistorySeq;
+	limit?: number;
+}
+
+export type ChatMessagesHistoryResult = ChatMessagesHistoryPage;
 
 export interface SessionSetModeParams {
 	session_id: string;

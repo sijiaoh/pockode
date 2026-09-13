@@ -182,6 +182,16 @@ func (h *RPCHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStr
 	log.Info("connection closed")
 }
 
+// subscriptionKey identifies one of a connection's subscriptions. The id alone
+// would not: a subscription id is the client's, and is unique only within the
+// watcher it was registered on, so two watchers can hold the same id for two
+// unrelated subscriptions. Keyed by id alone, the second would evict the first
+// from this map and the first would never be given back.
+type subscriptionKey struct {
+	watcher watch.Watcher
+	id      string
+}
+
 // rpcConnState tracks per-connection state.
 type rpcConnState struct {
 	mu            sync.Mutex
@@ -189,9 +199,9 @@ type rpcConnState struct {
 	conn          *jsonrpc2.Conn
 	notifier      *JSONRPCNotifier
 	log           *slog.Logger
-	worktree      *worktree.Worktree       // set after auth
-	subscriptions map[string]watch.Watcher // subID → watcher for cleanup
-	closed        bool                     // set by cleanup; guards against binds/subscribes racing disconnect
+	worktree      *worktree.Worktree           // set after auth
+	subscriptions map[subscriptionKey]struct{} // what this connection must give back
+	closed        bool                         // set by cleanup; guards against binds/subscribes racing disconnect
 	// ready is closed by setConn. Handlers must wait on it before touching the
 	// state: a handler that runs first would subscribe the still-nil notifier
 	// to the worktree — an entry cleanup can never find (it unsubscribes the
@@ -243,7 +253,7 @@ func (s *rpcConnState) setConn(conn *jsonrpc2.Conn) {
 	s.mu.Lock()
 	s.conn = conn
 	s.notifier = NewJSONRPCNotifier(conn)
-	s.subscriptions = make(map[string]watch.Watcher)
+	s.subscriptions = make(map[subscriptionKey]struct{})
 	s.mu.Unlock()
 	close(s.ready)
 }
@@ -268,14 +278,14 @@ func (s *rpcConnState) trackSubscription(id string, watcher watch.Watcher) {
 		watcher.Unsubscribe(id)
 		return
 	}
-	s.subscriptions[id] = watcher
+	s.subscriptions[subscriptionKey{watcher: watcher, id: id}] = struct{}{}
 	s.mu.Unlock()
 }
 
-func (s *rpcConnState) untrackSubscription(id string) {
+func (s *rpcConnState) untrackSubscription(id string, watcher watch.Watcher) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.subscriptions, id)
+	delete(s.subscriptions, subscriptionKey{watcher: watcher, id: id})
 }
 
 // unsubscribeWorktreeWatchers removes and unsubscribes all subscriptions
@@ -293,10 +303,10 @@ func (s *rpcConnState) unsubscribeWorktreeWatchers(wt *worktree.Worktree) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for id, watcher := range s.subscriptions {
-		if _, belongs := wtWatchers[watcher]; belongs {
-			watcher.Unsubscribe(id)
-			delete(s.subscriptions, id)
+	for key := range s.subscriptions {
+		if _, belongs := wtWatchers[key.watcher]; belongs {
+			key.watcher.Unsubscribe(key.id)
+			delete(s.subscriptions, key)
 		}
 	}
 }
@@ -311,8 +321,8 @@ func (s *rpcConnState) cleanup(worktreeManager *worktree.Manager) {
 	s.closed = true
 
 	// Unsubscribe all tracked subscriptions
-	for id, watcher := range s.subscriptions {
-		watcher.Unsubscribe(id)
+	for key := range s.subscriptions {
+		key.watcher.Unsubscribe(key.id)
 	}
 	s.subscriptions = nil
 
@@ -462,6 +472,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	// chat namespace
 	case "chat.messages.subscribe":
 		h.handleChatMessagesSubscribe(ctx, conn, req, wt)
+	case "chat.messages.history":
+		h.handleChatMessagesHistory(ctx, conn, req, wt)
 	case "chat.messages.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, wt.ChatMessagesWatcher, "chat-messages")
 	case "chat.message":
@@ -499,6 +511,10 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSessionListSubscribe(ctx, conn, req, wt)
 	case "session.list.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, wt.SessionListWatcher, "session list")
+	case "session.detail.subscribe":
+		h.handleSessionDetailSubscribe(ctx, conn, req, wt)
+	case "session.detail.unsubscribe":
+		h.handleWatcherUnsubscribe(ctx, conn, req, wt.SessionDetailWatcher, "session detail")
 	// file namespace
 	case "file.get":
 		h.handleFileGet(ctx, conn, req, wt)
@@ -661,6 +677,42 @@ type unsubscribeParams struct {
 	ID string `json:"id"`
 }
 
+// subscriptionID reads the client-chosen subscription id out of a *.subscribe
+// request that carries nothing else. ok=false means the request was not even
+// that and has already been answered; an id that is missing or unusable is the
+// watcher's to refuse (see replySubscriptionIDError), not this function's.
+func (h *rpcMethodHandler) subscriptionID(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) (id string, ok bool) {
+	var params rpc.SubscribeParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return "", false
+	}
+	return params.ID, true
+}
+
+// replySubscriptionIDError answers a subscribe whose subscription id the client
+// got wrong — missing, or one it is already using — and reports whether err was
+// such a case. Both are invalid params rather than internal errors: the id in a
+// *.subscribe request belongs to the client (see
+// watch.BaseWatcher.AddSubscription), so only the client can supply a usable one.
+func (h *rpcMethodHandler) replySubscriptionIDError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error) bool {
+	if !errors.Is(err, watch.ErrSubscriptionIDRequired) && !errors.Is(err, watch.ErrSubscriptionIDInUse) {
+		return false
+	}
+	h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, err.Error())
+	return true
+}
+
+// replySubscriptionError answers a failed subscribe for a watcher whose only
+// other failure is its own: an id the client got wrong is invalid params,
+// anything else is the server failing to read the snapshot it owes the reply.
+func (h *rpcMethodHandler) replySubscriptionError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error, message string, logArgs ...any) {
+	if h.replySubscriptionIDError(ctx, conn, id, err) {
+		return
+	}
+	h.replyInternalError(ctx, conn, id, message, err, logArgs...)
+}
+
 func (h *rpcMethodHandler) handleWatcherUnsubscribe(
 	ctx context.Context,
 	conn *jsonrpc2.Conn,
@@ -679,7 +731,7 @@ func (h *rpcMethodHandler) handleWatcherUnsubscribe(
 	}
 
 	watcher.Unsubscribe(params.ID)
-	h.state.untrackSubscription(params.ID)
+	h.state.untrackSubscription(params.ID, watcher)
 	h.log.Debug("unsubscribed", "watcher", logName, "watchId", params.ID)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {

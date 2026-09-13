@@ -425,9 +425,11 @@ The shared definitions, so the common cases cannot drift apart:
   list row, a group header or the row under a chat bubble (36 / coarse 44).
   Shared by both sidebar panels and chat; it moved out of `Git/` once the file
   tree stopped writing its own copy.
-- `web/src/components/common/MenuRow.tsx`'s `menuRowClass` — a full-bleed row of
-  a menu sheet (48, clear of the floor for either pointer). Shared by the file
-  entry menu and the message menu.
+- `web/src/components/common/MenuRow.tsx`'s `MenuRow` — a full-bleed row of a
+  menu sheet (48, clear of the floor for either pointer). Only the file entry
+  menu uses it today; the message menu it was extracted for is gone, its one row
+  now an icon standing on the bubble's action row
+  ([session-fork-ui.md](session-fork-ui.md#entry-point)).
 - `web/src/components/ui/ContentView.tsx`'s `actionIconButtonClass` — the
   bordered icon action in the bar under a file or a diff (36 / coarse 44). It was
   32px for everyone, under the floor for *either* pointer.
@@ -470,18 +472,18 @@ This is written down so the next reader does not "fix" it in passing.
 
 The shape the rule does not reach is not hypothetical. Counted with the same
 reader `touchTarget.test.ts` uses, over the same three roots, then carried past
-the point where the guard stops: **69** interactive elements render text, state
+the point where the guard stops: **66** interactive elements render text, state
 neither a height nor a stretch token, and carry no `touch-target`. (The two that
 do stretch are blind spot 5 below, not this list.)
 
-- **28** state both a font size and vertical padding, so their height is exact
-  arithmetic. **All 28 land between 20px and 40px** — not one reaches 44.
+- **29** state both a font size and vertical padding, so their height is exact
+  arithmetic. **All 29 land between 20px and 40px** — not one reaches 44.
 - **11** state no padding at all. For ten of them the box is a single line box,
   **16–20px** — six say their own font size, and the other four take it from the
   banner or paragraph they sit in, read one by one. The eleventh is the theme
   card in Appearance, which states no height but is sized by a `min-h-12` block
   inside it and is nowhere near the floor.
-- **30** inherit their font size from an ancestor in another file, so only a
+- **26** inherit their font size from an ancestor in another file, so only a
   range can be given. Nothing in either app sets a root font size and preflight
   sets `line-height: 1.5` on `html`, so the browser default puts the line box at
   24px: the common `p-2` case lands around 40px, `p-1` around 32px, and a `p-3`
@@ -500,7 +502,6 @@ source:
 | `Project/WorkListOverlay.tsx:418` | **20px** | the labelled Start chip (its icon-only twin above it is 44) |
 | `AppShell.tsx:523/530`, `ui/ReconnectBanner.tsx:39` | ~**20px** | Retry and dismiss in the session-error banner, Retry now in the reconnect banner |
 | `Worktree/WorktreeCreateSheet.tsx:225` | ~**20px** | the link out of the setup-script note |
-| `Chat/ChatPanel.tsx:115` | **24px** | the linked-work pill, in the toolbar row above the input |
 
 One more is worth naming although it clears the fine floor: `ConfirmDialog`'s
 Cancel and confirm are **36px** (`px-4 py-2` around `text-sm`), and every
@@ -580,7 +581,7 @@ Known blind spots, recorded as they are rather than as they should be:
    ([above](#which-controls-the-floor-is-asked-of)). The moment such a control
    does state a height, that number is read and held to both floors — which is
    where the send button's `h-9` was caught. Only a person reading the rendered
-   page catches the other kind, and **69 controls are sitting here today**, the
+   page catches the other kind, and **66 controls are sitting here today**, the
    shortest at 16px — inventoried in
    [Outside the floor today](#outside-the-floor-today).
 2. **The spacing check only looks at containers that state a gap, and only at

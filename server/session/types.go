@@ -90,15 +90,22 @@ func (s HistorySeq) Valid() bool { return s > 0 }
 // meaningful for a Valid sequence number.
 func (s HistorySeq) Index() int { return int(s) - 1 }
 
-// StampHistorySeq returns the records with their sequence numbers written into
+// stampHistorySeq returns the records with their sequence numbers written into
 // them, which is how a client learns what to quote back — see HistorySeq. The
 // stored records are left alone: a sequence number is a record's address in the
 // history, not part of the event that was recorded.
 //
+// firstSeq is where records[0] sits in the whole history, which is what makes
+// this usable on a page as well as on the whole of it: a record's address is its
+// position in the session's history, not in the slice it happens to be sent in,
+// so numbering a page from 1 would hand out the addresses of the oldest records
+// instead. PageHistory is the only caller; it is the one place that knows where
+// a page starts.
+//
 // Records are rewritten field by field rather than through a typed struct so
 // that a record written by another version of Pockode keeps every field it
 // arrived with.
-func StampHistorySeq(records []json.RawMessage) []json.RawMessage {
+func stampHistorySeq(records []json.RawMessage, firstSeq HistorySeq) []json.RawMessage {
 	stamped := make([]json.RawMessage, len(records))
 	for i, raw := range records {
 		fields := make(map[string]json.RawMessage)
@@ -118,7 +125,7 @@ func StampHistorySeq(records []json.RawMessage) []json.RawMessage {
 			continue
 		}
 
-		fields["seq"] = json.RawMessage(strconv.Itoa(i + 1))
+		fields["seq"] = json.RawMessage(strconv.Itoa(int(firstSeq) + i))
 		out, err := json.Marshal(fields)
 		if err != nil {
 			stamped[i] = raw
@@ -137,6 +144,20 @@ func StampHistorySeq(records []json.RawMessage) []json.RawMessage {
 // it already holds — where a parent that is gone is simply absent.
 type ForkOrigin struct {
 	SessionID string `json:"session_id"`
+}
+
+// CreateSpec is the engine a new session is born with. One struct rather than
+// four parameters because the four are validated against each other: a model or
+// effort only means anything next to the agent type it was chosen for.
+//
+// Every field may be empty. An empty AgentType or Mode falls back to the
+// server's built-in default; an empty Model or Effort means the CLI is passed
+// no flag and decides for itself.
+type CreateSpec struct {
+	AgentType AgentType
+	Mode      Mode
+	Model     string
+	Effort    string
 }
 
 // ForkSpec describes a session created as a copy of another one. Everything a
@@ -190,7 +211,7 @@ const (
 	OperationDelete Operation = "delete"
 )
 
-// SessionChangeEvent represents a change to the session list.
+// SessionChangeEvent represents a change to one session.
 // For create/update: Session is fully populated.
 // For delete: only Session.ID is valid.
 type SessionChangeEvent struct {
@@ -198,7 +219,13 @@ type SessionChangeEvent struct {
 	Session SessionMeta
 }
 
-// OnChangeListener receives notifications when the session list changes.
+// OnChangeListener receives notifications when a session changes.
+//
+// OnSessionChange is called with the store's lock held, so an implementation
+// must neither block nor call back into the store — do what SessionListWatcher
+// and SessionDetailWatcher do and queue the event. The lock is held on purpose:
+// it is what makes listeners see changes in the order they were written, which
+// the watchers' incremental notifications depend on.
 type OnChangeListener interface {
 	OnSessionChange(event SessionChangeEvent)
 }

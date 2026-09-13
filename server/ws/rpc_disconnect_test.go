@@ -97,7 +97,7 @@ func TestConnection_ReleasesResourcesWhenClientVanishes(t *testing.T) {
 	for cycle := range 5 {
 		client := newKilledClient(t, env)
 
-		if resp := client.call("work.list.subscribe", struct{}{}); resp.Error != nil {
+		if resp := client.call("work.list.subscribe", rpc.SubscribeParams{ID: "client-1"}); resp.Error != nil {
 			t.Fatalf("cycle %d: work.list.subscribe failed: %s", cycle, resp.Error.Message)
 		}
 		if got := wt.SubscriberCount(); got != baseSubscribers+1 {

@@ -11,8 +11,8 @@ import (
 )
 
 type mockSessionStore struct {
-	sessions []session.SessionMeta
-	listener session.OnChangeListener
+	sessions  []session.SessionMeta
+	listeners []session.OnChangeListener
 }
 
 func (m *mockSessionStore) List() ([]session.SessionMeta, error) {
@@ -28,7 +28,7 @@ func (m *mockSessionStore) Get(sessionID string) (session.SessionMeta, bool, err
 	return session.SessionMeta{}, false, nil
 }
 
-func (m *mockSessionStore) Create(ctx context.Context, sessionID string, agentType session.AgentType, mode session.Mode) (session.SessionMeta, error) {
+func (m *mockSessionStore) Create(ctx context.Context, sessionID string, spec session.CreateSpec) (session.SessionMeta, error) {
 	return session.SessionMeta{}, nil
 }
 
@@ -88,8 +88,17 @@ func (m *mockSessionStore) SetUnread(ctx context.Context, sessionID string, unre
 	return nil
 }
 
-func (m *mockSessionStore) SetOnChangeListener(listener session.OnChangeListener) {
-	m.listener = listener
+func (m *mockSessionStore) AddOnChangeListener(listener session.OnChangeListener) {
+	m.listeners = append(m.listeners, listener)
+}
+
+func (m *mockSessionStore) hasListener(l session.OnChangeListener) bool {
+	for _, registered := range m.listeners {
+		if registered == l {
+			return true
+		}
+	}
+	return false
 }
 
 type mockSessionStoreWithError struct {
@@ -117,13 +126,9 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 	w := NewSessionListWatcher(store)
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
-	id, sessions, err := w.Subscribe(nil)
+	sessions, err := w.Subscribe("client-1", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if id == "" {
-		t.Error("expected non-empty subscription ID")
 	}
 
 	if len(sessions) != 2 {
@@ -147,13 +152,13 @@ func TestSessionListWatcher_Unsubscribe(t *testing.T) {
 	w := NewSessionListWatcher(store)
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
-	id, _, _ := w.Subscribe(nil)
+	w.Subscribe("client-1", nil)
 
 	if !w.HasSubscriptions() {
 		t.Error("expected HasSubscriptions to be true")
 	}
 
-	w.Unsubscribe(id)
+	w.Unsubscribe("client-1")
 
 	if w.HasSubscriptions() {
 		t.Error("expected HasSubscriptions to be false")
@@ -175,7 +180,7 @@ func TestSessionListWatcher_ListenerRegistered(t *testing.T) {
 	store := &mockSessionStore{}
 	w := NewSessionListWatcher(store)
 
-	if store.listener != w {
+	if !store.hasListener(w) {
 		t.Error("expected watcher to be registered as listener")
 	}
 }
@@ -198,7 +203,7 @@ func TestSessionListWatcher_Subscribe_ListError(t *testing.T) {
 	w := NewSessionListWatcher(store)
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
-	_, _, err := w.Subscribe(nil)
+	_, err := w.Subscribe("client-1", nil)
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -352,15 +357,15 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 		},
 	}
 	w := &SessionListWatcher{
-		BaseWatcher: NewBaseWatcher("sl"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan session.SessionChangeEvent, 1),
 	}
-	store.SetOnChangeListener(w)
+	store.AddOnChangeListener(w)
 	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	notifier := &captureNotifier{}
-	w.Subscribe(notifier)
+	w.Subscribe("client-1", notifier)
 
 	// Simulate the dirty flag being set (as if events were dropped)
 	w.dirty.Store(true)

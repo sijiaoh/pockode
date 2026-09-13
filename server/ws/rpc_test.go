@@ -18,6 +18,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/internal/unwritabletest"
+	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -70,6 +71,7 @@ type testEnv struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	reqID           int
+	subID           int // names each subscription a test opens; see nextSubID
 	authResult      rpc.AuthResult
 	// buffered holds frames read while waiting for a reply that had not arrived
 	// yet. A notification can overtake the reply to the request that caused it,
@@ -312,23 +314,51 @@ func (e *testEnv) awaitNotification(method string) rpcNotification {
 	}
 }
 
-func (e *testEnv) subscribeChatMessages(sessionID string) rpc.ChatMessagesSubscribeResult {
-	resp := e.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{SessionID: sessionID})
-	if resp.Error != nil {
-		e.t.Fatalf("subscribe failed: %s", resp.Error.Message)
-	}
-	var result rpc.ChatMessagesSubscribeResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		e.t.Fatalf("failed to unmarshal result: %v", err)
-	}
-	return result
+// nextSubID names a subscription the way a client does: the id travels with the
+// *.subscribe request, and a watcher refuses one already in use, so every
+// subscription a test opens needs one of its own.
+func (e *testEnv) nextSubID() string {
+	e.subID++
+	return fmt.Sprintf("client-%d", e.subID)
 }
 
-func (e *testEnv) sendMessage(sessionID, content string) {
+func (e *testEnv) subscribeChatMessages(sessionID string) rpc.ChatMessagesSubscribeResult {
+	return e.subscribeChatMessagesWithLimit(sessionID, 0)
+}
+
+// createSession creates a session over the wire and returns both the reply — a
+// session list row — and the metadata the session was stored with. A row carries
+// only what drawing a row needs (rpc.SessionListItem), so anything a test wants
+// to say about the engine a session was born with is read from the store.
+func (e *testEnv) createSession() (rpc.SessionListItem, session.SessionMeta) {
+	resp := e.call("session.create", nil)
+	if resp.Error != nil {
+		e.t.Fatalf("session.create failed: %s", resp.Error.Message)
+	}
+	var row rpc.SessionListItem
+	if err := json.Unmarshal(resp.Result, &row); err != nil {
+		e.t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	meta, found, err := e.getMainWorktree().SessionStore.Get(row.ID)
+	if err != nil {
+		e.t.Fatalf("failed to read back session %q: %v", row.ID, err)
+	}
+	if !found {
+		e.t.Fatalf("created session %q is not in the store", row.ID)
+	}
+	return row, meta
+}
+
+func (e *testEnv) sendMessage(sessionID, content string) rpc.MessageResult {
 	resp := e.call("chat.message", rpc.MessageParams{SessionID: sessionID, Content: content})
 	if resp.Error != nil {
 		e.t.Fatalf("message failed: %s", resp.Error.Message)
 	}
+	var result rpc.MessageResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		e.t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	return result
 }
 
 // awaitResponseComplete drains notifications until the agent has finished
@@ -423,7 +453,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "chat.messages.subscribe", Params: rpc.ChatMessagesSubscribeParams{SessionID: "sess"}}
+	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "chat.messages.subscribe", Params: rpc.ChatMessagesSubscribeParams{ID: "client-1", SessionID: "sess"}}
 	data, _ := json.Marshal(req)
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 		t.Fatalf("failed to send: %v", err)
@@ -449,15 +479,12 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 
 func TestHandler_ChatMessagesSubscribe(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	result := env.subscribeChatMessages("sess")
 
 	if result.State != "ended" {
 		t.Errorf("expected state=ended before message, got %s", result.State)
-	}
-	if result.ID == "" {
-		t.Error("expected subscription ID")
 	}
 }
 
@@ -470,7 +497,7 @@ func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	wt := env.getMainWorktree()
-	wt.SessionStore.Create(bgCtx, "sess", "", "")
+	wt.SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	// Start process by sending message
 	env.subscribeChatMessages("sess")
@@ -492,7 +519,7 @@ func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
 func TestHandler_ChatMessagesSubscribe_InvalidSession(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	resp := env.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{SessionID: "non-existent"})
+	resp := env.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{ID: "client-1", SessionID: "non-existent"})
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
 		t.Errorf("expected session not found error, got %+v", resp)
@@ -507,15 +534,34 @@ func TestHandler_WebSocketConnection(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
-	env.subscribeChatMessages("sess")
+	const subID = "client-chat"
+	if resp := env.call("chat.messages.subscribe", rpc.ChatMessagesSubscribeParams{
+		ID: subID, SessionID: "sess",
+	}); resp.Error != nil {
+		t.Fatalf("subscribe failed: %s", resp.Error.Message)
+	}
 	env.sendMessage("sess", "Hello AI")
 
 	// The agent's output must reach the client in order: awaiting the text first
 	// fails if done overtakes it, because done would be consumed on the way.
-	env.awaitNotification("chat.text")
-	env.awaitNotification("chat.done")
+	text := env.awaitNotification("chat.text")
+	done := env.awaitNotification("chat.done")
+
+	// Addressed to the id the client chose: the client routes chat events by it
+	// alone, and it is the only id either side ever had for this subscription.
+	for _, notif := range []rpcNotification{text, done} {
+		var params struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(notif.Params, &params); err != nil {
+			t.Fatalf("unmarshal %s params: %v", notif.Method, err)
+		}
+		if params.ID != subID {
+			t.Errorf("%s addressed to %q, want %q", notif.Method, params.ID, subID)
+		}
+	}
 }
 
 func TestHandler_MultipleSessions(t *testing.T) {
@@ -527,8 +573,8 @@ func TestHandler_MultipleSessions(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "session-A", "", "")
-	store.Create(bgCtx, "session-B", "", "")
+	store.Create(bgCtx, "session-A", session.CreateSpec{})
+	store.Create(bgCtx, "session-B", session.CreateSpec{})
 
 	env.subscribeChatMessages("session-A")
 	env.subscribeChatMessages("session-B")
@@ -560,7 +606,7 @@ func TestHandler_PermissionRequest(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "run ls")
@@ -584,7 +630,7 @@ func TestHandler_AgentStartError(t *testing.T) {
 		startErr: fmt.Errorf("failed to start agent"),
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	env.subscribeChatMessages("sess")
 	resp := env.call("chat.message", rpc.MessageParams{SessionID: "sess", Content: "hello"})
@@ -602,7 +648,7 @@ func TestHandler_Interrupt(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "hello")
@@ -644,7 +690,7 @@ func TestHandler_NewSession_ResumeFalse(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "new-session", "", "")
+	store.Create(bgCtx, "new-session", session.CreateSpec{})
 
 	env.subscribeChatMessages("new-session")
 	env.sendMessage("new-session", "hello")
@@ -686,7 +732,7 @@ func TestHandler_FailedFirstTurn_KeepsAgentTypeSwitchable(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "failed-session", session.AgentTypeClaude, "")
+	store.Create(bgCtx, "failed-session", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	env.subscribeChatMessages("failed-session")
 	env.sendMessage("failed-session", "hello")
@@ -725,7 +771,7 @@ func TestHandler_SessionWithAgentOutput_LocksAgentType(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "started-session", session.AgentTypeClaude, "")
+	store.Create(bgCtx, "started-session", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	env.subscribeChatMessages("started-session")
 	env.sendMessage("started-session", "hello")
@@ -749,7 +795,7 @@ func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 	}
 	env := newTestEnv(t, mock)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "activated-session", "", "")
+	store.Create(bgCtx, "activated-session", session.CreateSpec{})
 	store.Activate(bgCtx, "activated-session")
 
 	env.subscribeChatMessages("activated-session")
@@ -780,7 +826,7 @@ func TestHandler_AskUserQuestion(t *testing.T) {
 		},
 	}
 	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", "", "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
 
 	env.subscribeChatMessages("sess")
 	env.sendMessage("sess", "ask me")
@@ -829,25 +875,20 @@ func TestHandler_Message_SessionNotInStore(t *testing.T) {
 func TestHandler_SessionListSubscribe(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "session-1", "", "")
-	store.Create(bgCtx, "session-2", "", "")
+	store.Create(bgCtx, "session-1", session.CreateSpec{})
+	store.Create(bgCtx, "session-2", session.CreateSpec{})
 
-	resp := env.call("session.list.subscribe", nil)
+	resp := env.call("session.list.subscribe", rpc.SubscribeParams{ID: "client-1"})
 
 	if resp.Error != nil {
 		t.Errorf("unexpected error: %s", resp.Error.Message)
 	}
 
 	var result struct {
-		ID       string                `json:"id"`
 		Sessions []session.SessionMeta `json:"sessions"`
 	}
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("failed to unmarshal result: %v", err)
-	}
-
-	if result.ID == "" {
-		t.Error("expected non-empty subscription ID")
 	}
 
 	if len(result.Sessions) != 2 {
@@ -855,27 +896,61 @@ func TestHandler_SessionListSubscribe(t *testing.T) {
 	}
 }
 
-func TestHandler_SessionCreate(t *testing.T) {
+func TestHandler_SessionDetailSubscribe(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "session-1", session.CreateSpec{})
 
-	resp := env.call("session.create", nil)
-
+	resp := env.call("session.detail.subscribe", rpc.SessionDetailSubscribeParams{ID: "client-1", SessionID: "session-1"})
 	if resp.Error != nil {
-		t.Errorf("unexpected error: %s", resp.Error.Message)
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
 	}
 
-	var result session.SessionMeta
+	var result rpc.SessionDetailSubscribeResult
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("failed to unmarshal result: %v", err)
 	}
+	if result.Session.ID != "session-1" {
+		t.Errorf("session = %+v, want session-1", result.Session)
+	}
 
-	if result.ID == "" {
+	// The id the client sent is the one the subscription answers to, with nothing
+	// in the reply to learn it from.
+	if resp := env.call("session.detail.unsubscribe", unsubscribeParams{ID: "client-1"}); resp.Error != nil {
+		t.Errorf("unsubscribe failed: %s", resp.Error.Message)
+	}
+}
+
+func TestHandler_SessionDetailSubscribe_UnknownSession(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("session.detail.subscribe", rpc.SessionDetailSubscribeParams{ID: "client-1", SessionID: "nope"})
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "session not found") {
+		t.Errorf("expected session not found error, got %+v", resp)
+	}
+}
+
+func TestHandler_SessionCreate(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	row, created := env.createSession()
+
+	// The row is what the client draws the new session with, so it is checked as
+	// the reply rather than through the store.
+	if row.ID == "" {
 		t.Error("expected non-empty session ID")
 	}
-	if result.Title != "New Chat" {
-		t.Errorf("expected title 'New Chat', got %q", result.Title)
+	if row.Title != "New Chat" {
+		t.Errorf("expected title 'New Chat', got %q", row.Title)
 	}
-	if result.Activated {
+	if row.State != string(process.ProcessStateEnded) {
+		t.Errorf("state = %q, want %q for a session with no process yet", row.State, process.ProcessStateEnded)
+	}
+	// Asserted on the stored session: a row carries no activated flag, so the
+	// same check against the reply would read false for a session that had been
+	// activated and prove nothing.
+	if created.Activated {
 		t.Error("expected activated=false for new session")
 	}
 }
@@ -905,7 +980,7 @@ func TestHandler_SessionCreate_ReportsUnderlyingCause(t *testing.T) {
 func TestHandler_SessionDelete(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "to-delete", "", "")
+	sess, _ := store.Create(bgCtx, "to-delete", session.CreateSpec{})
 
 	resp := env.call("session.delete", rpc.SessionDeleteParams{SessionID: sess.ID})
 
@@ -922,7 +997,7 @@ func TestHandler_SessionDelete(t *testing.T) {
 func TestHandler_SessionDelete_ClosesProcess(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	wt := env.getMainWorktree()
-	sess, _ := wt.SessionStore.Create(bgCtx, "to-delete-with-process", "", "")
+	sess, _ := wt.SessionStore.Create(bgCtx, "to-delete-with-process", session.CreateSpec{})
 	env.sendMessage(sess.ID, "hello")
 
 	if !wt.ProcessManager.HasProcess(sess.ID) {
@@ -942,7 +1017,7 @@ func TestHandler_SessionDelete_ClosesProcess(t *testing.T) {
 func TestHandler_SessionUpdateTitle(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "to-update", "", "")
+	sess, _ := store.Create(bgCtx, "to-update", session.CreateSpec{})
 
 	resp := env.call("session.update_title", rpc.SessionUpdateTitleParams{
 		SessionID: sess.ID,
@@ -961,7 +1036,7 @@ func TestHandler_SessionUpdateTitle(t *testing.T) {
 
 func TestHandler_SessionUpdateTitle_EmptyTitle(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
-	sess, _ := env.getMainWorktree().SessionStore.Create(bgCtx, "to-update", "", "")
+	sess, _ := env.getMainWorktree().SessionStore.Create(bgCtx, "to-update", session.CreateSpec{})
 
 	resp := env.call("session.update_title", rpc.SessionUpdateTitleParams{
 		SessionID: sess.ID,
@@ -989,7 +1064,7 @@ func TestHandler_SessionUpdateTitle_NotFound(t *testing.T) {
 func TestHandler_SessionSetAgentType(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := store.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
 		SessionID: sess.ID,
@@ -1009,7 +1084,7 @@ func TestHandler_SessionSetAgentType(t *testing.T) {
 func TestHandler_SessionSetAgentType_ActivatedSession(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "activated", session.AgentTypeClaude, "")
+	store.Create(bgCtx, "activated", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	store.Activate(bgCtx, "activated")
 
 	resp := env.call("session.set_agent_type", rpc.SessionSetAgentTypeParams{
@@ -1041,9 +1116,10 @@ func TestHandler_SessionSetAgentType_NotFound(t *testing.T) {
 func TestHandler_SessionFork(t *testing.T) {
 	env := newForkableTestEnv(t)
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
+	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
 	store.Update(bgCtx, "source", "Fix the parser")
-	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
+	store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
+	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "keep me too"})
 	store.AppendToHistory(bgCtx, "source", map[string]string{"type": "text", "content": "drop me"})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
@@ -1059,24 +1135,56 @@ func TestHandler_SessionFork(t *testing.T) {
 	if forked.ID == "source" || forked.ID == "" {
 		t.Fatalf("forked session ID = %q, want a new one", forked.ID)
 	}
-	if forked.Title != "Fix the parser" || forked.Mode != session.ModeYolo {
-		t.Errorf("title/mode = %q/%q, want the source's", forked.Title, forked.Mode)
+	if forked.Title != "Fix the parser" {
+		t.Errorf("title = %q, want the source's", forked.Title)
 	}
 	if forked.ForkedFrom == nil || forked.ForkedFrom.SessionID != "source" {
 		t.Errorf("forkedFrom = %+v, want the source", forked.ForkedFrom)
+	}
+	// The settings the fork inherited are checked in the store: the reply is a
+	// list row now, and a row carries no settings (rpc.SessionListItem).
+	forkedMeta, found, err := store.Get(forked.ID)
+	if err != nil || !found {
+		t.Fatalf("forked session %q not in the store (found=%v, err=%v)", forked.ID, found, err)
+	}
+	if forkedMeta.Mode != session.ModeYolo {
+		t.Errorf("mode = %q, want the source's %q", forkedMeta.Mode, session.ModeYolo)
 	}
 
 	history, err := store.GetHistory(bgCtx, forked.ID)
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
-	// The anchored record, plus the warning that this agent brought no context with
-	// it — the mock answers carried == false.
-	if len(history) != 2 {
-		t.Fatalf("forked history has %d records, want 2: %s", len(history), history)
+	// The conversation through the anchored record, plus the warning that this
+	// agent brought no context with it — the mock answers carried == false.
+	if len(history) != 3 {
+		t.Fatalf("forked history has %d records, want 3: %s", len(history), history)
 	}
-	if !strings.Contains(string(history[0]), "keep me") {
-		t.Errorf("first record = %s, want the anchored one", history[0])
+	if !strings.Contains(string(history[0]), "keep me") ||
+		!strings.Contains(string(history[1]), "keep me too") {
+		t.Errorf("forked history = %s, want the conversation through the anchor", history)
+	}
+}
+
+// TestHandler_SessionFork_NoHistoryBeforeAnchor: a fork anchored on the first
+// thing said in the session returns to before there was a conversation, and an
+// empty session is not a branch of one. The refusal has to reach the client as a
+// bad request with its own wording, since the sheet shows it to the user.
+func TestHandler_SessionFork_NoHistoryBeforeAnchor(t *testing.T) {
+	env := newForkableTestEnv(t)
+	store := env.getMainWorktree().SessionStore
+	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
+	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "the first thing"})
+
+	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
+	if resp.Error == nil {
+		t.Fatalf("fork succeeded with nothing to keep: %s", resp.Result)
+	}
+	if resp.Error.Code != jsonrpc2.CodeInvalidParams {
+		t.Errorf("error code = %d, want invalid params", resp.Error.Code)
+	}
+	if !strings.Contains(resp.Error.Message, "no conversation before this message") {
+		t.Errorf("error = %q, want it to say what was wrong", resp.Error.Message)
 	}
 }
 
@@ -1084,7 +1192,7 @@ func TestHandler_SessionFork(t *testing.T) {
 // with the request, since the sheet shows the server's message to the user.
 func TestHandler_SessionFork_AnchorOutOfRange(t *testing.T) {
 	env := newForkableTestEnv(t)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "source", session.AgentTypeClaude, "")
+	env.getMainWorktree().SessionStore.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: 7})
 
@@ -1100,7 +1208,7 @@ func TestHandler_SessionFork_AnchorOutOfRange(t *testing.T) {
 func TestHandler_SessionFork_AgentCannotFork(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	store.Create(bgCtx, "source", session.AgentTypeClaude, session.ModeYolo)
+	store.Create(bgCtx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo})
 	anchor, _ := store.AppendToHistory(bgCtx, "source", map[string]string{"type": "message", "content": "keep me"})
 
 	resp := env.call("session.fork", rpc.SessionForkParams{SessionID: "source", AnchorSeq: anchor})
@@ -1149,7 +1257,7 @@ func TestHandler_AgentList(t *testing.T) {
 func TestHandler_SessionSetModel(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := store.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	model := session.ModelsForAgent(session.AgentTypeClaude)[0].ID
 
 	resp := env.call("session.set_model", rpc.SessionSetModelParams{
@@ -1172,7 +1280,7 @@ func TestHandler_SessionSetModel_ForeignAgentModel(t *testing.T) {
 	// surface later, as a CLI that refuses to start.
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := store.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	resp := env.call("session.set_model", rpc.SessionSetModelParams{
 		SessionID: sess.ID,
@@ -1195,7 +1303,7 @@ func TestHandler_SessionSetModel_ForeignAgentModel(t *testing.T) {
 func TestHandler_SessionSetModel_RefusalSparesTheProcess(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	wt := env.getMainWorktree()
-	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	env.sendMessage(sess.ID, "hello")
 
 	if !wt.ProcessManager.HasProcess(sess.ID) {
@@ -1220,7 +1328,7 @@ func TestHandler_SessionSetModel_RefusalSparesTheProcess(t *testing.T) {
 func TestHandler_SessionSetModel_ClosesProcess(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	wt := env.getMainWorktree()
-	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	env.sendMessage(sess.ID, "hello")
 
 	if !wt.ProcessManager.HasProcess(sess.ID) {
@@ -1277,7 +1385,7 @@ func TestHandler_SessionModels(t *testing.T) {
 func TestHandler_ChatMessagesSubscribe_History(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "with-history", "", "")
+	sess, _ := store.Create(bgCtx, "with-history", session.CreateSpec{})
 	store.AppendToHistory(bgCtx, sess.ID, map[string]string{"type": "message", "content": "hello"})
 
 	result := env.subscribeChatMessages(sess.ID)
@@ -1691,7 +1799,7 @@ func TestHandler_GitDiffSubscribe_Unstaged(t *testing.T) {
 	os.WriteFile(testFile, []byte("modified"), 0644)
 
 	env := newWorkDirTestEnv(t, dir)
-	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "test.txt", Staged: false})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{ID: "client-1", Path: "test.txt", Staged: false})
 
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
@@ -1700,9 +1808,6 @@ func TestHandler_GitDiffSubscribe_Unstaged(t *testing.T) {
 	var result rpc.GitDiffSubscribeResult
 	json.Unmarshal(resp.Result, &result)
 
-	if result.ID == "" {
-		t.Error("expected subscription ID")
-	}
 	if result.OldContent != "original" {
 		t.Errorf("expected old content 'original', got %q", result.OldContent)
 	}
@@ -1725,7 +1830,7 @@ func TestHandler_GitDiffSubscribe_Staged(t *testing.T) {
 	runGitIn(t, dir, "add", "test.txt")
 
 	env := newWorkDirTestEnv(t, dir)
-	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "test.txt", Staged: true})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{ID: "client-1", Path: "test.txt", Staged: true})
 
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
@@ -1734,9 +1839,6 @@ func TestHandler_GitDiffSubscribe_Staged(t *testing.T) {
 	var result rpc.GitDiffSubscribeResult
 	json.Unmarshal(resp.Result, &result)
 
-	if result.ID == "" {
-		t.Error("expected subscription ID")
-	}
 	if result.OldContent != "original" {
 		t.Errorf("expected old content 'original', got %q", result.OldContent)
 	}
@@ -1749,7 +1851,7 @@ func TestHandler_GitDiffSubscribe_PathRequired(t *testing.T) {
 	dir := setupGitRepo(t)
 	env := newWorkDirTestEnv(t, dir)
 
-	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "", Staged: false})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{ID: "client-1", Path: "", Staged: false})
 
 	if resp.Error == nil {
 		t.Fatal("expected error")
@@ -1763,7 +1865,7 @@ func TestHandler_GitDiffSubscribe_InvalidPath(t *testing.T) {
 	dir := setupGitRepo(t)
 	env := newWorkDirTestEnv(t, dir)
 
-	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{Path: "../etc/passwd", Staged: false})
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{ID: "client-1", Path: "../etc/passwd", Staged: false})
 
 	if resp.Error == nil {
 		t.Fatal("expected error")
@@ -2002,7 +2104,7 @@ func effortOnlyOnCodex(t *testing.T) string {
 func TestHandler_SessionSetEffort(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := store.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	effort := session.EffortsForAgent(session.AgentTypeClaude)[0].ID
 
 	resp := env.call("session.set_effort", rpc.SessionSetEffortParams{
@@ -2025,7 +2127,7 @@ func TestHandler_SessionSetEffort_ForeignAgentEffort(t *testing.T) {
 	// with nothing but a warning nobody reads, so it is refused here.
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
-	sess, _ := store.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := store.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 
 	resp := env.call("session.set_effort", rpc.SessionSetEffortParams{
 		SessionID: sess.ID,
@@ -2047,7 +2149,7 @@ func TestHandler_SessionSetEffort_ForeignAgentEffort(t *testing.T) {
 func TestHandler_SessionSetEffort_ProcessLifetime(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	wt := env.getMainWorktree()
-	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.AgentTypeClaude, "")
+	sess, _ := wt.SessionStore.Create(bgCtx, "sess", session.CreateSpec{AgentType: session.AgentTypeClaude})
 	env.sendMessage(sess.ID, "hello")
 
 	if !wt.ProcessManager.HasProcess(sess.ID) {

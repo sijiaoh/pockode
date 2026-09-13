@@ -12,7 +12,7 @@ import {
 	parseAnswer,
 	type QuestionSelection,
 } from "../../utils/questionAnswer";
-import { ScrollableContent } from "../ui";
+import { CollapsibleBody, ScrollableContent } from "../ui";
 
 interface Props {
 	request: AskUserQuestionRequest;
@@ -324,7 +324,7 @@ function AskUserQuestionItem({
 				)}
 			</button>
 
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					{status === "cancelled" && (
 						<div className="mb-3 rounded bg-th-error/10 px-2 py-1.5 text-th-error">
@@ -369,7 +369,7 @@ function AskUserQuestionItem({
 						))}
 					</fieldset>
 				</ScrollableContent>
-			)}
+			</CollapsibleBody>
 
 			{isPending && onRespond && (
 				<div className="flex justify-end gap-2 border-t border-th-border p-2">

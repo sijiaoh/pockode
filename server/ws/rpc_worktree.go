@@ -204,12 +204,20 @@ func (h *rpcMethodHandler) handleWorktreeSwitch(ctx context.Context, conn *jsonr
 }
 
 func (h *rpcMethodHandler) handleWorktreeSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	id, ok := h.subscriptionID(ctx, conn, req)
+	if !ok {
+		return
+	}
+
 	notifier := h.state.getNotifier()
-	id := h.worktreeManager.WorktreeWatcher.Subscribe(notifier)
+	if err := h.worktreeManager.WorktreeWatcher.Subscribe(id, notifier); err != nil {
+		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to worktree list")
+		return
+	}
 	h.state.trackSubscription(id, h.worktreeManager.WorktreeWatcher)
 	h.log.Debug("subscribed", "watcher", "worktree", "watchId", id)
 
-	if err := conn.Reply(ctx, req.ID, rpc.WorktreeSubscribeResult{ID: id}); err != nil {
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		h.log.Error("failed to send worktree subscribe response", "error", err)
 	}
 }

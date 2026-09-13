@@ -328,7 +328,7 @@ const STRETCHED: [axis: "h" | "w", pattern: RegExp][] = [
  * What still nobody guards, stated plainly rather than hopefully: a control
  * with text and no height of its own. `py-1.5` around one line of `text-xs`
  * (12px on a 16px line box) is 28px, and this returns null for it. Only a
- * person reading the rendered page catches that one — and 69 controls are in
+ * person reading the rendered page catches that one — and 66 controls are in
  * that shape today, the shortest of them 16px (docs/responsive-ui.md, "Outside
  * the floor today"). The floor is scoped to what is readable here; those are
  * known and deferred, not exempt.

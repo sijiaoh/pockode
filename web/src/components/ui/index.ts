@@ -1,7 +1,9 @@
 export { Spinner } from "@pockode/shared";
 export { default as BackToChatButton } from "./BackToChatButton";
+export { default as BadgeCount, formatBadgeCount } from "./BadgeCount";
 export { default as BadgeDot } from "./BadgeDot";
 export { default as BottomActionBar } from "./BottomActionBar";
+export { CollapsibleBody, useEverExpanded } from "./CollapsibleBody";
 export { default as ConnectionStatus } from "./ConnectionStatus";
 export {
 	actionIconButtonClass,

@@ -44,10 +44,18 @@ export const useAgentOptionsStore = create<AgentOptionsStore>((set) => ({
 // and would re-render on every store read.
 const NO_OPTIONS: AgentOption[] = [];
 
+/**
+ * `undefined` agent — nobody has picked one yet, which only an agent role can
+ * be — has no list to offer, the same `undefined` as "the fetch has not
+ * answered". The two never have to be told apart: the caller that can be
+ * agentless hides the list either way.
+ */
 export function useModelsForAgent(
-	agentType: AgentType,
+	agentType: AgentType | undefined,
 ): AgentOption[] | undefined {
-	return useAgentOptionsStore((s) => s.models?.[agentType]);
+	return useAgentOptionsStore((s) =>
+		agentType ? s.models?.[agentType] : undefined,
+	);
 }
 
 /**
@@ -56,9 +64,9 @@ export function useModelsForAgent(
  * have to stay apart: one is "we do not know yet", the other is an answer.
  */
 export function useEffortsForAgent(
-	agentType: AgentType,
+	agentType: AgentType | undefined,
 ): AgentOption[] | undefined {
 	return useAgentOptionsStore((s) =>
-		s.efforts ? (s.efforts[agentType] ?? NO_OPTIONS) : undefined,
+		agentType && s.efforts ? (s.efforts[agentType] ?? NO_OPTIONS) : undefined,
 	);
 }

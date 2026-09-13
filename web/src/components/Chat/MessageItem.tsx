@@ -3,7 +3,8 @@ import {
 	Check,
 	ChevronRight,
 	CircleHelp,
-	Workflow,
+	ExternalLink,
+	ListTodo,
 	X,
 } from "lucide-react";
 import { memo, useMemo, useState } from "react";
@@ -19,23 +20,23 @@ import type {
 	PermissionUpdate,
 	PermissionUpdateDestination,
 	SystemMessageMeta,
-	SystemMessageStep,
 	ToolCall,
 } from "../../types/message";
 import { isForkableMessage } from "../../utils/forkAnchor";
+import { hasMessageActions } from "../../utils/messageActions";
 import { formatFilePath } from "../../utils/path";
-import { systemActionLabel } from "../../utils/systemMessage";
+import { workEventWording } from "../../utils/systemMessage";
 import {
-	formatStepProgress,
-	recordedStepProgress,
-} from "../../utils/workSteps";
-import { ScrollableContent, Spinner } from "../ui";
+	CollapsibleBody,
+	ScrollableContent,
+	Spinner,
+	useEverExpanded,
+} from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
 import { MarkdownContent } from "./MarkdownContent";
 import MessageActions from "./MessageActions";
-import TaskGroupItem from "./TaskGroupItem";
+import TaskItem from "./TaskItem";
 import ToolResultDisplay from "./ToolResultDisplay";
-import WorkCardItem from "./WorkCardItem";
 
 interface ToolCallItemProps {
 	tool: ToolCall;
@@ -105,14 +106,16 @@ const ToolCallItem = memo(function ToolCallItem({ tool }: ToolCallItemProps) {
 					<span className="truncate text-th-text-muted">{summary}</span>
 				)}
 			</button>
-			{expanded && tool.result && (
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
-					<ToolResultDisplay
-						toolName={tool.name}
-						toolInput={tool.input}
-						result={tool.result}
-					/>
-				</ScrollableContent>
+			{tool.result && (
+				<CollapsibleBody expanded={expanded}>
+					<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+						<ToolResultDisplay
+							toolName={tool.name}
+							toolInput={tool.input}
+							result={tool.result}
+						/>
+					</ScrollableContent>
+				</CollapsibleBody>
 			)}
 		</div>
 	);
@@ -148,29 +151,39 @@ function SystemItem({ content }: SystemItemProps) {
 				/>
 				<span className="italic text-th-text-muted">{label}</span>
 			</button>
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					<pre className="text-th-text-muted">{content}</pre>
 				</ScrollableContent>
-			)}
+			</CollapsibleBody>
 		</div>
 	);
 }
 
-interface SystemMessageItemProps {
+interface WorkEventItemProps {
 	content: string;
 	subtype?: string;
 	meta?: SystemMessageMeta;
+	onOpenWorkDetail?: (workId: string) => void;
 }
 
-// SystemMessageItem renders a Pockode system-automation message as a collapsed,
-// low-contrast banner (not a chat bubble). Only reachable for history recorded
-// before meta.work_id existed; anything newer is folded into a WorkCardItem.
-// Visual pattern mirrors SystemItem for consistency.
-function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
+/**
+ * One thing that happened to a Pockode work, at the point in the stream where
+ * it happened. It says only that — no status, no history, no live data: the
+ * event is over, and what the work is doing now lives behind Details.
+ */
+function WorkEventItem({
+	content,
+	subtype,
+	meta,
+	onOpenWorkDetail,
+}: WorkEventItemProps) {
 	const [expanded, setExpanded] = useState(false);
-	const actionLabel = systemActionLabel(subtype, meta);
-	const summary = meta?.title;
+	const { label, summary } = workEventWording(subtype, meta);
+	const workId = meta?.work_id;
+	// The work's own title, even where the collapsed line names something else
+	// (a finished child): expanded, it sits next to the link into that work.
+	const title = meta?.title;
 
 	return (
 		<div className="rounded bg-th-bg-secondary text-xs">
@@ -183,38 +196,36 @@ function SystemMessageItem({ content, subtype, meta }: SystemMessageItemProps) {
 				<ChevronRight
 					className={`size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
 				/>
-				<Workflow className="size-3 shrink-0 text-th-text-muted" />
-				<span className="shrink-0 text-th-text-muted">{`Pockode · ${actionLabel}`}</span>
+				<ListTodo className="size-3 shrink-0 text-th-text-muted" />
+				<span className="shrink-0 text-th-text-muted">{`Pockode · ${label}`}</span>
 				{summary && (
 					<span className="min-w-0 truncate text-th-text-muted opacity-70">
 						{summary}
 					</span>
 				)}
 			</button>
-			{expanded && (
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+			<CollapsibleBody expanded={expanded}>
+				<ScrollableContent className="max-h-[60vh] space-y-2 overflow-auto border-t border-th-border p-2">
+					{(title || (workId && onOpenWorkDetail)) && (
+						<div className="flex items-start gap-2">
+							<p className="min-w-0 flex-1 break-words text-sm text-th-text-primary">
+								{title}
+							</p>
+							{workId && onOpenWorkDetail && (
+								<button
+									type="button"
+									onClick={() => onOpenWorkDetail(workId)}
+									className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-th-accent hover:bg-th-overlay-hover"
+								>
+									<ExternalLink className="size-3" />
+									Details
+								</button>
+							)}
+						</div>
+					)}
 					<MarkdownContent content={content} />
 				</ScrollableContent>
-			)}
-		</div>
-	);
-}
-
-interface StepDividerItemProps {
-	step: SystemMessageStep;
-}
-
-// A hairline saying only "the work moved to a new step here". It keeps the
-// transcript's answer to "which output belongs to which step", which the old
-// per-step banner used to carry, without restating any status.
-function StepDividerItem({ step }: StepDividerItemProps) {
-	return (
-		<div className="flex items-center gap-2">
-			<span className="h-px flex-1 bg-th-border" />
-			<span className="shrink-0 text-xs text-th-text-muted">
-				{formatStepProgress(recordedStepProgress(step.current, step.total))}
-			</span>
-			<span className="h-px flex-1 bg-th-border" />
+			</CollapsibleBody>
 		</div>
 	);
 }
@@ -242,17 +253,21 @@ interface RawItemProps {
 
 function RawItem({ content }: RawItemProps) {
 	const [expanded, setExpanded] = useState(false);
-	const { label, formatted } = useMemo(() => {
+	const everExpanded = useEverExpanded(expanded);
+	const parsed = useMemo(() => {
 		try {
-			const parsed = JSON.parse(content);
-			return {
-				label: typeof parsed.type === "string" ? parsed.type : "raw",
-				formatted: JSON.stringify(parsed, null, 2),
-			};
+			return JSON.parse(content) as { type?: unknown };
 		} catch {
-			return { label: "raw", formatted: content };
+			return null;
 		}
 	}, [content]);
+	const label = typeof parsed?.type === "string" ? parsed.type : "raw";
+	// Re-indenting the payload is the expensive half and only the body reads it.
+	const formatted = useMemo(
+		() =>
+			everExpanded ? (parsed ? JSON.stringify(parsed, null, 2) : content) : "",
+		[everExpanded, parsed, content],
+	);
 
 	return (
 		<div className="rounded bg-th-bg-secondary text-xs">
@@ -266,11 +281,11 @@ function RawItem({ content }: RawItemProps) {
 				/>
 				<span className="italic text-th-text-muted">{label}</span>
 			</button>
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					<pre className="text-th-text-muted">{formatted}</pre>
 				</ScrollableContent>
-			)}
+			</CollapsibleBody>
 		</div>
 	);
 }
@@ -294,11 +309,11 @@ function CommandOutputItem({ content }: CommandOutputItemProps) {
 				/>
 				<span className="text-th-accent">Command Output</span>
 			</button>
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					<MarkdownContent content={content} />
 				</ScrollableContent>
-			)}
+			</CollapsibleBody>
 		</div>
 	);
 }
@@ -334,9 +349,10 @@ function formatInput(input: unknown): string {
 	}
 }
 
-/** Check if input is empty (null, undefined, or empty object) */
+/** Check if input is empty (null, undefined, empty string, or empty object) */
 function isEmptyInput(input: unknown): boolean {
 	if (input == null) return true;
+	if (input === "") return true;
 	if (typeof input === "object" && Object.keys(input as object).length === 0)
 		return true;
 	return false;
@@ -384,10 +400,7 @@ function PermissionRequestItem({
 	const planContent = isExitPlanMode
 		? extractPlanContent(request.toolInput)
 		: null;
-	const toolInputContent =
-		!planContent && !isEmptyInput(request.toolInput)
-			? formatInput(request.toolInput)
-			: null;
+	const hasToolInput = !planContent && !isEmptyInput(request.toolInput);
 	const permissionSuggestion =
 		isPending &&
 		request.permissionSuggestions &&
@@ -396,9 +409,17 @@ function PermissionRequestItem({
 			? request.permissionSuggestions[0]
 			: null;
 	const hasExpandableContent = Boolean(
-		planContent || toolInputContent || permissionSuggestion,
+		planContent || hasToolInput || permissionSuggestion,
 	);
 	const [expanded, setExpanded] = useState(isPending && hasExpandableContent);
+	const everExpanded = useEverExpanded(expanded);
+	// Whether there is an input to show is a cheap question; serializing it is
+	// not, and a denied request whose strip stays shut never needs the answer.
+	const toolInputContent = useMemo(
+		() =>
+			everExpanded && hasToolInput ? formatInput(request.toolInput) : null,
+		[everExpanded, hasToolInput, request.toolInput],
+	);
 
 	const statusConfig = {
 		pending: { Icon: CircleHelp, color: "text-th-warning" },
@@ -432,7 +453,7 @@ function PermissionRequestItem({
 				)}
 			</button>
 
-			{expanded && (
+			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					{planContent && <MarkdownContent content={planContent} />}
 					{toolInputContent && (
@@ -459,7 +480,7 @@ function PermissionRequestItem({
 						</div>
 					)}
 				</ScrollableContent>
-			)}
+			</CollapsibleBody>
 
 			{isPending && onRespond && (
 				<div className="flex justify-end gap-2 border-t border-th-border p-2">
@@ -548,14 +569,19 @@ function ContentPartItem({
 	if (part.type === "command_output") {
 		return <CommandOutputItem content={part.content} />;
 	}
-	if (part.type === "task_group") {
-		return <TaskGroupItem tasks={part.tasks} />;
+	if (part.type === "task") {
+		return <TaskItem task={part.task} />;
 	}
 	return <ToolCallItem tool={part.tool} />;
 }
 
 interface Props {
 	message: Message;
+	/**
+	 * First in the whole session, not in the pages loaded so far: it decides
+	 * whether a fork anchored here has any conversation behind it to keep.
+	 */
+	isFirst?: boolean;
 	isLast?: boolean;
 	isProcessRunning?: boolean;
 	isCodex?: boolean;
@@ -568,19 +594,43 @@ interface Props {
 		answers: Record<string, string> | null,
 	) => void;
 	onOpenWorkDetail?: (workId: string) => void;
-	/** Must be stable: this component is memoized. */
-	onOpenMessageMenu?: (messageId: string) => void;
+	/**
+	 * Absent when forking is out of reach for the whole session — the agent
+	 * cannot be forked, or there is no way to open the result. Must be stable:
+	 * this component is memoized.
+	 */
+	onForkMessage?: (messageId: string) => void;
+}
+
+/**
+ * Why fork cannot run on this message, or undefined when it can.
+ *
+ * The permanent reason is asked first: a first message with no seq yet is still
+ * a message a fork could never keep anything before, and a label promising
+ * "yet" would be waiting for something that is not coming.
+ */
+function forkBlockedReason(
+	message: Message,
+	isFirst: boolean | undefined,
+): "not-yet" | "nothing-before" | undefined {
+	// A fork anchored on a message the user sent returns to before they sent it,
+	// so the session's opening prompt has nothing behind it to keep. The
+	// server refuses this one too (chat.ErrForkAnchorNoHistory).
+	if (isFirst && message.role === "user") return "nothing-before";
+	if (!isForkableMessage(message)) return "not-yet";
+	return undefined;
 }
 
 const MessageItem = memo(function MessageItem({
 	message,
+	isFirst,
 	isLast,
 	isProcessRunning,
 	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
 	onOpenWorkDetail,
-	onOpenMessageMenu,
+	onForkMessage,
 }: Props) {
 	const chatUIConfig = useChatUIConfig();
 	const UserAvatar = chatUIConfig.UserAvatar;
@@ -588,32 +638,23 @@ const MessageItem = memo(function MessageItem({
 	const userBubbleClass = chatUIConfig.userBubbleClass ?? "";
 	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
 
-	const actions =
-		onOpenMessageMenu && isForkableMessage(message) ? (
-			<MessageActions
-				side={message.role}
-				onOpenMenu={() => onOpenMessageMenu(message.id)}
-			/>
-		) : null;
-
-	if (message.role === "work") {
-		return (
-			<WorkCardItem message={message} onOpenWorkDetail={onOpenWorkDetail} />
-		);
-	}
-
-	if (message.role === "step_divider") {
-		return <StepDividerItem step={message.step} />;
-	}
+	const actions = hasMessageActions(message) ? (
+		<MessageActions
+			side={message.role}
+			onFork={onForkMessage && (() => onForkMessage(message.id))}
+			forkBlocked={forkBlockedReason(message, isFirst)}
+		/>
+	) : null;
 
 	if (message.role === "user") {
-		// System-driven messages render as a collapsed banner instead of a bubble.
+		// System-driven messages render as a collapsed event line, not a bubble.
 		if (message.source === "system") {
 			return (
-				<SystemMessageItem
+				<WorkEventItem
 					content={message.content}
 					subtype={message.subtype}
 					meta={message.meta}
+					onOpenWorkDetail={onOpenWorkDetail}
 				/>
 			);
 		}
@@ -651,11 +692,8 @@ const MessageItem = memo(function MessageItem({
 											: part.type === "tool_call"
 												? // Index suffix: Claude Code resends tool_call after permission approval
 													`${part.tool.id}-${index}`
-												: part.type === "task_group"
-													? // Keyed on the anchor Task so a newly spawned one grows
-														// the group instead of remounting it and dropping what
-														// the user had expanded.
-														part.tasks[0].toolUseId
+												: part.type === "task"
+													? part.task.toolUseId
 													: `${part.type}-${index}`;
 								return (
 									<ContentPartItem

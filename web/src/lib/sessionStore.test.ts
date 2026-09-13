@@ -1,21 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { SessionListItem } from "../types/message";
+import { makeSessionListItem } from "../test/sessionFixtures";
 import { prependSession, useSessionStore } from "./sessionStore";
 
-const mockSession = (id: string, title = "Test"): SessionListItem => ({
-	id,
-	title,
-	created_at: "2024-01-01T00:00:00Z",
-	updated_at: "2024-01-01T00:00:00Z",
-	mode: "default",
-	agent_type: "codex",
-	model: "",
-	effort: "",
-	activated: false,
-	state: "ended",
-	needs_input: false,
-	unread: false,
-});
+const mockSession = (id: string, title = "Test") =>
+	makeSessionListItem({ id, title });
 
 describe("prependSession", () => {
 	it("adds session to the beginning", () => {

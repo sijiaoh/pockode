@@ -865,7 +865,7 @@ func (f listenerFunc) OnChatMessage(msg ChatMessage) { f(msg) }
 func TestProcess_ActivationFollowsAgentOutput(t *testing.T) {
 	ctx := context.Background()
 	store, _ := session.NewFileStore(t.TempDir())
-	if _, err := store.Create(ctx, "sess-1", session.AgentTypeClaude, session.ModeDefault); err != nil {
+	if _, err := store.Create(ctx, "sess-1", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}
 

@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BadgeDot } from "../ui";
+import { BadgeCount, BadgeDot } from "../ui";
 import Sidebar from "./Sidebar";
 import { SidebarContext } from "./SidebarContext";
 
@@ -9,6 +9,12 @@ export interface TabConfig {
 	label: string;
 	icon: LucideIcon;
 	showBadge?: boolean;
+	/**
+	 * Number badge plus what the number means, spoken after the tab label.
+	 * Left out entirely while there is no number to show. A tab wants one badge
+	 * or the other — a dot and a pill would land on top of each other.
+	 */
+	countBadge?: { value: number; label: string };
 }
 
 interface Props {
@@ -86,10 +92,26 @@ function TabbedSidebar({
 										? "border-b-2 border-th-accent text-th-accent"
 										: "text-th-text-muted hover:text-th-text-primary"
 								}`}
-								aria-label={tab.label}
+								aria-label={
+									tab.countBadge
+										? `${tab.label}, ${tab.countBadge.label}`
+										: tab.label
+								}
 							>
-								<Icon className="h-5 w-5" />
-								<BadgeDot show={!!tab.showBadge} className="top-2 right-1/4" />
+								{/* Both badges anchor to the 20px icon box, not to the tab:
+								    a pill that widens with its digits would drift if it were
+								    positioned off a percentage of the button. */}
+								<span className="relative flex">
+									<Icon className="h-5 w-5" />
+									<BadgeDot
+										show={!!tab.showBadge}
+										className="-top-0.5 -right-0.5"
+									/>
+									<BadgeCount
+										count={tab.countBadge?.value}
+										className="-top-1.5 -right-2.5"
+									/>
+								</span>
 							</button>
 						);
 					})}

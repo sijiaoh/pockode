@@ -92,6 +92,31 @@ Follows standard JSON-RPC 2.0; Pockode has no custom extensions.
 }
 ```
 
+### Growing a reply
+
+`chat.message` answers `rpc.MessageResult` — today one `omitempty` field, `seq`,
+telling the sender where its own message landed in the history. It needs one
+because the sender is deliberately left out of the broadcast that carries every
+other record's `seq` (it has already echoed the message into its own
+transcript), so the reply is the only place that address can reach it. What it
+is for is in [session-fork-ui.md](../session-fork-ui.md#which-messages-get-the-row-and-when-fork-is-on-it):
+a record a client cannot name is a record it cannot fork from.
+
+That method used to answer a bare `{}`, and growing it needed **no coordinated
+deploy**, which is the general rule worth stating: *adding* a field to a result
+is safe in both directions. An older client ignores what it does not read; a
+newer client against an older server sees the field absent, which `omitempty`
+already makes a legal answer — here it means "this message has no address",
+which was that client's normal state before the field existed. A client must
+therefore treat a missing optional field as a state it already knows how to be
+in, not as an error.
+
+*Changing what a field means* is the opposite case and does need lockstep, with
+nothing on the wire to reveal the disagreement. `session.fork`'s `anchor_seq` is
+the example ([session-fork-ui.md](../session-fork-ui.md#data-contract)) — same
+type, same name, different answer about which record it names. Do not reason
+about the two kinds of change from the same rule.
+
 ### Notification (Server → Client)
 
 ```json
@@ -117,10 +142,10 @@ For data that requires real-time updates, Pockode uses a subscription pattern ra
 │                                                                              │
 │   Client                                Server                               │
 │     │                                     │                                  │
-│     │   *.subscribe { params }            │                                  │
-│     │ ────────────────────────────────▶   │  Create subscription             │
-│     │                                     │  Return initial state            │
-│     │   Response { id, initial }          │                                  │
+│     │   *.subscribe { id, params }        │                                  │
+│     │ ────────────────────────────────▶   │  Register under the client's id  │
+│     │                                     │  Read initial state              │
+│     │   Response { initial }              │                                  │
 │     │ ◀────────────────────────────────   │                                  │
 │     │                                     │                                  │
 │     │                                     │  ┌──────────────────────────┐    │
@@ -137,9 +162,9 @@ For data that requires real-time updates, Pockode uses a subscription pattern ra
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Subscribe**: Client calls `*.subscribe`, server returns subscription ID and initial data
-2. **Notify**: Server sends `*.changed` notification when changes are detected
-3. **Unsubscribe**: Client calls `*.unsubscribe` to release resources
+1. **Subscribe**: Client generates the subscription id, registers its callback under it, then calls `*.subscribe` with that id; the server registers under it and replies with the initial data alone. The id is required — a subscribe without one is rejected as invalid params — and is unique only within the watcher it names, not across watchers ([why the client names it](subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened))
+2. **Notify**: Server sends `*.changed` notification, stamped with that id, when changes are detected
+3. **Unsubscribe**: Client calls `*.unsubscribe` with the same id to release resources
 
 ### Method Naming Convention
 
@@ -156,7 +181,8 @@ For data that requires real-time updates, Pockode uses a subscription pattern ra
 ```go
 // server/watch/base.go
 type Subscription struct {
-    ID       string
+    ID       string // the client's, carried in the subscribe request
+    Key      string // the one resource this subscriber follows; empty on list watchers
     Notifier Notifier
 }
 
@@ -223,14 +249,15 @@ This pattern ensures:
 | Subscription | Returns Initial Data | Recovery Strategy |
 |--------------|---------------------|-------------------|
 | `session.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
+| `session.detail.subscribe` | ✅ Full session metadata | `onSubscribed` replaces state |
 | `work.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
 | `work.detail.subscribe` | ✅ Full details | `onSubscribed` replaces state |
 | `settings.subscribe` | ✅ Full settings | `onSubscribed` replaces state |
 | `agent_role.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
-| `chat.messages.subscribe` | ✅ Full history | `onSubscribed` replaces state |
+| `chat.messages.subscribe` | ✅ Newest history page | `onSubscribed` replaces state ([paging](../agent-chat.md#history-paging)) |
 | `git.diff.subscribe` | ✅ Diff data | `onSubscribed` updates state |
-| `fs.subscribe` | ❌ ID only | `onSubscribed` triggers refresh |
-| `git.subscribe` | ❌ ID only | `onSubscribed` triggers refresh |
+| `fs.subscribe` | ❌ Empty reply | `onSubscribed` triggers refresh |
+| `git.subscribe` | ❌ Empty reply | `onSubscribed` triggers refresh |
 
 For subscriptions that don't return initial data, hooks pass their refresh callback to `onSubscribed`, ensuring the latest state is fetched immediately after reconnection.
 
@@ -512,9 +539,10 @@ the phrase repeated back. Every `session.*` handler replies this way, as does th
 session lookup in `chat.messages.subscribe`; handlers written before the helper
 still answer with a bare phrase or a bare cause. `session.fork` is the one
 `session.*` method that does not, because it runs the chat client's work: its
-distinctive failures — no such session, an anchor naming no record, an agent that
-cannot be forked at all — are the caller's, and it reaches for the chat helper
-below rather than grow a second mapping of the same errors. The chat handlers
+distinctive failures — no such session, an anchor naming no record, an anchor
+with nothing before it to keep, an agent that cannot be forked at all — are the
+caller's, and it reaches for the chat helper below rather than grow a second
+mapping of the same errors. The chat handlers
 keep their own `replyErrorForChat`: what is not the server's fault (no such session, no live
 process) becomes a client error, and anything else is logged there and forwarded
 as the cause — a failing agent start has to leave a trace even when the client
@@ -567,7 +595,7 @@ established that the error never came from the server at all.
    - Add subscribe/unsubscribe methods in RPC handler
 
 3. **Add frontend callback map and subscription methods**
-   - Add callback map in `wsStore.ts`
+   - Add callback map in `wsStore.ts`, in the group matching the watcher's owner — worktree-scoped maps are cleared on a worktree switch, app-level ones only on disconnect (see [subscription-system.md](subscription-system.md#why-app-level-subscriptions-survive-worktree-switches))
    - Handle notification in `watchNotificationHandlers`
    - Expose subscribe/unsubscribe methods
 

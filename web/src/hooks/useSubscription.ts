@@ -43,6 +43,11 @@ interface SubscribeResult<TInitial> {
  * Generic hook for WebSocket subscription lifecycle management.
  * Handles subscribe/unsubscribe, race conditions, cleanup, and worktree changes.
  *
+ * Nothing is lost while a subscription is being opened: `subscribe` registers its
+ * callback before the request goes out (see `openSubscription` in wsStore), and
+ * this hook holds whatever arrives until the subscription's initial snapshot has
+ * been applied. The contract in full: docs/code/subscription-system.md.
+ *
  * @typeParam TNotification - Type of notification params (void for parameterless notifications)
  * @typeParam TInitial - Type of initial data returned by subscribe (void if none)
  *
@@ -100,9 +105,25 @@ export function useSubscription<TNotification = void, TInitial = void>(
 
 		if (isStale()) return;
 
+		// Notifications that arrive before the subscription's own snapshot has been
+		// applied. The server registers the subscription before it reads that
+		// snapshot, and writes the reply and any notification from different
+		// goroutines, so "changed" can reach us first. Delivered straight away it
+		// would be overwritten by the older snapshot `onSubscribed` then applies;
+		// dropped, the stale snapshot would stay on screen with nothing left to
+		// correct it. Held and replayed in arrival order after the snapshot, the
+		// data converges on what the server has: notifications are emitted in the
+		// order the server's store committed the writes, so the last one is current.
+		// Null once the snapshot is in and delivery is direct.
+		let held: TNotification[] | null = [];
+
 		try {
 			const result = await subscribe((params) => {
 				if (isStale()) return;
+				if (held) {
+					held.push(params);
+					return;
+				}
 				onNotificationRef.current(params);
 			});
 
@@ -112,8 +133,22 @@ export function useSubscription<TNotification = void, TInitial = void>(
 			}
 
 			subscriptionIdRef.current = result.id;
+
+			// Delivery goes direct from here on, before the snapshot is applied
+			// rather than after: nothing can arrive in between (a notification
+			// reaches us from a socket event, which cannot interleave with the
+			// synchronous call below), and a snapshot handler that throws must not
+			// leave every later notification piling up in a queue nobody drains.
+			const replay = held;
+			held = null;
+
 			if (onSubscribedRef.current) {
 				onSubscribedRef.current(result.initial as TInitial);
+			}
+
+			for (const params of replay) {
+				if (isStale()) return;
+				onNotificationRef.current(params);
 			}
 		} catch (err) {
 			console.error("Subscription failed:", err);

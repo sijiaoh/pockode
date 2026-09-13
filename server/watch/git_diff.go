@@ -32,7 +32,7 @@ type GitDiffWatcher struct {
 
 func NewGitDiffWatcher(workDir string) *GitDiffWatcher {
 	return &GitDiffWatcher{
-		BaseWatcher: NewBaseWatcher("d"),
+		BaseWatcher: NewBaseWatcher(),
 		workDir:     workDir,
 		subData:     make(map[string]*gitDiffSubscription),
 	}
@@ -49,21 +49,28 @@ func (w *GitDiffWatcher) Stop() {
 	slog.Info("GitDiffWatcher stopped")
 }
 
-// Subscribe starts watching diff changes for a specific file.
-// Returns subscription ID and initial diff content.
-func (w *GitDiffWatcher) Subscribe(path string, staged bool, hideWhitespace bool, notifier Notifier) (string, *git.DiffResult, error) {
-	opts := git.DiffOptions{Staged: staged, HideWhitespace: hideWhitespace}
-	result, err := git.DiffWithContent(w.workDir, path, opts)
-	if err != nil {
-		return "", nil, err
-	}
-
-	id := w.GenerateID()
-	hash := w.hashDiff(result)
-
+// Subscribe starts watching diff changes for a specific file under the
+// client-chosen id, and returns the current diff.
+//
+// Registered before the diff is read, so that an id the client cannot use is
+// refused before the per-subscription data below is written — it belongs to
+// whoever holds that id already. A poll in between finds no data yet and skips
+// this subscription; the next one compares against the hash recorded here, so
+// no change goes unreported.
+func (w *GitDiffWatcher) Subscribe(id, path string, staged bool, hideWhitespace bool, notifier Notifier) (*git.DiffResult, error) {
 	sub := &Subscription{
 		ID:       id,
 		Notifier: notifier,
+	}
+	if err := w.AddSubscription(sub); err != nil {
+		return nil, err
+	}
+
+	opts := git.DiffOptions{Staged: staged, HideWhitespace: hideWhitespace}
+	result, err := git.DiffWithContent(w.workDir, path, opts)
+	if err != nil {
+		w.RemoveSubscription(id)
+		return nil, err
 	}
 
 	w.dataMu.Lock()
@@ -71,12 +78,11 @@ func (w *GitDiffWatcher) Subscribe(path string, staged bool, hideWhitespace bool
 		path:           path,
 		staged:         staged,
 		hideWhitespace: hideWhitespace,
-		lastHash:       hash,
+		lastHash:       w.hashDiff(result),
 	}
 	w.dataMu.Unlock()
 
-	w.AddSubscription(sub)
-	return id, result, nil
+	return result, nil
 }
 
 func (w *GitDiffWatcher) Unsubscribe(id string) {

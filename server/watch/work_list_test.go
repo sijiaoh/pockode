@@ -68,12 +68,9 @@ func TestWorkListWatcher_Subscribe(t *testing.T) {
 	}
 	w := NewWorkListWatcher(store)
 
-	id, items, err := w.Subscribe(nil)
+	items, err := w.Subscribe("client-1", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if id == "" {
-		t.Error("expected non-empty subscription ID")
 	}
 	if len(items) != 2 {
 		t.Errorf("expected 2 items, got %d", len(items))
@@ -87,8 +84,8 @@ func TestWorkListWatcher_Unsubscribe(t *testing.T) {
 	store := &mockWorkStore{}
 	w := NewWorkListWatcher(store)
 
-	id, _, _ := w.Subscribe(nil)
-	w.Unsubscribe(id)
+	w.Subscribe("client-1", nil)
+	w.Unsubscribe("client-1")
 
 	if w.HasSubscriptions() {
 		t.Error("expected HasSubscriptions to be false")
@@ -102,7 +99,7 @@ func TestWorkListWatcher_NotifyChange(t *testing.T) {
 	defer w.Stop()
 
 	notifier := &captureNotifier{}
-	w.Subscribe(notifier)
+	w.Subscribe("client-1", notifier)
 
 	// Fire a create event
 	w.OnWorkChange(work.ChangeEvent{
@@ -129,7 +126,7 @@ func TestWorkListWatcher_NotifyDelete(t *testing.T) {
 	defer w.Stop()
 
 	notifier := &captureNotifier{}
-	w.Subscribe(notifier)
+	w.Subscribe("client-1", notifier)
 
 	w.OnWorkChange(work.ChangeEvent{
 		Op:   work.OperationDelete,
@@ -156,14 +153,14 @@ func TestWorkListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 		},
 	}
 	w := &WorkListWatcher{
-		BaseWatcher: NewBaseWatcher("wl"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan work.ChangeEvent, 1),
 	}
 	store.AddOnChangeListener(w)
 
 	notifier := &captureNotifier{}
-	w.Subscribe(notifier)
+	w.Subscribe("client-1", notifier)
 
 	// Simulate the dirty flag being set (as if events were dropped)
 	w.dirty.Store(true)

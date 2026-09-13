@@ -44,12 +44,13 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 |-------|---------|-------------|
 | wsStore | WebSocket, RPC, subscriptions | Single hub for all communication |
 | sessionStore | Chat session list | State/Actions interface split |
+| sessionDetailStore | The open session's own metadata | One session at a time, read through a selector that checks whose it is |
 | workStore | Work items | State/Actions interface split |
 | agentRoleStore | AI roles | State/Actions interface split |
 | agentOptionsStore | Selectable models and effort levels per agent | Fetched once per connection, not subscribed |
 | settingsStore | App settings | State/Actions interface split |
 | authStore | Auth token | localStorage init |
-| inputStore | Draft text | persist middleware |
+| inputStore | Draft text, per session | persist middleware |
 | filesSearchStore | File search options | localStorage init |
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
 | worktreeStore | Current worktree, and whether the server can run the setup hook | External listener pattern |
@@ -186,6 +187,12 @@ they are untouched by a worktree switch. The one thing that can change the answe
 is a reconnect to a server upgraded in the meantime, which `useAgentOptions`
 covers by fetching on every `connected` rather than once per app load.
 
+The fetch hangs off `AppShell` rather than off the panel that needs it because
+three screens now read the same lists: the chat's engine selector, the agent role
+page, and the global defaults in Settings. Each of them also needs the lists of
+the agent it is *about to* switch to, not only the current one, so per-panel
+fetching would buy nothing and cost a round trip per open.
+
 Both lists sit in that one store behind a **single** `error`, and
 `useAgentOptions` fetches them in one `Promise.allSettled`, even though the
 server answers them as two methods (`session.models`, `session.efforts`). That is
@@ -212,11 +219,12 @@ ServerNotification (snake_case)
 
 ### Message Variants
 
-`Message` is wider than the two roles a chat obviously needs. Alongside
-`UserMessage` and `AssistantMessage` it holds `WorkCardMessage` and
-`StepDividerMessage`, which render a work item's progress inline in the
-transcript rather than in a panel beside it (see
-[work-system.md](work-system.md#rendering-in-the-transcript) for why).
+`Message` is exactly `UserMessage | AssistantMessage`. Pockode's own annotations
+— the prompts the Work engine sends — are not a third variant: they are user
+messages tagged `source: "system"`, rendered as a collapsed line instead of a
+bubble (see
+[work-system.md](work-system.md#rendering-in-the-transcript) for why the
+transcript holds no aggregate of them).
 
 The consequence to know before touching the reducer: **`status` is not a common
 field.** Only assistant messages carry one, so anything asking about it has to
@@ -245,26 +253,39 @@ of the last history record folded into it, and the reducer stamps it on the
 newest message only — `applyServerEvent` is the one path both replayed
 history and live notifications take, so the two cannot disagree about where a
 cut lands. A record that lands in an earlier message goes unstamped rather than
-raise that message's anchor past the messages below it, which would make "keep
-everything up to and including this message" quietly keep more than the user can
-see. The client is free to leave records unaddressable because it only anchors
-on ones the server gave it a seq for; what it must never do is number them
-itself ([agent-integration.md](agent-integration.md#history-storage)).
+raise that message's anchor past the messages below it, which would quietly move
+the cut past messages the user can see: they point at a bubble, and the fork
+would cut somewhere later than the bubble they pointed at. The client is free
+to leave records unaddressable because it only anchors on ones the server gave it
+a seq for; what it must never do is number them itself, or do arithmetic on the
+numbers it was given — where the cut falls relative to the anchor is the server's
+answer, not the client's ([session-fork-ui.md](../session-fork-ui.md#the-rule),
+[agent-integration.md](agent-integration.md#history-storage)).
 
 `complete` is deliberately excluded from that rule: when a background wait runs
 out of budget Pockode delivers the `done` itself
 ([agent-integration.md](agent-integration.md#background-waits)), and output
 resuming afterwards is a genuinely live turn.
 
-### Task Groups
+History arrives one page at a time, so a turn can also be cut in two by a page
+boundary rather than by an ending. The halves are rejoined where the pages meet
+([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)), and the joined
+message keeps the newer half's anchor: it names the later record, which is where
+a fork of the joined message has to cut. The older half's anchor stands in only
+when the newer one never got one, a message without an anchor being one the user
+cannot fork from at all.
+
+### Task Parts
 
 The subagent tool (named `Agent` today, `Task` in older CLIs and in history
-recorded by them) is the one tool whose calls do not each get their own part.
-Every Task of one turn folds into a single `task_group` part, anchored where the
-first of them landed, because a turn can spawn a dozen and one strip per call
-buries the conversation they belong to.
+recorded by them) gets a part of its own — `{ type: "task" }` — appended where
+its `tool_call` landed, so a Task reads at the point in the turn that spawned
+it, in among the text it was spawned between. Nothing groups them: a summary
+across several Tasks can only restate what the individual rows already say, and
+it costs the one thing a transcript is for, which is knowing when each thing
+happened.
 
-The part holds each Task's **current state** — `running` / `done` / `failed` /
+The part holds the Task's **current state** — `running` / `done` / `failed` /
 `interrupted` — and the reducer is its only author; the UI renders that state
 and infers nothing of its own. Four rules keep it honest:
 
@@ -283,9 +304,11 @@ and infers nothing of its own. Four rules keep it honest:
   reducer — so a Task still running at the end of a history stays running,
   which is right while the session is live. What history cannot show is a
   process killed while Pockode was down, since no `process_ended` was ever
-  recorded for it: `useChatMessages` settles once on load when the server
-  reports the session already ended, next to the call that expires the dialogs
-  orphaned the same way.
+  recorded for it: `useChatMessages` settles on the server's report that the
+  session has already ended, next to the call that expires the dialogs orphaned
+  the same way — and applies that to every page of history it pulls in, not only
+  the one it subscribed with
+  ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)).
 - An interrupted Task whose result finally arrives keeps its `interrupted`
   status and records `resultAfterInterrupt`. The content is kept and readable;
   what it cannot do is make the UI claim the Task finished normally. This is the
@@ -454,7 +477,7 @@ const Avatar = config.UserAvatar || DefaultAvatar;
 `useSubscription` manages WebSocket subscription lifecycle:
 
 ```typescript
-// web/src/hooks/useSubscription.ts:54-61
+// web/src/hooks/useSubscription.ts
 export function useSubscription<TNotification, TInitial>(
   subscribe: (callback) => Promise<{ id: string; initial?: TInitial }>,
   unsubscribe: (id: string) => Promise<void>,
@@ -468,6 +491,7 @@ Key features:
 1. **Generation counter** — prevents race conditions when multiple subscribes overlap
 2. **Worktree switch handling** — the server invalidates worktree-scoped subscriptions on switch, so the hook resubscribes. Rather than clearing data (`onReset`), a switch is a soft refresh: previous data stays on screen and is swapped out by `onSubscribed` when the new worktree's snapshot arrives (see [subscription-system.md](subscription-system.md#why-worktree-switch-is-a-soft-refresh-not-a-reset))
 3. **Connection state** — resets on disconnect, but deliberately keeps data during `reconnecting` and resubscribes once the connection is back
+4. **Nothing lost while opening** — the callback is registered under the client-generated id before the request goes out, and notifications arriving before the initial snapshot is applied are held and replayed after it (see [subscription-system.md](subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened))
 
 ## Key Files
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/filestore"
+	"github.com/pockode/server/session"
 )
 
 // Store provides CRUD operations and change notifications for AgentRole items.
@@ -29,9 +30,12 @@ type Store interface {
 
 // UpdateFields specifies which fields to update. Nil fields are left unchanged.
 type UpdateFields struct {
-	Name       *string   `json:"name,omitempty"`
-	RolePrompt *string   `json:"role_prompt,omitempty"`
-	Steps      *[]string `json:"steps,omitempty"`
+	Name       *string            `json:"name,omitempty"`
+	RolePrompt *string            `json:"role_prompt,omitempty"`
+	Steps      *[]string          `json:"steps,omitempty"`
+	AgentType  *session.AgentType `json:"agent_type,omitempty"`
+	Model      *string            `json:"model,omitempty"`
+	Effort     *string            `json:"effort,omitempty"`
 }
 
 type indexData struct {
@@ -103,25 +107,25 @@ var defaultRoles = []struct {
 		Steps: []string{
 			"创建任务\n始终在最后追加文档维护任务(文档撰写者)和整体审查任务(审查者)",
 			"推进任务\n\n- 通过 MCP 启动任务，将自己置为 waiting 状态，等待完成汇报\n- 根据任务结束时的汇报，必要时调整任务。但不要触碰已经开始的任务\n- 始终确保最后是文档维护任务(文档撰写者)和整体审查任务(审查者)",
-			"/commit",
+			"commit",
 		},
 	},
 	{
 		Name:       "工程师",
 		RolePrompt: "世界级的工程师\n不commit",
-		Steps:      []string{"实现", "/hard-review"},
+		Steps:      []string{"实现", "审查并且修复到没有问题"},
 	},
 	{
 		Name: "UI设计师",
-		RolePrompt: "精通AI短剧以及视频制作软件的最佳实践\n" +
+		RolePrompt: "世界级UI设计师\n" +
 			"将设计方案在投稿step中投稿至story comment\n\n" +
 			"不commit",
-		Steps: []string{"设计", "/hard-review", "投稿"},
+		Steps: []string{"设计", "审查并且修复到没有问题", "投稿"},
 	},
 	{
 		Name:       "文档撰写者",
 		RolePrompt: "世界级的开发者\n不commit",
-		Steps:      []string{"维护文档", "/hard-review"},
+		Steps:      []string{"维护文档", "审查并且修复到没有问题"},
 	},
 	{
 		Name: "审查者",
@@ -129,7 +133,7 @@ var defaultRoles = []struct {
 			"只直接修复一些小问题，大问题写入审查结果提交\n" +
 			"将审查结果在投稿step中投稿至story comment\n\n" +
 			"不commit",
-		Steps: []string{"审查，小问题可以直接修复", "/hard-review", "投稿"},
+		Steps: []string{"审查，小问题可以直接修复", "审查并且修复到没有问题", "投稿"},
 	},
 }
 
@@ -194,6 +198,9 @@ func (s *FileStore) Create(_ context.Context, r AgentRole) (AgentRole, error) {
 	if r.Name == "" {
 		return AgentRole{}, fmt.Errorf("%w: name is required", ErrInvalidRole)
 	}
+	if err := validateEngine(r); err != nil {
+		return AgentRole{}, err
+	}
 
 	s.rolesMu.Lock()
 
@@ -203,6 +210,9 @@ func (s *FileStore) Create(_ context.Context, r AgentRole) (AgentRole, error) {
 		Name:       r.Name,
 		RolePrompt: r.RolePrompt,
 		Steps:      r.Steps,
+		AgentType:  r.AgentType,
+		Model:      r.Model,
+		Effort:     r.Effort,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -247,6 +257,11 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) er
 	}
 	if fields.Steps != nil {
 		r.Steps = *fields.Steps
+	}
+	if err := applyEngineFields(r, fields); err != nil {
+		*r = prev
+		s.rolesMu.Unlock()
+		return err
 	}
 	r.UpdatedAt = now
 
@@ -417,6 +432,9 @@ func diffRoles(old, updated []AgentRole) []ChangeEvent {
 func roleChanged(a, b AgentRole) bool {
 	return a.Name != b.Name ||
 		a.RolePrompt != b.RolePrompt ||
+		a.AgentType != b.AgentType ||
+		a.Model != b.Model ||
+		a.Effort != b.Effort ||
 		!stepsEqual(a.Steps, b.Steps) ||
 		!a.UpdatedAt.Equal(b.UpdatedAt)
 }
@@ -431,6 +449,48 @@ func stepsEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// applyEngineFields writes the agent/model/effort trio onto a role, rejecting a
+// combination the agent could not run with. Unlike session.SetAgentType, an
+// invalid model or effort is an error rather than a silent reset: a role's
+// engine is a configuration the user is editing right now, so a value that
+// cannot be honoured has to be said out loud.
+//
+// The one reset that does happen is the same one sessions perform — changing the
+// agent type drops the model and effort, because neither survives a move to an
+// agent whose lists do not contain them. Doing it here means the UI sends one
+// field, not two requests.
+func applyEngineFields(r *AgentRole, fields UpdateFields) error {
+	if fields.AgentType == nil && fields.Model == nil && fields.Effort == nil {
+		// An update that does not touch the engine must not be judged by it. A
+		// role can legitimately hold a model the server has since retired — it is
+		// left there deliberately, so that the value the user chose is still what
+		// they see — and renaming such a role is not the moment to refuse.
+		return nil
+	}
+	if fields.AgentType != nil && *fields.AgentType != r.AgentType {
+		r.AgentType = *fields.AgentType
+		r.Model = ""
+		r.Effort = ""
+	}
+	if fields.Model != nil {
+		r.Model = *fields.Model
+	}
+	if fields.Effort != nil {
+		r.Effort = *fields.Effort
+	}
+
+	// Judged against the agent type the role ends up with, not the one it had:
+	// an update may set the agent and its model in a single call.
+	return validateEngine(*r)
+}
+
+func validateEngine(r AgentRole) error {
+	if err := session.ValidateEngine(r.Engine()); err != nil {
+		return fmt.Errorf("%w: %s", ErrInvalidRole, err)
+	}
+	return nil
 }
 
 // --- Helpers ---

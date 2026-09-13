@@ -15,7 +15,13 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 	sessionID := uuid.Must(uuid.NewV7()).String()
 
 	s := h.settingsStore.Get()
-	sess, err := wt.SessionStore.Create(ctx, sessionID, s.DefaultAgentType, s.DefaultMode)
+	engine := s.ResolveEngine(session.Engine{})
+	sess, err := wt.SessionStore.Create(ctx, sessionID, session.CreateSpec{
+		AgentType: engine.AgentType,
+		Mode:      s.DefaultMode,
+		Model:     engine.Model,
+		Effort:    engine.Effort,
+	})
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to create session", err, "sessionId", sessionID)
 		return
@@ -23,10 +29,7 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 
 	h.log.Info("session created", "sessionId", sessionID)
 
-	result := rpc.SessionListItem{
-		SessionMeta: sess,
-		State:       wt.ProcessManager.GetProcessState(sessionID),
-	}
+	result := rpc.NewSessionListItem(sess, wt.ProcessManager.GetProcessState(sessionID))
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session create response", "error", err)
@@ -47,10 +50,7 @@ func (h *rpcMethodHandler) handleSessionFork(ctx context.Context, conn *jsonrpc2
 	}
 
 	// Not logged here: chat.Client already logged the fork with what it did.
-	result := rpc.SessionListItem{
-		SessionMeta: meta,
-		State:       wt.ProcessManager.GetProcessState(meta.ID),
-	}
+	result := rpc.NewSessionListItem(meta, wt.ProcessManager.GetProcessState(meta.ID))
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session fork response", "error", err)
@@ -266,22 +266,62 @@ func (h *rpcMethodHandler) handleSessionEfforts(ctx context.Context, conn *jsonr
 }
 
 func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	id, ok := h.subscriptionID(ctx, conn, req)
+	if !ok {
+		return
+	}
+
 	notifier := h.state.getNotifier()
-	id, sessions, err := wt.SessionListWatcher.Subscribe(notifier)
+	sessions, err := wt.SessionListWatcher.Subscribe(id, notifier)
 	if err != nil {
-		h.replyInternalError(ctx, conn, req.ID, "failed to subscribe to session list", err)
+		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to session list")
 		return
 	}
 	h.state.trackSubscription(id, wt.SessionListWatcher)
 	h.log.Debug("subscribed", "watcher", "session list", "watchId", id)
 
 	result := rpc.SessionListSubscribeResult{
-		ID:       id,
 		Sessions: sessions,
 	}
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session list subscribe response", "error", err)
+	}
+}
+
+func (h *rpcMethodHandler) handleSessionDetailSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.SessionDetailSubscribeParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+	if params.SessionID == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session_id is required")
+		return
+	}
+
+	notifier := h.state.getNotifier()
+	meta, err := wt.SessionDetailWatcher.Subscribe(params.ID, params.SessionID, notifier)
+	if err != nil {
+		if h.replySubscriptionIDError(ctx, conn, req.ID, err) {
+			return
+		}
+		if errors.Is(err, session.ErrSessionNotFound) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+			return
+		}
+		h.replyInternalError(ctx, conn, req.ID, "failed to subscribe to session detail", err, "sessionId", params.SessionID)
+		return
+	}
+	h.state.trackSubscription(params.ID, wt.SessionDetailWatcher)
+	h.log.Debug("subscribed", "watcher", "session detail", "watchId", params.ID, "sessionId", params.SessionID)
+
+	result := rpc.SessionDetailSubscribeResult{
+		Session: meta,
+	}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send session detail subscribe response", "error", err)
 	}
 }
 

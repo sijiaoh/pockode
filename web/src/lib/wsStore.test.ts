@@ -11,6 +11,10 @@ const TEST_TOKEN = "test-token";
 // an implementation detail everywhere except here.
 const RECONNECT_MAX_DELAY = 30000;
 
+// What the server answers `chat.message` with. Defaults to the empty object a
+// server too old to hand back a seq sends.
+let chatMessageResult: Record<string, unknown> = {};
+
 // Track created WebSocket instances
 let mockWsInstances: MockWebSocket[] = [];
 let currentMockWs: MockWebSocket | null = null;
@@ -40,6 +44,8 @@ class MockWebSocket {
 					result = { version: "test" };
 				} else if (parsed.method === "chat.messages.subscribe") {
 					result = { id: "sub-1", history: [], state: "ended" };
+				} else if (parsed.method === "chat.message") {
+					result = chatMessageResult;
 				}
 				this.simulateMessage({
 					jsonrpc: "2.0",
@@ -122,6 +128,7 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	mockWsInstances = [];
 	currentMockWs = null;
+	chatMessageResult = {};
 	globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 });
 
@@ -338,6 +345,32 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			});
 		});
 
+		// The seq of the sender's own message reaches it here and nowhere else:
+		// the broadcast carrying every other record's address skips the sender.
+		it("sendMessage returns the seq the server replies with", async () => {
+			chatMessageResult = { seq: 4 };
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+
+			await expect(
+				wsActions.sendMessage("test-session", "hello"),
+			).resolves.toBe(4);
+		});
+
+		// Purely additive on the wire: an older server answers with an empty
+		// result, which has to read as "no address" rather than fail the send or
+		// become a seq of 0, which names no record.
+		it("sendMessage tolerates a server that sends no seq", async () => {
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+
+			await expect(
+				wsActions.sendMessage("test-session", "hello"),
+			).resolves.toBeUndefined();
+		});
+
 		it("throws when not connected", async () => {
 			const wsActions = await getWsActions();
 
@@ -469,8 +502,14 @@ describe("wsStore", { timeout: 20_000 }, () => {
 		});
 	});
 
-	describe("fs watch callbacks", () => {
-		it("calls callback when fs.changed notification is received", async () => {
+	// The server registers a subscription before it reads the snapshot it replies
+	// with, so it can notify while the reply is still in flight. The subscription
+	// id travels in the request for exactly this reason: the callback is in place
+	// before anything can be sent back.
+	describe("client-chosen subscription ids", () => {
+		const sessionDetail = { id: "s1", title: "during subscribe" };
+
+		it("delivers a notification that arrives before the subscribe reply", async () => {
 			const wsActions = await getWsActions();
 			const callback = vi.fn();
 
@@ -478,27 +517,192 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			const ws = getMockWs();
 			if (!ws) throw new Error("WebSocket not found");
 
-			// Mock fsSubscribe to return a known ID
+			let sentId: string | undefined;
 			ws.send = vi.fn((data: string) => {
 				const parsed = JSON.parse(data);
-				if (parsed.method === "fs.subscribe") {
+				if (parsed.method !== "session.detail.subscribe") return;
+				sentId = parsed.params.id;
+				ws.simulateNotification("session.detail.changed", {
+					id: sentId,
+					session: sessionDetail,
+				});
+				queueMicrotask(() => {
+					ws.simulateMessage({
+						jsonrpc: "2.0",
+						id: parsed.id,
+						result: { session: sessionDetail },
+					});
+				});
+			});
+
+			const pending = wsActions.sessionDetailSubscribe("s1", callback);
+
+			// Before the reply has been answered, let alone awaited.
+			expect(callback).toHaveBeenCalledTimes(1);
+
+			await vi.runAllTimersAsync();
+			const result = await pending;
+			expect(result.id).toBe(sentId);
+		});
+
+		it("gives each subscription an id of its own", async () => {
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+			const ws = getMockWs();
+			if (!ws) throw new Error("WebSocket not found");
+
+			const ids: string[] = [];
+			ws.send = vi.fn((data: string) => {
+				const parsed = JSON.parse(data);
+				if (parsed.method !== "session.detail.subscribe") return;
+				ids.push(parsed.params.id);
+				queueMicrotask(() => {
+					ws.simulateMessage({
+						jsonrpc: "2.0",
+						id: parsed.id,
+						result: { session: sessionDetail },
+					});
+				});
+			});
+
+			await Promise.all([
+				wsActions.sessionDetailSubscribe("s1", vi.fn()),
+				wsActions.sessionDetailSubscribe("s2", vi.fn()),
+			]);
+
+			expect(ids).toHaveLength(2);
+			expect(new Set(ids).size).toBe(2);
+		});
+
+		// The id is reserved before the request, so a refused subscribe has to take
+		// it back — otherwise the entry sits in the routing table forever, with no
+		// id ever returned for anyone to unsubscribe it by.
+		it("forgets the callback when the subscribe is refused", async () => {
+			const wsActions = await getWsActions();
+			const callback = vi.fn();
+
+			await connectAndAuth();
+			const ws = getMockWs();
+			if (!ws) throw new Error("WebSocket not found");
+
+			let sentId: string | undefined;
+			const unsubscribed: string[] = [];
+			ws.send = vi.fn((data: string) => {
+				const parsed = JSON.parse(data);
+				if (parsed.method === "session.detail.unsubscribe") {
+					unsubscribed.push(parsed.params.id);
+					return;
+				}
+				if (parsed.method !== "session.detail.subscribe") return;
+				sentId = parsed.params.id;
+				queueMicrotask(() => {
+					ws.simulateMessage({
+						jsonrpc: "2.0",
+						id: parsed.id,
+						error: { code: -32602, message: "session not found" },
+					});
+				});
+			});
+
+			// Settled via a handler attached now rather than awaited later: the
+			// rejection lands while the timers run, and nothing watching it then
+			// would surface as an unhandled rejection.
+			const settled = wsActions.sessionDetailSubscribe("s1", callback).then(
+				() => "resolved",
+				(err: Error) => err.message,
+			);
+			await vi.runAllTimersAsync();
+			expect(await settled).toBe("session not found");
+
+			ws.simulateNotification("session.detail.changed", {
+				id: sentId,
+				session: sessionDetail,
+			});
+			expect(callback).not.toHaveBeenCalled();
+			// And nothing is cancelled: a refusal is an answer, and the one refusal
+			// that names an id already in use names someone else's live
+			// subscription — unsubscribing it would kill a view that is working.
+			expect(unsubscribed).toEqual([]);
+		});
+
+		// A timeout is not an answer: the server may have registered the
+		// subscription and be notifying an id nobody here is listening to, for as
+		// long as the connection lasts. Naming it ourselves is what makes it
+		// cancellable at all — the id used to come back only in the reply that
+		// never came.
+		it("cancels a subscribe its own clock gave up on", async () => {
+			const wsActions = await getWsActions();
+
+			await connectAndAuth();
+			const ws = getMockWs();
+			if (!ws) throw new Error("WebSocket not found");
+
+			let sentId: string | undefined;
+			const unsubscribed: string[] = [];
+			ws.send = vi.fn((data: string) => {
+				const parsed = JSON.parse(data);
+				if (parsed.method === "session.detail.subscribe") {
+					// Never answered: what a server still working on the request looks
+					// like from here.
+					sentId = parsed.params.id;
+					return;
+				}
+				if (parsed.method === "session.detail.unsubscribe") {
+					unsubscribed.push(parsed.params.id);
 					queueMicrotask(() => {
-						ws.simulateMessage({
-							jsonrpc: "2.0",
-							id: parsed.id,
-							result: { id: "f_test123" },
-						});
+						ws.simulateMessage({ jsonrpc: "2.0", id: parsed.id, result: {} });
 					});
 				}
 			});
 
-			const result = await wsActions.fsSubscribe("/test/path", callback);
-			expect(result.id).toBe("f_test123");
+			const settled = wsActions.sessionDetailSubscribe("s1", vi.fn()).then(
+				() => "resolved",
+				(err: Error) => err.message,
+			);
+			await vi.runAllTimersAsync();
 
-			ws.simulateNotification("fs.changed", {
-				id: "f_test123",
-				data: {},
+			expect(await settled).toBe("Request timed out");
+			expect(unsubscribed).toEqual([sentId]);
+		});
+	});
+
+	describe("fs watch callbacks", () => {
+		// The id the client sent with fs.subscribe, and the reply it gets back —
+		// which carries no id of its own, because the client already named it.
+		function answerFsRequests(ws: MockWebSocket): { sentId?: string } {
+			const sent: { sentId?: string } = {};
+			ws.send = vi.fn((data: string) => {
+				const parsed = JSON.parse(data);
+				if (
+					parsed.method !== "fs.subscribe" &&
+					parsed.method !== "fs.unsubscribe"
+				) {
+					return;
+				}
+				if (parsed.method === "fs.subscribe") {
+					sent.sentId = parsed.params.id;
+				}
+				queueMicrotask(() => {
+					ws.simulateMessage({ jsonrpc: "2.0", id: parsed.id, result: {} });
+				});
 			});
+			return sent;
+		}
+
+		it("calls callback when fs.changed notification is received", async () => {
+			const wsActions = await getWsActions();
+			const callback = vi.fn();
+
+			await connectAndAuth();
+			const ws = getMockWs();
+			if (!ws) throw new Error("WebSocket not found");
+			const sent = answerFsRequests(ws);
+
+			const result = await wsActions.fsSubscribe("/test/path", callback);
+			expect(result.id).toBe(sent.sentId);
+
+			ws.simulateNotification("fs.changed", { id: result.id });
 
 			expect(callback).toHaveBeenCalledTimes(1);
 		});
@@ -510,28 +714,11 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			await connectAndAuth();
 			const ws = getMockWs();
 			if (!ws) throw new Error("WebSocket not found");
-
-			// Mock fsSubscribe
-			ws.send = vi.fn((data: string) => {
-				const parsed = JSON.parse(data);
-				if (parsed.method === "fs.subscribe") {
-					queueMicrotask(() => {
-						ws.simulateMessage({
-							jsonrpc: "2.0",
-							id: parsed.id,
-							result: { id: "f_known" },
-						});
-					});
-				}
-			});
+			answerFsRequests(ws);
 
 			await wsActions.fsSubscribe("/test/path", callback);
 
-			// Send notification with unknown ID
-			ws.simulateNotification("fs.changed", {
-				id: "f_unknown",
-				data: {},
-			});
+			ws.simulateNotification("fs.changed", { id: "f_unknown" });
 
 			expect(callback).not.toHaveBeenCalled();
 		});
@@ -543,35 +730,12 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			await connectAndAuth();
 			const ws = getMockWs();
 			if (!ws) throw new Error("WebSocket not found");
-
-			ws.send = vi.fn((data: string) => {
-				const parsed = JSON.parse(data);
-				if (parsed.method === "fs.subscribe") {
-					queueMicrotask(() => {
-						ws.simulateMessage({
-							jsonrpc: "2.0",
-							id: parsed.id,
-							result: { id: "f_test123" },
-						});
-					});
-				} else if (parsed.method === "fs.unsubscribe") {
-					queueMicrotask(() => {
-						ws.simulateMessage({
-							jsonrpc: "2.0",
-							id: parsed.id,
-							result: {},
-						});
-					});
-				}
-			});
+			answerFsRequests(ws);
 
 			const result = await wsActions.fsSubscribe("/test/path", callback);
 			await wsActions.fsUnsubscribe(result.id);
 
-			ws.simulateNotification("fs.changed", {
-				id: "f_test123",
-				data: {},
-			});
+			ws.simulateNotification("fs.changed", { id: result.id });
 
 			expect(callback).not.toHaveBeenCalled();
 		});

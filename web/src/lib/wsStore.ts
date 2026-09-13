@@ -11,15 +11,17 @@ import type {
 	AgentRoleListChangedNotification,
 	AgentRoleListSubscribeResult,
 } from "../types/agentRole";
-import type {
-	GitDiffChangedNotification,
-	GitDiffSubscribeResult,
-} from "../types/git";
+import type { GitDiffChangedNotification, GitDiffData } from "../types/git";
 import type {
 	AuthParams,
 	AuthResult,
+	ChatMessagesHistoryParams,
+	ChatMessagesHistoryResult,
 	ChatMessagesSubscribeResult,
+	HistorySeq,
 	ServerNotification,
+	SessionDetailChangedNotification,
+	SessionDetailSubscribeResult,
 	SessionListChangedNotification,
 	SessionListItem,
 	SessionListSubscribeResult,
@@ -37,6 +39,7 @@ import type {
 	WorkListSubscribeResult,
 } from "../types/work";
 import { getWebSocketUrl } from "../utils/config";
+import { generateUUID } from "../utils/uuid";
 import {
 	type AgentActions,
 	type AgentRoleActions,
@@ -79,8 +82,16 @@ interface ConnectionActions {
 
 // TODO: Implement retry logic for watcher subscriptions.
 // Currently callers must handle failures; retry only happens on WebSocket reconnect.
+// A timed-out subscribe is already cleaned up rather than retried; see
+// openSubscription.
 
-/** Base result for all watch subscriptions */
+/**
+ * Base result for all watch subscriptions.
+ *
+ * `id` names the subscription: what notifications are routed under and what to
+ * unsubscribe by. It is the client's own, chosen by `openSubscription` before
+ * the request went out, not something the reply carried back.
+ */
 export interface WatchSubscribeResult<TInitial = void> {
 	id: string;
 	initial?: TInitial;
@@ -99,7 +110,7 @@ export interface WatchActions {
 		staged: boolean,
 		hideWhitespace: boolean,
 		callback: (params: GitDiffChangedNotification) => void,
-	) => Promise<WatchSubscribeResult<GitDiffSubscribeResult>>;
+	) => Promise<WatchSubscribeResult<GitDiffData>>;
 	gitDiffUnsubscribe: (id: string) => Promise<void>;
 	worktreeSubscribe: (callback: () => void) => Promise<WatchSubscribeResult>;
 	worktreeUnsubscribe: (id: string) => Promise<void>;
@@ -107,10 +118,20 @@ export interface WatchActions {
 		callback: (params: SessionListChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<SessionListItem[]>>;
 	sessionListUnsubscribe: (id: string) => Promise<void>;
+	sessionDetailSubscribe: (
+		sessionId: string,
+		callback: (params: SessionDetailChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<SessionDetailSubscribeResult>>;
+	sessionDetailUnsubscribe: (id: string) => Promise<void>;
 	chatMessagesSubscribe: (
 		sessionId: string,
 		callback: (notification: ServerNotification) => void,
 	) => Promise<WatchSubscribeResult<ChatMessagesSubscribeResult>>;
+	/** Fetches the page of history older than `beforeSeq` (exclusive). */
+	chatMessagesHistory: (
+		sessionId: string,
+		beforeSeq: HistorySeq,
+	) => Promise<ChatMessagesHistoryResult>;
 	chatMessagesUnsubscribe: (id: string) => Promise<void>;
 	settingsSubscribe: (
 		callback: (params: SettingsChangedNotification) => void,
@@ -177,6 +198,10 @@ const sessionListWatchCallbacks = new Map<
 	string,
 	(params: SessionListChangedNotification) => void
 >();
+const sessionDetailWatchCallbacks = new Map<
+	string,
+	(params: SessionDetailChangedNotification) => void
+>();
 // Key: subscriptionId -> callback (unified with other watchers)
 const chatMessagesCallbacks = new Map<
 	string,
@@ -221,6 +246,7 @@ function clearWorktreeWatchSubscriptions(): void {
 	gitWatchCallbacks.clear();
 	gitDiffWatchCallbacks.clear();
 	sessionListWatchCallbacks.clear();
+	sessionDetailWatchCallbacks.clear();
 	chatMessagesCallbacks.clear();
 }
 
@@ -429,6 +455,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 		sessionListWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
+	"session.detail.changed": (params) => {
+		const changedParams = params as SessionDetailChangedNotification;
+		sessionDetailWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
 	"settings.changed": (params) => {
 		const changedParams = params as SettingsChangedNotification;
 		settingsWatchCallbacks.get(changedParams.id)?.(changedParams);
@@ -469,6 +500,86 @@ function handleNotification(method: string, params: unknown): void {
 
 		// Route by subscription ID (consistent with other watchers)
 		chatMessagesCallbacks.get(id)?.(notification);
+	}
+}
+
+/**
+ * Opens a watch subscription, with no window in which a notification can be lost.
+ *
+ * The subscription id is the client's: the callback goes into `callbacks` before
+ * the request is sent, so a change the server notifies the instant it registers
+ * the subscription already has a receiver here. Letting the server name the
+ * subscription is what left a gap — it registers before it reads the snapshot it
+ * replies with, so a notification could arrive addressed to an id this side had
+ * not learned yet, and routing dropped it with nothing left to say the snapshot
+ * on screen had gone stale.
+ *
+ * Ordering between the reply and such a notification is not guaranteed (the
+ * server writes them from different goroutines); handling that is
+ * `useSubscription`'s job, which holds early notifications until the snapshot is
+ * in.
+ *
+ * Rolling the callback back on failure also keeps a refused or timed-out
+ * subscribe from leaving an entry behind that nothing will ever remove.
+ */
+async function openSubscription<TCallback>(
+	method: string,
+	params: Record<string, unknown>,
+	callbacks: Map<string, TCallback>,
+	callback: TCallback,
+): Promise<{ id: string; result: unknown }> {
+	const client = getClient();
+	if (!client) {
+		throw new Error("Not connected");
+	}
+
+	// A UUID, not a per-page counter: one watcher's id space is shared by every
+	// client the server has, and it refuses an id already in use.
+	const id = generateUUID();
+	callbacks.set(id, callback);
+	try {
+		const result = await client.request(method, { ...params, id });
+		return { id, result };
+	} catch (err) {
+		callbacks.delete(id);
+		// A timeout is our own clock giving up, not an answer: the server may well
+		// have registered the subscription, and one nobody is listening to lives
+		// until the connection dies. Naming it ourselves is what makes it
+		// cancellable — before, the id only came back in a reply that never came.
+		// Only on a timeout: a subscribe refused because the id is already in use
+		// was answered, and that id belongs to the subscription already holding it.
+		if (isRPCTimeout(err)) {
+			closeSubscription(unsubscribeMethodFor(method), id, callbacks);
+		}
+		throw err;
+	}
+}
+
+/** `x.subscribe` -> `x.unsubscribe`; the pairing is the wire protocol's. */
+function unsubscribeMethodFor(subscribeMethod: string): string {
+	return subscribeMethod.replace(/\.subscribe$/, ".unsubscribe");
+}
+
+/**
+ * Closes a watch subscription.
+ *
+ * The callback goes first, so that a hook which has moved on hears nothing more
+ * even if the request is still in flight. A failed request is ignored: the
+ * connection is the usual reason, and a connection that is gone took every
+ * subscription on it along.
+ */
+async function closeSubscription<TCallback>(
+	method: string,
+	id: string,
+	callbacks: Map<string, TCallback>,
+): Promise<void> {
+	callbacks.delete(id);
+	const client = getClient();
+	if (!client) return;
+	try {
+		await client.request(method, { id });
+	} catch {
+		// Ignore errors (connection might be closed)
 	}
 }
 
@@ -718,52 +829,30 @@ export const useWSStore = create<WSState>((set, get) => ({
 		},
 
 		fsSubscribe: async (path: string, callback: () => void) => {
-			const client = getClient();
-			if (!client) {
-				throw new Error("Not connected");
-			}
-			const result = (await client.request("fs.subscribe", { path })) as {
-				id: string;
-			};
-			fsWatchCallbacks.set(result.id, callback);
-			return { id: result.id };
+			const { id } = await openSubscription(
+				"fs.subscribe",
+				{ path },
+				fsWatchCallbacks,
+				callback,
+			);
+			return { id };
 		},
 
-		fsUnsubscribe: async (id: string) => {
-			fsWatchCallbacks.delete(id);
-			const client = getClient();
-			if (client) {
-				try {
-					await client.request("fs.unsubscribe", { id });
-				} catch {
-					// Ignore errors (connection might be closed)
-				}
-			}
-		},
+		fsUnsubscribe: (id: string) =>
+			closeSubscription("fs.unsubscribe", id, fsWatchCallbacks),
 
 		gitSubscribe: async (callback: () => void) => {
-			const client = getClient();
-			if (!client) {
-				throw new Error("Not connected");
-			}
-			const result = (await client.request("git.subscribe", {})) as {
-				id: string;
-			};
-			gitWatchCallbacks.set(result.id, callback);
-			return { id: result.id };
+			const { id } = await openSubscription(
+				"git.subscribe",
+				{},
+				gitWatchCallbacks,
+				callback,
+			);
+			return { id };
 		},
 
-		gitUnsubscribe: async (id: string) => {
-			gitWatchCallbacks.delete(id);
-			const client = getClient();
-			if (client) {
-				try {
-					await client.request("git.unsubscribe", { id });
-				} catch {
-					// Ignore errors (connection might be closed)
-				}
-			}
-		},
+		gitUnsubscribe: (id: string) =>
+			closeSubscription("git.unsubscribe", id, gitWatchCallbacks),
 
 		gitDiffSubscribe: async (
 			path: string,
@@ -771,216 +860,165 @@ export const useWSStore = create<WSState>((set, get) => ({
 			hideWhitespace: boolean,
 			callback: (params: GitDiffChangedNotification) => void,
 		) => {
-			const client = getClient();
-			if (!client) {
-				throw new Error("Not connected");
-			}
-			const result = (await client.request("git.diff.subscribe", {
-				path,
-				staged,
-				hide_whitespace: hideWhitespace,
-			})) as GitDiffSubscribeResult;
-			gitDiffWatchCallbacks.set(result.id, callback);
-			return { id: result.id, initial: result };
+			const { id, result } = await openSubscription(
+				"git.diff.subscribe",
+				{ path, staged, hide_whitespace: hideWhitespace },
+				gitDiffWatchCallbacks,
+				callback,
+			);
+			return { id, initial: result as GitDiffData };
 		},
 
-		gitDiffUnsubscribe: async (id: string) => {
-			gitDiffWatchCallbacks.delete(id);
-			const client = getClient();
-			if (client) {
-				try {
-					await client.request("git.diff.unsubscribe", { id });
-				} catch {
-					// Ignore errors (connection might be closed)
-				}
-			}
-		},
+		gitDiffUnsubscribe: (id: string) =>
+			closeSubscription("git.diff.unsubscribe", id, gitDiffWatchCallbacks),
 
 		worktreeSubscribe: async (callback: () => void) => {
-			const client = getClient();
-			if (!client) {
-				throw new Error("Not connected");
-			}
-			const result = (await client.request("worktree.subscribe", {})) as {
-				id: string;
-			};
-			worktreeWatchCallbacks.set(result.id, callback);
-			return { id: result.id };
+			const { id } = await openSubscription(
+				"worktree.subscribe",
+				{},
+				worktreeWatchCallbacks,
+				callback,
+			);
+			return { id };
 		},
 
-		worktreeUnsubscribe: async (id: string) => {
-			worktreeWatchCallbacks.delete(id);
-			const client = getClient();
-			if (client) {
-				try {
-					await client.request("worktree.unsubscribe", { id });
-				} catch {
-					// Ignore errors (connection might be closed)
-				}
-			}
-		},
+		worktreeUnsubscribe: (id: string) =>
+			closeSubscription("worktree.unsubscribe", id, worktreeWatchCallbacks),
 
 		sessionListSubscribe: async (
 			callback: (params: SessionListChangedNotification) => void,
 		) => {
-			const client = getClient();
-			if (!client) {
-				throw new Error("Not connected");
-			}
-			const result = (await client.request(
+			const { id, result } = await openSubscription(
 				"session.list.subscribe",
 				{},
-			)) as SessionListSubscribeResult;
-			sessionListWatchCallbacks.set(result.id, callback);
-			return { id: result.id, initial: result.sessions };
+				sessionListWatchCallbacks,
+				callback,
+			);
+			return { id, initial: (result as SessionListSubscribeResult).sessions };
 		},
 
-		sessionListUnsubscribe: async (id: string) => {
-			sessionListWatchCallbacks.delete(id);
-			const client = getClient();
-			if (client) {
-				try {
-					await client.request("session.list.unsubscribe", { id });
-				} catch {
-					// Ignore errors (connection might be closed)
-				}
-			}
+		sessionListUnsubscribe: (id: string) =>
+			closeSubscription(
+				"session.list.unsubscribe",
+				id,
+				sessionListWatchCallbacks,
+			),
+
+		sessionDetailSubscribe: async (
+			sessionId: string,
+			callback: (params: SessionDetailChangedNotification) => void,
+		) => {
+			const { id, result } = await openSubscription(
+				"session.detail.subscribe",
+				{ session_id: sessionId },
+				sessionDetailWatchCallbacks,
+				callback,
+			);
+			return { id, initial: result as SessionDetailSubscribeResult };
 		},
+
+		sessionDetailUnsubscribe: (id: string) =>
+			closeSubscription(
+				"session.detail.unsubscribe",
+				id,
+				sessionDetailWatchCallbacks,
+			),
 
 		chatMessagesSubscribe: async (
 			sessionId: string,
 			callback: (notification: ServerNotification) => void,
 		) => {
+			const { id, result } = await openSubscription(
+				"chat.messages.subscribe",
+				{ session_id: sessionId },
+				chatMessagesCallbacks,
+				callback,
+			);
+			return { id, initial: result as ChatMessagesSubscribeResult };
+		},
+
+		chatMessagesHistory: async (sessionId: string, beforeSeq: HistorySeq) => {
 			const client = getClient();
 			if (!client) {
 				throw new Error("Not connected");
 			}
-			const result = (await client.request("chat.messages.subscribe", {
+			return (await client.request("chat.messages.history", {
 				session_id: sessionId,
-			})) as ChatMessagesSubscribeResult;
-			chatMessagesCallbacks.set(result.id, callback);
-			return { id: result.id, initial: result };
+				before_seq: beforeSeq,
+			} satisfies ChatMessagesHistoryParams)) as ChatMessagesHistoryResult;
 		},
 
-		chatMessagesUnsubscribe: async (id: string) => {
-			chatMessagesCallbacks.delete(id);
-			const client = getClient();
-			if (client) {
-				try {
-					await client.request("chat.messages.unsubscribe", { id });
-				} catch {
-					// Ignore errors (connection might be closed)
-				}
-			}
-		},
+		chatMessagesUnsubscribe: (id: string) =>
+			closeSubscription("chat.messages.unsubscribe", id, chatMessagesCallbacks),
 
 		settingsSubscribe: async (
 			callback: (params: SettingsChangedNotification) => void,
 		) => {
-			const client = getClient();
-			if (!client) {
-				throw new Error("Not connected");
-			}
-			const result = (await client.request(
+			const { id, result } = await openSubscription(
 				"settings.subscribe",
 				{},
-			)) as SettingsSubscribeResult;
-			settingsWatchCallbacks.set(result.id, callback);
-			return { id: result.id, initial: result.settings };
+				settingsWatchCallbacks,
+				callback,
+			);
+			return { id, initial: (result as SettingsSubscribeResult).settings };
 		},
 
-		settingsUnsubscribe: async (id: string) => {
-			settingsWatchCallbacks.delete(id);
-			const client = getClient();
-			if (client) {
-				try {
-					await client.request("settings.unsubscribe", { id });
-				} catch {
-					// Ignore errors (connection might be closed)
-				}
-			}
-		},
+		settingsUnsubscribe: (id: string) =>
+			closeSubscription("settings.unsubscribe", id, settingsWatchCallbacks),
 
 		workListSubscribe: async (
 			callback: (params: WorkListChangedNotification) => void,
 		) => {
-			const client = getClient();
-			if (!client) {
-				throw new Error("Not connected");
-			}
-			const result = (await client.request(
+			const { id, result } = await openSubscription(
 				"work.list.subscribe",
 				{},
-			)) as WorkListSubscribeResult;
-			workListWatchCallbacks.set(result.id, callback);
-			return { id: result.id, initial: result.items };
+				workListWatchCallbacks,
+				callback,
+			);
+			return { id, initial: (result as WorkListSubscribeResult).items };
 		},
 
-		workListUnsubscribe: async (id: string) => {
-			workListWatchCallbacks.delete(id);
-			const client = getClient();
-			if (client) {
-				try {
-					await client.request("work.list.unsubscribe", { id });
-				} catch {
-					// Ignore errors (connection might be closed)
-				}
-			}
-		},
+		workListUnsubscribe: (id: string) =>
+			closeSubscription("work.list.unsubscribe", id, workListWatchCallbacks),
 
 		workDetailSubscribe: async (
 			workId: string,
 			callback: (params: WorkDetailChangedNotification) => void,
 		) => {
-			const client = getClient();
-			if (!client) {
-				throw new Error("Not connected");
-			}
-			const result = (await client.request("work.detail.subscribe", {
-				work_id: workId,
-			})) as WorkDetailSubscribeResult;
-			workDetailWatchCallbacks.set(result.id, callback);
-			return { id: result.id, initial: result };
+			const { id, result } = await openSubscription(
+				"work.detail.subscribe",
+				{ work_id: workId },
+				workDetailWatchCallbacks,
+				callback,
+			);
+			return { id, initial: result as WorkDetailSubscribeResult };
 		},
 
-		workDetailUnsubscribe: async (id: string) => {
-			workDetailWatchCallbacks.delete(id);
-			const client = getClient();
-			if (client) {
-				try {
-					await client.request("work.detail.unsubscribe", { id });
-				} catch {
-					// Ignore errors (connection might be closed)
-				}
-			}
-		},
+		workDetailUnsubscribe: (id: string) =>
+			closeSubscription(
+				"work.detail.unsubscribe",
+				id,
+				workDetailWatchCallbacks,
+			),
 
 		agentRoleListSubscribe: async (
 			callback: (params: AgentRoleListChangedNotification) => void,
 		) => {
-			const client = getClient();
-			if (!client) {
-				throw new Error("Not connected");
-			}
-			const result = (await client.request(
+			const { id, result } = await openSubscription(
 				"agent_role.list.subscribe",
 				{},
-			)) as AgentRoleListSubscribeResult;
-			agentRoleListWatchCallbacks.set(result.id, callback);
-			return { id: result.id, initial: result.items };
+				agentRoleListWatchCallbacks,
+				callback,
+			);
+			return { id, initial: (result as AgentRoleListSubscribeResult).items };
 		},
 
-		agentRoleListUnsubscribe: async (id: string) => {
-			agentRoleListWatchCallbacks.delete(id);
-			const client = getClient();
-			if (client) {
-				try {
-					await client.request("agent_role.list.unsubscribe", { id });
-				} catch {
-					// Ignore errors (connection might be closed)
-				}
-			}
-		},
+		agentRoleListUnsubscribe: (id: string) =>
+			closeSubscription(
+				"agent_role.list.unsubscribe",
+				id,
+				agentRoleListWatchCallbacks,
+			),
 
 		// Spread namespace-specific actions
 		...agentActions,
@@ -1064,16 +1102,7 @@ export function resetWSStore() {
 		clearTimeout(reconnectTimeout);
 		reconnectTimeout = undefined;
 	}
-	fsWatchCallbacks.clear();
-	gitWatchCallbacks.clear();
-	gitDiffWatchCallbacks.clear();
-	worktreeWatchCallbacks.clear();
-	sessionListWatchCallbacks.clear();
-	chatMessagesCallbacks.clear();
-	settingsWatchCallbacks.clear();
-	workListWatchCallbacks.clear();
-	workDetailWatchCallbacks.clear();
-	agentRoleListWatchCallbacks.clear();
+	clearAllWatchSubscriptions();
 	worktreeDeletedListener = null;
 	onWorktreeSwitched = null;
 	useWSStore.setState({

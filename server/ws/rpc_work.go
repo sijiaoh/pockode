@@ -313,16 +313,18 @@ func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *
 	}
 
 	notifier := h.state.getNotifier()
-	id, item, comments, err := h.workDetailWatcher.Subscribe(params.WorkID, notifier)
+	item, comments, err := h.workDetailWatcher.Subscribe(params.ID, params.WorkID, notifier)
 	if err != nil {
+		if h.replySubscriptionIDError(ctx, conn, req.ID, err) {
+			return
+		}
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to subscribe")
 		return
 	}
-	h.state.trackSubscription(id, h.workDetailWatcher)
-	h.log.Debug("subscribed", "watcher", "work detail", "watchId", id, "workId", params.WorkID)
+	h.state.trackSubscription(params.ID, h.workDetailWatcher)
+	h.log.Debug("subscribed", "watcher", "work detail", "watchId", params.ID, "workId", params.WorkID)
 
 	result := rpc.WorkDetailSubscribeResult{
-		ID:       id,
 		Work:     item,
 		Comments: comments,
 	}
@@ -333,17 +335,21 @@ func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *
 }
 
 func (h *rpcMethodHandler) handleWorkListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	id, ok := h.subscriptionID(ctx, conn, req)
+	if !ok {
+		return
+	}
+
 	notifier := h.state.getNotifier()
-	id, items, err := h.workListWatcher.Subscribe(notifier)
+	items, err := h.workListWatcher.Subscribe(id, notifier)
 	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to subscribe")
+		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to work list")
 		return
 	}
 	h.state.trackSubscription(id, h.workListWatcher)
 	h.log.Debug("subscribed", "watcher", "work list", "watchId", id)
 
 	result := rpc.WorkListSubscribeResult{
-		ID:    id,
 		Items: items,
 	}
 

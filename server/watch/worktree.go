@@ -23,7 +23,7 @@ type WorktreeWatcher struct {
 
 func NewWorktreeWatcher(mainDir string) *WorktreeWatcher {
 	return &WorktreeWatcher{
-		BaseWatcher: NewBaseWatcher("wt"),
+		BaseWatcher: NewBaseWatcher(),
 		mainDir:     mainDir,
 	}
 }
@@ -44,15 +44,12 @@ func (w *WorktreeWatcher) Stop() {
 	slog.Info("WorktreeWatcher stopped")
 }
 
-func (w *WorktreeWatcher) Subscribe(notifier Notifier) string {
-	id := w.GenerateID()
-
-	sub := &Subscription{
+// Subscribe registers a subscriber under the client-chosen id.
+func (w *WorktreeWatcher) Subscribe(id string, notifier Notifier) error {
+	return w.AddSubscription(&Subscription{
 		ID:       id,
 		Notifier: notifier,
-	}
-	w.AddSubscription(sub)
-	return id
+	})
 }
 
 func (w *WorktreeWatcher) pollLoop() {

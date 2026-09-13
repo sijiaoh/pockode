@@ -16,7 +16,6 @@ vi.mock("../../hooks/useGitStatus", () => ({
 vi.mock("../../hooks/useGitLog", () => ({
 	useGitLog: () => ({ data: { commits } }),
 }));
-vi.mock("../../hooks/useGitWatch", () => ({ useGitWatch: () => undefined }));
 vi.mock("../../hooks/useGitStage", () => ({
 	useGitStage: () => ({
 		stageMutation: { mutateAsync: vi.fn() },

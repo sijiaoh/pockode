@@ -55,6 +55,9 @@ func (h *rpcMethodHandler) handleAgentRoleUpdate(ctx context.Context, conn *json
 		Name:       params.Name,
 		RolePrompt: params.RolePrompt,
 		Steps:      params.Steps,
+		AgentType:  params.AgentType,
+		Model:      params.Model,
+		Effort:     params.Effort,
 	}
 	if err := h.agentRoleStore.Update(ctx, params.ID, fields); err != nil {
 		h.replyAgentRoleError(ctx, conn, req.ID, err, "failed to update agent role")
@@ -135,17 +138,21 @@ func (h *rpcMethodHandler) handleAgentRoleResetDefaults(ctx context.Context, con
 }
 
 func (h *rpcMethodHandler) handleAgentRoleListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	id, ok := h.subscriptionID(ctx, conn, req)
+	if !ok {
+		return
+	}
+
 	notifier := h.state.getNotifier()
-	id, items, err := h.agentRoleListWatcher.Subscribe(notifier)
+	items, err := h.agentRoleListWatcher.Subscribe(id, notifier)
 	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to subscribe")
+		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to agent role list")
 		return
 	}
 	h.state.trackSubscription(id, h.agentRoleListWatcher)
 	h.log.Debug("subscribed", "watcher", "agent role list", "watchId", id)
 
 	result := rpc.AgentRoleListSubscribeResult{
-		ID:    id,
 		Items: items,
 	}
 

@@ -80,6 +80,33 @@ function reportVisibility(
 	}
 }
 
+/** Height every message row is given below, so scroll maths has numbers. */
+const ROW_HEIGHT = 100;
+
+function scrollContainer(): HTMLElement {
+	const el = document.querySelector<HTMLElement>(".overflow-y-auto");
+	if (!el) throw new Error("no scroll container");
+	return el;
+}
+
+/**
+ * Fires the observer watching the top-of-history sentinel. It is the only
+ * observed node outside a question card, which is what tells the two apart.
+ */
+function triggerHistorySentinel() {
+	for (const observer of MockIntersectionObserver.instances) {
+		for (const target of observer.targets) {
+			if (target.closest("[data-question-request-id]")) continue;
+			act(() => {
+				observer.callback(
+					[{ target, isIntersecting: true } as IntersectionObserverEntry],
+					observer as unknown as IntersectionObserver,
+				);
+			});
+		}
+	}
+}
+
 function questionMessage(
 	id: string,
 	requestId: string,
@@ -139,6 +166,26 @@ beforeEach(() => {
 	globalThis.IntersectionObserver =
 		MockIntersectionObserver as unknown as typeof globalThis.IntersectionObserver;
 	Element.prototype.scrollIntoView = vi.fn();
+
+	// jsdom has no layout, so the two things the scroll anchor is made of have to
+	// be supplied: a row's position in the list, and a scroll offset that is
+	// remembered rather than dropped.
+	Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+		configurable: true,
+		get(this: HTMLElement) {
+			if (!this.dataset.messageId) return 0;
+			const rows = [...document.querySelectorAll("[data-message-id]")];
+			return rows.indexOf(this) * ROW_HEIGHT;
+		},
+	});
+	let scrollTop = 0;
+	Object.defineProperty(HTMLElement.prototype, "scrollTop", {
+		configurable: true,
+		get: () => scrollTop,
+		set: (value: number) => {
+			scrollTop = value;
+		},
+	});
 });
 
 afterEach(() => {
@@ -224,25 +271,115 @@ describe("MessageList pending question pill", () => {
 		expect(questionCard("r1")).not.toHaveClass("question-highlight");
 	});
 
-	it("widens the pagination window before jumping to a question outside it", async () => {
+	it("jumps to a question that is loaded but out of view", async () => {
 		const messages: Message[] = [
 			questionMessage("m0", "r1"),
 			...Array.from({ length: 80 }, (_, i) => textMessage(`m${i + 1}`)),
 		];
 		renderList(messages);
+		reportVisibility("r1", false);
 
-		// Outside the render window: no DOM node exists, so it counts as hidden.
-		expect(questionCard("r1")).toBeNull();
-		const button = await findPill("Jump to unanswered question");
+		await userEvent.click(await findPill("Jump to unanswered question"));
 
-		await userEvent.click(button);
-		expect(questionCard("r1")).not.toBeNull();
 		expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
-		// Proxy for the internal at-bottom flag having been dropped: widening the
-		// window grows the content, and an auto-follow that still believed the user
-		// was at the tail would scroll straight back down over the jump.
+		expect(questionCard("r1")).toHaveClass("question-highlight");
+		// Proxy for the internal at-bottom flag having been dropped: an auto-follow
+		// that still believed the user was at the tail would scroll straight back
+		// down over the jump.
 		expect(
 			screen.getByRole("button", { name: "Scroll to bottom" }),
 		).toBeInTheDocument();
+	});
+});
+
+describe("MessageList history paging", () => {
+	it("asks for an earlier page when the top of the loaded history comes into view", () => {
+		const onLoadMoreHistory = vi.fn();
+		render(
+			<MessageList
+				messages={[textMessage("m1")]}
+				isProcessRunning={false}
+				hasMoreHistory
+				onLoadMoreHistory={onLoadMoreHistory}
+			/>,
+		);
+
+		triggerHistorySentinel();
+		expect(onLoadMoreHistory).toHaveBeenCalledTimes(1);
+	});
+
+	it("holds the view over the messages already on screen when a page lands above them", () => {
+		const onLoadMoreHistory = vi.fn();
+		const props = {
+			isProcessRunning: false,
+			hasMoreHistory: true,
+			onLoadMoreHistory,
+		};
+		const { rerender } = render(
+			<MessageList
+				{...props}
+				messages={[textMessage("m1"), textMessage("m2")]}
+				loadedHistoryPages={0}
+			/>,
+		);
+		const scroller = scrollContainer();
+		scroller.scrollTop = ROW_HEIGHT;
+
+		triggerHistorySentinel();
+
+		rerender(
+			<MessageList
+				{...props}
+				messages={[
+					textMessage("older1"),
+					textMessage("older2"),
+					textMessage("m1"),
+					textMessage("m2"),
+				]}
+				loadedHistoryPages={1}
+			/>,
+		);
+
+		// Two rows went in above the row the view was pinned to, so the view has
+		// to move down by exactly two rows to stay on it.
+		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
+	});
+
+	it("offers a retry instead of quietly stopping when a page fails", async () => {
+		const onLoadMoreHistory = vi.fn();
+		render(
+			<MessageList
+				messages={[textMessage("m1")]}
+				isProcessRunning={false}
+				hasMoreHistory
+				historyError="Failed to load earlier messages: connection lost"
+				onLoadMoreHistory={onLoadMoreHistory}
+			/>,
+		);
+
+		expect(screen.getByRole("alert")).toHaveTextContent("connection lost");
+		// Nothing left to observe, so the failure cannot spin into a retry loop
+		// the user never asked for.
+		triggerHistorySentinel();
+		expect(onLoadMoreHistory).not.toHaveBeenCalled();
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(onLoadMoreHistory).toHaveBeenCalledTimes(1);
+	});
+
+	it("says where the conversation starts, but only once the user has paged back", () => {
+		const { rerender } = render(
+			<MessageList messages={[textMessage("m1")]} isProcessRunning={false} />,
+		);
+		expect(screen.queryByText("Beginning of conversation")).toBeNull();
+
+		rerender(
+			<MessageList
+				messages={[textMessage("m1")]}
+				isProcessRunning={false}
+				loadedHistoryPages={1}
+			/>,
+		);
+		expect(screen.getByText("Beginning of conversation")).toBeInTheDocument();
 	});
 });

@@ -25,7 +25,7 @@ describe("MessageItem", () => {
 		expect(screen.getByText("Hello AI")).toBeInTheDocument();
 	});
 
-	describe("system message", () => {
+	describe("work event", () => {
 		const systemMessage = (
 			overrides: Partial<Extract<Message, { role: "user" }>> = {},
 		): Message => ({
@@ -40,9 +40,9 @@ describe("MessageItem", () => {
 			...overrides,
 		});
 
-		it("renders a collapsed banner with label and title summary", () => {
+		it("renders a collapsed line with the action and its title", () => {
 			render(<MessageItem message={systemMessage()} />);
-			expect(screen.getByText("Pockode · Kickoff")).toBeInTheDocument();
+			expect(screen.getByText("Pockode · Started")).toBeInTheDocument();
 			expect(screen.getByText("My work")).toBeInTheDocument();
 			// Prompt body hidden while collapsed
 			expect(screen.queryByText(/Do the thing/)).not.toBeInTheDocument();
@@ -63,7 +63,7 @@ describe("MessageItem", () => {
 			);
 		});
 
-		it("includes step context in the label for step_advance", () => {
+		it("makes the step itself the action for step_advance", () => {
 			render(
 				<MessageItem
 					message={systemMessage({
@@ -72,9 +72,38 @@ describe("MessageItem", () => {
 					})}
 				/>,
 			);
+			expect(screen.getByText("Pockode · Step 2/3")).toBeInTheDocument();
+		});
+
+		it("offers Details into the work it happened to", async () => {
+			const user = userEvent.setup();
+			const onOpenWorkDetail = vi.fn();
+			render(
+				<MessageItem
+					message={systemMessage({
+						meta: { title: "My work", work_id: "work-1" },
+					})}
+					onOpenWorkDetail={onOpenWorkDetail}
+				/>,
+			);
+
+			await user.click(screen.getByRole("button", { expanded: false }));
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			expect(onOpenWorkDetail).toHaveBeenCalledWith("work-1");
+		});
+
+		// History recorded before work_id was sent: it still renders, it just has
+		// nowhere to link to.
+		it("omits Details when the message names no work", async () => {
+			const user = userEvent.setup();
+			render(
+				<MessageItem message={systemMessage()} onOpenWorkDetail={vi.fn()} />,
+			);
+
+			await user.click(screen.getByRole("button", { expanded: false }));
 			expect(
-				screen.getByText("Pockode · Next step (Step 2/3)"),
-			).toBeInTheDocument();
+				screen.queryByRole("button", { name: "Details" }),
+			).not.toBeInTheDocument();
 		});
 
 		it("falls back to a generic label for unknown subtypes", () => {
@@ -93,7 +122,7 @@ describe("MessageItem", () => {
 			render(
 				<MessageItem message={systemMessage({ content: "raw prompt" })} />,
 			);
-			// The collapsed banner keeps the prompt hidden; a user bubble would show it.
+			// The collapsed line keeps the prompt hidden; a user bubble would show it.
 			expect(screen.queryByText("raw prompt")).not.toBeInTheDocument();
 		});
 	});
@@ -391,21 +420,5 @@ describe("MessageItem", () => {
 				screen.getByText("Button.tsx (src/components)"),
 			).toBeInTheDocument();
 		});
-	});
-
-	it("marks a step change with a bare step counter", () => {
-		const message: Message = {
-			id: "div-1",
-			role: "step_divider",
-			workId: "work-1",
-			step: { current: 2, total: 3 },
-			createdAt: new Date(),
-		};
-
-		render(<MessageItem message={message} />);
-		expect(screen.getByText("Step 2/3")).toBeInTheDocument();
-		// The divider says only where the work moved to; a status here could
-		// contradict the card that owns it.
-		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 	});
 });

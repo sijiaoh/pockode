@@ -52,7 +52,7 @@ func TestFSWatcher_NotifiesSubscribers(t *testing.T) {
 			defer w.Stop()
 
 			notifier := &recordingNotifier{notified: make(chan struct{}, 1)}
-			if _, err := w.Subscribe(tt.subscribed, notifier); err != nil {
+			if err := w.Subscribe("client-1", tt.subscribed, notifier); err != nil {
 				t.Fatalf("Subscribe(%q) failed: %v", tt.subscribed, err)
 			}
 

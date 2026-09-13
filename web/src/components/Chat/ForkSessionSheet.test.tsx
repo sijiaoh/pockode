@@ -13,6 +13,15 @@ const anchor: UserMessage = {
 	anchorSeq: 3,
 };
 
+const assistantAnchor: AssistantMessage = {
+	id: "a1",
+	role: "assistant",
+	parts: [{ type: "text", content: "Here is the plan" }],
+	status: "complete",
+	createdAt: new Date(),
+	anchorSeq: 4,
+};
+
 const defaultProps = {
 	anchor,
 	droppedCount: 0,
@@ -32,21 +41,54 @@ describe("ForkSessionSheet", () => {
 		expect(screen.getByText("Refactor the session store")).toBeInTheDocument();
 	});
 
-	it("says how many messages stay behind", () => {
+	// An agent had finished speaking at the moment the fork returns to, so the
+	// new session keeps its message and leaves only what came after.
+	it("says how many messages stay behind an agent anchor", () => {
+		const props = { ...defaultProps, anchor: assistantAnchor };
 		const { rerender } = render(
-			<ForkSessionSheet {...defaultProps} droppedCount={28} />,
+			<ForkSessionSheet {...props} droppedCount={28} />,
 		);
+		expect(
+			screen.getByText(/keeps the conversation up to this message/),
+		).toBeInTheDocument();
 		expect(
 			screen.getByText(/The 28 messages after it stay in this session/),
 		).toBeInTheDocument();
 
-		rerender(<ForkSessionSheet {...defaultProps} droppedCount={1} />);
+		rerender(<ForkSessionSheet {...props} droppedCount={1} />);
 		expect(
 			screen.getByText(/The message after it stays in this session/),
 		).toBeInTheDocument();
 
-		rerender(<ForkSessionSheet {...defaultProps} droppedCount={0} />);
+		rerender(<ForkSessionSheet {...props} droppedCount={0} />);
 		expect(screen.queryByText(/stay(s)? in this session/)).toBeNull();
+	});
+
+	// The user had not sent this one yet at the moment the fork returns to, so
+	// it is the first thing left behind rather than the last thing kept. Saying
+	// "up to this message" here would describe a transcript the new session
+	// never has.
+	it("says a user anchor is left behind, itself included", () => {
+		const { rerender } = render(
+			<ForkSessionSheet {...defaultProps} droppedCount={1} />,
+		);
+		expect(
+			screen.getByText(
+				/up to just before this message\. This message stays in this session/,
+			),
+		).toBeInTheDocument();
+
+		rerender(<ForkSessionSheet {...defaultProps} droppedCount={2} />);
+		expect(
+			screen.getByText(
+				/This message and the one after it stay in this session/,
+			),
+		).toBeInTheDocument();
+
+		rerender(<ForkSessionSheet {...defaultProps} droppedCount={29} />);
+		expect(
+			screen.getByText(/This message and the 28 after it stay in this session/),
+		).toBeInTheDocument();
 	});
 
 	it("forks with the edited title", async () => {
@@ -88,15 +130,7 @@ describe("ForkSessionSheet", () => {
 	});
 
 	it("labels the anchor with the agent that produced it", () => {
-		const assistant: AssistantMessage = {
-			id: "a1",
-			role: "assistant",
-			parts: [{ type: "text", content: "Here is the plan" }],
-			status: "complete",
-			createdAt: new Date(),
-			anchorSeq: 4,
-		};
-		render(<ForkSessionSheet {...defaultProps} anchor={assistant} />);
+		render(<ForkSessionSheet {...defaultProps} anchor={assistantAnchor} />);
 
 		expect(screen.getByText("Claude")).toBeInTheDocument();
 		expect(screen.getByText("Here is the plan")).toBeInTheDocument();

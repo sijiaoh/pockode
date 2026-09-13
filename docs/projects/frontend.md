@@ -48,7 +48,7 @@ Incoming notifications are routed by method name in `handleNotification()`:
 
 wsStore splits its watch callbacks into two groups, mirroring where the server keeps the matching watchers:
 
-- **Worktree-scoped** (file, git, git-diff, session list, chat messages) — the server tears down these watchers when the connection switches worktree.
+- **Worktree-scoped** (file, git, git-diff, session list, session detail, chat messages) — the server tears down these watchers when the connection switches worktree. Which group a callback map belongs to follows the server's watcher, not the hook's `resubscribeOnWorktreeChange` — session detail is worktree-scoped and still does not resubscribe ([why](../code/subscription-system.md#why-sessiondetail-is-worktree-scoped-but-never-resubscribes)).
 - **App-level / global** (work list, work detail, agent role list, settings, worktree list) — these watchers are Manager-level and keep pushing across worktree switches.
 
 On worktree switch, `switchWorktreeRPC()` calls `clearWorktreeWatchSubscriptions()`, which clears only the worktree-scoped maps. App-level callbacks are deliberately preserved: Work and AgentRole subscriptions set `resubscribeOnWorktreeChange: false` (they never resubscribe on switch), so clearing their callbacks would leave the server pushing `work.list.changed` and similar notifications into a connection with no local handler — silently dropping updates.
@@ -61,7 +61,7 @@ On WebSocket close, `clearAllWatchSubscriptions()` clears every callback map (in
 
 Both subscription hooks use the generic `useSubscription` hook (`web/src/hooks/useSubscription.ts`), which manages the full lifecycle:
 
-1. **Subscribe** — On mount (when `enabled && connected`), calls the subscribe function, stores the subscription ID, and invokes `onSubscribed` with initial data
+1. **Subscribe** — On mount (when `enabled && connected`), calls the subscribe function — which registers the callback under the id it generated *before* sending the RPC — and invokes `onSubscribed` with the initial data, replaying anything that arrived in the meantime ([why](../code/subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened))
 2. **Receive notifications** — Routes incremental changes through the notification callback
 3. **Unsubscribe** — On unmount, disable, or disconnect, unsubscribes and calls `onReset`
 4. **Race condition handling** — Uses a generation counter to discard stale responses
@@ -156,5 +156,47 @@ Activates `useAgentRoleSubscription`. Lists all roles with a delete button per r
 
 Shows detail for a single agent role:
 - **Name** — Inline-editable
+- **Engine** — Collapsed summary row opening a `ResponsivePanel` with Agent /
+  Model / Effort choices (`AgentRoleEngineSelector`)
 - **Role Prompt** — Inline-editable textarea with Markdown rendering
+- **Steps** — Reorderable list editor
 - **Delete** — Confirmation dialog
+
+#### AgentRoleEngineSelector
+
+The summary row and its three-section panel are `components/ui/EngineField.tsx`,
+shared with the global defaults in Settings' Session section. It is controlled:
+the selected dot follows the value passed in, and the caller supplies the three
+`onSelect` callbacks. What goes on the wire differs per caller and so stays out of
+the component — a role sends the one field that changed and lets the server clear
+the rest ([API](api.md#agent_roleupdate-engine-fields)), while the global defaults
+go out as one object and must carry an emptied model and effort with a new agent
+([why](../code/agent-integration.md#session-models)). So does what an empty model
+means: on a role that sits on the global agent the server fills it in from
+Settings, so its Auto row names the inherited value (`From Settings: Opus`)
+instead of claiming the CLI decides.
+
+`AgentRoleEngineSelector` is the role-shaped wrapper around it: the
+`Follow settings` row that leaves the agent unset, which only a role has
+somewhere to defer to, and the inherited descriptions above.
+
+Both callers read the global engine through `hooks/useGlobalEngine.ts`, the
+frontend twin of `settings.Settings.Engine` — one page to display it, the other to
+tell whether it is on the same agent and therefore inheriting. *Empty agent type
+means the built-in default agent* is a rule of the server's that the UI has to
+restate to draw an honest row before any write happens; restating it once, in a
+hook, is what keeps it from being spelled `?? "claude"` in every panel that asks.
+
+The chat's `EngineSelector` stays separate, deliberately. It is shaped around a
+resolved, possibly running session — an agent locked by activation, a CLI that
+restarts on a switch — and is replaceable through `chatUIRegistry`, so its props
+are an extension contract. Merging it in would mean a component driven by boolean
+switches. What it shares is the presentation of a pick-one list,
+`components/ui/ChoiceList.tsx` (`Section`, `ChoiceRow`, `SelectionDot`), so the
+touch-target floor and the radio semantics of those rows have one definition
+rather than several that drift.
+
+All of them read their options from `agentOptionsStore` and none fetches; the
+single fetch is `useAgentOptions`, called once in `AppShell`. Selecting applies
+immediately — there is no draft to save — and failures are reported inside the
+panel, these pages having no channel outside it.

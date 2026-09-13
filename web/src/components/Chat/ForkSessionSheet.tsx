@@ -6,9 +6,9 @@ import { messagePreview } from "../../utils/messagePreview";
 import { Sheet, Spinner } from "../ui";
 
 interface Props {
-	/** The message the fork cuts at, kept by the new session. */
+	/** The message the user picked the fork out of. */
 	anchor: Message;
-	/** How many messages fall after the anchor and stay behind. */
+	/** How many messages stay behind, the anchor included when it is dropped. */
 	droppedCount: number;
 	agentType: AgentType;
 	defaultTitle: string;
@@ -19,7 +19,32 @@ interface Props {
 	onClose: () => void;
 }
 
-function keptSentence(droppedCount: number): string {
+/**
+ * What the fork keeps and what it leaves, in the two shapes the rule takes.
+ *
+ * A fork returns to the moment before the anchor happened. For an agent message
+ * that moment is after it was said, so the new session keeps it; for a message
+ * the user sent it is before they said it, so the new session never shows it
+ * and the user is about to say it again. Same rule, two sentences, because
+ * "up to this message" would be a lie in the second case.
+ */
+function keptSentence(
+	anchorRole: Message["role"],
+	droppedCount: number,
+): string {
+	if (anchorRole === "user") {
+		const kept =
+			"The new session keeps the conversation up to just before this message.";
+		// The anchor itself is always one of them, so there is no zero case.
+		if (droppedCount === 1) {
+			return `${kept} This message stays in this session.`;
+		}
+		if (droppedCount === 2) {
+			return `${kept} This message and the one after it stay in this session.`;
+		}
+		return `${kept} This message and the ${droppedCount - 1} after it stay in this session.`;
+	}
+
 	const kept = "The new session keeps the conversation up to this message.";
 	if (droppedCount === 0) return kept;
 	if (droppedCount === 1) {
@@ -39,7 +64,8 @@ function keptSentence(droppedCount: number): string {
  *
  * The anchor is echoed back because the user picked it out of a scrolling
  * transcript on a phone, and seeing it is the only way to confirm they hit the
- * right one.
+ * right one. Whether it is the last message the fork keeps or the first one it
+ * leaves behind is what the sentence under it says.
  */
 function ForkSessionSheet({
 	anchor,
@@ -119,7 +145,7 @@ function ForkSessionSheet({
 				</div>
 
 				<p className="text-sm text-th-text-secondary">
-					{keptSentence(droppedCount)}
+					{keptSentence(anchor.role, droppedCount)}
 				</p>
 
 				<div className="space-y-1.5">

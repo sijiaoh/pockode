@@ -39,11 +39,11 @@ type SessionListWatcher struct {
 
 func NewSessionListWatcher(store session.Store) *SessionListWatcher {
 	w := &SessionListWatcher{
-		BaseWatcher: NewBaseWatcher("sl"),
+		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan session.SessionChangeEvent, 64), // Buffer to avoid blocking
 	}
-	store.SetOnChangeListener(w)
+	store.AddOnChangeListener(w)
 	return w
 }
 
@@ -87,10 +87,7 @@ func (w *SessionListWatcher) eventLoop() {
 }
 
 func (w *SessionListWatcher) buildItem(meta session.SessionMeta) rpc.SessionListItem {
-	return rpc.SessionListItem{
-		SessionMeta: meta,
-		State:       w.processStateGetter.GetProcessState(meta.ID),
-	}
+	return rpc.NewSessionListItem(meta, w.processStateGetter.GetProcessState(meta.ID))
 }
 
 // notifyChange sends notifications to all subscribers.
@@ -144,22 +141,24 @@ func (w *SessionListWatcher) notifySync() {
 	slog.Info("sent full sync to subscribers after event drop")
 }
 
-// Subscribe registers a subscriber and returns the subscription ID along with
-// the current session list enriched with runtime state.
-func (w *SessionListWatcher) Subscribe(notifier Notifier) (string, []rpc.SessionListItem, error) {
-	id := w.GenerateID()
+// Subscribe registers a subscriber under the client-chosen id and returns the
+// current session list enriched with runtime state.
+//
+// Registered before the list is read, so a change landing between the two is
+// notified rather than lost; see BaseWatcher.AddSubscription.
+func (w *SessionListWatcher) Subscribe(id string, notifier Notifier) ([]rpc.SessionListItem, error) {
 	sub := &Subscription{
 		ID:       id,
 		Notifier: notifier,
 	}
-	// Add subscription BEFORE getting the list to avoid missing events
-	// that occur between List() and AddSubscription().
-	w.AddSubscription(sub)
+	if err := w.AddSubscription(sub); err != nil {
+		return nil, err
+	}
 
 	sessions, err := w.store.List()
 	if err != nil {
 		w.RemoveSubscription(id)
-		return "", nil, err
+		return nil, err
 	}
 
 	items := make([]rpc.SessionListItem, len(sessions))
@@ -167,7 +166,7 @@ func (w *SessionListWatcher) Subscribe(notifier Notifier) (string, []rpc.Session
 		items[i] = w.buildItem(sess)
 	}
 
-	return id, items, nil
+	return items, nil
 }
 
 type sessionListChangedParams struct {
@@ -226,10 +225,7 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 
 	// Use e.State directly — the event already carries the authoritative state,
 	// so re-querying via GetProcessState would be redundant.
-	item := rpc.SessionListItem{
-		SessionMeta: meta,
-		State:       string(e.State),
-	}
+	item := rpc.NewSessionListItem(meta, string(e.State))
 	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
 		return sessionListChangedParams{
 			ID:        sub.ID,

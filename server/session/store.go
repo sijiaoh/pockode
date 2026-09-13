@@ -22,7 +22,7 @@ type Store interface {
 	Get(sessionID string) (SessionMeta, bool, error)
 
 	// Session metadata (with I/O)
-	Create(ctx context.Context, sessionID string, agentType AgentType, mode Mode) (SessionMeta, error)
+	Create(ctx context.Context, sessionID string, spec CreateSpec) (SessionMeta, error)
 	// CreateFork creates a session that begins life as a copy of another one.
 	CreateFork(ctx context.Context, sessionID string, fork ForkSpec) (SessionMeta, error)
 	Delete(ctx context.Context, sessionID string) error
@@ -53,7 +53,7 @@ type Store interface {
 	Touch(ctx context.Context, sessionID string) error
 
 	// Change notification
-	SetOnChangeListener(listener OnChangeListener)
+	AddOnChangeListener(listener OnChangeListener)
 }
 
 type indexData struct {
@@ -63,10 +63,10 @@ type indexData struct {
 // FileStore is NOT safe for multiple instances sharing the same dataDir.
 // Use a single instance per data directory (e.g., via dependency injection).
 type FileStore struct {
-	dataDir  string
-	mu       sync.RWMutex
-	sessions []SessionMeta // in-memory cache
-	listener OnChangeListener
+	dataDir   string
+	mu        sync.RWMutex
+	sessions  []SessionMeta // in-memory cache
+	listeners []OnChangeListener
 
 	// historyMu guards historyLen and is held across the append itself, so two
 	// concurrent appends cannot take sequence numbers in one order and reach the
@@ -114,9 +114,7 @@ func (s *FileStore) readIndexFromDisk() (indexData, error) {
 
 	// Migrate: ensure all sessions have valid defaults
 	for i := range idx.Sessions {
-		if idx.Sessions[i].AgentType == "" {
-			idx.Sessions[i].AgentType = AgentTypeClaude
-		}
+		idx.Sessions[i].AgentType = ResolveAgentType(idx.Sessions[i].AgentType)
 		if idx.Sessions[i].Mode == "" {
 			idx.Sessions[i].Mode = ModeDefault
 		}
@@ -133,15 +131,17 @@ func (s *FileStore) persistIndex() error {
 	return filestore.WriteFileAtomic(s.indexPath(), data, 0644)
 }
 
-func (s *FileStore) SetOnChangeListener(listener OnChangeListener) {
+func (s *FileStore) AddOnChangeListener(listener OnChangeListener) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.listener = listener
+	s.listeners = append(s.listeners, listener)
 }
 
+// notifyChange must be called with mu held — that is the contract listeners are
+// written against (see OnChangeListener).
 func (s *FileStore) notifyChange(event SessionChangeEvent) {
-	if s.listener != nil {
-		s.listener.OnSessionChange(event)
+	for _, l := range s.listeners {
+		l.OnSessionChange(event)
 	}
 }
 
@@ -171,16 +171,25 @@ func (s *FileStore) Get(sessionID string) (SessionMeta, bool, error) {
 	return SessionMeta{}, false, nil
 }
 
-func (s *FileStore) Create(ctx context.Context, sessionID string, agentType AgentType, mode Mode) (SessionMeta, error) {
+func (s *FileStore) Create(ctx context.Context, sessionID string, spec CreateSpec) (SessionMeta, error) {
 	if err := ctx.Err(); err != nil {
 		return SessionMeta{}, err
 	}
 
-	if agentType == "" {
-		agentType = AgentTypeClaude
-	}
+	agentType := ResolveAgentType(spec.AgentType)
+	mode := spec.Mode
 	if mode == "" {
 		mode = ModeDefault
+	}
+
+	// Judged before the session exists rather than through SetModel/SetEffort
+	// afterwards: a session that is briefly listed with a model its agent cannot
+	// run is one a client can see, and one the kickoff message can race.
+	if !IsValidModel(agentType, spec.Model) {
+		return SessionMeta{}, fmt.Errorf("%w: model %q, agent %q", ErrModelNotAvailable, spec.Model, agentType)
+	}
+	if !IsValidEffort(agentType, spec.Effort) {
+		return SessionMeta{}, fmt.Errorf("%w: effort %q, agent %q", ErrEffortNotAvailable, spec.Effort, agentType)
 	}
 
 	s.mu.Lock()
@@ -194,6 +203,8 @@ func (s *FileStore) Create(ctx context.Context, sessionID string, agentType Agen
 		UpdatedAt: now,
 		AgentType: agentType,
 		Mode:      mode,
+		Model:     spec.Model,
+		Effort:    spec.Effort,
 	}
 
 	if err := s.insertLocked(session); err != nil {
@@ -450,8 +461,8 @@ func (s *FileStore) GetHistory(ctx context.Context, sessionID string) ([]json.Ra
 // It carries seq 0 because it is not in the file: nothing can be resolved back to
 // it, and leaving it to be numbered by position would hand out an address that the
 // next real append also gets — the client would then name a record it never saw.
-// StampHistorySeq leaves an existing seq alone, and this record is only ever
-// appended last, so the records before it keep their positions.
+// Stamping leaves an existing seq alone, and this record is only ever appended
+// last, so the records before it keep their positions.
 func historyWarning(stats filestore.JSONLStats) json.RawMessage {
 	var parts []string
 	if stats.Corrupted > 0 {

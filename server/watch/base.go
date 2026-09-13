@@ -2,20 +2,30 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 )
 
+// Errors from AddSubscription. The id under which a subscription is registered
+// is chosen by the client, so both of these are the client's mistake.
+var (
+	ErrSubscriptionIDRequired = errors.New("subscription id is required")
+	ErrSubscriptionIDInUse    = errors.New("subscription id already in use")
+)
+
 type Subscription struct {
-	ID       string
-	WorkID   string // used by WorkDetailWatcher to filter by work item
+	ID string
+	// Key names the single resource a subscription follows, for watchers whose
+	// subscribers each watch one item instead of a whole list: a work_id for
+	// WorkDetailWatcher, a session_id for SessionDetailWatcher. Empty on list
+	// watchers, which notify every subscriber.
+	Key      string
 	Notifier Notifier
 }
 
 // BaseWatcher provides common subscription management for all watcher types.
 type BaseWatcher struct {
-	idPrefix string
-
 	subMu         sync.RWMutex
 	subscriptions map[string]*Subscription
 
@@ -28,25 +38,39 @@ type BaseWatcher struct {
 	wg      sync.WaitGroup
 }
 
-func NewBaseWatcher(idPrefix string) *BaseWatcher {
+func NewBaseWatcher() *BaseWatcher {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &BaseWatcher{
-		idPrefix:      idPrefix,
 		subscriptions: make(map[string]*Subscription),
 		ctx:           ctx,
 		cancel:        cancel,
 	}
 }
 
-func (b *BaseWatcher) GenerateID() string {
-	return generateIDWithPrefix(b.idPrefix)
-}
+// AddSubscription registers a subscription under the id the client chose.
+//
+// The id comes from the client precisely so that it is known before the request
+// is sent: a change landing between this registration and the reply arriving is
+// then delivered to a receiver that already exists, instead of arriving under an
+// id the client has not learned yet and being dropped. The id space is shared by
+// every connection a watcher serves, so one already in use is refused rather
+// than silently taking the other subscription's place.
+//
+// The full contract: docs/code/subscription-system.md.
+func (b *BaseWatcher) AddSubscription(sub *Subscription) error {
+	if sub.ID == "" {
+		return ErrSubscriptionIDRequired
+	}
 
-func (b *BaseWatcher) AddSubscription(sub *Subscription) {
 	b.subMu.Lock()
 	defer b.subMu.Unlock()
 
+	if _, exists := b.subscriptions[sub.ID]; exists {
+		return ErrSubscriptionIDInUse
+	}
+
 	b.subscriptions[sub.ID] = sub
+	return nil
 }
 
 func (b *BaseWatcher) RemoveSubscription(id string) *Subscription {
@@ -79,17 +103,32 @@ func (b *BaseWatcher) GetSubscription(id string) *Subscription {
 	return b.subscriptions[id]
 }
 
-// HasSubscriptionForWorkID reports whether any subscription targets workID.
+// HasSubscriptionForKey reports whether any subscription targets key.
 // Used to skip expensive per-event work (store reads) when no subscriber cares.
-func (b *BaseWatcher) HasSubscriptionForWorkID(workID string) bool {
+func (b *BaseWatcher) HasSubscriptionForKey(key string) bool {
 	b.subMu.RLock()
 	defer b.subMu.RUnlock()
 	for _, sub := range b.subscriptions {
-		if sub.WorkID == workID {
+		if sub.Key == key {
 			return true
 		}
 	}
 	return false
+}
+
+// NotifyForKey sends a notification only to subscribers whose Key matches.
+func (b *BaseWatcher) NotifyForKey(key, method string, makeParams func(sub *Subscription) any) {
+	for _, sub := range b.GetAllSubscriptions() {
+		if sub.Key != key {
+			continue
+		}
+		n := Notification{Method: method, Params: makeParams(sub)}
+		if err := sub.Notifier.Notify(b.ctx, n); err != nil {
+			slog.Debug("failed to notify subscriber",
+				"id", sub.ID,
+				"error", err)
+		}
+	}
 }
 
 func (b *BaseWatcher) NotifyAll(method string, makeParams func(sub *Subscription) any) int {

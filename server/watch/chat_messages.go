@@ -2,7 +2,6 @@ package watch
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"sync"
 
@@ -29,7 +28,7 @@ var _ ViewingChecker = (*ChatMessagesWatcher)(nil)
 
 func NewChatMessagesWatcher(store session.Store) *ChatMessagesWatcher {
 	return &ChatMessagesWatcher{
-		BaseWatcher:  NewBaseWatcher("cm"),
+		BaseWatcher:  NewBaseWatcher(),
 		store:        store,
 		msgCh:        make(chan process.ChatMessage, 256),
 		sessionToIDs: make(map[string][]string),
@@ -118,23 +117,38 @@ func (w *ChatMessagesWatcher) notifyEvent(sessionID string, record agent.EventRe
 type notifyParams struct {
 	ID string `json:"id"`
 	// Seq is the record's address in the session's history, the same number
-	// StampHistorySeq writes into replayed history, so a client cannot tell a
-	// live record from a replayed one when it names it later. Omitted for an
-	// event that was never persisted.
+	// replayed history is stamped with, so a client cannot tell a live record
+	// from a replayed one when it names it later. Omitted for an event that was
+	// never persisted.
 	Seq session.HistorySeq `json:"seq,omitempty"`
 	agent.EventRecord
 }
 
-// Subscribe registers a subscriber for a specific session.
-// Returns subscription ID and history.
+// Subscribe registers a subscriber for a specific session under the
+// client-chosen id and returns the newest page of that session's history.
+//
+// Both the registration and the session mapping precede the history read, so a
+// record written in between is notified rather than lost. Rare duplicates are
+// acceptable; message loss is not. (A record landing in the shorter window
+// between the two is not routed to this subscriber, but it is in the history
+// read right after, so it is not lost either.)
+//
+// limit follows session.PageHistory: zero asks for the default page size. Older
+// pages are fetched out of band (chat.messages.history) rather than through the
+// subscription, because they can never change and never arrive on their own —
+// every record a live notification carries is newer than this page.
 func (w *ChatMessagesWatcher) Subscribe(
+	id string,
 	notifier Notifier,
 	sessionID string,
-) (string, []json.RawMessage, error) {
-	id := w.GenerateID()
+	limit int,
+) (session.HistoryPage, error) {
 	sub := &Subscription{
 		ID:       id,
 		Notifier: notifier,
+	}
+	if err := w.AddSubscription(sub); err != nil {
+		return session.HistoryPage{}, err
 	}
 
 	w.sessionMu.Lock()
@@ -142,17 +156,19 @@ func (w *ChatMessagesWatcher) Subscribe(
 	w.idToSession[id] = sessionID
 	w.sessionMu.Unlock()
 
-	// Register subscription BEFORE getting history to avoid message loss.
-	// Rare duplicates are acceptable; message loss is not.
-	w.AddSubscription(sub)
-
 	history, err := w.store.GetHistory(context.Background(), sessionID)
 	if err != nil {
 		w.Unsubscribe(id)
-		return "", nil, err
+		return session.HistoryPage{}, err
 	}
 
-	return id, session.StampHistorySeq(history), nil
+	page, err := session.PageHistory(history, session.NoHistorySeq, limit)
+	if err != nil {
+		w.Unsubscribe(id)
+		return session.HistoryPage{}, err
+	}
+
+	return page, nil
 }
 
 // Unsubscribe removes a subscription.

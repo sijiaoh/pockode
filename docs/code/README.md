@@ -10,7 +10,7 @@ Index of Pockode code explanation documents. These documents focus on "why it's 
 | [Authentication & Access Control](authentication.md) | Trust model, token surfaces, and hardening | `server/authtoken/`, `server/middleware/`, `server/mcp/` |
 | [AI Agent Integration](agent-integration.md) | Claude/Codex subprocess management | `server/agent/`, `server/process/` |
 | [Work/Project Management](work-system.md) | Task decomposition and coordination | `server/work/`, `server/mcp/`, `web/src/lib/workStore.ts` |
-| [Real-time Subscription System](subscription-system.md) | Watcher architecture and backpressure handling | `server/watch/`, `web/src/hooks/useSubscription.ts` |
+| [Real-time Subscription System](subscription-system.md) | Who names a subscription, watcher architecture, backpressure handling | `server/watch/`, `web/src/hooks/useSubscription.ts` |
 | [Frontend State Management](frontend-state.md) | Zustand stores and extension system | `web/src/lib/` |
 | [Relay NAT Traversal](relay-system.md) | Mobile access to local PC | `server/relay/` |
 

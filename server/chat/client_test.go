@@ -91,7 +91,7 @@ func TestClient_RequestsNeedingLiveProcess(t *testing.T) {
 			pm := newTestManager(t, store)
 			defer pm.Shutdown()
 
-			if _, err := store.Create(context.Background(), "sess", session.AgentTypeClaude, session.ModeDefault); err != nil {
+			if _, err := store.Create(context.Background(), "sess", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
 				t.Fatalf("Create session: %v", err)
 			}
 
@@ -118,5 +118,49 @@ func TestClient_UnknownSessionStaysNotFound(t *testing.T) {
 	err = NewClient(store, pm).Interrupt(context.Background(), "nope")
 	if !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("error = %v, want %v", err, ErrSessionNotFound)
+	}
+}
+
+// failingAppendStore cannot write history. It hands back a plausible-looking
+// sequence number alongside the error on purpose: the number is meaningless, and
+// the point of the test below is that nothing passes it on.
+type failingAppendStore struct{ session.Store }
+
+func (failingAppendStore) AppendToHistory(context.Context, string, any) (session.HistorySeq, error) {
+	return 42, errors.New("history is not writable")
+}
+
+// TestClient_MessageWithNoRecordHasNoAddress: a message that could not be
+// recorded still reaches the agent — it is worth answering whether or not the
+// transcript kept it — but it has no address, and handing one out anyway would
+// point a later fork at whatever record eventually takes that number.
+func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
+	base, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	store := failingAppendStore{base}
+	pm := newTestManager(t, store)
+	defer pm.Shutdown()
+
+	if _, err := store.Create(context.Background(), "sess", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	client := NewClient(store, pm)
+	broadcastSeq := session.HistorySeq(-1)
+	client.SetBroadcaster(func(_ string, _ agent.MessageEvent, seq session.HistorySeq, _ any) {
+		broadcastSeq = seq
+	})
+
+	seq, err := client.SendMessageExcluding(context.Background(), "sess", "hello", nil)
+	if err != nil {
+		t.Fatalf("SendMessageExcluding = %v, want the prompt to go through anyway", err)
+	}
+	if seq.Valid() {
+		t.Errorf("seq = %d, want no address for a record that was not written", seq)
+	}
+	if broadcastSeq.Valid() {
+		t.Errorf("broadcast seq = %d, want no address for a record that was not written", broadcastSeq)
 	}
 }

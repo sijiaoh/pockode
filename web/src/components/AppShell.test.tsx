@@ -17,10 +17,8 @@ import {
 } from "../lib/worktreeStore";
 import { wsActions } from "../lib/wsStore";
 import { routeTree } from "../router";
-import type {
-	SessionListChangedNotification,
-	SessionListItem,
-} from "../types/message";
+import { makeSessionListItem } from "../test/sessionFixtures";
+import type { SessionListChangedNotification } from "../types/message";
 
 // ChatPanel is the attach point; render the session it was handed and whether
 // that session has resolved, which together are what the panel needs to show
@@ -94,20 +92,7 @@ vi.mock("../hooks/useAgentRoleSubscription", () => ({
 	useAgentRoleSubscription: () => {},
 }));
 
-const session = (id: string): SessionListItem => ({
-	id,
-	title: id,
-	created_at: "2024-01-01T00:00:00Z",
-	updated_at: "2024-01-01T00:00:00Z",
-	mode: "default" as const,
-	agent_type: "codex",
-	model: "",
-	effort: "",
-	activated: false,
-	state: "ended" as const,
-	needs_input: false,
-	unread: false,
-});
+const session = (id: string) => makeSessionListItem({ id, title: id });
 
 // Session lists are worktree-scoped. B's target session "x" is intentionally NOT
 // first so a redirect leaking across the worktree switch would land on "b1".

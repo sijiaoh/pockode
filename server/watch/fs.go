@@ -31,7 +31,7 @@ type FSWatcher struct {
 
 func NewFSWatcher(workDir string) *FSWatcher {
 	return &FSWatcher{
-		BaseWatcher:  NewBaseWatcher("f"),
+		BaseWatcher:  NewBaseWatcher(),
 		workDir:      workDir,
 		pathToIDs:    make(map[string][]string),
 		idToPath:     make(map[string]string),
@@ -69,16 +69,26 @@ func (w *FSWatcher) Stop() {
 	slog.Info("FSWatcher stopped")
 }
 
-func (w *FSWatcher) Subscribe(subPath string, notifier Notifier) (string, error) {
-	id := w.GenerateID()
+// Subscribe registers a subscriber for one path under the client-chosen id.
+func (w *FSWatcher) Subscribe(id, subPath string, notifier Notifier) error {
+	// Registered first, so that an id the client cannot use is refused before any
+	// of the path bookkeeping below is touched — it belongs to whoever holds that
+	// id already. An event landing before that bookkeeping is in place reaches no
+	// subscriber, as it did under either order: notifying needs both halves. It
+	// costs nothing here, because fs.changed carries no data — it only says "read
+	// this path again" — and the client reads the path once the subscription is
+	// established anyway (useFSWatch's onSubscribed).
+	if err := w.AddSubscription(&Subscription{ID: id, Notifier: notifier}); err != nil {
+		return err
+	}
 
 	fullPath := filepath.Join(w.workDir, subPath)
 	if _, err := os.Stat(fullPath); err != nil {
-		return "", err
+		w.RemoveSubscription(id)
+		return err
 	}
 
 	key := subscriptionKey(subPath)
-	sub := &Subscription{ID: id, Notifier: notifier}
 
 	w.pathMu.Lock()
 
@@ -86,7 +96,8 @@ func (w *FSWatcher) Subscribe(subPath string, notifier Notifier) (string, error)
 	if w.pathRefCount[key] == 0 {
 		if err := w.watcher.Add(fullPath); err != nil {
 			w.pathMu.Unlock()
-			return "", err
+			w.RemoveSubscription(id)
+			return err
 		}
 		slog.Debug("started watching path", "path", key)
 	}
@@ -96,10 +107,7 @@ func (w *FSWatcher) Subscribe(subPath string, notifier Notifier) (string, error)
 	w.pathRefCount[key]++
 	w.pathMu.Unlock()
 
-	// Add to BaseWatcher after path mapping is set up
-	w.AddSubscription(sub)
-
-	return id, nil
+	return nil
 }
 
 // Unsubscribe overrides BaseWatcher.Unsubscribe to also clean up fsnotify watches.

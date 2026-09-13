@@ -8,6 +8,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/session"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -21,8 +22,9 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	// Verify session exists and get mode
-	meta, found, err := wt.SessionStore.Get(params.SessionID)
+	// Verify the session exists. Its settings are not read here: they belong to
+	// session.detail.subscribe, which the client runs alongside this one.
+	_, found, err := wt.SessionStore.Get(params.SessionID)
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
 		return
@@ -33,30 +35,89 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	}
 
 	notifier := h.state.getNotifier()
-	id, history, err := wt.ChatMessagesWatcher.Subscribe(notifier, params.SessionID)
+	page, err := wt.ChatMessagesWatcher.Subscribe(params.ID, notifier, params.SessionID, params.Limit)
 	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		// An unusable subscription id or a limit the client cannot ask for are its
+		// mistakes; anything else Subscribe fails on is a history the server could
+		// not read.
+		if h.replySubscriptionIDError(ctx, conn, req.ID, err) {
+			return
+		}
+		if errors.Is(err, session.ErrInvalidHistoryLimit) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+			return
+		}
+		h.replyInternalError(ctx, conn, req.ID, "failed to read session history", err, "sessionId", params.SessionID)
 		return
 	}
-	h.state.trackSubscription(id, wt.ChatMessagesWatcher)
+	h.state.trackSubscription(params.ID, wt.ChatMessagesWatcher)
 
 	wt.SessionListWatcher.MarkRead(params.SessionID)
 
 	result := rpc.ChatMessagesSubscribeResult{
-		ID:        id,
-		History:   history,
-		State:     wt.ProcessManager.GetProcessState(params.SessionID),
-		Mode:      meta.Mode,
-		AgentType: meta.AgentType,
-		Model:     meta.Model,
-		Effort:    meta.Effort,
+		History:       page.Records,
+		HasMore:       page.HasMore,
+		NextBeforeSeq: page.NextBeforeSeq,
+		State:         wt.ProcessManager.GetProcessState(params.SessionID),
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)
 		return
 	}
 
-	log.Info("subscribed to chat messages", "subscriptionId", id, "state", result.State, "mode", meta.Mode)
+	log.Info("subscribed to chat messages",
+		"subscriptionId", params.ID, "state", result.State,
+		"records", len(page.Records), "hasMore", page.HasMore)
+}
+
+// handleChatMessagesHistory serves the page of history older than a cursor the
+// client already holds — how a chat scrolled back past the page it subscribed
+// with reaches the rest of the conversation.
+func (h *rpcMethodHandler) handleChatMessagesHistory(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.ChatMessagesHistoryParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	log := h.log.With("sessionId", params.SessionID)
+
+	_, found, err := wt.SessionStore.Get(params.SessionID)
+	if err != nil {
+		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
+		return
+	}
+	if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+		return
+	}
+
+	records, err := wt.SessionStore.GetHistory(ctx, params.SessionID)
+	if err != nil {
+		h.replyInternalError(ctx, conn, req.ID, "failed to read session history", err, "sessionId", params.SessionID)
+		return
+	}
+
+	page, err := session.PageHistory(records, params.BeforeSeq, params.Limit)
+	if err != nil {
+		// Both failures name what the client asked for and what the history can
+		// answer, so the cause is the reply.
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+		return
+	}
+
+	result := rpc.ChatMessagesHistoryResult{
+		History:       page.Records,
+		HasMore:       page.HasMore,
+		NextBeforeSeq: page.NextBeforeSeq,
+	}
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		log.Error("failed to send history response", "error", err)
+		return
+	}
+
+	log.Debug("served chat history page",
+		"beforeSeq", params.BeforeSeq, "records", len(page.Records), "hasMore", page.HasMore)
 }
 
 func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
@@ -74,12 +135,15 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	wt.SessionListWatcher.ClearNeedsInput(params.SessionID)
 
-	if err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier()); err != nil {
+	seq, err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier())
+	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
 
-	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+	// This connection is the one excluded from the broadcast, so the reply is
+	// where it learns its own message's seq (see rpc.MessageResult).
+	if err := conn.Reply(ctx, req.ID, rpc.MessageResult{Seq: seq}); err != nil {
 		log.Error("failed to send response", "error", err)
 	}
 }
@@ -171,11 +235,12 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
 	} else if errors.Is(err, chat.ErrSessionNotRunning) ||
 		errors.Is(err, chat.ErrForkAnchorOutOfRange) ||
+		errors.Is(err, chat.ErrForkAnchorNoHistory) ||
 		errors.Is(err, chat.ErrForkUnsupported) {
 		// The request does not fit the session's history, state or agent — a prompt
-		// whose process is gone, a fork anchored past the end of the history, a fork
-		// of a session whose agent cannot be forked. The message names what was
-		// wrong, and none of them is a server fault.
+		// whose process is gone, a fork anchored past the end of the history or at
+		// the very first message, a fork of a session whose agent cannot be forked.
+		// The message names what was wrong, and none of them is a server fault.
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {
 		// The reply carries the cause, but this is the branch a failing agent

@@ -348,6 +348,121 @@ describe("useSubscription", () => {
 		});
 	});
 
+	// The server registers the subscription before it reads the snapshot it
+	// replies with, and writes the reply and any notification independently — so a
+	// change can reach the client first. It must neither be lost nor applied
+	// before the snapshot that would then overwrite it.
+	describe("changes arriving while the subscription opens", () => {
+		it("applies an early notification after the initial snapshot", async () => {
+			const applied: string[] = [];
+			const onSubscribed = vi.fn((initial: string) =>
+				applied.push(`initial:${initial}`),
+			);
+			const onNotification = vi.fn((params: string) =>
+				applied.push(`changed:${params}`),
+			);
+
+			mockSubscribe.mockImplementation(
+				async (callback: (params: string) => void) => {
+					callback("first");
+					callback("second");
+					return { id: "sub-1", initial: "snapshot" };
+				},
+			);
+
+			renderHook(() =>
+				useSubscription<string, string>(
+					mockSubscribe,
+					mockUnsubscribe,
+					onNotification,
+					{ onSubscribed },
+				),
+			);
+
+			// Replayed in arrival order: the server emits changes in the order it
+			// committed them, so the last one is the current state.
+			await waitFor(() => {
+				expect(applied).toEqual([
+					"initial:snapshot",
+					"changed:first",
+					"changed:second",
+				]);
+			});
+		});
+
+		// The held queue is released before the snapshot is applied, so a handler
+		// that throws costs the snapshot and nothing else. Held instead, every
+		// later change would join a queue nothing drains — a view that looks live
+		// and silently never updates again.
+		it("keeps delivering when applying the snapshot throws", async () => {
+			const applied: string[] = [];
+			const onSubscribed = vi.fn(() => {
+				throw new Error("bad snapshot");
+			});
+			const onNotification = vi.fn((params: string) =>
+				applied.push(`changed:${params}`),
+			);
+
+			let capturedCallback: ((params: string) => void) | null = null;
+			mockSubscribe.mockImplementation(
+				async (callback: (params: string) => void) => {
+					capturedCallback = callback;
+					return { id: "sub-1", initial: "snapshot" };
+				},
+			);
+
+			renderHook(() =>
+				useSubscription<string, string>(
+					mockSubscribe,
+					mockUnsubscribe,
+					onNotification,
+					{ onSubscribed, onError: () => {} },
+				),
+			);
+
+			await waitFor(() => expect(onSubscribed).toHaveBeenCalled());
+
+			act(() => {
+				capturedCallback?.("later");
+			});
+
+			expect(applied).toEqual(["changed:later"]);
+		});
+
+		it("delivers notifications directly once the snapshot is in", async () => {
+			const applied: string[] = [];
+			const onSubscribed = vi.fn(() => applied.push("initial"));
+			const onNotification = vi.fn((params: string) =>
+				applied.push(`changed:${params}`),
+			);
+
+			let capturedCallback: ((params: string) => void) | null = null;
+			mockSubscribe.mockImplementation(
+				async (callback: (params: string) => void) => {
+					capturedCallback = callback;
+					return { id: "sub-1", initial: "snapshot" };
+				},
+			);
+
+			renderHook(() =>
+				useSubscription<string, string>(
+					mockSubscribe,
+					mockUnsubscribe,
+					onNotification,
+					{ onSubscribed },
+				),
+			);
+
+			await waitFor(() => expect(onSubscribed).toHaveBeenCalled());
+
+			act(() => {
+				capturedCallback?.("later");
+			});
+
+			expect(applied).toEqual(["initial", "changed:later"]);
+		});
+	});
+
 	describe("refresh", () => {
 		it("resubscribes when refresh is called", async () => {
 			mockSubscribe

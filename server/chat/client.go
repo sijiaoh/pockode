@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -28,6 +29,14 @@ var ErrSessionNotRunning = errors.New("session is no longer running, send a mess
 // source session's history.
 var ErrForkAnchorOutOfRange = errors.New("fork anchor is outside the session's history")
 
+// ErrForkAnchorNoHistory is returned when the anchor is a message the user sent
+// and nothing precedes it: the fork would cut to an empty conversation.
+//
+// Refused rather than made empty. A session with no history is not a branch of
+// anything, and creating one silently would answer "forked" to a request that
+// carried nothing across (AGENTS.md: no silent failures).
+var ErrForkAnchorNoHistory = errors.New("there is no conversation before this message to keep")
+
 // ErrForkUnsupported is returned when the source session's agent answers
 // agent.ForkUnsupported: it cannot reopen an earlier conversation at all.
 //
@@ -39,9 +48,10 @@ var ErrForkUnsupported = errors.New("this session's agent does not support forki
 
 // MessageBroadcastFunc broadcasts a user message to all session subscribers,
 // optionally excluding one notifier. seq is where the message landed in the
-// session's history, so subscribers can name that record later. The exclude
-// parameter is typed as any to avoid importing the watch package; the wiring code
-// casts it.
+// session's history, so subscribers can name that record later, or
+// session.NoHistorySeq when it was not recorded and there is nothing to name.
+// The exclude parameter is typed as any to avoid importing the watch package;
+// the wiring code casts it.
 type MessageBroadcastFunc func(sessionID string, event agent.MessageEvent, seq session.HistorySeq, exclude any)
 
 // Client coordinates chat operations across session and process management.
@@ -61,17 +71,20 @@ func (c *Client) SetBroadcaster(fn MessageBroadcastFunc) {
 	c.broadcast = fn
 }
 
-// SendMessage sends a user message to the agent process, persists it to
-// history, and broadcasts it to all session subscribers.
-func (c *Client) SendMessage(ctx context.Context, sessionID, content string) error {
-	return c.sendMessage(ctx, sessionID, content, nil)
-}
-
-// SendMessageExcluding is like SendMessage but excludes one notifier from
-// the broadcast. Used when the caller already notified itself (e.g. the
-// WebSocket client that sent the message).
-func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content string, exclude any) error {
-	return c.sendMessage(ctx, sessionID, content, exclude)
+// SendMessageExcluding sends a user message to the agent process, persists it to
+// history, and broadcasts it to every session subscriber except the given
+// notifier — the caller that has already shown the message to itself (the
+// WebSocket client that sent it).
+//
+// It returns where the message landed in the session's history so the caller can
+// hand that address back to the sender. This is the only way the sender can
+// learn it: the broadcast that tells every other subscriber a record's seq is
+// the very thing being excluded here, so without this the one message a client
+// can never name is its own (see session.HistorySeq).
+//
+// session.NoHistorySeq when the record was not persisted — see sendEvent.
+func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content string, exclude any) (session.HistorySeq, error) {
+	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content}, exclude)
 }
 
 // SendSystemMessage sends a system-driven automatic message (kickoff, restart,
@@ -85,34 +98,40 @@ func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content, subt
 		Subtype: subtype,
 		Meta:    meta,
 	}
-	return c.sendEvent(ctx, sessionID, event, nil)
+	_, err := c.sendEvent(ctx, sessionID, event, nil)
+	return err
 }
 
-func (c *Client) sendMessage(ctx context.Context, sessionID, content string, exclude any) error {
-	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content}, exclude)
-}
-
-func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, exclude any) error {
+// sendEvent delivers one message to the agent, records it, and tells subscribers.
+// It returns the record's address in history, or session.NoHistorySeq if there
+// is none.
+func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, exclude any) (session.HistorySeq, error) {
 	proc, err := c.getOrCreateProcess(ctx, sessionID)
 	if err != nil {
-		return err
+		return session.NoHistorySeq, err
 	}
 
 	// Persist message to history
 	seq, err := c.store.AppendToHistory(ctx, sessionID, agent.NewEventRecord(event))
 	if err != nil {
 		slog.Error("failed to persist message", "sessionId", sessionID, "error", err)
+		// The prompt still goes to the agent — it is worth answering whether or not
+		// the transcript kept it, and refusing it here would turn a disk hiccup into
+		// a session that cannot be talked to. But the failed append handed back no
+		// address, so nothing below may pass one on: a seq nobody can resolve would
+		// send a later fork to whatever record eventually takes that number.
+		seq = session.NoHistorySeq
 	}
 
 	if err := proc.SendMessage(event.Content); err != nil {
-		return err
+		return session.NoHistorySeq, err
 	}
 
 	if c.broadcast != nil {
 		c.broadcast(sessionID, event, seq, exclude)
 	}
 
-	return nil
+	return seq, nil
 }
 
 func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, data agent.PermissionRequestData, choice agent.PermissionChoice) error {
@@ -173,19 +192,26 @@ func (c *Client) Interrupt(_ context.Context, sessionID string) error {
 	return proc.SendInterrupt()
 }
 
-// Fork creates a new session carrying the source session's conversation up to and
-// including the history record named by anchor, then asks the agent to carry its
-// own context across. An empty title copies the source's.
+// Fork creates a new session carrying the source session's conversation up to the
+// moment before the history record named by anchor happened, then asks the agent
+// to carry its own context across. An empty title copies the source's.
+//
+// The anchor is the message the user picked, and what "before it happened" means
+// depends on who said it. An agent message: the agent had finished saying it, so
+// the fork keeps it. A message the user sent: they had not said it yet, so the
+// fork stops one record short and the new session never shows it. Which of the
+// two applies is decided here and nowhere else — a client sends the seq of the
+// message it was pointed at, not arithmetic on it.
 //
 // The anchor is a sequence number the server itself handed out, with the history
 // or with a live event — never an index the client counted, which would drift
 // (see session.HistorySeq).
 //
-// The anchor is inclusive and is not snapped to a turn boundary: cutting in the
-// middle of a turn is allowed, and leaves a last turn with no ending event, which
-// is what the source really did contain up to that point. No terminal event is
-// invented to tidy it up — a transcript claiming a turn finished where it was cut
-// would be a lie, and the next agent reads that transcript too.
+// The cut is not snapped to a turn boundary: cutting in the middle of a turn is
+// allowed, and leaves a last turn with no ending event, which is what the source
+// really did contain up to that point. No terminal event is invented to tidy it
+// up — a transcript claiming a turn finished where it was cut would be a lie,
+// and the next agent reads that transcript too.
 //
 // The source may be mid-turn. Forking neither waits for it nor disturbs it.
 //
@@ -222,7 +248,20 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 			ErrForkAnchorOutOfRange, int(anchor), len(records))
 	}
 
-	history := agent.TruncateHistory(records, anchor.Index())
+	keepThrough := anchor.Index()
+	if isUserMessageRecord(records[keepThrough]) {
+		// They had not sent it yet at the moment this fork returns to. That the
+		// agent's own context stopped one message short of it anyway — the CLI
+		// never streams back the prompts Pockode sends it, so there is no uuid to
+		// resume at — is why the rule costs nothing to honour, not why it exists.
+		keepThrough--
+	}
+	if keepThrough < 0 {
+		return session.SessionMeta{}, fmt.Errorf("%w: seq %d is the session's first record",
+			ErrForkAnchorNoHistory, int(anchor))
+	}
+
+	history := agent.TruncateHistory(records, keepThrough)
 
 	newID := uuid.Must(uuid.NewV7()).String()
 	meta, err := c.store.CreateFork(ctx, newID, session.ForkSpec{
@@ -343,4 +382,24 @@ func choiceToString(choice agent.PermissionChoice) string {
 	default:
 		return "deny"
 	}
+}
+
+// isUserMessageRecord reports whether a history record is a message the user
+// sent, as opposed to one Pockode wrote itself.
+//
+// EventTypeMessage carries both — a typed prompt and a work kickoff or step
+// advance — and only Origin tells them apart. Today's clients offer no fork
+// action on Pockode's own annotations, but the rule about where a fork cuts is
+// this function's to state, not something to infer from what a client happens
+// to send.
+//
+// A record that does not parse is not a user message: TruncateHistory keeps
+// such records as they are, and silently shortening the fork over a parse
+// failure would be the larger harm.
+func isUserMessageRecord(raw json.RawMessage) bool {
+	var rec agent.EventRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return false
+	}
+	return rec.Type == agent.EventTypeMessage && rec.Origin != agent.MessageOriginSystem
 }

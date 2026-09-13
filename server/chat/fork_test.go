@@ -67,7 +67,7 @@ func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.EventRecord)
 	t.Cleanup(pm.Shutdown)
 
 	ctx := context.Background()
-	if _, err := store.Create(ctx, "source", session.AgentTypeClaude, session.ModeYolo); err != nil {
+	if _, err := store.Create(ctx, "source", session.CreateSpec{AgentType: session.AgentTypeClaude, Mode: session.ModeYolo}); err != nil {
 		t.Fatalf("Create session: %v", err)
 	}
 	if err := store.Update(ctx, "source", "Fix the parser"); err != nil {
@@ -186,8 +186,8 @@ func TestFork_HandsTheAgentTheCutHistory(t *testing.T) {
 		name   string
 		anchor int // index into the fixture's history
 	}{
-		{name: "cut inside the conversation", anchor: 0},
-		{name: "cut at the last record", anchor: 1},
+		{name: "cut inside the conversation", anchor: 1},
+		{name: "cut at the last record", anchor: 4},
 	}
 
 	for _, tt := range tests {
@@ -196,6 +196,9 @@ func TestFork_HandsTheAgentTheCutHistory(t *testing.T) {
 			f := newForkFixture(t, ag, []agent.EventRecord{
 				{Type: agent.EventTypeMessage, Content: "first"},
 				{Type: agent.EventTypeText, Content: "answering first"},
+				{Type: agent.EventTypeDone},
+				{Type: agent.EventTypeMessage, Content: "second"},
+				{Type: agent.EventTypeText, Content: "answering second"},
 			})
 
 			meta, err := f.client.Fork(context.Background(), "source", f.seqs[tt.anchor], "")
@@ -214,6 +217,66 @@ func TestFork_HandsTheAgentTheCutHistory(t *testing.T) {
 				t.Error("agent was not told where the session's directories are")
 			}
 		})
+	}
+}
+
+// TestFork_UserMessageAnchorStopsBeforeIt is the rule that makes the fork's
+// transcript and its agent's context the same conversation: the CLI never
+// receives Pockode's prompts back, so the agent's memory of a fork cut here
+// stops at its own previous message either way. Keeping the prompt would show a
+// last message the agent does not have, which is the mismatch this drops.
+func TestFork_UserMessageAnchorStopsBeforeIt(t *testing.T) {
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
+		{Type: agent.EventTypeMessage, Content: "first", Origin: agent.MessageOriginUser},
+		{Type: agent.EventTypeText, Content: "answering first"},
+		{Type: agent.EventTypeDone},
+		{Type: agent.EventTypeMessage, Content: "second", Origin: agent.MessageOriginUser},
+	})
+
+	meta, err := f.client.Fork(context.Background(), "source", f.seqs[3], "")
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+
+	got := forkedHistory(t, f.store, meta.ID)
+	want := []agent.EventType{agent.EventTypeMessage, agent.EventTypeText, agent.EventTypeDone}
+	if len(got) != len(want) {
+		t.Fatalf("copied %d records, want %d: %+v", len(got), len(want), got)
+	}
+	for i, rec := range got {
+		if rec.Type != want[i] {
+			t.Errorf("record %d is %q, want %q", i, rec.Type, want[i])
+		}
+		if rec.Content == "second" {
+			t.Errorf("record %d carried the anchor message the fork returns to before", i)
+		}
+	}
+}
+
+// TestFork_SystemMessageAnchorIsKept: EventTypeMessage also carries Pockode's own
+// annotations — a work kickoff, a step advance — and those are not something the
+// user said, so the "return to before they said it" rule does not apply. The
+// server decides this from the record's origin rather than trusting a client not
+// to anchor on one.
+func TestFork_SystemMessageAnchorIsKept(t *testing.T) {
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
+		{Type: agent.EventTypeMessage, Content: "first", Origin: agent.MessageOriginUser},
+		{Type: agent.EventTypeText, Content: "answering first"},
+		{Type: agent.EventTypeDone},
+		{Type: agent.EventTypeMessage, Content: "step 2 started", Origin: agent.MessageOriginSystem},
+	})
+
+	meta, err := f.client.Fork(context.Background(), "source", f.seqs[3], "")
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+
+	got := forkedHistory(t, f.store, meta.ID)
+	if len(got) != 4 {
+		t.Fatalf("copied %d records, want all 4: %+v", len(got), got)
+	}
+	if got[3].Content != "step 2 started" {
+		t.Errorf("last record = %q, want the system message the anchor named", got[3].Content)
 	}
 }
 
@@ -322,9 +385,10 @@ func TestFork_SaysNothingWhenTheAgentRemembers(t *testing.T) {
 func TestFork_AgentFailureLeavesNoSession(t *testing.T) {
 	f := newForkFixture(t, &forkingAgent{err: errors.New("no transcript to fork")}, []agent.EventRecord{
 		{Type: agent.EventTypeMessage, Content: "first"},
+		{Type: agent.EventTypeText, Content: "answering first"},
 	})
 
-	if _, err := f.client.Fork(context.Background(), "source", f.seqs[0], ""); err == nil {
+	if _, err := f.client.Fork(context.Background(), "source", f.seqs[1], ""); err == nil {
 		t.Fatal("Fork succeeded despite the agent failing")
 	}
 
@@ -352,6 +416,9 @@ func TestFork_RejectedRequests(t *testing.T) {
 		{name: "anchor past the end", sessionID: "source", anchor: 2, want: ErrForkAnchorOutOfRange},
 		// What a client that never received a seq would send.
 		{name: "no anchor at all", sessionID: "source", anchor: session.NoHistorySeq, want: ErrForkAnchorOutOfRange},
+		// The first thing said in the session: returning to before it leaves no
+		// conversation to branch, and an empty session is not a fork of anything.
+		{name: "the session's opening message", sessionID: "source", anchor: 1, want: ErrForkAnchorNoHistory},
 	}
 
 	for _, tt := range tests {
@@ -461,9 +528,10 @@ func TestFork_AnchorNamesTheRecordTheClientSaw(t *testing.T) {
 func TestFork_UsesTheGivenTitle(t *testing.T) {
 	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
 		{Type: agent.EventTypeMessage, Content: "first"},
+		{Type: agent.EventTypeText, Content: "answering first"},
 	})
 
-	meta, err := f.client.Fork(context.Background(), "source", f.seqs[0], "Try the other approach")
+	meta, err := f.client.Fork(context.Background(), "source", f.seqs[1], "Try the other approach")
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}

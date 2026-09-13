@@ -604,7 +604,7 @@ func TestHandler_WorkStart_WorktreeImmutableOnRestart(t *testing.T) {
 func TestHandler_WorkListSubscribe_Empty(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	resp := env.call("work.list.subscribe", nil)
+	resp := env.call("work.list.subscribe", rpc.SubscribeParams{ID: env.nextSubID()})
 
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
@@ -615,9 +615,6 @@ func TestHandler_WorkListSubscribe_Empty(t *testing.T) {
 		t.Fatalf("failed to unmarshal result: %v", err)
 	}
 
-	if result.ID == "" {
-		t.Error("expected non-empty subscription ID")
-	}
 	if len(result.Items) != 0 {
 		t.Errorf("expected 0 items, got %d", len(result.Items))
 	}
@@ -638,7 +635,7 @@ func TestHandler_WorkListSubscribe_WithItems(t *testing.T) {
 		Title:       "Story B",
 	})
 
-	resp := env.call("work.list.subscribe", nil)
+	resp := env.call("work.list.subscribe", rpc.SubscribeParams{ID: env.nextSubID()})
 
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)

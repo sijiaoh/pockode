@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeSessionListItem } from "../../test/sessionFixtures";
 import type { SessionListItem } from "../../types/message";
 import { SidebarContext } from "../Layout/SidebarContext";
 import SessionsTab from "./SessionsTab";
@@ -15,20 +16,7 @@ vi.mock("../../hooks/useSession", () => ({
 	useSession: () => ({ ...sessionState, refresh: mockRefresh }),
 }));
 
-const session = (id: string): SessionListItem => ({
-	id,
-	title: id,
-	created_at: "2024-01-01T00:00:00Z",
-	updated_at: "2024-01-01T00:00:00Z",
-	mode: "default",
-	agent_type: "codex",
-	model: "",
-	effort: "",
-	activated: false,
-	state: "ended",
-	needs_input: false,
-	unread: false,
-});
+const session = (id: string) => makeSessionListItem({ id, title: id });
 
 // The sidebar bumps refreshSignal when it opens; raising it is how a test asks
 // the tab to refresh.

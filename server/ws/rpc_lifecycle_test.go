@@ -17,6 +17,8 @@ type recordingWatcher struct {
 	unsubscribed []string
 }
 
+var _ watch.Watcher = (*recordingWatcher)(nil)
+
 func (w *recordingWatcher) Start() error          { return nil }
 func (w *recordingWatcher) Stop()                 {}
 func (w *recordingWatcher) Unsubscribe(id string) { w.unsubscribed = append(w.unsubscribed, id) }
@@ -93,7 +95,7 @@ func TestRPCConnState_BindWorktree_RejectedAfterClose(t *testing.T) {
 
 	state := &rpcConnState{
 		notifier:      NewJSONRPCNotifier(nil),
-		subscriptions: map[string]watch.Watcher{},
+		subscriptions: map[subscriptionKey]struct{}{},
 		closed:        true, // connection already cleaned up
 	}
 
@@ -118,7 +120,7 @@ func TestRPCConnState_BindWorktree_NoopOnSameInstance(t *testing.T) {
 
 	state := &rpcConnState{
 		notifier:      NewJSONRPCNotifier(nil),
-		subscriptions: map[string]watch.Watcher{},
+		subscriptions: map[subscriptionKey]struct{}{},
 	}
 
 	if prev, noop, ok := state.bindWorktree(wt); !ok || noop || prev != nil {
@@ -142,7 +144,7 @@ func TestRPCConnState_BindWorktree_NoopOnSameInstance(t *testing.T) {
 func TestRPCConnState_TrackSubscription_UnsubscribesAfterClose(t *testing.T) {
 	watcher := &recordingWatcher{}
 	state := &rpcConnState{
-		subscriptions: map[string]watch.Watcher{},
+		subscriptions: map[subscriptionKey]struct{}{},
 		closed:        true,
 	}
 
@@ -151,7 +153,7 @@ func TestRPCConnState_TrackSubscription_UnsubscribesAfterClose(t *testing.T) {
 	if len(watcher.unsubscribed) != 1 || watcher.unsubscribed[0] != "sub-1" {
 		t.Errorf("expected orphaned subscription to be unsubscribed, got %v", watcher.unsubscribed)
 	}
-	if _, tracked := state.subscriptions["sub-1"]; tracked {
+	if _, tracked := state.subscriptions[subscriptionKey{watcher: watcher, id: "sub-1"}]; tracked {
 		t.Error("closed connection must not retain the subscription")
 	}
 }
@@ -159,7 +161,7 @@ func TestRPCConnState_TrackSubscription_UnsubscribesAfterClose(t *testing.T) {
 func TestRPCConnState_TrackSubscription_TracksWhenOpen(t *testing.T) {
 	watcher := &recordingWatcher{}
 	state := &rpcConnState{
-		subscriptions: map[string]watch.Watcher{},
+		subscriptions: map[subscriptionKey]struct{}{},
 	}
 
 	state.trackSubscription("sub-1", watcher)
@@ -167,7 +169,7 @@ func TestRPCConnState_TrackSubscription_TracksWhenOpen(t *testing.T) {
 	if len(watcher.unsubscribed) != 0 {
 		t.Errorf("open connection should not unsubscribe, got %v", watcher.unsubscribed)
 	}
-	if state.subscriptions["sub-1"] != watcher {
+	if _, tracked := state.subscriptions[subscriptionKey{watcher: watcher, id: "sub-1"}]; !tracked {
 		t.Error("open connection should retain the subscription for later cleanup")
 	}
 }

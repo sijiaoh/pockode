@@ -3,12 +3,15 @@ package agentrole
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/pockode/server/session"
 )
 
 func newTestStore(t *testing.T) *FileStore {
@@ -695,3 +698,142 @@ func TestDiffRoles_Update(t *testing.T) {
 type listenerFunc func(ChangeEvent)
 
 func (f listenerFunc) OnAgentRoleChange(e ChangeEvent) { f(e) }
+
+// --- Engine (agent type / model / effort) ---
+
+func strPtr(s string) *string { return &s }
+
+func agentPtr(a session.AgentType) *session.AgentType { return &a }
+
+func TestUpdateEngine(t *testing.T) {
+	tests := []struct {
+		name    string
+		initial UpdateFields
+		update  UpdateFields
+		wantErr bool
+		want    AgentRole
+	}{
+		{
+			name:   "agent with its own model and effort",
+			update: UpdateFields{AgentType: agentPtr(session.AgentTypeCodex), Model: strPtr("gpt-5.6-sol"), Effort: strPtr("minimal")},
+			want:   AgentRole{AgentType: session.AgentTypeCodex, Model: "gpt-5.6-sol", Effort: "minimal"},
+		},
+		{
+			name:    "model belonging to another agent",
+			update:  UpdateFields{AgentType: agentPtr(session.AgentTypeClaude), Model: strPtr("gpt-5.6-sol")},
+			wantErr: true,
+		},
+		{
+			name:    "effort the agent does not offer",
+			update:  UpdateFields{AgentType: agentPtr(session.AgentTypeClaude), Effort: strPtr("minimal")},
+			wantErr: true,
+		},
+		{
+			name:    "model without an agent to judge it against",
+			update:  UpdateFields{Model: strPtr("opus")},
+			wantErr: true,
+		},
+		{
+			name:    "unknown agent type",
+			update:  UpdateFields{AgentType: agentPtr("gemini")},
+			wantErr: true,
+		},
+		{
+			name:    "switching agent drops the previous model and effort",
+			initial: UpdateFields{AgentType: agentPtr(session.AgentTypeClaude), Model: strPtr("opus"), Effort: strPtr("xhigh")},
+			update:  UpdateFields{AgentType: agentPtr(session.AgentTypeCodex)},
+			want:    AgentRole{AgentType: session.AgentTypeCodex},
+		},
+		{
+			name:    "going back to no agent drops them too",
+			initial: UpdateFields{AgentType: agentPtr(session.AgentTypeClaude), Model: strPtr("opus"), Effort: strPtr("xhigh")},
+			update:  UpdateFields{AgentType: agentPtr(session.AgentType(""))},
+			want:    AgentRole{},
+		},
+		{
+			name:    "re-sending the same agent keeps the model",
+			initial: UpdateFields{AgentType: agentPtr(session.AgentTypeClaude), Model: strPtr("opus")},
+			update:  UpdateFields{AgentType: agentPtr(session.AgentTypeClaude), Effort: strPtr("high")},
+			want:    AgentRole{AgentType: session.AgentTypeClaude, Model: "opus", Effort: "high"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			role := createRole(t, s, "Engineer", "")
+			if tt.initial.AgentType != nil {
+				if err := s.Update(context.Background(), role.ID, tt.initial); err != nil {
+					t.Fatalf("initial Update: %v", err)
+				}
+			}
+			before := getRole(t, s, role.ID)
+
+			err := s.Update(context.Background(), role.ID, tt.update)
+			got := getRole(t, s, role.ID)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				if !errors.Is(err, ErrInvalidRole) {
+					t.Errorf("error = %v, want ErrInvalidRole", err)
+				}
+				if got.AgentType != before.AgentType || got.Model != before.Model || got.Effort != before.Effort {
+					t.Errorf("rejected update still changed the role to %q/%q/%q", got.AgentType, got.Model, got.Effort)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+			if got.AgentType != tt.want.AgentType || got.Model != tt.want.Model || got.Effort != tt.want.Effort {
+				t.Errorf("engine = %q/%q/%q, want %q/%q/%q",
+					got.AgentType, got.Model, got.Effort,
+					tt.want.AgentType, tt.want.Model, tt.want.Effort)
+			}
+		})
+	}
+}
+
+// TestUpdateKeepsStaleEngine covers a role whose model the server no longer
+// offers — a value left behind by an upgrade, which the role keeps on purpose so
+// the user still sees what they chose. Editing anything else about that role
+// must not be refused because of it.
+func TestUpdateKeepsStaleEngine(t *testing.T) {
+	dir := t.TempDir()
+	stale := AgentRole{ID: "stale", Name: "Engineer", AgentType: session.AgentTypeClaude, Model: "retired-model"}
+	data, err := json.Marshal(indexData{Roles: []AgentRole{stale}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "agent-roles"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-roles", "index.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	if err := s.Update(context.Background(), stale.ID, UpdateFields{Name: strPtr("Renamed")}); err != nil {
+		t.Fatalf("rename refused because of an untouched engine: %v", err)
+	}
+
+	got := getRole(t, s, stale.ID)
+	if got.Name != "Renamed" {
+		t.Errorf("name = %q, want %q", got.Name, "Renamed")
+	}
+	if got.Model != "retired-model" {
+		t.Errorf("model = %q, want the stale value to survive", got.Model)
+	}
+
+	// Touching the engine is still the moment the stale value has to be resolved.
+	if err := s.Update(context.Background(), stale.ID, UpdateFields{Effort: strPtr("high")}); err == nil {
+		t.Error("expected an engine edit to be judged against the stale model")
+	}
+}

@@ -396,9 +396,9 @@ type ChildInfo struct {
 type MessageMeta struct {
 	// WorkID is the work that owns the session this message was delivered to —
 	// the receiver, never the subject. A child_done message is delivered to the
-	// parent's session, so its WorkID is the parent's. The frontend groups
-	// messages by this key into one card per work; a subject id here would
-	// shatter that card.
+	// parent's session, so its WorkID is the parent's. The frontend opens this
+	// work from the message; a subject id here would send the reader somewhere
+	// the message was never delivered.
 	WorkID string `json:"work_id,omitempty"`
 	// WorkType is the receiving work's type ("story" or "task").
 	WorkType string `json:"work_type,omitempty"`

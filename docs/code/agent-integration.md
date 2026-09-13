@@ -12,7 +12,7 @@ Pockode integrates AI Agents (Claude and Codex) through subprocess management. T
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  ws/rpc_chat.go                                                      │
-│  ├─ chat.message → ChatClient.SendMessage()                         │
+│  ├─ chat.message → ChatClient.SendMessageExcluding()                │
 │  ├─ chat.interrupt → ChatClient.Interrupt()                         │
 │  ├─ chat.permission_response → ChatClient.SendPermissionResponse()  │
 │  └─ chat.question_response → ChatClient.SendQuestionResponse()      │
@@ -229,8 +229,8 @@ which is the shape this is.
 ### Session Forking
 
 Forking is two jobs with one interface between them. Pockode does the first
-itself: `chat.Client.Fork` copies the source's history up to the anchor into a
-new session. The second — bringing the *agent's* own memory of that conversation
+itself: `chat.Client.Fork` copies the source's history into a new session, cut at
+the anchor. The second — bringing the *agent's* own memory of that conversation
 across — belongs to the agent, and whether it can is the agent's own answer.
 
 **The agent declares what it can do by implementing `agent.SessionForker`, and
@@ -248,7 +248,7 @@ they are the two facts that are true today:
 
 | `agent.ForkSupport` | What the CLI can reopen | What Pockode does with it |
 |---------------------|-------------------------|---------------------------|
-| `ForkUnsupported` (`"none"`) | nothing — it cannot reopen an earlier conversation at all | the fork is refused: `chat.Client.Fork` answers `ErrForkUnsupported` before creating anything, and the frontend shows the menu row disabled with that reason |
+| `ForkUnsupported` (`"none"`) | nothing — it cannot reopen an earlier conversation at all | the fork is refused: `chat.Client.Fork` answers `ErrForkUnsupported` before creating anything, and the frontend offers no fork action in such a session at all ([session-fork-ui.md](../session-fork-ui.md#blocked-and-failed)) |
 | `ForkFromAnyMessage` (`"any_message"`) | a conversation at a chosen point inside it | forking is offered from any message and can carry the agent's memory from any of them |
 
 The type stays a named string rather than a bool because the two values are two
@@ -290,10 +290,22 @@ screen, and no way to continue it; `session.fork` must not claim to do something
 it does not do just because half of it succeeded. The frontend blocks it first for
 the user's sake, and the backend refuses it because that is the contract.
 
-**What the cut means.** The anchor is inclusive and is not snapped to a turn
-boundary. Cutting mid-turn leaves a last turn with no terminal event, and none is
-invented to tidy it up: the next agent reads this transcript too, and one
-claiming a turn ended where it was cut would lie to it as well as to the user.
+**What the cut means.** The anchor names the message the user picked, and which
+side of it the cut falls on is decided in `chat.Client.Fork` and nowhere else: an
+agent message is kept, because the agent had finished saying it; a message the
+user sent is dropped, because the fork returns to before they sent it — and
+because the agent's own context stopped one message short of it regardless, there
+being no uuid for a prompt Pockode sent ([Claude's case](#forking)). A client
+sends back the seq it was handed and does no arithmetic on it. An anchor the user
+sent with nothing before it leaves no conversation to keep and is refused,
+`ErrForkAnchorNoHistory`, rather than producing an empty session that would
+answer "forked" to a request that carried nothing across. The reasoning the user
+is shown is in [session-fork-ui.md](../session-fork-ui.md#the-rule).
+
+The cut is not snapped to a turn boundary. Cutting mid-turn leaves a last turn
+with no terminal event, and none is invented to tidy it up: the next agent reads
+this transcript too, and one claiming a turn ended where it was cut would lie to
+it as well as to the user.
 The price lands in the fork's UI: with nothing to
 settle it, that last message sits in the frontend's `streaming` status until the
 user's next message closes the turn, and while it does it cannot itself be a fork
@@ -413,7 +425,7 @@ and its companions are absent from `claude --help`, so their semantics come from
 running them, not from reading it. Which version renamed it from
 `Task` was not established and does not matter — history recorded by older CLIs
 still says `Task`, so both names have to keep working
-([frontend-state.md](frontend-state.md#task-groups)).
+([frontend-state.md](frontend-state.md#task-parts)).
 
 The versions are written down because these findings expire. When a mapping stops
 working, the useful question is which version changed what, and the way to answer
@@ -653,21 +665,30 @@ one. The message it names is kept whole, so a cut *inside* an assistant message
 tool call whose result was cut away as failed, which is a better mismatch than
 dropping the very message the user forked at.
 
-The mismatch runs the other way at a **user message**: the CLI never streams back
-the prompts Pockode sends it, so Pockode has no uuid for them, and a fork anchored
-on one stops at the agent's previous message. The new session shows a last message
-its agent does not have in context. That is the safe direction — carrying less
-than the transcript shows rather than more — and it is the only one available.
+The mismatch runs the other way wherever the **last kept record names no
+message** — a prompt Pockode sent, which the CLI never streams back and so has no
+uuid here, or a warning Pockode wrote itself. The replay then stops at the last
+message the agent did speak, while the transcript shows more, which is the safe
+direction — carrying less than the transcript shows rather than more — and the
+only one available.
+
+A fork anchored on a user message used to be the ordinary way into that
+mismatch, and is not any more: `chat.Client.Fork` cuts that message away (*What
+the cut means*), so the kept history normally ends on the agent's turn and the
+replay stops exactly where the transcript does. **Normally, not always** — the
+mismatch survives wherever the record *before* the anchor also names no message:
+two prompts sent back to back while the agent worked, or a message Pockode wrote
+itself — a work event, say — sitting in front of the anchor. Do not read the
+change as having removed it.
 
 Two situations carry nothing, both reported the same honest way —
 `carried == false`, which makes `chat.Client` record it in the new session's
 history:
 
 - **no record in the copied history carries a message uuid** — history written
-  before Pockode stored the uuids, or a fork taken at a point the agent has not
-  spoken before, which an opening message always is however far the conversation
-  goes on past it. There is no point to cut at, and replaying uncut is not an
-  option (above). The second case has no memory to carry in any event.
+  before Pockode stored the uuids, or a session the agent never spoke in. There
+  is no point to cut at, and replaying uncut is not an option (above). The second
+  case has no memory to carry in any event.
 - **the source has no provider session recorded, or gave up on the one it had**
   (`recovery: "fresh"`) — replaying it would fail, which is worse *after* telling
   the user it would not.
@@ -1515,9 +1536,25 @@ add a second source that can disagree with it. If Codex's models start turning
 over fast enough to make the manual list a burden, that cache is the first thing
 to reach for.
 
-An empty model means *pass no model flag* — the CLI picks for itself. That is
-the default for new sessions and, since the field simply did not exist before,
-the value every older session already reads as, so no migration was needed.
+An empty model means *pass no model flag* — the CLI picks for itself. It is
+where a new session starts unless whoever creates it names a model: the global
+default in Settings names one for every session created from scratch, and a
+session started for a work item can take the agent role's instead ([Role Engine
+to Session Engine](../projects/workflow-engine.md#role-engine-to-session-engine)).
+Since the field simply did not exist before, it is also the value every older
+session already reads as, so no migration was needed.
+
+The same lists judge the engines chosen *outside* a session — an agent role's,
+and the global defaults — through `session.ValidateEngine`, which takes agent,
+model and effort as one trio, so a combination refused in one of those places is
+refused in the other. A session checks the two lists one at a time instead: its
+agent type is settled by the time it is created, and `session.set_model` /
+`session.set_effort` each change a single value and answer with
+`ErrModelNotAvailable` / `ErrEffortNotAvailable`. Judging the global defaults as
+a trio is what makes them refused as a whole rather than half-applied, and that
+is why a client changing the default agent sends an emptied model and effort with
+it: `settings.update` carries the whole settings object, so a model picked for
+the previous agent would otherwise come back with the write and be rejected.
 
 Like the mode, the model is only read when a CLI is launched: Claude gets
 `--model` in its arguments, Codex gets `model` on the `codex` tool call, which
@@ -1636,7 +1673,8 @@ properly means a compare-and-swap in the store (`SetAgentTypeIfNotActivated` or
 similar) instead of a read followed by an unconditional write.
 
 The frontend disables the agent half of the engine selector on the same flag,
-which `SessionListItem` carries. Using the transcript instead
+which reaches it through `session.detail` — the session list does not carry it,
+having no row to draw with it. Using the transcript instead
 (`messages.length > 0`) looks equivalent and is not: a failed first turn leaves a
 user message and an error behind, so the selector would stay disabled in exactly
 the situation it is meant to rescue.

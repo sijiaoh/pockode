@@ -4,7 +4,7 @@ How chat keeps an unanswered `AskUserQuestion` reachable after it has scrolled a
 
 ## The problem
 
-`AskUserQuestion` renders as a card in the message stream. An agent usually keeps producing output after asking (tool calls, text, work cards), and the list auto-scrolls while the user sits at the bottom, so the card is pushed out of view within seconds. The user loses the one signal that matters — *there is a question waiting on me* — and the agent looks hung when it is in fact blocked on an answer.
+`AskUserQuestion` renders as a card in the message stream. An agent usually keeps producing output after asking (tool calls, text, work events), and the list auto-scrolls while the user sits at the bottom, so the card is pushed out of view within seconds. The user loses the one signal that matters — *there is a question waiting on me* — and the agent looks hung when it is in fact blocked on an answer.
 
 ## What it is
 
@@ -34,7 +34,9 @@ Two inputs: the unanswered questions, and whether each one is on screen.
 
 A rendered card is assumed to be on screen until the observer reports on it. Starting from "hidden" instead would flash the pill over a question the user is already looking at whenever the first callback lands after the debounce; guessing this way round only ever delays the pill by one callback.
 
-**A question that is not rendered counts as hidden.** `MessageList` only renders the last `visibleCount` messages, so a question outside that window has no DOM node and produces no observer callback. Treating "no node" as "not visible" is what stops an old unanswered question from vanishing from the UI altogether — precisely the failure this feature exists to prevent.
+**A question with no visibility entry counts as hidden.** The map is rebuilt around the cards that actually exist, so an answered question cannot leave a stale "visible" behind to suppress the pill, and a question the map has not caught up with yet errs toward being announced. Erring in that direction is what stops an old unanswered question from vanishing from the UI altogether — precisely the failure this feature exists to prevent.
+
+A question in history the client has not paged in yet is a different case: it is not in `messages` at all, so it is not in the pending set either and the pill says nothing about it. In practice a pending question blocks the agent, so nothing can be written after it and it sits in the newest page the subscription already returned.
 
 Everything else follows from the hidden set:
 
@@ -54,9 +56,8 @@ Tapping the pill scrolls the target card into view (`block: "start"`), rings it 
 
 Three things about that sequence are load-bearing:
 
-- **The render window is widened first when needed.** If the target is outside the paginated window it has no node to scroll to, so `visibleCount` grows to cover it and the scroll runs in a layout effect once the wider page is committed. Without this the tap would silently do nothing.
 - **`scroll-mt-14` (56px) lives on the card root**, the node that actually receives `scrollIntoView` — `scroll-margin` has no effect on an ancestor wrapper. The value is tied to the pill's own geometry: the pill's bottom edge sits at 52px on desktop, and with several questions waiting it *stays* after the jump, so a smaller margin would park the card underneath the button that just scrolled to it.
-- **The jump leaves the tail.** The list auto-follows new output while the user is at the bottom, and widening the window grows the content at the very moment the jump starts; unless the jump clears the at-bottom flag itself, that auto-follow snaps back down and the tap appears to do nothing.
+- **The jump leaves the tail.** The list auto-follows new output while the user is at the bottom, and a jump is a deliberate move away from it; unless the jump clears the at-bottom flag itself, the next reflow of streaming output snaps back down and the tap appears to do nothing.
 - **Focus uses `preventScroll: true`**, or the browser's focus scroll fights the smooth scroll already in flight. Focus lands on the header row, not the first option: arrow keys inside a radio group would change the selection, and focusing a form control on iOS pulls up a scroll of its own.
 
 The ring is applied as a class on the node the code already has in hand rather than as React state threaded down through `MessageItem` and `ContentPartItem` — it is a transient visual effect, not something the tree needs to know about. Moving it always removes it from the previous card first; keeping only the timer would strand a ring on that card permanently when two jumps land within 1.5s.
@@ -96,7 +97,7 @@ There is no auto-expand: a pending card starts expanded and only collapses once 
 |---|---|
 | `web/src/utils/pendingQuestions.ts` | `findPendingQuestions(messages)` — the pending set, derived and testable |
 | `web/src/components/Chat/PendingQuestionPill.tsx` | Presentation only: `count`, `direction`, `onClick` |
-| `web/src/components/Chat/MessageList.tsx` | Visibility observation, debounce, window widening, scroll, highlight, focus, live region |
+| `web/src/components/Chat/MessageList.tsx` | Visibility observation, debounce, scroll, highlight, focus, live region |
 | `web/src/components/Chat/AskUserQuestionItem.tsx` | `data-question-request-id` on the card root, `data-question-header` on the header row |
 | `web/src/index.css` | `question-pill-in` entrance animation and `.question-highlight`, both with reduced-motion fallbacks |
 

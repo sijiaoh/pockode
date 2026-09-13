@@ -3,31 +3,27 @@ import type {
 	AssistantMessage,
 	ContentPart,
 	Message,
-	StepDividerMessage,
 	TaskRun,
 	UserMessage,
-	WorkCardMessage,
 } from "../types/message";
 import {
 	applyEventToParts,
 	applyServerEvent,
 	applyUserMessage,
 	expirePendingDialogs,
+	isBackReference,
 	normalizeEvent,
+	prependHistoryPage,
 	replayHistory,
 	settleRunningTasks,
+	stampMessageAnchorSeq,
 } from "./messageReducer";
 
 // Deterministic but distinct ids: whether a message keeps its id or gets a
-// fresh one is itself under test (a new id would remount the work card).
+// fresh one is itself under test (a new id would remount its bubble).
 const uuidMock = vi.hoisted(() => {
 	let counter = 0;
-	return {
-		generateUUID: () => `test-uuid-${++counter}`,
-		reset: () => {
-			counter = 0;
-		},
-	};
+	return { generateUUID: () => `test-uuid-${++counter}` };
 });
 vi.mock("../utils/uuid", () => ({ generateUUID: uuidMock.generateUUID }));
 
@@ -1263,7 +1259,7 @@ describe("messageReducer", () => {
 		});
 	});
 
-	describe("work card aggregation", () => {
+	describe("work event messages", () => {
 		const systemEvent = (
 			content: string,
 			subtype: string,
@@ -1277,32 +1273,31 @@ describe("messageReducer", () => {
 				meta,
 			});
 
-		const kickoff = systemEvent("kickoff prompt", "kickoff", {
+		const workMeta = {
 			work_id: "work-1",
 			work_type: "task",
 			title: "Ship the card",
+		};
+		const kickoff = systemEvent("kickoff prompt", "kickoff", {
+			...workMeta,
 			step: { current: 1, total: 3 },
 		});
-
 		const stepAdvance = systemEvent("next step prompt", "step_advance", {
-			work_id: "work-1",
-			work_type: "task",
-			title: "Ship the card",
+			...workMeta,
 			step: { current: 2, total: 3 },
 		});
 
-		it("anchors a card at the work's first system message", () => {
+		it("lands each event in the stream where it happened", () => {
 			const messages = applyServerEvent([], kickoff);
 
-			const card = messages[0] as WorkCardMessage;
-			expect(card.role).toBe("work");
-			expect(card.workId).toBe("work-1");
-			expect(card.workType).toBe("task");
-			expect(card.title).toBe("Ship the card");
-			expect(card.entries).toHaveLength(1);
-			expect(card.entries[0]).toMatchObject({
-				subtype: "kickoff",
-				content: "kickoff prompt",
+			const event = messages[0] as UserMessage;
+			expect(event.role).toBe("user");
+			expect(event.source).toBe("system");
+			expect(event.subtype).toBe("kickoff");
+			expect(event.content).toBe("kickoff prompt");
+			expect(event.meta).toMatchObject({
+				work_id: "work-1",
+				title: "Ship the card",
 				step: { current: 1, total: 3 },
 			});
 			// The system message still drives the agent, so a reply placeholder
@@ -1310,91 +1305,31 @@ describe("messageReducer", () => {
 			expect(messages[1].role).toBe("assistant");
 		});
 
-		it("carries no status of its own", () => {
-			const card = applyServerEvent([], kickoff)[0] as WorkCardMessage;
-			expect(card).not.toHaveProperty("status");
-		});
-
-		it("folds later messages into the same card without moving or renaming it", () => {
-			const first = applyServerEvent([], kickoff);
-			const cardId = (first[0] as WorkCardMessage).id;
-
-			const second = applyServerEvent(first, stepAdvance);
-			const card = second[0] as WorkCardMessage;
-
-			expect(second.filter((m) => m.role === "work")).toHaveLength(1);
-			expect(card.id).toBe(cardId);
-			expect(card.entries.map((e) => e.subtype)).toEqual([
-				"kickoff",
-				"step_advance",
-			]);
-		});
-
-		it("keeps a card per work", () => {
-			const other = systemEvent("other kickoff", "kickoff", {
-				work_id: "work-2",
-				work_type: "story",
-				title: "Another",
-			});
-
-			const messages = applyServerEvent(applyServerEvent([], kickoff), other);
-			const cards = messages.filter(
-				(m): m is WorkCardMessage => m.role === "work",
-			);
-			expect(cards.map((c) => c.workId)).toEqual(["work-1", "work-2"]);
-		});
-
-		it("files child_done under the receiving parent, with the child named", () => {
-			const childDone = systemEvent("child done prompt", "child_done", {
-				work_id: "work-1",
-				work_type: "task",
-				title: "Ship the card",
-				child: { id: "child-9", title: "Sub task" },
-			});
-
-			const messages = applyServerEvent(
-				applyServerEvent([], kickoff),
-				childDone,
-			);
-			const cards = messages.filter(
-				(m): m is WorkCardMessage => m.role === "work",
-			);
-
-			expect(cards).toHaveLength(1);
-			expect(cards[0].entries[1].child).toEqual({
-				id: "child-9",
-				title: "Sub task",
-			});
-		});
-
-		it("marks a step advance with a divider in the stream", () => {
+		it("keeps later events of the same work as their own messages", () => {
 			const messages = applyServerEvent(
 				applyServerEvent([], kickoff),
 				stepAdvance,
 			);
-			const divider = messages.find(
-				(m): m is StepDividerMessage => m.role === "step_divider",
-			);
 
-			expect(divider).toMatchObject({
-				workId: "work-1",
-				step: { current: 2, total: 3 },
-			});
-			// It sits after the card it belongs to, not at the end of the transcript.
-			expect(messages.indexOf(divider as StepDividerMessage)).toBeLessThan(
-				messages.length - 1,
+			const events = messages.filter(
+				(m): m is UserMessage => m.role === "user",
 			);
+			expect(events.map((m) => m.subtype)).toEqual(["kickoff", "step_advance"]);
+			// Nothing extra marks the step change: the step_advance message is
+			// already at the point the step changed and says so itself. Only the
+			// two events and the placeholder for the reply the second provokes.
+			expect(messages).toHaveLength(3);
 		});
 
-		it("finalizes a streaming assistant before the card", () => {
+		it("finalizes a streaming assistant before the event", () => {
 			const streaming = applyServerEvent([], { type: "text", content: "hi" });
 			const messages = applyServerEvent(streaming, kickoff);
 
 			expect((messages[0] as AssistantMessage).status).toBe("complete");
-			expect(messages[1].role).toBe("work");
+			expect((messages[1] as UserMessage).source).toBe("system");
 		});
 
-		it("leaves pre-card history as standalone banners", () => {
+		it("treats history recorded without a work_id the same way", () => {
 			const legacy = normalizeEvent({
 				type: "message",
 				content: "kickoff prompt",
@@ -1403,62 +1338,15 @@ describe("messageReducer", () => {
 				meta: { title: "Ship the card" },
 			});
 
-			const messages = applyServerEvent([], legacy);
-			const banner = messages[0] as UserMessage;
-			expect(banner.role).toBe("user");
-			expect(banner.source).toBe("system");
-			expect(messages.some((m) => m.role === "work")).toBe(false);
-		});
-
-		it("replays history into the same cards live streaming builds", () => {
-			const records = [
-				{
-					type: "message",
-					content: "kickoff prompt",
-					origin: "system",
-					subtype: "kickoff",
-					meta: {
-						work_id: "work-1",
-						work_type: "task",
-						title: "Ship the card",
-						step: { current: 1, total: 3 },
-					},
-				},
-				{
-					type: "message",
-					content: "next step prompt",
-					origin: "system",
-					subtype: "step_advance",
-					meta: {
-						work_id: "work-1",
-						work_type: "task",
-						title: "Ship the card",
-						step: { current: 2, total: 3 },
-					},
-				},
-			];
-
-			uuidMock.reset();
-			const replayed = replayHistory(records);
-			uuidMock.reset();
-			const streamed = applyServerEvent(
-				applyServerEvent([], normalizeEvent(records[0])),
-				normalizeEvent(records[1]),
-			);
-
-			expect(replayed.map((m) => m.role)).toEqual(streamed.map((m) => m.role));
-			expect(
-				(replayed.find((m) => m.role === "work") as WorkCardMessage).entries,
-			).toEqual(
-				(streamed.find((m) => m.role === "work") as WorkCardMessage).entries,
-			);
+			const event = applyServerEvent([], legacy)[0] as UserMessage;
+			expect(event.source).toBe("system");
+			expect(event.meta?.work_id).toBeUndefined();
 		});
 	});
 
 	// Every incoming message leaves a placeholder for the reply it provokes. When
 	// the agent answers with nothing at all, that placeholder renders as a blank
-	// bubble — visible on both message paths, and back to back once work cards
-	// removed the banners that used to sit between them.
+	// bubble — visible on both message paths.
 	describe("placeholders the agent never wrote into", () => {
 		const placeholder = (
 			status: AssistantMessage["status"],
@@ -1492,7 +1380,7 @@ describe("messageReducer", () => {
 				systemMessage,
 			);
 
-			expect(messages.map((m) => m.role)).toEqual(["work", "assistant"]);
+			expect(messages.map((m) => m.role)).toEqual(["user", "assistant"]);
 		});
 
 		it("drops one the agent left mid-turn without writing to", () => {
@@ -1540,7 +1428,11 @@ describe("messageReducer", () => {
 			let messages = applyServerEvent([], systemMessage);
 			messages = applyServerEvent(messages, systemMessage);
 
-			expect(messages.map((m) => m.role)).toEqual(["work", "assistant"]);
+			expect(messages.map((m) => m.role)).toEqual([
+				"user",
+				"user",
+				"assistant",
+			]);
 		});
 
 		// A turn can also end at the tail of the transcript with nothing written:
@@ -1621,8 +1513,8 @@ describe("messageReducer", () => {
 			expect((messages[1] as AssistantMessage).anchorSeq).toBeUndefined();
 		});
 
-		// Anchors that ran backwards would make "everything up to and including
-		// this message" keep messages shown below the anchor.
+		// An anchor that ran backwards would put the cut somewhere later than the
+		// bubble the user pointed at, keeping messages shown below it.
 		it("does not move an earlier message's anchor past a later one", () => {
 			const messages = replayHistory([
 				{ type: "message", content: "Run it", seq: 1 },
@@ -1650,6 +1542,38 @@ describe("messageReducer", () => {
 					m.role === "assistant" && m.status === "interrupted",
 			);
 			expect(interrupted?.anchorSeq).toBe(3);
+		});
+
+		// The message a client sends itself is echoed before the server has a
+		// number for it, and the reply carrying that number arrives later — by
+		// which time the transcript has moved on. Position cannot find it again:
+		// the turn it opened left a placeholder below it, and the agent may have
+		// streamed in more.
+		it("stamps the message it names, not the last one", () => {
+			const before = replayHistory([
+				{ type: "message", content: "Hello", seq: 1 },
+				{ type: "text", content: "Hi", seq: 2 },
+			]);
+			const sent = applyUserMessage(before, "Try again");
+			const sentId = sent[sent.length - 2].id;
+
+			const after = stampMessageAnchorSeq(sent, sentId, 3);
+
+			expect((after[after.length - 2] as UserMessage).anchorSeq).toBe(3);
+			// The placeholder the turn opened is a different record's to claim.
+			expect((after[after.length - 1] as AssistantMessage).anchorSeq).toBe(
+				undefined,
+			);
+		});
+
+		// The reply can land after the user has left for another session, whose
+		// history the seq names nothing in.
+		it("stamps nothing when the message is gone", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "Elsewhere", seq: 1 },
+			]);
+
+			expect(stampMessageAnchorSeq(messages, "not-here", 9)).toBe(messages);
 		});
 	});
 
@@ -2032,29 +1956,29 @@ describe("messageReducer", () => {
 			isError = false,
 		) => ({ type: "tool_result" as const, toolUseId, toolResult, isError });
 
-		const tasksOf = (message: Message): TaskRun[] => {
-			const assistant = message as AssistantMessage;
-			const group = assistant.parts.find((part) => part.type === "task_group");
-			if (group?.type !== "task_group") throw new Error("no task_group part");
-			return group.tasks;
-		};
+		const tasksOf = (message: Message): TaskRun[] =>
+			(message as AssistantMessage).parts
+				.filter((part) => part.type === "task")
+				.map((part) => part.task);
 
-		it("folds every Task of one turn into a single group", () => {
+		// Each Task is its own part, sitting where the turn spawned it, so the
+		// text written between two of them stays between them.
+		it("gives every Task its own part at the point it was called", () => {
 			let messages: Message[] = [streaming()];
 			messages = applyServerEvent(messages, taskCall("t1", "find usages"));
+			messages = applyServerEvent(messages, { type: "text", content: "next" });
 			messages = applyServerEvent(messages, taskCall("t2", "write plan"));
 
-			const assistant = messages[0] as AssistantMessage;
-			expect(assistant.parts).toHaveLength(1);
-			expect(tasksOf(messages[0])).toMatchObject([
-				{ toolUseId: "t1", description: "find usages", status: "running" },
-				{ toolUseId: "t2", description: "write plan", status: "running" },
+			expect((messages[0] as AssistantMessage).parts).toMatchObject([
+				{ type: "task", task: { toolUseId: "t1", status: "running" } },
+				{ type: "text", content: "next" },
+				{ type: "task", task: { toolUseId: "t2", status: "running" } },
 			]);
 		});
 
 		// Older CLIs named the subagent tool "Task"; stored history still holds
-		// that name and has to land in the same group.
-		it("groups the legacy Task tool name alongside Agent", () => {
+		// that name and has to render the same way.
+		it("recognizes the legacy Task tool name alongside Agent", () => {
 			let messages: Message[] = [streaming()];
 			messages = applyServerEvent(
 				messages,
@@ -2157,7 +2081,7 @@ describe("messageReducer", () => {
 		});
 
 		// The whole reason `complete` cannot settle a Task: a background one
-		// reports back turns later, and its result has to find the group it was
+		// reports back turns later, and its result has to find the turn it was
 		// started in rather than the turn that happens to be open.
 		it("lands a background Task's result back in the turn that started it", () => {
 			let messages: Message[] = [streaming()];
@@ -2188,10 +2112,8 @@ describe("messageReducer", () => {
 				role: "assistant",
 				parts: [
 					{
-						type: "task_group",
-						tasks: [
-							{ toolUseId: "old", description: "stale", status: "running" },
-						],
+						type: "task",
+						task: { toolUseId: "old", description: "stale", status: "running" },
 					},
 				],
 				status: "complete",
@@ -2205,7 +2127,7 @@ describe("messageReducer", () => {
 			expect(tasksOf(messages[0])).toMatchObject([{ status: "interrupted" }]);
 		});
 
-		it("starts a fresh group for the next turn", () => {
+		it("keeps the next turn's Task in the next turn", () => {
 			let messages: Message[] = [streaming()];
 			messages = applyServerEvent(messages, taskCall("t1", "first"));
 			messages = applyServerEvent(messages, { type: "done" });
@@ -2260,6 +2182,320 @@ describe("messageReducer", () => {
 			expect(tasksOf(replayed[replayed.length - 1])).toMatchObject([
 				{ status: "done", result: "# Report" },
 			]);
+		});
+	});
+
+	describe("paging backwards through history", () => {
+		const partsOf = (message: Message) =>
+			message.role === "assistant" ? message.parts : [];
+
+		describe("isBackReference", () => {
+			it("picks out the records that settle something recorded earlier", () => {
+				expect(isBackReference({ type: "tool_result" })).toBe(true);
+				expect(isBackReference({ type: "question_response" })).toBe(true);
+				expect(isBackReference({ type: "process_ended" })).toBe(true);
+				expect(isBackReference({ type: "text", content: "hi" })).toBe(false);
+				expect(isBackReference({ type: "message", content: "hi" })).toBe(false);
+			});
+		});
+
+		describe("catching an older page up on what it could not know", () => {
+			it("finishes a call whose result only arrived a page later", () => {
+				const older = replayHistory([
+					{ type: "message", content: "Read it" },
+					{ type: "tool_call", tool_use_id: "t1", tool_name: "Read" },
+				]);
+				expect(partsOf(older[older.length - 1])).not.toMatchObject([
+					{ type: "tool_call", tool: { result: "file body" } },
+				]);
+
+				const caught = prependHistoryPage(older, [], {
+					backReferences: [
+						{
+							type: "tool_result",
+							tool_use_id: "t1",
+							tool_result: "file body",
+						},
+					],
+				});
+				expect(partsOf(caught[caught.length - 1])).toMatchObject([
+					{ type: "tool_call", tool: { result: "file body" } },
+				]);
+			});
+
+			// Same path for a Task, whose report is the whole of what it has to
+			// say: closing the older page's turn leaves it running, so the
+			// back-reference is the only thing that can finish it.
+			it("finishes a Task whose report only arrived a page later", () => {
+				const older = replayHistory([
+					{ type: "message", content: "Explore" },
+					{
+						type: "tool_call",
+						tool_use_id: "t1",
+						tool_name: "Agent",
+						tool_input: { description: "find usages" },
+					},
+				]);
+
+				const caught = prependHistoryPage(older, [], {
+					backReferences: [
+						{ type: "tool_result", tool_use_id: "t1", tool_result: "# Report" },
+					],
+				});
+				expect(partsOf(caught[caught.length - 1])).toMatchObject([
+					{ type: "task", task: { status: "done", result: "# Report" } },
+				]);
+			});
+
+			it("retires a question the user has already answered", () => {
+				const older = replayHistory([
+					{
+						type: "ask_user_question",
+						request_id: "q1",
+						tool_use_id: "t1",
+						questions: sampleQuestions,
+					},
+				]);
+
+				const caught = prependHistoryPage(older, [], {
+					backReferences: [
+						{
+							type: "question_response",
+							request_id: "q1",
+							answers: { Library: "React" },
+						},
+					],
+				});
+				expect(partsOf(caught[caught.length - 1])).toMatchObject([
+					{ type: "ask_user_question", status: "answered" },
+				]);
+			});
+
+			it("retires what a later process end left open without claiming the turn ended there", () => {
+				// The process died long after this page. The question it stranded has
+				// to be retired, but the turn itself was still running at this point
+				// and did not end that way.
+				const older = replayHistory([
+					{ type: "message", content: "Ask me" },
+					{
+						type: "ask_user_question",
+						request_id: "q1",
+						tool_use_id: "t1",
+						questions: sampleQuestions,
+					},
+					{ type: "text", content: "half an answer" },
+				]);
+
+				const caught = prependHistoryPage(older, [], {
+					backReferences: [{ type: "process_ended" }],
+				});
+
+				const turn = caught[caught.length - 1];
+				expect(turn).toMatchObject({ status: "complete" });
+				expect(partsOf(turn)).toMatchObject([
+					{ type: "ask_user_question", status: "expired" },
+					{ type: "text" },
+				]);
+			});
+			it("retires what a killed process left open, which history never recorded", () => {
+				// A restart takes the process down without writing a process_ended, so
+				// nothing in any page says these are over.
+				const older = replayHistory([
+					{ type: "message", content: "Ask me" },
+					{
+						type: "ask_user_question",
+						request_id: "q1",
+						tool_use_id: "t1",
+						questions: sampleQuestions,
+					},
+				]);
+
+				const caught = prependHistoryPage(older, [], { processEnded: true });
+
+				expect(partsOf(caught[caught.length - 1])).toMatchObject([
+					{ type: "ask_user_question", status: "expired" },
+				]);
+			});
+		});
+
+		describe("prependHistoryPage", () => {
+			it("rejoins the turn the page boundary cut in half", () => {
+				// The cut falls between two records of one answer: the older page trails
+				// off mid-sentence, and the page above it opens on content that no
+				// message event preceded.
+				const older = replayHistory([
+					{ type: "message", content: "Explain" },
+					{ type: "text", content: "first half " },
+				]);
+				const current = replayHistory([
+					{ type: "text", content: "second half" },
+					{ type: "done" },
+				]);
+
+				const joined = prependHistoryPage(older, current);
+
+				expect(joined.map((m) => m.role)).toEqual(["user", "assistant"]);
+				expect(partsOf(joined[1])).toMatchObject([
+					{ type: "text", content: "first half second half" },
+				]);
+				// The bubble already on screen keeps its identity, so it is not remounted
+				// and whatever was expanded inside it survives.
+				expect(joined[1].id).toBe(current[0].id);
+			});
+
+			it("leaves a turn of its own alone", () => {
+				const older = replayHistory([
+					{ type: "message", content: "Earlier" },
+					{ type: "text", content: "answer" },
+					{ type: "done" },
+				]);
+				const current = replayHistory([
+					{ type: "message", content: "Later" },
+					{ type: "text", content: "reply" },
+					{ type: "done" },
+				]);
+
+				const joined = prependHistoryPage(older, current);
+				expect(joined.map((m) => m.role)).toEqual([
+					"user",
+					"assistant",
+					"user",
+					"assistant",
+				]);
+			});
+
+			it("keeps work events on either side of a page boundary in order", () => {
+				const workMeta = {
+					work_id: "w1",
+					work_type: "task",
+					title: "Ship it",
+				};
+				const older = replayHistory([
+					{
+						type: "message",
+						content: "Kickoff",
+						origin: "system",
+						subtype: "kickoff",
+						meta: workMeta,
+					},
+					{ type: "text", content: "starting" },
+					{ type: "done" },
+				]);
+				const current = replayHistory([
+					{
+						type: "message",
+						content: "Auto-continue",
+						origin: "system",
+						subtype: "auto_continue",
+						meta: workMeta,
+					},
+				]);
+
+				const joined = prependHistoryPage(older, current);
+
+				// Ordinary messages, so paging needs no special case: each stays
+				// where it was recorded instead of being pulled up into a card.
+				expect(
+					joined
+						.filter((m) => m.role === "user")
+						.map((m) => (m as UserMessage).subtype),
+				).toEqual(["kickoff", "auto_continue"]);
+			});
+
+			it("keeps both halves' Tasks when a turn spans the boundary", () => {
+				const older = replayHistory([
+					{ type: "message", content: "Explore" },
+					{
+						type: "tool_call",
+						tool_use_id: "t1",
+						tool_name: "Task",
+						tool_input: { description: "first" },
+					},
+				]);
+				const current = replayHistory([
+					{
+						type: "tool_call",
+						tool_use_id: "t2",
+						tool_name: "Task",
+						tool_input: { description: "second" },
+					},
+				]);
+
+				const joined = prependHistoryPage(older, current);
+
+				expect(partsOf(joined[joined.length - 1])).toMatchObject([
+					{ type: "task", task: { description: "first" } },
+					{ type: "task", task: { description: "second" } },
+				]);
+			});
+
+			it("stops the spinner on a turn whose ending is in the page above", () => {
+				// Replayed alone the page ends on a streaming bubble, because the record
+				// that closed the turn is not in it.
+				const older = replayHistory([
+					{ type: "message", content: "Explain" },
+					{ type: "text", content: "half an answer" },
+				]);
+				expect(older[older.length - 1]).toMatchObject({ status: "streaming" });
+
+				const joined = prependHistoryPage(older, []);
+				expect(joined[joined.length - 1]).toMatchObject({ status: "complete" });
+			});
+
+			it("keeps how a turn ended when the record saying so opens the page above", () => {
+				// That record has nothing to end in its own page, so replaying that page
+				// drops it. Without it the turn reads as a normal finished answer.
+				const older = replayHistory([
+					{ type: "message", content: "Explain", seq: 1 },
+					{ type: "text", content: "half an answer", seq: 2 },
+					{
+						type: "tool_call",
+						tool_use_id: "t1",
+						tool_name: "Task",
+						tool_input: { description: "sub" },
+						seq: 3,
+					},
+				]);
+				const boundaryTerminal = { type: "error", error: "boom", seq: 4 };
+				const current = replayHistory([
+					boundaryTerminal,
+					{ type: "message", content: "Next", seq: 5 },
+				]);
+
+				const joined = prependHistoryPage(older, current, {
+					boundaryTerminal,
+				});
+
+				const turn = joined[1];
+				expect(turn).toMatchObject({ status: "error", error: "boom" });
+				// The record that ended the turn is the last one in it, so it is where
+				// a fork of the turn cuts — the address an unbroken replay leaves here.
+				expect(turn).toMatchObject({ anchorSeq: 4 });
+				// A turn that ended this way has no Task left running.
+				expect(partsOf(turn)).toMatchObject([
+					{ type: "text" },
+					{ type: "task", task: { status: "interrupted" } },
+				]);
+			});
+
+			it("does not let output trailing an ended turn reopen it", () => {
+				// The CLI was still writing when the turn was cut short, so the page
+				// above opens on content that belongs to the turn that already ended.
+				const older = replayHistory([
+					{ type: "message", content: "Explain" },
+					{ type: "text", content: "half " },
+					{ type: "interrupted" },
+				]);
+				const current = replayHistory([{ type: "text", content: "an answer" }]);
+
+				const joined = prependHistoryPage(older, current);
+
+				const turn = joined[joined.length - 1];
+				expect(turn).toMatchObject({ status: "interrupted" });
+				expect(partsOf(turn)).toMatchObject([
+					{ type: "text", content: "half an answer" },
+				]);
+			});
 		});
 	});
 });
