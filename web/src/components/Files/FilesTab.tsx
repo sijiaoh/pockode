@@ -99,10 +99,21 @@ function DropTargetBar({
 			className={`pointer-events-none flex min-h-[36px] shrink-0 items-center gap-1.5 px-3 text-xs ${
 				refusal
 					? "bg-th-bg-tertiary text-th-text-secondary"
-					: "bg-th-accent/10 text-th-accent"
+					: "bg-th-accent/10 text-th-text-primary"
 			}`}
 		>
-			<Upload className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+			{/*
+			 * Load-bearing rather than decoration: the accepting fill and the
+			 * refusing one are the same lightness in two light variants
+			 * (1.00:1) and never past 1.34:1 in any of the rest, so this icon
+			 * is the only thing separating the two states by colour. It owes
+			 * the non-text floor rather than AA, and clears it on every surface
+			 * in every variant (3.76:1 at worst).
+			 */}
+			<Upload
+				className={`h-3.5 w-3.5 shrink-0 ${refusal ? "" : "text-th-accent"}`}
+				aria-hidden="true"
+			/>
 			<span className="truncate">
 				{refusal ??
 					(destPath

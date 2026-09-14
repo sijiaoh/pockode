@@ -419,7 +419,7 @@ export function StartButton({
 			type="button"
 			onClick={handleStart}
 			disabled={isStarting}
-			className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs disabled:opacity-50 ${error ? "bg-th-error/10 text-th-error" : "bg-th-accent/10 text-th-accent"}`}
+			className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs disabled:opacity-50 ${error ? "border border-th-error bg-th-error/10" : "border border-th-accent bg-th-accent/10"} text-th-text-primary`}
 			aria-label={error ?? undefined}
 		>
 			{isStarting ? (

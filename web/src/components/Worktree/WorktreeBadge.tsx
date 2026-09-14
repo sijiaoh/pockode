@@ -35,9 +35,14 @@ function WorktreeBadge({ work, className }: Props) {
 		worktree: worktree ?? "",
 	});
 
+	// Accent lettering on an accent tint fails AA in the light variants at every
+	// opacity, so the label is the primary text colour and the hue moves to the
+	// icon, which only owes the non-text floor. The icon holds that floor up to
+	// /20 and not beyond, which is why the press state reuses the hover tint and
+	// answers with scale instead of going darker.
 	const variantClass = isMain
 		? "text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-secondary active:bg-th-bg-tertiary focus-visible:ring-th-border-focus"
-		: "bg-th-accent/10 text-th-accent hover:bg-th-accent/20 hover:text-th-accent-hover active:bg-th-accent/30 focus-visible:ring-th-accent/50";
+		: "bg-th-accent/10 text-th-text-primary hover:bg-th-accent/20 active:bg-th-accent/20 active:scale-95 focus-visible:ring-th-accent/50";
 
 	// The dense meta rows only leave ~20px of visible height, so the transparent
 	// `before` pseudo-element expands the vertical hit target to WCAG's ≥44px.
@@ -50,7 +55,10 @@ function WorktreeBadge({ work, className }: Props) {
 			title={displayName}
 			aria-label={label}
 		>
-			<GitBranch className="size-3 shrink-0" aria-hidden="true" />
+			<GitBranch
+				className={`size-3 shrink-0 ${isMain ? "" : "text-th-accent"}`}
+				aria-hidden="true"
+			/>
 			<span className="truncate">{displayName}</span>
 		</Link>
 	);

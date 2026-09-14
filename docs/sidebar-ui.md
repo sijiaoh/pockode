@@ -171,13 +171,18 @@ themes did come up short, at 3.74:1 and 3.68:1, and the fix went into their
 token values, where it landed for every caller at once.
 
 **Changing an accent means changing the tokens that hold the same value.**
-`--th-border-focus` is the accent value in every variant, and `--th-user-bubble`
-is in the light ones — the bubble was the same failing pair under a second name,
-over a whole message body rather than a button, which is how it went unnoticed.
-Edit by line rather than by search-and-replace: two dark variants happen to
-carry a light variant's old *hover* colour, and would be rewritten along with
-it. `web/src/lib/registries/themeRegistry.ts` keeps a second copy of each accent
-for the theme picker's swatches and needs the same edit.
+`--th-border-focus` is the accent value in every variant, and
+`--th-user-bubble` is in the light ones — the bubble was the same failing pair
+under a second name, over a whole message body rather than a button, which is
+how it went unnoticed. Edit by line rather than by search-and-replace: two dark
+variants happen to carry a light variant's old *hover* colour, and would be
+rewritten along with it. `web/src/lib/registries/themeRegistry.ts` keeps a
+second copy of each accent for the theme picker's swatches and needs the same
+edit. Those copies are previews, never the truth — the stylesheet is — and
+`web/tests/themeTokens.test.ts` compares the two every way a copy can drift: a
+value that no longer matches, a theme one side has and the other does not, a
+token declared outside its theme's rule, and a colour field added to the
+registry that nothing maps to a custom property.
 
 **To darken an accent, hold hue and saturation and drop lightness alone.**
 Tailwind's next step down (`teal-700` under `teal-600`) desaturates as it
@@ -189,23 +194,84 @@ through a contrast check trades a measurable problem for a quiet one.
 Selection is the bar **and** the `th-bg-tertiary` fill together. The rule is
 about **row backgrounds** and only about them, which is the clause to keep in
 mind before reading it as a ban on standing accent generally: a pressed search
-option chip is `border-th-accent bg-th-accent/10 text-th-accent` and persists
-across sessions, and no row rule reaches it, because a chip is not a row and
-cannot be mistaken for a selected one.
+option chip is `border-th-accent bg-th-accent/10 text-th-text-primary` and
+persists across sessions, and no row rule reaches it, because a chip is not a
+row and cannot be mistaken for a selected one.
 
-**Known gap: `text-th-accent` on `bg-th-accent/10` is still below AA**, at
-4.34:1 and 4.43:1 in the two light themes, and those are the best case: the fill
-is translucent, so the same pairing measures 3.83:1 and 4.00:1 once it lands on
-`th-bg-tertiary`. It is written in this chip and in half a dozen places besides
-— `ui/StatusBadge.tsx`, `common/ToggleChip.tsx` and `Worktree/WorktreeBadge.tsx`
-among them. It is the accent pairing a token value cannot settle, which is why
-it outlived the fix above: the fill *is* the accent at 10% opacity, so darkening
-the accent darkens both sides and the ratio barely moves — clearing 4.5 would
-take an accent dark enough to dull every primary action, for the sake of the
-smallest labels on screen. The fix belongs in the chip's own foreground rather
-than in the accent: accent carries the emphasis through the border and the fill,
-and the label is read in `th-text-primary`, the way `common/Highlight.tsx`
-already writes it.
+**Text on an accent tint is `th-text-primary`, and the tint stops at `/20`.** A
+`bg-th-accent/α` is not a colour any theme declares: the compositor makes it
+out of the accent, the alpha, and whatever opaque surface the element landed
+on, so it is the one accent pairing a token value cannot settle — the fill *is*
+the accent, so darkening the accent darkens both sides and the ratio barely
+moves. Clearing 4.5:1 with `text-th-accent` would take an accent dark enough to
+dull every primary action, for the sake of the smallest labels on screen; in
+the four coloured light variants it misses the floor on every surface from
+`/10` up, and at `/5` it falls on either side of the line depending on the
+surface underneath. Void is the exception that proves the point: its light
+accent is a near-black, which clears the floor by being all but the body colour
+already. So the foreground goes back to the body colour, where it clears AA
+with room to spare over every variant and every surface, and `th-accent`,
+`th-accent-hover` and `th-text-muted` are not written on an accent tint —
+including where the tint only appears on `hover:`, `focus-visible:` or
+`active:`, since a control that is unreadable for the moment it is pressed is
+an unreadable control.
+
+Emphasis then moves off the text and onto `border-th-accent`, or onto an accent
+icon inside the chip, which is what the alpha ceiling is for: at `/20` a
+full-strength accent still holds WCAG's non-text 3:1 against its own composite,
+and at `/30` it does not. The border is doing the work the fill cannot — a tint
+this light is barely a shade away from the page, so "the background carries the
+emphasis" was never true in the light variants. `common/ToggleChip.tsx` and
+`Project/StepList.tsx` are the shape to copy. `ui/StatusBadge.tsx` writes it
+for every status rather than for the accent ones alone, so one row of badges
+keeps one shape — though `needs_input` still reads faint: `th-warning` is too
+pale in the light variants to clear even the non-text floor as a border, a
+token-layer fault it carries in every role it takes, and not one a badge can
+fix. Its label is legible regardless, which it was not before. `open` and
+`closed` are the two with no hue to move: their fill is `th-bg-tertiary` rather
+than a tint, and `th-border` on it is under 1.3:1, so the only weight they have
+is the label. It is `th-text-secondary` and not the body colour — a status is
+the least important thing in a row, and a finished or unstarted one should not
+read as loudly as a running one, which is what the `th-text-muted` they used to
+carry was saying at 2.23:1.
+
+Four chips take the fill without a border, and the test for them is whether the
+border would add the hue or only a box: `Chat/TaskItem.tsx` sits beside an
+accent label and an accent icon already, the two in
+`Chat/AskUserQuestionItem.tsx` are inline and a border would push the line
+height around, and the upload destination bar in `Files/FilesTab.tsx` spans the
+panel, where a border reads as a frame around the row rather than as a chip.
+They are `common/Highlight.tsx`'s shape — tint plus body colour — and none of
+them asks the fill to carry meaning its words do not, so nothing is lost by the
+border being absent. The upload bar keeps one thing more. The other three sit
+beside an accent of their own — a label, an icon — while the bar was refused a
+border for spanning the panel rather than for having the hue nearby already,
+which leaves it the only one of the four with no hue at all once its label
+turns into body colour. That would be cosmetic if the bar had one state, and
+it has two: the fill it draws when the drop will be taken and the fill it
+draws when it will not measure 1.00:1 against each other in two light variants
+and never past 1.34:1 in any of the rest, so with no hue the two read as one.
+Its `Upload` icon is `text-th-accent` for that reason, and can be — an icon
+owes the non-text floor, which the accent clears on its own tint on every
+surface in every variant.
+
+`web/tests/tint.test.ts` holds all three clauses. It reads the tints and their
+alphas out of the components rather than from a list, composites each one over
+all three page backgrounds in every variant — which of them a chip actually
+sits on is decided by an ancestor in another file, so it has to clear the floor
+on each — and checks the ratio, the banned foregrounds and the ceiling
+separately. The ban is not a shortcut for the arithmetic: `th-accent-hover`
+clears 4.5 at `/10` by about a third of a point and at `/15` by seven hundredths
+of one, and misses at `/20` — so a check that only computed ratios would wave
+through a chip that the next palette tweak turns illegible, and would have no
+answer to "why not this one, it passes". The ceiling is not a constant either —
+the test derives `/20` from the non-text floor, so raising it turns the suite
+red by itself. What it does not cover, it says out loud: a tint whose text
+comes from a child element or from inheritance is beyond a text scan and was
+checked by eye, and the error, warning, success and muted tints are left out on
+purpose — adding them to the scan turns it red at call sites that fail on the
+token values rather than on how they are written, which is a palette decision
+and not this rule's.
 
 **On rows, though, neither panel has a standing annotation any more, and that is
 the resolution of "accent meant too many things" rather than a gap in it.** The

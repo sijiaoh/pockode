@@ -74,7 +74,7 @@ function QuestionForm({
 	return (
 		<div className="space-y-2">
 			<div>
-				<span className="inline-block rounded bg-th-accent/20 px-1.5 py-0.5 text-xs text-th-accent">
+				<span className="inline-block rounded bg-th-accent/20 px-1.5 py-0.5 text-xs text-th-text-primary">
 					{question.header}
 				</span>
 				<p className="mt-1 break-words text-sm text-th-text-primary">
@@ -309,7 +309,7 @@ function AskUserQuestionItem({
 				/>
 				<Icon className={`size-3 shrink-0 ${color}`} />
 				<span className="shrink-0 text-th-accent">Question</span>
-				<span className="max-w-[40%] shrink-0 truncate rounded bg-th-accent/20 px-1.5 py-0.5 text-th-accent">
+				<span className="max-w-[40%] shrink-0 truncate rounded bg-th-accent/20 px-1.5 py-0.5 text-th-text-primary">
 					{headerSummary}
 				</span>
 				{statusLabel && (

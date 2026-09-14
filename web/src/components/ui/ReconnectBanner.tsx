@@ -30,7 +30,7 @@ function ReconnectBanner() {
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: status banner is not a form output
 		<div
-			className="flex items-center justify-center gap-2 bg-th-accent/20 px-4 py-1 text-sm text-th-text-muted"
+			className="flex items-center justify-center gap-2 bg-th-accent/20 px-4 py-1 text-sm text-th-text-primary"
 			role="status"
 		>
 			<span className="inline-block h-2 w-2 animate-pulse rounded-full bg-th-accent" />
@@ -39,7 +39,7 @@ function ReconnectBanner() {
 				<button
 					type="button"
 					onClick={() => wsActions.retryNow()}
-					className="underline underline-offset-2 hover:text-th-text-primary"
+					className="underline underline-offset-2 hover:opacity-80"
 				>
 					Retry now
 				</button>

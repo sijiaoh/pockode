@@ -78,7 +78,7 @@ function TaskItem({ task }: Props) {
 				<Workflow className="size-3 shrink-0 text-th-accent" />
 				<span className="shrink-0 text-th-accent">Task</span>
 				{task.subagentType && (
-					<span className="shrink-0 rounded bg-th-accent/20 px-1.5 py-0.5 text-th-accent">
+					<span className="shrink-0 rounded bg-th-accent/20 px-1.5 py-0.5 text-th-text-primary">
 						{task.subagentType}
 					</span>
 				)}
