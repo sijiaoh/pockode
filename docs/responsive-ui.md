@@ -575,8 +575,8 @@ of the source — and it has to hold for components nobody has written yet.
 | `web/tests/widthLadder.test.ts` | No retired rung (`md:` / `xl:` / `2xl:`, stacked or interpolated) appears in source. A retired rung compiles to nothing, which is silent; this makes it loud |
 | `web/tests/hoverReveal.test.ts` | Hover-revealed visibility carries no width prefix; both halves share one gate; every reveal pair has a `group-focus-within` twin and does not hide with `display` |
 | `web/tests/pointerEvents.test.ts` | Nothing tracks a gesture with mouse events (a bare `onMouseDown` prop is allowed — see the exception above) |
-| `web/tests/touchTarget.test.ts` | Every interactive element — `<button>`, `<a>`, or anything with `role="button"` — is held to the floors as far as its source can be read ([scope](#which-controls-the-floor-is-asked-of)): an icon-only one states a box on both axes, one with text is held to whatever height it wrote down itself, and a tag that is inline by default has to blockify or the size it wrote does not count. Neighbouring controls sit ≥8px apart, over that same set of tags, wherever their container states a gap at all. **It no longer speaks for `iconButtonClass`'s callers** — see the row below |
-| `web/tests/iconButtonClass.test.ts` | Both branches of `iconButtonClass` state the floors themselves — the grown one 36 and `pointer-coarse:` 44 on both axes, the fixed one `size-9` plus the overlay. It exists because the scan above cannot read this helper any more: it splices the body into every call site and stops at the word `touch-target`, which one branch now contains, so a caller taking the *other* branch is waved through on a class it never receives. Verified by mutation — deleting either branch's floors turns it red |
+| `web/tests/touchTarget.test.ts` | Every interactive element — `<button>`, `<a>`, or anything with `role="button"` — is held to the floors as far as its source can be read ([scope](#which-controls-the-floor-is-asked-of)): an icon-only one states a box on both axes, one with text is held to whatever height it wrote down itself, and a tag that is inline by default has to blockify or the size it wrote does not count. Neighbouring controls sit ≥8px apart, over that same set of tags, wherever their container states a gap at all. A class helper with a conditional box is read one class list per branch and **every** branch has to clear the floors, since the scan does not evaluate the argument that picks one |
+| `web/tests/iconButtonClass.test.ts` | What the scan above still cannot say about this helper: the fixed branch's `size-9`, which is the visual rung rather than a hit area and is therefore excused by `touch-target`, and that `grow` defaults to the branch safe in a row with room to spare. The floors themselves are guarded at the call sites now |
 | `web/src/components/AppShell.test.tsx` | The hamburger and the sidebar's shape come from one source and can never disagree |
 | `web/src/components/ui/Sheet.test.tsx` | Drawer sits at the bottom, modal is centred, and both follow the one hook |
 | `web/src/test/outsideClick.test.tsx` | A click outside dismisses and one inside does not; touch scrolling does not; the click that opened the overlay does not; the listener survives a host re-render |
@@ -626,14 +626,35 @@ Known blind spots, recorded as they are rather than as they should be:
    a reason it cannot verify, and that is worth knowing before the third one is
    written. (`w-full` / `flex-1` are credited the same way on the width axis,
    where a control that fills its row is rarely the one a thumb misses.)
-6. **One `touch-target` anywhere in a class helper's body clears every caller
-   of it.** The scan splices a helper's whole source in and treats that word as
-   both floors satisfied, without asking which branch a given call site takes.
-   `iconButtonClass` is the shape that exposes this — one branch overlays, the
-   other grows — and the branch that grows is now checked by
-   `web/tests/iconButtonClass.test.ts` instead. Any future helper with a
-   conditional box has the same hole and needs the same kind of direct test; the
-   scan will not say so.
+6. **A conditional class helper is read as all of its branches at once, so a
+   call site is held to the strictest of them.** This is the closed half of what
+   used to be a hole in the other direction: one `touch-target` anywhere in a
+   helper's body cleared every caller, whichever branch they took, and
+   `iconButtonClass`'s growing branch rode on the overlaying branch's word for
+   eight call sites. The scan now enumerates one class list per branch and
+   requires each to clear the floors. It still cannot evaluate the argument that
+   picks a branch, so it asks all of them — which is the safe direction to be
+   wrong in, but it means a helper whose branches are *deliberately* different
+   sizes cannot be expressed and would have to be split into two helpers.
+   Verified by mutation: stripping `pointer-coarse:` from the growing branch, and
+   the overlay from the fixed branch, each turn the scan red and name the call
+   sites; the first of those left the *old* scan green, which is the hole. The
+   same run turned up a second one — reading a branch means scanning source, and
+   an apostrophe in a comment (`can't`) read as an opening quote swallowed the
+   class list whole, leaving the scan green through a mutation that had just
+   deleted both floors. The scanner skips comments now.
+7. **A declaration over 500 characters is no longer followed for the class
+   helpers it names.** Splicing is by name and class tokens supply names —
+   `items-start` yields `start` — so following every identifier out of a long
+   body walked from one control's class list through eleven declarations into the
+   WebSocket store, crediting the control with every class along the way. A body
+   that long is a component or a function with logic, not a class helper. The
+   short chains the arm exists for (`getActionIconButtonClass` → a constant → a
+   constant) are all one-liners and are unaffected. The cost is the mirror of the
+   old hole: a genuine class helper that both exceeds 500 characters *and* names
+   its classes only indirectly would stop being followed, and its callers would
+   be asked to state a box they already get from it. That fails loudly rather
+   than quietly, and no such helper exists today.
 
 ### The manual check that cannot be automated
 

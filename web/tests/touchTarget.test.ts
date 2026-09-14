@@ -23,7 +23,7 @@ describe("touch targets", () => {
 			.filter(([, fault]) => fault !== null)
 			.map(
 				([c, fault]) =>
-					`${c.file}:${c.line} <${c.tag}>\n  ${fault}\n  ${c.classes}`,
+					`${c.file}:${c.line} <${c.tag}>\n  ${fault}\n  ${c.classes.join("\n  ")}`,
 			);
 		expect(faults).toEqual([]);
 	});

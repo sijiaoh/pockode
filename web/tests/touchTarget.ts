@@ -7,7 +7,13 @@ export interface Control {
 	line: number;
 	/** `button`, `a`, or the tag carrying `role="button"`. Only for messages. */
 	tag: string;
-	classes: string;
+	/**
+	 * Every class list this element can end up with: one entry per combination
+	 * of branches its `className` expression and the helpers it names can take.
+	 * A call site has to clear the floors on all of them, because which one it
+	 * gets is decided by arguments this scan does not evaluate.
+	 */
+	classes: string[];
 	/**
 	 * Whether the element renders nothing but icons, which decides how much of
 	 * it can be checked: an icon-only control owes a box on both axes, while one
@@ -53,6 +59,9 @@ export function classHelpers(files: string[]): Map<string, string> {
 	return out;
 }
 
+/** Longest body whose names `looksLikeClasses` follows. See below. */
+const TRANSITIVE_BODY_LIMIT = 500;
+
 /**
  * Whether a helper is about classes, directly or through another helper.
  *
@@ -79,26 +88,330 @@ function looksLikeClasses(
 	) {
 		return true;
 	}
+	// Only a short body is followed. The arm exists for a declaration that is
+	// nothing but a reference to another one, and those are one line; a body long
+	// enough to be a function with logic reaches a class string by accident, and
+	// following that accident splices whole modules in — `items-start` yields the
+	// name `start`, which led through eleven more declarations to the WebSocket
+	// store. Everything it dragged along was credited to the control.
+	if (body.length > TRANSITIVE_BODY_LIMIT) return false;
 	return (body.match(/[A-Za-z_$][\w$]*/g) ?? []).some((n) =>
 		looksLikeClasses(n, helpers, seen),
 	);
 }
 
-/** An expression with every class helper it names spliced in, transitively. */
-function expand(
+/**
+ * The most branch combinations one `className` expression is enumerated into.
+ *
+ * Class helpers have a handful of ternaries between them, so the real counts
+ * are 2 and 4. The cap exists for the pathological splice: `classHelpers` runs
+ * a body to the next top-level declaration, so a mis-named helper can drag a
+ * whole component in. Past the cap a branch point collapses back to the union
+ * of its branches — the old, over-permissive reading — rather than dropping
+ * combinations, which would drop faults silently.
+ */
+const MAX_VARIANTS = 64;
+
+/** Every `a` continued by every `b`, collapsing `b` if the product overflows. */
+function cross(a: string[], b: string[]): string[] {
+	if (b.length === 0) return a;
+	const bs = a.length * b.length > MAX_VARIANTS ? [b.join(" ")] : b;
+	return a.flatMap((x) => bs.map((y) => `${x} ${y}`));
+}
+
+/**
+ * The index just past a line or block comment starting at `i`, or -1.
+ *
+ * Comments are skipped rather than scanned. An apostrophe in one is not a
+ * string, and letting the string scanner see it swallows everything up to the
+ * next quote: a single `can't` in `iconButtonClass` ate the class list, and the
+ * scan stayed green through a mutation that had just deleted both coarse
+ * floors. A guard that a comment can switch off is worse than no guard.
+ *
+ * Only a comment opener matches, so a lone `/` — division — does not. A regex
+ * literal is read as code, which is harmless: classes do not live in one.
+ */
+function commentEnd(text: string, i: number): number {
+	if (text[i] !== "/") return -1;
+	if (text[i + 1] === "/") {
+		const nl = text.indexOf("\n", i);
+		return nl < 0 ? text.length : nl;
+	}
+	if (text[i + 1] !== "*") return -1;
+	const end = text.indexOf("*/", i + 2);
+	return end < 0 ? text.length : end + 2;
+}
+
+/** The index just past the string, template or bracket group starting at `i`. */
+function atomEnd(text: string, i: number): number {
+	const open = text[i];
+	if (open === '"' || open === "'") {
+		for (let j = i + 1; j < text.length; j++) {
+			if (text[j] === "\\") j++;
+			else if (text[j] === open) return j + 1;
+		}
+		return text.length;
+	}
+	if (open === "`") {
+		for (let j = i + 1; j < text.length; j++) {
+			if (text[j] === "\\") j++;
+			else if (text[j] === "`") return j + 1;
+			// A substitution may hold a backtick of its own, so skip the braces.
+			else if (text[j] === "$" && text[j + 1] === "{")
+				j = atomEnd(text, j + 1) - 1;
+		}
+		return text.length;
+	}
+	// Only the matching bracket is counted: valid source never interleaves two
+	// kinds, so a nested `[` cannot close a `(`.
+	const close = open === "(" ? ")" : open === "[" ? "]" : "}";
+	let depth = 0;
+	for (let j = i; j < text.length; j++) {
+		const ch = text[j];
+		if (ch === '"' || ch === "'" || ch === "`") {
+			j = atomEnd(text, j) - 1;
+			continue;
+		}
+		const comment = commentEnd(text, j);
+		if (comment >= 0) {
+			j = comment - 1;
+			continue;
+		}
+		if (ch === open) depth++;
+		else if (ch === close && --depth === 0) return j + 1;
+	}
+	return text.length;
+}
+
+/** The outermost `? :` pair in `text`, or null if it holds none. */
+function topLevelTernary(
+	text: string,
+): { question: number; colon: number } | null {
+	let question = -1;
+	let depth = 0;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if (
+			ch === '"' ||
+			ch === "'" ||
+			ch === "`" ||
+			ch === "(" ||
+			ch === "[" ||
+			ch === "{"
+		) {
+			i = atomEnd(text, i) - 1;
+			continue;
+		}
+		const comment = commentEnd(text, i);
+		if (comment >= 0) {
+			i = comment - 1;
+			continue;
+		}
+		if (ch === "?") {
+			// `??`, `?.` and an optional marker are not conditionals.
+			if (text[i + 1] === "?" || text[i + 1] === "." || text[i + 1] === ":") {
+				i++;
+				continue;
+			}
+			if (question < 0) question = i;
+			depth++;
+			continue;
+		}
+		if (ch === ":" && question >= 0 && --depth === 0)
+			return { question, colon: i };
+	}
+	return null;
+}
+
+/**
+ * Every class list an expression can produce, one string per combination of
+ * branches taken.
+ *
+ * The reason this is a list and not a string: splicing a helper's body in as
+ * one flat blob credits every call site with the classes of *all* its branches
+ * at once. `iconButtonClass` is the shape that exposes it — one branch overlays
+ * `touch-target`, the other grows the box — so every caller was waved through
+ * on a class only half of them receive. A branch a call site may take has to be
+ * readable on its own, and that is what a variant is.
+ *
+ * The condition is kept in both variants rather than cut out: telling a
+ * ternary's condition from whatever legitimately precedes it (`clsx("flex",
+ * cond ? ... )`) needs a real parser, and dropping the lot would lose the
+ * `flex`. The cost is that a class-shaped string *inside* a condition is
+ * credited to both branches — `variant === "size-11" ? …` would be read as
+ * 44px. Nothing writes that, and it is the same order of limit as the rest of
+ * this file.
+ *
+ * Nested ternaries are handled by counting: the matching `:` is the one that
+ * brings the `?` depth back to zero, so `a ? x : b ? y : z` yields three.
+ */
+function alternatives(text: string): string[] {
+	const t = topLevelTernary(text);
+	if (!t) return inlineAlternatives(text);
+	return cross(alternatives(text.slice(0, t.question)), [
+		...alternatives(text.slice(t.question + 1, t.colon)),
+		...alternatives(text.slice(t.colon + 1)),
+	]);
+}
+
+/** `alternatives` for text whose branch points are all inside brackets. */
+function inlineAlternatives(text: string): string[] {
+	let out = [""];
+	let plain = "";
+	const flush = () => {
+		if (!plain) return;
+		const held = plain;
+		out = out.map((v) => `${v} ${held}`);
+		plain = "";
+	};
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if (
+			ch === '"' ||
+			ch === "'" ||
+			ch === "`" ||
+			ch === "(" ||
+			ch === "[" ||
+			ch === "{"
+		) {
+			const end = atomEnd(text, i);
+			const inner = text.slice(i + 1, end - 1);
+			i = end - 1;
+			// A quoted string is a leaf; a bracket group is code and may hold a
+			// ternary; a template is neither and gets its own walk.
+			if (ch === '"' || ch === "'") plain += ` ${inner} `;
+			else {
+				flush();
+				out = cross(
+					out,
+					ch === "`" ? templateAlternatives(inner) : alternatives(inner),
+				);
+			}
+			continue;
+		}
+		const comment = commentEnd(text, i);
+		if (comment >= 0) {
+			i = comment - 1;
+			continue;
+		}
+		plain += ch;
+	}
+	flush();
+	return out;
+}
+
+/**
+ * `alternatives` for the inside of a template literal, where the only branch
+ * point is a `${}`.
+ *
+ * A template's literal text is classes, not code, and a class may contain
+ * brackets: reading `min-h-[44px]` as an array subscript cut it into `min-h-`
+ * and `44px`, and every `min-h-[44px]` row was suddenly a height of nothing.
+ */
+function templateAlternatives(text: string): string[] {
+	let out = [""];
+	let plain = "";
+	for (let i = 0; i < text.length; i++) {
+		if (text[i] === "$" && text[i + 1] === "{") {
+			const end = atomEnd(text, i + 1);
+			if (plain) {
+				const held = plain;
+				out = out.map((v) => `${v} ${held}`);
+				plain = "";
+			}
+			out = cross(out, alternatives(text.slice(i + 2, end - 1)));
+			i = end - 1;
+			continue;
+		}
+		plain += text[i];
+	}
+	return plain ? out.map((v) => `${v} ${plain}`) : out;
+}
+
+/**
+ * Every class list one helper's body can produce, computed once per helper.
+ *
+ * The memo is not an optimisation detail, it is what makes the enumeration
+ * finish: a variant list is spliced into every *other* variant, so expanding a
+ * helper afresh under each branch of its caller costs a product of the whole
+ * tree. Keyed on the helper map so a fresh scan gets a fresh memo.
+ */
+const memos = new WeakMap<Map<string, string>, Map<string, string[]>>();
+
+/**
+ * An expression with every class helper it names spliced in, transitively, once
+ * per combination of branches.
+ *
+ * Names are collected per variant rather than from the whole expression, so a
+ * helper that is a ternary between two constants (`getActionIconButtonClass`)
+ * resolves to one constant per variant instead of both at once.
+ *
+ * `stack` breaks recursion between helpers. A cyclic pair is read as whatever
+ * was resolvable from the outside, which is what the old single `seen` set did
+ * too; nothing here is cyclic today.
+ */
+function expandVariants(
 	expression: string,
 	helpers: Map<string, string>,
-	seen = new Set<string>(),
-): string {
-	let out = expression;
-	for (const name of expression.match(/[A-Za-z_$][\w$]*/g) ?? []) {
-		if (seen.has(name)) continue;
-		const body = helpers.get(name);
-		if (body === undefined || !looksLikeClasses(name, helpers)) continue;
-		seen.add(name);
-		out += ` ${expand(body, helpers, seen)}`;
+	stack = new Set<string>(),
+): string[] {
+	const out = new Set<string>();
+	for (const variant of alternatives(expression).map(condense)) {
+		let texts = [variant];
+		for (const name of new Set(variant.match(/[A-Za-z_$][\w$]*/g) ?? [])) {
+			if (stack.has(name)) continue;
+			const body = helpers.get(name);
+			if (body === undefined || !looksLikeClasses(name, helpers)) continue;
+			texts = cross(texts, helperVariants(name, body, helpers, stack));
+		}
+		for (const text of texts) out.add(condense(text));
 	}
-	return out;
+	return capped([...out]);
+}
+
+/** At most `MAX_VARIANTS` entries, the overflow folded into one union of itself. */
+function capped(variants: string[]): string[] {
+	if (variants.length <= MAX_VARIANTS) return variants;
+	return [
+		...variants.slice(0, MAX_VARIANTS - 1),
+		condense(variants.slice(MAX_VARIANTS - 1).join(" ")),
+	];
+}
+
+/** `expandVariants` of a named helper's body, memoised. */
+function helperVariants(
+	name: string,
+	body: string,
+	helpers: Map<string, string>,
+	stack: Set<string>,
+): string[] {
+	let memo = memos.get(helpers);
+	if (!memo) {
+		memo = new Map();
+		memos.set(helpers, memo);
+	}
+	const hit = memo.get(name);
+	if (hit) return hit;
+	stack.add(name);
+	const result = expandVariants(body, helpers, stack);
+	stack.delete(name);
+	memo.set(name, result);
+	return result;
+}
+
+/**
+ * A variant reduced to its distinct tokens.
+ *
+ * Splicing carries whole declaration bodies around, and a body repeats the same
+ * few hundred tokens thousands of times over. Every reader downstream — class
+ * matching and helper lookup alike — treats a variant as a set of tokens, so
+ * dropping the repeats changes no answer. Without it, enumerating branches
+ * multiplies whole component sources against each other and the scan runs the
+ * heap out.
+ */
+function condense(text: string): string {
+	const tokens = text.split(/[^\w$@:[\]./-]+/).filter((t) => /\w/.test(t));
+	return [...new Set(tokens)].join(" ");
 }
 
 /** The end index of a JSX open tag starting at `start`, brace-aware. */
@@ -211,14 +524,12 @@ export function interactiveControls(
 
 		const cm = tag.match(/className=(?:"([^"]*)"|\{([\s\S]*)\})/);
 		const classes =
-			cm?.[2] === undefined
-				? (cm?.[1] ?? "")
-				: expand(cm[2], helpers).replace(/[`"'${}]/g, " ");
+			cm?.[2] === undefined ? [cm?.[1] ?? ""] : expandVariants(cm[2], helpers);
 		out.push({
 			file: repoPath(file),
 			line: source.slice(0, m.index).split("\n").length,
 			tag: name,
-			classes: classes.replace(/\s+/g, " ").trim(),
+			classes: [...new Set(classes.map((c) => c.replace(/\s+/g, " ").trim()))],
 			iconOnly: isIconOnly(children),
 		});
 	}
@@ -332,9 +643,29 @@ const STRETCHED: [axis: "h" | "w", pattern: RegExp][] = [
  * that shape today, the shortest of them 16px (docs/responsive-ui.md, "Outside
  * the floor today"). The floor is scoped to what is readable here; those are
  * known and deferred, not exempt.
+ *
+ * Every branch the control's classes can take has to clear the floors, not just
+ * one: the scan does not evaluate a helper's arguments, so any branch is a
+ * branch some call site takes. Reading them as one merged blob is what let
+ * `iconButtonClass`'s growing branch ride on the other branch's `touch-target`.
  */
 export function hitAreaFault(control: Control): string | null {
-	const tokens = control.classes.split(/\s+/).filter(Boolean);
+	for (const classes of control.classes) {
+		const fault = branchFault(control, classes);
+		if (fault) {
+			// Which branch, when there is more than one: the caller prints the class
+			// lists anyway, and "36px" says nothing about which of them it came from.
+			return control.classes.length > 1
+				? `${fault} — on \`${classes}\``
+				: fault;
+		}
+	}
+	return null;
+}
+
+/** `hitAreaFault` for one of the class lists the control may end up with. */
+function branchFault(control: Control, classes: string): string | null {
+	const tokens = classes.split(/\s+/).filter(Boolean);
 	if (tokens.includes("touch-target")) return null;
 
 	const best = { h: { fine: 0, coarse: 0 }, w: { fine: 0, coarse: 0 } };

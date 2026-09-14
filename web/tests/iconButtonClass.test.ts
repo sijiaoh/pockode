@@ -2,17 +2,18 @@ import { describe, expect, it } from "vitest";
 import { iconButtonClass } from "../src/components/ui/iconButtonClass";
 import { COARSE_FLOOR, FINE_FLOOR } from "./touchTarget";
 
-// touchTarget.test.ts used to check these floors for us: it splices this
-// helper's body into every call site and reads the numbers off it. It cannot
-// any more. The scan treats `touch-target` as satisfying both floors and stops
-// reading there, and the body now contains that word in one branch — so a call
-// site taking the *other* branch is waved through on the strength of a class it
-// never receives.
+// touchTarget.test.ts checks these floors for us at every call site: it splices
+// this helper's body in and reads the numbers off it, one class list per branch
+// the caller could take. It could not always — it read the two branches as one
+// blob, so `touch-target` from the fixed branch waved through every caller of
+// the grown one, on a class only half of them receive.
 //
-// That leaves the two branches unguarded from the outside, and they are the
-// only place the rung's numbers are written down. Hence these, which read the
-// branches directly. Living here rather than beside the source so the floors
-// can come from the one file that defines them.
+// What is left here is what the scan still cannot say. `touch-target` clears
+// both floors and it stops reading, so the fixed branch's `size-9` — the visual
+// rung, not the hit area — is checked by nobody else. And which branch a call
+// site takes is decided by an argument the scan does not evaluate, so the
+// default is not readable there either. Living here rather than beside the
+// source so the floors can come from the one file that defines them.
 describe("iconButtonClass", () => {
 	it("states both floors on the branch that grows its box", () => {
 		const grown = iconButtonClass().split(/\s+/);
