@@ -152,7 +152,7 @@ Colour, restated as rules rather than as a list of places:
 | `th-accent` | The one primary action, the active tab, the focus ring, a drag under the cursor right now, a progress bar, a tab's notification badge (the dot, and the Git tab's change count) |
 | `th-accent` as a 2px left bar | A row singled out: the selected row in `SidebarListItem` |
 | `th-bg-tertiary` | The row you are looking at (selected file, selected commit), and the fill of secondary buttons inside sheets |
-| `th-text-muted` | Group headers, metadata, and icons that are not asking to be pressed — decoration, or an action rare enough to sit below the row it lives on (a tree row's `…`) |
+| `th-text-muted` | Group headers, metadata, and the icon of an action rare enough to sit below the row it lives on (a tree row's `…`). Quieter than the body colour, never quiet enough to stop being read — it owes AA 4.5 over the worst surface it lands on |
 | `th-error` / `th-success` | A failure / a completed outcome. Never a state that is merely unusual |
 
 **`th-accent-text` on `th-accent` clears WCAG AA's 4.5:1 in every variant, and
@@ -169,6 +169,70 @@ caller that comes up short fixes nothing by picking a colour of its own: it
 leaves the system less consistent and the real problem better hidden. Two light
 themes did come up short, at 3.74:1 and 3.68:1, and the fix went into their
 token values, where it landed for every caller at once.
+
+**`th-text-muted` is guarded too, and it is the pair that broke the shape the
+other three share: no single fill owns it.** The table above reads it as the
+quiet rung of the text ladder, not as decoration, and the distinction is what
+sets its floor — what it carries is timestamps, paths, counts and diff hunk
+headers, all of it `text-xs`, none of it anywhere near the 18pt (24px) regular
+or 14pt bold (18.66px) that WCAG's large-text relief starts at. So it owes the
+full 4.5, and it owes it on the *worst* surface it lands on rather than on a
+chosen one. That comes to five pairings in `GUARDED_PAIRS`: `th-bg-primary`,
+`th-bg-secondary` and `th-bg-tertiary`, plus `th-ai-bubble` — Mermaid's
+loading and error lines are muted and render inside the assistant bubble,
+which is darker than tertiary in void and mint light — plus `th-overlay-hover`
+composited onto `th-bg-secondary`. That last one is the worst of the five in
+every variant, and it is the one no listing of the stylesheet's own colours
+would ever show: Chat's collapsible headers are muted text on
+`bg-th-bg-secondary` under `hover:bg-th-overlay-hover`, and the overlay is
+black at 6-8% in light and white at 10% in dark, so in both directions it
+pushes the backdrop towards the text. Hover is a state a person reads in, not
+one they are excused from. Guarding muted against `th-bg-primary` alone — the
+most forgiving surface in either mode, being the one furthest from the text —
+is how eleven variants sat below AA while looking like seven — or like six to
+anyone counting only the ten in `web`. A pair this shape needs a fill the
+stylesheet does not hold, which is what `TokenPair`'s `onto` is for; without
+it the blend would have to be hard-coded into the test, and a hard-coded blend
+stops tracking the overlay the moment a theme changes it. That pair is also
+the one a future palette tweak would be tempted to delete rather than satisfy
+— it has the least margin of the five — and deleting a pair is invisible to
+every other check in the file, since the remaining four still cover every
+variant. So the overlays are counted the other way round as well: every
+`--th-overlay-*` a stylesheet declares has to appear as a fill in
+`GUARDED_PAIRS`, which is a list the stylesheet itself supplies rather than
+one the test asserts about itself. `themeRegistry.ts` keeps a second copy of
+this token as well as of the accent, for the picker's swatches, and
+`web/tests/themeTokens.test.ts` compares the two the same way.
+
+**The text ladder `th-text-muted` → `th-text-secondary` → `th-text-primary`
+holds a CIELab ΔL\* of at least 13 at each step, and both steps are the same
+constant.** Contrast alone cannot express what "muted" is *for*: every way of
+raising a muted colour's ratio against the page moves it towards the body
+text, so a check that measured only contrast would wave through — and
+eventually invite — a muted pushed all the way onto secondary. Green suite,
+and the tier gone. 13 is not picked from the air; it is the tightest step the
+shipping themes already hold, ember light having left the factory at 12.9,
+mint light at 13.2 and aurora light at 14.8, all three legible today. Rounding
+to that keeps the themes that already pass from being repainted to satisfy a
+wider number. The reason one `TEXT_TIER_STEP` carries both rungs rather than
+one per rung is that 4.5 is WCAG's and 13 is this project's: a floor the
+standard sets can be guarded against edits by a test that simply asserts the
+number, but asserting `13` is `13` is a tautology that stops nobody. Making
+the constant load-bearing twice is what replaces that — lowering it to escape
+one rung visibly loosens the other, which is a policy change rather than a
+local escape. `web/tests/contrast.ts` holds the constant and
+`contrast.test.ts` asserts both rungs.
+
+**Muted retreats towards its own mode's background, so the two modes' values
+have no fixed order between them and comparing them proves nothing.** A light
+muted lighter than its dark counterpart looks like a swapped pair and is not
+one: retreating means lighter in light and darker in dark, both measured
+against a different background, so either order can come out. Two of the five
+themes shipped that way before these values were last set, and it was twice
+read as "only one theme is inverted" — wrong on the count, and wrong that
+there was a fault. The check that means something is monotonicity *within* one
+mode: `bg → muted → secondary → primary` orders strictly by L\* in all eleven
+variants, and did so even while every one of them was below AA.
 
 **Changing an accent means changing the tokens that hold the same value.**
 `--th-border-focus` is the accent value in every variant, and
@@ -268,10 +332,21 @@ answer to "why not this one, it passes". The ceiling is not a constant either �
 the test derives `/20` from the non-text floor, so raising it turns the suite
 red by itself. What it does not cover, it says out loud: a tint whose text
 comes from a child element or from inheritance is beyond a text scan and was
-checked by eye, and the error, warning, success and muted tints are left out on
+checked by eye, and the error, warning and success tints are left out on
 purpose — adding them to the scan turns it red at call sites that fail on the
 token values rather than on how they are written, which is a palette decision
-and not this rule's.
+and not this rule's. Muted is left out for a different reason and no longer a
+token-layer one: it clears AA over every surface the app paints and the
+non-text floor as a border, and no `bg-th-text-muted` tint carries text any
+more — the one that did, the expired chip in `Chat/AskUserQuestionItem.tsx`,
+is an opaque `bg-th-bg-tertiary` now. What it would still fail is the alpha
+ceiling, since `ui/Sheet.tsx`'s drag handle is `bg-th-text-muted/30` and no
+value of the token can lift it: the extreme token, black or white at 30% over
+the sheet's own surface, reaches about 2.1 in the light variants and 2.7 in
+the dark ones, both short of the non-text floor. Whether a drag handle is
+decoration or an affordance owing 3:1 is the judgement call, and web-cluster's
+own handle answers it the other way, opaque — that disagreement is its own
+piece of work.
 
 **On rows, though, neither panel has a standing annotation any more, and that is
 the resolution of "accent meant too many things" rather than a gap in it.** The
