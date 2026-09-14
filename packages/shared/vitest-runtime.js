@@ -6,6 +6,14 @@ import { availableParallelism } from "node:os";
  * Lives outside `src` because it needs Node types, which the browser package
  * deliberately does not have — the same reason `web/vitest.setup.ts` sits
  * outside its own `src`.
+ *
+ * Plain JavaScript, unlike everything else here, because a `vitest.config.ts`
+ * is not part of the bundle it configures: vite bundles the config file but
+ * leaves bare imports external, so node itself loads this one. Node only strips
+ * types from 22.18 on, and `.node-version` pins 22.13, so a `.ts` here fails
+ * the whole suite at startup on CI while passing on a newer local node. There
+ * is no type syntax to lose — `erasableSyntaxOnly` already rules it out for the
+ * configs that import this.
  */
 export const vitestRuntimeOptions = {
 	/**

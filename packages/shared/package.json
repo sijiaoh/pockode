@@ -5,7 +5,7 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
-		"./vitest": "./vitest-runtime.ts"
+		"./vitest": "./vitest-runtime.js"
 	},
 	"peerDependencies": {
 		"react": "^19.0.0",

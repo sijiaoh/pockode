@@ -6,6 +6,10 @@
 		"module": "ESNext",
 		"types": ["node"],
 		"skipLibCheck": true,
+		// @pockode/shared/vitest is plain JavaScript - see the comment in
+		// vitest-runtime.js for why. Its types are inferred from that file
+		// rather than restated in a .d.ts that could drift from it.
+		"allowJs": true,
 
 		/* Bundler mode */
 		"moduleResolution": "bundler",

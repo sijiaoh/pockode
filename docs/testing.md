@@ -44,8 +44,8 @@ unrelated. Match the message before touching a number.
 
 | Message | Knob | Where |
 |---|---|---|
-| `Test timed out in <n>ms` | `testTimeout` / `hookTimeout` | `packages/shared/vitest-runtime.ts` |
-| `[vitest-pool-runner]: Timeout waiting for worker to respond` | `maxWorkers` — the worker pool is starved, no individual test is slow. `poolOptions` and `fileParallelism` are the other levers, both left at their defaults | `packages/shared/vitest-runtime.ts` |
+| `Test timed out in <n>ms` | `testTimeout` / `hookTimeout` | `packages/shared/vitest-runtime.js` |
+| `[vitest-pool-runner]: Timeout waiting for worker to respond` | `maxWorkers` — the worker pool is starved, no individual test is slow. `poolOptions` and `fileParallelism` are the other levers, both left at their defaults | `packages/shared/vitest-runtime.js` |
 | testing-library's `Unable to find an element …` with a DOM dump, from a `findBy*` | `asyncUtilTimeout` — **defaults to 1000ms** however high `testTimeout` is, and is enforced by testing-library, not vitest | `web/src/test/setup.ts` |
 
 The third one catches people out: raising `testTimeout` does nothing for a
