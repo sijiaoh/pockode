@@ -7,39 +7,68 @@ import type {
 import { hasMessageActions } from "./messageActions";
 
 /**
- * Whether a message can be the point a fork cuts at.
+ * Why fork cannot run on a message it otherwise applies to.
  *
- * Narrower than `hasMessageActions`: on top of being a settled conversation
- * turn, a message the server never gave a seq for cannot be named at all (see
- * `Message.anchorSeq`), and one holding a request nobody has answered is not a
- * settled transcript to cut at. Neither is the message's permanent state, which
- * is why they disable the fork action rather than remove it — but neither is on
- * a clock: the request waits as long as the user leaves it unanswered, and a
- * missing seq lasts until a reload. A missing seq is rare now that the server
- * tells a sender where its own message landed (`MessageResult`), leaving only a
- * server too old to answer with one and a record that could not be persisted —
- * and that last one no reload can name, because the message does not survive it
- * either.
+ * - `no-anchor-seq`: the server never gave this message a seq, so it cannot be
+ *   named as the cut point at all (see `Message.anchorSeq`). Rare now that the
+ *   server tells a sender where its own message landed (`MessageResult`),
+ *   leaving a server too old to answer with one and a record that could not be
+ *   persisted — and that last one no reload can name, because the message does
+ *   not survive it either.
+ * - `pending-request`: the message holds a permission request or a question
+ *   nobody has answered, so it is not a settled transcript to cut at.
  *
- * A turn in flight does not make the messages above it unforkable: everything a
- * fork anchored there keeps is already final, and everything still arriving
- * falls after the anchor and is dropped anyway.
+ * Neither is a verdict on the message itself, which is why they disable the
+ * fork row rather than remove it.
+ */
+export type ForkUnavailable = "no-anchor-seq" | "pending-request";
+
+/**
+ * Which of the two stops fork on this message, or undefined when neither does.
+ *
+ * `no-anchor-seq` is asked first because a message can be in both states at
+ * once, and only one of the two sentences is still true after the user acts on
+ * it: answering the request does not conjure a seq, so a reason the user can
+ * clear must never be shown ahead of one they cannot.
  *
  * Asked of the message alone, so it cannot answer the one question that needs
  * the transcript: a user message that opens the session has nothing behind it
- * to keep. `resolveForkAnchor` is where that is decided.
+ * to keep. `resolveForkAnchor` and `MessageItem` are where that is decided.
+ *
+ * Says nothing about a message that is not a conversation turn at all — that is
+ * `hasMessageActions`, and a message it rejects has no menu to carry a reason.
  */
-export function isForkableMessage(message: Message): boolean {
-	if (!hasMessageActions(message)) return false;
-	if (message.anchorSeq === undefined) return false;
+export function forkUnavailableReason(
+	message: Message,
+): ForkUnavailable | undefined {
+	if (message.anchorSeq === undefined) return "no-anchor-seq";
 	// Only an assistant turn can be holding one: the requests are the agent's.
-	if (message.role === "user") return true;
+	if (message.role === "user") return undefined;
 
-	return !message.parts.some(
+	return message.parts.some(
 		(part) =>
 			(part.type === "permission_request" ||
 				part.type === "ask_user_question") &&
 			part.status === "pending",
+	)
+		? "pending-request"
+		: undefined;
+}
+
+/**
+ * Whether a message can be the point a fork cuts at.
+ *
+ * Narrower than `hasMessageActions`: on top of being a settled conversation
+ * turn, the message has to be addressable and settled in the two ways
+ * `ForkUnavailable` names.
+ *
+ * A turn in flight does not make the messages above it unforkable: everything a
+ * fork anchored there keeps is already final, and everything still arriving
+ * falls after the anchor and is dropped anyway.
+ */
+export function isForkableMessage(message: Message): boolean {
+	return (
+		hasMessageActions(message) && forkUnavailableReason(message) === undefined
 	);
 }
 

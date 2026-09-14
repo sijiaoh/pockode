@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage, Message, UserMessage } from "../types/message";
-import { isForkableMessage, resolveForkAnchor } from "./forkAnchor";
+import {
+	forkUnavailableReason,
+	isForkableMessage,
+	resolveForkAnchor,
+} from "./forkAnchor";
 
 function userMessage(overrides: Partial<UserMessage> = {}): UserMessage {
 	return {
@@ -30,20 +34,11 @@ function assistantMessage(
 
 // Only the reasons fork adds on top of `hasMessageActions`, which has its own
 // tests — a settled turn is the premise here, not the subject.
-describe("isForkableMessage", () => {
-	it("accepts a settled user or assistant message", () => {
-		expect(isForkableMessage(userMessage())).toBe(true);
-		expect(isForkableMessage(assistantMessage())).toBe(true);
-	});
-
-	it("rejects a message the server never gave a seq for", () => {
-		expect(isForkableMessage(userMessage({ anchorSeq: undefined }))).toBe(
-			false,
-		);
-	});
-
-	it("rejects a message holding a request nobody has answered", () => {
-		const pending = assistantMessage({
+describe("forkUnavailableReason", () => {
+	const pendingRequest = (
+		overrides: Partial<AssistantMessage> = {},
+	): AssistantMessage =>
+		assistantMessage({
 			parts: [
 				{
 					type: "permission_request",
@@ -56,8 +51,22 @@ describe("isForkableMessage", () => {
 					status: "pending",
 				},
 			],
+			...overrides,
 		});
-		expect(isForkableMessage(pending)).toBe(false);
+
+	it("names no reason for a settled user or assistant message", () => {
+		expect(forkUnavailableReason(userMessage())).toBeUndefined();
+		expect(forkUnavailableReason(assistantMessage())).toBeUndefined();
+	});
+
+	it("names a message the server never gave a seq for", () => {
+		expect(forkUnavailableReason(userMessage({ anchorSeq: undefined }))).toBe(
+			"no-anchor-seq",
+		);
+	});
+
+	it("names a message holding a request nobody has answered", () => {
+		expect(forkUnavailableReason(pendingRequest())).toBe("pending-request");
 
 		const answered = assistantMessage({
 			parts: [
@@ -73,11 +82,26 @@ describe("isForkableMessage", () => {
 				},
 			],
 		});
-		expect(isForkableMessage(answered)).toBe(true);
+		expect(forkUnavailableReason(answered)).toBeUndefined();
 	});
 
-	it("rejects a message that has no actions at all", () => {
+	// Both at once: the seq is the one the user cannot clear, so telling them to
+	// respond would send them back to a row that is still grey.
+	it("names the missing seq when the message is also holding a request", () => {
+		expect(
+			forkUnavailableReason(pendingRequest({ anchorSeq: undefined })),
+		).toBe("no-anchor-seq");
+	});
+});
+
+// The gate `resolveForkAnchor` leans on and `forkUnavailableReason` does not
+// ask: a message that is no conversation turn cannot be cut at either, however
+// addressable it looks.
+describe("isForkableMessage", () => {
+	it("accepts a settled turn and rejects a message with no actions", () => {
+		expect(isForkableMessage(userMessage())).toBe(true);
 		expect(isForkableMessage(userMessage({ source: "system" }))).toBe(false);
+		expect(isForkableMessage(userMessage({ status: "streaming" }))).toBe(false);
 	});
 });
 

@@ -217,35 +217,35 @@ files that say which is which: `utils/messageActions.ts` answers the first,
   turn. Here too the slot stays, which is what lets the glyph arrive when the
   turn ends without moving the bubble the agent has been writing into.
 
-**2. Can fork run on this message?** (`isForkableMessage` +
-`resolveForkAnchor`)
+**2. Can fork run on this message?** (`forkUnavailableReason`,
+`isForkableMessage`, `resolveForkAnchor`)
 
 - A message no record names cannot be pointed at, and the client must not
-  number it itself (*Data contract*). Two ways to get there, both rare: the
-  server could not persist the record, or it is too old to answer
+  number it itself (`no-anchor-seq`, *Data contract*). Two ways to get there,
+  both rare: the server could not persist the record, or it is too old to answer
   `chat.message` with a seq at all — for such a server, every message this tab
   sends stays unaddressable until a reload.
 - A message holding a pending permission request or question is not a settled
-  transcript to cut at.
+  transcript to cut at (`pending-request`).
 - A user message that opens the *session* has nothing behind it to keep
-  (*The rule*). This one needs the message's *position*, which is why it is
-  `resolveForkAnchor`'s answer and not `isForkableMessage`'s — and the position
-  has to be read against the whole session, not against the pages loaded so
-  far: while `hasMoreHistory` is true the topmost bubble on screen still has a
-  conversation above it, so both `resolveForkAnchor` and `MessageItem`'s
-  `isFirst` are given that flag rather than trusting index zero.
+  (`nothing-before`, *The rule*). This one needs the message's *position*, which
+  is why it is `resolveForkAnchor`'s answer and not `isForkableMessage`'s — and
+  the position has to be read against the whole session, not against the pages
+  loaded so far: while `hasMoreHistory` is true the topmost bubble on screen
+  still has a conversation above it, so both `resolveForkAnchor` and
+  `MessageItem`'s `isFirst` are given that flag rather than trusting index zero.
 
 Neither of the first two is a verdict on the message itself, so they leave the
 fork row in the menu and disable it rather than removing it (*Blocked and
-failed*). Neither is on a clock either — an answer settles the request, a reload
-names what the old server would not — so the sentence on the row promises no
-more than that this is not how the message will stay. It is stretched furthest
-by a record that failed to persist, which this session will never name: that
-message does not survive a reload either, so the sentence outlives its subject
-rather than lying to anyone who can still act on it. Were the two questions
-still one, as they were while `isForkableMessage` gated the entry point itself,
-a missing `seq` would silently cost the message every other action it will ever
-be given.
+failed*). They stay two reasons rather than one all the way to the words on that
+row, because only one of them is the user's to clear: an answer settles the
+request, while a missing seq is nothing the user can supply and, where the
+record never persisted, nothing a reload brings back either — that message does
+not survive one. A single sentence covering both could only promise that this is
+not how the message will stay, which is no help to the user who could have acted
+and a half-truth to the one who could not. Were the two questions still one, as
+they were while `isForkableMessage` gated the entry point itself, a missing
+`seq` would silently cost the message every other action it will ever be given.
 
 **A message the user just sent is not in that set, and closing that hole is why
 `chat.message` has a reply at all.** The server leaves a sender out of the
@@ -480,30 +480,52 @@ A control that vanishes from under the user's thumb is worse than one that says
 no. This is the menu's largest single gain over the icon that preceded it: an
 icon could carry the reason only in `aria-label`, which a screen reader reads
 and nobody else does — and a `title` never fires on a touch device at all. There
-are two of these, and they must not share a sentence, because one of them is
-waiting for something and the other is not:
+are three of these, one per cause, and each is named after its cause rather than
+after the state it leaves the row in: one code spanning two causes can only be
+worded as the symptom they share, and a symptom is never the thing the user can
+go and act on:
 
 | | Reason | Second line |
 | --- | --- | --- |
-| **Not yet** | A pending permission request or question, or the rare message no record names | *"This message can't be a fork point yet."* |
-| **Permanent** | A user message that opens the session: nothing before it to keep | *"Nothing before this message to keep."* |
+| **`nothing-before`** | A user message that opens the session: nothing before it to keep | *"Nothing before this message to keep."* |
+| **`no-anchor-seq`** | The server never gave this message a seq, so it cannot be named as the cut point | *"This message has no saved position to fork from."* |
+| **`pending-request`** | The message holds a permission request or question nobody has answered | *"Respond to the request in this message first."* |
 
-*Not yet* has to be true of two unrelated causes at once: a message waiting on
-an answer is unfinished business, while a message with no seq was finished long
-ago and merely has no address. What both share is that the message cannot be
-**named** as the cut point, which is why the sentence says that and not "still
-being written". It promises impermanence and no more — and for the same reason
-the permanent one must never say "yet".
+The table's order is the order the reasons are asked in, and it carries as much
+of the design as the names do. A message can be in more than one of these states
+at once, and the rule for which one it is told is that **a reason the user's own
+action can clear is asked after one it cannot**. An assistant message can hold
+an unanswered request *and* have no seq; told to respond to the request first,
+the user responds, comes back, and finds the row still dimmed — sent off to do
+work that was never what stood in the way. The other order costs nothing:
+`no-anchor-seq`'s sentence stays true while a request is pending, because it
+only says this message has no address and promises nothing about the request.
 
 The permanent reason is asked **first** (`forkBlockedReason` in
-`MessageItem.tsx`). The two can land on the same message — an opening prompt
-whose record failed to persist is both — and "yet" would there be promising a
-wait that never ends.
+`MessageItem.tsx`); the other two are `forkUnavailableReason`'s
+(`forkAnchor.ts`), which is asked of the message alone and so cannot see that it
+opens the session. `nothing-before` and `no-anchor-seq` can land on the same
+message — an opening prompt whose record failed to persist is both — and there,
+naming the missing seq would point at a state whose clearing changes nothing:
+nothing behind the opening message is ever coming back. `pending-request` cannot
+collide with `nothing-before` at all: the requests are the agent's, and an
+opening message is the user's.
 
-Neither opens `ForkSessionSheet`, which has no blocked variant: the first is not
-the message's permanent state, which does not earn that machinery, and the
-second is fully stated where it stands. The row is `aria-disabled` rather than
-natively `disabled` — a natively disabled button takes no focus and screen
+A message that is not a conversation turn at all gets **no code**:
+`forkBlockedReason` asks `hasMessageActions` before anything else and answers
+`undefined` when it says no. That is this section's opening distinction drawn
+inside a single message rather than across a session — a bubble still being
+written and a Pockode event line are not being refused fork; it never applied to
+them, and they carry no menu a sentence could sit in. The gate is written out
+rather than left implicit: the single code this replaced was computed for these
+messages too and nothing ever came of it, since a row with no menu shows no
+sentence — harmless while a code named a symptom, and not once it names a
+cause.
+
+None of the three opens `ForkSessionSheet`, which has no blocked variant: each
+is one sentence long and is fully said where it stands, and a sheet would charge
+a tap and a dismissal to reach the same words. The row is `aria-disabled` rather
+than natively `disabled` — a natively disabled button takes no focus and screen
 readers step over it, which would hide the very sentence that was the point of
 saying no in words.
 
@@ -526,7 +548,7 @@ New, all in `web/src/components/Chat/` unless noted:
 
 | File | Role |
 | --- | --- |
-| `MessageMenuTrigger.tsx` | The slot beside a bubble and the `…` in it, plus whether its menu is open. Props: `{ side: "user" \| "assistant"; onFork?: () => void; forkBlocked?: "not-yet" \| "nothing-before" }`. No `onFork` means this message is not a turn — the slot renders, the glyph does not. It also owns the `ForkBlocked` type; `MessageMenu` imports it back, as a type, which is erased at compile time and so is not a runtime cycle |
+| `MessageMenuTrigger.tsx` | The slot beside a bubble and the `…` in it, plus whether its menu is open. Props: `{ side: "user" \| "assistant"; onFork?: () => void; forkBlocked?: "nothing-before" \| "no-anchor-seq" \| "pending-request" }`. No `onFork` means this message is not a turn — the slot renders, the glyph does not. It also owns the `ForkBlocked` type, though only `nothing-before` is spelled there: the other two are `forkAnchor.ts`'s `ForkUnavailable`, declared beside the check that produces them, since a utility module does not import from the components that use it. `MessageMenu` imports `ForkBlocked`, as a type, which is erased at compile time and so is not a runtime cycle |
 | `MessageMenu.tsx` | The `Sheet` behind the `…`: everything this message can do, titled by speaker — **Your message** / **Agent message**, since a sheet here names its subject the way `Fork session` and a file's own name do. The rules for adding the second row live at its top, where the list is |
 | `ForkSessionSheet.tsx` | The confirm sheet above. Props: `{ anchor, droppedCount, agentType, defaultTitle, isForking, error, onFork, onClose }` |
 | `ForkOriginBanner.tsx` | The lineage row at the top of `MessageList` |
@@ -549,11 +571,13 @@ Changed:
   row (*Blocked and failed*). `description` renders inside the button, so it
   joins the row's accessible name without an `aria-describedby`.
 - `MessageItem.tsx` — renders `MessageMenuTrigger` on every row of a forkable
-  session, as a flex sibling on the bubble's inside, and decides fork's blocked
-  reason. Optional props `onForkMessage?: (messageId: string) => void` (stable,
-  since the component is `memo`) and `isFirst?: boolean` — first in the *whole*
-  session, not in the pages loaded so far, since that is what decides whether a
-  fork here has anything behind it to keep.
+  session, as a flex sibling on the bubble's inside, and assembles fork's
+  blocked reason: the menu gate first, then `nothing-before`, the one cause that
+  needs the transcript, then whatever `forkUnavailableReason` says about the
+  message alone. Optional props `onForkMessage?: (messageId: string) => void`
+  (stable, since the component is `memo`) and `isFirst?: boolean` — first in the
+  *whole* session, not in the pages loaded so far, since that is what decides
+  whether a fork here has anything behind it to keep.
 - `MessageList.tsx` — the origin banner, and threading `onForkMessage` and
   `isFirst`. The top of the loaded transcript is the session's start only once
   `hasMoreHistory` is false; with older pages still unread, the first rendered

@@ -1,23 +1,23 @@
 import { MoreHorizontal } from "lucide-react";
 import { useState } from "react";
+import type { ForkUnavailable } from "../../utils/forkAnchor";
 import { iconButtonClass } from "../ui/iconButtonClass";
 import MessageMenu from "./MessageMenu";
 
 /**
  * Why fork applies to this message but cannot run on it.
  *
- * - `not-yet`: the message holds a request nobody has answered, or it has no
- *   seq. The second is rare now that the server tells a sender where its own
- *   message landed, leaving only a server too old to answer with one and a
- *   record that could not be persisted. Neither is on a clock — an answer
- *   settles the request, a reload names what an old server would not — so the
- *   sentence on the row promises only that this is not the message's permanent
- *   state. The unpersisted record is the one case it outlives rather than
- *   describes: it does not survive a reload, so nobody is left waiting.
  * - `nothing-before`: the message opens the session, and a fork returns to
- *   before it was sent. Permanent, so the sentence must not promise later.
+ *   before it was sent. Permanent — nothing the user or the server can do makes
+ *   this message forkable.
+ * - `no-anchor-seq`: the message has no seq to be named by.
+ * - `pending-request`: the message holds a request nobody has answered.
+ *
+ * The last two are `forkUnavailableReason`'s answers and are explained there,
+ * next to the checks that produce them; only the first needs the transcript, so
+ * only it is decided by `MessageItem`.
  */
-export type ForkBlocked = "not-yet" | "nothing-before";
+export type ForkBlocked = "nothing-before" | ForkUnavailable;
 
 interface Props {
 	/** Which side the bubble sits on, so the menu can name whose message it is. */

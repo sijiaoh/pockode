@@ -4,20 +4,29 @@ import { Sheet } from "../ui";
 import type { ForkBlocked } from "./MessageMenuTrigger";
 
 /**
- * One sentence per reason, shown on the row itself.
+ * How each reason is worded. A tone table, not a table of facts: what puts a
+ * message into one of these states is `forkUnavailableReason` and
+ * `forkBlockedReason`, and repeating a condition here would only give it a
+ * second place to drift.
  *
- * `not-yet` covers two unrelated causes — a request nobody has answered, and a
- * message the server never gave a seq for — so the sentence has to be true of
- * both. "Still being written" is false of the second, which was finished long
- * ago and merely has no address; what they share is that this message cannot
- * be named as the cut point. It promises only that this is not permanent, not
- * when it changes.
+ * One sentence each, and the boundaries are not interchangeable:
+ * - `nothing-before` is permanent, so it must never say "yet".
+ * - `no-anchor-seq` leaves the user nothing to do, and in one case — a record
+ *   that was never persisted — not even a reload brings it back. So: no
+ *   imperative, and no promise that it recovers.
+ * - `pending-request` is the only one the user can clear, so it is the only
+ *   imperative. The verb is "Respond" and not "Answer": a permission card
+ *   offers Allow and Deny, which nobody answers.
  *
- * `nothing-before` is permanent, so it must never say "yet".
+ * These sentences are read into the row's accessible name (`MenuRow` renders
+ * the description inside the button), so each has to be short, stand as its own
+ * sentence, and never lean on a pronoun pointing back at the label — a screen
+ * reader says the label and the reason in one breath.
  */
 const FORK_BLOCKED_DESCRIPTION = {
-	"not-yet": "This message can't be a fork point yet.",
 	"nothing-before": "Nothing before this message to keep.",
+	"no-anchor-seq": "This message has no saved position to fork from.",
+	"pending-request": "Respond to the request in this message first.",
 } as const satisfies Record<ForkBlocked, string>;
 
 interface Props {

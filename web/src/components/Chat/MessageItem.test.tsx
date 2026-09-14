@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Message } from "../../types/message";
+import type { AssistantMessage, Message } from "../../types/message";
 import MessageItem from "./MessageItem";
 
 const mockWorkDir = vi.hoisted(() => ({ value: "/Users/test/project" }));
@@ -395,7 +395,7 @@ describe("MessageItem", () => {
 		const slots = (container: HTMLElement) =>
 			Array.from(container.querySelectorAll(".size-9.self-start"));
 
-		const settled = (): Message => ({
+		const settled = (): AssistantMessage => ({
 			id: "slot-1",
 			role: "assistant",
 			parts: [{ type: "text", content: "Answer" }],
@@ -403,6 +403,24 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 			anchorSeq: 4,
 		});
+
+		const pendingRequest = () => ({
+			type: "permission_request" as const,
+			request: {
+				requestId: "r1",
+				toolName: "Bash",
+				toolInput: {},
+				toolUseId: "t1",
+			},
+			status: "pending" as const,
+		});
+
+		const openFork = async (user: ReturnType<typeof userEvent.setup>) => {
+			await user.click(
+				screen.getByRole("button", { name: "Actions for the agent's message" }),
+			);
+			return screen.getByRole("button", { name: /Fork from here/ });
+		};
 
 		// The whole point of reserving the slot: the bubble the user is reading
 		// does not move when the agent finishes writing into it.
@@ -485,15 +503,83 @@ describe("MessageItem", () => {
 			expect(screen.getByRole("dialog")).toHaveAccessibleName("Your message");
 		});
 
+		// The one reason the user can clear, so it is the one that says what to do.
+		it("tells the user to respond to a request the message is holding", async () => {
+			const user = userEvent.setup();
+			render(
+				<MessageItem
+					message={{ ...settled(), parts: [pendingRequest()] }}
+					onForkMessage={vi.fn()}
+				/>,
+			);
+
+			const fork = await openFork(user);
+			expect(fork).toHaveAttribute("aria-disabled", "true");
+			expect(fork).toHaveTextContent(
+				"Respond to the request in this message first.",
+			);
+			// Disabled but reachable: the reason is worth nothing if focus and the
+			// screen reader skip the row carrying it.
+			fork.focus();
+			expect(fork).toHaveFocus();
+		});
+
+		// Both reasons at once. Answering the request would not conjure a seq, so
+		// the row must not send the user off to come back to the same grey row.
+		it("names the missing seq over a request when both apply", async () => {
+			const user = userEvent.setup();
+			render(
+				<MessageItem
+					message={{
+						...settled(),
+						anchorSeq: undefined,
+						parts: [pendingRequest()],
+					}}
+					onForkMessage={vi.fn()}
+				/>,
+			);
+
+			const fork = await openFork(user);
+			expect(fork).toHaveTextContent(
+				"This message has no saved position to fork from.",
+			);
+			expect(fork).not.toHaveTextContent("Respond to the request");
+		});
+
+		// The opening prompt whose record never persisted is both codes at once,
+		// and the permanent one wins: pointing at the missing seq would name a
+		// state whose clearing changes nothing, since nothing behind the first
+		// message is coming back either way.
+		it("names the opening message over a missing seq when both apply", async () => {
+			const user = userEvent.setup();
+			render(
+				<MessageItem
+					message={{
+						id: "slot-4",
+						role: "user",
+						content: "Try again",
+						status: "complete",
+						createdAt: new Date(),
+					}}
+					isFirst
+					onForkMessage={vi.fn()}
+				/>,
+			);
+
+			await user.click(
+				screen.getByRole("button", { name: "Actions for your message" }),
+			);
+			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			expect(fork).toHaveTextContent("Nothing before this message to keep.");
+			expect(fork).not.toHaveTextContent("no saved position");
+		});
+
 		it("forks the message the menu was opened from", async () => {
 			const user = userEvent.setup();
 			const onForkMessage = vi.fn();
 			render(<MessageItem message={settled()} onForkMessage={onForkMessage} />);
 
-			await user.click(
-				screen.getByRole("button", { name: "Actions for the agent's message" }),
-			);
-			await user.click(screen.getByRole("button", { name: "Fork from here" }));
+			await user.click(await openFork(user));
 
 			expect(onForkMessage).toHaveBeenCalledWith("slot-1");
 			// The menu steps aside for the confirmation that follows it.

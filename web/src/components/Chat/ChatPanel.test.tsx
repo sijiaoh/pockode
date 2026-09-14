@@ -1528,7 +1528,12 @@ describe("ChatPanel", () => {
 			expect(fork).toHaveAttribute("aria-disabled", "true");
 			// Written out where a finger can read it: a tooltip never fires on a
 			// touch screen, so a reason living only in a label is out of reach.
-			expect(fork).toHaveTextContent("This message can't be a fork point yet.");
+			expect(fork).toHaveTextContent(
+				"This message has no saved position to fork from.",
+			);
+			// Nothing the user can do about it, and one flavour of it no reload
+			// brings back, so the sentence neither directs nor promises.
+			expect(fork).not.toHaveTextContent("yet");
 			fork.focus();
 			expect(fork).toHaveFocus();
 

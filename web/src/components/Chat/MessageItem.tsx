@@ -22,7 +22,7 @@ import type {
 	SystemMessageMeta,
 	ToolCall,
 } from "../../types/message";
-import { isForkableMessage } from "../../utils/forkAnchor";
+import { forkUnavailableReason } from "../../utils/forkAnchor";
 import { hasMessageActions } from "../../utils/messageActions";
 import { formatFilePath } from "../../utils/path";
 import { workEventWording } from "../../utils/systemMessage";
@@ -605,20 +605,24 @@ interface Props {
 /**
  * Why fork cannot run on this message, or undefined when it can.
  *
- * The permanent reason is asked first: a first message with no seq yet is still
- * a message a fork could never keep anything before, and a label promising
- * "yet" would be waiting for something that is not coming.
+ * A message that is not a conversation turn has no reason at all: it has no
+ * menu either, and these codes say why fork cannot run on a message it applies
+ * to, not why it does not apply.
+ *
+ * The permanent reason is asked first: nothing behind the opening message is
+ * ever coming back, so naming a missing seq or an unanswered request there
+ * would point at a state whose clearing changes nothing.
  */
 function forkBlockedReason(
 	message: Message,
 	isFirst: boolean | undefined,
 ): ForkBlocked | undefined {
+	if (!hasMessageActions(message)) return undefined;
 	// A fork anchored on a message the user sent returns to before they sent it,
 	// so the session's opening prompt has nothing behind it to keep. The
 	// server refuses this one too (chat.ErrForkAnchorNoHistory).
 	if (isFirst && message.role === "user") return "nothing-before";
-	if (!isForkableMessage(message)) return "not-yet";
-	return undefined;
+	return forkUnavailableReason(message);
 }
 
 const MessageItem = memo(function MessageItem({
