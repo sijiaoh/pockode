@@ -44,18 +44,28 @@ export const ROOT_STYLESHEETS: Record<string, (keyof typeof STYLESHEETS)[]> = {
 	"../packages/shared/src": ["web/src/index.css", "web-cluster/src/index.css"],
 };
 
-export function sourceFiles(root: string): string[] {
+/**
+ * Every file under a directory, unfiltered. Callers decide what they care
+ * about — the source scans want TypeScript, the docs scans want prose.
+ */
+export function walkFiles(root: string): string[] {
 	const abs = resolve(process.cwd(), root);
 	const out: string[] = [];
 	const walk = (dir: string) => {
 		for (const e of readdirSync(dir, { withFileTypes: true })) {
 			const p = join(dir, e.name);
 			if (e.isDirectory()) walk(p);
-			else if (/\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p)) out.push(p);
+			else out.push(p);
 		}
 	};
 	walk(abs);
 	return out;
+}
+
+export function sourceFiles(root: string): string[] {
+	return walkFiles(root).filter(
+		(p) => /\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p),
+	);
 }
 
 /** Repo-relative path, so a failure names the file the same way git does. */

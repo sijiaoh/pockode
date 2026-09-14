@@ -1,0 +1,55 @@
+name: Docs
+
+# The citation guard lives in web's suite, which only Frontend runs, and `docs/`
+# is not among the paths Frontend watches. So a change that edits `docs/`
+# without touching the frontend — the guard reads nothing but `docs/` — would
+# reach main without the guard ever running. Hence a workflow of its own rather
+# than adding `docs/**` to Frontend's filter: that would make every typo fix pay
+# for two full test-and-build matrices, for one scan that takes milliseconds.
+# (The list is repeated because GitHub Actions does not support YAML anchors.)
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "web/tests/docsCitations.test.ts"
+      - "web/tests/sourceScan.ts"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "web/tests/docsCitations.test.ts"
+      - "web/tests/sourceScan.ts"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Only the docs scan, not `pnpm run test`: everything else in web's suite is
+  # about web, and Frontend already runs it whenever web changes.
+  citations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check documentation citations
+        run: pnpm exec vitest run tests/docsCitations.test.ts
+        working-directory: web

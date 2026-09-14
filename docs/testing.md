@@ -200,8 +200,22 @@ evidence.
 - **Markdown is outside every lint scope.** Pointed at `docs/`, Biome exits 1
   with `No files were processed in the specified paths` and lists them under
   `These paths were provided but ignored`. **Nothing lints the documentation.**
-  What checks it is the tests that read it, such as the register comparison in
-  `web/tests/touchTarget.test.ts`.
+  What checks it is the tests that read it: the register comparison in
+  `web/tests/touchTarget.test.ts`, and `web/tests/docsCitations.test.ts`, which
+  holds all of `docs/` to the "cite a path, never a line number" rule in
+  `docs/code/AGENTS.md`.
+- **A `paths` filter can hide a guard from the change it guards.** Both of those
+  documentation tests live under `web/` and run with `pnpm run test` there, but
+  `frontend.yml` is `paths`-filtered on the frontend projects and `docs/` is not
+  among those paths. A change that edits `docs/` without touching the frontend
+  therefore does not trigger Frontend — and `docs/` is the whole of what the
+  citation scan reads. Until `.github/workflows/docs.yml`, the guard was the
+  silent-pass row of [Four kinds of red](#four-kinds-of-red) wearing a workflow
+  badge: green because nothing ran, not because anything passed. That workflow
+  runs the citation scan on `docs/**`, and its header says why it is a workflow
+  of its own rather than a wider filter on `frontend.yml`. The register
+  comparison is still only reached when `web/` changes; nobody has closed that
+  one.
 - **`go test ... | grep ... | head` then `$?` reads `head`'s status**, which is
   essentially always 0. Capture the output in a variable and check the exit code
   of the command itself. An interactive shell has no `pipefail`; the pipeline in
