@@ -129,23 +129,25 @@ which no local command runs for you:
 ./scripts/verify-release-assets.test.sh
 ```
 
-About twenty seconds, and `jq` is the only thing it needs that a machine running
-the rest of this repository does not already have. CI runs it in
+Eighty to ninety seconds — most of it spent waiting out the deadlines the
+retry behaviour is checked against — and `jq` is the only thing it needs that a
+machine running the rest of this repository does not already have. CI runs it in
 `.github/workflows/release-assets.yml` — the only place it runs automatically,
 and then only when one of the two scripts, `release.yml`, or that workflow
 itself changes, because it is `paths`-filtered. It has a workflow to itself
 rather than a job in `build.yml` because these two scripts are not among the
-files that workflow watches: a job there would make every edit to a
-twenty-second shell test pay for two full-platform builds. What each case
+files that workflow watches: a job there would make every edit to a shell test
+that takes well over a minute pay for two full-platform builds. What each case
 covers is in
 [scripts/README.md](../scripts/README.md#testing-a-change-to-the-release-path-before-tagging).
 
 Three things to know before reading it red:
 
-- **Its wall clock is sleep, not work.** The twenty seconds are spent waiting
-  out poll intervals — measured runs of it burn about four seconds of CPU in
-  total. Load does not stretch it the way kind 1 stretches the Go and vitest
-  suites, so a red here is unlikely to be the machine.
+- **Its wall clock is sleep, not work.** Those seconds are spent waiting out
+  poll intervals and deadlines — measured runs of it burn twenty to thirty
+  seconds of CPU in total, well under half the wall clock. Load does not
+  stretch it the way kind 1 stretches the Go and vitest suites, so a red here
+  is unlikely to be the machine.
 - **It runs on Linux; the script runs on macOS.** `release-assets.yml` gives
   the suite an `ubuntu-latest` job, while `release.yml` — the only thing that
   ever runs the gate for real — is `macos-latest`. Anything the two platforms'
@@ -200,8 +202,8 @@ evidence.
   exercising the behaviour it was named for — and would have stayed green either
   way, so no amount of running it would have shown that. It now asserts the
   precondition first.
-- **An exit status is weak evidence on its own.** Four of the release-gate
-  suite's six cases expect the script to fail, and a script broken badly enough
+- **An exit status is weak evidence on its own.** Five of the release-gate
+  suite's nine cases expect the script to fail, and a script broken badly enough
   fails for entirely the wrong reason. Two things keep them honest. Each also
   asserts on the message printed, so *why* it failed is part of the contract;
   and the suite then re-runs every case against deliberately broken copies of

@@ -21,10 +21,11 @@ jobs:
   # The gate that decides whether a draft release is complete. A tag push is
   # otherwise the first thing that ever runs it, and by then there is a release
   # to clean up. It needs neither a toolchain nor a build - the gh it talks to
-  # is a stub - so it answers in seconds. Hence a workflow of its own rather
-  # than a job in build.yml: these two scripts are not what that workflow
-  # watches, and editing one of them should not pay for its full-platform
-  # matrix.
+  # is a stub - and the eighty-five seconds or so it takes are spent asleep,
+  # waiting out the deadlines it checks the retry against. Hence a workflow of
+  # its own rather than a job in build.yml: these two scripts are not what that
+  # workflow watches, and editing one of them should not pay for its
+  # full-platform matrix.
   verify-assets-logic:
     runs-on: ubuntu-latest
     timeout-minutes: 5

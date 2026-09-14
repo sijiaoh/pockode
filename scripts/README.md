@@ -131,6 +131,22 @@ holds the three things that have to be true of a draft before it is published:
 A timeout names each asset that is still waiting and the state it is in; the
 point is to distinguish "GitHub is slow" from "this one file never landed".
 
+A `gh` call that fails is treated as a round that got no answer rather than as a
+verdict: the reason is kept, and the next poll tries again. The wait is several
+calls wide, so without that, one 502 or one rate-limit reply anywhere in the
+window would throw away a whole draft. The deadline is the only bound — there is
+no attempt count on top of it — and reaching it still fails, which is what
+separates tolerating the jitter from tolerating the outcome. If the deadline
+arrives with the last call still failing, what is printed is that call's own
+error, not the stuck-asset list: nothing was learned about the assets at all,
+and naming one as stuck sends whoever reads it hunting an upload that was never
+stuck. A round that is lost and then retried says so in the log as it happens,
+so a release that went out after three 502s does not read afterwards as one
+that went out cleanly. Capturing `gh`'s stderr for that report is also what
+would otherwise swallow it on a call that *succeeds*, so anything such a call
+writes — a deprecation notice about the endpoint this gate rests on, say — is
+handed on to the log too, as a note rather than as a reason to keep waiting.
+
 The script deliberately avoids piping `gh` into anything. A workflow step's
 default shell is `bash -e` without `pipefail`, so a failing `gh` inside a
 pipeline hands its status to the next command and leaves its empty output
@@ -149,15 +165,18 @@ watches the two verify-assets scripts rather than `build.sh`, and needs neither
 a toolchain nor a build — runs `verify-release-assets.test.sh`, which drives
 `verify-release-assets.sh` against a stub `gh` that answers with canned release
 bodies: assets already uploaded, assets that finish on a later poll, assets that
-never finish, a `gh` that fails outright, an empty `dist/`, and a release short
-an asset. Each case that expects a failure asserts on the message printed and
-not only on the exit status, and the suite then re-runs every one of them
-against deliberately broken copies of the script, failing if a breakage goes
-unnoticed — a script broken badly enough exits non-zero for entirely the wrong
-reason, so neither layer is worth much alone. Run it locally with
-`./scripts/verify-release-assets.test.sh`; it takes about twenty seconds, and
-`jq` is the only thing it needs that working on the rest of this repository does
-not already require.
+never finish, a `gh` that fails twice and then answers, a `gh` that answers and
+warns on the same call, a `gh` that fails for the whole window, a `gh` that
+fails without saying why, an empty `dist/`, and a release short an asset. Each
+case that expects a failure asserts on the message printed and not only on the
+exit status, and the suite then re-runs every one of them against deliberately
+broken copies of the script, failing if a breakage goes unnoticed — a script
+broken badly enough exits non-zero for entirely the wrong reason, so neither
+layer is worth much alone. Run it locally with
+`./scripts/verify-release-assets.test.sh`; it takes about eighty-five seconds —
+most of it spent waiting out deadlines, which is what the retry it now checks
+costs — and `jq` is the only thing it needs that working on the rest of this
+repository does not already require.
 
 What neither of those covers is GitHub's actual `starting` → `uploaded` timing,
 and so whether 120s is enough. Only a real release answers that. For the release
