@@ -218,6 +218,19 @@ $arch = Get-ReleaseArch
 $urlWasGiven = [bool]$Url
 
 if (-not $Url) {
+    # The version ends up in a URL, so it is checked before it gets there
+    # rather than being pasted in as-is: "../../evil" otherwise climbs out of
+    # releases/download/ and fetches from somewhere else on github.com. \A and
+    # \z rather than ^ and $, which in .NET still accept a trailing newline.
+    # install.sh checks the same spellings the same way - the two scripts have
+    # to agree on what a version is.
+    if (-not $Version) {
+        throw "Version must not be empty. Try: -Version 0.16.0, or -Version latest"
+    }
+    if ($Version -notmatch '\A[A-Za-z0-9.+_-]+\z') {
+        throw "Invalid version: $Version`nExpected a release tag such as v0.16.0, 0.16.0, or latest."
+    }
+
     $asset = "pockode-windows-$arch.exe"
     if ($Version -eq 'latest') {
         $Url = "https://github.com/$Repo/releases/latest/download/$asset"

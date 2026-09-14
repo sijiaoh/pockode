@@ -175,6 +175,30 @@ jobs:
             throw "a partial download was left behind"
           }
 
+      # The sh side has covered this since it was written (see the
+      # install-sh-version job): the version is pasted into a release URL, so
+      # one containing a slash has to be refused before it gets there rather
+      # than quietly fetching from elsewhere on github.com.
+      - name: A version that is not a version is refused before any download
+        run: |
+          foreach ($bad in @('0.16.0/../../evil', '', 'a;b', '0.16.0 ')) {
+            $message = $null
+            try {
+              ./site/static/install.ps1 -Version $bad
+            } catch {
+              $message = "$_"
+            }
+            if (-not $message) { throw "-Version '$bad' should have been refused" }
+            if ($message -notlike '*Invalid version*' -and
+                $message -notlike '*must not be empty*') {
+              throw "-Version '$bad' was refused for the wrong reason: $message"
+            }
+            # The refusal has to come before the URL is built, not after a 404.
+            if ($message -like '*github.com*') {
+              throw "-Version '$bad' got as far as a download: $message"
+            }
+          }
+
       # The point of the checksum: a file that does not match the release is not
       # installed. Nothing here is rolled back - the check happens before the
       # download is renamed into place - so what has to hold is that the binary
