@@ -56,7 +56,7 @@ The Windows installer needs no administrator rights; open a new terminal afterwa
 
 Scan the QR code with your phone. Done.
 
-> Every prebuilt binary, how to install a specific version, and what Windows needs installed alongside it: [platform support](docs/platforms.md).
+> Every prebuilt binary, how each download is verified, how to install a specific version, and what Windows needs installed alongside it: [platform support](docs/platforms.md).
 
 > Need to manage multiple projects? Use [cluster mode](docs/cluster.md) — an orchestrator that registers project nodes and starts/stops their servers on demand.
 

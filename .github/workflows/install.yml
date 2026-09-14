@@ -19,8 +19,8 @@ jobs:
   # install.ps1 rewrites the user's PATH in the registry, and it is the only
   # supported way onto Windows. Neither of those can be checked by reading the
   # script, and no machine in this project runs Windows, so it is exercised end
-  # to end: install, upgrade over it, uninstall, then the same cycle against a
-  # custom -InstallDir.
+  # to end: install, refuse a download that fails its checksum, upgrade over
+  # it, uninstall, then the same cycle against a custom -InstallDir.
   windows:
     runs-on: windows-latest
     timeout-minutes: 15
@@ -45,6 +45,53 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path ../.ci-serve -Force | Out-Null
           go build -o ../.ci-serve/pockode-windows-amd64.exe .
+
+          # The same "<hash>  <name>" line scripts/build.sh publishes, LF and
+          # lower case included: the install only proves anything if what it
+          # verifies against has the shape a real release has. WriteAllText
+          # rather than Set-Content, which would end the line with CRLF.
+          $hash = (Get-FileHash ../.ci-serve/pockode-windows-amd64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path ../.ci-serve) 'checksums.txt'), "$hash  pockode-windows-amd64.exe`n")
+
+      # Three releases that must not install: one whose binary does not match
+      # the checksum published for it, one that publishes no checksums.txt at
+      # all, and one whose checksums.txt covers other platforms but not this
+      # one. Off in a subtree of their own, so what the steps above install from
+      # stays exactly what a real release looks like.
+      - name: Add releases that cannot be verified to the served tree
+        working-directory: .ci-serve
+        run: |
+          function New-Fixture([string]$tag) {
+            $dir = (New-Item -ItemType Directory -Path "download/$tag" -Force).FullName
+            Copy-Item pockode-windows-amd64.exe $dir
+            return $dir
+          }
+
+          # A byte appended after the checksum was taken is the same thing to
+          # sha256 as a binary swapped for someone else's.
+          $tampered = New-Fixture 'v0.0.0-tampered'
+          Copy-Item checksums.txt $tampered
+          Add-Content -LiteralPath (Join-Path $tampered 'pockode-windows-amd64.exe') -Value 'x' -NoNewline
+
+          # Deliberately nothing beside it: a release from before checksums were
+          # published looks exactly like this.
+          New-Fixture 'v0.0.0-no-checksums' | Out-Null
+
+          $other = New-Fixture 'v0.0.0-other-platform'
+          (Get-Content -Raw checksums.txt).Replace('pockode-windows-amd64.exe', 'pockode-darwin-arm64') |
+            Set-Content -LiteralPath (Join-Path $other 'checksums.txt') -NoNewline
+
+          # The odd one out: this release is fine and has to install. Its
+          # checksums.txt carries the same hash in the three shapes a file not
+          # written by scripts/build.sh can arrive in - a "*" in front of the
+          # name, which is how shasum writes a hash it took in binary mode;
+          # CRLF endings, which a mirror serving the file through a text-mode
+          # tool produces; and this platform's line somewhere other than first.
+          $odd = New-Fixture 'v0.0.0-odd-checksums'
+          $hash, $name = (Get-Content -LiteralPath checksums.txt -Raw).Trim() -split '\s+'
+          [IO.File]::WriteAllText(
+            (Join-Path $odd 'checksums.txt'),
+            "$('0' * 64)  pockode-darwin-arm64`r`n$hash  *$name`r`n")
 
       # The released asset does not exist until this branch ships, and pointing
       # the test at a real release would test GitHub rather than the script.
@@ -127,6 +174,117 @@ jobs:
           if (Test-Path (Join-Path $installDir 'pockode.exe.download')) {
             throw "a partial download was left behind"
           }
+
+      # The point of the checksum: a file that does not match the release is not
+      # installed. Nothing here is rolled back - the check happens before the
+      # download is renamed into place - so what has to hold is that the binary
+      # never appears and the PATH is never touched. An install directory of its
+      # own, both because it is not on PATH yet (against the default one, "PATH
+      # unchanged" would hold no matter what the script did) and because
+      # "nothing was installed" is then a statement about an empty directory.
+      - name: A download that cannot be verified is refused
+        run: |
+          $custom = Join-Path $env:RUNNER_TEMP 'pockode-refused'
+
+          function Get-RawUserPath {
+            $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+            try {
+              return [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            } finally {
+              $key.Close()
+            }
+          }
+
+          # $tag is the fixture release under test, $expected what stderr has to
+          # say about it: the three failures need three different answers from
+          # the user, so one wording standing in for another is a real defect.
+          function Assert-Refused([string]$tag, [string]$expected) {
+            Remove-Item -LiteralPath $custom -Recurse -Force -ErrorAction SilentlyContinue
+            $pathBefore = Get-RawUserPath
+            $message = $null
+            try {
+              ./site/static/install.ps1 -InstallDir $custom -Url "http://127.0.0.1:8000/download/$tag/pockode-windows-amd64.exe"
+            } catch {
+              $message = "$_"
+            }
+
+            # Checked before the wording and never skipped because of it: what
+            # the user is owed here is an absent binary, and an assertion about
+            # the message that returned early would hide its presence.
+            if (Test-Path (Join-Path $custom 'pockode.exe')) {
+              throw "[$tag] an unverified pockode.exe was installed to $custom"
+            }
+            # The directory itself, not just its contents: this run created it,
+            # and a -InstallDir the user has never installed to should not be
+            # left behind by an install that never happened.
+            if (Test-Path -LiteralPath $custom) {
+              $left = @(Get-ChildItem -LiteralPath $custom -Force)
+              throw "[$tag] a refused install left ${custom} behind, holding: $($left.Name -join ', ')"
+            }
+            if ((Get-RawUserPath) -ne $pathBefore) {
+              throw "[$tag] the user PATH was changed by a refused install: $(Get-RawUserPath)"
+            }
+
+            if (-not $message) { throw "[$tag] the install should have failed" }
+            if ($message -notlike 'Nothing was installed:*') {
+              throw "[$tag] the message does not start with 'Nothing was installed:': $message"
+            }
+            if ($message -notlike "*$expected*") {
+              throw "[$tag] the message does not say '$expected': $message"
+            }
+            # -Url points at a mirror, not at a release, so the explanation
+            # that only fits a default `latest` install cannot be true here.
+            # Offering it anyway would hand the user an account of a mismatch
+            # that cannot be true, for the one failure that is a security event.
+            if ($message -like '*published mid-install*') {
+              throw "[$tag] offered the latest-release explanation for a -Url install: $message"
+            }
+          }
+
+          Assert-Refused 'v0.0.0-tampered' 'does not match the checksum'
+          Assert-Refused 'v0.0.0-no-checksums' 'without checksums.txt'
+          Assert-Refused 'v0.0.0-other-platform' 'does not list pockode-windows-amd64.exe'
+          Remove-Item -LiteralPath $custom -Recurse -Force -ErrorAction SilentlyContinue
+
+          # And the same over an install that is already there, which is what a
+          # user actually stands to lose: the copy on disk has to still be the
+          # one that was verified, not the download that was not.
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Pockode'
+          $target = Join-Path $installDir 'pockode.exe'
+          # Named, rather than left to fail inside Get-FileHash: without it a
+          # broken install step turns up here as a missing-file error about a
+          # path this step never installed to.
+          if (-not (Test-Path $target)) { throw "expected an install from the earlier steps at $target" }
+          $before = (Get-FileHash $target -Algorithm SHA256).Hash
+          $message = $null
+          try {
+            ./site/static/install.ps1 -Url 'http://127.0.0.1:8000/download/v0.0.0-tampered/pockode-windows-amd64.exe'
+          } catch {
+            $message = "$_"
+          }
+          if (-not $message) { throw "the failed upgrade should have failed" }
+          if ((Get-FileHash $target -Algorithm SHA256).Hash -ne $before) {
+            throw "the working copy was replaced by a download that does not match its checksum"
+          }
+          foreach ($leftover in 'pockode.exe.download', 'pockode.exe.checksums') {
+            if (Test-Path (Join-Path $installDir $leftover)) { throw "$leftover was left behind" }
+          }
+
+      # The other half of the checksum: a release that is fine has to install.
+      # A parser stricter than the format costs the user an install and tells
+      # them the release is broken, which is the one answer they can do nothing
+      # about - and it would go unnoticed because every other assertion about
+      # the checksum here is on a run that was supposed to fail.
+      - name: A checksums.txt in the shapes other tools write it still verifies
+        run: |
+          $custom = Join-Path $env:RUNNER_TEMP 'pockode-odd'
+          Remove-Item -LiteralPath $custom -Recurse -Force -ErrorAction SilentlyContinue
+          ./site/static/install.ps1 -InstallDir $custom `
+            -Url http://127.0.0.1:8000/download/v0.0.0-odd-checksums/pockode-windows-amd64.exe
+          if (-not (Test-Path (Join-Path $custom 'pockode.exe'))) {
+            throw "a valid release was refused: nothing was installed to $custom"
+          }
+          ./site/static/install.ps1 -Uninstall -InstallDir $custom
 
       # Also the documented `irm ... | iex` form, which turns the file into a
       # script block instead of running it as a script.
@@ -438,6 +596,49 @@ jobs:
         run: |
           mkdir -p ../.ci-serve/latest/download
           go build -o ../.ci-serve/latest/download/pockode-linux-amd64 .
+          # The same "<hash>  <name>" line scripts/build.sh publishes, produced
+          # the same way: the install only proves anything if what it verifies
+          # against has the shape a real release has.
+          (cd ../.ci-serve/latest/download && sha256sum pockode-linux-amd64 > checksums.txt)
+
+      # Three releases that must not install: one whose binary does not match
+      # the checksum published for it, one that publishes no checksums.txt at
+      # all, and one whose checksums.txt covers other platforms but not this
+      # one. Laid out as tagged releases, so the tree the default run installs
+      # from stays exactly what a real release looks like.
+      - name: Add releases that cannot be verified to the served tree
+        run: |
+          fixture() {
+            mkdir -p ".ci-serve/download/$1"
+            cp .ci-serve/latest/download/pockode-linux-amd64 ".ci-serve/download/$1/"
+          }
+
+          # A byte appended after the checksum was taken is the same thing to
+          # sha256 as a binary swapped for someone else's.
+          fixture v0.0.0-tampered
+          cp .ci-serve/latest/download/checksums.txt .ci-serve/download/v0.0.0-tampered/
+          printf 'x' >> .ci-serve/download/v0.0.0-tampered/pockode-linux-amd64
+
+          # Deliberately nothing beside it: a release from before checksums
+          # were published looks exactly like this.
+          fixture v0.0.0-no-checksums
+
+          fixture v0.0.0-other-platform
+          sed 's/pockode-linux-amd64/pockode-darwin-arm64/' .ci-serve/latest/download/checksums.txt \
+            > .ci-serve/download/v0.0.0-other-platform/checksums.txt
+
+          # The odd one out: this release is fine and has to install. Its
+          # checksums.txt is the same hashes in the three shapes a file not
+          # written by scripts/build.sh can arrive in - a "*" in front of the
+          # name, which is how shasum writes a hash it took in binary mode;
+          # CRLF endings, which install.ps1 reads without noticing; and this
+          # platform's line somewhere other than first. Refusing any of them
+          # would be a rejection the message blames the release for.
+          fixture v0.0.0-odd-checksums
+          {
+            printf '%064d  pockode-darwin-arm64\r\n' 0
+            sed 's/^\([0-9a-f]*\)  /\1  */; s/$/\r/' .ci-serve/latest/download/checksums.txt
+          } > .ci-serve/download/v0.0.0-odd-checksums/checksums.txt
 
       # The released asset does not exist until this branch ships, and pointing
       # the test at a real release would test GitHub rather than the script. The
@@ -570,10 +771,12 @@ jobs:
             [ -z "$leftover" ] || fail "a temporary directory was left behind: $leftover"
           }
 
-          # Where the last download was told to land, and the mode of the
-          # directory it was in, both as recorded by the fake curl.
-          download_path() { awk 'END { print $2 }' "$DOWNLOAD_LOG"; }
-          download_dir_mode() { awk 'END { print $1 }' "$DOWNLOAD_LOG"; }
+          # Where the last download of the binary was told to land, and the
+          # mode of the directory it was in, both as recorded by the fake curl.
+          # The binary's line and not the checksums file's: each run fetches
+          # both, and it is the binary that has to land somewhere private.
+          download_path() { awk '$2 ~ /\/pockode$/ { p = $2 } END { print p }' "$DOWNLOAD_LOG"; }
+          download_dir_mode() { awk '$2 ~ /\/pockode$/ { m = $1 } END { print m }' "$DOWNLOAD_LOG"; }
           LIB
 
       - name: An install is executable by a user who did not install it
@@ -682,6 +885,113 @@ jobs:
               fail "installing a version that does not exist should have failed"
             fi
             assert_installed
+            assert_no_leftovers
+          }
+          for_each_shell check
+
+      # The point of the checksum: a file that does not match the release is not
+      # installed, and that is decided before anything asks for root. The fake
+      # sudo exits 99 rather than refusing quietly, so a script that did reach
+      # it fails here instead of passing on a cleanup that happened to work.
+      - name: A download that cannot be verified is refused, and sudo is never reached
+        run: |
+          . ./ci-lib.sh
+          mkdir -p fake-sudo-bin
+          printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$SUDO_LOG"\nexit 99\n' > fake-sudo-bin/sudo
+          chmod +x fake-sudo-bin/sudo
+          export SUDO_LOG=$PWD/sudo.log
+
+          # $1 is the fixture release under test, $2 what stderr has to say
+          # about it - the three failures need three different answers from the
+          # user, so one wording standing in for another is a real defect.
+          refuses() {
+            : > "$SUDO_LOG"
+            status=0
+            # In a subshell: install_sh is a function, and a variable
+            # assignment prefixing one of those is only scoped to the call in
+            # newer bash. A fake sudo left on PATH would fail the assertions
+            # below, which use the real one.
+            ( PATH="$PWD/fake-sudo-bin:$PATH"; install_sh --version "$1" ) > out.txt 2> err.txt || status=$?
+            [ "$status" = 1 ] || fail "[$1] exited $status, wanted 1"
+            grep -qF "$2" err.txt || fail "[$1] stderr does not say '$2': $(cat err.txt)"
+            # These are named versions, where the binary and the checksums came
+            # from one release by construction. Offering the mid-install
+            # explanation here would hand the user an account of a mismatch
+            # that cannot be true, for the one failure that is a security event.
+            if grep -qF 'published mid-install' err.txt; then
+              fail "[$1] offered the latest-release explanation for a named version: $(cat err.txt)"
+            fi
+            if [ -s "$SUDO_LOG" ]; then fail "[$1] reached sudo: $(cat "$SUDO_LOG")"; fi
+            if grep -q 'Installing to' out.txt; then fail "[$1] said it was installing: $(cat out.txt)"; fi
+            # The install that was already there is what a user stands to lose.
+            assert_installed
+            assert_no_leftovers
+          }
+
+          check() {
+            reset_install
+            install_sh || fail "the install failed"
+            refuses 0.0.0-tampered 'does not match the checksum'
+            refuses 0.0.0-no-checksums 'without checksums.txt'
+            refuses 0.0.0-other-platform 'does not list pockode-linux-amd64'
+          }
+          for_each_shell check
+
+      # The other half of the checksum: a release that is fine has to install.
+      # A parser that is stricter than the format costs the user an install and
+      # tells them the release is broken, which is the one answer they can do
+      # nothing about - and the reason it would go unnoticed is that every other
+      # assertion here is about a run that was supposed to fail.
+      - name: A checksums.txt in the shapes other tools write it still verifies
+        run: |
+          . ./ci-lib.sh
+          check() {
+            reset_install
+            install_sh --version 0.0.0-odd-checksums > out.txt 2> err.txt ||
+              fail "a valid release was refused: $(cat err.txt)"
+            assert_installed
+            assert_no_leftovers
+          }
+          for_each_shell check
+
+      # A machine with no way to check the download does not get an install it
+      # cannot check: refusing is the whole difference between a checksum and a
+      # decoration. Nothing is fetched either - the tools are looked for before
+      # the download rather than after it.
+      - name: Without sha256sum or shasum nothing is downloaded or installed
+        run: |
+          . ./ci-lib.sh
+          # A PATH of its own is the only way to take a tool away from
+          # `command -v`, and this one takes away nothing else: everything
+          # install.sh runs is in it, down to the sudo it installs with, so the
+          # single difference from a working machine is the missing hash tool.
+          # A script that verified late, or not at all, would get all the way to
+          # the download or the install and be caught by the assertions below
+          # rather than dying of some other missing tool and looking the same.
+          # A tool added to install.sh later and not added here fails loudly as
+          # a 127, which is the right way round.
+          mkdir -p nosha-bin
+          for tool in dash bash busybox uname mktemp rm awk sudo cp chmod mv stat dirname; do
+            ln -sf "$(command -v "$tool")" "nosha-bin/$tool"
+          done
+          ln -sf "$PWD/fake-bin/curl" nosha-bin/curl
+          check() {
+            # busybox ash resolves sha256sum as one of its own applets without
+            # consulting PATH, the way it already does uname, so there the tool
+            # cannot be taken away - which is also why busybox needs no
+            # fallback. Asked rather than assumed, like the uname branches.
+            if PATH="$PWD/nosha-bin" $SH -c 'command -v sha256sum' > /dev/null 2>&1; then
+              echo "$SH answers sha256sum itself; leaving this branch to the other shells"
+              return 0
+            fi
+            reset_install
+            status=0
+            PATH="$PWD/nosha-bin" $SH site/static/install.sh > out.txt 2> err.txt || status=$?
+            [ "$status" = 1 ] || fail "a machine without a sha256 tool exited $status, wanted 1"
+            grep -qF 'neither sha256sum nor shasum' err.txt ||
+              fail "stderr does not name the missing tools: $(cat err.txt)"
+            [ ! -e "$TARGET" ] || fail "$TARGET was installed without being verified"
+            [ ! -s "$DOWNLOAD_LOG" ] || fail "something was downloaded anyway: $(cat "$DOWNLOAD_LOG")"
             assert_no_leftovers
           }
           for_each_shell check

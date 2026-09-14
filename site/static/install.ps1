@@ -212,6 +212,11 @@ if ($Uninstall) {
 
 $arch = Get-ReleaseArch
 
+# Remembered before $Url is filled in below, because something downstream turns
+# on who chose it: a mirror is not a release, so the one explanation that only
+# applies to `latest` must not be offered for it.
+$urlWasGiven = [bool]$Url
+
 if (-not $Url) {
     $asset = "pockode-windows-$arch.exe"
     if ($Version -eq 'latest') {
@@ -222,32 +227,132 @@ if (-not $Url) {
     }
 }
 
+# checksums.txt is published beside the binary in the same release, so it is the
+# download URL with the last segment swapped - which also carries -Url to a
+# mirror, where the file has to sit beside the binary the same way. Resolved as
+# a relative reference rather than by cutting the string, so that a query string
+# or an odd number of slashes cannot produce a URL pointing somewhere else.
+#
+# For a named tag the two requests are the same release by construction. For
+# `latest` they are two independent resolutions, and a release published between
+# them would pair a new binary with an old checksum file: a download rejected
+# although nothing is wrong with it. Resolving `latest` to a tag first would
+# close that window, but only by making every install depend on the shape of
+# GitHub's redirect, for a race measured in seconds against a release cadence
+# measured in days. install.sh makes the same trade; the mismatch message below
+# says so, and a second run then succeeds where a real mismatch would not.
+$checksumsUrl = [uri]::new([uri]$Url, 'checksums.txt').AbsoluteUri
+# The name to look for in checksums.txt is the name of the file being fetched,
+# taken from the URL for the same reason: -Url has to find its own line too.
+$assetName = [IO.Path]::GetFileName(([uri]$Url).AbsolutePath)
+
+# Asked before the directory is created, because it decides who owns it on the
+# way out: a -InstallDir the user has never used must not be left behind as an
+# empty directory by an install that was refused.
+$installDirExisted = Test-Path -LiteralPath $InstallDir
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 
 # Download beside the target so the install is a rename on the same volume: an
-# interrupted download never replaces a working binary with a partial one.
+# interrupted download never replaces a working binary with a partial one. The
+# checksums file keeps it company rather than going to %TEMP%, so that one
+# cleanup covers both.
 $temp = "$target.download"
+$tempChecksums = "$target.checksums"
 
-Write-Host "Downloading $Url"
-try {
+function Save-Download([string]$uri, [string]$path) {
     # Windows PowerShell on older builds still defaults to TLS 1.0/1.1, which
     # github.com refuses.
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri $Url -OutFile $temp -UseBasicParsing
-} catch {
-    Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
-    throw "Download failed: $($_.Exception.Message)`nURL: $Url"
+    Invoke-WebRequest -Uri $uri -OutFile $path -UseBasicParsing
 }
 
-# Some transports tag downloads with a mark of the web, which makes Windows warn
-# on - or refuse - the first run.
-Unblock-File -LiteralPath $temp -ErrorAction SilentlyContinue
-
+# Whatever was staged is removed on the way out however this ends, so a refused
+# download leaves nothing behind for the next run - or for the uninstall, which
+# only removes the install directory when it is empty.
 try {
-    Move-Item -LiteralPath $temp -Destination $target -Force
-} catch {
-    Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
-    throw "Could not write ${target}: $($_.Exception.Message)`nIf Pockode is running, stop it and run this again."
+
+    Write-Host "Downloading $Url"
+    # The binary first: a run that cannot even reach its asset should say so in
+    # terms of that asset, not of a checksums file the user never asked for.
+    try {
+        Save-Download $Url $temp
+    } catch {
+        throw "Download failed: $($_.Exception.Message)`nURL: $Url"
+    }
+
+    # Get-FileHash has been in Windows PowerShell since 4.0, so no machine
+    # reaching this line is unable to verify - which is why, unlike
+    # install.sh, there is nothing to check before spending the download.
+    try {
+        Save-Download $checksumsUrl $tempChecksums
+    } catch {
+        throw "Nothing was installed: the download cannot be verified without checksums.txt.`n" +
+            "Releases made before checksums were published do not have one; install a newer release instead.`n" +
+            "URL: $checksumsUrl`n" +
+            $_.Exception.Message
+    }
+
+    # checksums.txt covers every asset of the release, so only this
+    # platform's line is of any use, and the lines come in no promised order.
+    # shasum writes the name with a leading "*" when it hashed in binary
+    # mode, which is not part of the name.
+    $expectedHash = $null
+    foreach ($line in Get-Content -LiteralPath $tempChecksums) {
+        $fields = @($line -split '\s+' | Where-Object { $_ -ne '' })
+        if ($fields.Count -lt 2) { continue }
+        if ($fields[1].TrimStart('*') -eq $assetName) {
+            $expectedHash = $fields[0]
+            break
+        }
+    }
+    if (-not $expectedHash) {
+        throw "Nothing was installed: checksums.txt for this release does not list $assetName.`n" +
+            "That is a problem with the release rather than with this machine.`n" +
+            "Please report it: https://github.com/$Repo/issues"
+    }
+
+    # Both sides lower-cased before they meet: Get-FileHash reports
+    # upper-case hex and checksums.txt is written lower-case, and -ne on
+    # strings happening to ignore case is not something this comparison
+    # should rest on.
+    $expectedHash = $expectedHash.ToLowerInvariant()
+    $actualHash = (Get-FileHash -LiteralPath $temp -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -cne $expectedHash) {
+        $message = "Nothing was installed: the download does not match the checksum published for this release.`n" +
+            "  file:     $Url`n" +
+            "  expected: $expectedHash`n" +
+            "  actual:   $actualHash`n" +
+            "The file is corrupt, or it was tampered with on the way here. Do not run it."
+        if ($Version -eq 'latest' -and -not $urlWasGiven) {
+            # The benign explanation, and the only one a second run clears
+            # up: the two requests above resolved `latest` independently.
+            $message += "`nIt can also mean a release was published mid-install, in which case running this again will succeed."
+        }
+        throw $message
+    }
+
+    # Some transports tag downloads with a mark of the web, which makes
+    # Windows warn on - or refuse - the first run. After the checksum rather
+    # than before it: the file this unblocks should be one already shown to
+    # be the right file.
+    Unblock-File -LiteralPath $temp -ErrorAction SilentlyContinue
+
+    try {
+        Move-Item -LiteralPath $temp -Destination $target -Force
+    } catch {
+        throw "Could not write ${target}: $($_.Exception.Message)`nIf Pockode is running, stop it and run this again."
+    }
+
+} finally {
+    Remove-Item -LiteralPath $temp, $tempChecksums -Force -ErrorAction SilentlyContinue
+    # Both conditions together only hold for a run that created the directory
+    # and installed nothing into it, which is to say a refused one: a successful
+    # install has $target sitting in there. Same rule the uninstall uses, and it
+    # must not turn a refusal into a different error - what the user is owed
+    # here is the checksum message, not a complaint about a directory.
+    if (-not $installDirExisted -and -not (Get-ChildItem -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $pathAdded = Add-UserPathEntry $InstallDir

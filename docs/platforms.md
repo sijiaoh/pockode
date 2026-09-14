@@ -7,8 +7,9 @@ around them. Build details for the release artifacts are in
 ## Release Binaries
 
 Every [release](https://github.com/sijiaoh/pockode/releases/latest) attaches one
-binary per platform. Each one embeds the frontend, so it is the only thing to
-download.
+binary per platform, plus a `checksums.txt` covering all of them. Each binary
+embeds the frontend, so it is the only thing you need to download; the checksums
+file is what the install scripts check it against.
 
 | Platform | Architecture | Artifact | Install |
 |----------|--------------|----------|---------|
@@ -42,6 +43,80 @@ obstacle — `windows/arm64` is a first-class Go target and GitHub has offered
 a choice to the download page and a variable to every bug report, in exchange for
 something emulation already provides.
 
+## Verifying the Download
+
+Both install scripts check the file they downloaded against the `checksums.txt`
+published with the same release, and they do it before anything is installed.
+Nothing reaches the install directory unless the hash matches: the download is
+discarded, the copy you already had stays where it is, and on Windows your
+`PATH` is left alone. All of the failures below go to stderr and end the run
+with a non-zero status. The three that can happen on either platform are worded
+the same way on both and say `Nothing was installed:` outright; the fourth is a
+macOS and Linux case that stops before there is anything to install at all.
+
+**The download does not match the checksum.** This is a security event, not a
+flaky download to retry your way past. The file you were served is not the file
+that was released — it was corrupted on the way, or something changed it — and
+the message names the file, the hash that was expected and the one that arrived.
+Do not run it.
+
+There is one benign explanation, and it only applies to a default install — not
+to a named version, and not to `install.ps1 -Url`: the binary and `checksums.txt`
+are two separate requests for `latest`, so a release published between them pairs
+a new binary with the previous checksums. The script adds a line saying so in
+exactly that case, and a second run then succeeds. If it fails again the
+mismatch is real — stop there and
+[report it](https://github.com/sijiaoh/pockode/issues).
+
+**`checksums.txt` could not be downloaded.** Almost always this means the release
+predates checksums. **Releases made before checksums were published cannot be
+installed by these scripts at all**, because there is nothing to check the
+download against — install a newer release. The message carries the URL it tried
+and the underlying network error, so a genuine network or mirror problem is
+distinguishable from an old release.
+
+**`checksums.txt` does not list your platform's file.** That is a broken release
+rather than a broken machine, and there is nothing to fix on your side: please
+[report it](https://github.com/sijiaoh/pockode/issues) and install a different
+version meanwhile.
+
+**Neither `sha256sum` nor `shasum` is installed.** A macOS and Linux case only,
+and the one failure that is about your machine rather than about the release: it
+stops the run before anything is downloaded, and the way out is to install either
+tool — see [Installing on macOS and Linux](#installing-on-macos-and-linux).
+
+### Checking it yourself
+
+`checksums.txt` is a release asset like the binaries, so it sits beside them:
+
+```
+https://github.com/sijiaoh/pockode/releases/latest/download/checksums.txt
+https://github.com/sijiaoh/pockode/releases/download/v0.12.1/checksums.txt
+```
+
+Each line is a 64-character lower-case hex hash, two spaces, then the bare asset
+name — the same name you downloaded, with no directory in front of it:
+
+```
+8f45b48ec1d48a1d7654c59bd3c6b33047cfbf9d20c925fc8ac0c08e85374cb9  pockode-darwin-amd64
+```
+
+That is the standard `sha256sum` format, so a binary you downloaded by hand can
+be checked with the tools you already have:
+
+```bash
+sha256sum pockode-linux-amd64        # or: shasum -a 256 pockode-linux-amd64
+grep pockode-linux-amd64 checksums.txt
+```
+
+```powershell
+(Get-FileHash pockode-windows-amd64.exe -Algorithm SHA256).Hash
+Select-String pockode-windows-amd64.exe checksums.txt
+```
+
+`Get-FileHash` prints upper-case hex while the file is lower-case; compare
+case-insensitively.
+
 ## Installing on macOS and Linux
 
 ```bash
@@ -58,6 +133,14 @@ pockode -auth-token YOUR_PASSWORD
 The script downloads the binary for your OS and architecture and moves it into
 `/usr/local/bin`, which is why it asks for `sudo`. Re-running the same command
 upgrades in place, and `sudo rm /usr/local/bin/pockode` is the whole uninstall.
+
+Before any of that the download is verified, so a file that fails stops the run
+before it ever asks for `sudo` — see
+[Verifying the Download](#verifying-the-download). The check needs `sha256sum`
+or `shasum`; Linux and busybox ship the first, macOS the second. Which one you
+have is looked for *before* the download, because a machine that cannot verify
+should not install: with neither, you get an error naming the tools — install
+coreutils or perl — and not a single byte is fetched.
 
 ### Installing a specific version
 
@@ -84,9 +167,9 @@ Confirm what you ended up with:
 pockode -version
 ```
 
-A version that has no release, or a release with no binary for your platform,
-fails with the URL it tried rather than a bare 404 — nothing is installed, and
-the copy you already had stays where it is.
+A version that has no release, a release with no binary for your platform, or a
+download that fails verification all fail with the URL they tried rather than a
+bare 404 — nothing is installed, and the copy you already had stays where it is.
 
 `--version` is the only option here, unlike `install.ps1`, which also has
 `-InstallDir`, `-Url` and `-Uninstall`. Those exist there because a Windows
@@ -119,6 +202,11 @@ deliberate difference from `install.sh` and its `sudo` write to `/usr/local/bin`
 
 Re-running the same command upgrades in place.
 
+The download is verified here as well — see
+[Verifying the Download](#verifying-the-download). Nothing has to be installed
+for that: `Get-FileHash` comes with PowerShell, so unlike `install.sh` this
+script has no missing-tool case to report.
+
 Piping into `iex` cannot pass arguments, so anything but a default install goes
 through a script block instead:
 
@@ -130,11 +218,14 @@ through a script block instead:
 ```
 
 `-Url` takes the binary from somewhere other than a GitHub release — a mirror, or
-a build that has not been released yet. `-InstallDir` has to be repeated on every
-later run, `-Uninstall` included: the script only knows about the directory it is
-given. Leave it off and an upgrade installs a second copy in the default location
-while `pockode` keeps resolving to the first one — the custom directory went onto
-`PATH` earlier, so it still wins.
+a build that has not been released yet. A mirror has to carry a `checksums.txt`
+beside the binary, listing it under the file name the URL ends in: the download
+is checked there exactly as it is for a release, and a mirror is where that
+matters most. `-InstallDir` has to be repeated on every later run, `-Uninstall`
+included: the script only knows about the directory it is given. Leave it off
+and an upgrade installs a second copy in the default location while `pockode`
+keeps resolving to the first one — the custom directory went onto `PATH`
+earlier, so it still wins.
 
 Uninstalling removes `pockode.exe` and the `PATH` entry, plus the install
 directory itself if nothing else is left in it. It deliberately leaves

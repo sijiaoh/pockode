@@ -96,14 +96,40 @@ esac
 
 ASSET="pockode-$OS-$ARCH"
 if [ "$VERSION" = "latest" ]; then
-  DOWNLOAD_URL="https://github.com/$REPO/releases/latest/download/$ASSET"
+  RELEASE_URL="https://github.com/$REPO/releases/latest/download"
 else
   # Accept both v0.12.1 and 0.12.1, the way install.ps1 does.
   case "$VERSION" in
     v*) TAG="$VERSION" ;;
     *)  TAG="v$VERSION" ;;
   esac
-  DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
+  RELEASE_URL="https://github.com/$REPO/releases/download/$TAG"
+fi
+DOWNLOAD_URL="$RELEASE_URL/$ASSET"
+# The checksums come from the same release the binary did. For a named tag that
+# is exact. For `latest` it is two independent requests, and a release published
+# between them would pair a new binary with an old checksum file: the download
+# would be rejected even though nothing is wrong with it. Resolving `latest` to
+# a tag first would close that window, but only by making every install depend
+# on the shape of GitHub's redirect for a race measured in seconds against a
+# release cadence measured in days. The mismatch message says so instead, and a
+# second run then succeeds - where a real mismatch would not.
+CHECKSUMS_URL="$RELEASE_URL/checksums.txt"
+
+# Chosen before anything is downloaded: a machine that cannot verify must not
+# install, so there is nothing to be gained by fetching first. Which of the two
+# exists is a platform difference, the same one scripts/build.sh writes the file
+# around - macOS ships shasum, Linux and busybox ship sha256sum - and both print
+# the hash as the first field.
+if command -v sha256sum > /dev/null 2>&1; then
+  SHA256="sha256sum"
+elif command -v shasum > /dev/null 2>&1; then
+  SHA256="shasum -a 256"
+else
+  echo "Cannot verify the download: neither sha256sum nor shasum is installed." >&2
+  echo "That is this machine missing a tool, not a problem with the download." >&2
+  echo "Install either one (coreutils, or perl) and run this again." >&2
+  exit 1
 fi
 
 # The default run cannot name a version - `releases/latest` resolves server
@@ -119,6 +145,7 @@ fi
 # and the install would then hand root whatever they left there.
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pockode-install.XXXXXX")
 TMP_BINARY="$TMP_DIR/$BINARY_NAME"
+TMP_CHECKSUMS="$TMP_DIR/checksums.txt"
 # Set once there is a staged file to remove, which is also what tells cleanup
 # whether it has to reach for sudo at all.
 STAGED=""
@@ -148,20 +175,66 @@ trap 'cleanup; exit 143' TERM
 
 # curl's own message for a missing release is a bare "The requested URL returned
 # error: 404", which names neither the version nor the URL it was built from.
-CURL_ERROR=$(curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BINARY" 2>&1) && CURL_STATUS=0 || CURL_STATUS=$?
-if [ "$CURL_STATUS" -ne 0 ]; then
-  echo "Download failed: $DOWNLOAD_URL" >&2
-  if [ -n "$CURL_ERROR" ]; then
-    printf '%s\n' "$CURL_ERROR" >&2
+# The caller adds whatever it can say about that particular URL.
+download() {
+  DOWNLOAD_ERROR=$(curl -fsSL "$1" -o "$2" 2>&1) && DOWNLOAD_STATUS=0 || DOWNLOAD_STATUS=$?
+  if [ "$DOWNLOAD_STATUS" -ne 0 ]; then
+    echo "Download failed: $1" >&2
+    if [ -n "$DOWNLOAD_ERROR" ]; then
+      printf '%s\n' "$DOWNLOAD_ERROR" >&2
+    fi
   fi
+  return "$DOWNLOAD_STATUS"
+}
+
+# The binary first: a run that cannot even reach its asset should say so in
+# terms of that asset, not of a checksums file the user never asked for.
+if ! download "$DOWNLOAD_URL" "$TMP_BINARY"; then
   # 22 is how curl reports an HTTP error under -f. Usually that is a release or
   # an asset that does not exist, which curl cannot tell the user about.
-  if [ "$CURL_STATUS" -eq 22 ]; then
+  if [ "$DOWNLOAD_STATUS" -eq 22 ]; then
     if [ "$VERSION" = "latest" ]; then
       echo "The latest release may not have a $ASSET asset yet." >&2
     else
       echo "Check that release $TAG exists and has a $ASSET asset: https://github.com/$REPO/releases" >&2
     fi
+  fi
+  exit 1
+fi
+
+if ! download "$CHECKSUMS_URL" "$TMP_CHECKSUMS"; then
+  echo "Nothing was installed: the download cannot be verified without checksums.txt." >&2
+  echo "Releases made before checksums were published do not have one; install a newer release instead." >&2
+  exit 1
+fi
+
+# checksums.txt covers every asset of the release, so only this platform's line
+# is of any use. shasum writes the name with a leading "*" when it hashed in
+# binary mode, which is not part of the name. Neither is a trailing CR: a file
+# that arrived with CRLF endings is one install.ps1 reads without noticing, and
+# the two scripts reading the same file differently is a difference nobody
+# would think to look for.
+EXPECTED_SHA256=$(awk -v asset="$ASSET" '{ sub(/\r$/, "", $2); sub(/^[*]/, "", $2); if ($2 == asset) { print $1; exit } }' "$TMP_CHECKSUMS")
+if [ -z "$EXPECTED_SHA256" ]; then
+  echo "Nothing was installed: checksums.txt for this release does not list $ASSET." >&2
+  echo "That is a problem with the release rather than with this machine." >&2
+  echo "Please report it: https://github.com/$REPO/issues" >&2
+  exit 1
+fi
+
+# Hashed from stdin, so the output is the hash and nothing else: given a path,
+# both tools append it, and it is a different path every run.
+ACTUAL_SHA256=$($SHA256 < "$TMP_BINARY" | awk '{ print $1 }')
+if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+  echo "Nothing was installed: the download does not match the checksum published for this release." >&2
+  echo "  file:     $DOWNLOAD_URL" >&2
+  echo "  expected: $EXPECTED_SHA256" >&2
+  echo "  actual:   $ACTUAL_SHA256" >&2
+  echo "The file is corrupt, or it was tampered with on the way here. Do not run it." >&2
+  if [ "$VERSION" = "latest" ]; then
+    # The benign explanation, and the only one a second run clears up: the two
+    # requests above resolved `latest` independently of each other.
+    echo "It can also mean a release was published mid-install, in which case running this again will succeed." >&2
   fi
   exit 1
 fi
