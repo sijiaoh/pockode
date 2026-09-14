@@ -335,6 +335,12 @@ function templateAlternatives(text: string): string[] {
  * finish: a variant list is spliced into every *other* variant, so expanding a
  * helper afresh under each branch of its caller costs a product of the whole
  * tree. Keyed on the helper map so a fresh scan gets a fresh memo.
+ *
+ * The entry is keyed on the name alone while the reading also depends on the
+ * `stack` it was first expanded under, so a helper first reached from inside a
+ * cycle would hand its truncated reading to everyone. That reading holds fewer
+ * classes, which credits a control with less and fails loudly; nothing here is
+ * cyclic today.
  */
 const memos = new WeakMap<Map<string, string>, Map<string, string[]>>();
 
@@ -915,6 +921,13 @@ function unreachableTokens(classes: string): string[] | null {
  * colour, and telling them apart needs the palette; omitting them reads a
  * control as shorter than it renders, which is the direction that over-reports
  * rather than excuses.
+ *
+ * Two padding tokens on one axis are read as the larger, not as the cascade:
+ * `p-4 py-1` renders with 8px of vertical padding and is read here as 32, and
+ * `pt-2 pb-2` renders with 16 and is read as 8. Only the first of those excuses
+ * a control instead of alarming about it, and nothing writes either shape
+ * today. Reading it properly means ordering tokens by specificity, and a class
+ * list that says two things about one axis is a bug of its own.
  */
 export function impliedHeight(classes: string): ImpliedHeight | null {
 	const tokens = unreachableTokens(classes);

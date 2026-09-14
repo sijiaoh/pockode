@@ -556,18 +556,28 @@ noticed. One representation with a test on it is the only thing that ends that.
   48px  bound  web/src/extensions/ExampleExtension/sidebarUI/SessionsTab.tsx
 ```
 
-Two things the numbers do not say on their own. Heights are `padding + line
+Three things the numbers do not say on their own. Heights are `padding + line
 box` with borders left out, so a bordered control renders a pixel or two taller
 than it reads here — the error runs toward reading a control as too short, which
-raises an alarm rather than excusing one. And `bound` means the font size comes
-from an ancestor in another file: neither app sets a root font size and
-preflight sets `line-height: 1.5` on `html`, so the browser default puts that
-line box at 24px, while an ancestor that sets a smaller size makes the real
-control shorter. An `exact` row is a height; a `bound` row is a ceiling.
+raises an alarm rather than excusing one. The same direction, much further: a
+control whose height comes from a *child* is read as its own line box and
+nothing else, because the scan measures the element that was written down and
+not the subtree under it. The theme card in
+`Settings/sections/AppearanceSections` reads as 24px while the label strip
+inside it is `min-h-12` on its own. A row here is a reason to go and look, not a
+verdict. And `bound` means the font size comes from an ancestor in another file:
+neither app sets a root font size and preflight sets `line-height: 1.5` on
+`html`, so the browser default puts that line box at 24px, while an ancestor
+that sets a smaller size makes the real control shorter. An `exact` row is a
+height; a `bound` row is a ceiling.
 
 The block above is the whole list. What the shortest of them *are*, since a file
 name does not say what a control is for:
 
+- **`Chat/MessageItem`** and **`Chat/AskUserQuestionItem`** — Allow, Always
+  Allow and Deny on a permission request; Cancel and Submit on a question; the
+  Details link out to a work item. Answering the agent is the most consequential
+  thing either screen does, and none of these clears the fine floor.
 - **`Files/UploadQueue`** — Replace, Keep both, Retry, Retry failed: the only
   way out of a failed upload.
 - **`Git/ErrorBanner`** — the details toggle on a git failure.
@@ -579,6 +589,8 @@ name does not say what a control is for:
   `items-center` centres the text rather than stretching it.
 - **`AppShell`** and **`ui/ReconnectBanner`** — Retry and dismiss in the
   session-error banner, Retry now in the reconnect banner.
+- **`ui/ContentView`** — the path button at the top of a file or diff view, the
+  way into the file it names.
 - **`ui/SettingsLoadError`** — Retry, the only way back from a settings
   subscription that failed on a live socket.
 - **`Worktree/WorktreeCreateSheet`** — the link out of the setup-script note.
@@ -699,8 +711,8 @@ Known blind spots, recorded as they are rather than as they should be:
    a reason it cannot verify, and that is worth knowing before the third one is
    written. (`w-full` / `flex-1` are credited the same way on the width axis,
    where a control that fills its row is rarely the one a thumb misses.)
-6. **A conditional class helper is read as all of its branches at once, so a
-   call site is held to the strictest of them.** This is the closed half of what
+6. **A conditional class helper is read one class list per branch, and a call
+   site is held to every one of them.** This is the closed half of what
    used to be a hole in the other direction: one `touch-target` anywhere in a
    helper's body cleared every caller, whichever branch they took, and
    `iconButtonClass`'s growing branch rode on the overlaying branch's word for
