@@ -1,9 +1,17 @@
 // Package rpc defines JSON-RPC 2.0 wire format types for WebSocket communication.
-// These types represent the params and result structures for all RPC methods.
+// These types are the params and results that have a shape of their own.
 //
 // Where a wire type is a deliberate narrowing of a domain type rather than a
 // copy of it, the narrowing lives here too (NewSessionListItem), so that what a
 // client is told is decided in one place instead of at each handler.
+//
+// The converse is why several methods have params here and no result: a handler
+// that replies with a domain value as it stands (git.show, work.create) defines
+// no result type. An alias for one would not be a type — it narrows nothing and
+// checks nothing — and aliasing some such methods but not others would read as
+// a distinction between them that does not exist. The domain package the
+// handler returns from is the definition of those results; the namespace's own
+// document describes them (docs/git.md, docs/file.md, docs/projects/api.md).
 //
 // Subscribe results carry no subscription id: the client named the subscription
 // in the request, and echoing it back would invite code that trusts the echo
@@ -24,7 +32,6 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
-	"github.com/pockode/server/search"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
@@ -213,11 +220,7 @@ type FileSearchParams struct {
 	MaxResults       int   `json:"max_results"`
 }
 
-type FileSearchResult = search.Result
-
 // Git namespace
-
-type GitStatusResult = git.GitStatus
 
 // Git diff watch (subscription for file-specific diff changes)
 
@@ -262,9 +265,6 @@ type GitShowParams struct {
 	Hash string `json:"hash"`
 }
 
-// GitShowResult is the result of git.show request.
-type GitShowResult = git.ShowResult
-
 // GitShowDiffParams is the params for git.show.diff request.
 type GitShowDiffParams struct {
 	Hash           string `json:"hash"`
@@ -272,21 +272,11 @@ type GitShowDiffParams struct {
 	HideWhitespace bool   `json:"hide_whitespace"`
 }
 
-// GitShowDiffResult is the result of git.show.diff request.
-type GitShowDiffResult = git.DiffResult
-
 // GitShowFileParams is the params for git.show.file request.
 type GitShowFileParams struct {
 	Hash string `json:"hash"`
 	Path string `json:"path"`
 }
-
-// GitShowFileResult is the result of git.show.file request. It is the same
-// shape file.get returns for a file, so the client renders both the same way.
-type GitShowFileResult = contents.FileContent
-
-// GitBranchesResult is the result of git.branches request.
-type GitBranchesResult = git.BranchList
 
 // GitCheckoutParams is the params for git.checkout request.
 type GitCheckoutParams struct {

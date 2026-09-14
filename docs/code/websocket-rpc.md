@@ -572,7 +572,16 @@ established that the error never came from the server at all.
 ### Adding New RPC Methods
 
 1. **Define parameter and return types**
-   - Go: `server/rpc/types.go`
+   - Go: `server/rpc/types.go` — only for a shape that is the wire's own: a
+     struct, or a deliberate narrowing of a domain type. A handler that replies
+     with a domain value as it stands (`git.branches` → `git.BranchList`,
+     `work.create` → `work.Work`) defines nothing here. A `type X = domain.Y`
+     alias is not a type — it narrows nothing and checks nothing, and a set of
+     them that covers some methods and not others reads as a distinction where
+     there is none. The domain package is the definition; describe the result in
+     the namespace's own document ([git.md](../git.md), [file.md](../file.md),
+     [projects/api.md](../projects/api.md)) so a reader can find it from the
+     method name.
    - TypeScript: `web/src/types/*.ts`
 
 2. **Implement backend handler**

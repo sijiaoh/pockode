@@ -17,6 +17,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
+	"github.com/pockode/server/git"
 	"github.com/pockode/server/internal/unwritabletest"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
@@ -1762,7 +1763,7 @@ func TestHandler_GitStatus_Empty(t *testing.T) {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
 	}
 
-	var result rpc.GitStatusResult
+	var result git.GitStatus
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -1783,7 +1784,7 @@ func TestHandler_GitStatus_UntrackedFile(t *testing.T) {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
 	}
 
-	var result rpc.GitStatusResult
+	var result git.GitStatus
 	json.Unmarshal(resp.Result, &result)
 
 	if len(result.Unstaged) != 1 {
