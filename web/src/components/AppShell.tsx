@@ -461,7 +461,7 @@ function AppShell() {
 					<button
 						type="button"
 						onClick={() => window.location.reload()}
-						className="rounded bg-th-accent px-4 py-2 text-sm text-white hover:opacity-90"
+						className="rounded bg-th-accent px-4 py-2 text-sm text-th-accent-text hover:opacity-90"
 					>
 						Retry
 					</button>

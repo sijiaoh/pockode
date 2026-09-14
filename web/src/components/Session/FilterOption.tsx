@@ -33,7 +33,7 @@ export default function FilterOption({
 			<span
 				className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
 					checked
-						? "border-th-accent bg-th-accent text-white"
+						? "border-th-accent bg-th-accent text-th-accent-text"
 						: "border-th-border bg-transparent"
 				}`}
 				aria-hidden="true"
