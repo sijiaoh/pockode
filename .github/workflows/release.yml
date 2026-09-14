@@ -49,6 +49,29 @@ jobs:
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
 
+      # The accident this workflow is being fixed for was a release that ended
+      # up published with no assets at all. The upload failure was reported, so
+      # this is not a second chance to catch that one - it is what turns "the
+      # release is short a binary" into a red run instead of something a user
+      # finds by downloading it. It runs while the release is still a draft so
+      # that an incomplete one never becomes visible: a draft that fails here is
+      # deleted by hand, which is the cheaper of the two cleanups.
+      - name: Verify draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
+        # A step's default shell is `bash -e`, without pipefail: a failing gh
+        # would leave the empty output of a successful sort behind.
+        shell: bash
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            --jq '.assets[].name' | sort > "$RUNNER_TEMP/uploaded.txt"
+          ls dist | sort > "$RUNNER_TEMP/expected.txt"
+          if ! diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/uploaded.txt"; then
+            echo "release $GITHUB_REF_NAME does not carry exactly what dist/ built" >&2
+            exit 1
+          fi
+
       # draft: true also disables the action's own publish step, so the release
       # would stay a draft forever without this. Addressed by id rather than by
       # tag because the release is still a draft here, and a draft is not what
@@ -64,24 +87,3 @@ jobs:
           gh api --method PATCH --silent \
             "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             -F draft=false -f make_latest="$MAKE_LATEST"
-
-      # The accident this workflow is being fixed for was a release that ended
-      # up published with no assets at all. The upload failure was reported, so
-      # this is not a second chance to catch that one - it is what turns "the
-      # release is short a binary" into a red run instead of something a user
-      # finds by downloading it.
-      - name: Verify published assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ steps.draft.outputs.id }}
-        # A step's default shell is `bash -e`, without pipefail: a failing gh
-        # would leave the empty output of a successful sort behind.
-        shell: bash
-        run: |
-          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
-            --jq '.assets[].name' | sort > "$RUNNER_TEMP/published.txt"
-          ls dist | sort > "$RUNNER_TEMP/expected.txt"
-          if ! diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/published.txt"; then
-            echo "release $GITHUB_REF_NAME does not publish exactly what dist/ built" >&2
-            exit 1
-          fi
