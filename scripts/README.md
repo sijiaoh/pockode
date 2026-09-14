@@ -1,8 +1,9 @@
 # Scripts
 
-Helper scripts for local development and release builds.
+Helper scripts for local development and release builds, plus how a tag turns
+into a published release.
 
-Both are bash scripts, verified only on macOS and Linux. On Windows use WSL — see
+Both scripts are bash, verified only on macOS and Linux. On Windows use WSL — see
 [Developing Pockode on Windows](../docs/platforms.md#developing-pockode-on-windows)
 for why that is a decision rather than an oversight.
 
@@ -55,6 +56,60 @@ the other's output with `-c`.
 | ------------ | ------- | -------------------------------------------- |
 | `VERSION`    | `dev`   | Version stamped into the binary (leading `v` is stripped). |
 | `OUTPUT_DIR` | `dist`  | Directory the binaries and `checksums.txt` are written to. Absolute, or relative to the repository root. |
+
+## Releasing
+
+Pushing a tag matching `v*` is the whole release procedure —
+`.github/workflows/release.yml` does the rest on `macos-latest`:
+
+```bash
+git tag v0.16.0
+git push origin v0.16.0
+```
+
+The tag is the version: `build.sh` runs with `VERSION=<tag>`, so the number
+`pockode -version` prints comes from there and from nowhere else in the
+repository.
+
+| Step | What it does |
+| ---- | ------------ |
+| Build | `./scripts/build.sh` — five binaries and `checksums.txt` in `dist/` |
+| Create draft release | Uploads `dist/*` to a release that is still a **draft** |
+| Verify draft assets | Diffs the release's asset names against `ls dist` |
+| Publish release | Flips the draft to published, setting `make_latest` explicitly |
+
+Three properties of that sequence are worth knowing before you touch it, because
+each one has already gone wrong once:
+
+- **Assets can only be uploaded while the release is a draft.** The repository
+  has immutable releases enabled, so an upload into a published release is
+  rejected outright. Creating the release as a draft and publishing it
+  afterwards is what makes the assets land — for a prerelease as much as for a
+  final one.
+- **Verification happens before publishing.** A release that is short a binary
+  fails the run while it is still invisible, leaving a draft to delete by hand.
+  The alternative — noticing afterwards — is not a cleanup you can do: an
+  immutable release cannot be given its missing assets later, so it has to be
+  deleted and the tag re-cut.
+- **`make_latest` is spelled out rather than left to default.** It defaults to
+  true, and the install scripts install whatever
+  [`/releases/latest`](https://github.com/sijiaoh/pockode/releases/latest)
+  points at — a prerelease inheriting that default would put every new install
+  on an alpha. A tag containing `-` (`v0.16.0-alpha.1`) is published as a
+  prerelease and does not become `latest`; anything else does.
+
+### Testing a change to the release path before tagging
+
+`.github/workflows/build.yml` runs `build.sh` on `ubuntu-latest` and
+`macos-latest` whenever `build.sh`, `release.yml` or `build.yml` itself changes,
+and checks the `checksums.txt` that comes out. It exists because a tag is
+otherwise the first thing that ever runs this code, and by then the release is
+already published.
+
+It does not exercise the release steps themselves. For those, push a prerelease
+tag (`v0.16.0-alpha.1`), let the workflow run against the real API, then delete
+the release and its tag with `gh release delete <tag> --cleanup-tag`. A
+prerelease is safe to experiment with precisely because it cannot take `latest`.
 
 ## `dev.sh` — Development server
 
