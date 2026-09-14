@@ -13,7 +13,7 @@
     from install.sh, which installs to /usr/local/bin with sudo.
 
 .PARAMETER Version
-    Release tag to install, e.g. "v0.12.1". Defaults to the latest release.
+    Release tag to install, e.g. "v0.16.0". Defaults to the latest release.
 
 .PARAMETER InstallDir
     Where pockode.exe goes. Defaults to %LOCALAPPDATA%\Programs\Pockode.

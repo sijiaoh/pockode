@@ -69,11 +69,11 @@ mismatch is real — stop there and
 [report it](https://github.com/sijiaoh/pockode/issues).
 
 **`checksums.txt` could not be downloaded.** Almost always this means the release
-predates checksums. **Releases made before checksums were published cannot be
-installed by these scripts at all**, because there is nothing to check the
-download against — install a newer release. The message carries the URL it tried
-and the underlying network error, so a genuine network or mirror problem is
-distinguishable from an old release.
+predates checksums — `v0.16.0` is the first one that ships them. **Releases made
+before that cannot be installed by these scripts at all**, because there is
+nothing to check the download against — install a newer release. The message
+carries the URL it tried and the underlying network error, so a genuine network
+or mirror problem is distinguishable from an old release.
 
 **`checksums.txt` does not list your platform's file.** That is a broken release
 rather than a broken machine, and there is nothing to fix on your side: please
@@ -91,7 +91,7 @@ tool — see [Installing on macOS and Linux](#installing-on-macos-and-linux).
 
 ```
 https://github.com/sijiaoh/pockode/releases/latest/download/checksums.txt
-https://github.com/sijiaoh/pockode/releases/download/v0.12.1/checksums.txt
+https://github.com/sijiaoh/pockode/releases/download/v0.16.0/checksums.txt
 ```
 
 Each line is a 64-character lower-case hex hash, two spaces, then the bare asset
@@ -144,20 +144,22 @@ coreutils or perl — and not a single byte is fetched.
 
 ### Installing a specific version
 
-By default you get the latest release. Ask for a particular one — any tag from
-the [releases page](https://github.com/sijiaoh/pockode/releases) — when a new
+By default you get the latest release. Ask for a particular one — any tag
+`v0.16.0` or newer from the
+[releases page](https://github.com/sijiaoh/pockode/releases), since
+[older ones ship no `checksums.txt`](#verifying-the-download) — when a new
 version broke something and you need the previous one back, or when several
 machines have to run the same version:
 
 ```bash
-curl -fsSL https://pockode.com/install.sh | POCKODE_VERSION=0.12.1 sh
-curl -fsSL https://pockode.com/install.sh | sh -s -- --version 0.12.1
+curl -fsSL https://pockode.com/install.sh | POCKODE_VERSION=0.16.0 sh
+curl -fsSL https://pockode.com/install.sh | sh -s -- --version 0.16.0
 ```
 
 The two are equivalent, and the flag wins if both are set. There are two because
 a pipe gives the script no arguments of its own: `sh -s --` is the shell's way to
 hand them over, and the environment variable is the shorter thing to type in
-front of it. `v0.12.1`, `0.12.1` and `latest` are all accepted — the same
+front of it. `v0.16.0`, `0.16.0` and `latest` are all accepted — the same
 spellings `install.ps1` takes for `-Version`. Anything else is rejected before
 the download, since the version is pasted into a release URL.
 
@@ -211,7 +213,7 @@ Piping into `iex` cannot pass arguments, so anything but a default install goes
 through a script block instead:
 
 ```powershell
-& ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -Version v0.12.1
+& ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -Version v0.16.0
 & ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -InstallDir D:\tools\pockode
 & ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -Url https://mirror.example/pockode-windows-amd64.exe
 & ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -Uninstall

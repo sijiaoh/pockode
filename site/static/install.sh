@@ -17,11 +17,11 @@ Installs Pockode on macOS and Linux.
 
 Usage:
   curl -fsSL https://pockode.com/install.sh | sh
-  curl -fsSL https://pockode.com/install.sh | POCKODE_VERSION=0.12.1 sh
-  curl -fsSL https://pockode.com/install.sh | sh -s -- --version 0.12.1
+  curl -fsSL https://pockode.com/install.sh | POCKODE_VERSION=0.16.0 sh
+  curl -fsSL https://pockode.com/install.sh | sh -s -- --version 0.16.0
 
 Options:
-  --version <version>  Release to install, e.g. v0.12.1, 0.12.1 or latest.
+  --version <version>  Release to install, e.g. v0.16.0, 0.16.0 or latest.
                        Defaults to $POCKODE_VERSION, or the latest release.
   -h, --help           Show this message.
 USAGE
@@ -31,14 +31,14 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --version)
       if [ $# -lt 2 ]; then
-        printf '%s\n' "Missing value for $1. Try: --version 0.12.1" >&2
+        printf '%s\n' "Missing value for $1. Try: --version 0.16.0" >&2
         exit 1
       fi
       # Without this, a forgotten value takes the next option as one and the
       # run ends as a 404 for a release named after that option.
       case "$2" in
         -*)
-          printf '%s\n' "Missing value for $1: next came the option $2. Try: --version 0.12.1" >&2
+          printf '%s\n' "Missing value for $1: next came the option $2. Try: --version 0.16.0" >&2
           exit 1 ;;
       esac
       VERSION="$2"
@@ -62,11 +62,11 @@ done
 # somewhere else entirely.
 case "$VERSION" in
   "")
-    echo "Version must not be empty. Try: --version 0.12.1, or --version latest" >&2
+    echo "Version must not be empty. Try: --version 0.16.0, or --version latest" >&2
     exit 1 ;;
   *[!A-Za-z0-9.+_-]*)
     printf '%s\n' "Invalid version: $VERSION" >&2
-    echo "Expected a release tag such as v0.12.1, 0.12.1, or latest." >&2
+    echo "Expected a release tag such as v0.16.0, 0.16.0, or latest." >&2
     exit 1 ;;
 esac
 
@@ -98,7 +98,7 @@ ASSET="pockode-$OS-$ARCH"
 if [ "$VERSION" = "latest" ]; then
   RELEASE_URL="https://github.com/$REPO/releases/latest/download"
 else
-  # Accept both v0.12.1 and 0.12.1, the way install.ps1 does.
+  # Accept both v0.16.0 and 0.16.0, the way install.ps1 does.
   case "$VERSION" in
     v*) TAG="$VERSION" ;;
     *)  TAG="v$VERSION" ;;
