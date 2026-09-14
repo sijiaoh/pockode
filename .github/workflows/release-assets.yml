@@ -1,0 +1,35 @@
+name: Release Assets
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/verify-release-assets.sh"
+      - "scripts/verify-release-assets.test.sh"
+      - ".github/workflows/release-assets.yml"
+      - ".github/workflows/release.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/verify-release-assets.sh"
+      - "scripts/verify-release-assets.test.sh"
+      - ".github/workflows/release-assets.yml"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+jobs:
+  # The gate that decides whether a draft release is complete. A tag push is
+  # otherwise the first thing that ever runs it, and by then there is a release
+  # to clean up. It needs neither a toolchain nor a build - the gh it talks to
+  # is a stub - so it answers in seconds. Hence a workflow of its own rather
+  # than a job in build.yml: these two scripts are not what that workflow
+  # watches, and editing one of them should not pay for its full-platform
+  # matrix.
+  verify-assets-logic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+      - name: Drive the release gate against a stubbed gh
+        run: ./scripts/verify-release-assets.test.sh

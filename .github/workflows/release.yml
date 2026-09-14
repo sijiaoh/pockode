@@ -56,29 +56,16 @@ jobs:
       # finds by downloading it. It runs while the release is still a draft so
       # that an incomplete one never becomes visible: a draft that fails here is
       # deleted by hand, which is the cheaper of the two cleanups.
+      #
+      # The checks live in a script because a tag push is the only thing that
+      # ever runs this step: scripts/verify-release-assets.test.sh drives that
+      # script against a stubbed gh, which is as much of this as can be tried
+      # before a release.
       - name: Verify draft assets
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.draft.outputs.id }}
-        # A step's default shell is `bash -e`, without pipefail: a failing gh
-        # would leave the empty output of a successful sort behind.
-        shell: bash
-        run: |
-          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
-            --jq '.assets[].name' | sort > "$RUNNER_TEMP/uploaded.txt"
-          ls dist | sort > "$RUNNER_TEMP/expected.txt"
-          # An empty dist/ makes both sides empty, and diff then agrees: the one
-          # way this check passes while the release carries nothing, which is
-          # the accident it exists to catch. build.sh can get there without
-          # failing - it warns about exactly that for an absolute OUTPUT_DIR.
-          if ! [ -s "$RUNNER_TEMP/expected.txt" ]; then
-            echo "dist/ is empty: the build produced no release assets" >&2
-            exit 1
-          fi
-          if ! diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/uploaded.txt"; then
-            echo "release $GITHUB_REF_NAME does not carry exactly what dist/ built" >&2
-            exit 1
-          fi
+        run: ./scripts/verify-release-assets.sh dist
 
       # draft: true also disables the action's own publish step, so the release
       # would stay a draft forever without this. Addressed by id rather than by

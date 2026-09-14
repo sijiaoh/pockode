@@ -3,8 +3,8 @@
 Helper scripts for local development and release builds, plus how a tag turns
 into a published release.
 
-Both scripts are bash, verified only on macOS and Linux. On Windows use WSL — see
-[Developing Pockode on Windows](../docs/platforms.md#developing-pockode-on-windows)
+Every script here is bash, run only on macOS and Linux. On Windows use WSL
+— see [Developing Pockode on Windows](../docs/platforms.md#developing-pockode-on-windows)
 for why that is a decision rather than an oversight.
 
 ## `build.sh` — Release build
@@ -76,11 +76,13 @@ makes `pockode -version` print `pockode 0.17.0`.
 | ---- | ------------ |
 | Build | `./scripts/build.sh` — five binaries and `checksums.txt` in `dist/` |
 | Create draft release | Uploads `dist/*` to a release that is still a **draft** |
-| Verify draft assets | Diffs the release's asset names against `ls dist` |
+| Verify draft assets | `./scripts/verify-release-assets.sh dist` — see below |
 | Publish release | Flips the draft to published, setting `make_latest` explicitly |
 
-Three properties of that sequence are worth knowing before you touch it, because
-each one has already gone wrong once:
+Four properties of that sequence are worth knowing before you touch it. All but
+one have already gone wrong once; the exception — an asset's name saying nothing
+about whether it arrived — is a way this could go wrong that nothing had ruled
+out:
 
 - **Assets can only be uploaded while the release is a draft.** The repository
   has immutable releases enabled, so an upload into a published release is
@@ -92,12 +94,47 @@ each one has already gone wrong once:
   The alternative — noticing afterwards — is not a cleanup you can do: an
   immutable release cannot be given its missing assets later, so it has to be
   deleted and the tag re-cut.
+- **An asset's name says nothing about whether it arrived.** GitHub lists an
+  asset it is still receiving under its final name, with `state` set to
+  `starting` rather than `uploaded`, so a diff of names alone would pass a
+  release carrying a half-written binary. The verification waits for every
+  asset to reach `uploaded`, with a timeout — see below for why that is a wait
+  rather than a plain equality check.
 - **`make_latest` is spelled out rather than left to default.** It defaults to
   true, and the install scripts install whatever
   [`/releases/latest`](https://github.com/sijiaoh/pockode/releases/latest)
   points at — a prerelease inheriting that default would put every new install
   on an alpha. A tag containing `-` (`v0.17.0-alpha.1`) is published as a
   prerelease and does not become `latest`; anything else does.
+
+### `verify-release-assets.sh` — Release gate
+
+Run as `./scripts/verify-release-assets.sh dist`, with `GH_TOKEN`,
+`GITHUB_REPOSITORY`, `GITHUB_REF_NAME` and `RELEASE_ID` in the environment. It
+holds the three things that have to be true of a draft before it is published:
+
+1. `dist/` is not empty. Both sides of a diff of an empty directory against a
+   release with no assets are empty, and diff then agrees — the one way this
+   check could pass while the release carries nothing, which is the accident it
+   exists to catch.
+2. Every asset has `state == "uploaded"`. This is a **bounded wait**, polled
+   every 5s for up to 120s, not a one-shot equality check: whether an asset is
+   still `starting` once the upload action has returned has never been measured
+   here, and a strict check would turn any such window into a random red
+   release. With no window to wait out, the first poll passes and nothing is
+   spent. The 120s is derived from the job's own budget rather than from
+   GitHub's timing — `release.yml` allows the job 15 minutes and a run of it
+   takes 2–3, so a cap well inside the remainder is what makes a stuck asset
+   come out as a named error instead of as a killed job.
+3. The asset names are exactly `ls dist`.
+
+A timeout names each asset that is still waiting and the state it is in; the
+point is to distinguish "GitHub is slow" from "this one file never landed".
+
+The script deliberately avoids piping `gh` into anything. A workflow step's
+default shell is `bash -e` without `pipefail`, so a failing `gh` inside a
+pipeline hands its status to the next command and leaves its empty output
+behind — which reads exactly like a release that has no assets yet.
 
 ### Testing a change to the release path before tagging
 
@@ -107,10 +144,27 @@ each one has already gone wrong once:
 comes out. It exists because a tag is otherwise the first thing that ever runs
 this code, and by then the release is already published.
 
-It does not exercise the release steps themselves. For those, push a prerelease
-tag (`v0.17.0-alpha.1`), let the workflow run against the real API, then delete
-the release and its tag with `gh release delete <tag> --cleanup-tag`. A
-prerelease is safe to experiment with precisely because it cannot take `latest`.
+`.github/workflows/release-assets.yml` — a workflow of its own, because it
+watches the two verify-assets scripts rather than `build.sh`, and needs neither
+a toolchain nor a build — runs `verify-release-assets.test.sh`, which drives
+`verify-release-assets.sh` against a stub `gh` that answers with canned release
+bodies: assets already uploaded, assets that finish on a later poll, assets that
+never finish, a `gh` that fails outright, an empty `dist/`, and a release short
+an asset. Each case that expects a failure asserts on the message printed and
+not only on the exit status, and the suite then re-runs every one of them
+against deliberately broken copies of the script, failing if a breakage goes
+unnoticed — a script broken badly enough exits non-zero for entirely the wrong
+reason, so neither layer is worth much alone. Run it locally with
+`./scripts/verify-release-assets.test.sh`; it takes about twenty seconds, and
+`jq` is the only thing it needs that working on the rest of this repository does
+not already require.
+
+What neither of those covers is GitHub's actual `starting` → `uploaded` timing,
+and so whether 120s is enough. Only a real release answers that. For the release
+steps themselves, push a prerelease tag (`v0.17.0-alpha.1`), let the workflow
+run against the real API, then delete the release and its tag with
+`gh release delete <tag> --cleanup-tag`. A prerelease is safe to experiment with
+precisely because it cannot take `latest`.
 
 ## `dev.sh` — Development server
 

@@ -31,7 +31,7 @@ Infrastructure docs: [websocket-rpc-design.md](websocket-rpc-design.md) (RPC lay
 
 Feature docs: [agent-chat.md](agent-chat.md) (chat), [pending-question-entry.md](pending-question-entry.md) (reaching an unanswered question in chat), [session-fork-ui.md](session-fork-ui.md) (branching a new session off a chosen message), [file.md](file.md) (file ops), [git.md](git.md) (git ops), [git-ui.md](git-ui.md) (the git panel's UI), [sidebar-ui.md](sidebar-ui.md) (the rules the Files and Git panels share), [responsive-ui.md](responsive-ui.md) (the width ladder, the pointer gates, and the hit-area floors — including where they currently stop), [usage-display-ui.md](usage-display-ui.md) (what a session and a work item report having spent, and the session info panel it introduces).
 
-Working docs: [testing.md](testing.md) (telling a contended machine apart from a broken test, which timeout knob owns which message, and the commands that pass without checking anything).
+Working docs: [testing.md](testing.md) (telling a contended machine apart from a broken test, which timeout knob owns which message, the suite neither test entry point runs, and the commands that pass without checking anything).
 
 ## Agent-Centric Workflow
 

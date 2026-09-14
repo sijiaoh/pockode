@@ -128,7 +128,7 @@ This repository is public; the cloud service it connects to is developed in a se
 - **Test public interfaces** — Testing public methods naturally covers internal implementation, no need to separately test private methods
 - **Keep it lean** — Each test should have a clear purpose; redundant tests are a burden, not an asset
 - Ensure tests pass before committing
-- **A red test is a diagnosis, not a verdict** — Before assuming the code broke, tell apart a contended machine, a timing assumption, a fabricated state, and a test that silently never ran; [docs/testing.md](docs/testing.md) has the checks, the timeout knobs and which "passing" commands check nothing
+- **A red test is a diagnosis, not a verdict** — Before assuming the code broke, tell apart a contended machine, a timing assumption, a fabricated state, and a test that silently never ran; [docs/testing.md](docs/testing.md) has the checks, the timeout knobs, the suite neither test entry point runs, and which "passing" commands check nothing
 
 ### Error Handling
 

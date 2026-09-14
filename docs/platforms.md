@@ -410,8 +410,8 @@ Three things that are easy to get wrong here:
 
 ## Developing Pockode on Windows
 
-`scripts/build.sh` and `scripts/dev.sh` are bash scripts, verified only on macOS
-and Linux. Use WSL on Windows.
+The scripts in `scripts/` are bash, run only on macOS and Linux. Use WSL on
+Windows.
 
 That is a decision, not an oversight. Release artifacts are cross-compiled by CI
 on macOS, and what a Windows user downloads is a single `.exe` with the frontend
@@ -423,7 +423,9 @@ The server test suite does run on `windows-latest`; the frontend one does not, a
 deliberately. The realistic Windows-only frontend failure is a lockfile missing a
 platform-specific optional binary, and all three lockfiles carry the full set of
 `win32` artifacts. What is left — case sensitivity, line endings — is stricter on
-Linux, so a Windows leg would catch nothing the existing one misses.
+Linux, so a Windows leg would catch nothing the existing one misses. The
+release-path shell suite runs on `ubuntu-latest` alone; Windows is out of scope
+for it for the same reason as for the scripts it tests.
 
 This rests on the project [not taking code contributions yet](../README.md#feedback).
 When that changes, "frontend development on Windows has never been exercised"
