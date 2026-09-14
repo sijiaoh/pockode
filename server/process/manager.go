@@ -88,6 +88,10 @@ type Process struct {
 	// as opposed to pausing it for a permission or question answer. Only
 	// meaningful while state is idle. Guarded by mu; see setIdle.
 	turnEnded bool
+	// promptPending says whether a permission request or question is on screen
+	// with no answer yet, which is what keeps the idle reaper off this process.
+	// Guarded by mu; see awaitingUserAnswer for why it is not read off turnEnded.
+	promptPending bool
 	// closed is set when the process is explicitly terminated (Close/Shutdown/reap).
 	// Prevents stale buffered events from emitting state changes (e.g. running/idle)
 	// that would incorrectly interact with the AutoResumer.
@@ -471,6 +475,14 @@ func (m *Manager) reapIdleAsOf(now time.Time) {
 			slog.Debug("idle process spared, waiting on background work", "sessionId", p.sessionID)
 			return false
 		}
+		// A turn paused on a permission or a question is waiting for a person,
+		// and people take longer than any timeout worth setting. Reaping one
+		// answers the agent's question by killing it: the user comes back to a
+		// dead session and a prompt that can no longer be answered.
+		if p.awaitingUserAnswer() {
+			slog.Debug("idle process spared, waiting for a user answer", "sessionId", p.sessionID)
+			return false
+		}
 		return true
 	})
 	for _, proc := range procs {
@@ -510,6 +522,36 @@ func (p *Process) waitingForBackgroundWork() bool {
 	return ok && waiter.WaitingForBackgroundWork()
 }
 
+// awaitingUserAnswer reports whether a permission request or a question is
+// waiting for an answer that only a person can give.
+//
+// This is deliberately not read off turnEnded, which is the inverse of it
+// everywhere except the one place that matters. An agent can withdraw a prompt
+// it no longer needs answered (request_cancelled), and that withdraws the wait
+// without ending the turn: the frontend moves the card from "pending" to
+// "expired", and turnEnded, whose job is deciding whether an idle still needs
+// reporting, correctly stays false. Reusing it here would spare a process that
+// nobody is waiting on — forever, since a turn that cancelled its prompt and
+// then hung never reports another idle to clear it.
+//
+// Unlike a background wait, this exemption has no budget: it ends when a person
+// acts, when the agent withdraws the prompt, or when the turn ends some other
+// way (an interrupt, an error).
+func (p *Process) awaitingUserAnswer() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.promptPending
+}
+
+// clearPendingPrompt records that the prompt the process was waiting on is gone,
+// for the case where nothing else says so: the agent withdrawing it leaves the
+// turn running, so no idle follows to clear the wait.
+func (p *Process) clearPendingPrompt() {
+	p.mu.Lock()
+	p.promptPending = false
+	p.mu.Unlock()
+}
+
 func (p *Process) touch() {
 	p.mu.Lock()
 	p.lastActive = time.Now()
@@ -540,6 +582,9 @@ func (p *Process) SetRunning() {
 		return
 	}
 	p.state = ProcessStateRunning
+	// A prompt is only ever pending while idle, so leaving idle ends the wait.
+	// This is the path an answer takes (see SendQuestionResponse).
+	p.promptPending = false
 	p.mu.Unlock()
 
 	p.manager.emitStateChange(p.sessionID, ProcessStateRunning, false)
@@ -572,6 +617,10 @@ func (p *Process) setIdle(needsInput, interrupted bool) {
 	}
 
 	p.mu.Lock()
+	// Before the early return, which skips a redundant *emission*, not the
+	// bookkeeping: a second prompt raised while the first one is still on screen
+	// says nothing new downstream but is still a prompt waiting to be answered.
+	p.promptPending = needsInput
 	if p.state == ProcessStateIdle && (p.turnEnded || needsInput) {
 		p.mu.Unlock()
 		return
@@ -629,6 +678,10 @@ func (p *Process) streamEvents(ctx context.Context) {
 		seq, err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event))
 		if err != nil {
 			log.Error("failed to append to history", "error", err)
+		}
+
+		if eventType == agent.EventTypeRequestCancelled {
+			p.clearPendingPrompt()
 		}
 
 		if eventType.AwaitsUserInput() {
