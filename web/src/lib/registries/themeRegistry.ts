@@ -33,7 +33,7 @@ export const THEME_INFO: Record<ThemeName, ThemeInfo> = {
 		accent: { light: "#0b7a70", dark: "#2dd4bf" },
 		bg: { light: "#f8fafb", dark: "#0c1220" },
 		text: { light: "#0c1829", dark: "#e8f0f5" },
-		textMuted: { light: "#7c919e", dark: "#5a7a8f" },
+		textMuted: { light: "#536570", dark: "#829eb0" },
 	},
 	aurora: {
 		label: "Aurora",
@@ -41,7 +41,7 @@ export const THEME_INFO: Record<ThemeName, ThemeInfo> = {
 		accent: { light: "#9333ea", dark: "#c084fc" },
 		bg: { light: "#fbf9fe", dark: "#150a24" },
 		text: { light: "#1e1228", dark: "#f3e8ff" },
-		textMuted: { light: "#6d5d80", dark: "#7c5a9c" },
+		textMuted: { light: "#6a5b7d", dark: "#a58cbc" },
 	},
 	ember: {
 		label: "Ember",
@@ -49,7 +49,7 @@ export const THEME_INFO: Record<ThemeName, ThemeInfo> = {
 		accent: { light: "#c2410c", dark: "#fb923c" },
 		bg: { light: "#fefcfa", dark: "#1c1412" },
 		text: { light: "#27201c", dark: "#f8f0e8" },
-		textMuted: { light: "#7a6a5c", dark: "#8a7468" },
+		textMuted: { light: "#706155", dark: "#ac9b91" },
 	},
 	mint: {
 		label: "Mint",
@@ -57,7 +57,7 @@ export const THEME_INFO: Record<ThemeName, ThemeInfo> = {
 		accent: { light: "#077691", dark: "#22d3ee" },
 		bg: { light: "#f8fcfa", dark: "#0a1610" },
 		text: { light: "#0a2018", dark: "#e8f8f0" },
-		textMuted: { light: "#4a7560", dark: "#5a8a70" },
+		textMuted: { light: "#456c59", dark: "#78a78d" },
 	},
 	void: {
 		label: "Void",
@@ -65,7 +65,7 @@ export const THEME_INFO: Record<ThemeName, ThemeInfo> = {
 		accent: { light: "#18181b", dark: "#fafafa" },
 		bg: { light: "#ffffff", dark: "#09090b" },
 		text: { light: "#09090b", dark: "#fafafa" },
-		textMuted: { light: "#a1a1aa", dark: "#71717a" },
+		textMuted: { light: "#676772", dark: "#92929a" },
 	},
 };
 

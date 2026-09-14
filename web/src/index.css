@@ -201,8 +201,8 @@ samp {
 
 	/* Text - 深蓝灰色调 */
 	--th-text-primary: #0c1829;
-	--th-text-secondary: #3d5160;
-	--th-text-muted: #7c919e;
+	--th-text-secondary: #344652;
+	--th-text-muted: #536570;
 	--th-text-inverse: #f8fafb;
 
 	/* Borders */
@@ -242,8 +242,8 @@ samp {
 
 	/* Text - 冷白色调 */
 	--th-text-primary: #e8f0f5;
-	--th-text-secondary: #a0b8c8;
-	--th-text-muted: #5a7a8f;
+	--th-text-secondary: #acc1cf;
+	--th-text-muted: #829eb0;
 	--th-text-inverse: #0c1220;
 
 	/* Borders */
@@ -294,7 +294,7 @@ samp {
 	/* Text - 深紫灰 */
 	--th-text-primary: #1e1228;
 	--th-text-secondary: #4a3a5c;
-	--th-text-muted: #6d5d80;
+	--th-text-muted: #6a5b7d;
 	--th-text-inverse: #fbf9fe;
 
 	/* Borders */
@@ -334,8 +334,8 @@ samp {
 
 	/* Text - 柔和的淡紫白 */
 	--th-text-primary: #f3e8ff;
-	--th-text-secondary: #c9a8e8;
-	--th-text-muted: #7c5a9c;
+	--th-text-secondary: #ccade9;
+	--th-text-muted: #a58cbc;
 	--th-text-inverse: #150a24;
 
 	/* Borders */
@@ -385,8 +385,8 @@ samp {
 
 	/* Text - 温暖的深棕 */
 	--th-text-primary: #27201c;
-	--th-text-secondary: #5c4a40;
-	--th-text-muted: #7a6a5c;
+	--th-text-secondary: #514139;
+	--th-text-muted: #706155;
 	--th-text-inverse: #fefcfa;
 
 	/* Borders */
@@ -427,7 +427,7 @@ samp {
 	/* Text - 温暖的米白 */
 	--th-text-primary: #f8f0e8;
 	--th-text-secondary: #d4c0b0;
-	--th-text-muted: #8a7468;
+	--th-text-muted: #ac9b91;
 	--th-text-inverse: #1c1412;
 
 	/* Borders */
@@ -477,8 +477,8 @@ samp {
 
 	/* Text - 深翠绿灰 */
 	--th-text-primary: #0a2018;
-	--th-text-secondary: #2d5443;
-	--th-text-muted: #4a7560;
+	--th-text-secondary: #284b3c;
+	--th-text-muted: #456c59;
 	--th-text-inverse: #f8fcfa;
 
 	/* Borders */
@@ -519,7 +519,7 @@ samp {
 	/* Text - 薄荷白 */
 	--th-text-primary: #e8f8f0;
 	--th-text-secondary: #a8d4c0;
-	--th-text-muted: #5a8a70;
+	--th-text-muted: #78a78d;
 	--th-text-inverse: #0a1610;
 
 	/* Borders */
@@ -570,7 +570,7 @@ samp {
 	/* Text - 纯黑灰阶 */
 	--th-text-primary: #09090b;
 	--th-text-secondary: #3f3f46;
-	--th-text-muted: #a1a1aa;
+	--th-text-muted: #676772;
 	--th-text-inverse: #fafafa;
 
 	/* Borders */
@@ -611,7 +611,7 @@ samp {
 	/* Text - 纯白灰阶 */
 	--th-text-primary: #fafafa;
 	--th-text-secondary: #d4d4d8;
-	--th-text-muted: #71717a;
+	--th-text-muted: #92929a;
 	--th-text-inverse: #09090b;
 
 	/* Borders */

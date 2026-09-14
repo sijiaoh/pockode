@@ -98,7 +98,7 @@ function TaskItem({ task }: Props) {
 					    on a phone a fixed-width label there truncates the
 					    description away to nothing. */}
 					{task.resultAfterInterrupt && (
-						<p className="px-2 pt-2 text-th-text-muted opacity-70">
+						<p className="px-2 pt-2 text-th-text-muted">
 							Returned after the turn was interrupted.
 						</p>
 					)}

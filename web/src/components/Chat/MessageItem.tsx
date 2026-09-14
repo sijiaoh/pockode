@@ -199,9 +199,7 @@ function WorkEventItem({
 				<ListTodo className="size-3 shrink-0 text-th-text-muted" />
 				<span className="shrink-0 text-th-text-muted">{`Pockode · ${label}`}</span>
 				{summary && (
-					<span className="min-w-0 truncate text-th-text-muted opacity-70">
-						{summary}
-					</span>
+					<span className="min-w-0 truncate text-th-text-muted">{summary}</span>
 				)}
 			</button>
 			<CollapsibleBody expanded={expanded}>

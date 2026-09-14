@@ -163,7 +163,12 @@ const statusConfig = {
 		Icon: X,
 		color: "text-th-text-muted",
 		label: "Expired",
-		chip: "bg-th-text-muted/15 text-th-text-muted",
+		// An opaque surface rather than the `/15` self-tint its siblings use:
+		// muted tinting itself drags the backdrop towards the text, so raising
+		// the token raises both halves and the ratio barely moves. The card
+		// underneath is `bg-th-bg-secondary` with a `hover:` overlay, which a
+		// translucent chip would let through as well.
+		chip: "bg-th-bg-tertiary text-th-text-muted",
 	},
 };
 

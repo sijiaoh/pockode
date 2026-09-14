@@ -150,7 +150,7 @@ function InlineEditableName({ role }: { role: AgentRole }) {
 			<button
 				type="button"
 				onClick={() => setEditing(true)}
-				className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
+				className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted opacity-80 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
 				aria-label="Edit name"
 			>
 				<Pencil className="size-4" />
@@ -252,7 +252,7 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 				<button
 					type="button"
 					onClick={() => setEditing(true)}
-					className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
+					className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-80 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
 					aria-label="Edit role prompt"
 				>
 					<Pencil className="size-3.5" />
@@ -594,7 +594,7 @@ function StepsEditor({ role }: { role: AgentRole }) {
 				<button
 					type="button"
 					onClick={() => setEditing(true)}
-					className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-60 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
+					className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-80 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
 					aria-label="Edit steps"
 				>
 					<Pencil className="size-3.5" />
