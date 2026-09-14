@@ -108,8 +108,9 @@ fi
 DOWNLOAD_URL="$RELEASE_URL/$ASSET"
 # The checksums come from the same release the binary did. For a named tag that
 # is exact. For `latest` it is two independent requests, and a release published
-# between them would pair a new binary with an old checksum file: the download
-# would be rejected even though nothing is wrong with it. Resolving `latest` to
+# between them pairs the binary fetched first with the checksums of the release
+# that replaced it: the download would be rejected even though nothing is wrong
+# with it. Resolving `latest` to
 # a tag first would close that window, but only by making every install depend
 # on the shape of GitHub's redirect for a race measured in seconds against a
 # release cadence measured in days. The mismatch message says so instead, and a

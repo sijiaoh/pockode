@@ -87,8 +87,8 @@ else
 fi
 
 # Hashed from inside OUTPUT_DIR so the second field is a bare filename: it has
-# to match the asset name the release publishes, and OUTPUT_DIR is an absolute
-# path by now. Only this run's binaries are listed, so --local yields a
+# to match the asset name the install scripts download, and OUTPUT_DIR is an
+# absolute path by now. Only this run's binaries are listed, so --local yields a
 # one-line file rather than stale entries from an earlier full build.
 echo "Writing $OUTPUT_DIR/checksums.txt..."
 (cd "$OUTPUT_DIR" && "${sha256[@]}" "${binaries[@]}" > checksums.txt)

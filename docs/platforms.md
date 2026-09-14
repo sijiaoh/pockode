@@ -63,7 +63,7 @@ Do not run it.
 There is one benign explanation, and it only applies to a default install — not
 to a named version, and not to `install.ps1 -Url`: the binary and `checksums.txt`
 are two separate requests for `latest`, so a release published between them pairs
-a new binary with the previous checksums. The script adds a line saying so in
+the binary you were served with the checksums of the release that replaced it. The script adds a line saying so in
 exactly that case, and a second run then succeeds. If it fails again the
 mismatch is real — stop there and
 [report it](https://github.com/sijiaoh/pockode/issues).
@@ -219,9 +219,11 @@ through a script block instead:
 
 `-Url` takes the binary from somewhere other than a GitHub release — a mirror, or
 a build that has not been released yet. A mirror has to carry a `checksums.txt`
-beside the binary, listing it under the file name the URL ends in: the download
-is checked there exactly as it is for a release, and a mirror is where that
-matters most. `-InstallDir` has to be repeated on every later run, `-Uninstall`
+beside the binary, listing it under the file name the URL ends in, or the
+download is refused. Both files come from the mirror, so the check catches a
+copy that arrived corrupt or truncated — not a mirror that is serving you
+something else on purpose. For a mirror you do not control, compare the hash
+against the release's own `checksums.txt`. `-InstallDir` has to be repeated on every later run, `-Uninstall`
 included: the script only knows about the directory it is given. Leave it off
 and an upgrade installs a second copy in the default location while `pockode`
 keeps resolving to the first one — the custom directory went onto `PATH`

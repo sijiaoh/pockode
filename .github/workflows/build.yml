@@ -16,11 +16,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  # A release ships checksums.txt for downloads to be verified against, so an
-  # unusable one is worse than none - it is only discovered by whoever bothered
-  # to check. Nothing else runs build.sh before a tag is pushed, hence its own
-  # workflow rather than a job in server.yml or install.yml, whose trigger paths
-  # deliberately watch other things.
+  # The install scripts verify downloads against the checksums.txt a release
+  # ships, so a release that builds but publishes an unusable checksums.txt
+  # breaks every install. Nothing else runs build.sh before a tag is pushed,
+  # hence its own workflow rather than a job in server.yml or install.yml,
+  # whose trigger paths deliberately watch other things.
   checksums:
     # macOS is what release.yml builds on and has no sha256sum, only shasum;
     # Linux is what developers run. The file has to come out identical on both.

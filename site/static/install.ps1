@@ -235,8 +235,8 @@ if (-not $Url) {
 #
 # For a named tag the two requests are the same release by construction. For
 # `latest` they are two independent resolutions, and a release published between
-# them would pair a new binary with an old checksum file: a download rejected
-# although nothing is wrong with it. Resolving `latest` to a tag first would
+# them pairs the binary fetched first with the checksums of the release that
+# replaced it: a download rejected although nothing is wrong with it. Resolving `latest` to a tag first would
 # close that window, but only by making every install depend on the shape of
 # GitHub's redirect, for a race measured in seconds against a release cadence
 # measured in days. install.sh makes the same trade; the mismatch message below
