@@ -207,11 +207,11 @@ samp {
 
 	/* Borders */
 	--th-border: #d4e0e6;
-	--th-border-focus: #0d9488;
+	--th-border-focus: #0b7a70;
 
 	/* Interactive - Teal */
-	--th-accent: #0d9488;
-	--th-accent-hover: #0f766e;
+	--th-accent: #0b7a70;
+	--th-accent-hover: #09655d;
 	--th-accent-text: #ffffff;
 
 	/* Semantic */
@@ -224,7 +224,7 @@ samp {
 	--th-code-text: #134e4a;
 
 	/* Chat bubbles */
-	--th-user-bubble: #0d9488;
+	--th-user-bubble: #0b7a70;
 	--th-user-bubble-text: #ffffff;
 	--th-ai-bubble: #e6eef2;
 	--th-ai-bubble-text: #0c1829;
@@ -483,11 +483,11 @@ samp {
 
 	/* Borders */
 	--th-border: #c8e8d8;
-	--th-border-focus: #0891b2;
+	--th-border-focus: #077691;
 
 	/* Interactive - Cyan (使用青色与 success 绿色区分，同时满足 WCAG AA) */
-	--th-accent: #0891b2;
-	--th-accent-hover: #0e7490;
+	--th-accent: #077691;
+	--th-accent-hover: #056379;
 	--th-accent-text: #ffffff;
 
 	/* Semantic */
@@ -500,7 +500,7 @@ samp {
 	--th-code-text: #155e75;
 
 	/* Chat bubbles */
-	--th-user-bubble: #0891b2;
+	--th-user-bubble: #077691;
 	--th-user-bubble-text: #ffffff;
 	--th-ai-bubble: #ddf0e5;
 	--th-ai-bubble-text: #0a2018;

@@ -155,18 +155,36 @@ Colour, restated as rules rather than as a list of places:
 | `th-text-muted` | Group headers, metadata, and icons that are not asking to be pressed — decoration, or an action rare enough to sit below the row it lives on (a tree row's `…`) |
 | `th-error` / `th-success` | A failure / a completed outcome. Never a state that is merely unusual |
 
-**Known gap: `th-accent-text` on `th-accent` falls below AA in two light
-themes.** The pair measures 3.74:1 in abyss light and 3.68:1 in mint light,
-against WCAG AA's 4.5:1 for text this size; the other eight theme variants pass
-with room to spare. Abyss is the default theme and the mode defaults to
-`system`, so this is what a first-run user on a light desktop gets. It is a
-property of the token pair rather than of any one place that uses it — every L1
-primary action sits at the same contrast, and the Git tab's count badge
-([git-ui.md](git-ui.md#the-change-count-on-the-tab)) only joined them. Recorded
-here rather than worked around where it was noticed: a single component picking
-a colour of its own would leave the system less consistent and the real problem
-better hidden. The fix belongs in those two themes' token values, where it lands
-for everything at once.
+**`th-accent-text` on `th-accent` clears WCAG AA's 4.5:1 in every variant, and
+`web/tests/contrast.test.ts` holds the line.** The test finds the variants by
+reading the stylesheets rather than by listing them, so a theme added tomorrow
+is guarded the day it is written. Guarded beside it are the two other fills that
+take a foreground a theme pins to them: `th-accent-hover`, which wears
+`th-accent-text` too and so owes the same floor the resting fill does, and
+`th-user-bubble` / `th-user-bubble-text`. Contrast here is a property of the
+token pair and never of a place that uses it — every L1 primary action sits at
+one ratio, and the Git tab's count badge
+([git-ui.md](git-ui.md#the-change-count-on-the-tab)) only joins them — so a
+caller that comes up short fixes nothing by picking a colour of its own: it
+leaves the system less consistent and the real problem better hidden. Two light
+themes did come up short, at 3.74:1 and 3.68:1, and the fix went into their
+token values, where it landed for every caller at once.
+
+**Changing an accent means changing the tokens that hold the same value.**
+`--th-border-focus` is the accent value in every variant, and `--th-user-bubble`
+is in the light ones — the bubble was the same failing pair under a second name,
+over a whole message body rather than a button, which is how it went unnoticed.
+Edit by line rather than by search-and-replace: two dark variants happen to
+carry a light variant's old *hover* colour, and would be rewritten along with
+it. `web/src/lib/registries/themeRegistry.ts` keeps a second copy of each accent
+for the theme picker's swatches and needs the same edit.
+
+**To darken an accent, hold hue and saturation and drop lightness alone.**
+Tailwind's next step down (`teal-700` under `teal-600`) desaturates as it
+darkens, and it is the saturation it drops, not the darkness it adds, that reads
+as muddy. Hue is also the theme's identity — mint's accent is a cyan precisely
+to stay apart from its green `th-success` — so a hue that drifts on its way
+through a contrast check trades a measurable problem for a quiet one.
 
 Selection is the bar **and** the `th-bg-tertiary` fill together. The rule is
 about **row backgrounds** and only about them, which is the clause to keep in
@@ -174,6 +192,20 @@ mind before reading it as a ban on standing accent generally: a pressed search
 option chip is `border-th-accent bg-th-accent/10 text-th-accent` and persists
 across sessions, and no row rule reaches it, because a chip is not a row and
 cannot be mistaken for a selected one.
+
+**Known gap: `text-th-accent` on `bg-th-accent/10` is still below AA**, at
+4.34:1 and 4.43:1 in the two light themes, and those are the best case: the fill
+is translucent, so the same pairing measures 3.83:1 and 4.00:1 once it lands on
+`th-bg-tertiary`. It is written in this chip and in half a dozen places besides
+— `ui/StatusBadge.tsx`, `common/ToggleChip.tsx` and `Worktree/WorktreeBadge.tsx`
+among them. It is the accent pairing a token value cannot settle, which is why
+it outlived the fix above: the fill *is* the accent at 10% opacity, so darkening
+the accent darkens both sides and the ratio barely moves — clearing 4.5 would
+take an accent dark enough to dull every primary action, for the sake of the
+smallest labels on screen. The fix belongs in the chip's own foreground rather
+than in the accent: accent carries the emphasis through the border and the fill,
+and the label is read in `th-text-primary`, the way `common/Highlight.tsx`
+already writes it.
 
 **On rows, though, neither panel has a standing annotation any more, and that is
 the resolution of "accent meant too many things" rather than a gap in it.** The

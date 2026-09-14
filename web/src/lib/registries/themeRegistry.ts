@@ -26,7 +26,7 @@ export const THEME_INFO: Record<ThemeName, ThemeInfo> = {
 	abyss: {
 		label: "Abyss",
 		description: "Ocean depths",
-		accent: { light: "#0d9488", dark: "#2dd4bf" },
+		accent: { light: "#0b7a70", dark: "#2dd4bf" },
 		bg: { light: "#f8fafb", dark: "#0c1220" },
 		text: { light: "#0f172a", dark: "#f1f5f9" },
 		textMuted: { light: "#64748b", dark: "#94a3b8" },
@@ -50,7 +50,7 @@ export const THEME_INFO: Record<ThemeName, ThemeInfo> = {
 	mint: {
 		label: "Mint",
 		description: "Cool breeze",
-		accent: { light: "#0891b2", dark: "#22d3ee" },
+		accent: { light: "#077691", dark: "#22d3ee" },
 		bg: { light: "#f8fcfa", dark: "#0a1610" },
 		text: { light: "#083344", dark: "#ecfeff" },
 		textMuted: { light: "#0e7490", dark: "#67e8f9" },
