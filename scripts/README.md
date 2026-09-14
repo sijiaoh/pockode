@@ -63,13 +63,14 @@ Pushing a tag matching `v*` is the whole release procedure —
 `.github/workflows/release.yml` does the rest on `macos-latest`:
 
 ```bash
-git tag v0.16.0
-git push origin v0.16.0
+git tag v0.17.0
+git push origin v0.17.0
 ```
 
-The tag is the version: `build.sh` runs with `VERSION=<tag>`, so the number
-`pockode -version` prints comes from there and from nowhere else in the
-repository.
+The tag is the version, and there is no version file to bump alongside it:
+`build.sh` runs with `VERSION=${GITHUB_REF_NAME}` and strips the leading `v`,
+then `-ldflags` replaces the `dev` fallback in the source, so `v0.17.0` is what
+makes `pockode -version` print `pockode 0.17.0`.
 
 | Step | What it does |
 | ---- | ------------ |
@@ -95,19 +96,19 @@ each one has already gone wrong once:
   true, and the install scripts install whatever
   [`/releases/latest`](https://github.com/sijiaoh/pockode/releases/latest)
   points at — a prerelease inheriting that default would put every new install
-  on an alpha. A tag containing `-` (`v0.16.0-alpha.1`) is published as a
+  on an alpha. A tag containing `-` (`v0.17.0-alpha.1`) is published as a
   prerelease and does not become `latest`; anything else does.
 
 ### Testing a change to the release path before tagging
 
 `.github/workflows/build.yml` runs `build.sh` on `ubuntu-latest` and
-`macos-latest` whenever `build.sh`, `release.yml` or `build.yml` itself changes,
-and checks the `checksums.txt` that comes out. It exists because a tag is
-otherwise the first thing that ever runs this code, and by then the release is
-already published.
+`macos-latest` whenever `build.sh`, `release.yml` or `build.yml` itself changes
+— and on demand, via `workflow_dispatch` — then checks the `checksums.txt` that
+comes out. It exists because a tag is otherwise the first thing that ever runs
+this code, and by then the release is already published.
 
 It does not exercise the release steps themselves. For those, push a prerelease
-tag (`v0.16.0-alpha.1`), let the workflow run against the real API, then delete
+tag (`v0.17.0-alpha.1`), let the workflow run against the real API, then delete
 the release and its tag with `gh release delete <tag> --cleanup-tag`. A
 prerelease is safe to experiment with precisely because it cannot take `latest`.
 
