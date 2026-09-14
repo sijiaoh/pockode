@@ -79,10 +79,10 @@ Aggregation](#usage-aggregation).
 
 ### Validation Rules
 
-On creation (`server/work/store.go:175-210`):
+On creation (`FileStore.Create` in `server/work/store.go`):
 1. **Type must be valid** — either "story" or "task"
 2. **Title required** — non-empty string
-3. **AgentRoleID required** — must exist in the role store
+3. **AgentRoleID required** — non-empty here; that the role actually exists is checked one layer up, in `handleWorkCreate` (`server/ws/rpc_work.go`)
 4. **Parent type match** — Tasks must have a Story parent, Stories cannot have parents
 5. **Parent not closed** — Cannot create children under closed parents
 

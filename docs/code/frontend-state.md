@@ -91,7 +91,7 @@ export type SessionStore = SessionState & SessionActions;
 **Pattern B: Listener Pattern** — worktreeStore uses external listeners for non-React contexts:
 
 ```typescript
-// web/src/lib/worktreeStore.ts:24-65 (abridged)
+// web/src/lib/worktreeStore.ts (abridged)
 const changeListeners = new Set<WorktreeChangeListener>();
 
 export const worktreeActions = {
@@ -111,7 +111,7 @@ wsStore subscribes to these listeners to clean up worktree-scoped subscriptions 
 **Pattern C: Registry Subscription** — themeStore subscribes to themeRegistry changes:
 
 ```typescript
-// web/src/lib/themeStore.ts:121-142
+// web/src/lib/themeStore.ts — themeActions.init
 subscribeThemeRegistry(() => {
   const { theme: current, mode } = useThemeStore.getState();
   if (isValidTheme(current)) {
@@ -354,7 +354,7 @@ React.memo benefits from reference stability — unchanged messages don't trigge
 Extensions register capabilities at runtime via `ExtensionContext`:
 
 ```typescript
-// web/src/lib/extensions.ts:26-45
+// web/src/lib/extensions.ts
 export interface ExtensionContext {
   readonly settings: { register(config: SettingsSectionConfig): void };
   readonly chatUI: { configure(config: Partial<ChatUIConfig>): void };
@@ -369,7 +369,7 @@ export interface ExtensionContext {
 Each context tracks cleanup functions automatically:
 
 ```typescript
-// web/src/lib/extensions.ts:56-101
+// web/src/lib/extensions.ts
 function createContext(extensionId: string): InternalContext {
   const disposables: Array<() => void> = [];
 
@@ -394,7 +394,7 @@ When `unloadExtension(id)` is called, all registered resources are cleaned up.
 Extensions are auto-discovered via Vite's glob import:
 
 ```typescript
-// web/src/lib/extensions.ts:147-150
+// web/src/lib/extensions.ts — loadAllExtensions
 const modules = import.meta.glob<ExtensionModule>(
   "../extensions/*/index.ts",
   { eager: true },
@@ -430,7 +430,7 @@ export function useXxxRegistry() {
 ### Theme Registry Example
 
 ```typescript
-// web/src/lib/registries/themeRegistry.ts:118-144
+// web/src/lib/registries/themeRegistry.ts
 export function registerTheme(name, info, css): () => void {
   // Immutable update for React change detection
   customThemes = new Map(customThemes);
@@ -454,7 +454,7 @@ Built-in themes are typed (`ThemeName`), custom themes are runtime-registered.
 Allows extensions to replace UI components:
 
 ```typescript
-// web/src/lib/registries/chatUIRegistry.ts:64-91
+// web/src/lib/registries/chatUIRegistry.ts
 export interface ChatUIConfig {
   UserAvatar?: ComponentType<AvatarProps>;
   AssistantAvatar?: ComponentType<AvatarProps>;
