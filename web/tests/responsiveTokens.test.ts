@@ -91,6 +91,26 @@ describe("gate coverage", () => {
 	});
 });
 
+// touchTarget.ts computes a text control's height as its padding plus its line
+// box, and reads that line box out of a table of Tailwind's *defaults* — a
+// default is not in the stylesheet, so there is nothing there to read it from.
+// Touching the scale in `@theme` is the one thing that would make that table
+// wrong silently: every computed height would shift, and the register in
+// docs/responsive-ui.md would go on agreeing with itself. Adding a step is the
+// same hazard from the other side — the scan would read `text-tiny` as a colour
+// and credit the control with the inherited 16px. Either is a fine thing to
+// want; it just has to move TYPE_SCALE too.
+//
+// `--text-shadow-*` is a different Tailwind namespace and says nothing about
+// type, so it is not what this is looking for.
+describe.each(Object.entries(STYLESHEETS))("%s type scale", (_name, path) => {
+	const css = read(path);
+
+	it("leaves Tailwind's font-size scale alone", () => {
+		expect(css).not.toMatch(/--text-(?!shadow)[\w-]*:/);
+	});
+});
+
 // `hitAreaFault` treats `touch-target` as clearing both floors and stops
 // looking — so every control that reaches the floor through the overlay rests
 // on this utility actually declaring them. Nothing at runtime would notice if

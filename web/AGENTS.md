@@ -67,7 +67,7 @@ export default Dialog;
 - Mobile-first：默认移动端，**只用 `sm:`(640) 和 `lg:`(1024)** 两个断点适配大屏（compact / regular / expanded 三档）
 - 宽度决定「东西放在哪」，指针决定「东西够不够得着」：可达性与命中区用 `pointer-fine:` / `pointer-coarse:`，绝不用宽度前缀（详见 `docs/responsive-ui.md`）
 - 命中区底线：粗指针 44×44、相邻间距 ≥8px；细指针 36×36、≥4px。默认用 `pointer-coarse:` 把盒子撑到 44；容器高度不能变时用 `touch-target`（不改盒子，只铺一层命中区：细指针 36、粗指针 44）
-- 底线现在管得住的是两类：**icon-only 控件**（两个轴都要写盒子）和**任何自己写下高度的控件**（那个数字直接按两条底线判）。有文字、高度靠 padding + 行盒撑出来的控件**目前在规则之外** —— 字符串匹配变不出像素，padding 加行盒还要知道继承来的字号。这是守卫的能力边界，不是「这些控件不用管」：全库现有 69 个这种形状，其中 38 个的高度可以直接从它自己写的 class 算出来、**无一到 44px**（最矮 16px），已知并有意推迟，清单见 `docs/responsive-ui.md` 的 Outside the floor today
+- 底线现在管得住的是两类：**icon-only 控件**（两个轴都要写盒子）和**任何自己写下高度的控件**（那个数字直接按两条底线判）。有文字、高度靠 padding + 行盒撑出来的控件**不在强制范围内** —— 作者没写下的高度，守卫没法拿它问责。但它们不是「不用管」：扫描会把 padding 加行盒算出来，逐个登记在 `docs/responsive-ui.md` 的 Outside the floor today，那份清单由 `touchTarget.test.ts` 生成并逐字比对，新写一个这种形状的控件当场变红。**数量和高度只在那份清单里写一次，别在任何别处复述**（这个数字曾经因为四处散落的副本连错四版）
 - 底线对 `<button>` / `<a>` / `role="button"` 一视同仁；在 `<a>` `<span>` `<label>` 这类默认 `display: inline` 的标签上写盒子，必须同时给 `inline-flex` 之类的 display，否则 CSS 直接丢弃那个高度
 - `pointer-fine` / `pointer-coarse` 是 Tailwind 内置 variant 名，两份 `index.css` 里的 `@custom-variant` 是刻意覆盖：删掉不是「少一条规则」，而是悄悄换成内置的主指针语义
 - hover 揭示只能「加」不能「还」：隐藏与揭示两半必须同挂 `pointer-fine:`，用 `opacity` 而非 `display`，并配 `group-focus-within` 孪生

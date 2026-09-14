@@ -639,10 +639,11 @@ const STRETCHED: [axis: "h" | "w", pattern: RegExp][] = [
  * What still nobody guards, stated plainly rather than hopefully: a control
  * with text and no height of its own. `py-1.5` around one line of `text-xs`
  * (12px on a 16px line box) is 28px, and this returns null for it. Only a
- * person reading the rendered page catches that one — and 66 controls are in
- * that shape today, the shortest of them 16px (docs/responsive-ui.md, "Outside
- * the floor today"). The floor is scoped to what is readable here; those are
- * known and deferred, not exempt.
+ * person reading the rendered page catches that one. It is not unknown, though:
+ * `impliedHeight` computes exactly that arithmetic and `deferredControls`
+ * collects every control in the shape, which is what keeps the register in
+ * docs/responsive-ui.md derived rather than counted. The floor is scoped to
+ * what can be demanded of an author; those are known and deferred, not exempt.
  *
  * Every branch the control's classes can take has to clear the floors, not just
  * one: the scan does not evaluate a helper's arguments, so any branch is a
@@ -663,23 +664,36 @@ export function hitAreaFault(control: Control): string | null {
 	return null;
 }
 
-/** `hitAreaFault` for one of the class lists the control may end up with. */
-function branchFault(control: Control, classes: string): string | null {
-	const tokens = classes.split(/\s+/).filter(Boolean);
-	if (tokens.includes("touch-target")) return null;
+/** What one class list says about the box it makes. */
+interface Measured {
+	tokens: string[];
+	/** The px each axis reaches, per pointer. */
+	best: Record<"h" | "w", { fine: number; coarse: number }>;
+	/** Whether a size token named the axis, as opposed to nothing at all. */
+	declared: Record<"h" | "w", boolean>;
+	/** Whether the axis was handed to the layout instead of being sized here. */
+	stretched: Record<"h" | "w", boolean>;
+	/** Whether anything at all — a size or a stretch — spoke about the box. */
+	sized: boolean;
+}
 
+/** Every box number one class list states. Shared by the fault and the census. */
+function measure(classes: string): Measured {
+	const tokens = classes.split(/\s+/).filter(Boolean);
 	const best = { h: { fine: 0, coarse: 0 }, w: { fine: 0, coarse: 0 } };
 	const declared = { h: false, w: false };
+	const stretched = { h: false, w: false };
 	let sized = false;
 	for (const token of tokens) {
-		let stretched = false;
+		let handedOver = false;
 		for (const [axis, pattern] of STRETCHED) {
 			if (!pattern.test(token)) continue;
-			stretched = true;
+			handedOver = true;
 			sized = true;
+			stretched[axis] = true;
 			best[axis] = { fine: COARSE_FLOOR, coarse: COARSE_FLOOR };
 		}
-		if (stretched) continue;
+		if (handedOver) continue;
 		const size = sizePx(token);
 		if (!size) continue;
 		sized = true;
@@ -691,6 +705,13 @@ function branchFault(control: Control, classes: string): string | null {
 			if (!coarseOnly) slot.fine = Math.max(slot.fine, size.px);
 		}
 	}
+	return { tokens, best, declared, stretched, sized };
+}
+
+/** `hitAreaFault` for one of the class lists the control may end up with. */
+function branchFault(control: Control, classes: string): string | null {
+	const { tokens, best, declared, sized } = measure(classes);
+	if (tokens.includes("touch-target")) return null;
 
 	// On `sized`, not just on an explicit height: `w-full` and `h-full` are
 	// dropped on an inline box for the same reason a `min-h` is. Checked after
@@ -732,6 +753,303 @@ function axisFault(
 		return `${name} is ${px.fine}px on a fine pointer, below the ${FINE_FLOOR}px floor`;
 	}
 	return null;
+}
+
+/**
+ * Tailwind 4's default type scale: the font size each `text-` step sets and the
+ * line box that comes with it.
+ *
+ * Written down rather than read out of the stylesheet because a default is not
+ * in the stylesheet — it only appears there once someone overrides it in
+ * `@theme`. responsiveTokens.test.ts holds both stylesheets to having *not*
+ * overridden them, so this table stays the truth rather than merely starting
+ * out as it.
+ */
+const TYPE_SCALE: Record<string, { font: number; line: number }> = {
+	xs: { font: 12, line: 16 },
+	sm: { font: 14, line: 20 },
+	base: { font: 16, line: 24 },
+	lg: { font: 18, line: 28 },
+	xl: { font: 20, line: 28 },
+	"2xl": { font: 24, line: 32 },
+	"3xl": { font: 30, line: 36 },
+	"4xl": { font: 36, line: 40 },
+	"5xl": { font: 48, line: 48 },
+};
+
+/** `leading-` steps that are a multiple of the font size rather than px. */
+const LEADING_FACTORS: Record<string, number> = {
+	none: 1,
+	tight: 1.25,
+	snug: 1.375,
+	normal: 1.5,
+	relaxed: 1.625,
+	loose: 2,
+};
+
+/**
+ * The line box of a control that states no font size of its own.
+ *
+ * Neither app sets a root font size, so the browser default of 16px stands, and
+ * preflight sets `line-height: 1.5` on `html` — a unitless value, so it
+ * inherits as a factor and every descendant that does not restate it lands
+ * here. It is what to use when the font size comes from an ancestor in another
+ * file — and it is a ceiling, not a measurement: almost every ancestor that
+ * sets one sets `text-sm` or `text-xs`, which makes the real box *shorter*.
+ * That is the unsafe direction for a floor, which is why a height resting on it
+ * is reported as an upper bound and never mixed in with a height that was read.
+ */
+const INHERITED_LINE_BOX = 24;
+
+/** The height one class list implies, and how much of it was read vs assumed. */
+export interface ImpliedHeight {
+	/** Line box plus vertical padding, per pointer. */
+	fine: number;
+	coarse: number;
+	/** True when the font size came from an ancestor, so the line box is the
+	 * browser default rather than a number this control wrote down. */
+	inherited: boolean;
+}
+
+/** px of vertical padding a token adds, or null if it is not padding. */
+function paddingPx(token: string): { edges: number; px: number } | null {
+	if (WIDTH_PREFIXED.test(token)) return null;
+	const m = token.match(
+		/^(?:[\w-]+:)*(p|py|pt|pb)-(?:\[(\d+(?:\.\d+)?)px\]|(\d+(?:\.\d+)?))$/,
+	);
+	if (!m) return null;
+	const px = m[2] ? Number(m[2]) : Number(m[3]) * SPACING_UNIT;
+	return { edges: m[1] === "pt" || m[1] === "pb" ? 1 : 2, px };
+}
+
+/**
+ * The line box one class list asks for, or null if it names a step this table
+ * cannot read.
+ *
+ * Null is not "no font size" — that is `INHERITED_LINE_BOX`. It means a token
+ * was recognised as type but not understood, and the census asserts there are
+ * none, so a new `leading-` shape shows up as a red test rather than as a
+ * height quietly computed from the wrong number.
+ */
+function lineBox(tokens: string[]): { px: number; inherited: boolean } | null {
+	let font: number | undefined;
+	let line: number | undefined;
+	let leadingFactor: number | undefined;
+	for (const token of tokens) {
+		if (WIDTH_PREFIXED.test(token)) continue;
+		const bare = token.replace(/^(?:[\w-]+:)*/, "");
+		const text = bare.match(/^text-(\[.+\]|[a-z0-9]+)$/);
+		if (text) {
+			const step = TYPE_SCALE[text[1]];
+			if (step) {
+				font = step.font;
+				line = step.line;
+				continue;
+			}
+			if (text[1].startsWith("[")) {
+				const px = text[1].match(/^\[(\d+(?:\.\d+)?)px\]$/);
+				// Any other arbitrary value — a rem, a `length:inherit` — is a font
+				// size this cannot turn into pixels, and reading it as "no font size
+				// stated" would quietly hand the control the 16px default instead.
+				if (!px) return null;
+				// An arbitrary font size sets no line height of its own, so the
+				// inherited factor applies to the new size.
+				font = Number(px[1]);
+				line = undefined;
+				continue;
+			}
+			// Anything else under `text-` is a colour or an alignment.
+			continue;
+		}
+		const leading = bare.match(/^leading-(.+)$/);
+		if (!leading) continue;
+		const factor = LEADING_FACTORS[leading[1]];
+		if (factor !== undefined) {
+			leadingFactor = factor;
+			continue;
+		}
+		if (/^\d+(?:\.\d+)?$/.test(leading[1])) {
+			line = Number(leading[1]) * SPACING_UNIT;
+			leadingFactor = undefined;
+			continue;
+		}
+		return null;
+	}
+	const inherited = font === undefined;
+	const basis = font ?? 16;
+	if (leadingFactor !== undefined)
+		return { px: basis * leadingFactor, inherited };
+	if (line !== undefined) return { px: line, inherited };
+	return { px: inherited ? INHERITED_LINE_BOX : basis * 1.5, inherited };
+}
+
+/**
+ * The tokens of a class list the hit-area rule has nothing to say about, or
+ * null if it does: an overlay clears both floors, and a height or a stretch
+ * token is a number `hitAreaFault` already holds the control to.
+ */
+function unreachableTokens(classes: string): string[] | null {
+	const { tokens, declared, stretched } = measure(classes);
+	if (tokens.includes("touch-target") || declared.h || stretched.h) return null;
+	return tokens;
+}
+
+/**
+ * The height a control implies when it states none: its line box plus its
+ * vertical padding. Null when the control is not in that shape, or when its
+ * type is unreadable.
+ *
+ * This is the arithmetic the guard cannot demand. `hitAreaFault` speaks only
+ * about numbers a control wrote down, because a text control's height is its
+ * text's business — but `padding + line box` is exactly the part of that
+ * business a class list does spell out. Computing it is what turns "so many
+ * controls are in that shape" from a number someone counts by hand every year
+ * or so into one the scan re-derives on every run. See `deferredControls`,
+ * which is what the census is built from.
+ *
+ * Padding counts even on a tag CSS leaves `inline`, where a stated `height`
+ * would be dropped: an inline box's padding is still painted and still takes
+ * the tap, and this is a hit area rather than a line box.
+ *
+ * Borders are left out. `border-2` is a width and `border-th-border` is a
+ * colour, and telling them apart needs the palette; omitting them reads a
+ * control as shorter than it renders, which is the direction that over-reports
+ * rather than excuses.
+ */
+export function impliedHeight(classes: string): ImpliedHeight | null {
+	const tokens = unreachableTokens(classes);
+	if (!tokens) return null;
+	const box = lineBox(tokens);
+	if (!box) return null;
+	let fine = 0;
+	let coarse = 0;
+	for (const token of tokens) {
+		const pad = paddingPx(token);
+		if (!pad) continue;
+		const px = pad.px * pad.edges;
+		coarse = Math.max(coarse, px);
+		if (!/(?:^|:)pointer-coarse:/.test(token)) fine = Math.max(fine, px);
+	}
+	return {
+		fine: box.px + fine,
+		coarse: box.px + coarse,
+		inherited: box.inherited,
+	};
+}
+
+/**
+ * A control whose height the guard cannot demand, with the height it implies.
+ *
+ * The line number is kept even though `renderCensus` drops it: dropping it is a
+ * decision about what the register is sensitive to, not about what was found,
+ * and a caller that wants to go and look at one of these needs it.
+ */
+export interface Deferred extends ImpliedHeight {
+	file: string;
+	line: number;
+}
+
+/**
+ * Every control the hit-area rule cannot reach: it renders text, carries no
+ * `touch-target`, and states no height — neither a number nor a token handing
+ * the height to its parent.
+ *
+ * The shortest branch wins, for the same reason `hitAreaFault` fails on the
+ * worst one: which branch a call site takes is decided by arguments this scan
+ * does not evaluate.
+ *
+ * A control whose type is unreadable is returned with `fine: 0`, so it cannot
+ * be lost — the census counts those separately and expects none.
+ */
+export function deferredControls(controls: Control[]): Deferred[] {
+	const out: Deferred[] = [];
+	for (const control of controls) {
+		if (control.iconOnly) continue;
+		let worst: ImpliedHeight | null = null;
+		let unreadable = false;
+		for (const classes of control.classes) {
+			if (!unreachableTokens(classes)) continue;
+			const implied = impliedHeight(classes);
+			if (!implied) {
+				unreadable = true;
+				continue;
+			}
+			if (!worst || implied.fine < worst.fine) worst = implied;
+		}
+		if (unreadable) {
+			out.push({
+				file: control.file,
+				line: control.line,
+				fine: 0,
+				coarse: 0,
+				inherited: false,
+			});
+			continue;
+		}
+		if (worst) out.push({ ...worst, file: control.file, line: control.line });
+	}
+	return out;
+}
+
+/**
+ * The register of everything the hit-area rule cannot reach, as text.
+ *
+ * It is written into docs/responsive-ui.md and compared there on every run, so
+ * the counts in that section are derived rather than remembered. That is the
+ * whole point of computing heights: four times in a row this number was
+ * corrected to the previous value plus one, because nobody re-counts dozens of
+ * controls by hand, and the section had four prose copies for a correction to
+ * miss. Nothing outside the generated block may restate a count — one
+ * representation, checked.
+ *
+ * Deliberately no line numbers, and files rather than controls: a line number
+ * would make an unrelated edit above a button turn this red, and the register
+ * exists to catch a control being *added* to this shape, not moved.
+ *
+ * The listed px is the fine-pointer height, while the coarse floor is counted
+ * against the coarse one — each floor judged on the height that applies to it.
+ * The two differ only for padding written behind `pointer-coarse:`, which
+ * nothing does today; if something did, the listing would name the shorter of
+ * its two heights, which is the alarming direction rather than the excusing
+ * one.
+ */
+export function renderCensus(deferred: Deferred[]): string {
+	// A real line box is never zero, so `fine: 0` is unambiguously the "could not
+	// be read" marker `deferredControls` sets, and those are kept out of the
+	// ranges rather than dragging a 0 into one.
+	const unreadable = deferred.filter((d) => d.fine === 0);
+	const exact = deferred.filter((d) => d.fine > 0 && !d.inherited);
+	const bound = deferred.filter((d) => d.fine > 0 && d.inherited);
+	const readable = [...exact, ...bound];
+	const range = (group: Deferred[]) =>
+		group.length === 0
+			? "none"
+			: `${Math.min(...group.map((d) => d.fine))}–${Math.max(...group.map((d) => d.fine))}px`;
+
+	const tally = new Map<string, number>();
+	for (const d of deferred) {
+		const basis = d.fine === 0 ? "unread" : d.inherited ? "bound " : "exact ";
+		const key = `${String(d.fine).padStart(4)}px  ${basis} ${d.file}`;
+		tally.set(key, (tally.get(key) ?? 0) + 1);
+	}
+	const listing = [...tally]
+		.sort(([a], [b]) => (a < b ? -1 : 1))
+		.map(([key, n]) => (n > 1 ? `${key} ×${n}` : key));
+
+	return [
+		`${deferred.length} controls render text, state no height of their own and carry no touch-target.`,
+		"",
+		`${exact.length} state their own font size, so the height below is exact: ${range(exact)}.`,
+		`${bound.length} inherit it, so the height below is an upper bound — the ancestor that`,
+		`  sets it may well set a smaller one: ${range(bound)}.`,
+		"",
+		`${readable.filter((d) => d.fine < FINE_FLOOR).length} are under the ${FINE_FLOOR}px fine-pointer floor.`,
+		`${readable.filter((d) => d.coarse >= COARSE_FLOOR).length} reach the ${COARSE_FLOOR}px coarse floor, ${exact.filter((d) => d.coarse >= COARSE_FLOOR).length} of them on a read height.`,
+		`${unreadable.length} state type this scan cannot read, listed as 0px and \`unread\`.`,
+		"",
+		...listing,
+		"",
+	].join("\n");
 }
 
 /** A flex/grid container that puts controls next to each other. */
