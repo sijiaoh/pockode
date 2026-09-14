@@ -135,6 +135,16 @@ evidence.
   and now runs `tsc -b` like `web`'s. Both projects' `tsconfig.node.json` list
   `vitest.config.ts`, so the test config is covered as well — but only through
   that reference, which is exactly what bare `tsc` skips.
+- **`npx biome check docs` is not Biome.** No Biome lives at the repository root
+  — the binary is in `web/node_modules` and `web-cluster/node_modules` — so `npx`
+  falls back to the registry package that happens to be named `biome` (0.3.3,
+  unrelated to `@biomejs/biome`) and runs that. It exits 0 on a path that does
+  not exist and on a file the real Biome fails, so a green run from the root is
+  not evidence about anything. The real one is `pnpm exec biome check …` from
+  inside `web` or `web-cluster`, and pointed at `docs/` it answers `these paths
+  were provided but ignored` and exits 1 — Markdown is in neither project's
+  scope. **Nothing lints the documentation.** What checks it is the tests that
+  read it, such as the register comparison in `web/tests/touchTarget.test.ts`.
 - **`go test ... | grep ... | head` then `$?` reads `head`'s status**, which is
   essentially always 0. Capture the output in a variable and check the exit code
   of the command itself. An interactive shell has no `pipefail`; the pipeline in

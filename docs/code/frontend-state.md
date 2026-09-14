@@ -492,6 +492,7 @@ Key features:
 2. **Worktree switch handling** — the server invalidates worktree-scoped subscriptions on switch, so the hook resubscribes. Rather than clearing data (`onReset`), a switch is a soft refresh: previous data stays on screen and is swapped out by `onSubscribed` when the new worktree's snapshot arrives (see [subscription-system.md](subscription-system.md#why-worktree-switch-is-a-soft-refresh-not-a-reset))
 3. **Connection state** — resets on disconnect, but deliberately keeps data during `reconnecting` and resubscribes once the connection is back
 4. **Nothing lost while opening** — the callback is registered under the client-generated id before the request goes out, and notifications arriving before the initial snapshot is applied are held and replayed after it (see [subscription-system.md](subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened))
+5. **A snapshot handler that throws is reported apart from a failed subscribe** — by the time `onSubscribed` and the replay run, the subscription is open and stays open, so an exception there recovers the same way (`onError`, else `onReset`) but is reported in its own sentence instead of as `Subscription failed`, which would send the reader looking for a network fault that is not there (see [subscription-system.md](subscription-system.md#why-a-throwing-snapshot-handler-is-reported-separately))
 
 ## Key Files
 
