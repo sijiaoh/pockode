@@ -19,15 +19,27 @@ import { repoPath, sourceFiles } from "./sourceScan";
  * The fills whose tints are guarded. The one hand-written list in this file —
  * everything else about a usage is read off the source.
  *
- * Only the accent, for now, and not because the others are fine. The same scan
- * with `th-error`, `th-warning`, `th-success` and `th-text-muted` added finds
- * eighteen more call sites, and they fail: in every light variant those tokens
- * are below AA as text on their own tint, several of them by more than the
- * accent ever was. That is a token-layer fault — those colours miss the floor
- * as text, as a border and as an icon, over any background — and adding the
- * line here turns the suite red until someone picks new colours, which is a
- * separate piece of work with a judgement call in it. Same reasoning, and same
- * shape, as the survey deliberately left out of `GUARDED_PAIRS`.
+ * Only the accent, for now, and not because the others are fine. Adding
+ * `th-error`, `th-warning` and `th-success` turns the suite red: in every light
+ * variant those tokens are below AA as text on their own tint, several of them
+ * by more than the accent ever was. That is a token-layer fault — they miss the
+ * floor as text, as a border and as an icon, over any background — and fixing
+ * it means picking new colours, which is a separate piece of work with a
+ * judgement call in it. Same reasoning, and same shape, as the survey
+ * deliberately left out of `GUARDED_PAIRS`.
+ *
+ * `th-text-muted` is a different case and no longer a token-layer one: it now
+ * clears AA over every surface the app paints and `NON_TEXT_FLOOR` as a border,
+ * and no `bg-th-text-muted` tint carries text any more — the one that did, the
+ * expired chip in `AskUserQuestionItem`, was the self-tint `BANNED_FOREGROUNDS`
+ * names and is now an opaque `bg-th-bg-tertiary`. What it would still fail is
+ * `MAX_TINT_ALPHA`: `Sheet`'s drag handle is `bg-th-text-muted/30`, and no
+ * value of the token can lift it — the extreme token, black or white at 30%
+ * over the sheet's own surface, reaches about 2.1 in the light variants and 2.7
+ * in the dark ones, both under `NON_TEXT_FLOOR`. Whether
+ * a drag handle is decoration or an affordance owing 3:1 is the judgement call,
+ * and web-cluster's own handle answers it the other way, opaque. That
+ * disagreement is its own piece of work.
  */
 export const TINTED_BACKGROUNDS = ["th-accent"];
 
@@ -69,12 +81,18 @@ export const MAX_TINT_ALPHA = 20;
  *
  * The rule is that text on an accent tint is the body colour; these three are
  * the ways it was written before. Two of them the ratio catches on its own —
- * `th-accent` on its own tint is below AA in every light variant, `th-text-muted`
- * is below it everywhere. `th-accent-hover` is the one that needs saying: it
- * clears 4.5 at /10 by about a third of a point and at /15 by seven hundredths
- * of one, and misses it at /20, so a check that only computed ratios would wave
- * through a chip that a single palette tweak turns illegible, and would have no
- * answer at all to "why not this one, it passes".
+ * `th-accent` on its own tint is below AA in every light variant, and
+ * `th-text-muted` misses it over at least one of the three bases in every
+ * variant, which is what `BASE_BACKGROUNDS` asks. (Over the most forgiving base
+ * alone — `th-bg-primary`, the one furthest from the text in either mode, not
+ * the lightest, which is `th-bg-tertiary` in the dark variants — a /10 accent
+ * tint now carries muted at 4.6 or better in ten of the eleven, so the margin
+ * is thinner than it was; the ban is what keeps that from mattering.)
+ * `th-accent-hover` is the one that needs saying: it clears 4.5 at /10 by about
+ * a third of a point and at /15 by seven hundredths of one, and misses it at
+ * /20, so a check that only computed ratios would wave through a chip that a
+ * single palette tweak turns illegible, and would have no answer at all to
+ * "why not this one, it passes".
  *
  * A ban rather than an allow-list of the one token the rule names, because the
  * arithmetic is the part that has to keep working: an allow-list would make

@@ -41,6 +41,22 @@ export function declarationCount(css: string, name: string): number {
 }
 
 /**
+ * Every custom property the stylesheet declares whose name starts with
+ * `prefix`, without the leading `--` and without repeats — the stylesheet's own
+ * list of a family of tokens, for a check that has to notice one nobody
+ * mentioned to it.
+ *
+ * Declarations only, so neither `var(--th-x)` nor the `--color-th-x` alias
+ * layer is counted, on the same reasoning as `declarationCount`.
+ */
+export function declaredNames(css: string, prefix: string): string[] {
+	const matches = stripComments(css).matchAll(
+		new RegExp(`(?:^|[^-\\w])--(${prefix}[\\w-]*)\\s*:`, "g"),
+	);
+	return [...new Set([...matches].map((m) => m[1]))];
+}
+
+/**
  * Every style rule in the stylesheet paired with its *own* declarations —
  * at-rule bodies and nested rules walked into, so a theme nested in `@media`
  * or under a parent selector is still found as itself rather than folded into
