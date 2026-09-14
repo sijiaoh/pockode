@@ -6,8 +6,19 @@
  * project deliberately does not have.
  */
 
+import { declaration, styleRules } from "./css";
+
 /** WCAG 2.x AA for normal-size text. The guarded pairs are all read as text. */
 export const AA_FLOOR = 4.5;
+
+/**
+ * WCAG 2.x AA for anything that is not text — 1.4.11, non-text contrast.
+ *
+ * Icons, borders and focus rings owe this and not `AA_FLOOR`, which is what
+ * makes "move the hue off the label and onto the border" a fix rather than a
+ * relocation of the same failure.
+ */
+export const NON_TEXT_FLOOR = 3;
 
 /** A fill colour and the foreground token written to sit on it. */
 export interface TokenPair {
@@ -58,8 +69,8 @@ export interface ThemeVariant {
 	foreground: string;
 }
 
-/** sRGB 0-255 per channel. */
-type Rgb = [number, number, number];
+/** sRGB 0-255 per channel. Fractional after compositing. */
+export type Rgb = [number, number, number];
 
 /**
  * Hex only, deliberately. Every theme variant is written as hex today; a
@@ -94,98 +105,60 @@ export function contrastRatio(a: Rgb, b: Rgb): number {
 	return (hi + 0.05) / (lo + 0.05);
 }
 
-/** Comments are stripped first so a brace or a colon inside one cannot be read as code. */
-function stripComments(css: string): string {
-	return css.replace(/\/\*[\s\S]*?\*\//g, "");
-}
-
 /**
- * The last declaration of `--name` in a rule's own body, matching the cascade,
- * and ignoring both `--color-name` and `var(--name)`.
- */
-function declaration(css: string, name: string): string | undefined {
-	const matches = [
-		...css.matchAll(new RegExp(`(?:^|[^-\\w])--${name}\\s*:\\s*([^;}]+)`, "g")),
-	];
-	return matches.at(-1)?.[1].trim();
-}
-
-/** How many times `--name` is declared anywhere in the stylesheet. */
-export function declarationCount(css: string, name: string): number {
-	return (
-		stripComments(css).match(new RegExp(`(?:^|[^-\\w])--${name}\\s*:`, "g"))
-			?.length ?? 0
-	);
-}
-
-/**
- * Every style rule in the stylesheet paired with its *own* declarations —
- * at-rule bodies and nested rules walked into, so a theme nested in `@media`
- * or under a parent selector is still found as itself rather than folded into
- * whatever encloses it.
+ * Every rule in the stylesheet that declares `anchor`, with whichever of
+ * `names` that same rule declares — discovered rather than listed, so a theme
+ * added later is guarded without anyone remembering this file exists.
  *
- * At-rules are not returned as rules of their own: `@theme inline` declares
- * `--color-th-accent: var(--th-accent)`, which is the alias layer, not a
- * variant. Statement at-rules (`@import`, `@custom-variant`) are not selectors
- * either, which is why a prelude is cut at its last `;`.
+ * Never from the cascade: a rule that overrode only the anchor would silently
+ * be read with another theme's foreground, and resolving that properly means
+ * implementing the cascade. Callers assert the set they need is complete
+ * instead.
  */
-function styleRules(css: string): { selector: string; body: string }[] {
-	const out: { selector: string; body: string }[] = [];
-
-	/** Nesting reads as a descendant here; `&` is the common case and stays readable. */
-	const join = (parent: string | undefined, child: string) =>
-		parent === undefined ? child : `${parent} ${child}`;
-
-	/** Collects `source`'s own declarations, recursing; pushes them under `selector`. */
-	const walk = (source: string, selector: string | undefined) => {
-		let own = "";
-		let i = 0;
-		while (i < source.length) {
-			const open = source.indexOf("{", i);
-			if (open < 0) {
-				own += source.slice(i);
-				break;
-			}
-			let depth = 0;
-			let close = open;
-			for (; close < source.length; close++) {
-				if (source[close] === "{") depth++;
-				else if (source[close] === "}" && --depth === 0) break;
-			}
-			const prelude = source.slice(i, open);
-			const cut = prelude.lastIndexOf(";");
-			own += prelude.slice(0, cut + 1);
-			const prefix = prelude.slice(cut + 1).trim();
-			const body = source.slice(open + 1, close);
-			// An at-rule keeps the enclosing selector: `@media` inside a theme
-			// still declares that theme's tokens.
-			walk(body, prefix.startsWith("@") ? selector : join(selector, prefix));
-			i = close + 1;
-		}
-		if (selector !== undefined) out.push({ selector, body: own });
-	};
-
-	walk(stripComments(css), undefined);
-	return out;
-}
-
-/**
- * Every variant in the stylesheet that declares `pair`, discovered rather than
- * listed, so a theme added later is guarded without anyone remembering to add
- * it here.
- *
- * A rule counts as a variant when it declares the pair's background. Both
- * halves are read from that same rule and never from the cascade: a rule that
- * overrode only one half would silently pair its fill with another theme's
- * foreground, and resolving that properly means implementing the cascade. The
- * test asserts the pair is complete instead.
- */
-export function themeVariants(css: string, pair: TokenPair): ThemeVariant[] {
+export function themeRules(
+	css: string,
+	anchor: string,
+	names: string[],
+): { selector: string; values: Record<string, string | undefined> }[] {
 	return styleRules(css)
-		.filter((rule) => declaration(rule.body, pair.background) !== undefined)
+		.filter((rule) => declaration(rule.body, anchor) !== undefined)
 		.map((rule) => ({
 			selector: rule.selector.replace(/\s+/g, " "),
-			background: declaration(rule.body, pair.background) ?? "",
-			foreground: declaration(rule.body, pair.foreground) ?? "",
+			values: Object.fromEntries(
+				names.map((name) => [name, declaration(rule.body, name)]),
+			),
 		}));
+}
+
+/**
+ * Every variant in the stylesheet that declares `pair`. A rule counts as a
+ * variant when it declares the pair's background; see `themeRules`.
+ */
+export function themeVariants(css: string, pair: TokenPair): ThemeVariant[] {
+	return themeRules(css, pair.background, [
+		pair.background,
+		pair.foreground,
+	]).map(({ selector, values }) => ({
+		selector,
+		background: values[pair.background] ?? "",
+		foreground: values[pair.foreground] ?? "",
+	}));
+}
+
+/**
+ * `over` painted on `base` at `alpha`, the arithmetic a browser does for
+ * `bg-th-accent/10`: a tint is not a colour the stylesheet holds, it is one the
+ * compositor makes, and the only thing text on it is ever read against.
+ *
+ * Channel-wise in sRGB rather than in linear light, because that is what simple
+ * alpha compositing over an opaque backdrop does — the values are already in
+ * the space they are blended in. Deliberately not rounded back to 8-bit: the
+ * rounding is the compositor's business and dropping it here would move a ratio
+ * in the third decimal for no gain in truth.
+ *
+ * `base` must be opaque. Two tints stacked (a chip on a tinted card) is
+ * composite applied twice, which is what a caller that knows its layers does.
+ */
+export function composite(over: Rgb, base: Rgb, alpha: number): Rgb {
+	return base.map((b, i) => over[i] * alpha + b * (1 - alpha)) as Rgb;
 }

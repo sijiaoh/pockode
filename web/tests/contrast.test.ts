@@ -3,13 +3,14 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	AA_FLOOR,
+	composite,
 	contrastRatio,
-	declarationCount,
 	GUARDED_PAIRS,
 	parseColor,
 	type TokenPair,
 	themeVariants,
 } from "./contrast";
+import { declarationCount } from "./css";
 import { STYLESHEETS } from "./sourceScan";
 
 // A theme pins a fill colour and the foreground that sits on it — `--th-accent`
@@ -214,5 +215,44 @@ describe("contrast", () => {
 
 	it("does not depend on the order of the pair", () => {
 		expect(ratio("#0d9488", "#ffffff")).toBe(ratio("#ffffff", "#0d9488"));
+	});
+});
+
+// The arithmetic tint.test.ts rests on. Every ratio it computes is against a
+// colour that exists nowhere in the stylesheet, so an error here would not look
+// like an error anywhere — it would look like a chip that passes.
+describe("composite", () => {
+	const over = parseColor("#0d9488");
+	const base = parseColor("#ffffff");
+	if (!over || !base) throw new Error("unparsed fixture");
+
+	it("is the base at no opacity and the fill at full", () => {
+		expect(composite(over, base, 0)).toEqual(base);
+		expect(composite(over, base, 1)).toEqual(over);
+	});
+
+	it("halves the distance at half opacity", () => {
+		const white = [255, 255, 255] as const;
+		const black = [0, 0, 0] as const;
+		expect(composite([...black], [...white], 0.5)).toEqual([
+			127.5, 127.5, 127.5,
+		]);
+	});
+
+	// A tint of a colour on itself is that colour, whatever the alpha. The one
+	// property that has to hold for the compositing to be per-channel at all.
+	// Approximately, because the mix is left unrounded on purpose: `13 * 0.1 +
+	// 13 * 0.9` is not 13 in binary floating point, and a ratio does not care.
+	it("leaves a fill painted on its own colour alone", () => {
+		for (const [i, channel] of composite(over, over, 0.1).entries())
+			expect(channel).toBeCloseTo(over[i]);
+	});
+
+	// The direction that matters: a tint is always closer to its backdrop than
+	// the full-strength fill is, which is exactly why `text-th-accent` on an
+	// accent tint reads worse than on the accent itself.
+	it("moves a tint towards the backdrop it sits on", () => {
+		const tint = composite(over, base, 0.1);
+		expect(contrastRatio(tint, base)).toBeLessThan(contrastRatio(over, base));
 	});
 });

@@ -19,41 +19,45 @@ export interface ThemeInfo {
 }
 
 // Theme colors for preview display.
-// These values must match the CSS custom properties in index.css.
 // We duplicate them here because the theme preview needs to show colors
 // for themes that aren't currently applied to the DOM.
+// Every value is a copy of a custom property in index.css — accent
+// `--th-accent`, bg `--th-bg-primary`, text `--th-text-primary`, textMuted
+// `--th-text-muted` — and index.css is the source of truth for all of them.
+// tests/themeTokens.test.ts compares the two, themes included, so edit the
+// stylesheet and let the failure tell you what to copy here.
 export const THEME_INFO: Record<ThemeName, ThemeInfo> = {
 	abyss: {
 		label: "Abyss",
 		description: "Ocean depths",
 		accent: { light: "#0b7a70", dark: "#2dd4bf" },
 		bg: { light: "#f8fafb", dark: "#0c1220" },
-		text: { light: "#0f172a", dark: "#f1f5f9" },
-		textMuted: { light: "#64748b", dark: "#94a3b8" },
+		text: { light: "#0c1829", dark: "#e8f0f5" },
+		textMuted: { light: "#7c919e", dark: "#5a7a8f" },
 	},
 	aurora: {
 		label: "Aurora",
 		description: "Northern lights",
 		accent: { light: "#9333ea", dark: "#c084fc" },
 		bg: { light: "#fbf9fe", dark: "#150a24" },
-		text: { light: "#1e1030", dark: "#f5f3ff" },
-		textMuted: { light: "#6b21a8", dark: "#a78bfa" },
+		text: { light: "#1e1228", dark: "#f3e8ff" },
+		textMuted: { light: "#6d5d80", dark: "#7c5a9c" },
 	},
 	ember: {
 		label: "Ember",
 		description: "Glowing coals",
 		accent: { light: "#c2410c", dark: "#fb923c" },
 		bg: { light: "#fefcfa", dark: "#1c1412" },
-		text: { light: "#1c1412", dark: "#fef3e2" },
-		textMuted: { light: "#9a3412", dark: "#fdba74" },
+		text: { light: "#27201c", dark: "#f8f0e8" },
+		textMuted: { light: "#7a6a5c", dark: "#8a7468" },
 	},
 	mint: {
 		label: "Mint",
 		description: "Cool breeze",
 		accent: { light: "#077691", dark: "#22d3ee" },
 		bg: { light: "#f8fcfa", dark: "#0a1610" },
-		text: { light: "#083344", dark: "#ecfeff" },
-		textMuted: { light: "#0e7490", dark: "#67e8f9" },
+		text: { light: "#0a2018", dark: "#e8f8f0" },
+		textMuted: { light: "#4a7560", dark: "#5a8a70" },
 	},
 	void: {
 		label: "Void",
@@ -61,7 +65,7 @@ export const THEME_INFO: Record<ThemeName, ThemeInfo> = {
 		accent: { light: "#18181b", dark: "#fafafa" },
 		bg: { light: "#ffffff", dark: "#09090b" },
 		text: { light: "#09090b", dark: "#fafafa" },
-		textMuted: { light: "#71717a", dark: "#a1a1aa" },
+		textMuted: { light: "#a1a1aa", dark: "#71717a" },
 	},
 };
 
