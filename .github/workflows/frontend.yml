@@ -12,6 +12,7 @@ on:
       - "web-cluster/**"
       - "packages/**"
       - "package.json"
+      - "biome.json"
       - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
       - ".node-version"
@@ -23,6 +24,7 @@ on:
       - "web-cluster/**"
       - "packages/**"
       - "package.json"
+      - "biome.json"
       - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
       - ".node-version"
@@ -33,6 +35,32 @@ permissions:
   contents: read
 
 jobs:
+  # Lint is one job, not a matrix entry: Biome's scope is the whole pnpm
+  # workspace (see the root biome.json and the root `lint` script), including
+  # packages/shared, which belongs to no single project.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -57,10 +85,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Lint
-        run: pnpm run lint
-        working-directory: ${{ matrix.project }}
 
       - name: Test
         run: pnpm run test

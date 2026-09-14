@@ -89,6 +89,20 @@ import { Spinner, ConfirmDialog, useIsExpanded, createAuthStore, getWebSocketUrl
 ### Code Style
 
 - Frontend: Use Biome (Linter + Formatter), follow React best practices (see web/AGENTS.md)
+    - Biome runs from the repository root — `pnpm run lint` / `pnpm run format` cover
+      `web`, `web-cluster` and `packages` in one pass, so `packages/shared` (which ships
+      inside both frontends) is not left to a project that does not own it. The root
+      `biome.json` holds the settings; each project's `biome.json` is `extends: "//"`
+      plus only what genuinely differs. The three directories are named rather than
+      passing `.`, because a root-level sweep walks into `site/` — Biome panics on
+      Hugo's Go templates — and into data files such as `signatures/version1/cla.json`
+      that it has no business reformatting. `format` is `biome check --write` with the
+      linter off, not `biome format`: import order is an assist action, so plain
+      `biome format` leaves a failure that `lint` reports and cannot fix itself.
+    - The projects deliberately have no `lint` / `format` script of their own. A
+      forwarding script would quietly check the *other* frontend too, so instead
+      `pnpm run lint` inside `web/` fails with `Missing script: lint` — and pnpm's
+      own error already names `pnpm -w run lint`, which is the answer anyway.
 - Backend: Use `gofmt`, follow idiomatic Go
 - Run linter and formatter before committing
 

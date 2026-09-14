@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@biomejs/biome':
+        specifier: ^2.3.10
+        version: 2.3.14
       concurrently:
         specifier: ^9.2.1
         version: 9.2.1
@@ -109,9 +112,6 @@ importers:
         specifier: ^5.0.9
         version: 5.0.11(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
     devDependencies:
-      '@biomejs/biome':
-        specifier: ^2.3.10
-        version: 2.3.14
       '@tailwindcss/typography':
         specifier: ^0.5.19
         version: 0.5.19(tailwindcss@4.1.18)
@@ -176,9 +176,6 @@ importers:
         specifier: ^5.0.14
         version: 5.0.14(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
     devDependencies:
-      '@biomejs/biome':
-        specifier: ^2.3.10
-        version: 2.3.14
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.1.18(vite@7.3.1(@types/node@24.10.11)(jiti@2.6.1)(lightningcss@1.30.2))

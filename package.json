@@ -9,9 +9,12 @@
     "dev:web": "cd web && pnpm run dev",
     "dev:cluster": "concurrently --kill-others -n server,web -c blue,green \"pnpm:dev:cluster:server\" \"pnpm:dev:cluster:web\"",
     "dev:cluster:server": "cd server && go run . cluster",
-    "dev:cluster:web": "cd web-cluster && pnpm run dev"
+    "dev:cluster:web": "cd web-cluster && pnpm run dev",
+    "lint": "biome check --error-on-warnings web web-cluster packages",
+    "format": "biome check --write --linter-enabled=false web web-cluster packages"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.3.10",
     "concurrently": "^9.2.1"
   }
 }

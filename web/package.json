@@ -10,8 +10,6 @@
 		"dev": "vite",
 		"build": "tsc -b && vite build",
 		"build:release": "tsc -b && vite build --outDir ../server/static --emptyOutDir",
-		"lint": "biome check .",
-		"format": "biome format --write .",
 		"preview": "vite preview",
 		"test": "vitest run",
 		"test:watch": "vitest"
@@ -44,7 +42,6 @@
 		"zustand": "^5.0.9"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.3.10",
 		"@tailwindcss/typography": "^0.5.19",
 		"@testing-library/jest-dom": "^6.9.1",
 		"@testing-library/react": "^16.3.1",

@@ -9,11 +9,13 @@ React 19 + TypeScript + Vite 7 + Tailwind 4 + Biome + Vitest
 ```bash
 pnpm run dev             # 开发服务器
 pnpm run build           # 构建
-pnpm run lint            # Lint 检查
-pnpm run format          # 格式化
 pnpm run test            # 测试
 pnpm run test:watch      # 测试（监视模式）
 pnpm exec tsc -b         # 类型检查
+
+# 本项目没有 lint / format 脚本，统一在仓库根目录执行（理由见根 AGENTS.md）
+pnpm -w run lint         # Lint 检查
+pnpm -w run format       # 格式化
 ```
 
 ## 结构
@@ -114,7 +116,7 @@ describe("MyComponent", () => {
 
 ## 边界
 
-✅ **Always**: `pnpm run lint` + `pnpm run build` + `pnpm run test` · 函数组件 · Props 定义类型 · 直接调 HTTP API 时用 `lib/api.ts` 的 `apiUrl()` / `authHeaders()` / `fetchWithAuth()`，401 走 `logoutIfUnauthorized()`（token 拼装与登出规则全站只有这一处）
+✅ **Always**: `pnpm -w run lint` + `pnpm run build` + `pnpm run test` · 函数组件 · Props 定义类型 · 直接调 HTTP API 时用 `lib/api.ts` 的 `apiUrl()` / `authHeaders()` / `fetchWithAuth()`，401 走 `logoutIfUnauthorized()`（token 拼装与登出规则全站只有这一处）
 
 ⚠️ **Ask First**: 添加 pnpm 依赖 · 修改 Vite/TS 配置 · 新建全局 store
 

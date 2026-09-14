@@ -66,8 +66,8 @@ looking at how long each test is allowed to take.
 
 CI is the other half of this: a GitHub runner does own its machine, the premise
 for halving does not hold there, and the config hands `maxWorkers` back to
-vitest's default under `CI`. `.github/workflows/frontend.yml` runs lint, test and
-build per project with a 10-minute budget.
+vitest's default under `CI`. `.github/workflows/frontend.yml` runs test and
+build per project with a 10-minute budget, plus one workspace-wide lint job.
 
 ## Go: there is no equivalent knob
 
@@ -179,16 +179,29 @@ evidence.
   and now runs `tsc -b` like `web`'s. Both projects' `tsconfig.node.json` list
   `vitest.config.ts`, so the test config is covered as well — but only through
   that reference, which is exactly what bare `tsc` skips.
-- **`npx biome check docs` is not Biome.** No Biome lives at the repository root
-  — the binary is in `web/node_modules` and `web-cluster/node_modules` — so `npx`
-  falls back to the registry package that happens to be named `biome` (0.3.3,
-  unrelated to `@biomejs/biome`) and runs that. It exits 0 on a path that does
-  not exist and on a file the real Biome fails, so a green run from the root is
-  not evidence about anything. The real one is `pnpm exec biome check …` from
-  inside `web` or `web-cluster`, and pointed at `docs/` it answers `these paths
-  were provided but ignored` and exits 1 — Markdown is in neither project's
-  scope. **Nothing lints the documentation.** What checks it is the tests that
-  read it, such as the register comparison in `web/tests/touchTarget.test.ts`.
+- **`biome check` exits 0 on warnings.** Several recommended rules —
+  `noUnusedVariables` among them — are warnings, not errors, and a run that
+  reports them still exits 0: the diagnostic is printed and the gate is green.
+  A lint gate that only fails on errors lets that whole class through, which is
+  why the root `lint` script passes `--error-on-warnings`. Drop the flag and a
+  planted unused variable reports `Found 1 warning` and exits 0.
+- **A green lint says nothing about the files outside its scope, and the scope
+  was smaller than it looked.** `web`'s `biome check .` meant `web/`, so it
+  never saw `../packages/shared`; `web-cluster`'s was narrowed to `src`, so it
+  never saw its own `vite.config.ts`. Both were green the whole time, which is
+  what kept it invisible — a lint that never reads a file cannot report on it.
+  Lint now runs once from the repository root over all three directories;
+  `AGENTS.md` describes that arrangement. Reaching for a root `npx biome`
+  instead is not a substitute for owning the dependency there: before
+  `@biomejs/biome` was a root devDependency, `npx` resolved to an unrelated
+  registry package that happens to be named `biome` (0.3.3) and ran that, and
+  it exits 0 on anything — including paths that do not exist. Move the
+  dependency back down into the projects and that impostor comes back with it.
+- **Markdown is outside every lint scope.** Pointed at `docs/`, Biome exits 1
+  with `No files were processed in the specified paths` and lists them under
+  `These paths were provided but ignored`. **Nothing lints the documentation.**
+  What checks it is the tests that read it, such as the register comparison in
+  `web/tests/touchTarget.test.ts`.
 - **`go test ... | grep ... | head` then `$?` reads `head`'s status**, which is
   essentially always 0. Capture the output in a variable and check the exit code
   of the command itself. An interactive shell has no `pipefail`; the pipeline in
