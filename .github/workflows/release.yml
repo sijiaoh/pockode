@@ -35,8 +35,53 @@ jobs:
       - name: Build
         run: VERSION=${GITHUB_REF_NAME} ./scripts/build.sh
 
-      - name: Create Release
+      # draft: true is what makes the assets land. With immutable releases on,
+      # an asset can only be uploaded while the release is still a draft, and
+      # action-gh-release only creates a draft on its own when prerelease is
+      # false - a prerelease is created already published, so every upload into
+      # it fails with a 422. Asking for a draft explicitly takes both paths
+      # through the same sequence: create, upload, then publish below.
+      - name: Create draft release
+        id: draft
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+      # draft: true also disables the action's own publish step, so the release
+      # would stay a draft forever without this. Addressed by id rather than by
+      # tag because the release is still a draft here, and a draft is not what
+      # /releases/tags/{tag} answers with. make_latest is spelled out because it
+      # otherwise defaults to true, and install.sh installs whatever
+      # /releases/latest points at.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
+          MAKE_LATEST: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+        run: |
+          gh api --method PATCH --silent \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F draft=false -f make_latest="$MAKE_LATEST"
+
+      # The accident this workflow is being fixed for was a release that ended
+      # up published with no assets at all. The upload failure was reported, so
+      # this is not a second chance to catch that one - it is what turns "the
+      # release is short a binary" into a red run instead of something a user
+      # finds by downloading it.
+      - name: Verify published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
+        # A step's default shell is `bash -e`, without pipefail: a failing gh
+        # would leave the empty output of a successful sort behind.
+        shell: bash
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            --jq '.assets[].name' | sort > "$RUNNER_TEMP/published.txt"
+          ls dist | sort > "$RUNNER_TEMP/expected.txt"
+          if ! diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/published.txt"; then
+            echo "release $GITHUB_REF_NAME does not publish exactly what dist/ built" >&2
+            exit 1
+          fi
