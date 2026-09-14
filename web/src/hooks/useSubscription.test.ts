@@ -597,6 +597,45 @@ describe("useSubscription", () => {
 			consoleSpy.mockRestore();
 		});
 
+		// The two failures land in the same recovery, but only one of them is a
+		// failure to subscribe. A snapshot handler throws with the subscription
+		// already open — "Subscription failed" would send the reader to the
+		// network, where there is nothing wrong to find. (That it really is still
+		// open is covered by "keeps delivering when applying the snapshot throws".)
+		it("reports a throwing snapshot handler apart from a failed subscribe", async () => {
+			const consoleSpy = vi
+				.spyOn(console, "error")
+				.mockImplementation(() => {});
+			const onError = vi.fn();
+			const snapshotError = new Error("bad snapshot");
+			const onSubscribed = vi.fn(() => {
+				throw snapshotError;
+			});
+			mockSubscribe.mockResolvedValue({ id: "sub-1", initial: "snapshot" });
+
+			renderHook(() =>
+				useSubscription<string, string>(
+					mockSubscribe,
+					mockUnsubscribe,
+					mockOnNotification,
+					{ onSubscribed, onError },
+				),
+			);
+
+			await waitFor(() => expect(onError).toHaveBeenCalledWith(snapshotError));
+
+			expect(consoleSpy).toHaveBeenCalledWith(
+				"Subscription is open, but applying its initial data failed:",
+				snapshotError,
+			);
+			expect(consoleSpy).not.toHaveBeenCalledWith(
+				"Subscription failed:",
+				expect.anything(),
+			);
+
+			consoleSpy.mockRestore();
+		});
+
 		it("calls onReset when subscribe fails", async () => {
 			const consoleSpy = vi
 				.spyOn(console, "error")

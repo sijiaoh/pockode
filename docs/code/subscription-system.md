@@ -62,6 +62,23 @@ than showing a rare one twice. The server's own "rare duplicates are
 acceptable" comment in `chat_messages.go` still describes its side of the deal;
 the client is simply now able to collect on it.
 
+### Why a Throwing Snapshot Handler Is Reported Separately
+
+Two different faults reach `doSubscribe`'s recovery: `*.subscribe` itself
+rejecting, and `onSubscribed` (or a replayed notification) throwing while the
+data is applied. They call for the same recovery — the caller's data is
+untrustworthy either way, so `onError`, else `onReset` — but they are not the
+same event, and the second one is the one a reader is likely to misread.
+
+By the time the snapshot is applied the subscription is **open**: its id is
+recorded, the hold is released, and every later notification is delivered
+straight through. So the view recovers on the next change without anything
+reconnecting, and there is nothing wrong at the network layer to find. A single
+`"Subscription failed"` for both sends whoever reads the console looking there.
+The two are caught in separate `try` blocks and reported in separate sentences
+for that reason alone; splitting the recovery as well would be inventing a
+distinction the caller has no use for.
+
 ### Why Only a Timeout Sends a Compensating Unsubscribe
 
 If `*.subscribe` fails, the client deletes its callback — but the server may
@@ -481,7 +498,7 @@ So switch start no longer calls `onReset`. Instead:
 1. **onSwitchStart**: `invalidate()` cancels the stale subscription (bumps the generation counter so late notifications are ignored) but leaves the previous data on screen. The optional `onWorktreeSwitch` callback lets a consumer mark that data as "reloading" without clearing it.
 2. **onSwitchEnd**: `doSubscribe()` resubscribes; `onSubscribed` swaps in the new worktree's snapshot when it arrives.
 
-`onReset` is now reserved for teardown where the data is genuinely untrustworthy — disable, disconnect, or a failed (re)subscribe. Consumers that don't pass `onWorktreeSwitch` (git, git-diff, fs) simply keep their previous data until the new snapshot replaces it, turning the switch into a seamless refresh. This is a `keepPreviousData`-style trade-off: the placeholder briefly shows the old worktree's data, but it is data already on the client — no cross-worktree request is issued during the transition, so the security boundary (server-side `worktree.switch` validation) is untouched.
+`onReset` is now reserved for the cases where the data is genuinely untrustworthy — disable, disconnect, a failed (re)subscribe, or an `onSubscribed` that threw part-way through (see *Why a Throwing Snapshot Handler Is Reported Separately*: that last one leaves the subscription open, so the next notification refills what it cleared). Consumers that don't pass `onWorktreeSwitch` (git, git-diff, fs) simply keep their previous data until the new snapshot replaces it, turning the switch into a seamless refresh. This is a `keepPreviousData`-style trade-off: the placeholder briefly shows the old worktree's data, but it is data already on the client — no cross-worktree request is issued during the transition, so the security boundary (server-side `worktree.switch` validation) is untouched.
 
 ### Why the Session List Keeps a Placeholder During a Switch
 

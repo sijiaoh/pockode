@@ -15,8 +15,11 @@ interface SubscriptionOptions<TInitial> {
 	 */
 	onSubscribed?: (initial: TInitial) => void;
 	/**
-	 * Called when the subscription is torn down for good: on disable, disconnect,
-	 * or a failed (re)subscribe. Clears data because it is no longer trustworthy.
+	 * Called when the data can no longer be trusted and should be cleared: on
+	 * disable, disconnect, a failed (re)subscribe, or an `onSubscribed` that
+	 * threw part-way through. Only the first three tear the subscription down;
+	 * after a throwing `onSubscribed` the subscription is still open, so the
+	 * next notification refills what this cleared.
 	 */
 	onReset?: () => void;
 	/**
@@ -28,7 +31,9 @@ interface SubscriptionOptions<TInitial> {
 	 */
 	onWorktreeSwitch?: () => void;
 	/**
-	 * Called when subscription fails with an error.
+	 * Called when subscribing fails, and when `onSubscribed` throws while applying
+	 * the initial data — the second leaves the subscription open (see `onReset`),
+	 * but the caller's data is equally untrustworthy either way.
 	 * If not provided, falls back to onReset.
 	 */
 	onError?: (err: unknown) => void;
@@ -117,6 +122,15 @@ export function useSubscription<TNotification = void, TInitial = void>(
 		// Null once the snapshot is in and delivery is direct.
 		let held: TNotification[] | null = [];
 
+		const reportFailure = (err: unknown) => {
+			if (isStale()) return;
+			if (onErrorRef.current) {
+				onErrorRef.current(err);
+			} else {
+				onResetRef.current?.();
+			}
+		};
+
 		try {
 			const result = await subscribe((params) => {
 				if (isStale()) return;
@@ -128,6 +142,10 @@ export function useSubscription<TNotification = void, TInitial = void>(
 			});
 
 			if (isStale()) {
+				// Cancels a subscription nobody is waiting on any more. It cannot
+				// mislabel itself as the failed subscribe below: every unsubscribe
+				// reaching this hook goes through `closeSubscription`, which
+				// swallows its own errors and never rejects.
 				await unsubscribe(result.id);
 				return;
 			}
@@ -142,23 +160,30 @@ export function useSubscription<TNotification = void, TInitial = void>(
 			const replay = held;
 			held = null;
 
-			if (onSubscribedRef.current) {
-				onSubscribedRef.current(result.initial as TInitial);
-			}
+			// The subscription is open from here on and stays open even if this
+			// throws, so reporting it as a failure to subscribe would send the
+			// next reader looking for a network fault that isn't there. Same
+			// recovery, different sentence; the reasoning is in
+			// docs/code/subscription-system.md.
+			try {
+				if (onSubscribedRef.current) {
+					onSubscribedRef.current(result.initial as TInitial);
+				}
 
-			for (const params of replay) {
-				if (isStale()) return;
-				onNotificationRef.current(params);
+				for (const params of replay) {
+					if (isStale()) return;
+					onNotificationRef.current(params);
+				}
+			} catch (err) {
+				console.error(
+					"Subscription is open, but applying its initial data failed:",
+					err,
+				);
+				reportFailure(err);
 			}
 		} catch (err) {
 			console.error("Subscription failed:", err);
-			if (!isStale()) {
-				if (onErrorRef.current) {
-					onErrorRef.current(err);
-				} else {
-					onResetRef.current?.();
-				}
-			}
+			reportFailure(err);
 		}
 	}, [subscribe, unsubscribe]);
 
