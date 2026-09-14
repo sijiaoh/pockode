@@ -287,7 +287,7 @@ try {
         Save-Download $checksumsUrl $tempChecksums
     } catch {
         throw "Nothing was installed: the download cannot be verified without checksums.txt.`n" +
-            "Releases made before checksums were published do not have one; install a newer release instead.`n" +
+            "Releases before v0.16.0 do not publish one and cannot be installed; ask for v0.16.0 or newer.`n" +
             "URL: $checksumsUrl`n" +
             $_.Exception.Message
     }

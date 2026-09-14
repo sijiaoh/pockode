@@ -67,6 +67,14 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             --jq '.assets[].name' | sort > "$RUNNER_TEMP/uploaded.txt"
           ls dist | sort > "$RUNNER_TEMP/expected.txt"
+          # An empty dist/ makes both sides empty, and diff then agrees: the one
+          # way this check passes while the release carries nothing, which is
+          # the accident it exists to catch. build.sh can get there without
+          # failing - it warns about exactly that for an absolute OUTPUT_DIR.
+          if ! [ -s "$RUNNER_TEMP/expected.txt" ]; then
+            echo "dist/ is empty: the build produced no release assets" >&2
+            exit 1
+          fi
           if ! diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/uploaded.txt"; then
             echo "release $GITHUB_REF_NAME does not carry exactly what dist/ built" >&2
             exit 1

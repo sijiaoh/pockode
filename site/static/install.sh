@@ -205,7 +205,7 @@ fi
 
 if ! download "$CHECKSUMS_URL" "$TMP_CHECKSUMS"; then
   echo "Nothing was installed: the download cannot be verified without checksums.txt." >&2
-  echo "Releases made before checksums were published do not have one; install a newer release instead." >&2
+  echo "Releases before v0.16.0 do not publish one and cannot be installed; ask for v0.16.0 or newer." >&2
   exit 1
 fi
 
