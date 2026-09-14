@@ -33,12 +33,27 @@ the full set of release binaries.
 
 Binaries are named `pockode-<os>-<arch>`, with a `.exe` suffix on Windows.
 
+### `checksums.txt`
+
+Each run also writes a `checksums.txt` next to the binaries, listing only the
+ones it just built — so `--local` leaves a one-line file rather than stale
+entries from an earlier full build. It ships as a release asset (`release.yml`
+uploads `dist/*`), so anyone who downloads a binary can check it against the
+hash published with the same release.
+
+Lines are the standard `sha256sum` format — a 64-character lower-case hex hash,
+two spaces, and a bare file name with no directory in front of it, so the name
+in the file is the asset name the release publishes. The hashing uses
+`sha256sum` where it exists and `shasum -a 256` otherwise, which is what a
+release build on macOS gets; both tools write the same line, and either verifies
+the other's output with `-c`.
+
 ### Environment variables
 
 | Variable     | Default | Description                                  |
 | ------------ | ------- | -------------------------------------------- |
 | `VERSION`    | `dev`   | Version stamped into the binary (leading `v` is stripped). |
-| `OUTPUT_DIR` | `dist`  | Directory the binaries are written to. Absolute, or relative to the repository root. |
+| `OUTPUT_DIR` | `dist`  | Directory the binaries and `checksums.txt` are written to. Absolute, or relative to the repository root. |
 
 ## `dev.sh` — Development server
 

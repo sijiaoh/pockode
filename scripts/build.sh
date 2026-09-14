@@ -60,6 +60,7 @@ mkdir -p "$OUTPUT_DIR"
 # the binaries somewhere else while still reporting success.
 OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd)
 
+binaries=()
 for platform in "${platforms[@]}"; do
     os="${platform%/*}"
     arch="${platform#*/}"
@@ -73,7 +74,24 @@ for platform in "${platforms[@]}"; do
         -C server \
         -ldflags="-w -s -X main.version=$VERSION" \
         -o "$output" .
+    binaries+=("${output##*/}")
 done
+
+# Releases are built on macOS, which ships shasum instead of sha256sum. Both
+# print the same "<hash>  <filename>" line and both accept it back with -c, so
+# the file reads the same whichever machine produced it.
+if command -v sha256sum >/dev/null 2>&1; then
+    sha256=(sha256sum)
+else
+    sha256=(shasum -a 256)
+fi
+
+# Hashed from inside OUTPUT_DIR so the second field is a bare filename: it has
+# to match the asset name the release publishes, and OUTPUT_DIR is an absolute
+# path by now. Only this run's binaries are listed, so --local yields a
+# one-line file rather than stale entries from an earlier full build.
+echo "Writing $OUTPUT_DIR/checksums.txt..."
+(cd "$OUTPUT_DIR" && "${sha256[@]}" "${binaries[@]}" > checksums.txt)
 
 echo ""
 echo "Build complete! Binaries in $OUTPUT_DIR/"

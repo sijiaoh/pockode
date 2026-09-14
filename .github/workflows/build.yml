@@ -1,0 +1,110 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/build.sh"
+      - ".github/workflows/build.yml"
+      - ".github/workflows/release.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/build.sh"
+      - ".github/workflows/build.yml"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+jobs:
+  # A release ships checksums.txt for downloads to be verified against, so an
+  # unusable one is worse than none - it is only discovered by whoever bothered
+  # to check. Nothing else runs build.sh before a tag is pushed, hence its own
+  # workflow rather than a job in server.yml or install.yml, whose trigger paths
+  # deliberately watch other things.
+  checksums:
+    # macOS is what release.yml builds on and has no sha256sum, only shasum;
+    # Linux is what developers run. The file has to come out identical on both.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+    # Two full runs of build.sh below: four frontend builds and six
+    # cross-compiles, on a workflow that only runs when build.sh or release.yml
+    # changes.
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: server/.go-version
+          cache-dependency-path: server/go.sum
+
+      # The full build, which is what release.yml runs: the five cross-compiles
+      # cost a few minutes, and they are the only way the line for
+      # pockode-windows-amd64.exe - the one asset name with a suffix - is ever
+      # checked, or that "every binary built gets a line" is more than one
+      # binary getting one.
+      - name: Build every platform, the way a release does
+        run: ./scripts/build.sh
+
+      - name: Verify checksums.txt
+        working-directory: dist
+        run: |
+          # shasum ships on both runners while sha256sum does not, so checking
+          # with it also proves the two tools' formats are interchangeable -
+          # on Linux the file was written by sha256sum and is read back here
+          # by the other one.
+          shasum -a 256 -c checksums.txt
+
+          # A line is looked up by the asset name that was downloaded, so the
+          # second field must stay a bare filename.
+          if grep -vE '^[0-9a-f]{64}  [^ /\\]+$' checksums.txt >&2; then
+            echo "the lines above are not '<sha256>  <filename>'" >&2
+            exit 1
+          fi
+          cat checksums.txt
+
+          # Every asset the release publishes, named the way the install
+          # scripts ask for it. Listed rather than counted: a count passes just
+          # as well when five binaries are hashed under the wrong five names.
+          for asset in pockode-darwin-amd64 pockode-darwin-arm64 \
+                       pockode-linux-amd64 pockode-linux-arm64 \
+                       pockode-windows-amd64.exe; do
+            grep -qE "^[0-9a-f]{64}  $asset\$" checksums.txt ||
+              { echo "checksums.txt has no line for $asset" >&2; exit 1; }
+          done
+          lines=$(wc -l < checksums.txt)
+          if [ "$lines" -ne 5 ]; then
+            echo "expected 5 lines in checksums.txt, found $lines" >&2
+            exit 1
+          fi
+
+      # Only meaningful after the full build above: what this catches is a
+      # checksums.txt that accumulates rather than being rewritten, and there is
+      # nothing to accumulate until five lines have been written once.
+      - name: A --local build leaves no lines from the full one behind
+        run: |
+          ./scripts/build.sh --local
+          cd dist
+          cat checksums.txt
+          lines=$(wc -l < checksums.txt)
+          if [ "$lines" -ne 1 ]; then
+            echo "expected 1 line after --local, found $lines" >&2
+            exit 1
+          fi
+          shasum -a 256 -c checksums.txt
