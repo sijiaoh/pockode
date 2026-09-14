@@ -594,6 +594,81 @@ necessarily reaches this subscription, so the new value arrives the one way ever
 other client's does. A rejected switch needs no rollback — the control was never
 moved — and the reason reaches the user through `settingError`.
 
+The global settings behind the Settings page follow the same rule one layer
+lower, in `lib/rpc/settings.ts`. `settings.update` carries the whole settings
+object and the server stores what it receives, so every write has to be composed
+out of the caller's snapshot — and before the `settings` subscription delivers
+one, there is nothing to compose it from. Merging the change into an empty
+object, which is what the code used to do, wrote every field back as its zero
+value and silently reset the ones the user never touched. `updateSettings`
+now refuses in that state, naming the fields it was asked to change, rather than
+sending a write that claims to know the current settings — the same rule as
+above, applied to a write instead of a display: what is not known yet must be
+refused, not filled in.
+
+Keeping that contract means two clients editing at once are last-write-wins,
+and that is a trade taken on purpose rather than an oversight. Every write is
+composed from a snapshot the server itself pushed, and every write the server
+accepts broadcasts `settings.changed` to all subscribers, so the window where
+two clients can disagree is one broadcast round trip wide while the edits that
+open it are made by hand, seconds apart. A write that loses inside that window
+puts a field back to a value its client demonstrably observed, and the other end
+is told, so a person can see it happen and redo it. Merging into an empty object
+was none of that: the values had never been observed by anyone, the span was the
+whole wait for the first snapshot rather than a round trip, and nothing said it
+had happened. Getting rid of last-write-wins would take a version on
+`settings.update`, or a patch the server merges — and the settings fields are
+`omitempty` values, so a patch cannot tell "absent, leave it" from "empty, clear
+it" without a second, pointer-shaped copy of the type, while clearing is exactly
+what changing the default agent does
+([Session Models](agent-integration.md#session-models)). Nor would either reach
+the server's own read-modify-write callers, which do not go through this RPC at
+all. Nobody edits the settings from two clients today, so neither is built.
+
+The display half is the three call sites that compose those writes — the Engine
+and Mode fields in Settings, the worktree base path, and the default-role star
+in the agent role list. Each waits on the one question `useGlobalSettingsStatus`
+answers, `settings !== null`, and never on whether the fields inside are filled:
+an empty snapshot is a real answer, and the resolved defaults are the honest
+thing to show for it. Until it arrives they draw a pulsing `Skeleton` where the
+value goes and refuse input, because every resolved default here is a reassuring
+one — Claude on Auto, Default mode, `../<repo>-worktrees`, "None (always ask)" —
+and each says, of settings nobody has been told, exactly what a user who set
+nothing would have. Only the part that claims a value is replaced: field names,
+the static help text, and everything in the role list that answers to its own
+subscription stay put.
+
+These appear at once, without the `SKELETON_DELAY_MS` the worktree-switch
+skeletons wait out. There the delay can spare a quick switch any indicator at
+all; here the frame it would buy is a working control naming a value nobody set,
+which is the whole thing being fixed. Nor is there a flash to hide: each
+placeholder is the shape and place of the value that replaces it, so the arrival
+moves nothing.
+
+Waiting has to be able to end. `useSettingsSubscription` passes `onError`, so a
+subscribe that fails on a still-open socket — where no banner appears and
+nothing retries on its own — stops the pulse and names the reason it was given,
+with a Retry, rather than pulsing forever with nothing behind it. The reason is
+shown rather than only recorded, because the people reading it are the ones who
+can act on it. Pressing it
+goes back to waiting first — the message clears and the pulse returns — so a
+retry that fails the same way reads as a retry that failed rather than as a
+button that does nothing. That is also why the store holds the `refresh` this
+hook gets back: the subscription is mounted at the top of the app, and the Retry
+sits beside each waiting control. None of it mentions the connection: a
+reconnect keeps the last snapshot on screen (`useSubscription` only invalidates
+while reconnecting), so the controls stay usable, the refusal a click gets is
+`Not connected`, and `ReconnectBanner` is the one telling that story.
+
+What the three call sites read is therefore not a flag but the three-way
+`ValueState` in `lib/valueState.ts` — `known`, `pending`, `unavailable`. The
+last two are indistinguishable to a control, which can neither show the value
+nor accept an edit for it, and differ only in whether a pulse is still telling
+the truth; a boolean would have needed a second flag beside it and would have
+admitted a combination that cannot happen. One word instead means the pulse, the
+accessible name and the refusal all follow from the same answer in all three
+places, and that the names never say "loading" where nothing is loading.
+
 ## Buffer Size Tuning
 
 | Watcher | Buffer | Reasoning |

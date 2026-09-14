@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentOptionsStore } from "../../../lib/agentOptionsStore";
@@ -14,7 +14,7 @@ vi.mock("../../../lib/wsStore", () => ({
 
 beforeEach(() => {
 	updateSettings.mockReset().mockResolvedValue(undefined);
-	useSettingsStore.setState({ settings: {} });
+	useSettingsStore.setState({ settings: {}, error: null, refresh: null });
 	useAgentOptionsStore.setState({
 		models: {
 			claude: [{ id: "opus", label: "Opus" }],
@@ -78,6 +78,18 @@ describe("SessionSection", () => {
 		).not.toBeInTheDocument();
 	});
 
+	it("reports a rejected mode change", async () => {
+		const user = userEvent.setup();
+		updateSettings.mockRejectedValue(new Error("snapshot has not arrived"));
+		render(<SessionSection />);
+
+		await user.click(screen.getByRole("button", { name: /YOLO/ }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"snapshot has not arrived",
+		);
+	});
+
 	it("reports a rejected engine choice without changing the shown value", async () => {
 		const user = userEvent.setup();
 		updateSettings.mockRejectedValue(new Error("model needs an agent type"));
@@ -92,5 +104,67 @@ describe("SessionSection", () => {
 		expect(screen.getByRole("button", { name: /^Engine:/ })).toHaveTextContent(
 			"Claude · Auto",
 		);
+	});
+
+	// The resolved defaults are Claude on Auto in Default mode, which is exactly
+	// what a user who set none of them would have picked — so showing them before
+	// the snapshot lands tells everyone else something false about their own
+	// settings, and lets them act on it.
+	describe("before the settings snapshot arrives", () => {
+		beforeEach(() => {
+			useSettingsStore.setState({ settings: null });
+		});
+
+		it("names none of the values it has not been told", () => {
+			render(<SessionSection />);
+
+			expect(screen.queryByText(/Claude/)).not.toBeInTheDocument();
+			expect(screen.queryByText(/Auto/)).not.toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: /YOLO/ }),
+			).not.toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: /Default/ }),
+			).not.toBeInTheDocument();
+		});
+
+		it("refuses the engine panel, which has nothing to compose a write from", async () => {
+			const user = userEvent.setup();
+			render(<SessionSection />);
+
+			await user.click(screen.getByRole("button", { name: /^Engine:/ }));
+
+			expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+			expect(updateSettings).not.toHaveBeenCalled();
+		});
+
+		it("closes an engine panel that was already open when the snapshot went", async () => {
+			const user = userEvent.setup();
+			useSettingsStore.setState({ settings: { default_agent_type: "codex" } });
+			render(<SessionSection />);
+			await user.click(screen.getByRole("button", { name: /^Engine:/ }));
+			expect(screen.getByRole("radio", { name: /GPT-5/ })).toBeInTheDocument();
+
+			// What a dropped connection does to it while this page stays mounted.
+			act(() => {
+				useSettingsStore.getState().reset();
+			});
+
+			expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+		});
+
+		it("offers a retry once the snapshot is known not to be coming", async () => {
+			const user = userEvent.setup();
+			const refresh = vi.fn();
+			useSettingsStore.setState({ error: "subscribe failed", refresh });
+			render(<SessionSection />);
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"Couldn't load settings: subscribe failed",
+			);
+			await user.click(screen.getByRole("button", { name: "Retry" }));
+
+			expect(refresh).toHaveBeenCalled();
+		});
 	});
 });

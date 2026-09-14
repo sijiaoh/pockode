@@ -48,7 +48,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | workStore | Work items | State/Actions interface split |
 | agentRoleStore | AI roles | State/Actions interface split |
 | agentOptionsStore | Selectable models and effort levels per agent | Fetched once per connection, not subscribed |
-| settingsStore | App settings | State/Actions interface split |
+| settingsStore | App settings, and why they are missing when they are | Holds the subscription's `refresh` too: the Retry is far below the hook that owns it |
 | authStore | Auth token | localStorage init |
 | inputStore | Draft text, per session | persist middleware |
 | filesSearchStore | File search options | localStorage init |
@@ -506,6 +506,7 @@ Key features:
 | `web/src/lib/gitPanelStore.ts` | Git panel UI state that must outlive remounts |
 | `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |
+| `web/src/lib/valueState.ts` | Stored / still coming / not coming, named once for every control that waits on a snapshot ([why three states](subscription-system.md#why-the-controls-wait-for-the-session-to-describe-itself)) |
 
 `worktreeQuery.ts` exists because two hooks (`useWorktree`, `useWorktreeDisplay`)
 read the same react-query cache entry. Key and fetcher living in separate files

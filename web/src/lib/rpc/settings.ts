@@ -18,11 +18,22 @@ export function createSettingsActions(
 	};
 
 	return {
-		// Merge with current settings to avoid overwriting unrelated fields
+		// `settings.update` replaces the stored object rather than patching it, so
+		// a caller that has not seen the subscription snapshot has nothing
+		// truthful to send: merging the patch into an empty object would write
+		// every untouched field back as its zero value. Refusing is the honest
+		// answer — waiting for the snapshot is the caller's job, not something
+		// this layer can fake by guessing what the current settings are.
 		updateSettings: async (patch: Partial<Settings>): Promise<void> => {
-			const current = useSettingsStore.getState().settings ?? {};
+			const client = requireClient();
+			const current = useSettingsStore.getState().settings;
+			if (!current) {
+				throw new Error(
+					`Cannot update settings (${Object.keys(patch).join(", ")}) before the settings snapshot arrives`,
+				);
+			}
 			const settings: Settings = { ...current, ...patch };
-			await requireClient().request("settings.update", { settings });
+			await client.request("settings.update", { settings });
 		},
 	};
 }

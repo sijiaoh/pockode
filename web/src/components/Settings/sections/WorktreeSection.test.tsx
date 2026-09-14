@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "../../../lib/settingsStore";
@@ -23,7 +23,11 @@ vi.mock("../../../lib/wsStore", () => ({
 
 describe("WorktreeSection", () => {
 	beforeEach(() => {
-		useSettingsStore.setState({ settings: { worktree_base_dir: "" } });
+		useSettingsStore.setState({
+			settings: { worktree_base_dir: "" },
+			error: null,
+			refresh: null,
+		});
 		mockUpdateSettings.mockReset().mockResolvedValue(undefined);
 	});
 
@@ -91,5 +95,60 @@ describe("WorktreeSection", () => {
 
 		await waitFor(() => expect(input).toHaveValue("/persisted"));
 		expect(mockUpdateSettings).not.toHaveBeenCalled();
+	});
+
+	// An empty field under the default placeholder reads as "not set, using the
+	// default" — a claim about settings nobody has been told yet, and one a user
+	// who set an absolute path would have to notice to disbelieve.
+	describe("before the settings snapshot arrives", () => {
+		beforeEach(() => {
+			useSettingsStore.setState({ settings: null });
+		});
+
+		it("offers no field to type a path nobody knows into", () => {
+			render(<WorktreeSection />);
+
+			expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+			// The same path still appears in the help text below, which documents
+			// the default rather than claiming this is what is set.
+			expect(
+				screen.queryByPlaceholderText("../<repo>-worktrees"),
+			).not.toBeInTheDocument();
+			expect(
+				screen.getByRole("status", { name: "Base Path: loading" }),
+			).toBeInTheDocument();
+		});
+
+		// The draft outlives the field: `baseDir` was already "", so the effect
+		// that resyncs the input never fires, and Save would go on offering to
+		// write a path composed from a snapshot that is not there.
+		it("takes Save away with the field a draft was typed into", async () => {
+			const user = userEvent.setup();
+			useSettingsStore.setState({ settings: { worktree_base_dir: "" } });
+			render(<WorktreeSection />);
+			await user.type(screen.getByRole("textbox"), "/trees");
+			expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+
+			act(() => {
+				useSettingsStore.getState().reset();
+			});
+
+			expect(
+				screen.queryByRole("button", { name: "Save" }),
+			).not.toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: "Reset" }),
+			).not.toBeInTheDocument();
+		});
+
+		it("says so, instead of waiting forever, once the snapshot is known not to be coming", () => {
+			useSettingsStore.setState({ error: "subscribe failed" });
+			render(<WorktreeSection />);
+
+			expect(screen.getByRole("alert")).toHaveTextContent(
+				"Couldn't load settings: subscribe failed",
+			);
+			expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+		});
 	});
 });

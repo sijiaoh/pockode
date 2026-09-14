@@ -1,6 +1,6 @@
 import { useIsExpanded } from "@pockode/shared";
 import { ChevronDown, CircleHelp } from "lucide-react";
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
 	AUTO_EFFORT_DESCRIPTION,
 	AUTO_ID,
@@ -18,9 +18,11 @@ import {
 	AGENT_TYPES,
 	type AgentTypeInfo,
 } from "../../lib/agentType";
+import { type ValueState, waitingLabel } from "../../lib/valueState";
 import type { AgentType } from "../../types/settings";
 import { ChoiceRow, Section } from "./ChoiceList";
 import ResponsivePanel from "./ResponsivePanel";
+import Skeleton from "./Skeleton";
 
 /**
  * The empty agent type. Not called Auto, though the empty model and effort are:
@@ -63,6 +65,16 @@ interface Props {
 	onSelectAgent: (agentType: string) => Promise<void>;
 	onSelectModel: (model: string) => Promise<void>;
 	onSelectEffort: (effort: string) => Promise<void>;
+	/**
+	 * Whether the engine passed in is the stored one. Anything but `known` draws
+	 * the summary row as placeholders and refuses input: the values resolved for
+	 * an absent snapshot are the reassuring ones — Claude on Auto — and a user
+	 * whose defaults are Codex on Opus would be told, briefly, that they are not.
+	 *
+	 * Defaults to `known`, because a caller whose values come from something it
+	 * has already loaded has nothing to wait for.
+	 */
+	valueState?: ValueState;
 }
 
 /** An agent id this build has no entry for, shown as itself. */
@@ -94,6 +106,7 @@ function EngineField({
 	onSelectAgent,
 	onSelectModel,
 	onSelectEffort,
+	valueState = "known",
 }: Props) {
 	const [isOpen, setIsOpen] = useState(false);
 	const [error, setError] = useState<{
@@ -105,6 +118,8 @@ function EngineField({
 	// cannot steal this one's selection.
 	const groupId = useId();
 	const isExpanded = useIsExpanded();
+
+	const hasValues = valueState === "known";
 
 	const models = useModelsForAgent(agentType);
 	const efforts = useEffortsForAgent(agentType);
@@ -169,6 +184,14 @@ function EngineField({
 
 	const handleClose = useCallback(() => setPanelOpen(false), [setPanelOpen]);
 
+	// The trigger being disabled is not enough: the panel can already be open when
+	// the snapshot is dropped (a disconnect resets it while this page stays
+	// mounted), and its rows would go on showing the resolved defaults as the
+	// selected ones — the very claim the collapsed row refuses to make.
+	useEffect(() => {
+		if (!hasValues) setPanelOpen(false);
+	}, [hasValues, setPanelOpen]);
+
 	// The panel stays open either way. A radio group selects as the arrow keys
 	// move through it, so closing on selection would leave a keyboard user able
 	// to reach only the option next to the current one — and seeing the dot move,
@@ -208,18 +231,41 @@ function EngineField({
 					ref={triggerRef}
 					type="button"
 					onClick={() => setPanelOpen(!isOpen)}
+					disabled={!hasValues}
 					aria-haspopup="dialog"
 					aria-expanded={isOpen}
+					// Only while something is on its way. "Busy" for a value that is not
+					// coming would keep a screen reader waiting on an update that never
+					// lands; the label says "unavailable" there instead.
+					aria-busy={valueState === "pending"}
 					aria-label={
-						agentInfo
-							? `Engine: ${agentInfo.label}, ${modelLabel}${
-									effortLabel ? `, ${effortLabel} effort` : ""
-								}`
-							: `Engine: ${FOLLOW_SETTINGS_LABEL}`
+						!hasValues
+							? waitingLabel("Engine", valueState)
+							: agentInfo
+								? `Engine: ${agentInfo.label}, ${modelLabel}${
+										effortLabel ? `, ${effortLabel} effort` : ""
+									}`
+								: `Engine: ${FOLLOW_SETTINGS_LABEL}`
 					}
-					className="flex min-h-11 w-full items-center gap-2 rounded-lg border border-th-border bg-th-bg-secondary px-3 py-2 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent hover:border-th-border-focus"
+					className="flex min-h-11 w-full items-center gap-2 rounded-lg border border-th-border bg-th-bg-secondary px-3 py-2 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent hover:border-th-border-focus disabled:pointer-events-none disabled:opacity-50"
 				>
-					{agentInfo ? (
+					{!hasValues ? (
+						<>
+							{/* Same geometry as the icon and the line they stand in for, so
+							    the row does not move when the snapshot lands. `mr-auto` does
+							    for the chevron what `flex-1` on the real summary does: without
+							    it the free space would collect after the chevron and drag it
+							    in from the edge it sits on once the value arrives. */}
+							<Skeleton
+								className="size-4 shrink-0 rounded-full"
+								animated={valueState === "pending"}
+							/>
+							<Skeleton
+								className="mr-auto h-3.5 w-40 max-w-[60%] rounded"
+								animated={valueState === "pending"}
+							/>
+						</>
+					) : agentInfo ? (
 						<>
 							<agentInfo.icon
 								className="size-4 shrink-0 text-th-text-secondary"

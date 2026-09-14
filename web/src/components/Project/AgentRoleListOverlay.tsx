@@ -8,10 +8,14 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useCallback, useState } from "react";
+import { useGlobalSettingsStatus } from "../../hooks/useGlobalSettingsStatus";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useSettingsStore } from "../../lib/settingsStore";
+import { type ValueState, waitingLabel } from "../../lib/valueState";
 import { useWSStore } from "../../lib/wsStore";
 import BackToChatButton from "../ui/BackToChatButton";
+import SettingsLoadError from "../ui/SettingsLoadError";
+import Skeleton from "../ui/Skeleton";
 
 interface Props {
 	onBack: () => void;
@@ -30,6 +34,11 @@ export default function AgentRoleListOverlay({
 		(s) => s.settings?.default_agent_role_id ?? "",
 	);
 	const updateSettings = useWSStore((s) => s.actions.updateSettings);
+	// Only the star and the line at the bottom wait on the settings snapshot. The
+	// list itself comes from the agent role subscription, a separate wait with its
+	// own loading and error states, so everything else here stays usable.
+	const { valueState } = useGlobalSettingsStatus();
+	const hasDefaultRole = valueState === "known";
 
 	const [defaultRoleError, setDefaultRoleError] = useState<string | null>(null);
 
@@ -91,6 +100,7 @@ export default function AgentRoleListOverlay({
 					{resetError || defaultRoleError}
 				</p>
 			)}
+			<SettingsLoadError className="px-3 py-1.5" />
 
 			<div className="min-h-0 flex-1 overflow-auto p-2">
 				{isLoading ? (
@@ -114,6 +124,7 @@ export default function AgentRoleListOverlay({
 								roleId={role.id}
 								name={role.name}
 								isDefault={role.id === defaultRoleId}
+								defaultState={valueState}
 								onToggleDefault={handleToggleDefault}
 								onOpenDetail={onOpenAgentRoleDetail}
 							/>
@@ -123,8 +134,19 @@ export default function AgentRoleListOverlay({
 			</div>
 
 			<div className="border-t border-th-border p-2">
-				<p className="px-3 py-1 text-xs text-th-text-muted">
-					Default: {defaultRoleName ?? "None (always ask)"}
+				<p className="flex items-center gap-1 px-3 py-1 text-xs text-th-text-muted">
+					Default:{" "}
+					{hasDefaultRole ? (
+						(defaultRoleName ?? "None (always ask)")
+					) : (
+						// Never "None (always ask)" first: it says there is no default
+						// role, and the user may well have one.
+						<Skeleton
+							className="h-3 w-24 rounded"
+							animated={valueState === "pending"}
+							label={waitingLabel("Default role", valueState)}
+						/>
+					)}
 				</p>
 				<CreateRoleButton />
 			</div>
@@ -147,12 +169,15 @@ function RoleRow({
 	roleId,
 	name,
 	isDefault,
+	defaultState,
 	onToggleDefault,
 	onOpenDetail,
 }: {
 	roleId: string;
 	name: string;
 	isDefault: boolean;
+	/** Whether `isDefault` is the stored answer; see the list's own comment. */
+	defaultState: ValueState;
 	onToggleDefault: (roleId: string) => void;
 	onOpenDetail: (roleId: string) => void;
 }) {
@@ -178,13 +203,30 @@ function RoleRow({
 				<button
 					type="button"
 					onClick={() => onToggleDefault(roleId)}
-					className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center"
-					aria-label={isDefault ? "Unset as default" : "Set as default"}
-					aria-pressed={isDefault}
+					disabled={defaultState !== "known"}
+					className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center disabled:pointer-events-none disabled:opacity-50"
+					aria-label={
+						defaultState !== "known"
+							? waitingLabel("Default role", defaultState)
+							: isDefault
+								? "Unset as default"
+								: "Set as default"
+					}
+					// No `aria-pressed` while waiting: `false` is as much a claim about
+					// the default role as `true` is.
+					aria-pressed={defaultState === "known" ? isDefault : undefined}
+					aria-busy={defaultState === "pending"}
 				>
-					<Star
-						className={`size-4 ${isDefault ? "fill-th-accent text-th-accent" : "text-th-text-muted"}`}
-					/>
+					{defaultState === "known" ? (
+						<Star
+							className={`size-4 ${isDefault ? "fill-th-accent text-th-accent" : "text-th-text-muted"}`}
+						/>
+					) : (
+						<Skeleton
+							className="size-4 rounded-full"
+							animated={defaultState === "pending"}
+						/>
+					)}
 				</button>
 
 				<button

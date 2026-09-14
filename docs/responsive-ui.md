@@ -480,15 +480,15 @@ This is written down so the next reader does not "fix" it in passing.
 
 The shape the rule does not reach is not hypothetical. Counted with the same
 reader `touchTarget.test.ts` uses, over the same three roots, then carried past
-the point where the guard stops: **66** interactive elements render text, state
+the point where the guard stops: **67** interactive elements render text, state
 neither a height nor a stretch token, and carry no `touch-target`. (The two that
 do stretch are blind spot 5 below, not this list.)
 
 - **29** state both a font size and vertical padding, so their height is exact
   arithmetic. **All 29 land between 20px and 40px** — not one reaches 44.
-- **11** state no padding at all. For ten of them the box is a single line box,
-  **16–20px** — six say their own font size, and the other four take it from the
-  banner or paragraph they sit in, read one by one. The eleventh is the theme
+- **12** state no padding at all. For eleven of them the box is a single line
+  box, **16–20px** — six say their own font size, and the other five take it from
+  the banner or paragraph they sit in, read one by one. The twelfth is the theme
   card in Appearance, which states no height but is sized by a `min-h-12` block
   inside it and is nowhere near the floor.
 - **26** inherit their font size from an ancestor in another file, so only a
@@ -506,9 +506,10 @@ source:
 | `Git/ErrorBanner.tsx:38` | **16px** | the details toggle on a git failure |
 | `Project/WorkDetailOverlay.tsx:104` | **16px** | the link up to the parent work |
 | `Project/WorkListOverlay.tsx:341` | **16px** | a task title, in a `min-h-[36px]` row |
-| `Project/WorkListOverlay.tsx:251`, `WorkDetailOverlay.tsx:699`, `AgentRoleListOverlay.tsx:190` | **20px** | list titles **inside a `min-h-[44px]` row** — the row is 44, the target in it is 20, because `items-center` centres the text rather than stretching it |
+| `Project/WorkListOverlay.tsx:251`, `WorkDetailOverlay.tsx:699`, `AgentRoleListOverlay.tsx:232` | **20px** | list titles **inside a `min-h-[44px]` row** — the row is 44, the target in it is 20, because `items-center` centres the text rather than stretching it |
 | `Project/WorkListOverlay.tsx:418` | **20px** | the labelled Start chip (its icon-only twin above it is 44) |
 | `AppShell.tsx:523/530`, `ui/ReconnectBanner.tsx:39` | ~**20px** | Retry and dismiss in the session-error banner, Retry now in the reconnect banner |
+| `ui/SettingsLoadError.tsx:22` | **16px** | Retry, the only way back from a settings subscription that failed on a live socket |
 | `Worktree/WorktreeCreateSheet.tsx:225` | ~**20px** | the link out of the setup-script note |
 
 One more is worth naming although it clears the fine floor: `ConfirmDialog`'s

@@ -1,15 +1,29 @@
 import { useNavigate } from "@tanstack/react-router";
 import { FileCode, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useGlobalSettingsStatus } from "../../../hooks/useGlobalSettingsStatus";
 import { overlayToNavigation, SETUP_HOOK_PATH } from "../../../lib/navigation";
 import { useSettingsStore } from "../../../lib/settingsStore";
+import { waitingLabel } from "../../../lib/valueState";
 import { useWorktreeStore } from "../../../lib/worktreeStore";
 import { useWSStore } from "../../../lib/wsStore";
+import SettingsLoadError from "../../ui/SettingsLoadError";
+import Skeleton from "../../ui/Skeleton";
+
+/**
+ * Shared by the input and the placeholder that stands in for it, so the row is
+ * the same box either way and nothing moves when the path arrives. Height is
+ * nobody's to write down here: it comes out of the padding and the line box.
+ */
+const FIELD_BOX =
+	"min-w-0 flex-1 rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm";
 
 export default function WorktreeSection() {
 	const navigate = useNavigate();
 
 	const baseDir = useSettingsStore((s) => s.settings?.worktree_base_dir ?? "");
+	const { valueState } = useGlobalSettingsStatus();
+	const hasSettings = valueState === "known";
 	const setupHookSkip = useWorktreeStore((s) => s.setupHookSkip);
 	const updateSettings = useWSStore((s) => s.actions.updateSettings);
 
@@ -61,29 +75,57 @@ export default function WorktreeSection() {
 	return (
 		<div className="space-y-4">
 			<div className="space-y-1.5">
-				<label
-					htmlFor="worktree-base-dir"
-					className="text-xs font-medium text-th-text-muted"
-				>
-					Base Path
-				</label>
+				{/* A `<p>` while waiting, not a `<label>`: the input it points at is not
+				    on the page, and the id cannot move to the placeholder — a label
+				    labels a form control, and the placeholder is not one. */}
+				{hasSettings ? (
+					<label
+						htmlFor="worktree-base-dir"
+						className="text-xs font-medium text-th-text-muted"
+					>
+						Base Path
+					</label>
+				) : (
+					<p className="text-xs font-medium text-th-text-muted">Base Path</p>
+				)}
 				<div className="flex items-center gap-2">
-					<input
-						id="worktree-base-dir"
-						type="text"
-						value={value}
-						onChange={(e) => {
-							setValue(e.target.value);
-							setError(null);
-						}}
-						placeholder="../<repo>-worktrees"
-						autoComplete="off"
-						autoCapitalize="off"
-						autoCorrect="off"
-						spellCheck={false}
-						className="min-w-0 flex-1 rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
-					/>
-					{isDirty && (
+					{hasSettings ? (
+						<input
+							id="worktree-base-dir"
+							type="text"
+							value={value}
+							onChange={(e) => {
+								setValue(e.target.value);
+								setError(null);
+							}}
+							placeholder="../<repo>-worktrees"
+							autoComplete="off"
+							autoCapitalize="off"
+							autoCorrect="off"
+							spellCheck={false}
+							className={`${FIELD_BOX} text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none`}
+						/>
+					) : (
+						// The empty input reads as "not set, using the default", which for
+						// a user who set an absolute path is the reassuring lie.
+						<div className={`${FIELD_BOX} flex items-center`}>
+							<Skeleton
+								className="h-3 w-32 rounded"
+								animated={valueState === "pending"}
+								label={waitingLabel("Base Path", valueState)}
+							/>
+							{/* Holds open the line box the input's own text would make, so
+							    the row keeps its height when the path lands. */}
+							<span className="invisible" aria-hidden="true">
+								&#8203;
+							</span>
+						</div>
+					)}
+					{/* Not just `isDirty`: a draft typed over an unset path survives the
+					    snapshot going away (`baseDir` is already "", so the resync effect
+					    does not fire), and Save would be the one control here still able
+					    to write with nothing to compose the write from. */}
+					{hasSettings && isDirty && (
 						<>
 							<button
 								type="button"
@@ -109,6 +151,7 @@ export default function WorktreeSection() {
 						</>
 					)}
 				</div>
+				<SettingsLoadError />
 				{error ? (
 					<p className="text-xs text-th-error" role="alert">
 						{error}
