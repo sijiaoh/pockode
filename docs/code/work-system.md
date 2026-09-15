@@ -338,7 +338,7 @@ When an AI session's state changes, sync the work status:
 | running | stopped → in_progress | User message to stopped session |
 | idle (first) | (ignored) | Initial process startup |
 | idle (normal) | in_progress → in_progress | Send auto-continuation |
-| idle (needs_input) | in_progress → needs_input | Agent raised a prompt. The AutoResumer ignores this idle; the transition is `NeedsInputSyncer`'s, driven from `SessionListWatcher` |
+| idle (needs_input) | in_progress → needs_input | Agent raised a prompt. The AutoResumer ignores this idle; the transition is `StatusSyncer.HandlePromptRaised`'s, driven from `SessionListWatcher` |
 | interrupted | in_progress → stopped | Turn aborted (user interrupt, denied permission, replaced turn) |
 | ended | in_progress → stopped | Process exited |
 

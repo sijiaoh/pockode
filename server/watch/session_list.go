@@ -19,9 +19,10 @@ type ViewingChecker interface {
 	IsViewing(sessionID string) bool
 }
 
-// WorkNeedsInputSyncer syncs work item status when a session's needs_input state changes.
-type WorkNeedsInputSyncer interface {
-	SyncNeedsInput(ctx context.Context, sessionID string, needsInput bool)
+// WorkStatusSyncer moves a work item's status in response to session events.
+type WorkStatusSyncer interface {
+	HandlePromptRaised(ctx context.Context, sessionID string)
+	HandleUserAction(ctx context.Context, sessionID string)
 }
 
 // SessionListWatcher notifies subscribers when the session list changes.
@@ -29,12 +30,12 @@ type WorkNeedsInputSyncer interface {
 // store's mutex during network I/O.
 type SessionListWatcher struct {
 	*BaseWatcher
-	store                session.Store
-	processStateGetter   ProcessStateGetter
-	viewingChecker       ViewingChecker
-	workNeedsInputSyncer WorkNeedsInputSyncer
-	eventCh              chan session.SessionChangeEvent
-	dirty                atomic.Bool // set when an event is dropped; triggers full sync
+	store              session.Store
+	processStateGetter ProcessStateGetter
+	viewingChecker     ViewingChecker
+	workStatusSyncer   WorkStatusSyncer
+	eventCh            chan session.SessionChangeEvent
+	dirty              atomic.Bool // set when an event is dropped; triggers full sync
 }
 
 func NewSessionListWatcher(store session.Store) *SessionListWatcher {
@@ -55,8 +56,8 @@ func (w *SessionListWatcher) SetViewingChecker(vc ViewingChecker) {
 	w.viewingChecker = vc
 }
 
-func (w *SessionListWatcher) SetWorkNeedsInputSyncer(s WorkNeedsInputSyncer) {
-	w.workNeedsInputSyncer = s
+func (w *SessionListWatcher) SetWorkStatusSyncer(s WorkStatusSyncer) {
+	w.workStatusSyncer = s
 }
 
 func (w *SessionListWatcher) Start() error {
@@ -198,8 +199,8 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 				slog.Warn("failed to set unread", "sessionId", e.SessionID, "error", err)
 			}
 		}
-		if e.NeedsInput && w.workNeedsInputSyncer != nil {
-			w.workNeedsInputSyncer.SyncNeedsInput(w.Context(), e.SessionID, true)
+		if e.NeedsInput && w.workStatusSyncer != nil {
+			w.workStatusSyncer.HandlePromptRaised(w.Context(), e.SessionID)
 		}
 	case process.ProcessStateRunning:
 		// needs_input is NOT cleared here — it is cleared by user events
@@ -244,9 +245,7 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 // Two things follow from that one event, at two different layers: the prompt the
 // session was holding up has been dealt with, so its needs_input flag drops; and
 // a work paused on that prompt — or on child work — has the attention it was
-// paused for, so it resumes (work.NeedsInputSyncer.SyncNeedsInput). Naming the
-// event rather than either consequence is the point: called "clear a flag", the
-// second half reads as a side effect nobody signed up for.
+// paused for, so it resumes (work.StatusSyncer.HandleUserAction).
 //
 // What counts is "the user handed this session something to go on": a message, a
 // permission answer, a question answer. Interrupt does not, even though a user
@@ -269,8 +268,8 @@ func (w *SessionListWatcher) HandleUserAction(sessionID string) {
 	if err := w.store.SetNeedsInput(ctx, sessionID, false); err != nil {
 		slog.Warn("failed to clear needs input", "sessionId", sessionID, "error", err)
 	}
-	if w.workNeedsInputSyncer != nil {
-		w.workNeedsInputSyncer.SyncNeedsInput(ctx, sessionID, false)
+	if w.workStatusSyncer != nil {
+		w.workStatusSyncer.HandleUserAction(ctx, sessionID)
 	}
 }
 

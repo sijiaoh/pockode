@@ -207,11 +207,21 @@ an existing one.
 
 > Source: `server/worktree/work_stopper.go`.
 
-## NeedsInputSyncer
+## StatusSyncer
 
-`NeedsInputSyncer` bridges session-level `needs_input` state to work status. When a session enters `needs_input`, the associated `in_progress` work transitions to `needs_input`; when the session resumes, the work transitions back to `in_progress`.
+`StatusSyncer` moves a work item's status in response to what happens to the
+session it runs in. A session raising a prompt pauses its `in_progress` work into
+`needs_input`; the user acting on that session puts `needs_input` or `waiting`
+work back to `in_progress`. `stopped` is not resumed here — the AutoResumer owns
+that one, because the retry bookkeeping has to be reset with it.
 
-> Source: `server/work/needs_input_syncer.go`.
+These are two events, not one flag being set and cleared. The session's own
+`needs_input` flag also drops when its process dies, and that is not a user
+acting: a work paused on a question outlives the process that raised it. See
+[work-system.md](../code/work-system.md#autoresumer) for why resuming it there
+would only walk it into `stopped`.
+
+> Source: `server/work/status_syncer.go`.
 
 ## Prompt Builders
 

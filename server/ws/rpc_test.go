@@ -144,7 +144,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	// user action on a session — and of the entry points that deliberately are
 	// not one. Without it the syncer is nil and any such assertion passes for the
 	// wrong reason.
-	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
+	worktreeManager.SetWorkStatusSyncer(work.NewStatusSyncer(workStore))
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
 	workOps := work.NewOperations(workStore, workStarter, nil)

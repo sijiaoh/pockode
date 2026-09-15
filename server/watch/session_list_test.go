@@ -244,23 +244,27 @@ func (r *recordingSessionStore) SetNeedsInput(_ context.Context, sessionID strin
 }
 
 type recordingSyncer struct {
-	calls []syncCall
+	promptsRaised []string
+	userActions   []string
 }
 
-type syncCall struct {
-	SessionID  string
-	NeedsInput bool
+func (r *recordingSyncer) HandlePromptRaised(_ context.Context, sessionID string) {
+	r.promptsRaised = append(r.promptsRaised, sessionID)
 }
 
-func (r *recordingSyncer) SyncNeedsInput(_ context.Context, sessionID string, needsInput bool) {
-	r.calls = append(r.calls, syncCall{SessionID: sessionID, NeedsInput: needsInput})
+func (r *recordingSyncer) HandleUserAction(_ context.Context, sessionID string) {
+	r.userActions = append(r.userActions, sessionID)
+}
+
+func (r *recordingSyncer) callCount() int {
+	return len(r.promptsRaised) + len(r.userActions)
 }
 
 func TestHandleProcessStateChange_IdleNeedsInput_SyncsWork(t *testing.T) {
 	store := &mockSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
-	w.SetWorkNeedsInputSyncer(syncer)
+	w.SetWorkStatusSyncer(syncer)
 
 	w.HandleProcessStateChange(process.StateChangeEvent{
 		SessionID:  "sess-1",
@@ -268,11 +272,11 @@ func TestHandleProcessStateChange_IdleNeedsInput_SyncsWork(t *testing.T) {
 		NeedsInput: true,
 	})
 
-	if len(syncer.calls) != 1 {
-		t.Fatalf("expected 1 sync call, got %d", len(syncer.calls))
+	if len(syncer.promptsRaised) != 1 || syncer.promptsRaised[0] != "sess-1" {
+		t.Fatalf("expected one prompt-raised call for sess-1, got %v", syncer.promptsRaised)
 	}
-	if syncer.calls[0].SessionID != "sess-1" || !syncer.calls[0].NeedsInput {
-		t.Errorf("unexpected call: %+v", syncer.calls[0])
+	if len(syncer.userActions) != 0 {
+		t.Errorf("expected no user-action calls, got %v", syncer.userActions)
 	}
 }
 
@@ -280,7 +284,7 @@ func TestHandleProcessStateChange_IdleNoNeedsInput_NoSync(t *testing.T) {
 	store := &mockSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
-	w.SetWorkNeedsInputSyncer(syncer)
+	w.SetWorkStatusSyncer(syncer)
 
 	w.HandleProcessStateChange(process.StateChangeEvent{
 		SessionID:  "sess-1",
@@ -288,8 +292,8 @@ func TestHandleProcessStateChange_IdleNoNeedsInput_NoSync(t *testing.T) {
 		NeedsInput: false,
 	})
 
-	if len(syncer.calls) != 0 {
-		t.Errorf("expected no sync calls for idle without needsInput, got %d", len(syncer.calls))
+	if syncer.callCount() != 0 {
+		t.Errorf("expected no sync calls for idle without needsInput, got %d", syncer.callCount())
 	}
 }
 
@@ -297,7 +301,7 @@ func TestHandleProcessStateChange_Running_KeepsNeedsInput(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
-	w.SetWorkNeedsInputSyncer(syncer)
+	w.SetWorkStatusSyncer(syncer)
 
 	w.HandleProcessStateChange(process.StateChangeEvent{
 		SessionID: "sess-1",
@@ -308,22 +312,22 @@ func TestHandleProcessStateChange_Running_KeepsNeedsInput(t *testing.T) {
 	if len(store.needsInputCalls) != 0 {
 		t.Errorf("expected no SetNeedsInput calls on Running, got %d", len(store.needsInputCalls))
 	}
-	if len(syncer.calls) != 0 {
-		t.Errorf("expected no sync calls on Running, got %d", len(syncer.calls))
+	if syncer.callCount() != 0 {
+		t.Errorf("expected no sync calls on Running, got %d", syncer.callCount())
 	}
 }
 
 // A dead process clears the session's own flag but must not touch the work item.
-// The work syncer's resume branch moves needs_input and waiting back to
-// in_progress, and the AutoResumer's process-ended stop — which runs a moment
-// later on the same event — stops in_progress work. Calling the syncer here
-// chains the two together, so every paused work ends up stopped as soon as its
-// process dies, which the idle reaper guarantees it eventually will.
+// HandleUserAction moves needs_input and waiting back to in_progress, and the
+// AutoResumer's process-ended stop — which runs a moment later on the same
+// event — stops in_progress work. Calling the syncer here chains the two
+// together, so every paused work ends up stopped as soon as its process dies,
+// which the idle reaper guarantees it eventually will.
 func TestHandleProcessStateChange_Ended_ClearsSessionFlagButNotTheWork(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
-	w.SetWorkNeedsInputSyncer(syncer)
+	w.SetWorkStatusSyncer(syncer)
 
 	w.HandleProcessStateChange(process.StateChangeEvent{
 		SessionID: "sess-1",
@@ -338,8 +342,8 @@ func TestHandleProcessStateChange_Ended_ClearsSessionFlagButNotTheWork(t *testin
 		t.Errorf("expected SetNeedsInput(sess-1, false), got %+v", store.needsInputCalls[0])
 	}
 
-	if len(syncer.calls) != 0 {
-		t.Errorf("a dead process must not resume its work item, got %d sync calls", len(syncer.calls))
+	if syncer.callCount() != 0 {
+		t.Errorf("a dead process must not touch its work item, got %d sync calls", syncer.callCount())
 	}
 }
 
@@ -408,7 +412,7 @@ func TestHandleUserAction_ClearsStoreAndResumesWork(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
-	w.SetWorkNeedsInputSyncer(syncer)
+	w.SetWorkStatusSyncer(syncer)
 
 	w.HandleUserAction("sess-1")
 
@@ -419,11 +423,11 @@ func TestHandleUserAction_ClearsStoreAndResumesWork(t *testing.T) {
 		t.Errorf("expected SetNeedsInput(sess-1, false), got %+v", store.needsInputCalls[0])
 	}
 
-	if len(syncer.calls) != 1 {
-		t.Fatalf("expected 1 sync call, got %d", len(syncer.calls))
+	if len(syncer.userActions) != 1 || syncer.userActions[0] != "sess-1" {
+		t.Fatalf("expected one user-action call for sess-1, got %v", syncer.userActions)
 	}
-	if syncer.calls[0].SessionID != "sess-1" || syncer.calls[0].NeedsInput {
-		t.Errorf("unexpected call: %+v", syncer.calls[0])
+	if len(syncer.promptsRaised) != 0 {
+		t.Errorf("expected no prompt-raised calls, got %v", syncer.promptsRaised)
 	}
 }
 

@@ -311,7 +311,7 @@ Flags:
 	worktreeManager.SetWorkAutoResumer(workAutoResumer)
 	// Route AutoResumer follow-up messages to each work's own worktree.
 	workAutoResumer.SetSenderResolver(worktreeManager)
-	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
+	worktreeManager.SetWorkStatusSyncer(work.NewStatusSyncer(workStore))
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
 	// Single implementation of the start/reopen transitions, shared by both the
