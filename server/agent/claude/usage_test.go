@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math"
 	"testing"
@@ -31,6 +32,14 @@ const (
 			"claude-opus-5[1m]":{"inputTokens":4,"outputTokens":6,"cacheReadInputTokens":27811,"cacheCreationInputTokens":3613,"costUSD":0.0502,"contextWindow":1000000,"canonicalModel":"claude-opus-5"}},
 		"total_cost_usd":0.051173}`
 )
+
+// assistantFrame is one API request's usage in the shape claude 2.1.263 reports
+// it, which is where the context reading comes from.
+func assistantFrame(input, cacheRead, cacheCreation int64) string {
+	return fmt.Sprintf(`{"type":"assistant","parent_tool_use_id":null,"message":{"model":"claude-opus-5",`+
+		`"usage":{"input_tokens":%d,"cache_read_input_tokens":%d,"cache_creation_input_tokens":%d,"output_tokens":7}}}`,
+		input, cacheRead, cacheCreation)
+}
 
 // observeFrames feeds raw stream-json lines through the observer the way
 // streamOutput does, and returns everything it reported.
@@ -81,11 +90,11 @@ func TestUsageObserverAccumulatesAcrossTurns(t *testing.T) {
 	}
 }
 
-// The context reading comes from the frame's own `usage`: the prompt that was
-// just sent, cache hits and cache writes included, is how much of the window the
-// conversation occupies.
+// The context reading is the prompt of the last API request the turn made, cache
+// hits and cache writes included: that is how much of the window the conversation
+// occupies right now.
 func TestUsageObserverReportsContext(t *testing.T) {
-	got := observeFrames(t, initFrame, secondResultFrame)
+	got := observeFrames(t, initFrame, assistantFrame(2, 15694, 36), secondResultFrame)
 
 	if len(got) != 1 {
 		t.Fatalf("got %d reports, want 1", len(got))
@@ -251,5 +260,108 @@ func TestUsageObserverContextWindowCanonicalFallbackIsStable(t *testing.T) {
 		if got[0].ContextWindow != 1000000 {
 			t.Fatalf("context window = %d, want the widest canonical match 1000000", got[0].ContextWindow)
 		}
+	}
+}
+
+// The contract this file exists to protect: a turn that makes many API requests
+// must report the size the conversation reached, not the sum of every prompt it
+// sent along the way. The figures are one real claude 2.1.263 turn of seven
+// requests, whose `result.usage.cache_read_input_tokens` was 163135 — exactly
+// those seven cache reads added up, and 6.6x the conversation's actual size.
+func TestUsageObserverContextIsNotTheTurnsTotal(t *testing.T) {
+	frames := []string{initFrame}
+	for _, cacheRead := range []int64{18534, 23726, 23935, 24055, 24175, 24295, 24415} {
+		frames = append(frames, assistantFrame(2, cacheRead, 120))
+	}
+	frames = append(frames, secondResultFrame)
+
+	got := observeFrames(t, frames...)
+	if len(got) != 1 {
+		t.Fatalf("got %d reports, want 1", len(got))
+	}
+	if want := int64(2 + 24415 + 120); got[0].ContextTokens != want {
+		t.Errorf("context tokens = %d, want the last request's prompt %d", got[0].ContextTokens, want)
+	}
+}
+
+// A compaction shrinks the conversation, and the reading has to follow it down.
+// The levels are a real /compact between two turns of one process — 66200 before
+// and 24876 after — and the boundary frame is carried along because its
+// `post_tokens` (3026) is the tempting wrong answer: it counts the retained
+// conversation alone, without the system prompt and tool definitions that the
+// next request's 24876 includes.
+func TestUsageObserverContextFallsAfterCompaction(t *testing.T) {
+	got := observeFrames(t,
+		initFrame, assistantFrame(2, 66078, 120), firstResultFrame,
+		`{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":66631,"post_tokens":3026}}`,
+		initFrame, assistantFrame(2, 20000, 4874), secondResultFrame,
+	)
+
+	if len(got) != 2 {
+		t.Fatalf("got %d reports, want one per result frame", len(got))
+	}
+	if got[0].ContextTokens != 66200 {
+		t.Errorf("context before compaction = %d, want 66200", got[0].ContextTokens)
+	}
+	if got[1].ContextTokens != 24876 {
+		t.Errorf("context after compaction = %d, want 24876", got[1].ContextTokens)
+	}
+}
+
+// A subagent is prompted with a conversation of its own, so the size of its
+// prompt is not the size of this session's window. Its frames are the last ones
+// a turn emits whenever the turn ends on a Task call.
+func TestUsageObserverIgnoresSubagentContext(t *testing.T) {
+	subagent := `{"type":"assistant","parent_tool_use_id":"toolu_01","message":{"model":"claude-opus-5",` +
+		`"usage":{"input_tokens":2,"cache_read_input_tokens":11798,"cache_creation_input_tokens":0,"output_tokens":9}}}`
+
+	got := observeFrames(t, initFrame, assistantFrame(2, 24032, 0), subagent, secondResultFrame)
+	if len(got) != 1 {
+		t.Fatalf("got %d reports, want 1", len(got))
+	}
+	if want := int64(2 + 24032); got[0].ContextTokens != want {
+		t.Errorf("context tokens = %d, want the main conversation's %d", got[0].ContextTokens, want)
+	}
+}
+
+// A turn that sent no request of its own has not made the conversation smaller,
+// so the last measurement still stands. `/compact` is such a turn: it ends in a
+// result frame whose own `usage` is all zeroes and whose modelUsage still carries
+// the totals of the turn before it, and it emits no assistant frame at all.
+func TestUsageObserverContextSurvivesTurnWithoutRequests(t *testing.T) {
+	compactResultFrame := `{"type":"result","subtype":"success","is_error":false,
+		"usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0},
+		"modelUsage":{
+			"claude-haiku-4-5-20251001":{"inputTokens":898,"outputTokens":14,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0.000968,"contextWindow":200000,"canonicalModel":"claude-haiku-4-5"},
+			"claude-opus-5[1m]":{"inputTokens":2,"outputTokens":3,"cacheReadInputTokens":12117,"cacheCreationInputTokens":3577,"costUSD":0.0419,"contextWindow":1000000,"canonicalModel":"claude-opus-5"}},
+		"total_cost_usd":0.042868}`
+
+	got := observeFrames(t, initFrame, assistantFrame(2, 15694, 36), firstResultFrame, compactResultFrame)
+
+	if len(got) != 2 {
+		t.Fatalf("got %d reports, want one per result frame", len(got))
+	}
+	if want := int64(2 + 36 + 15694); got[1].ContextTokens != want {
+		t.Errorf("context tokens = %d, want the last measurement %d", got[1].ContextTokens, want)
+	}
+}
+
+// An assistant frame that carries no usage measured nothing, so it must not be
+// read as "the conversation is now empty" and overwrite the frame that did
+// measure something. Unlike the store's guard on the same value
+// (session/usage.go), this one protects the reading for the rest of the process,
+// not just the one report — every later result would report the zero too.
+//
+// The frame is constructed rather than captured: no such frame was seen on
+// claude 2.1.263. It pins what the guard promises, not a claim about the CLI.
+func TestUsageObserverIgnoresAssistantFrameWithoutUsage(t *testing.T) {
+	noUsage := `{"type":"assistant","parent_tool_use_id":null,"message":{"model":"claude-opus-5","content":[]}}`
+
+	got := observeFrames(t, initFrame, assistantFrame(2, 15694, 36), noUsage, secondResultFrame)
+	if len(got) != 1 {
+		t.Fatalf("got %d reports, want 1", len(got))
+	}
+	if want := int64(2 + 36 + 15694); got[0].ContextTokens != want {
+		t.Errorf("context tokens = %d, want the last real measurement %d", got[0].ContextTokens, want)
 	}
 }
