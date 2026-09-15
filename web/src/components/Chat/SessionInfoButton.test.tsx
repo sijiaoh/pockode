@@ -47,9 +47,12 @@ describe("SessionInfoButton", () => {
 		expect(screen.getByText("1,248,301")).toBeInTheDocument();
 		expect(screen.getByText("1,116,274")).toBeInTheDocument();
 		expect(screen.getByText("$3.42")).toBeInTheDocument();
-		expect(
-			screen.getByRole("progressbar", { name: "Context" }),
-		).toHaveAttribute("aria-valuetext", "92,134 of 200,000 tokens");
+		const bar = screen.getByRole("progressbar", { name: "Context" });
+		expect(bar).toHaveAttribute("aria-valuetext", "92,134 of 200,000 tokens");
+		// The range is the window while the reading fits in it, so the bar reports
+		// how full the window is and not merely that it is as full as itself.
+		expect(bar).toHaveAttribute("aria-valuenow", "92134");
+		expect(bar).toHaveAttribute("aria-valuemax", "200000");
 	});
 
 	it("leaves out the counters the agent never filled", async () => {
@@ -74,6 +77,30 @@ describe("SessionInfoButton", () => {
 			screen.getByText("Context window not reported by this agent."),
 		).toBeInTheDocument();
 		expect(screen.getByText("1,248,301")).toBeInTheDocument();
+	});
+
+	it("says the context is unmeasured rather than reporting it as empty", async () => {
+		const { context_tokens: _unmeasured, ...noReading } = spent;
+		await open(noReading);
+
+		expect(screen.getByText("Context not measured yet.")).toBeInTheDocument();
+		expect(
+			screen.queryByRole("progressbar", { name: "Context" }),
+		).not.toBeInTheDocument();
+		expect(screen.getByText("1,248,301")).toBeInTheDocument();
+	});
+
+	// A reading past the window is displayed as it is, so the bar's ARIA range has
+	// to hold it: an out-of-range aria-valuenow is the one a screen reader may
+	// drop, on the session that most needs reading out.
+	it("keeps a reading past the window inside the bar's announced range", async () => {
+		await open({ ...spent, context_tokens: 240_000 });
+
+		const bar = screen.getByRole("progressbar", { name: "Context" });
+		expect(bar).toHaveAttribute("aria-valuenow", "240000");
+		expect(bar).toHaveAttribute("aria-valuemax", "240000");
+		expect(bar).toHaveAttribute("aria-valuetext", "240,000 of 200,000 tokens");
+		expect(screen.getByText("120%")).toBeInTheDocument();
 	});
 
 	it("explains a fork's total, which starts at zero", async () => {

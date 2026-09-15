@@ -74,9 +74,24 @@ function ContextBlock({ usage }: { usage: SessionUsage }) {
 		return <Note>Context window not reported by this agent.</Note>;
 	}
 
+	// Zero is not a measurement of zero: the store only records a reading the
+	// agent actually took (see server/session/usage.go), and no prompt is empty.
+	// This is the gap between the window — which arrives with the agent's first
+	// frame — and the end of the first turn, and it is where a session sits whose
+	// reading was taken by a build that measured it wrong and has been dropped.
 	const used = usage.context_tokens ?? 0;
+	if (used <= 0) {
+		return <Note>Context not measured yet.</Note>;
+	}
+
 	const ratio = used / contextWindow;
 	const spoken = `${formatExactTokens(used)} of ${formatExactTokens(contextWindow)} tokens`;
+	// The window, except once the reading is past it: an agent is allowed to
+	// overshoot its own window, and an aria-valuenow above aria-valuemax is out of
+	// range — a value a screen reader may discard or renormalise, precisely when
+	// the reading most needs announcing. Widening the range clamps nothing: the
+	// percentage and `spoken` still carry the reading against the real window.
+	const rangeMax = Math.max(contextWindow, used);
 
 	return (
 		<div>
@@ -93,7 +108,7 @@ function ContextBlock({ usage }: { usage: SessionUsage }) {
 				role="progressbar"
 				aria-label="Context"
 				aria-valuemin={0}
-				aria-valuemax={contextWindow}
+				aria-valuemax={rangeMax}
 				aria-valuenow={used}
 				aria-valuetext={spoken}
 			>
