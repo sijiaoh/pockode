@@ -1559,11 +1559,9 @@ asymmetry matters at both ends:
 A message starts a process when the session has none; an answer does not.
 `chat.Client` sends permission and question responses only to a process that is
 already there, and reports `ErrSessionNotRunning` otherwise. An answer belongs to
-the process that asked, so a prompt outliving its process — replayed from history
-after a restart, with the card still on screen — can no longer be answered. The
-idle reaper is deliberately not one of the ways that happens: it spares a process
-paused on a prompt, so within one run of the server an answerable-looking card
-stays answerable. Starting a process to receive it delivers the answer
+the process that asked, so a prompt outliving its process — reaped after an idle
+timeout, or replayed from history after a restart, with the card still on screen —
+can no longer be answered. Starting a process to receive it delivers the answer
 nowhere and leaves that process running with no turn to end it. An interrupt in
 the same situation succeeds silently: nothing to stop is what the caller wanted.
 
@@ -1615,32 +1613,9 @@ func (m *Manager) runIdleReaper() {
 
 **Design Decision**: Check frequency is 1/4 of timeout duration, balancing response speed with CPU overhead.
 
-Two kinds of process are spared, both for the same reason: silence is the normal
-condition of a wait, so `lastActive` says "abandoned" exactly when collecting the
-process would destroy what it is waiting for.
-
-- **Holding a turn open for background work** — see
-  [Background Waits](#background-waits).
-- **Paused on an unanswered prompt** (`permission_request`, `ask_user_question`).
-  The predicate is `Process.awaitingUserAnswer`, reading a `promptPending` flag
-  the state machine above maintains: set by the idle that raises the prompt,
-  cleared by the idle that ends the turn, by `SetRunning` (every answer path
-  goes through it), and by `request_cancelled`.
-
-  That last one is why the flag exists instead of `!turnEnded`, which is its
-  inverse everywhere else. An agent can withdraw a prompt it no longer needs
-  answered, and that ends the wait *without* ending the turn — the frontend
-  moves the card from `pending` to `expired`, while `turnEnded`, whose job is
-  deciding whether an idle still needs reporting, correctly stays false.
-  Sparing on `!turnEnded` would keep a process nobody is waiting on, and keep it
-  forever: a turn that withdrew its prompt and then hung reports no further idle
-  to clear the exemption.
-
-The two exemptions differ in one respect. A background wait has a budget and is
-guaranteed to end; a prompt waits on a person, so this one has none — a session
-left on an unanswered question keeps its process for as long as the server runs.
-That is the intended trade: the alternative is a prompt on screen that answers
-`ErrSessionNotRunning`, described under [State Machine](#state-machine).
+A process is spared while it is holding a turn open for background work, which is
+the one case where no events for hours does not mean abandoned; see
+[Background Waits](#background-waits).
 
 ## Session Management
 
