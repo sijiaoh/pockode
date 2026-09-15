@@ -4,23 +4,34 @@ import { formatBytes } from "../../utils/bytes";
 import { formatMimeLabel, getMimeType } from "../../utils/fileView";
 import { FileStateCard, Spinner } from "../ui";
 
-interface Props {
-	src: string;
-	fileName: string;
-	mime: string;
-	size: number;
-}
-
-type Status = "loading" | "loaded" | "error";
-
 interface Dimensions {
 	width: number;
 	height: number;
 }
 
-function ImagePreview({ src, fileName, mime, size }: Props) {
+interface Props {
+	src: string;
+	fileName: string;
+	mime: string;
+	size: number;
+	/**
+	 * What the bytes will turn out to be, when something already knows — an
+	 * agent's content block reports them. Given here they reach the `<img>` as
+	 * its `width`/`height` attributes, so the browser reserves the right box
+	 * before the image decodes instead of growing into it. That matters in the
+	 * transcript, where loading an older page corrects the scroll position by a
+	 * measurement an image resizing afterwards would invalidate.
+	 */
+	dimensions?: Dimensions;
+}
+
+type Status = "loading" | "loaded" | "error";
+
+function ImagePreview({ src, fileName, mime, size, dimensions }: Props) {
 	const [status, setStatus] = useState<Status>("loading");
-	const [dimensions, setDimensions] = useState<Dimensions | null>(null);
+	const [measured, setMeasured] = useState<Dimensions | null>(
+		dimensions ?? null,
+	);
 	// Bumped to remount the <img>, since re-assigning the same src after a
 	// failure does not make the browser try again.
 	const [attempt, setAttempt] = useState(0);
@@ -34,7 +45,7 @@ function ImagePreview({ src, fileName, mime, size }: Props) {
 	if (renderedSrc !== src) {
 		setRenderedSrc(src);
 		setStatus("loading");
-		setDimensions(null);
+		setMeasured(dimensions ?? null);
 	}
 
 	if (status === "error") {
@@ -61,7 +72,7 @@ function ImagePreview({ src, fileName, mime, size }: Props) {
 
 	const caption = [
 		formatMimeLabel(mime),
-		dimensions && `${dimensions.width}×${dimensions.height}`,
+		measured && `${measured.width}×${measured.height}`,
 		formatBytes(size),
 	]
 		.filter(Boolean)
@@ -76,8 +87,10 @@ function ImagePreview({ src, fileName, mime, size }: Props) {
 					key={attempt}
 					src={src}
 					alt={fileName}
+					width={dimensions?.width}
+					height={dimensions?.height}
 					onLoad={(event) => {
-						setDimensions({
+						setMeasured({
 							width: event.currentTarget.naturalWidth,
 							height: event.currentTarget.naturalHeight,
 						});

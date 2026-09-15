@@ -43,10 +43,12 @@ import { generateUUID } from "../utils/uuid";
 import {
 	type AgentActions,
 	type AgentRoleActions,
+	type AttachmentActions,
 	type ChatActions,
 	type CommandActions,
 	createAgentActions,
 	createAgentRoleActions,
+	createAttachmentActions,
 	createChatActions,
 	createCommandActions,
 	createFileActions,
@@ -155,6 +157,7 @@ export interface WatchActions {
 type RPCActions = ConnectionActions &
 	AgentActions &
 	AgentRoleActions &
+	AttachmentActions &
 	ChatActions &
 	CommandActions &
 	SessionActions &
@@ -586,6 +589,7 @@ async function closeSubscription<TCallback>(
 // Create namespace-specific actions
 const agentActions = createAgentActions(getClient);
 const agentRoleActions = createAgentRoleActions(getClient);
+const attachmentActions = createAttachmentActions(getClient);
 const chatActions = createChatActions(getClient, getAgentStartClient);
 const commandActions = createCommandActions(getClient);
 const sessionActions = createSessionActions(getClient);
@@ -1023,6 +1027,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		// Spread namespace-specific actions
 		...agentActions,
 		...agentRoleActions,
+		...attachmentActions,
 		...chatActions,
 		...commandActions,
 		...sessionActions,

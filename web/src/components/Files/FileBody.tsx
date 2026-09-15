@@ -1,6 +1,10 @@
-import { Binary, File, FileWarning } from "lucide-react";
+import { Binary, File, FileQuestion, FileWarning } from "lucide-react";
 import { formatBytes } from "../../utils/bytes";
-import { type FileViewState, getMimeType } from "../../utils/fileView";
+import {
+	type FileViewState,
+	getMimeType,
+	isImageMime,
+} from "../../utils/fileView";
 import { splitPath } from "../../utils/path";
 import { FileContentDisplay, FileStateCard } from "../ui";
 import ImagePreview from "./ImagePreview";
@@ -31,6 +35,11 @@ interface Props {
 	 * non-binary file here would be editable.
 	 */
 	readOnly?: boolean;
+	/**
+	 * What the image will turn out to be, where something knows before it
+	 * decodes — an agent's content block reports it. See `ImagePreview`.
+	 */
+	imageDimensions?: { width: number; height: number };
 }
 
 function fileDetails(mime: string, size: number) {
@@ -40,7 +49,14 @@ function fileDetails(mime: string, size: number) {
 	];
 }
 
-function FileBody({ state, path, downloadAction, plain, readOnly }: Props) {
+function FileBody({
+	state,
+	path,
+	downloadAction,
+	plain,
+	readOnly,
+	imageDimensions,
+}: Props) {
 	switch (state.kind) {
 		case "empty":
 			// A zero-byte file would otherwise render as blank space that reads as
@@ -80,6 +96,7 @@ function FileBody({ state, path, downloadAction, plain, readOnly }: Props) {
 					fileName={splitPath(path).fileName}
 					mime={state.mime}
 					size={state.size}
+					dimensions={imageDimensions}
 				/>
 			);
 
@@ -97,13 +114,25 @@ function FileBody({ state, path, downloadAction, plain, readOnly }: Props) {
 				/>
 			);
 
+		case "unavailable":
+			// Not a refusal like the two above: the content was fine, it is just
+			// gone — an attachment cleaned up with its session, a file deleted
+			// since. Nothing about it is worth explaining as a limitation.
+			return (
+				<FileStateCard
+					icon={FileQuestion}
+					title="File not found"
+					description="This file is no longer available."
+				/>
+			);
+
 		case "too-large":
 			return (
 				<FileStateCard
 					icon={FileWarning}
 					iconClassName="text-th-warning"
 					title={
-						getMimeType(state.mime).startsWith("image/")
+						isImageMime(state.mime)
 							? "Image is too large to preview"
 							: "File is too large to preview"
 					}

@@ -149,7 +149,13 @@ function textMessage(id: string): Message {
 }
 
 function renderList(messages: Message[]) {
-	return render(<MessageList messages={messages} isProcessRunning={false} />);
+	return render(
+		<MessageList
+			sessionId="session-1"
+			messages={messages}
+			isProcessRunning={false}
+		/>,
+	);
 }
 
 const pill = () =>
@@ -231,6 +237,7 @@ describe("MessageList pending question pill", () => {
 
 		rerender(
 			<MessageList
+				sessionId="session-1"
 				messages={[questionMessage("m1", "r1", "answered")]}
 				isProcessRunning={false}
 			/>,
@@ -297,6 +304,7 @@ describe("MessageList history paging", () => {
 		const onLoadMoreHistory = vi.fn();
 		render(
 			<MessageList
+				sessionId="session-1"
 				messages={[textMessage("m1")]}
 				isProcessRunning={false}
 				hasMoreHistory
@@ -317,6 +325,7 @@ describe("MessageList history paging", () => {
 		};
 		const { rerender } = render(
 			<MessageList
+				sessionId="session-1"
 				{...props}
 				messages={[textMessage("m1"), textMessage("m2")]}
 				loadedHistoryPages={0}
@@ -329,6 +338,7 @@ describe("MessageList history paging", () => {
 
 		rerender(
 			<MessageList
+				sessionId="session-1"
 				{...props}
 				messages={[
 					textMessage("older1"),
@@ -349,6 +359,7 @@ describe("MessageList history paging", () => {
 		const onLoadMoreHistory = vi.fn();
 		render(
 			<MessageList
+				sessionId="session-1"
 				messages={[textMessage("m1")]}
 				isProcessRunning={false}
 				hasMoreHistory
@@ -369,12 +380,17 @@ describe("MessageList history paging", () => {
 
 	it("says where the conversation starts, but only once the user has paged back", () => {
 		const { rerender } = render(
-			<MessageList messages={[textMessage("m1")]} isProcessRunning={false} />,
+			<MessageList
+				sessionId="session-1"
+				messages={[textMessage("m1")]}
+				isProcessRunning={false}
+			/>,
 		);
 		expect(screen.queryByText("Beginning of conversation")).toBeNull();
 
 		rerender(
 			<MessageList
+				sessionId="session-1"
 				messages={[textMessage("m1")]}
 				isProcessRunning={false}
 				loadedHistoryPages={1}

@@ -190,6 +190,19 @@ type FileGetResult struct {
 	File    *contents.FileContent `json:"file,omitempty"`
 }
 
+// AttachmentGetParams reads content a chat event references by id. See
+// package attachments.
+type AttachmentGetParams struct {
+	SessionID string `json:"session_id"`
+	ID        string `json:"id"`
+}
+
+// AttachmentGetResult describes the content the same way file.get describes a
+// file, so a client renders both with one code path.
+type AttachmentGetResult struct {
+	File *contents.FileContent `json:"file"`
+}
+
 type FileWriteParams struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`

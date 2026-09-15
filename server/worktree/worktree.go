@@ -13,8 +13,13 @@ import (
 
 // Worktree holds all resources (session store, watchers, processes) for a single worktree.
 type Worktree struct {
-	Name                 string
-	WorkDir              string
+	Name    string
+	WorkDir string
+	// DataDir is this worktree's own data directory — where its session store
+	// and everything that hangs off a session (history, attachments) lives. The
+	// main worktree's is the server's data dir; a named one gets a directory of
+	// its own under it.
+	DataDir              string
 	SessionStore         session.Store
 	FSWatcher            *watch.FSWatcher
 	GitWatcher           *watch.GitWatcher

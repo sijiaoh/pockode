@@ -20,6 +20,18 @@ AI CLI (stdout)
                            → UI render (ContentPart[])
 ```
 
+A tool result holding something that is not prose — the image a tool returned,
+the document a read delivered — travels as blocks ([below](#eventrecord-serialization)),
+and a file block names its content instead of carrying it. The content is
+therefore a second request, made when the UI has somewhere to draw it:
+
+```
+UI (attachment strip scrolled into view)
+  → attachment.get {session_id, id}
+    → contents.GetContents(<dataDir>/sessions/<id>/attachments)
+      → FileContent (base64) → the same file viewer the Files tab renders with
+```
+
 ## Backend
 
 ### AgentEvent Interface
@@ -96,6 +108,24 @@ So the frontend parses the string back into selections (`web/src/utils/questionA
 
 Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, `Answers`, and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
 
+`Contents` and `ToolResult` are one field in two shapes, and a `tool_result`
+record fills exactly one of them. A tool result that is nothing but prose fills
+`ToolResult`; one holding anything else — the image a read returned, the
+document a PDF read delivered, the tools a search named — fills `Contents` with
+ordered blocks instead, one per piece, in the agent's own order. The blocks then
+hold the whole result, its prose included: lifting the text back out into
+`ToolResult` would lose where it sat relative to the files, and a PDF read is
+exactly a line of text followed by the document.
+
+A file block describes its content — name, MIME type, size, an image's
+dimensions — and names it by id; it never carries it. That follows the same rule
+the rest of the record does: a record is replayed with every page of scrollback,
+so an image written into one would be re-sent for as long as the session
+exists. Where the bytes live instead, why the two agents' very different
+deliveries (Claude hands over content, Codex hands over a path) are made one
+before they reach here, and what a fork has to do about it are in
+[code/agent-integration.md](code/agent-integration.md#content-blocks-and-attachments).
+
 ### Event Parsing
 
 Each backend maps its CLI's output to this event set: `server/agent/claude/claude.go`
@@ -142,12 +172,31 @@ Events do not map one-to-one onto parts. Several events can describe the same
 tool use, and the reducer folds them into the one part that renders it, matching
 on `tool_use_id`:
 
-- `tool_result` merges into its `tool_call` part.
+- `tool_result` merges into its `tool_call` part, carrying its content blocks
+  with it — so a returned image is shown against the call that produced it
+  rather than floating loose in the transcript, which is what the warning it
+  replaces used to do.
 - `ask_user_question` takes the place of its `tool_call` part. Claude asks
   through a regular `AskUserQuestion` tool call, so one question arrives as
   `tool_call` → `ask_user_question` → `question_response` → `tool_result`. The
   question card renders the questions and the answers, and the trailing
   `tool_result` matches no `tool_call` and is dropped as an orphan.
+
+Blocks are read into a narrowed union at the wire boundary
+(`web/src/lib/contentBlocks.ts`), where one the client cannot read is dropped
+rather than half-rendered: the server forwards what it does not recognise as
+text, so an unreadable block here means the two ends disagree about a version,
+not that new content arrived.
+
+File blocks are drawn in a strip under the tool's header line and *outside* its
+collapsible body — when a tool answers with a screenshot, the screenshot is the
+answer, and an answer folded behind a chevron has not been shown. The body keeps
+the prose, which is what the chevron is gated on: a call whose whole result is
+an image has nothing left to expand. Content is fetched only once the strip
+scrolls into view, so paging back through a long session does not pull every
+image in it, and it is rendered through the same `FileContent` states the Files
+tab uses — which is why a decode failure, a file too large to send and a binary
+read the same in both places.
 
 ### Message Status Transitions
 
@@ -169,10 +218,14 @@ on `tool_use_id`:
 |-------|------|------|
 | Backend | `server/agent/event.go` | Event interface and concrete types |
 | Backend | `server/agent/history.go` | EventRecord serialization format |
+| Backend | `server/agent/content.go` | Content block and file block shapes shared by both agents |
+| Backend | `server/attachments/attachments.go` | Per-session store for content an event references by id |
+| Backend | `server/ws/rpc_attachment.go` | `attachment.get` — serving that content to a client |
 | Backend | `server/agent/claude/claude.go` | CLI output parsing and event emission |
 | Backend | `server/process/manager.go` | Event distribution |
 | Backend | `server/watch/chat_messages.go` | WebSocket broadcast to subscribers |
 | Frontend | `web/src/types/message.ts` | Wire types and ContentPart definitions |
 | Frontend | `web/src/lib/messageReducer.ts` | Event normalization and state reduction |
+| Frontend | `web/src/lib/contentBlocks.ts` | Content block parsing at the wire boundary |
 | Frontend | `web/src/hooks/useChatMessages.ts` | Subscription and history replay |
 | Frontend | `web/src/lib/wsStore.ts` | WebSocket routing by subscription ID |

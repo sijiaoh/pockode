@@ -8,6 +8,7 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useMemo, useState } from "react";
+import { contentBlockFiles, groupContentBlocks } from "../../lib/contentBlocks";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { useWSStore } from "../../lib/wsStore";
 import type {
@@ -33,6 +34,7 @@ import {
 	useEverExpanded,
 } from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
+import AttachmentStrip from "./AttachmentStrip";
 import { MarkdownContent } from "./MarkdownContent";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import TaskItem from "./TaskItem";
@@ -40,6 +42,9 @@ import ToolResultDisplay from "./ToolResultDisplay";
 
 interface ToolCallItemProps {
 	tool: ToolCall;
+	/** The session whose attachment store holds this call's file blocks. */
+	sessionId: string;
+	onOpenFile?: (path: string) => void;
 }
 
 /** Extract a short summary from tool input for display */
@@ -81,20 +86,45 @@ function getInputSummary(
 	return "";
 }
 
-const ToolCallItem = memo(function ToolCallItem({ tool }: ToolCallItemProps) {
+const ToolCallItem = memo(function ToolCallItem({
+	tool,
+	sessionId,
+	onOpenFile,
+}: ToolCallItemProps) {
 	const [expanded, setExpanded] = useState(false);
-	const hasResult = Boolean(tool.result);
 	const workDir = useWSStore((state) => state.workDir);
 	const summary = getInputSummary(tool.name, tool.input, workDir);
+
+	const files = useMemo(
+		() =>
+			tool.contents
+				? contentBlockFiles(tool.contents, {
+						name: tool.name,
+						input: tool.input,
+					})
+				: [],
+		[tool.contents, tool.name, tool.input],
+	);
+	// What is left once the files are drawn above. A result that is nothing but
+	// an image has none, and then there is nothing to expand — the chevron is
+	// gated on a body rather than on a result, or a tool that answered with a
+	// screenshot would offer a strip that opens on emptiness.
+	const hasBody = useMemo(
+		() =>
+			tool.contents
+				? groupContentBlocks(tool.contents).length > 0
+				: Boolean(tool.result),
+		[tool.contents, tool.result],
+	);
 
 	return (
 		<div className="rounded bg-th-bg-secondary text-xs">
 			<button
 				type="button"
-				onClick={() => hasResult && setExpanded(!expanded)}
-				className={`flex w-full items-center gap-1.5 rounded p-2 text-left ${hasResult ? "hover:bg-th-overlay-hover" : ""}`}
+				onClick={() => hasBody && setExpanded(!expanded)}
+				className={`flex w-full items-center gap-1.5 rounded p-2 text-left ${hasBody ? "hover:bg-th-overlay-hover" : ""}`}
 			>
-				{hasResult ? (
+				{hasBody ? (
 					<ChevronRight
 						className={`size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
 					/>
@@ -106,13 +136,21 @@ const ToolCallItem = memo(function ToolCallItem({ tool }: ToolCallItemProps) {
 					<span className="truncate text-th-text-muted">{summary}</span>
 				)}
 			</button>
-			{tool.result && (
+			{files.length > 0 && (
+				<AttachmentStrip
+					files={files}
+					sessionId={sessionId}
+					onOpenFile={onOpenFile}
+				/>
+			)}
+			{hasBody && (
 				<CollapsibleBody expanded={expanded}>
 					<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 						<ToolResultDisplay
 							toolName={tool.name}
 							toolInput={tool.input}
-							result={tool.result}
+							result={tool.result ?? ""}
+							contents={tool.contents}
 						/>
 					</ScrollableContent>
 				</CollapsibleBody>
@@ -515,6 +553,8 @@ function PermissionRequestItem({
 
 interface ContentPartItemProps {
 	part: ContentPart;
+	sessionId: string;
+	onOpenFile?: (path: string) => void;
 	isCodex?: boolean;
 	onPermissionRespond?: (
 		request: PermissionRequest,
@@ -528,6 +568,8 @@ interface ContentPartItemProps {
 
 function ContentPartItem({
 	part,
+	sessionId,
+	onOpenFile,
 	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
@@ -570,11 +612,25 @@ function ContentPartItem({
 	if (part.type === "task") {
 		return <TaskItem task={part.task} />;
 	}
-	return <ToolCallItem tool={part.tool} />;
+	return (
+		<ToolCallItem
+			tool={part.tool}
+			sessionId={sessionId}
+			onOpenFile={onOpenFile}
+		/>
+	);
 }
 
 interface Props {
 	message: Message;
+	/** The session this transcript belongs to; see `ToolCallItem`. */
+	sessionId: string;
+	/**
+	 * Opens a work-directory file in the Files viewer. Absent when the host
+	 * cannot navigate, which is what withholds the way over to an attachment's
+	 * full viewer.
+	 */
+	onOpenFile?: (path: string) => void;
 	/**
 	 * First in the whole session, not in the pages loaded so far: it decides
 	 * whether a fork anchored here has any conversation behind it to keep.
@@ -625,6 +681,8 @@ function forkBlockedReason(
 
 const MessageItem = memo(function MessageItem({
 	message,
+	sessionId,
+	onOpenFile,
 	isFirst,
 	isLast,
 	isProcessRunning,
@@ -714,6 +772,8 @@ const MessageItem = memo(function MessageItem({
 								<ContentPartItem
 									key={key}
 									part={part}
+									sessionId={sessionId}
+									onOpenFile={onOpenFile}
 									isCodex={isCodex}
 									onPermissionRespond={onPermissionRespond}
 									onQuestionRespond={onQuestionRespond}

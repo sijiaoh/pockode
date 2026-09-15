@@ -6,8 +6,10 @@ import {
 	type CodexChangeView,
 	parseCodexChanges,
 } from "../../lib/codexChanges";
+import { groupContentBlocks } from "../../lib/contentBlocks";
 import { parseReadResult } from "../../lib/toolResultParser";
 import { useWSStore } from "../../lib/wsStore";
+import type { ContentBlock } from "../../types/content";
 import { GIT_STATUS_INFO } from "../../types/git";
 import { formatFilePath } from "../../utils/path";
 import { DiffViewer, FileContentDisplay } from "../ui";
@@ -19,6 +21,13 @@ interface ToolResultDisplayProps {
 	toolName: string;
 	toolInput: unknown;
 	result: string;
+	/**
+	 * The result in blocks, when the agent returned something that is not prose.
+	 * It then describes the whole result and `result` is empty, so it decides how
+	 * the body is rendered — the per-tool views below read a result's text, and
+	 * there is none to read.
+	 */
+	contents?: ContentBlock[];
 }
 
 interface EditInput {
@@ -213,10 +222,56 @@ function isTodoWriteInput(input: unknown): input is TodoWriteInput {
 	return Array.isArray(i?.todos) && i.todos.length > 0;
 }
 
+/**
+ * The names a tool search answered with.
+ *
+ * A row of labels rather than a list of lines: what the agent got back is a set
+ * of names, and reading them is scanning for one, not reading prose.
+ */
+function ToolReferenceList({ names }: { names: string[] }) {
+	return (
+		<div className="flex flex-wrap gap-1">
+			{names.map((name, index) => (
+				<span
+					// biome-ignore lint/suspicious/noArrayIndexKey: a settled result's blocks are fixed — nothing is inserted, removed or reordered
+					key={index}
+					className="rounded bg-th-bg-tertiary px-1.5 py-0.5 text-th-accent"
+				>
+					{name}
+				</span>
+			))}
+		</div>
+	);
+}
+
+function ContentBlocksDisplay({ blocks }: { blocks: ContentBlock[] }) {
+	const groups = useMemo(() => groupContentBlocks(blocks), [blocks]);
+
+	return (
+		<div className="space-y-2">
+			{groups.map((group, index) =>
+				group.kind === "tools" ? (
+					// biome-ignore lint/suspicious/noArrayIndexKey: as above — the groups of a settled result never change
+					<ToolReferenceList key={index} names={group.names} />
+				) : (
+					<pre
+						// biome-ignore lint/suspicious/noArrayIndexKey: as above
+						key={index}
+						className="whitespace-pre-wrap text-th-text-muted"
+					>
+						{group.text}
+					</pre>
+				),
+			)}
+		</div>
+	);
+}
+
 function ToolResultDisplay({
 	toolName,
 	toolInput,
 	result,
+	contents,
 }: ToolResultDisplayProps) {
 	const input = toolInput as Record<string, unknown>;
 	const filePath =
@@ -224,6 +279,10 @@ function ToolResultDisplay({
 	// Memoized because building add/delete patches diffs whole file contents,
 	// and a streaming session re-renders this tree while it stays expanded.
 	const codexChanges = useMemo(() => parseCodexChanges(toolInput), [toolInput]);
+
+	if (contents) {
+		return <ContentBlocksDisplay blocks={contents} />;
+	}
 
 	switch (toolName) {
 		case "Read":

@@ -21,7 +21,7 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} />);
+		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByText("Hello AI")).toBeInTheDocument();
 	});
 
@@ -41,7 +41,7 @@ describe("MessageItem", () => {
 		});
 
 		it("renders a collapsed line with the action and its title", () => {
-			render(<MessageItem message={systemMessage()} />);
+			render(<MessageItem sessionId="session-1" message={systemMessage()} />);
 			expect(screen.getByText("Pockode · Started")).toBeInTheDocument();
 			expect(screen.getByText("My work")).toBeInTheDocument();
 			// Prompt body hidden while collapsed
@@ -54,7 +54,7 @@ describe("MessageItem", () => {
 
 		it("expands to reveal the full prompt on click", async () => {
 			const user = userEvent.setup();
-			render(<MessageItem message={systemMessage()} />);
+			render(<MessageItem sessionId="session-1" message={systemMessage()} />);
 			await user.click(screen.getByRole("button"));
 			expect(screen.getByText(/Do the thing/)).toBeInTheDocument();
 			expect(screen.getByRole("button")).toHaveAttribute(
@@ -66,6 +66,7 @@ describe("MessageItem", () => {
 		it("makes the step itself the action for step_advance", () => {
 			render(
 				<MessageItem
+					sessionId="session-1"
 					message={systemMessage({
 						subtype: "step_advance",
 						meta: { title: "My work", step: { current: 2, total: 3 } },
@@ -80,6 +81,7 @@ describe("MessageItem", () => {
 			const onOpenWorkDetail = vi.fn();
 			render(
 				<MessageItem
+					sessionId="session-1"
 					message={systemMessage({
 						meta: { title: "My work", work_id: "work-1" },
 					})}
@@ -97,7 +99,11 @@ describe("MessageItem", () => {
 		it("omits Details when the message names no work", async () => {
 			const user = userEvent.setup();
 			render(
-				<MessageItem message={systemMessage()} onOpenWorkDetail={vi.fn()} />,
+				<MessageItem
+					sessionId="session-1"
+					message={systemMessage()}
+					onOpenWorkDetail={vi.fn()}
+				/>,
 			);
 
 			await user.click(screen.getByRole("button", { expanded: false }));
@@ -109,6 +115,7 @@ describe("MessageItem", () => {
 		it("falls back to a generic label for unknown subtypes", () => {
 			render(
 				<MessageItem
+					sessionId="session-1"
 					message={systemMessage({
 						subtype: "future_subtype",
 						meta: undefined,
@@ -120,7 +127,10 @@ describe("MessageItem", () => {
 
 		it("does not render a system message as a plain user bubble", () => {
 			render(
-				<MessageItem message={systemMessage({ content: "raw prompt" })} />,
+				<MessageItem
+					sessionId="session-1"
+					message={systemMessage({ content: "raw prompt" })}
+				/>,
 			);
 			// The collapsed line keeps the prompt hidden; a user bubble would show it.
 			expect(screen.queryByText("raw prompt")).not.toBeInTheDocument();
@@ -136,7 +146,7 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} />);
+		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByText("Hello human")).toBeInTheDocument();
 	});
 
@@ -150,7 +160,7 @@ describe("MessageItem", () => {
 		};
 
 		// sending always shows spinner, regardless of isProcessRunning
-		render(<MessageItem message={message} />);
+		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByRole("status")).toBeInTheDocument();
 	});
 
@@ -163,7 +173,14 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} isLast isProcessRunning />);
+		render(
+			<MessageItem
+				sessionId="session-1"
+				message={message}
+				isLast
+				isProcessRunning
+			/>,
+		);
 		expect(screen.getByRole("status")).toBeInTheDocument();
 	});
 
@@ -179,7 +196,12 @@ describe("MessageItem", () => {
 		// When a new message is added, the previous streaming message becomes !isLast
 		// In this case, no indicator is shown - the message content stands on its own
 		render(
-			<MessageItem message={message} isLast={false} isProcessRunning={true} />,
+			<MessageItem
+				sessionId="session-1"
+				message={message}
+				isLast={false}
+				isProcessRunning={true}
+			/>,
 		);
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 		expect(screen.queryByText("Process ended")).not.toBeInTheDocument();
@@ -195,7 +217,7 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} />);
+		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByText("Connection failed")).toBeInTheDocument();
 	});
 
@@ -208,7 +230,7 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} />);
+		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByText("Interrupted")).toBeInTheDocument();
 	});
 
@@ -227,7 +249,7 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} />);
+		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByText("Read")).toBeInTheDocument();
 	});
 
@@ -251,7 +273,7 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} />);
+		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByText("Bash")).toBeInTheDocument();
 
 		// Result is hidden by default (collapsed)
@@ -261,6 +283,84 @@ describe("MessageItem", () => {
 		await user.click(screen.getByRole("button"));
 		expect(screen.getByText(/file1\.txt/)).toBeInTheDocument();
 		expect(screen.getByText(/file2\.txt/)).toBeInTheDocument();
+	});
+
+	it("shows a file a tool returned without asking to expand anything", async () => {
+		const user = userEvent.setup();
+		const message: Message = {
+			id: "6b",
+			role: "assistant",
+			parts: [
+				{
+					type: "tool_call",
+					tool: {
+						id: "tool-2b",
+						name: "Read",
+						input: { file_path: "/Users/test/project/doc.pdf" },
+						// claude's block names no file — it hands over the bytes
+						// alone — so the name under the entry is the one the call
+						// itself read, which is what makes this entry say as much
+						// as codex's does for the same file.
+						contents: [
+							{
+								type: "file",
+								file: {
+									mime: "application/pdf",
+									size: 385,
+									omitted: "binary",
+								},
+							},
+						],
+					},
+				},
+			],
+			status: "complete",
+			createdAt: new Date(),
+		};
+
+		render(<MessageItem sessionId="session-1" message={message} />);
+
+		// Visible without expanding: the file is the answer, and an answer folded
+		// behind a chevron has not been shown. Found by its tooltip, which is the
+		// entry's own — the header line above it shows the same short name.
+		const entry = screen.getByTitle("/Users/test/project/doc.pdf");
+		expect(entry).toHaveTextContent("doc.pdf");
+		expect(screen.getByText("Can't be previewed")).toBeInTheDocument();
+
+		// Nothing left to expand, so the header does not pretend there is.
+		await user.click(screen.getByText("Read"));
+		expect(screen.getByText("Can't be previewed")).toBeInTheDocument();
+	});
+
+	it("renders the tools a search returned as names", async () => {
+		const user = userEvent.setup();
+		const message: Message = {
+			id: "6c",
+			role: "assistant",
+			parts: [
+				{
+					type: "tool_call",
+					tool: {
+						id: "tool-2c",
+						name: "ToolSearch",
+						input: { query: "notebook" },
+						contents: [
+							{ type: "tool_reference", toolName: "NotebookEdit" },
+							{ type: "tool_reference", toolName: "Read" },
+						],
+					},
+				},
+			],
+			status: "complete",
+			createdAt: new Date(),
+		};
+
+		render(<MessageItem sessionId="session-1" message={message} />);
+		expect(screen.queryByText("NotebookEdit")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button"));
+		expect(screen.getByText("NotebookEdit")).toBeInTheDocument();
+		expect(screen.getByText("Read")).toBeInTheDocument();
 	});
 
 	it("renders pending permission_request with action buttons", () => {
@@ -283,7 +383,13 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} onPermissionRespond={vi.fn()} />);
+		render(
+			<MessageItem
+				sessionId="session-1"
+				message={message}
+				onPermissionRespond={vi.fn()}
+			/>,
+		);
 		expect(screen.getByText("Bash")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Deny" })).toBeInTheDocument();
@@ -311,7 +417,13 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} onPermissionRespond={onRespond} />);
+		render(
+			<MessageItem
+				sessionId="session-1"
+				message={message}
+				onPermissionRespond={onRespond}
+			/>,
+		);
 		await user.click(screen.getByRole("button", { name: "Allow" }));
 		expect(onRespond).toHaveBeenCalledWith(
 			{
@@ -344,7 +456,7 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} />);
+		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByText("Bash")).toBeInTheDocument();
 		expect(
 			screen.queryByRole("button", { name: "Allow" }),
@@ -366,7 +478,7 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} />);
+		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByText("compacting: started")).toBeInTheDocument();
 	});
 
@@ -384,7 +496,7 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem message={message} />);
+		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByText("init")).toBeInTheDocument();
 	});
 
@@ -431,6 +543,7 @@ describe("MessageItem", () => {
 		it("reserves the same slot while streaming and once settled", () => {
 			const streaming = render(
 				<MessageItem
+					sessionId="session-1"
 					message={{ ...settled(), status: "streaming" }}
 					onForkMessage={vi.fn()}
 				/>,
@@ -443,7 +556,11 @@ describe("MessageItem", () => {
 			).not.toBeInTheDocument();
 
 			const after = render(
-				<MessageItem message={settled()} onForkMessage={vi.fn()} />,
+				<MessageItem
+					sessionId="session-1"
+					message={settled()}
+					onForkMessage={vi.fn()}
+				/>,
 			);
 			const settledSlots = slots(after.container);
 			expect(settledSlots).toHaveLength(1);
@@ -458,6 +575,7 @@ describe("MessageItem", () => {
 		it("reserves the slot on a work event line too, with nothing in it", () => {
 			const { container } = render(
 				<MessageItem
+					sessionId="session-1"
 					message={{
 						id: "slot-2",
 						role: "user",
@@ -480,7 +598,9 @@ describe("MessageItem", () => {
 		// Session-level: nothing can be done to any message here, so the room is
 		// not paid for either.
 		it("reserves nothing when the session cannot fork", () => {
-			const { container } = render(<MessageItem message={settled()} />);
+			const { container } = render(
+				<MessageItem sessionId="session-1" message={settled()} />,
+			);
 			expect(slots(container)).toHaveLength(0);
 			expect(
 				screen.queryByRole("button", { name: /^Actions for/ }),
@@ -491,6 +611,7 @@ describe("MessageItem", () => {
 			const user = userEvent.setup();
 			render(
 				<MessageItem
+					sessionId="session-1"
 					message={{
 						id: "slot-3",
 						role: "user",
@@ -514,6 +635,7 @@ describe("MessageItem", () => {
 			const user = userEvent.setup();
 			render(
 				<MessageItem
+					sessionId="session-1"
 					message={{ ...settled(), parts: [pendingRequest()] }}
 					onForkMessage={vi.fn()}
 				/>,
@@ -536,6 +658,7 @@ describe("MessageItem", () => {
 			const user = userEvent.setup();
 			render(
 				<MessageItem
+					sessionId="session-1"
 					message={{
 						...settled(),
 						anchorSeq: undefined,
@@ -560,6 +683,7 @@ describe("MessageItem", () => {
 			const user = userEvent.setup();
 			render(
 				<MessageItem
+					sessionId="session-1"
 					message={{
 						id: "slot-4",
 						role: "user",
@@ -583,7 +707,13 @@ describe("MessageItem", () => {
 		it("forks the message the menu was opened from", async () => {
 			const user = userEvent.setup();
 			const onForkMessage = vi.fn();
-			render(<MessageItem message={settled()} onForkMessage={onForkMessage} />);
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={settled()}
+					onForkMessage={onForkMessage}
+				/>,
+			);
 
 			await user.click(await openFork(user));
 
@@ -620,7 +750,7 @@ describe("MessageItem", () => {
 				createdAt: new Date(),
 			};
 
-			render(<MessageItem message={message} />);
+			render(<MessageItem sessionId="session-1" message={message} />);
 			expect(
 				screen.getByText("Button.tsx (src/components)"),
 			).toBeInTheDocument();

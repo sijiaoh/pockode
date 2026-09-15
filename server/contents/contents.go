@@ -93,6 +93,11 @@ type OmitReason string
 const (
 	OmitTooLarge OmitReason = "too_large"
 	OmitBinary   OmitReason = "binary"
+	// OmitUnavailable means the content existed but could not be kept or read
+	// back — the attachment store failed to write it, or the session has no
+	// directory to write it to. Distinct from the other two because nothing
+	// about the content itself is wrong: a retry may well produce it.
+	OmitUnavailable OmitReason = "unavailable"
 )
 
 type Entry struct {
@@ -265,7 +270,7 @@ func NewFileContent(relPath string, size int64, content []byte) *FileContent {
 		Type: TypeFile,
 		Path: relPath,
 		Size: size,
-		MIME: detectMIME(relPath, content),
+		MIME: DetectMIME(relPath, content),
 	}
 
 	switch {
@@ -276,7 +281,7 @@ func NewFileContent(relPath string, size int64, content []byte) *FileContent {
 	case !IsBinary(content):
 		file.Encoding = EncodingText
 		file.Content = string(content)
-	case strings.HasPrefix(file.MIME, "image/"):
+	case IsImageMIME(file.MIME):
 		file.Encoding = EncodingBase64
 		file.Content = base64.StdEncoding.EncodeToString(content)
 	default:
@@ -299,11 +304,32 @@ var imageExtMIMEs = map[string]string{
 	".tiff": "image/tiff",
 }
 
-// detectMIME reports the media type of a file whose leading bytes are head.
+// ImageExtension returns name's extension when it is one this package needs in
+// order to name the content, and "" otherwise.
+//
+// For a caller that stores content under a name of its own making — the
+// attachment store, whose names are hashes — this is which part of the original
+// name is worth carrying over. Answering from the same table DetectMIME
+// consults is the point: an extension kept for any other reason would be a
+// guess, and one that is not on the table buys nothing, since sniffing already
+// names those formats.
+func ImageExtension(name string) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	if _, ok := imageExtMIMEs[ext]; ok {
+		return ext
+	}
+	return ""
+}
+
+// DetectMIME reports the media type of a file whose leading bytes are head.
 // Content wins over extension — a file is what it contains — and the extension
 // is consulted only where sniffing gave up, so a .svg holding a PNG is still
 // reported as a PNG.
-func detectMIME(name string, head []byte) string {
+//
+// head need be no longer than SniffLen. Exported for the callers that describe
+// content this package never reads off disk — the image an agent says it
+// looked at — so that one answer is given about what a file is.
+func DetectMIME(name string, head []byte) string {
 	sniffed := http.DetectContentType(head)
 	if !isGenericType(sniffed) {
 		return sniffed
@@ -312,6 +338,16 @@ func detectMIME(name string, head []byte) string {
 		return mime
 	}
 	return sniffed
+}
+
+// IsImageMIME reports whether content of this type is something to render as a
+// picture, which is what decides whether it is worth sending at all.
+//
+// One test rather than one per call site: this package and the agent parsers
+// that keep an agent's images have to agree on what counts, or a format one
+// side stores is a format the other refuses to send back.
+func IsImageMIME(mime string) bool {
+	return strings.HasPrefix(mime, "image/")
 }
 
 // isGenericType reports whether http.DetectContentType matched no signature and

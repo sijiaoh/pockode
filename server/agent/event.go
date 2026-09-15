@@ -226,6 +226,15 @@ func (e ToolCallEvent) ToRecord() EventRecord {
 type ToolResultEvent struct {
 	ToolUseID  string
 	ToolResult string
+	// Contents is the result cut into blocks, set only when the agent returned
+	// something that is not prose — an image, a file. A result that is all text
+	// leaves it nil and travels in ToolResult alone, which is every result
+	// recorded before this field existed and still the overwhelming majority.
+	//
+	// When it is set it holds the whole result, text blocks included, in the
+	// agent's own order, and ToolResult is empty: splitting the prose off into
+	// the other field would lose where it sat relative to the files.
+	Contents []ContentBlock
 	// IsError reports that the tool call failed. Best-effort: only set when the
 	// agent CLI says so, never inferred from the result text.
 	IsError bool
@@ -242,6 +251,7 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 		Type:              e.EventType(),
 		ToolUseID:         e.ToolUseID,
 		ToolResult:        e.ToolResult,
+		Contents:          e.Contents,
 		IsError:           e.IsError,
 		ProviderMessageID: e.ProviderMessageID,
 	}

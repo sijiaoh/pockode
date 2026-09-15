@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
@@ -89,6 +90,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		exe:               exe,
 		pendingRPCResults: &sync.Map{},
 		pendingElicit:     &sync.Map{},
+		attachments:       attachments.NewStore(opts.DataDir, opts.SessionID),
 		// Per-process: Codex's totals count from the start of the mcp-server
 		// process holding the thread. See agent.UsageAccumulator.
 		usage: newUsageObserver(log, opts),
@@ -149,6 +151,10 @@ type mcpSession struct {
 	nextID            atomic.Int64
 	pendingRPCResults *sync.Map // id -> chan *rpcResponse
 	pendingElicit     *sync.Map // id -> chan elicitAnswer
+
+	// attachments holds the images the session's tools looked at, so the events
+	// naming them stay small enough to keep in the history. See handleViewImage.
+	attachments attachments.Store
 
 	idMu     sync.Mutex // protects threadID
 	threadID string
@@ -641,6 +647,15 @@ var ignoredCodexEvents = map[string]bool{
 	"plan_delta":                  true,
 	"patch_apply_updated":         true, // partial patch preview; the begin/end pair is rendered
 
+	// Image generation, which reports the images it wrote the way view_image
+	// reports the one it read: by path. Left unhandled rather than assumed to
+	// match, because the tool could not be reached to see one — it is not in
+	// the sessions Pockode starts — and the field names are only what the
+	// binary's strings suggest. Listed here so it is on the record as
+	// unsupported instead of looking like a type nobody has noticed.
+	"image_generation_begin": true,
+	"image_generation_end":   true,
+
 	// Real information with no surface in Pockode yet.
 	"agent_reasoning":               true,
 	"agent_reasoning_raw_content":   true,
@@ -886,6 +901,9 @@ func (s *mcpSession) processCodexMsg(raw json.RawMessage, requestID *int64) {
 			return
 		}
 		s.log.Info("codex reported a turn error", "message", ev.Message, "info", string(ev.Info))
+
+	case "view_image_tool_call":
+		s.handleViewImage(raw)
 
 	case "turn_aborted":
 		var ev struct {

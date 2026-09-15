@@ -295,6 +295,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	wt := &Worktree{
 		Name:                 name,
 		WorkDir:              workDir,
+		DataDir:              wtDataDir,
 		SessionStore:         sessionStore,
 		FSWatcher:            fsWatcher,
 		GitWatcher:           gitWatcher,

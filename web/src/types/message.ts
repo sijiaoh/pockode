@@ -1,3 +1,4 @@
+import type { ContentBlock } from "./content";
 import type { AgentType } from "./settings";
 import type { WorkType } from "./work";
 
@@ -86,7 +87,14 @@ export interface ToolCall {
 	id: string;
 	name: string;
 	input: unknown;
+	/** Empty when the result arrived as `contents` instead. */
 	result?: string;
+	/**
+	 * The result cut into blocks, present only when the agent returned something
+	 * that is not prose — an image, a file, a tool it found. It then holds the
+	 * whole result, prose included, in the agent's own order.
+	 */
+	contents?: ContentBlock[];
 }
 
 export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
@@ -589,6 +597,8 @@ export type ServerNotification =
 			type: "tool_result";
 			tool_use_id: string;
 			tool_result: string;
+			/** Absent when the result was prose alone; see `ToolCall.contents`. */
+			contents?: ContentBlock[];
 			/** Absent unless the agent CLI reported the tool call as failed. */
 			is_error?: boolean;
 	  }

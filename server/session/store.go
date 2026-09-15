@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/filestore"
 )
 
@@ -319,6 +320,18 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 	if err := s.insertLocked(session); err != nil {
 		return SessionMeta{}, err
 	}
+
+	// The history this fork is about to be given names its attachments by id,
+	// and an id resolves inside the session's own directory — so the content
+	// has to be here too, or every image in the copied transcript would point
+	// at a session the fork does not own. Not fatal: a fork that loses its
+	// images is still the conversation the user asked for, and refusing to
+	// create it would be the worse trade.
+	if err := attachments.Clone(s.dataDir, fork.Source.ID, sessionID); err != nil {
+		slog.Warn("failed to copy attachments into forked session",
+			"sessionId", sessionID, "sourceSessionId", fork.Source.ID, "error", err)
+	}
+
 	return session, nil
 }
 

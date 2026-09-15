@@ -361,6 +361,7 @@ type EventRecord struct {
     ToolInput             json.RawMessage    `json:"tool_input,omitempty"`
     ToolUseID             string             `json:"tool_use_id,omitempty"`
     ToolResult            string             `json:"tool_result,omitempty"`
+    Contents              []ContentBlock     `json:"contents,omitempty"`
     IsError               bool               `json:"is_error,omitempty"`
     Error                 string             `json:"error,omitempty"`
     Message               string             `json:"message,omitempty"`
@@ -395,6 +396,149 @@ Claude's `is_error` on a `tool_result` block, Codex's command exit code, patch
 `success`, and MCP call error. It is never inferred from the result text: a
 wrong "failed" badge is worse than no badge, so a CLI that stays silent leaves
 the call looking successful.
+
+`Contents` holds a tool result that is not prose, cut into ordered blocks; it
+and `ToolResult` are the same field in two shapes and never both set. See
+[Content Blocks and Attachments](#content-blocks-and-attachments).
+
+## Content Blocks and Attachments
+
+A tool result is not always prose. Reading an image answers with the image,
+reading a PDF with a line of text and the document, an MCP tool with its report
+and its screenshot in one array, a tool search with the names it found. So
+`ToolResultEvent` carries either prose or an ordered list of
+`agent.ContentBlock` (`agent/content.go`), and a result that is nothing but
+prose still carries no blocks at all — the shape that has always been on the
+wire stays the shape, and every history record written before blocks existed
+loads unchanged.
+
+Blocks are built one element at a time (`agent/claude/tool_result.go`). Deciding
+the whole array's fate from a single element in it is what the parser used to
+do — an array holding an `image` block became an `image_not_supported` warning
+and nothing else — and it cost everything beside that element: the MCP tool's
+prose, its resource links and its audio notice all disappeared with the
+screenshot, and the warning left behind carried no `tool_use_id`, so it could
+not even be shown against the call that produced it. An element of a kind nobody
+has seen yet is now passed through as its own raw JSON instead, which keeps it
+visible in the transcript without letting it take its neighbours down. History
+written before this keeps the warnings it recorded, and they replay as the
+warnings they are — nothing rewrites a transcript to say what would be said
+today.
+
+### One Route to the Bytes
+
+The two agents hand over different things. Claude delivers the content itself,
+base64 inside the frame. Codex delivers a path, regularly one outside the work
+directory ([Codex Event Mapping](#codex-event-mapping)). That difference is
+settled in the parsers and nowhere above them: Codex's file is read when its
+event arrives and stored where Claude's inline content is stored, so a block has
+one field naming its content (`AttachmentID`) and a client has one way to fetch
+it. `Path` is description — which file was looked at, and whether the UI can
+offer to open it in the Files tab — and it is not the route to the bytes while
+there are stored bytes to reach. A block may well carry both; the path being
+present says nothing about where the content comes from. (The one time the path
+is read for content is when there is no stored content to read and the reason is
+`unavailable`; see [the table below](#what-is-kept-and-what-is-only-described).)
+
+The alternative was to let the client understand both shapes, which buys two
+loaders, two sets of failure wording and two click behaviours for what the user
+sees as one image.
+
+### Why the Bytes Are Not in the Event
+
+An `EventRecord` is written whole into `history.jsonl` and replayed with every
+page of scrollback. One image Claude hands over is around half a megabyte, so a
+session with a dozen screenshots in it would carry megabytes of base64 in every
+page, forever, for images the reader has already seen. The content is therefore
+written once into `sessions/<sessionID>/attachments/`, addressed by its own
+sha256, and the record keeps the id alone — a record carrying an image measures
+under half a kilobyte.
+
+The id keeps the original file's extension where it had one that names the
+content (`contents.ImageExtension`). That is not decoration: the read side types
+an attachment by sniffing it again, and SVG, AVIF, HEIC and TIFF cannot be named
+from their bytes, so under a bare hash they would come back as plain text or as
+an unnamed binary — stored perfectly well and impossible to draw. Every other
+format sniffs, and its id is the hash alone.
+
+Transport was never the constraint. The Claude parser used to carry a comment
+deferring images until a "10 MB HTTP relay limit" lifted; that ceiling belonged
+to a relay transport which packed a whole request into one WebSocket message and
+has since been replaced, and today's relay lowers no limit at all
+([file.md](../file.md#transfer)). The ceilings that do apply are
+`ws.maxClientMessage` (16 MiB, client to server only, so not this direction at
+all), `contents.MaxFileSize` (2 MiB, what one JSON-RPC message carries) and
+`filetransfer.MaxUploadSize` (32 MiB, on the HTTP upload route). Claude's inline
+images sit far under the one that applies: it re-encodes anything large as JPEG
+before handing it over, and measured against claude 2.1.263 an 18 MB PNG arrived
+as 591 KB of base64, with ~650 KB the largest seen from any input. The cost was
+always the writing down, not the sending.
+
+### What Is Kept, and What Is Only Described
+
+A block with no content behind it still describes what the agent produced, and
+says why it is empty in `contents.OmitReason` — the same vocabulary the file
+namespace omits with, so one client code path renders both:
+
+| Case | `omitted` | Why |
+|------|-----------|-----|
+| An image within `contents.MaxFileSize` | — | stored; this is the whole point |
+| A PDF or other non-image | `binary` | the UI lists it rather than rendering it, and the read that produced it names the file on disk in the text block beside it, so half a megabyte of base64 would buy nothing. The file namespace omits non-image binaries for the same reason. On the Codex side this is also the boundary of the copy: the event says the file is an image and the path is the agent's, so what does not sniff as one is described where it lies rather than copied in on the strength of that claim |
+| An image over `contents.MaxFileSize` | `too_large` (+ `limit`) | it could not be sent back through one JSON-RPC message, so storing it would only defer the failure |
+| Content that could not be read, decoded or stored; a path the server cannot use | `unavailable` | there is nothing to keep |
+
+`unavailable` is the one of the three a client may get past. The other two are
+statements about the content — the same ceiling and the same refusal would come
+back from any route — while this one says only that the server could not keep
+it, so a block naming a file still in the work directory is read through
+`file.get` instead and the image appears after all. Claude's blocks carry no
+path of their own, but the call that produced one does, and its `file_path` is
+that file: the client fills it in for a lone file block, which is also what
+gives a Claude read the file name and the way over to the Files tab that a Codex
+read of the same file has.
+
+Width and height are read from the delivered bytes' own header rather than from
+the `tool_use_result` field Claude sends alongside: that field is one per frame
+and a frame may carry several file blocks, so it cannot be attributed, and it is
+not part of any published shape. They travel with the block so a client can hold
+an image's space before the image arrives — without them, paging back through a
+transcript re-lays-out under the reader as each one loads.
+
+### Lifetime, and What a Fork Does
+
+Attachments live under the session's own directory, so `session.FileStore.Delete`
+removes them with it and there is no separate collector to get wrong.
+
+Forking needs one deliberate step to keep that true (`attachments.Clone`, called
+from `FileStore.CreateFork`). A fork copies the source's history records
+verbatim, and those records name content by id alone — so without cloning, every
+image in the fork would resolve into the *source's* directory and vanish the day
+that session was deleted. The clone hard-links rather than copies — the content
+is immutable and addressed by its own hash, so the bytes outlive whichever
+session is deleted first and are freed when the last one naming them goes — and
+a clone that fails warns rather than aborting the fork, because a fork missing
+its images is still the conversation the user asked for.
+
+### Reading It Back
+
+`attachment.get` (`ws/rpc_attachment.go`) takes a session id and an attachment
+id and answers with the same `contents.FileContent` that `file.get` answers
+with — MIME sniffed from the bytes, base64 for an image, text for content that
+is text, omitted with a reason for the rest — so a client renders an attachment
+through the file viewer's existing code path instead of a second one built to
+say the same things.
+
+It is a WebSocket method and not an HTTP endpoint because an `<img src>` cannot
+carry the bearer header ([file.md](../file.md#downloading)); the viewer already
+fetches and builds a data URL, and this fits that without inventing a way to
+authenticate an image tag.
+
+Two things confine it. The session id is checked against this worktree's own
+sessions before it is allowed to pick a directory — it selects the path, so an
+unknown one must not become one — and the attachment id goes through
+`contents.ValidatePath` inside a directory that holds nothing but
+content-addressed files. An attachment that no longer exists is an error reply,
+the same as a missing file is on `file.get`.
 
 ## Protocol Baselines
 
@@ -741,14 +885,16 @@ stops a session being unstarted.
 | `progress`, `tool_progress`, `tool_use_summary`, `rate_limit_event`, `auth_status`, `prompt_suggestion`, `command_lifecycle` | — | (dropped — telemetry / host control) |
 
 A `user` message carries tool results, whose `content` arrives in three shapes.
-A JSON string is the result text as-is. An array of nothing but `text` blocks is
-joined into one string (`textBlocksContent`) — the subagent tool reports this
-way and its report is Markdown, so forwarding the array verbatim would show the
-user a wall of escaped JSON instead. Anything else — a mixed array, an object —
-is forwarded as raw JSON rather than reduced to the parts Pockode happens to
-recognize. Images are the exception that yields no result at all: an array
-holding an `image` block becomes an `image_not_supported` warning instead,
-which is why the `user` row above is not quite unconditional.
+A JSON string is the result text as-is. An array is walked element by element,
+and if any element is one the UI cannot render as prose — an image, a document,
+a tool reference — the array becomes ordered [content
+blocks](#content-blocks-and-attachments), which is how an image, a PDF and a
+tool search's answer reach the transcript as themselves instead of as the raw
+JSON they were flattened into before. An array with nothing like that in it is
+joined back into one string as it always was: the subagent tool reports this way
+and its report is Markdown, so forwarding the array verbatim would show the user
+a wall of escaped JSON instead. An object, or content that does not decode at
+all, is forwarded as raw JSON — there is nothing there to cut.
 
 `system` subtypes are **allowlisted**, not denylisted: the CLI emits dozens of
 internal subtypes (`task_started`, `task_notification`, `session_state_changed`,
@@ -1189,6 +1335,7 @@ privileged container.
 | `patch_apply_end` | `ToolResultEvent` |
 | `mcp_tool_call_begin` | `ToolCallEvent {ToolName: "server:tool"}` |
 | `mcp_tool_call_end` | `ToolResultEvent` |
+| `view_image_tool_call` | `ToolCallEvent {ToolName: "Read"}` + `ToolResultEvent` with one file block |
 | `mcp_startup_complete` (with failures) | `WarningEvent` per failed server |
 | `stream_error`, `warning`, `guardian_warning` | `WarningEvent` |
 | `turn_aborted` | `InterruptedEvent` / `ErrorEvent` (see above) |
@@ -1210,7 +1357,9 @@ always answers the `tools/call` and stops the turn after emitting it, so the
 result already becomes an `ErrorEvent` — emitting one here too would report the
 same failure twice.
 
-Everything else is dropped through an explicit ignore list (`ignoredCodexEvents`) rather than forwarded. Codex emits 70+ event types — per-turn bookkeeping, token deltas, and a second copy of the whole turn in "thread item" shape — so a parser that forwards what it does not recognise fills the transcript with noise every time upstream adds a type. The list also keeps the default branch meaning "type we have never seen", which is what the debug log is for. Events that carry real information Pockode has no surface for yet (`agent_reasoning*`, `plan_update`, `web_search_*`, `turn_diff`) are listed there by choice, not by accident.
+Everything else is dropped through an explicit ignore list (`ignoredCodexEvents`) rather than forwarded. Codex emits 70+ event types — per-turn bookkeeping, token deltas, and a second copy of the whole turn in "thread item" shape — so a parser that forwards what it does not recognise fills the transcript with noise every time upstream adds a type. The list also keeps the default branch meaning "type we have never seen", which is what the debug log is for. Events that carry real information Pockode has no surface for yet (`agent_reasoning*`, `plan_update`, `web_search_*`, `turn_diff`) are listed there by choice, not by accident. `image_generation_begin` / `image_generation_end` are listed for a different reason: the tool is not reachable from the sessions Pockode starts, so its event shape could not be observed, and a handler written from the field names the binary happens to contain would be a guess wearing a test.
+
+`view_image_tool_call` is one Codex event and two Pockode events, the call and its result, because that is the pair every other tool produces and it is what puts a viewed image into the same chat UI as claude reading one. Codex hands over a path and not the bytes, and the path is regularly outside the work directory — `/tmp` is where it puts an image it fetched. The file is therefore read at that moment and copied into the session's attachment store, and the event carries the attachment's id. Doing it this way is what keeps the client's only route to a file the work-directory-relative one it already has: widening `file.get` or the download endpoint to accept an absolute path would turn a chat event into a request for any file the server process can read. Reading it here adds no reach, since the bytes are read under the agent's own authority at the moment the agent says it read them itself. A file that cannot be read is still reported, as a block whose `omitted` says why — a viewed image that silently vanishes from the transcript is indistinguishable from a bug.
 
 ## Usage Reporting
 
@@ -1820,6 +1969,12 @@ History is stored in JSON Lines format, one `EventRecord` per line:
 ```
 
 This format facilitates append-only writes and streaming reads.
+
+Binary content an agent delivered inside its output is written beside it, in
+`sessions/<sessionID>/attachments/`, and named from the record by id — that is
+what keeps a line holding an image small enough to replay on every page. What
+goes there, what only gets described, and what a fork does with it are in
+[Content Blocks and Attachments](#content-blocks-and-attachments).
 
 **Crash safety** (`server/filestore/jsonl.go`):
 

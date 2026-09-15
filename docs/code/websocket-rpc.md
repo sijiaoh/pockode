@@ -32,6 +32,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `chat.*` | worktree | `ws/rpc_chat.go` |
 | `session.*` | worktree | `ws/rpc_session.go` |
 | `file.*` | worktree | `ws/rpc_file.go` |
+| `attachment.*` | worktree | `ws/rpc_attachment.go` |
 | `git.*` | worktree | `ws/rpc_git.go` |
 | `fs.*` | worktree | `ws/rpc_fs.go` |
 | `worktree.*` | app | `ws/rpc_worktree.go` |

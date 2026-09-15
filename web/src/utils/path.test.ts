@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatFilePath, splitNativePath, splitPath } from "./path";
+import {
+	formatFilePath,
+	relativeToWorkDir,
+	splitNativePath,
+	splitPath,
+} from "./path";
 
 describe("splitPath", () => {
 	it("splits path with directory", () => {
@@ -111,5 +116,40 @@ describe("formatFilePath", () => {
 		expect(formatFilePath("/Users/me/project/src/main.go", "")).toBe(
 			"main.go (src)",
 		);
+	});
+});
+
+describe("relativeToWorkDir", () => {
+	const posixWorkDir = "/Users/me/project";
+	const windowsWorkDir = "C:\\Users\\me\\project";
+
+	it("returns the path in Pockode's own slash form, whichever separator it came in", () => {
+		expect(
+			relativeToWorkDir("/Users/me/project/src/main.go", posixWorkDir),
+		).toBe("src/main.go");
+		expect(
+			relativeToWorkDir("C:\\Users\\me\\project\\src\\main.go", windowsWorkDir),
+		).toBe("src/main.go");
+	});
+
+	it("handles a file sitting directly in the work directory", () => {
+		expect(relativeToWorkDir("/Users/me/project/README.md", posixWorkDir)).toBe(
+			"README.md",
+		);
+	});
+
+	// Compared segment by segment, so a sibling directory whose name starts with
+	// the work directory's is not mistaken for something inside it.
+	it("is null for anything outside", () => {
+		expect(relativeToWorkDir("/etc/hosts", posixWorkDir)).toBeNull();
+		expect(
+			relativeToWorkDir("/Users/me/project2/src/main.go", posixWorkDir),
+		).toBeNull();
+	});
+
+	// Not a file the file namespace can serve, so there is nothing to open.
+	it("is null for the work directory itself, and with no work directory", () => {
+		expect(relativeToWorkDir(posixWorkDir, posixWorkDir)).toBeNull();
+		expect(relativeToWorkDir("/Users/me/project/src/main.go", "")).toBeNull();
 	});
 });
