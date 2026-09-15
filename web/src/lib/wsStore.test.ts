@@ -33,9 +33,24 @@ class MockWebSocket {
 	onerror: (() => void) | null = null;
 	onmessage: ((event: { data: string }) => void) | null = null;
 
+	// Methods whose replies the test releases by hand, so that a request can be
+	// left in flight while the app sends the next one.
+	deferredMethods = new Set<string>();
+	// Every deferred request ever sent, in order. Entries are kept after being
+	// released, so the list doubles as the record of what was asked for.
+	deferred: Array<{
+		id: number;
+		method: string;
+		params: Record<string, string>;
+	}> = [];
+
 	send = vi.fn((data: string) => {
 		// Auto-respond to JSON-RPC requests with success (synchronous for testing)
 		const parsed = JSON.parse(data);
+		if (parsed.id !== undefined && this.deferredMethods.has(parsed.method)) {
+			this.deferred.push(parsed);
+			return;
+		}
 		if (parsed.id !== undefined) {
 			// It's a request, send a response synchronously via queueMicrotask
 			queueMicrotask(() => {
@@ -98,6 +113,16 @@ class MockWebSocket {
 	finishClose() {
 		this.readyState = MockWebSocket.CLOSED;
 		this.onclose?.();
+	}
+	deferMethod(method: string) {
+		this.deferredMethods.add(method);
+	}
+	releaseDeferred(index: number, result: Record<string, unknown>) {
+		this.simulateMessage({
+			jsonrpc: "2.0",
+			id: this.deferred[index].id,
+			result,
+		});
 	}
 	mockAuthFailure() {
 		this.send = vi.fn((data: string) => {
@@ -991,6 +1016,61 @@ describe("wsStore", { timeout: 20_000 }, () => {
 
 			// Should not have reconnected
 			expect(mockWsInstances.length).toBe(1);
+		});
+	});
+
+	describe("worktree switch", () => {
+		// The connection has exactly one bound worktree, and the server answers
+		// each request on its own goroutine, so two switches in flight can finish
+		// in either order. A slow switch to "b" (a worktree the server still has
+		// to open) landing after a fast switch to "c" used to leave the connection
+		// bound to "b" while the app showed "c" — the subscriptions reopened by
+		// the switch-end then came back full of "b"'s sessions, and no refresh
+		// recovered it, because every later request was answered against "b" too.
+		it("never leaves the connection bound to a superseded worktree", async () => {
+			const useWSStore = await getUseWSStore();
+			const { worktreeActions } = await import("./worktreeStore");
+			await connectAndAuth();
+
+			const ws = getMockWs();
+			if (!ws) throw new Error("no socket");
+			ws.deferMethod("worktree.switch");
+
+			let switchEnds = 0;
+			const stopListening = worktreeActions.onWorktreeSwitchEnd(() => {
+				switchEnds++;
+			});
+
+			try {
+				worktreeActions.setCurrent("b");
+				await vi.advanceTimersByTimeAsync(0);
+				expect(ws.deferred.map((r) => r.params.name)).toEqual(["b"]);
+
+				// The user moves on before "b" is answered. "c" must not go out yet.
+				worktreeActions.setCurrent("c");
+				await vi.advanceTimersByTimeAsync(0);
+				expect(ws.deferred.map((r) => r.params.name)).toEqual(["b"]);
+
+				// "b" finally lands, long after the app left it.
+				ws.releaseDeferred(0, { work_dir: "/repo/b", worktree_name: "b" });
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(switchEnds).toBe(0);
+				expect(useWSStore.getState().workDir).not.toBe("/repo/b");
+				expect(ws.deferred.map((r) => r.params.name)).toEqual(["b", "c"]);
+
+				ws.releaseDeferred(1, { work_dir: "/repo/c", worktree_name: "c" });
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(switchEnds).toBe(1);
+				expect(useWSStore.getState().workDir).toBe("/repo/c");
+			} finally {
+				stopListening();
+				// reset(), not resetWorktreeStore(): the listener sets are registered
+				// once when wsStore is imported, so clearing them would leave every
+				// later test in this file without a switch handler.
+				worktreeActions.reset();
+			}
 		});
 	});
 });

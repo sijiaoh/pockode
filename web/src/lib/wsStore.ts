@@ -1053,7 +1053,12 @@ export const wsActions = useWSStore.getState().actions;
 
 listenForRecovery();
 
-type SwitchResult = "success" | "not_connected" | "failed";
+/**
+ * `settled` — the connection is now bound to the worktree the app wants.
+ * `superseded` — the switch succeeded, but the app has since moved on; the
+ * connection is bound to a worktree nobody is looking at any more.
+ */
+type SwitchResult = "settled" | "superseded" | "not_connected" | "failed";
 
 // Switch worktree on existing connection
 async function switchWorktreeRPC(name: string): Promise<SwitchResult> {
@@ -1067,27 +1072,53 @@ async function switchWorktreeRPC(name: string): Promise<SwitchResult> {
 			name,
 		})) as { work_dir: string; worktree_name: string };
 
-		useWSStore.setState({ workDir: result.work_dir });
+		// The server binds the worktree before it replies, so anything sent from
+		// here on is answered against it — whether or not it is still wanted.
 		clearWorktreeWatchSubscriptions();
 		onWorktreeSwitched?.();
+
+		// Read after the await, with no await between it and what it guards, so
+		// nothing can move the target in between.
+		if (worktreeActions.getCurrent() !== name) return "superseded";
+
+		useWSStore.setState({ workDir: result.work_dir });
 		worktreeActions.notifyWorktreeSwitchEnd();
-		return "success";
+		return "settled";
 	} catch (error) {
 		console.warn("Worktree switch RPC failed:", error);
 		return "failed";
 	}
 }
 
-// Handle worktree change: try RPC switch, fall back to reconnect if needed
-worktreeActions.onWorktreeChange((_prev, next) => {
-	void switchWorktreeRPC(next).then((result) => {
+// One switch at a time, and the loop re-reads the target after each reply, so
+// the connection cannot end up bound to a worktree the app has already left —
+// which the server, handling each request on its own goroutine, is free to do
+// with two switches in flight. Why that has to be fixed here, and what a late
+// reply did to the session list: docs/code/subscription-system.md.
+let switchInFlight = false;
+
+async function runWorktreeSwitchLoop(): Promise<void> {
+	if (switchInFlight) return;
+	switchInFlight = true;
+	try {
+		let result = await switchWorktreeRPC(worktreeActions.getCurrent());
+		while (result === "superseded") {
+			result = await switchWorktreeRPC(worktreeActions.getCurrent());
+		}
 		if (result === "failed") {
-			// RPC failed while connected - reconnect to recover
+			// RPC failed while connected - reconnect to recover. Auth binds to
+			// worktreeActions.getCurrent(), so the target survives the reconnect.
 			reconnectWebSocket();
 		}
 		// "not_connected": auth will bind to correct worktree on connect
-		// "success": done
-	});
+		// "settled": done
+	} finally {
+		switchInFlight = false;
+	}
+}
+
+worktreeActions.onWorktreeChange(() => {
+	void runWorktreeSwitchLoop();
 });
 
 // Reset function for testing
@@ -1103,6 +1134,7 @@ export function resetWSStore() {
 		reconnectTimeout = undefined;
 	}
 	clearAllWatchSubscriptions();
+	switchInFlight = false;
 	worktreeDeletedListener = null;
 	onWorktreeSwitched = null;
 	useWSStore.setState({
