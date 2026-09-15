@@ -391,9 +391,13 @@ describe("MessageItem", () => {
 	// The slot beside the bubble, and the `…` in it. Queried by class because
 	// what these assert is geometry, and jsdom applies no Tailwind — the same
 	// reason tests/touchTarget.ts reads the source rather than the layout.
+	// By size, not by alignment: what these assert is that the 36px slot is there
+	// and unchanging, and where it sits in the row is not their claim. `div`
+	// because the glyph inside the slot is 36px too (`iconButtonClass`), and a
+	// bare `.size-9` would count the slot twice wherever one is drawn.
 	describe("message menu slot", () => {
 		const slots = (container: HTMLElement) =>
-			Array.from(container.querySelectorAll(".size-9.self-start"));
+			Array.from(container.querySelectorAll("div.size-9"));
 
 		const settled = (): AssistantMessage => ({
 			id: "slot-1",
@@ -441,7 +445,9 @@ describe("MessageItem", () => {
 			const after = render(
 				<MessageItem message={settled()} onForkMessage={vi.fn()} />,
 			);
-			expect(slots(after.container)[0].className).toBe(before[0].className);
+			const settledSlots = slots(after.container);
+			expect(settledSlots).toHaveLength(1);
+			expect(settledSlots[0].className).toBe(before[0].className);
 			expect(
 				screen.getByRole("button", { name: "Actions for the agent's message" }),
 			).toBeInTheDocument();

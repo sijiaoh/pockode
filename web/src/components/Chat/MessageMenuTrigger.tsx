@@ -45,13 +45,19 @@ interface Props {
  * to — a two-word message would otherwise have its `…` stranded half a screen
  * away. Belonging beats a tidy vertical rule.
  *
+ * `self-end` is written here rather than left to the row's own `items-*`: where
+ * the `…` sits is the slot's rule, and the rows that host one set their
+ * alignment for reasons of their own — an avatar to level, a full-bleed line to
+ * start at the top. Inherited, the fork glyph would move the next time one of
+ * those reasons changed, and the author would not know they had moved it.
+ *
  * The glyph fades in rather than appearing (`animate-message-menu-in`, not a
  * transition: it is mounted, and there is no before-value to transition from).
  * The mount the fade is written for is a turn settling — the one moment the
- * user is certainly watching this bubble — and it lands at the bubble's *top*,
- * which is not where the writing was. The same fade plays wherever else a glyph
- * mounts, on a transcript's first paint or on a page of older messages, and
- * costs nothing there: the slot is already the size it will stay.
+ * user is certainly watching this bubble — and it lands at the bubble's *end*,
+ * which is exactly where the writing just was. The same fade plays wherever
+ * else a glyph mounts, on a transcript's first paint or on a page of older
+ * messages, and costs nothing there: the slot is already the size it will stay.
  *
  * Visible under both pointers, never revealed on hover: the slot's width is
  * paid whether or not anything is drawn in it, so hiding the glyph would save
@@ -68,7 +74,7 @@ function MessageMenuTrigger({ side, onFork, forkBlocked }: Props) {
 	const [open, setOpen] = useState(false);
 
 	return (
-		<div className="size-9 shrink-0 self-start">
+		<div className="size-9 shrink-0 self-end">
 			{onFork && (
 				<button
 					type="button"

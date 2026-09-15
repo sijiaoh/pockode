@@ -72,11 +72,39 @@ of the row. Pinning it out there would buy a tidy column of dots, at the price
 of a two-word user message whose `…` floats half a screen from anything it
 belongs to. **Belonging beats alignment.**
 
-Vertically it sits at the bubble's **top** (`self-start`, while the row itself
-stays `items-end` so the avatar still sits on the baseline). A bubble can be
-several screens tall — a diff, a long tool call — and a control pinned to its
-bottom asks the user to scroll to the end of a message before they may act on
-it. The top edge is where the message identifies itself.
+Vertically it sits at the bubble's **end** (`self-end`). That is less a rule
+laid over the row than one taken off it: both bubble rows are already
+`items-end`, so that the avatar sits on the baseline, and the slot used to
+override them with `self-start`. It is still written out rather than inherited,
+because where the `…` sits is the slot's own rule, while the rows that host one
+set their alignment for reasons of their own — an avatar to level, a full-bleed
+line to start at the top. Inherited, the glyph would move the next time one of
+those reasons changed, and the author would not know they had moved it. Written,
+it is one line, readable and greppable.
+
+A bubble can be several screens tall — a diff, a long tool call — and then the
+`…` is off screen until the user scrolls to the message's end. That cost is the
+mirror of the one top alignment paid, not a new one: pinned to the top, the
+trigger asked the user to scroll back to a long message's *beginning*. What the
+flip trades is which end the user is more often already at. When a turn has just
+settled — the moment the glyph fades in, and the moment a fork is most often
+wanted — the eye is at the bubble's **bottom**, where the writing just appeared;
+only when scrolling back through old messages is the top the nearer edge. The
+common path wins.
+
+Belonging survives the move on the current numbers, and only on them. Bottom
+alignment puts the `…` beside the seam with the next row, but the row spacing
+`py-1.5 sm:py-2` (12–16px between neighbours) is wider than the in-row `gap-2`
+(8px), so the glyph is still nearer the bubble it belongs to than the row below.
+**Tighten the row spacing and this has to be checked again.**
+
+The work event row (`items-start`) is the one place the slot no longer agrees
+with the row around it, and there the difference is invisible: that slot is
+always empty, since `hasMessageActions` is false for `source === "system"`. The
+boundary worth recording is a future one — if such a row ever does draw a glyph,
+`self-end` would put it at the bottom of a body that runs to 60vh and scrolls
+inside itself, far from the collapsed header at the top. That row should then be
+given an alignment decision of its own rather than inherit the bubble rows'.
 
 `MoreHorizontal` rather than `GitBranch`: the file tree, the Git log and the
 files panel already say *this thing has a menu* with these three dots, and chat
@@ -120,8 +148,8 @@ The glyph **fades in** when the message settles (`animate-message-menu-in`,
 because the glyph is mounted rather than restyled: a transition has no
 before-value to move from, so writing one would have produced no animation at
 all. Nothing else moves — the slot was already there while the message streamed,
-and the fade happens at the top of the bubble while the agent's last words land
-at the bottom.
+and the fade happens at the bubble's end, exactly where the agent's last words
+just landed.
 
 **The trade, priced:** every message gives back the 36–44px of height a standing
 action row spent, and every bubble is at most 44px narrower for it. Diffs, code

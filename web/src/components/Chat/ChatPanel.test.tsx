@@ -1394,10 +1394,19 @@ describe("ChatPanel", () => {
 					screen.queryAllByRole("button", { name: /^Actions for/ }),
 				).toHaveLength(0),
 			);
-			expect(container.querySelectorAll(".size-9.self-start")).toHaveLength(0);
-			// The transcript really is on screen, so the absence above is the
+			// The transcript really is on screen, so the absence below is the
 			// declaration talking and not a render that never happened.
 			expect(screen.getByText("Hi there!")).toBeInTheDocument();
+			// Scoped to the transcript rows, and matched by size, not by alignment:
+			// over the whole panel this would also count the composer's own 36px
+			// buttons and could never reach 0, while naming the alignment would
+			// leave the selector empty — and this assertion silently passing — the
+			// next time the alignment changes.
+			const rows = container.querySelectorAll("[data-message-id]");
+			expect(rows).not.toHaveLength(0);
+			for (const row of rows) {
+				expect(row.querySelectorAll("div.size-9")).toHaveLength(0);
+			}
 		});
 
 		it("forks from the chosen message and opens the new session", async () => {
