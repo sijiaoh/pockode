@@ -2,28 +2,35 @@ package codex
 
 import "testing"
 
-func TestParseMCPSubcommand(t *testing.T) {
+// The guard reads `codex --help`, and the one thing it must not do is match the
+// word anywhere in the text: the neighbouring entries describe app-server in
+// their own prose.
+func TestListsAppServer(t *testing.T) {
+	// Verbatim from codex-cli 0.153.0, trimmed to the lines that matter.
+	const withAppServer = `Commands:
+  mcp-server        Start Codex as an MCP server (stdio)
+  app-server        [experimental] Run the app server or related tooling
+  remote-control    [experimental] Manage the app-server daemon with remote control enabled
+`
+	const withoutAppServer = `Commands:
+  mcp-server        Start Codex as an MCP server (stdio)
+  remote-control    [experimental] Manage the app-server daemon with remote control enabled
+`
+
 	tests := []struct {
-		version string
-		want    string
+		name string
+		help string
+		want bool
 	}{
-		{"codex-cli 0.42.0", "mcp"},
-		{"codex-cli 0.43.0-alpha.4", "mcp"},
-		{"codex-cli 0.43.0-alpha.5", "mcp-server"},
-		{"codex-cli 0.43.0-alpha.10", "mcp-server"},
-		{"codex-cli 0.43.0", "mcp-server"},
-		{"codex-cli 0.43.1", "mcp-server"},
-		{"codex-cli 0.44.0", "mcp-server"},
-		{"codex-cli 1.0.0", "mcp-server"},
-		{"unknown", "mcp"},
-		{"", "mcp"},
+		{"app-server offered", withAppServer, true},
+		{"only named in another entry's description", withoutAppServer, false},
+		{"empty", "", false},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.version, func(t *testing.T) {
-			got := parseMCPSubcommand(tt.version)
-			if got != tt.want {
-				t.Errorf("parseMCPSubcommand(%q) = %q, want %q", tt.version, got, tt.want)
+		t.Run(tt.name, func(t *testing.T) {
+			if got := listsAppServer(tt.help); got != tt.want {
+				t.Errorf("listsAppServer() = %v, want %v", got, tt.want)
 			}
 		})
 	}

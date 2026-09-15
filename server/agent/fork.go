@@ -10,15 +10,17 @@ import (
 // agent it is holding, and it is what the frontend is sent (rpc.AgentInfo's
 // fork_support) so that it does not keep a table of its own.
 //
-// It stays a named string rather than collapsing into a bool, even though the
-// only question asked of it today is CanFork. The values are not "yes" and "no"
-// but distinct capabilities, and a third is already in sight: `codex exec fork`
-// reopens a whole session and nothing finer, so an agent reachable only that way
-// would fork from the end of a conversation and from nowhere else — a value the
-// frontend has to tell apart from both of today's, since it decides which
-// messages offer the row and what a disabled row says. A bool would have to grow
-// back into this the day that happens, and it is a wire field, so growing it
-// back costs a synchronised change on both sides.
+// It stays a named string rather than collapsing into a bool, even though both
+// agents Pockode ships answer the same value today and the only question asked
+// of it is CanFork. The values are capabilities, not yes and no: an agent that
+// could only reopen a whole conversation and nothing finer would fork from the
+// end of one and from nowhere else, which the frontend has to tell apart from
+// both of today's values, since it decides which messages offer the row and what
+// a disabled row says. `codex exec fork` is shaped that way — it takes a session
+// id and no message selector — so an agent reached through a channel like it
+// would need that value. A bool would have to grow back into this the day one
+// appears, and it is a wire field, so growing it back costs a synchronised
+// change on both sides.
 type ForkSupport string
 
 const (
@@ -204,4 +206,30 @@ func HistoryActivatesSession(records []json.RawMessage) bool {
 		}
 	}
 	return false
+}
+
+// LastProviderMessageID returns the provider id named by the last record in a
+// forked history that names one, empty when none does.
+//
+// It is where a fork's anchor comes from for every agent that has one: Pockode's
+// own sequence numbers mean nothing to a CLI, so the only way to say "reopen the
+// conversation up to here" in the agent's terms is to find the last thing the
+// agent itself put a name on. Searching backwards is what makes the trailing
+// records Pockode wrote itself — its warnings, the prompts the CLI never streams
+// back — fall through instead of ending the search empty.
+//
+// It lands at or before the end of the kept history and never past it: only
+// records the fork kept are read. What the agent does with an anchor that sits
+// short of the end is the agent's own trade-off to state; see the callers.
+func LastProviderMessageID(history []json.RawMessage) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		var rec EventRecord
+		if err := json.Unmarshal(history[i], &rec); err != nil {
+			continue
+		}
+		if rec.ProviderMessageID != "" {
+			return rec.ProviderMessageID
+		}
+	}
+	return ""
 }

@@ -794,17 +794,20 @@ Base prompts tell the agent to fetch its agent role and use that role's instruct
 
 Every follow-up repeats this base rather than assuming the agent remembers an
 earlier turn, which is why a nudge still works when the agent has no memory of the
-work at all. That is not hypothetical: a Codex session cannot carry its
-conversation across a process restart (see
-[agent-integration.md](agent-integration.md#no-session-recovery)), so a follow-up
-can land in a thread that has never seen this work and must be able to pick it up
-from the prompt alone.
+work at all. That is not hypothetical: reopening an earlier conversation can fail
+on either agent — a rollout that is gone, a provider session the CLI has given up
+on — and the session then carries on in a fresh one, with a warning saying so
+(see [agent-integration.md](agent-integration.md#thread-recovery) and
+[the recovery ladder](agent-integration.md#session-recovery-ladder)). Pockode's
+transcript is unaffected; the agent's memory of it is exactly what was lost. A
+follow-up can therefore land in a conversation that has never seen this work, and
+must be able to pick it up from the prompt alone.
 
 Auto-continuation additionally restates the current step, so a stepped work
 survives the memory loss. **Restart does not**: `BuildRestartMessage` appends only the
 restart nudge, which tells the agent to review what it has done so far — and the
 step number is reachable from neither the prompt nor `work_get`. An agent that
-still has its history re-reads it; a fresh Codex thread has to re-derive its
+still has its history re-reads it; one that started over has to re-derive its
 position from the work item and the worktree.
 
 **Initial kickoff with steps:**
