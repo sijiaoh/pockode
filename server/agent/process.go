@@ -306,3 +306,40 @@ func WaitForProcess(ctx context.Context, log *slog.Logger, proc *Process, stderr
 
 	log.Info("process exited")
 }
+
+// processEndedDeliveryTimeout bounds the wait for a consumer to take the final
+// process_ended. It is not a delivery deadline — a consumer that is still
+// draining takes the event at once — but a backstop for one that has stopped
+// draining without closing the session, which a panic recovered above the read
+// loop does. Without it that goroutine would wait forever.
+const processEndedDeliveryTimeout = 10 * time.Second
+
+// EmitProcessEnded hands the consumer a session's last event, the one saying the
+// CLI behind it is gone. Agents call it once, on the way out of the goroutine
+// that owns the event channel.
+//
+// The send waits for the consumer instead of racing the session's context, which
+// every other send on this channel does. That context is already cancelled in
+// exactly the case this event matters most — a process closed on purpose, by the
+// idle reaper or by a session being deleted — so a select over it and the send
+// has both cases ready and Go picks one at random: half the time the client is
+// never told, and its view of the session stays "running" until it refetches
+// history.
+//
+// Waiting costs nothing against the consumer's own contract, which is to drain
+// Events() until it closes — the same contract that lets a caller wait for a
+// closed process to finish writing (process.Manager.Close).
+func EmitProcessEnded(log *slog.Logger, events chan<- AgentEvent) {
+	emitProcessEnded(log, events, processEndedDeliveryTimeout)
+}
+
+// emitProcessEnded takes the backstop as an argument so a test can reach it
+// without waiting it out.
+func emitProcessEnded(log *slog.Logger, events chan<- AgentEvent, timeout time.Duration) {
+	select {
+	case events <- ProcessEndedEvent{}:
+	case <-time.After(timeout):
+		log.Warn("nobody took the process_ended event; the client may still show this session as running",
+			"timeout", timeout)
+	}
+}

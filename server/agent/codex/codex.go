@@ -112,10 +112,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		sess.cleanupPendingElicitations()
 		agent.WaitForProcess(procCtx, log, proc, stderrCh, events)
 
-		select {
-		case events <- agent.ProcessEndedEvent{}:
-		case <-procCtx.Done():
-		}
+		agent.EmitProcessEnded(log, events)
 	}()
 
 	// Initialize the MCP connection before returning. The deadline lives on a

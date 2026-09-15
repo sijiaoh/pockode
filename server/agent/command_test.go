@@ -2,8 +2,6 @@ package agent
 
 import (
 	"errors"
-	"io"
-	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -64,7 +62,7 @@ func TestCheckBinariesReportsEveryName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve test binary: %v", err)
 	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	log := discardLog()
 
 	got := CheckBinaries(log, exe, "pockode-no-such-binary")
 	if len(got) != 2 {
