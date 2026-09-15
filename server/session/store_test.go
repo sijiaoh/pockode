@@ -793,3 +793,121 @@ func TestFileStore_Create_KeepsEngine(t *testing.T) {
 		t.Errorf("engine = %q/%q, want %q/%q", sess.Model, sess.Effort, model, effort)
 	}
 }
+
+// writeRawIndex puts an index file in a fresh data directory and returns the
+// directory. Raw JSON rather than an indexData (which is what cleanup_test.go's
+// writeIndex takes): a test about reading an older file has to be able to write
+// one, fields and all, as that older build wrote it.
+func writeRawIndex(t *testing.T, content string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		t.Fatalf("failed to create sessions dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsDir, "index.json"), []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write index: %v", err)
+	}
+	return dir
+}
+
+func usageOf(t *testing.T, store *FileStore, sessionID string) Usage {
+	t.Helper()
+
+	sess, found, err := store.Get(sessionID)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected session %q to be found", sessionID)
+	}
+	return sess.Usage
+}
+
+// TestFileStore_DropsStaleClaudeContext: an index with no version was written by
+// the build that read Claude's context as the turn's total, so the figure in it
+// is inflated by the number of requests the turn made — 904% of the window, in
+// the reading this came from. The window is not a measurement and stays, and
+// Codex's reading was never wrong.
+func TestFileStore_DropsStaleClaudeContext(t *testing.T) {
+	dir := writeRawIndex(t, `{"sessions":[
+		{"id":"claude-session","agent_type":"claude","usage":{"context_tokens":9039777,"context_window":1000000,"input_tokens":1494}},
+		{"id":"codex-session","agent_type":"codex","usage":{"context_tokens":12726,"context_window":258400}}
+	]}`)
+
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	claude := usageOf(t, store, "claude-session")
+	if claude.ContextTokens != 0 {
+		t.Errorf("expected the stale Claude reading to be dropped, got %d", claude.ContextTokens)
+	}
+	if claude.ContextWindow != 1_000_000 {
+		t.Errorf("expected the window to survive, got %d", claude.ContextWindow)
+	}
+	if claude.InputTokens != 1494 {
+		t.Errorf("expected the token totals to survive, got %d", claude.InputTokens)
+	}
+
+	codex := usageOf(t, store, "codex-session")
+	if codex.ContextTokens != 12726 {
+		t.Errorf("expected the Codex reading to survive, got %d", codex.ContextTokens)
+	}
+}
+
+// TestFileStore_KeepsContextOnceVersioned: the repair above must not run twice.
+// A versioned index was written by a build that measures the context correctly,
+// so clearing it again would throw away a reading that is right.
+func TestFileStore_KeepsContextOnceVersioned(t *testing.T) {
+	dir := writeRawIndex(t, `{"version":1,"sessions":[
+		{"id":"claude-session","agent_type":"claude","usage":{"context_tokens":178508,"context_window":1000000}}
+	]}`)
+
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	if got := usageOf(t, store, "claude-session").ContextTokens; got != 178508 {
+		t.Errorf("expected the reading to survive, got %d", got)
+	}
+}
+
+// TestFileStore_StampsIndexVersion: the repair runs on any index that does not
+// say which build wrote it, so a store that writes one has to say.
+func TestFileStore_StampsIndexVersion(t *testing.T) {
+	dir := writeRawIndex(t, `{"sessions":[
+		{"id":"claude-session","agent_type":"claude","usage":{"context_tokens":9039777,"context_window":1000000}}
+	]}`)
+
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	if err := store.AddUsage(ctx, "claude-session", UsageReport{ContextTokens: 24537, ContextWindow: 1_000_000}); err != nil {
+		t.Fatalf("AddUsage failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "sessions", "index.json"))
+	if err != nil {
+		t.Fatalf("failed to read index: %v", err)
+	}
+	var idx indexData
+	if err := json.Unmarshal(data, &idx); err != nil {
+		t.Fatalf("failed to parse index: %v", err)
+	}
+	if idx.Version != indexVersion {
+		t.Errorf("expected the written index to carry version %d, got %d", indexVersion, idx.Version)
+	}
+
+	reopened, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	if got := usageOf(t, reopened, "claude-session").ContextTokens; got != 24537 {
+		t.Errorf("expected the fresh reading to survive a restart, got %d", got)
+	}
+}

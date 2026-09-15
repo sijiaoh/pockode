@@ -61,8 +61,19 @@ type Store interface {
 }
 
 type indexData struct {
+	// Version is the generation of the file on disk, and is here so that a
+	// one-time repair of what is already stored can run once instead of on every
+	// start. An index written before the field existed reads back as 0, which is
+	// exactly the set of files a first repair has to reach.
+	Version  int           `json:"version"`
 	Sessions []SessionMeta `json:"sessions"`
 }
+
+// indexVersion is the generation this build writes. Bump it when a stored value
+// has to be repaired rather than merely defaulted — a missing field can be
+// filled in unconditionally (see readIndexFromDisk), a wrong one cannot be told
+// from a right one without knowing which build wrote it.
+const indexVersion = 1
 
 // FileStore is NOT safe for multiple instances sharing the same dataDir.
 // Use a single instance per data directory (e.g., via dependency injection).
@@ -131,11 +142,46 @@ func (s *FileStore) readIndexFromDisk() (indexData, error) {
 		}
 	}
 
+	// Against the version that introduced this repair, not against indexVersion:
+	// a later generation must not re-run it, and would if this said "older than
+	// current".
+	if idx.Version < 1 {
+		dropStaleClaudeContext(idx.Sessions)
+	}
+
 	return idx, nil
 }
 
+// dropStaleClaudeContext forgets a context reading taken by the build that read
+// it wrong.
+//
+// Claude's reading used to be the sum of every API request the turn made rather
+// than the size of the last prompt, so a turn of nine requests was stored as
+// nine times the context the session actually held — the reading that started
+// this was 9,039,777 against a 1,000,000 window, and the session it belonged to
+// had 178,508 tokens of conversation. Nothing here can recompute the right
+// figure: the per-request counts it should have come from were never stored.
+//
+// So it is dropped rather than corrected. The figure is a cached measurement,
+// not history — no one is owed the number the agent said last month — and a
+// session with none says it has not measured its context yet, which is true,
+// where a wrong one goes on claiming 904%. The window is kept: it was always
+// read correctly, and it is what tells the reader which agent's window the next
+// measurement will be against. Codex's reading was the last prompt all along
+// (see agent/codex/usage.go), so it survives.
+func dropStaleClaudeContext(sessions []SessionMeta) {
+	for i := range sessions {
+		if sessions[i].AgentType == AgentTypeClaude {
+			sessions[i].Usage.ContextTokens = 0
+		}
+	}
+}
+
 func (s *FileStore) persistIndex() error {
-	data, err := filestore.MarshalIndex(indexData{Sessions: s.sessions})
+	// The version is stamped by whatever write comes first rather than forced at
+	// startup: a run that stores nothing has nothing to lose by repairing the
+	// same file again, and the first report from any agent writes both at once.
+	data, err := filestore.MarshalIndex(indexData{Version: indexVersion, Sessions: s.sessions})
 	if err != nil {
 		return err
 	}
