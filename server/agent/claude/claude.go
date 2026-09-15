@@ -230,11 +230,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			lossStore.record(log, backgroundTasks.liveCount())
 		}
 
-		// Notify client that process has ended (abnormal: process should stay alive)
-		select {
-		case events <- agent.ProcessEndedEvent{}:
-		case <-procCtx.Done():
-		}
+		agent.EmitProcessEnded(log, events)
 	}()
 
 	return sess, nil

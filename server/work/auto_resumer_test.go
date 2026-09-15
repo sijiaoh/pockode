@@ -550,22 +550,30 @@ func TestAutoResumer_WaitingParentNoSessionNoMessage(t *testing.T) {
 	}
 }
 
-func TestAutoResumer_StopOrphanedWork_IncludesWaiting(t *testing.T) {
+// A restart destroys processes, not child work. The children are still on disk
+// and still reactivate their parent when they close, so a waiting work has
+// nothing to be rescued from.
+func TestAutoResumer_StopOrphanedWork_KeepsWaiting(t *testing.T) {
 	store := newTestStore(t)
 	resumer := NewAutoResumer(store, 3)
-	resumer.settleDelay = 10 * time.Millisecond
 
 	// Create a work item in waiting status (simulating orphaned from previous server run)
 	story := createStory(t, store, "S")
 	startWorkWithSession(t, store, story.ID, "s1")
 	store.MarkWaiting(context.Background(), story.ID)
 
-	// Should transition waiting to stopped
 	resumer.StopOrphanedWork()
 
 	got := getWork(t, store, story.ID)
-	if got.Status != StatusStopped {
-		t.Errorf("status = %q, want stopped", got.Status)
+	if got.Status != StatusWaiting {
+		t.Errorf("status = %q, want %q", got.Status, StatusWaiting)
+	}
+	comments, err := store.ListComments(story.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 0 {
+		t.Errorf("a work that was not stopped should not be told it was, got %d comments", len(comments))
 	}
 }
 
@@ -906,7 +914,11 @@ func TestAutoResumer_ProcessEndedStopsWork(t *testing.T) {
 	}
 }
 
-func TestAutoResumer_ProcessEndedStopsNeedsInputWork(t *testing.T) {
+// A question outlives the process that asked it: the card is still on screen and
+// the user can still answer it, which rebuilds the session. Stopping the work
+// here is what made every unanswered question turn into a stopped work five
+// minutes later, when the idle reaper collected the process nobody was using.
+func TestAutoResumer_ProcessEndedKeepsNeedsInputWork(t *testing.T) {
 	store, resumer, _ := setupResumerTest(t)
 
 	story := createStory(t, store, "Story")
@@ -916,16 +928,12 @@ func TestAutoResumer_ProcessEndedStopsNeedsInputWork(t *testing.T) {
 	// Transition to needs_input (agent waiting for user)
 	store.MarkNeedsInput(context.Background(), story.ID)
 
+	outlast := widenSettleDelay(resumer)
 	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
 
-	waitFor(t, func() bool {
-		w := getWork(t, store, story.ID)
-		return w.Status == StatusStopped
-	})
-
-	w := getWork(t, store, story.ID)
-	if w.Status != StatusStopped {
-		t.Errorf("status = %q, want %q after process ended while needs_input", w.Status, StatusStopped)
+	time.Sleep(outlast)
+	if w := getWork(t, store, story.ID); w.Status != StatusNeedsInput {
+		t.Errorf("status = %q, want %q after process ended while needs_input", w.Status, StatusNeedsInput)
 	}
 }
 
@@ -986,17 +994,14 @@ func TestAutoResumer_ProcessEndedNoopWhenWorkWaiting(t *testing.T) {
 		t.Fatal("precondition: story should be waiting")
 	}
 
+	outlast := widenSettleDelay(resumer)
 	resumer.HandleProcessStateChange(sid, "ended", false, false, false)
 
-	// waiting work IS stopped on process ended
-	waitFor(t, func() bool {
-		w := getWork(t, store, story.ID)
-		return w.Status == StatusStopped
-	})
-
-	w := getWork(t, store, story.ID)
-	if w.Status != StatusStopped {
-		t.Errorf("status = %q, want %q (waiting work should be stopped)", w.Status, StatusStopped)
+	// The child is still running and still wakes its parent when it closes, so
+	// the dead process takes nothing away from a waiting work.
+	time.Sleep(outlast)
+	if w := getWork(t, store, story.ID); w.Status != StatusWaiting {
+		t.Errorf("status = %q, want %q (waiting work outlives its process)", w.Status, StatusWaiting)
 	}
 }
 
@@ -1132,6 +1137,9 @@ func TestAutoResumer_StopOrphanedWork(t *testing.T) {
 	}
 }
 
+// The mirror of TestAutoResumer_ProcessEndedKeepsNeedsInputWork: a question
+// survives its process, but not a restart. The CLI's ask-user-question lives
+// inside the process, so after a restart there is nothing left to answer.
 func TestAutoResumer_StopOrphanedWork_NeedsInput(t *testing.T) {
 	store := newTestStore(t)
 	resumer := NewAutoResumer(store, 3)

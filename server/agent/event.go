@@ -47,8 +47,10 @@ func (e EventType) AwaitsUserInput() bool {
 //
 // It is a whitelist because being wrong is not symmetric. An event wrongly
 // counted as activity marks a session running with nothing running, and nothing
-// corrects that until the idle reaper collects the process hours later — the
-// startup warning Codex emits for a session it cannot resume did exactly that.
+// corrects that — not even the idle reaper, which spares a turn in progress
+// precisely because it cannot tell a busy one from a stuck one (see
+// Process.reapHold). The startup warning Codex emits for a session it cannot
+// resume did exactly that.
 // An event wrongly left out costs at most one missed transition, because the
 // send that started the turn has already set running.
 //

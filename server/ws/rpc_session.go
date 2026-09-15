@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -64,6 +65,10 @@ func (h *rpcMethodHandler) handleSessionDelete(ctx context.Context, conn *jsonrp
 		return
 	}
 
+	// Before the process and the session go, so the work is never briefly
+	// claiming a session that is already on its way out.
+	h.stopWorkForDeletedSession(ctx, params.SessionID)
+
 	wt.ProcessManager.Close(params.SessionID)
 	if err := wt.SessionStore.Delete(ctx, params.SessionID); err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to delete session", err, "sessionId", params.SessionID)
@@ -75,6 +80,44 @@ func (h *rpcMethodHandler) handleSessionDelete(ctx context.Context, conn *jsonrp
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		h.log.Error("failed to send session delete response", "error", err)
 	}
+}
+
+// stopWorkForDeletedSession stops the work bound to a session the user is about
+// to delete. Nothing else will: the process-ended event that follows stops only
+// in_progress work, because a dead process is no evidence about a work paused on
+// a question or on child work — but a deleted session is, since it takes the
+// place an answer would have gone. Why the two facts differ is in
+// docs/code/work-system.md, Trigger A.
+//
+// Deleting is a user action like the ones behind SessionListWatcher.HandleUserAction,
+// but it is kept out of that entry point on purpose: those resume the work and
+// this one stops it, and one name covering both opposite consequences is how a
+// caller ends up applying the wrong one.
+func (h *rpcMethodHandler) stopWorkForDeletedSession(ctx context.Context, sessionID string) {
+	w, found, err := h.workStore.FindBySessionID(sessionID)
+	if err != nil {
+		h.log.Warn("failed to find work for deleted session", "sessionId", sessionID, "error", err)
+		return
+	}
+	// ValidateProgress is the store's own answer to "is this work inside the
+	// agent lifecycle", and Stop is one of the transitions it guards, so asking
+	// it here reuses that rule rather than restating the live statuses. The
+	// store would refuse anyway; asking first is what keeps a perfectly normal
+	// act — finishing a work, then deleting its chat — out of the warning log.
+	//
+	// Already stopped is checked separately because ValidateProgress admits it:
+	// stopping a stopped work is a silent no-op that still reports success, so
+	// without this the line below would announce a transition that never
+	// happened — for what is the commonest order of all, stop a work and then
+	// delete its chat.
+	if !found || w.Status == work.StatusStopped || work.ValidateProgress(w.Status) != nil {
+		return
+	}
+	if err := h.workStore.Stop(ctx, w.ID); err != nil {
+		h.log.Warn("failed to stop work for deleted session", "workId", w.ID, "sessionId", sessionID, "error", err)
+		return
+	}
+	h.log.Info("work stopped because its session was deleted", "workId", w.ID, "sessionId", sessionID)
 }
 
 func (h *rpcMethodHandler) handleSessionUpdateTitle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {

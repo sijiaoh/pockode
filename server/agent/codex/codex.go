@@ -152,10 +152,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		sess.cancelPendingApprovals()
 		agent.WaitForProcess(procCtx, log, proc, stderrCh, events)
 
-		select {
-		case events <- agent.ProcessEndedEvent{}:
-		case <-procCtx.Done():
-		}
+		agent.EmitProcessEnded(log, events)
 	}()
 
 	// Handshake and open the thread before returning. The deadline lives on a

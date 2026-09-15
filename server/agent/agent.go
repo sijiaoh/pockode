@@ -106,6 +106,11 @@ type Session interface {
 	// events. A turn can span a wait for background work, over which no event
 	// arrives at all for as long as that work runs — so silence must never be
 	// read as an ending (see BackgroundWaiter).
+	//
+	// A consumer keeps receiving until the channel closes. That is what the
+	// session's last event counts on (see EmitProcessEnded), and the goroutine
+	// holding the channel open is the one a caller waits for when closing a
+	// process.
 	Events() <-chan AgentEvent
 
 	// SendMessage sends a new message to the agent. Callers may send before the
