@@ -340,7 +340,13 @@ function getAgentStartClient(): JSONRPCRequester<void> | null {
 	return rpcClients?.withAgentStartTimeout ?? null;
 }
 
-const RPC_TIMEOUT_MS = 30000;
+/**
+ * This and AGENT_START_RPC_TIMEOUT_MS are exported because the tests advance a
+ * fake clock across them: a second copy of either number goes stale the moment
+ * this side moves, which is how the agent-start case came to wait out a
+ * deadline that had been pushed 15s out from under it.
+ */
+export const RPC_TIMEOUT_MS = 30000;
 
 const RPC_TIMEOUT_MESSAGE = "Request timed out";
 
@@ -392,7 +398,7 @@ const CODEX_START_BUDGET_MS = 10000 + 45000;
  * once (see `onclose`) rather than leaving it to sit out the clock, so the extra
  * seconds are only ever spent on a server that is genuinely still working.
  */
-const AGENT_START_RPC_TIMEOUT_MS = CODEX_START_BUDGET_MS + 20000;
+export const AGENT_START_RPC_TIMEOUT_MS = CODEX_START_BUDGET_MS + 20000;
 
 interface RPCClients {
 	base: JSONRPCClient;
