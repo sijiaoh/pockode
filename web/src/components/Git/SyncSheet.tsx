@@ -1,115 +1,40 @@
 import { ConfirmDialog } from "@pockode/shared";
 import { ArrowDown, ArrowUp, RefreshCw } from "lucide-react";
 import { type ReactNode, useState } from "react";
+import { useGitSyncRunner } from "../../hooks/useGitSync";
+import { type SyncOperation, useSyncRun } from "../../lib/gitSyncStore";
+import { useWorktreeStore } from "../../lib/worktreeStore";
 import { describeGitSync, type GitSync } from "../../types/git";
+import { commits } from "../../utils/gitSyncMessages";
 import { formatRelativeDate } from "../../utils/relativeTime";
 import { Sheet, Spinner } from "../ui";
 import GitOutput from "./GitOutput";
 
-type Operation = "fetch" | "pull" | "push";
-
 interface Props {
 	sync: GitSync;
 	onClose: () => void;
-	onFetch: () => Promise<void>;
-	/** Resolves to the number of commits the fast-forward brought in. */
-	onPull: () => Promise<number>;
-	onPush: (force: boolean) => Promise<void>;
 }
 
-/** git's own words when --ff-only meets a diverged branch. */
-const DIVERGED = /not possible to fast-forward|divergent branches/i;
-/** --force-with-lease when the remote moved since our last fetch. */
-const STALE_LEASE = /stale info/i;
-/** A plain push whose remote holds commits we do not have. */
-const BEHIND_REMOTE = /fetch first|non-fast-forward/i;
-
 /**
- * Fetch, pull and push — the only operations in the panel with no bound on how
- * long they take.
+ * Fetch, pull and push — the only operations in the panel that wait on a machine
+ * other than this one, and so the only ones with no bound on how long they take.
  *
  * The sheet stays open after one succeeds: over a slow relay link, a sheet that
- * closes by itself leaves the user unsure whether anything happened at all.
+ * closes by itself leaves the user unsure whether anything happened at all. It
+ * can be closed while one runs, though — the run belongs to the sync store, not
+ * to this sheet, so reopening shows the same run rather than a blank panel.
  */
-function SyncSheet({ sync, onClose, onFetch, onPull, onPush }: Props) {
-	const [running, setRunning] = useState<Operation | null>(null);
-	const [error, setError] = useState<{
-		summary: string;
-		detail: string;
-	} | null>(null);
-	const [result, setResult] = useState<string | null>(null);
+function SyncSheet({ sync, onClose }: Props) {
+	const worktree = useWorktreeStore((s) => s.current);
+	const { running, outcome } = useSyncRun(worktree);
+	const { startFetch, startPull, startPush } = useGitSyncRunner();
 	const [confirmingForce, setConfirmingForce] = useState(false);
 
 	const state = describeGitSync(sync);
 	const busy = running !== null;
 
-	/** action resolves to the sentence shown on success. */
-	const run = async (
-		operation: Operation,
-		action: () => Promise<string>,
-		summarize: (detail: string) => string,
-	) => {
-		if (busy) return;
-
-		setError(null);
-		setResult(null);
-		setRunning(operation);
-		try {
-			setResult(await action());
-		} catch (err) {
-			const detail = err instanceof Error ? err.message : String(err);
-			setError({ summary: summarize(detail), detail });
-		} finally {
-			setRunning(null);
-		}
-	};
-
-	const handleFetch = () =>
-		run(
-			"fetch",
-			async () => {
-				await onFetch();
-				return "Fetched.";
-			},
-			() => "Fetch failed.",
-		);
-
-	const handlePull = () =>
-		run(
-			"pull",
-			// The count comes back from the pull itself: it fetches first, so it
-			// can bring in more than the numbers above it promised.
-			async () => {
-				const pulled = await onPull();
-				return pulled > 0
-					? `Pulled ${commits(pulled)}.`
-					: "Already up to date.";
-			},
-			(detail) =>
-				DIVERGED.test(detail)
-					? "Could not pull: this branch and its upstream have diverged. Ask the agent in chat to merge or rebase."
-					: "Pull failed.",
-		);
-
-	const handlePush = (force: boolean) => {
-		// What push sends is what the counts above say: a push that would send
-		// anything else is rejected rather than silently sending more.
-		const success = state.needsPublish
-			? "Branch published."
-			: `Pushed ${commits(sync.ahead)}.`;
-
-		return run(
-			"push",
-			async () => {
-				await onPush(force);
-				return success;
-			},
-			pushFailureSummary,
-		);
-	};
-
 	const order = operationOrder(state.needsPublish, sync.upstream_gone);
-	const buttons: Record<Operation, ReactNode> = {
+	const buttons: Record<SyncOperation, ReactNode> = {
 		fetch: (
 			<SyncButton
 				key="fetch"
@@ -120,7 +45,7 @@ function SyncSheet({ sync, onClose, onFetch, onPull, onPush }: Props) {
 				// Never touches the working tree, so it is the one action that is
 				// always safe — and the repair action for stale counts.
 				disabled={busy}
-				onClick={handleFetch}
+				onClick={startFetch}
 			/>
 		),
 		pull: (
@@ -131,7 +56,7 @@ function SyncSheet({ sync, onClose, onFetch, onPull, onPush }: Props) {
 				runningLabel="Pulling…"
 				isRunning={running === "pull"}
 				disabled={busy || !state.canPull}
-				onClick={handlePull}
+				onClick={startPull}
 			/>
 		),
 		push: (
@@ -144,21 +69,17 @@ function SyncSheet({ sync, onClose, onFetch, onPull, onPush }: Props) {
 				disabled={busy || !state.canPush}
 				danger={state.diverged}
 				onClick={() =>
-					state.diverged ? setConfirmingForce(true) : handlePush(false)
+					state.diverged ? setConfirmingForce(true) : startPush(sync, false)
 				}
 			/>
 		),
 	};
 
-	// Not dismissible behind the force-push confirmation either: both listen for
-	// Escape on document, and a key press meant for the dialog would otherwise
-	// take the sheet down with it.
+	// Not dismissible behind the force-push confirmation: both it and the sheet
+	// listen for Escape on document, and a key press meant for the dialog would
+	// otherwise take the sheet down with it.
 	return (
-		<Sheet
-			title="Sync"
-			onClose={onClose}
-			dismissible={!busy && !confirmingForce}
-		>
+		<Sheet title="Sync" onClose={onClose} dismissible={!confirmingForce}>
 			<div className="space-y-4 p-4">
 				<div className="space-y-1">
 					<p className="truncate text-sm text-th-text-primary">
@@ -176,15 +97,17 @@ function SyncSheet({ sync, onClose, onFetch, onPull, onPush }: Props) {
 
 				{/* Above the buttons: pushed below them it would sit off-screen on a
 				    phone once the on-screen keyboard or a long message shows up. */}
-				{error && (
+				{outcome?.kind === "error" && (
 					<div className="space-y-1" role="alert">
-						<p className="text-sm text-th-error">{error.summary}</p>
-						<GitOutput>{error.detail}</GitOutput>
+						<p className="text-sm text-th-error">{outcome.summary}</p>
+						<GitOutput>{outcome.detail}</GitOutput>
 					</div>
 				)}
 
-				{result && (
-					<output className="block text-sm text-th-success">{result}</output>
+				{outcome?.kind === "success" && (
+					<output className="block text-sm text-th-success">
+						{outcome.message}
+					</output>
 				)}
 
 				<div className="space-y-2">{order.map((op) => buttons[op])}</div>
@@ -198,7 +121,7 @@ function SyncSheet({ sync, onClose, onFetch, onPull, onPush }: Props) {
 					variant="danger"
 					onConfirm={() => {
 						setConfirmingForce(false);
-						handlePush(true);
+						startPush(sync, true);
 					}}
 					onCancel={() => setConfirmingForce(false)}
 				/>
@@ -254,24 +177,9 @@ function SyncButton({
 function operationOrder(
 	needsPublish: boolean,
 	upstreamGone: boolean,
-): Operation[] {
+): SyncOperation[] {
 	if (!needsPublish) return ["fetch", "pull", "push"];
 	return upstreamGone ? ["fetch", "push"] : ["push", "fetch"];
-}
-
-/**
- * Both rejections mean the same thing to the user — the remote moved — but only
- * after a fetch can the panel tell them whether pulling is enough. Anything else
- * gets no guessed summary; git's own message is below it either way.
- */
-function pushFailureSummary(detail: string): string {
-	if (STALE_LEASE.test(detail)) {
-		return "Push rejected: the remote moved since your last fetch. Fetch, then try again.";
-	}
-	if (BEHIND_REMOTE.test(detail)) {
-		return "Push rejected: the remote has commits you do not have. Fetch, then pull or force push.";
-	}
-	return "Push failed.";
 }
 
 /**
@@ -299,10 +207,6 @@ function pushLabel(
 	if (needsPublish) return "Publish branch";
 	if (diverged) return "Push (force)";
 	return sync.ahead > 0 ? `Push (${sync.ahead})` : "Push";
-}
-
-function commits(count: number): string {
-	return `${count} ${count === 1 ? "commit" : "commits"}`;
 }
 
 export default SyncSheet;

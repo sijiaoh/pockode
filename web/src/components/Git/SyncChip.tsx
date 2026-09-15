@@ -1,8 +1,12 @@
 import { ArrowDown, ArrowUp, RefreshCw } from "lucide-react";
+import type { SyncOperation } from "../../lib/gitSyncStore";
 import { describeGitSync, type GitSync } from "../../types/git";
+import { Spinner } from "../ui";
 
 interface Props {
 	sync: GitSync;
+	/** The operation in flight, which may have been started from a sheet that is now closed. */
+	running: SyncOperation | null;
 	onClick: () => void;
 }
 
@@ -12,8 +16,11 @@ interface Props {
  *
  * The counts are as old as the last fetch, which only the sheet has room to
  * say — so the chip is a button in every state, including "up to date".
+ *
+ * It also carries the progress of a run whose sheet has been closed: the sheet
+ * is this chip expanded, so this is where the action was started from.
  */
-function SyncChip({ sync, onClick }: Props) {
+function SyncChip({ sync, running, onClick }: Props) {
 	const { needsPublish } = describeGitSync(sync);
 
 	return (
@@ -21,8 +28,14 @@ function SyncChip({ sync, onClick }: Props) {
 			type="button"
 			onClick={onClick}
 			className="flex min-h-[36px] shrink-0 items-center gap-1 rounded px-2 pointer-coarse:min-h-11 text-xs text-th-text-secondary transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
-			aria-label={`Sync with remote, ${describeState(sync, needsPublish)}`}
+			aria-label={`Sync with remote, ${running ? RUNNING_STATE[running] : describeState(sync, needsPublish)}`}
 		>
+			{/* Leads rather than replaces: the "Publish" state has no icon to take
+			    over, and the counts are still the truth until the run refreshes
+			    them. */}
+			{running && (
+				<Spinner variant="current" size="h-3.5 w-3.5" srText={null} />
+			)}
 			{needsPublish ? (
 				"Publish"
 			) : sync.behind === 0 && sync.ahead === 0 ? (
@@ -46,6 +59,12 @@ function SyncChip({ sync, onClick }: Props) {
 		</button>
 	);
 }
+
+const RUNNING_STATE: Record<SyncOperation, string> = {
+	fetch: "fetching…",
+	pull: "pulling…",
+	push: "pushing…",
+};
 
 /** Spells the arrows out, since a screen reader gets nothing from them. */
 function describeState(sync: GitSync, needsPublish: boolean): string {

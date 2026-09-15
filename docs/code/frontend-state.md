@@ -18,6 +18,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ inputStore (localStorage)                               │   │
 │  ├─ filesSearchStore (localStorage)                         │   │
 │  ├─ gitPanelStore                                           │   │
+│  ├─ gitSyncStore                                            │   │
 │  └─ worktreeStore + listeners                               │   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Domain Data Layer                                              │
@@ -53,6 +54,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | inputStore | Draft text, per session | persist middleware |
 | filesSearchStore | File search options | localStorage init |
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
+| gitSyncStore | The fetch/pull/push in flight in each worktree, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
 | worktreeStore | Current worktree, and whether the server can run the setup hook | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |
 
