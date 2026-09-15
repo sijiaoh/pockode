@@ -338,12 +338,83 @@ When an AI session's state changes, sync the work status:
 | running | stopped → in_progress | User message to stopped session |
 | idle (first) | (ignored) | Initial process startup |
 | idle (normal) | in_progress → in_progress | Send auto-continuation |
-| interrupted | in_progress/needs_input/waiting → stopped | Turn aborted (user interrupt, denied permission, replaced turn) |
-| ended | in_progress/needs_input/waiting → stopped | Process exited |
+| idle (needs_input) | in_progress → needs_input | Agent raised a prompt. The AutoResumer ignores this idle; the transition is `NeedsInputSyncer`'s, driven from `SessionListWatcher` |
+| interrupted | in_progress → stopped | Turn aborted (user interrupt, denied permission, replaced turn) |
+| ended | in_progress → stopped | Process exited |
+
+That row is the only one another component owns, and the only way a *session*
+puts a work into a paused status — the other way in, the MCP `work_needs_input`
+and `work_wait` tools, never touches session state at all. It is listed because
+the rows below deliberately leave paused work alone, and a table showing only
+those exits would not say where the status came from. The way back out is a user
+action rather than a process state, so it has no row here; it is the subject of
+the rest of this section.
 
 An aborted turn stops the work instead of continuing it, which is what makes a
 denied permission during an automated run end the run rather than nudge the agent
-to try again.
+to try again. Note what that purpose implies: the run it has to end is by
+definition an `in_progress` one, because auto-continuation only ever nudges
+`in_progress` work. So the two rows narrow together and the abort keeps doing
+exactly the job it was added for.
+
+**Only `in_progress` is stopped.** A dead process means the work is no longer
+being carried out; it says nothing about a work that had already paused on
+something the process was not going to settle anyway. `needs_input` still needs
+its answer and `waiting` still needs its child, and both are woken by events that
+outlive the process — a user action, a child closing.
+
+The idle reaper is what turns that from a nicety into a requirement. A work
+paused through MCP (`work_needs_input`, `work_wait`) is paused by the agent
+itself, in the work store: nothing about it is visible to the session, so no
+prompt is outstanding there and none of the holds that keep the reaper off a
+process applies ([agent-integration.md](agent-integration.md#idle-timeout-cleanup),
+which also has the idle timeout's default and why it can be short). Once that
+agent finishes its turn, its process is precisely what the reaper collects — so a
+rule that stopped paused work on process death would stop those work items a few
+minutes after they paused, with nothing on screen to explain it.
+
+The coupling runs through that timeout and only tightens as it shortens: the same
+mistake is just as wrong at an hours-long timeout, merely rare enough there to
+pass for bad luck. Narrowing what a death stops is what lets the timeout be
+chosen for the question it is actually about — how long an unused CLI may stay
+resident — instead of for how long a deliberately paused work has to survive.
+
+The same reasoning rules out the opposite shortcut on the way in. `needs_input`
+and `waiting` are *not* resumed when the process ends either, even though the
+session's own `needs_input` flag is cleared there (the process that raised the
+prompt is gone). Resuming would put the work in `in_progress` moments before this
+trigger's own stop ran — which is exactly how paused work used to end up stopped
+regardless of what it was paused on. Work leaves `needs_input`/`waiting` on a
+user action, through `SessionListWatcher.HandleUserAction` — the single entry
+point for "the user acted on this session". Both consequences the event has hang
+off that name — the session's `needs_input` flag drops, and a paused work
+resumes — rather than off either one of them, and the three RPCs that hand the
+session something to go on (message, permission response, question response) all
+call it.
+
+`stopped` is the one status the process *does* speak for: it means the process
+died, so a process running again is itself the evidence that the work is live. A
+`needs_input` process is often still alive and still emitting — a Task subagent's
+last few sentences, a little output after an MCP call — so its running state
+proves nothing and must not resume the work.
+
+**Interrupt is not one of those actions, and that is deliberate.** It is followed
+by an `interrupted` event that stops `in_progress` work, so resuming a paused
+work first would only walk it into `stopped` — the same bypass the paragraph
+above rules out. Reading the handler cannot tell an omission from a decision, so
+the rest of the reason sits next to it there
+(`server/ws/rpc_chat.go` — `handleInterrupt`).
+
+**Deleting the session is a user action too, and the opposite one.**
+A work paused on a question survives its process dying because the question can
+still be answered; deleting the session takes the transcript, the pending
+question and the process all at once, so there is nothing left to answer into.
+`session.delete` therefore stops the work itself
+(`server/ws/rpc_session.go` — `stopWorkForDeletedSession`) before removing the session,
+rather than leaving it to the process-ended event that would only stop
+`in_progress` work. It stays out of `HandleUserAction`, whose other callers all
+resume. Deleting a *work* needs no such rule: it cascades into its sessions, so
+no work is left behind to lie about its status.
 
 **Trigger B: Child Closure**
 
@@ -373,6 +444,41 @@ Task: closed ──► Parent (open/closed) → (no message)
 ```
 
 **Key distinction**: Only `waiting` parents undergo a state transition. Other active parents (`in_progress`, `needs_input`, `stopped`) receive the notification without changing status. This enables coordinators to receive multiple child completion messages when running with parallel subtasks.
+
+**Trigger C: Server Startup**
+
+`StopOrphanedWork` runs once at startup, before any session exists, and stops the
+work left behind by the previous run. It stops a different set than Trigger A
+does, because a restart destroys a different set of things than a dead process:
+
+| Status at startup | Outcome | Why |
+|---|---|---|
+| `in_progress` | → `stopped` | Its process is gone; nothing is carrying it out |
+| `needs_input` | → `stopped` | The question is gone too — see below |
+| `waiting` | preserved | Its children are on disk and still wake it when they close |
+
+`needs_input` is the one status treated more harshly here than on process death,
+and the reason is the same fact that makes the reaper spare a process paused on a
+prompt: a CLI's permission request and ask-user-question live inside the process
+that raised them and are not restored when a new one starts
+([agent-integration.md](agent-integration.md#a-prompt-belongs-to-the-process-that-raised-it),
+which also records that both decisions expire if prompts ever become answerable
+across processes). Within one run of the server the idle reaper will not take
+that process away, so the card generally stays answerable and the work may go on
+saying `needs_input`. A restart removes the doubt: the question is certainly
+gone, and leaving the work `needs_input` would promise a resumption that can
+never arrive.
+
+Each work this stops gets a comment saying so, since nobody asked for the stop
+and the background tasks the work may have been waiting on died with the server.
+A preserved `waiting` work gets no comment — nothing happened to it.
+
+A preserved `waiting` parent is not waiting on anything that is still moving:
+the same pass stopped every child that was being carried out or holding a
+question. What it keeps is the wiring —
+restart a child, let it close, and Trigger B resumes the parent exactly as it
+would have before the restart. Stopping the parent instead would throw that away
+to gain nothing, since the user has to restart the child either way.
 
 ### Step-Advance and Reopen Follow-ups
 
@@ -434,9 +540,9 @@ The two ways a wait ends both land back on existing behaviour:
 - **The process dies during the wait.** `ProcessEndedEvent` moves the work to
   `stopped` through Trigger A, as for any other death. A death nobody is left to
   observe — a server restart — reaches the same state by the other route,
-  `StopOrphanedWork` at startup, which leaves a comment on each work it stops:
-  otherwise the user comes back to a work stopped for no stated reason, with the
-  background tasks it was waiting for gone too.
+  `StopOrphanedWork` at startup (Trigger C), which leaves a comment on each work
+  it stops: otherwise the user comes back to a work stopped for no stated reason,
+  with the background tasks it was waiting for gone too.
 
 ### Follow-ups During a Background Wait
 
@@ -1048,6 +1154,7 @@ cached entry needs no additional locking.
 | Worktree start/stop handlers | `server/worktree/work_starter.go`, `server/worktree/work_stopper.go` |
 | Worktree manager (sender resolver) | `server/worktree/manager.go` |
 | Worktree delete protection | `server/ws/rpc_worktree.go` |
+| Session delete → work stop | `server/ws/rpc_session.go` |
 | Prompt builder | `server/work/prompt.go` |
 | Prompt templates | `server/work/prompts.yaml` |
 | MCP stdio proxy + client | `server/mcp/server.go`, `server/mcp/client.go` |

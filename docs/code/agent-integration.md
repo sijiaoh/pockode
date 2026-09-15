@@ -82,7 +82,8 @@ type Session interface {
 **Design Decisions**:
 
 - **Long-lived Session**: A Session is a persistent subprocess, not request-response. It survives across multiple messages, supporting continuous context conversations
-- **Channel event stream**: Uses unbuffered channels for low-latency event delivery. Consumers can cancel via `ctx.Done()`
+- **Channel event stream**: Uses unbuffered channels for low-latency event delivery. A consumer drains `Events()` until the agent closes it — that close is the end of the session, and it is what `process.Manager.Close` waits for before letting a caller delete what the session writes to
+- **`process_ended` waits for its consumer**: every other send on the channel steps aside when the session's context is cancelled, which is right for output overtaken by a shutdown. The last event cannot: it is needed *most* when that context has just been cancelled on purpose — a reaped or deleted session — and a `select` over the two has both cases ready, so Go picks at random and half the closes never reach the client, which goes on showing the session as running until it refetches history. `agent.EmitProcessEnded` therefore waits for the consumer instead, with only a 10s backstop against a read loop that has stopped draining without closing the session (a panic recovered above it). The guarantee ends at that consumer: the next hop, `watch.ChatMessagesWatcher.OnChatMessage`, is a bounded queue that drops on overflow like every other chat event, and a client that loses one recovers by refetching history. What was fixed is the hop that dropped the event *by design*, on exactly the closes a user asked for
 - **Close() returns nothing**: Session closure is a best-effort operation; errors don't affect the outcome
 
 ### Event Types
@@ -134,11 +135,13 @@ marked `running` forever, which `work.AutoResumer` reads as "the agent is workin
 and never corrects.
 
 That asymmetry is why `IndicatesAgentActivity` lists what counts as activity
-rather than what doesn't: a wrong inclusion strands a session until the idle
-reaper collects it hours later, while a wrong exclusion costs one missed
-transition that the send path had already made. A new event type is therefore
+rather than what doesn't, and nothing downstream softens a wrong inclusion: the
+idle reaper will not collect the stranded session either, because a session
+marked `running` is a turn in progress and turns in progress are never reaped
+([Idle Timeout Cleanup](#idle-timeout-cleanup)). A new event type is therefore
 inert by default, and adding it to the list is a deliberate claim that it cannot
-arrive between turns.
+arrive between turns; the rest of that trade-off is at
+`agent.EventType.IndicatesAgentActivity`.
 
 #### Why `ActivatesSession` Is Not `IndicatesAgentActivity`
 
@@ -1556,14 +1559,52 @@ asymmetry matters at both ends:
   Pockode synthesizes a response for the same call — and a second idle reads
   downstream as a second stop.
 
+#### A Prompt Belongs to the Process That Raised It
+
 A message starts a process when the session has none; an answer does not.
 `chat.Client` sends permission and question responses only to a process that is
-already there, and reports `ErrSessionNotRunning` otherwise. An answer belongs to
-the process that asked, so a prompt outliving its process — reaped after an idle
-timeout, or replayed from history after a restart, with the card still on screen —
-can no longer be answered. Starting a process to receive it delivers the answer
-nowhere and leaves that process running with no turn to end it. An interrupt in
-the same situation succeeds silently: nothing to stop is what the caller wanted.
+already there (`chat.Client.liveProcess`), and reports `ErrSessionNotRunning`
+otherwise. That is not caution on Pockode's part, it is the shape of the
+transport. A prompt is a request still in flight on the process's own stdio
+connection, addressed by an id that only that connection ever issued:
+
+| CLI | How the prompt arrives | How an answer is addressed |
+|---|---|---|
+| Claude | `control_request` | `control_response` carrying the same `request_id`, matched against the session's own pending-request map |
+| Codex | MCP `elicitation/create` | a JSON-RPC response to that request's id on the same connection |
+
+Neither id outlives the connection that issued it, and nothing replays an
+in-flight request into a later process — so an answer has exactly one possible
+recipient, and it is a live one. Starting a process to take an answer therefore
+delivers it nowhere and leaves that process running with no turn to end it. An
+interrupt in the same situation succeeds silently: nothing to stop is what the
+caller wanted.
+
+A prompt can therefore outlive the only thing that could answer it — replayed
+from history after a restart, with the card still on screen. Two rules elsewhere
+exist to keep that window as narrow as the premise allows, and they point in
+opposite directions for the same reason:
+
+- **While the server runs, Pockode does not take the process away itself.** The
+  idle reaper spares a process paused on a prompt and gives that hold no time
+  budget ([Idle Timeout Cleanup](#idle-timeout-cleanup)), because only that
+  process can still take the answer. A CLI that dies on its own still ends the
+  session, and the card with it — but that is the CLI's doing, not a card
+  expired by a timer nobody asked for.
+- **Across a restart, the work is not kept waiting.** Startup stops
+  `needs_input` work instead of preserving it
+  ([work-system.md](work-system.md#triggers), Trigger C): the process is gone,
+  so the question is gone, and the status would be promising a resumption that
+  cannot arrive.
+
+**Both rules stand on this premise and have to be revisited if it changes.** The
+change to watch for is a CLI re-offering its outstanding prompts to a resumed
+session, or accepting an answer addressed by something more durable than a live
+request id. Either one turns the reaper's unbounded hold into a plain resource
+leak — the process would no longer be the only way back to the question — and
+turns a `needs_input` work preserved across a restart from a lie into the correct
+answer. Neither rule has a second reason to fall back on, which is why the
+premise is written down once here instead of being re-derived at each of them.
 
 ### Event Stream Handling
 
@@ -1602,7 +1643,7 @@ func (m *Manager) runIdleReaper() {
     ticker := time.NewTicker(idleTimeout / 4) // Check frequency = timeout/4
     for range ticker.C {
         for sessionID, proc := range processes {
-            if now.Sub(proc.lastActive) > idleTimeout {
+            if now.Sub(proc.lastActive) > idleTimeout && proc.reapHold() == "" {
                 proc.agentSession.Close()
                 delete(processes, sessionID)
             }
@@ -1613,9 +1654,77 @@ func (m *Manager) runIdleReaper() {
 
 **Design Decision**: Check frequency is 1/4 of timeout duration, balancing response speed with CPU overhead.
 
-A process is spared while it is holding a turn open for background work, which is
-the one case where no events for hours does not mean abandoned; see
-[Background Waits](#background-waits).
+The timeout is only half the rule. `lastActive` measures silence, and silence is
+the normal condition of a wait, so on its own it says "abandoned" exactly when
+collecting the process would destroy what it is waiting for. What the reaper
+actually asks is `Process.reapHold`: the name of the thing this process is still
+in the middle of, or `""` when it is in the middle of nothing.
+
+Three things hold a process, checked most specific first because the name is
+what gets logged:
+
+- **Paused on an unanswered prompt** (`permission_request`, `ask_user_question`).
+  Reaping one answers the agent's question by killing it, and no later process
+  can make up for that: the prompt belongs to the process that raised it
+  ([A Prompt Belongs to the Process That Raised It](#a-prompt-belongs-to-the-process-that-raised-it)).
+
+  The predicate is `Process.awaitingUserAnswer`, which tracks the outstanding
+  answer separately from the turn rather than reading it off `turnEnded`. The
+  two come apart in both directions — an agent can withdraw a prompt without
+  ending the turn, which the frontend shows as a card moving from `pending` to
+  `expired`, and a prompt raised after a turn has reported its end outlives that
+  turn. Which flag answers which question is worked out at
+  `Process.promptPending`.
+- **Waiting on background work** — a turn held open for background tasks, which
+  would be killed with the process; see [Background Waits](#background-waits).
+- **A turn in progress** — the state is not a reported idle (`state != idle` or
+  `!turnEnded`). This is the hold that does the most work, and the one that had
+  to be written: a turn can run for minutes without producing a single event —
+  one `Bash` call around a build or a test suite is enough — and to `lastActive`
+  that is indistinguishable from a session nobody came back to. Requiring the
+  turn's own report of having ended is what keeps "quiet" from passing for
+  "done".
+
+  It is also the widest, and it comes close enough to covering the other two
+  that the gaps are worth stating: a prompt raised after its turn already
+  reported an end has no turn behind it and is held by the prompt check alone.
+  So the earlier checks are not prettier labels for cases this one would catch
+  anyway — dropping one can cost a session rather than a log line. Which check
+  covers which case is worked out at `Process.reapHold`.
+
+None of the three holds has a time budget, and none can: a build outruns any
+timeout worth setting and a person outruns it by more. Each ends when the session
+itself moves on — the turn reports its end, the agent gives up on its background
+tasks, the prompt is answered or withdrawn.
+
+So a process outlives the timeout whenever the session never moves on: a session
+left on an unanswered question keeps its process for as long as the server runs,
+and so does a CLI that stays alive without ever ending its turn. Both are
+deliberate. The alternative to the first is a prompt on screen that answers
+`ErrSessionNotRunning`
+([the premise above](#a-prompt-belongs-to-the-process-that-raised-it));
+the alternative to the second is killing builds, and nothing distinguishes a slow
+turn from a stuck one from outside. A CLI that actually dies closes its event
+stream, which ends the process through the ordinary path rather than the reaper.
+
+Because the holds carry the whole rule, the timeout itself only has to answer
+"how long may a session that is in the middle of nothing keep a CLI alive?", and
+the answer is short: `--idle-timeout` defaults to **5m**. A reaped process costs
+the next message a resume, and nothing else — history lives in the store, and
+`process_ended` reaches the client either way. What it costs the *work* bound to
+that session is the other half of this story, and the short version is "nothing
+it was not already exposed to": a reaped process is an ordinary process death, so
+it stops `in_progress` work and leaves paused work alone
+([work-system.md](work-system.md#triggers), Trigger A). That rule and this one are
+written against each other — narrowing what a death stops is only safe because
+the holds keep the reaper off the sessions somebody is waiting on, and the holds
+are only affordable because a reaped session is cheap to resume.
+
+`--idle-timeout=0` turns reaping off rather than reaping everything — worth
+saying because the literal reading is the opposite one: every process is older
+than a zero timeout the instant it is created. An operator who writes zero means
+"never", and `Manager.reapingDisabled` is the single place that reading is
+written down, asked by both the ticker and the reaping rule.
 
 ## Session Management
 
