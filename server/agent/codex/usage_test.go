@@ -25,6 +25,41 @@ const (
 		"rate_limits":{"limit_id":"codex","primary":{"used_percent":1.0}}}`
 )
 
+// One turn of codex-cli 0.153.0 that made six tool calls, so seven requests:
+// the first request's event and the seventh's. The thread totals have added up
+// seven prompts by the end; last_token_usage still reports one.
+const (
+	longTurnFirstTokenCount = `{"type":"token_count","info":{
+		"total_token_usage":{"input_tokens":12174,"cached_input_tokens":3968,"cache_write_input_tokens":0,"output_tokens":40,"reasoning_output_tokens":0,"total_tokens":12214},
+		"last_token_usage":{"input_tokens":12174,"cached_input_tokens":3968,"cache_write_input_tokens":0,"output_tokens":40,"reasoning_output_tokens":0,"total_tokens":12214},
+		"model_context_window":258400}}`
+
+	longTurnLastTokenCount = `{"type":"token_count","info":{
+		"total_token_usage":{"input_tokens":87193,"cached_input_tokens":77440,"cache_write_input_tokens":0,"output_tokens":165,"reasoning_output_tokens":0,"total_tokens":87358},
+		"last_token_usage":{"input_tokens":12726,"cached_input_tokens":12416,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0,"total_tokens":12731},
+		"model_context_window":258400}}`
+)
+
+// A thread of codex-cli 0.153.0 run against an 18000-token window (Codex
+// reports 17100 of it as usable) until it compacted itself: the request that
+// filled the window, the compaction's own event, and the first request after it.
+const (
+	beforeCompactionTokenCount = `{"type":"token_count","info":{
+		"total_token_usage":{"input_tokens":84154,"cached_input_tokens":67072,"cache_write_input_tokens":0,"output_tokens":206,"reasoning_output_tokens":0,"total_tokens":84360},
+		"last_token_usage":{"input_tokens":16191,"cached_input_tokens":14592,"cache_write_input_tokens":0,"output_tokens":19,"reasoning_output_tokens":0,"total_tokens":16210},
+		"model_context_window":17100}}`
+
+	compactionTokenCount = `{"type":"token_count","info":{
+		"total_token_usage":{"input_tokens":84154,"cached_input_tokens":67072,"cache_write_input_tokens":0,"output_tokens":206,"reasoning_output_tokens":0,"total_tokens":84360},
+		"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":6140},
+		"model_context_window":17100}}`
+
+	afterCompactionTokenCount = `{"type":"token_count","info":{
+		"total_token_usage":{"input_tokens":96770,"cached_input_tokens":76160,"cache_write_input_tokens":0,"output_tokens":254,"reasoning_output_tokens":0,"total_tokens":97024},
+		"last_token_usage":{"input_tokens":12616,"cached_input_tokens":9088,"cache_write_input_tokens":0,"output_tokens":48,"reasoning_output_tokens":0,"total_tokens":12664},
+		"model_context_window":17100}}`
+)
+
 func observeFrames(t *testing.T, lines ...string) []session.UsageReport {
 	t.Helper()
 
@@ -91,6 +126,47 @@ func TestUsageObserverReportsContext(t *testing.T) {
 	}
 	if got[1].ContextWindow != 258400 {
 		t.Errorf("context window = %d, want 258400", got[1].ContextWindow)
+	}
+}
+
+// The context reading is a level, so it must not grow with the number of
+// requests a turn makes. Every request re-sends the whole conversation, which is
+// why the thread totals climb by a prompt each time while the level barely
+// moves — reading the totals as the level multiplies it by the request count.
+func TestUsageObserverContextIsNotTheTurnsTotal(t *testing.T) {
+	got := observeFrames(t, longTurnFirstTokenCount, longTurnLastTokenCount)
+
+	if len(got) != 2 {
+		t.Fatalf("got %d reports, want 2", len(got))
+	}
+	if got[0].ContextTokens != 12174 {
+		t.Errorf("context tokens at the turn's first request = %d, want 12174", got[0].ContextTokens)
+	}
+	if got[1].ContextTokens != 12726 {
+		t.Errorf("context tokens at the turn's seventh request = %d, want the prompt it sent, 12726 (its input count in the thread totals had reached 87193, the sum of all seven)",
+			got[1].ContextTokens)
+	}
+}
+
+// Compaction's own token_count measured no request: its last_token_usage is
+// zeroed apart from total_tokens, which is Codex's estimate of the compacted
+// history and not the size of any prompt. Reporting zero leaves the last real
+// measurement in place, and the level then falls on the next request.
+func TestUsageObserverContextFallsAfterCompaction(t *testing.T) {
+	got := observeFrames(t, beforeCompactionTokenCount, compactionTokenCount, afterCompactionTokenCount)
+
+	if len(got) != 3 {
+		t.Fatalf("got %d reports, want 3", len(got))
+	}
+	if got[0].ContextTokens != 16191 {
+		t.Errorf("context tokens before compaction = %d, want 16191", got[0].ContextTokens)
+	}
+	if got[1].ContextTokens != 0 {
+		t.Errorf("compaction reported a context level of %d, want none (6140 is not a prompt size)",
+			got[1].ContextTokens)
+	}
+	if got[2].ContextTokens != 12616 {
+		t.Errorf("context tokens after compaction = %d, want 12616", got[2].ContextTokens)
 	}
 }
 

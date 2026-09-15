@@ -16,15 +16,44 @@ import (
 //   - `info.total_token_usage` — the thread's totals so far. Codex emits a
 //     token_count event during a turn as well as at the end of one, so these
 //     arrive more often than once per turn; taking deltas makes that harmless.
-//   - `info.last_token_usage` — the last request's own figures, whose
-//     input_tokens is the size of the prompt that was sent, and so the only
-//     report of how large the conversation currently is.
+//   - `info.last_token_usage` — one API request's own figures, not the turn's.
+//     Its input_tokens is the size of the prompt that request sent, and so the
+//     only report of how large the conversation currently is. Measured on a turn
+//     that made six tool calls, i.e. seven requests: the input count in the
+//     thread totals reached 87193, the sum of all seven prompts, while the same
+//     count here moved only 12174 -> 12726, each request re-sending a prompt
+//     that had grown by one tool's output. Reading the totals as a context level
+//     would therefore multiply the level by the number of requests in the turn,
+//     which is the bug a Claude session showed as 904% of its window.
 //   - `info.model_context_window` — the window that prompt has to fit in.
 //   - No cost, ever. Codex reports rate limits, plan type and a credit balance
 //     and never a price, so a Codex session stores no cost (see session.Usage).
 //
 // `info` is optional in the event: a token_count carrying only `rate_limits`
 // says nothing about usage and is skipped.
+//
+// Compaction emits a token_count of its own, and it measured no request: every
+// field of last_token_usage is zero except total_tokens, which carries Codex's
+// estimate of the compacted history (6140, in a thread run against an 18000
+// token window until it compacted itself, whose next real request then measured
+// a prompt of 12616). Reporting zero is right for it — the store
+// reads a zero context level as "not reported in this frame" and keeps the last
+// real measurement, so the reading falls once, when the next request measures
+// it, rather than dipping to a number no prompt ever had and bouncing back.
+// This is why the level is taken from input_tokens and not from total_tokens.
+//
+// Codex's own UI prints a smaller percentage than Pockode does for the same
+// thread, and the difference is understood. Its optional `context-used`
+// status-line item showed 1% where the prompt this reports was 14414 of a 258400
+// window (5.6%): Codex discounts a baseline of roughly 12000 tokens — about what
+// a thread's very first prompt measures, i.e. the system prompt and tool
+// definitions that are in every prompt — from both sides of the ratio. Pockode
+// does not, because that baseline really is occupying the window, no event
+// reports its size as a figure of its own — it would have to be hard-coded from
+// Codex's internals — and discounting it for Codex alone would make the figure
+// incomparable with the Claude one shown beside it. What the cross-check does
+// settle is the shape of the reading: Codex called that turn 1%, not the 38% its
+// running total had reached.
 type usageObserver struct {
 	log         *slog.Logger
 	accumulator *agent.UsageAccumulator
