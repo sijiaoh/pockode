@@ -70,7 +70,11 @@ interface TokenUsage {
 }
 
 interface SessionUsage extends TokenUsage {
-	/** A level, not a total: compaction makes it fall while the totals climb. */
+	/**
+	 * A level, not a total: compaction makes it fall while the totals climb.
+	 * Absent, or zero, means no level has been measured yet — never that the
+	 * conversation is empty. It can exceed `context_window`, and is not clamped.
+	 */
 	context_tokens?: number;
 	/** The window that level sits in. Absent means this agent never reported one. */
 	context_window?: number;
@@ -163,7 +167,10 @@ real spend never renders as nothing.
 one floor: anything above zero that rounds to `0%` prints `<1%`. A window that has
 something in it must not read as empty.
 Rounding can print `100%` slightly before the window is full; that is the correct
-warning to give, and it is why the figure is not floored at the top end too.
+warning to give. Nothing caps it either: a level above the window prints above
+100%, because how full an agent lets its own context get is a fact about that
+agent, and a figure clamped to `100%` would hide it at exactly the moment it
+matters.
 
 **Abbreviated on the glance surface, exact in the panel.** The work card is
 abbreviated, and that is the value it reports: `title` is unreachable under a
@@ -310,6 +317,18 @@ sub-rows are indented and `text-th-text-muted`. The context bar is
 `aria-valuetext="92,134 of 200,000 tokens"`. `progressbar` rather than ARIA's
 `meter`, which is the role screen readers actually announce.
 
+The bar has one end the percentage does not: its fill saturates at full width,
+while the figure beside it goes on past `100%` (the level can exceed the window,
+and is never clamped). The two carry the same fact until the window is full, and
+past it the number is the one that keeps reporting.
+
+`aria-valuemax` is the window or the reading, whichever is larger. Once the level
+overshoots, a fixed max would put `aria-valuenow` out of range, and an
+out-of-range value is one a screen reader may discard or renormalise — on exactly
+the session whose reading most needs announcing. Growing the range caps nothing:
+the percentage, the `x of y tokens` line and `aria-valuetext` all still carry the
+real figures against the real window.
+
 The bar's fill and the percentage beside it are the only place the thresholds are
 read: `th-accent` below 75%, `th-warning` at 75–89%, `th-error` at 90% and up,
 where compaction is imminent. Colour is never the only carrier — the percentage
@@ -328,7 +347,8 @@ below is a state of the Usage section inside the panel.
 | --- | --- |
 | Detail not loaded yet (opened during a session switch) | One muted line: `Loading…` |
 | All four counters zero | One muted line: `Nothing reported yet.` — plus the Context block, if a window was reported |
-| Counters and window reported | All three blocks |
+| Counters, window and a context reading all reported | All three blocks |
+| Window reported, no level measured yet | Context block replaced by one muted line: `Context not measured yet.` |
 | No context window reported | Context block replaced by one muted line: `Context window not reported by this agent.` |
 | No cost reported | Cost block absent entirely — no row, no dash, no `$0.00` |
 | Session was forked (`forked_from` present) | One muted sub-line under the total: `Since this session was forked.` — including when the total is the empty line, which is when the copied history on screen behind the panel makes it easiest to misread |
@@ -343,6 +363,14 @@ empty panel would read as a broken one, and `0` figures would claim the agent
 reported zeros when it reported nothing at all. The Context block survives an
 empty total because a window can be known before anything is spent — a resumed
 session reports its window on the first frame.
+
+**A known window with no level is its own state, not `0%`.** The window arrives
+with the agent's first frame and a level only once a request has been measured,
+so a session sits here at the start of its first turn; so does one whose stored
+reading was dropped as unmeasurable
+([why](code/agent-integration.md#usage-reporting)). Drawing it as `Context 0% /
+0 of 1,000,000 tokens` would be worse than the wrong number it replaced: a bad
+reading looks bad, an invented `0%` looks fine and is still a lie.
 
 The fork line answers *A fork starts at zero*: the copied history is on screen
 right behind the panel, so a total covering only part of it needs one clause saying

@@ -1281,6 +1281,57 @@ describe how full one live conversation currently is; compaction makes them fall
 while the totals keep climbing. They belong to a session and are never summed —
 the work aggregate carries no window at any depth.
 
+**The level is one request's prompt, and each CLI also reports a total that looks
+exactly like it.** Both were measured on the same CLI versions as the counter
+behaviour above, and reading the wrong one is the whole history of this section:
+
+| | The level | The total it is not |
+|---|---|---|
+| Claude | the last main-conversation `assistant` frame's `message.usage`, summed as `input + cache_read + cache_creation` | `result.usage` — every request the turn made, added up. A seven-request turn reported `cache_read_input_tokens: 163135`, to the token the sum of its seven per-request reads |
+| Codex | `info.last_token_usage.input_tokens`, which is one request's whole prompt with its cached part already inside it | `info.total_token_usage` — the thread's running total. The same shape of turn had it at 87,193 while the level was 12,726 |
+
+Read either total as a level and the reading is inflated by every request it has
+already summed over — for Claude every request in the turn, for Codex every
+request in the thread. A `904%` sitting in a stored index came from exactly that.
+Claude needs one filter besides: an `assistant` frame carrying
+`parent_tool_use_id` belongs to a subagent's own conversation (11,800 against the
+main conversation's 24,034), and a turn that ends in a Task call would otherwise
+report the subagent's context as the session's. Codex needs no equivalent — one
+`mcp-server` process carries one thread.
+
+**Two fields that look like the level after compaction, and are not.** Claude's
+`compact_boundary.compact_metadata.post_tokens` counts only the conversation that
+was kept, without the system prompt and tool definitions the next request still
+sends: `pre_tokens` 66,631 against a measured prompt of 66,200, but `post_tokens`
+3,026 against a measured 24,876. Codex's compaction `token_count` zeroes
+`last_token_usage` apart from a `total_tokens` of 6,140 — its own estimate of the
+compacted history, where the next real request measured 12,616. Either would make
+the reading collapse and then jump back. Taking the level from the fields above
+instead means a compaction frame reports no level at all, and `session/usage.go`
+reads that zero as *this frame measured nothing* — never *the conversation is
+empty* — and keeps the previous reading, so the level falls once rather than
+flickering.
+
+**The percentage is not clamped, and does not match Codex's own.** On one thread
+Codex's status line read `1% used` where Pockode showed 5.6%: Codex subtracts a
+fixed baseline of roughly 12,000 tokens — the magnitude of a thread's first
+prompt, which is to say the system prompt and tool definitions that every later
+prompt carries too — from both sides of the ratio. Pockode does not. The constant
+appears in no event, so copying it would be a magic number that rots silently;
+subtracting it for Codex alone would make two agents' percentages incomparable on
+one screen; and those tokens genuinely occupy the window. For the same reason a
+level above the window is displayed above 100% rather than capped — how full an
+agent lets its own context get is its decision to show, not Pockode's to hide.
+
+**A stored reading is a cache, not history.** Nobody is owed the number an agent
+reported last month, so a reading known to have been taken wrong is dropped
+rather than kept or guessed at. `indexData` therefore carries a `version`, and an
+index older than version 1 loses its Claude `ContextTokens` on load — the window
+is kept, since it was always read correctly and says which window the next
+measurement will be against, and Codex's readings are untouched because that side
+was measuring the last prompt all along. Nothing can recompute the right figure:
+the per-request counts it would come from were never stored.
+
 `SessionMeta.Usage` reaches clients through `session.detail` alone; the list row
 has no use for it and goes to every subscriber on every change
 ([why](subscription-system.md#why-a-session-is-two-subscriptions)). Recording
