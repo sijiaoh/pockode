@@ -2,5 +2,44 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "server/.go-version and go.mod's go directive name the same Go release as the Dockerfile builder image; nothing tracks them out of the box, so they would sit still while the image moved",
+      "managerFilePatterns": [
+        "/^server/\\.go-version$/"
+      ],
+      "matchStrings": [
+        "^(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "go",
+      "datasourceTemplate": "golang-version"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^server/go\\.mod$/"
+      ],
+      "matchStrings": [
+        "\\ngo (?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "go",
+      "datasourceTemplate": "golang-version"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "One PR moves every place the Go version is written, so a released image is never built by a toolchain CI did not test",
+      "matchDatasources": [
+        "docker",
+        "golang-version"
+      ],
+      "matchPackageNames": [
+        "go",
+        "golang"
+      ],
+      "groupName": "Go"
+    }
   ]
 }
