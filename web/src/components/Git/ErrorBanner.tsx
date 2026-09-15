@@ -32,14 +32,14 @@ function ErrorBanner({ summary, details, onDismiss }: Props) {
 				aria-hidden="true"
 			/>
 			<div className="min-w-0 flex-1">
-				<div className="flex flex-wrap items-baseline gap-x-2 text-sm text-th-error">
+				<div className="flex flex-wrap items-start gap-x-2 text-sm text-th-error">
 					<span className="min-w-0 break-words">{summary}</span>
 					{details && (
 						<button
 							type="button"
 							onClick={() => setShowDetails(!showDetails)}
 							aria-expanded={showDetails}
-							className="text-xs text-th-text-secondary underline transition-colors hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+							className="inline-flex min-h-9 items-start text-xs text-th-text-secondary underline transition-colors pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 						>
 							Details
 						</button>

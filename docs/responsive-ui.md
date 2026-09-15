@@ -420,6 +420,41 @@ a height. `touchTarget.test.ts` enforces this, and `touch-target` is exempt: its
 overlay is an absolutely positioned pseudo-element and reaches its floors from
 an inline parent.
 
+**The overlay is the exception, and a batch using it zero times is the normal
+outcome.** The first batch of raises below covered nine controls in five files
+and reached for `touch-target` not once, because its precondition — *the
+container's height cannot change on a touch device either* — held in none of
+them: the containers there either scroll, or were already tall enough for
+another reason, or are flowing banners free to grow. The one place a container
+genuinely could not take 44px was a Retry sitting inside a line of `text-xs`
+body copy, and the answer there was **to move the control onto its own line**,
+not to reach for the overlay. If the overlay looks like the answer, check first
+whether the control is in the wrong place.
+
+**When you grow a box, align what sits beside it with `items-start`, not
+`items-center`.** Under `items-center` the neighbour's *first line* moves
+whenever the row's height changes, so any margin computed to chase it back into
+alignment is only correct at one row height. `Git/ErrorBanner` took the long
+way round to this. The approach first written down for it — centre the row,
+then give the warning icon an `mt-2.5 pointer-coarse:mt-3.5` computed to follow
+the summary down — is right only where the summary is exactly one line **and**
+the details string is non-empty. The sync-failure messages in
+`utils/gitSyncMessages.ts` are fixed strings that run to two or three lines at
+phone width, and the component renders no Details button at all when the
+details string is empty, so in three of the four cases that compensation
+*mis*-aligns by 8px an icon that had been fine. `items-start` pins the first
+line at top 0 and no neighbour has to move at all. Inside the button too:
+`items-start` keeps the label at the top of its own box, so the 36 / 44px hit
+area **grows downward**, into the banner's own free space under the label,
+rather than upward out of its padding and into the row above it. What this
+looks like in `ErrorBanner` is small either way: where Details shares the
+summary's line, the label moves up about 3px, from sitting on the summary's
+baseline to sitting on the top of its first line; where the summary is long
+enough to take the whole line, Details was already on a line of its own and the
+label does not move at all, the banner growing under it instead (the figures
+are in batch 1's layout table below). The summary and the icon do not move by a
+pixel in any of those cases.
+
 ### Where the rungs are defined
 
 The shared definitions, so the common cases cannot drift apart:
@@ -500,28 +535,23 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-69 controls render text, state no height of their own and carry no touch-target.
+60 controls render text, state no height of their own and carry no touch-target.
 
-37 state their own font size, so the height below is exact: 16–40px.
-32 inherit it, so the height below is an upper bound — the ancestor that
+32 state their own font size, so the height below is exact: 16–40px.
+28 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
-24 are under the 36px fine-pointer floor.
+15 are under the 36px fine-pointer floor.
 6 reach the 44px coarse floor, 0 of them on a read height.
 0 state type this scan cannot read, listed as 0px and `unread`.
 
-  16px  exact  web/src/components/Git/ErrorBanner.tsx
   16px  exact  web/src/components/Project/WorkDetailOverlay.tsx
   16px  exact  web/src/components/Project/WorkListOverlay.tsx
-  20px  exact  web/src/components/Files/UploadQueue.tsx ×4
   20px  exact  web/src/components/Project/AgentRoleListOverlay.tsx
   20px  exact  web/src/components/Project/WorkDetailOverlay.tsx
   20px  exact  web/src/components/Project/WorkListOverlay.tsx ×2
   20px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx
-  24px  bound  web/src/components/AppShell.tsx ×2
   24px  bound  web/src/components/Settings/sections/AppearanceSections.tsx
-  24px  bound  web/src/components/ui/ReconnectBanner.tsx
-  24px  bound  web/src/components/ui/SettingsLoadError.tsx
   28px  bound  web/src/components/Chat/MessageItem.tsx
   32px  bound  web/src/components/Chat/AskUserQuestionItem.tsx ×2
   32px  bound  web/src/components/Chat/MessageItem.tsx ×3
@@ -564,12 +594,28 @@ control whose height comes from a *child* is read as its own line box and
 nothing else, because the scan measures the element that was written down and
 not the subtree under it. The theme card in
 `Settings/sections/AppearanceSections` reads as 24px while the label strip
-inside it is `min-h-12` on its own. A row here is a reason to go and look, not a
-verdict. And `bound` means the font size comes from an ancestor in another file:
+inside it is `min-h-12` on its own. That one has been looked at: the strip
+really is the 48px thing a thumb lands on, so read that row as a **known
+over-report of this scan, not a defect waiting for someone to fix it**. A row
+here is a reason to go and look, not a verdict. And `bound` means the font size
+comes from an ancestor in another file:
 neither app sets a root font size and preflight sets `line-height: 1.5` on
 `html`, so the browser default puts that line box at 24px, while an ancestor
 that sets a smaller size makes the real control shorter. An `exact` row is a
 height; a `bound` row is a ceiling.
+
+**Every `bound` row anyone has chased to its ancestor has come back shorter
+than the register reported, without a single exception.** Of the ones still
+listed above, the permission card is a `text-xs` shell, so its three buttons
+read 32 and are 24 and its Details reads 28 and is 20. Of the ones raised out of
+the register since — the reconnect and session-error banners set `text-sm` on
+the row, so their buttons read 24 and were 20; the settings-error text is a
+`text-xs` paragraph, so its Retry read 24 and was 16. Not one came back taller,
+and not one came back equal. So on the type axis `bound` does not mean
+*possibly fine*: it means **worse than it looks**, and the ceiling is the
+optimistic reading. The theme card runs the other way only because its height
+comes from a child rather than from type — the correction above, not a
+counterexample to this one.
 
 The block above is the whole list. What the shortest of them *are*, since a file
 name does not say what a control is for:
@@ -578,35 +624,180 @@ name does not say what a control is for:
   Allow and Deny on a permission request; Cancel and Submit on a question; the
   Details link out to a work item. Answering the agent is the most consequential
   thing either screen does, and none of these clears the fine floor.
-- **`Files/UploadQueue`** — Replace, Keep both, Retry, Retry failed: the only
-  way out of a failed upload.
-- **`Git/ErrorBanner`** — the details toggle on a git failure.
 - **`Project/WorkDetailOverlay`** — the link up to the parent work.
 - **`Project/WorkListOverlay`** — a task title in a `min-h-[36px]` row; the
   labelled Start chip whose icon-only twin above it is 44; and, with
   `WorkDetailOverlay` and `AgentRoleListOverlay`, list titles **inside a
   `min-h-[44px]` row** — the row is 44, the target in it is 20, because
   `items-center` centres the text rather than stretching it.
-- **`AppShell`** and **`ui/ReconnectBanner`** — Retry and dismiss in the
-  session-error banner, Retry now in the reconnect banner.
+- **`Settings/sections/AppearanceSections`** — the theme card, which is the
+  over-report described above and needs nothing done to it.
 - **`ui/ContentView`** — the path button at the top of a file or diff view, the
   way into the file it names.
-- **`ui/SettingsLoadError`** — Retry, the only way back from a settings
-  subscription that failed on a live socket.
 - **`Worktree/WorktreeCreateSheet`** — the link out of the setup-script note.
 
 One more is worth naming although it clears the fine floor: `ConfirmDialog`'s
 Cancel and confirm are 36px (`px-4 py-2` around `text-sm`), and every
 destructive confirmation in both front ends goes through them.
 
-**These are known and deliberately deferred, not a backlog nobody owns.** The
-decision, taken in the story that wrote this file: raising this many controls
-changes the phone layout in as many places, the phone UI reads well today, and
-the outcome cannot be checked without the coarse-pointer walkthrough. That is
-still its own story — one that picks a batch by P0/P1/P2 rather than raising
-everything. The other half of what that story asked for is done here: the scan
-computes the `padding + line box` shape, so the next such control shows up in
-the register on the commit that writes it instead of being counted years later.
+**These are known and deliberately deferred, not a backlog nobody owns.**
+Raising them all at once would change the phone layout in as many places, and
+this repository cannot render a pixel to check the result, so they go up in
+batches. The scan is what keeps that honest: it computes the
+`padding + line box` shape, so the next such control shows up in the register on
+the commit that writes it instead of being counted years later. The order the
+batches go in is below.
+
+### Which to raise first: R0 / R1 / R2
+
+> **These levels are not the P0/P1/P2 of progressive disclosure above.** That
+> grading asks *may this control be hidden from a finger?* This one asks *how
+> much does missing it cost, so who goes first?* The two cross, and they cross
+> badly. `Git/ErrorBanner`'s Details is **P1** there — delete it and there is no
+> other route to the raw git output — and **R0** here, the first thing raised.
+> The step editor's `Move up` / `Move down` are **P1** there and **R2** here,
+> being 44px already with nothing left to raise. One name answering two
+> questions is the mistake this file was written to undo when it took
+> `isDesktop` apart: each reader takes it as the answer to the question they
+> were asking.
+>
+> **`R` is for raise order, and the letter is chosen rather than left over.**
+> `P` is spoken for by the grading above, and `L` by
+> [sidebar-ui.md](sidebar-ui.md#visual-weight)'s **L1–L5** visual-weight rungs,
+> which this file cites by that name a few sections up to size hit areas
+> against. Three gradings, three letters: whichever one a reader meets, its
+> letter already says which question it answers.
+
+**R0 — the app is in a state the user did not choose, and this is the way out.**
+Either of:
+
+- **(a) The only exit.** Something the user did not ask for has failed — an
+  upload, the socket, a settings snapshot, a git command — and this control is
+  the only thing on the screen that leaves that state **without redoing work
+  already done**. That last clause is load-bearing, and it is why the disclosure
+  question is too loose to reuse here: delete `UploadQueue`'s Retry and the user
+  "can still" press upload and pick the files again. Redoing is not a second
+  path.
+- **(b) A mis-tap that cannot be undone.** Missing costs more than a wasted tap
+  — an authorization, a refusal, an overwrite, with nothing to undo it with.
+  `MessageItem`'s Deny / Always Allow / Allow fail (a), since they are not an
+  exit from an error, but they are the most expensive mis-tap in the app: 24px
+  tall, 8px apart, side by side, and hitting Allow while aiming at Deny is a
+  tool call that has already run. A rule that knew only about error exits would
+  file them as R1, which is wrong.
+
+**R1 — frequent navigation, where a mis-tap costs time and not work.** List
+titles, jump links, the path button. Going back and tapping again is the whole
+cost, **and** this screen or the one before it holds another route to the same
+place.
+
+**R2 — everything else.** A control whose same-screen twin already clears the
+floor, an external link inside an explanatory note, and the register's own
+over-reports.
+
+**A batch raises a row, not a control.** Whatever shares a flex row with an R0
+goes up with it. A 44px Retry beside a 20px Dismiss is easier to mis-tap than
+two 20px buttons were: the large target pulls the thumb toward itself, and the
+small one loses the near edge of its hit area to a neighbour that looks bigger
+than it is. In batch 1 this pulled in exactly one extra control.
+
+#### Batch 1, done — the banner-and-queue shape
+
+Nine controls in five files, all now `min-h-9 pointer-coarse:min-h-11`:
+
+| File | Controls | Level |
+|---|---|---|
+| `Files/UploadQueue` | Replace, Keep both, Retry on a failed row | R0 (a) |
+| `Files/UploadQueue` | Retry failed, in the queue header | R0 (a) |
+| `Git/ErrorBanner` | Details | R0 (a) |
+| `ui/ReconnectBanner` | Retry now | R0 (a) |
+| `ui/SettingsLoadError` | Retry | R0 (a) |
+| `AppShell` | Retry in the session-error banner | R0 (a) |
+| `AppShell` | Dismiss beside it | R1, in by the row rule |
+
+**Why nine, rather than every one of them, and why the batch was cut by shape
+rather than by level.** All five files are the *same shape* — a text button in
+a banner or a queue row, inheriting its type or setting `text-xs`, inside a
+container whose height is free to change. Solving one shape once leaves a
+precedent to cite; taking every remaining shape in one go leaves one
+improvisation per shape and no precedent at all. It also keeps the layout
+consequences derivable: each of these either does not change height at all or
+only occupies the extra pixels while something is failing, and since nothing
+here can be rendered, the batch admits only places whose height can be computed
+to the pixel without rendering them.
+
+The chat-transcript controls are **R0 too and still wait**, which is the point
+of cutting by shape: bubble geometry belongs to
+[session-fork-ui.md](session-fork-ui.md), the permission card is a dense
+`text-xs` card, and taking its three buttons from 24px to 44px re-spaces the
+whole card vertically. That wants doing together with the bubble geometry, and
+it is the next batch rather than an open question.
+
+#### What is left, already graded
+
+Written down so the next reader does not grade it again.
+
+- **Batch 2 — R0, the chat transcript.** `MessageItem`'s Deny, Always Allow and
+  Allow; `AskUserQuestionItem`'s Cancel and Submit. All R0 (b).
+- **Batch 3 — R1, text targets centred in a tall row.** `WorkDetailOverlay` ×2,
+  `WorkListOverlay` ×2, `AgentRoleListOverlay`, `MessageItem`'s Details link,
+  `ContentView`'s path button. They share a *structural* cause — a 44px row
+  using `items-center` to centre a 20px text target rather than stretch it — so
+  they are worth one answer between them rather than one each.
+- **Nothing to raise.** `WorkListOverlay`'s labelled Start chip (R2; the
+  icon-only twin above it is already 44), `WorktreeCreateSheet`'s setup-script
+  link (R2), and the `AppearanceSections` theme card, which is the register's
+  known over-report and not a defect.
+
+#### What batch 1 did to the phone layout
+
+Every number here is `padding + line box` **arithmetic, not measurement** — see
+the honesty note below.
+
+| Where | Before | After | When it is on screen |
+|---|---|---|---|
+| `UploadQueue` action row | 20px | 36 / 44px | while an upload is failing |
+| `UploadQueue` failed row | 50px | 66 / 74px (single-line message) | same; the panel itself is capped by `max-h-[12rem]`, so the file tree does not move |
+| `UploadQueue` header | 36 / 44px | unchanged | the row already held two `size-9 pointer-coarse:size-11` icon buttons |
+| `Git/ErrorBanner` | 52 / 60px (short summary) | unchanged with a short summary; +20 / +28px once the summary wraps | the dismiss `X` was already 36 / 44, so Details lands inside the same `max()` — but only while it shares a line with the summary |
+| `ui/ReconnectBanner` | 28px | 44 / 52px (unwrapped) | only once the retry has escalated to an outage (`OUTAGE_AFTER_ATTEMPTS`); the ordinary "Reconnecting..." form carries no button and stays 28px |
+| `AppShell` session-error banner | 28px | 44 / 52px (unwrapped) | only while a session-creation error is unacknowledged |
+| `ui/SettingsLoadError` | 16px | 56 / 64px | only when a settings snapshot fails to load; with no error the component renders `null` |
+
+The two banners' `28 → 44/52` is the **unwrapped** figure. Both wrap — the
+session-error banner is `flex-wrap` with a span that does not shrink, so a long
+server message already makes it taller than 28px today. **The figure that holds
+whether or not it wraps is the increment: +16px on a fine pointer, +24px on a
+coarse one.** `UploadQueue`'s `50 → 66/74` is a single-line figure in the same
+way.
+
+`ErrorBanner`'s *unchanged* carries a caveat of the same kind, and it is the
+easier one to miss, because what wraps is not the text. The summary `<span>`
+sets `min-w-0` but no `flex-1`, so what the `flex-wrap` row sizes it by is its
+**max-content** width, and a summary wider than roughly 30 characters at 360px
+puts Details on a flex line of its own. Once it is there it shares no `max()`
+with the 36 / 44px dismiss button, so the line it occupies goes from a 16px line
+box to 36 / 44 and the banner grows by +20px on a fine pointer, +28px on a
+coarse one.
+Which summaries do that is written down rather than open-ended: `Discard
+failed.`, `Delete failed.` and the short sync outcomes stay beside Details; the
+three long strings in `utils/gitSyncMessages.ts` — the diverged pull and the two
+rejected pushes — do not.
+
+One consequence is shared by all nine: the keyboard focus ring now outlines the
+36px box rather than the text inside it. That is inherent to growing the box.
+
+#### Not done: the coarse-pointer walkthrough
+
+**Batch 1 was never looked at on a coarse pointer, or rendered at all.** This
+repository cannot render: Playwright's `headless_shell` is missing
+`libatk-1.0.so.0` and the other system libraries beside it, and installing them
+needs `sudo`. So every height, offset and clearance in this section — and the
+two technique precedents this batch contributed above — is arithmetic over
+`padding + line box`. What *is* machine-checked is the static reading of the
+class lists in `touchTarget.test.ts` and the behavioural assertions in the
+component suites. The walkthrough remains the acceptance criterion, and it
+remains owed.
 
 ## Which event primitive
 

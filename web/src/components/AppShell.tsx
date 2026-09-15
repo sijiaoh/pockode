@@ -523,14 +523,14 @@ function AppShell() {
 					<button
 						type="button"
 						onClick={handleRetryCreateSession}
-						className="shrink-0 underline hover:opacity-80"
+						className="inline-flex min-h-9 shrink-0 items-center rounded px-2 underline pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:opacity-80"
 					>
 						Retry
 					</button>
 					<button
 						type="button"
 						onClick={clearCreateError}
-						className="shrink-0 underline hover:opacity-80"
+						className="inline-flex min-h-9 shrink-0 items-center rounded px-2 underline pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:opacity-80"
 					>
 						Dismiss
 					</button>

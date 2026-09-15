@@ -39,7 +39,7 @@ function ReconnectBanner() {
 				<button
 					type="button"
 					onClick={() => wsActions.retryNow()}
-					className="underline underline-offset-2 hover:opacity-80"
+					className="inline-flex min-h-9 items-center rounded px-2 underline underline-offset-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:opacity-80"
 				>
 					Retry now
 				</button>

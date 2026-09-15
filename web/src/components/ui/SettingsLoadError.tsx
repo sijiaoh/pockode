@@ -22,17 +22,17 @@ export default function SettingsLoadError({ className = "" }: Props) {
 	if (!error) return null;
 
 	return (
-		<p className={`text-xs text-th-error ${className}`} role="alert">
-			Couldn't load settings: {error}{" "}
+		<div className={`text-xs text-th-error ${className}`} role="alert">
+			<p>Couldn't load settings: {error}</p>
 			{refresh && (
 				<button
 					type="button"
 					onClick={() => refresh()}
-					className="underline hover:text-th-text-primary"
+					className="mt-1 inline-flex min-h-9 items-center rounded px-2 underline pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:text-th-text-primary"
 				>
 					Retry
 				</button>
 			)}
-		</p>
+		</div>
 	);
 }

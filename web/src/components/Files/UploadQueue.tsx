@@ -145,7 +145,7 @@ function UploadRow({ item, onReplace, onKeepBoth }: RowProps) {
 								type="button"
 								onClick={() => onReplace(item)}
 								aria-label={`Replace ${item.name}`}
-								className="shrink-0 rounded px-1.5 py-0.5 text-xs text-th-error hover:bg-th-error/10"
+								className="inline-flex min-h-9 shrink-0 items-center justify-center rounded px-2 text-xs text-th-error pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:bg-th-error/10"
 							>
 								Replace
 							</button>
@@ -155,7 +155,7 @@ function UploadRow({ item, onReplace, onKeepBoth }: RowProps) {
 								type="button"
 								onClick={() => onKeepBoth(item)}
 								aria-label={`Keep both copies of ${item.name}`}
-								className="shrink-0 rounded px-1.5 py-0.5 text-xs text-th-accent hover:text-th-accent-hover"
+								className="inline-flex min-h-9 shrink-0 items-center justify-center rounded px-2 text-xs text-th-accent pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:text-th-accent-hover"
 							>
 								Keep both
 							</button>
@@ -167,7 +167,7 @@ function UploadRow({ item, onReplace, onKeepBoth }: RowProps) {
 									type="button"
 									onClick={() => uploadActions.retry(item.id)}
 									aria-label={`Retry ${item.name}`}
-									className="shrink-0 rounded px-1.5 py-0.5 text-xs text-th-accent hover:text-th-accent-hover"
+									className="inline-flex min-h-9 shrink-0 items-center justify-center rounded px-2 text-xs text-th-accent pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:text-th-accent-hover"
 								>
 									Retry
 								</button>
@@ -228,7 +228,7 @@ function UploadQueue({ items, onReplace, onKeepBoth }: Props) {
 					<button
 						type="button"
 						onClick={() => uploadActions.retryFailed()}
-						className="shrink-0 rounded px-1.5 py-0.5 text-xs text-th-accent hover:text-th-accent-hover"
+						className="inline-flex min-h-9 shrink-0 items-center justify-center rounded px-2 text-xs text-th-accent pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:text-th-accent-hover"
 					>
 						Retry failed
 					</button>
