@@ -33,11 +33,7 @@ function CodeBlock({ className, children, node }: CodeProps) {
 	if (language === "mermaid") {
 		return (
 			<Suspense
-				fallback={
-					<div className="flex items-center justify-center p-4 text-th-text-muted">
-						Loading diagram...
-					</div>
-				}
+				fallback={<div className="mermaid-placeholder">Loading diagram...</div>}
 			>
 				<MermaidBlock code={code} />
 			</Suspense>
@@ -47,8 +43,21 @@ function CodeBlock({ className, children, node }: CodeProps) {
 	return <CodeHighlighter language={language}>{code}</CodeHighlighter>;
 }
 
+type ImageProps = ComponentPropsWithoutRef<"img"> & {
+	node?: Element;
+};
+
+// `node` is react-markdown's hast node and must not reach the DOM.
+function MarkdownImage({ node, alt, ...props }: ImageProps) {
+	return (
+		<span className="markdown-image">
+			<img alt={alt ?? ""} {...props} />
+		</span>
+	);
+}
+
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
-const MARKDOWN_COMPONENTS = { code: CodeBlock };
+const MARKDOWN_COMPONENTS = { code: CodeBlock, img: MarkdownImage };
 
 interface MarkdownContentProps {
 	content: string;

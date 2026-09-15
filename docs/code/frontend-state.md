@@ -157,6 +157,36 @@ tree, which is where the answer usually comes from; a stale choice restored
 across restarts would outlive the situation that produced it. See
 [git-ui.md](../git-ui.md#history).
 
+### Why Scroll State Is Neither a Store nor State
+
+The transcript's scroll decisions — whether the tail is being followed, whether
+the last scroll was the user's, the anchor a page is being restored against,
+whether paging has stopped — live in refs inside `MessageList`
+(`web/src/components/Chat/MessageList.tsx`), and that is the exact opposite of
+the reasoning above.
+
+They are not in a store because **they must not outlive the component**. The
+list is keyed by the session id and remounts on every switch, and every one of
+these values describes a view that no longer exists once it does; a store would
+carry "the user had scrolled up" into a session they have not looked at yet.
+Where `gitPanelStore` holds a decision the user made, these hold facts about a
+layout.
+
+They are refs rather than `useState` because **nothing should re-render when
+they change**, and more than that: they are read at moments a render cannot
+reach. The follow intent is read inside a layout effect and inside a
+`ResizeObserver` callback, against the DOM as it is at that instant. A state
+update would deliver the new value a render later — after the frame whose scroll
+position was the whole question — and would reflow the very list being measured.
+
+What is state in that component marks the boundary. Whether the
+scroll-to-bottom button is showing is state because it is something drawn;
+`sentinelArmKey` is state for the less obvious version of the same reason — it
+exists to re-run the effect that observes the paging sentinel, and a re-render
+is the only way to get an effect to run again. Something is state when a render
+has to happen because of it; the rest of this is bookkeeping the render must not
+see.
+
 ## Server Cache vs Store
 
 Not every piece of server data belongs in a store. Data the client fetches

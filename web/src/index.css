@@ -863,6 +863,67 @@ samp {
 	display: block;
 }
 
+/* react-shiki hands back shiki's own <pre class="shiki">, so once highlighting
+ * lands there is a second <pre> nested inside .code-block. `32e9811` moved "the
+ * parent container scrolls, not the library's own box" off `.shiki` and onto
+ * `.code-block`, and reset the inner pre's font-size through `prose-pre:*` — but
+ * margin and overflow were left behind, and the inner pre is in .prose, so
+ * typography's `pre { margin: 1.667em 0; overflow-x: auto }` still reaches it.
+ * The margin is the expensive half: every code block grew ~40px the instant it
+ * was highlighted, against MessageList's AT_BOTTOM_THRESHOLD of 50. */
+.code-block pre {
+	margin: 0;
+	overflow: visible;
+}
+
+/* =============================================================================
+ * ASYNC MEDIA
+ *
+ * Chat scroll decisions (follow-the-tail, history-page anchoring) are measured
+ * on the frame the content commits, so anything that only learns its real size
+ * later must already occupy that space.
+ * ============================================================================= */
+
+:root {
+	/* Reserved for content whose size is unknown until it loads. Roughly a small
+	 * diagram or a screenshot on a phone — big enough that settling is not a jump,
+	 * small enough not to push the rest of the message off screen. */
+	--async-media-height: 12rem;
+}
+
+/* Mermaid arrives in two async steps — the lazy chunk, then mermaid.render() —
+ * and ends as a diagram far taller than a line of text. Both waiting states
+ * hold this box so measurements are not taken against a one-line placeholder. */
+.mermaid-placeholder {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: var(--async-media-height);
+	color: var(--th-text-muted);
+}
+
+/* A markdown image has no intrinsic size until it loads, so the frame keeps a
+ * fixed height and the image sits inside it. Height therefore never changes;
+ * the cost is whitespace around images smaller than the frame. `inline-flex`
+ * rather than `flex` because an image can share a line with text.
+ * The image gives up typography's own `img { margin: 1.714em 0 }` — margins on
+ * a flex item do not collapse and would push it out of the frame. Its
+ * surrounding <p> is what spaces it from the rest of the message. */
+.markdown-image {
+	display: inline-flex;
+	align-items: flex-start;
+	vertical-align: middle;
+	height: var(--async-media-height);
+	max-width: 100%;
+}
+
+.markdown-image img {
+	max-width: 100%;
+	max-height: 100%;
+	width: auto;
+	margin: 0;
+}
+
 /* =============================================================================
  * FILE EDITOR (react-simple-code-editor)
  *
