@@ -88,6 +88,15 @@ type Process struct {
 	// as opposed to pausing it for a permission or question answer. Only
 	// meaningful while state is idle. Guarded by mu; see setIdle.
 	turnEnded bool
+	// promptPending says whether a permission request or question is on screen
+	// with no answer yet, which is one of the things that keeps the idle reaper
+	// off this process (see reapHold). Guarded by mu.
+	//
+	// Its own flag rather than !turnEnded, which is its inverse almost
+	// everywhere: an agent can withdraw a prompt it no longer needs answered
+	// (request_cancelled), and that ends the wait without ending the turn, which
+	// turnEnded correctly goes on reporting.
+	promptPending bool
 	// closed is set when the process is explicitly terminated (Close/Shutdown/reap).
 	// Prevents stale buffered events from emitting state changes (e.g. running/idle)
 	// that would incorrectly interact with the AutoResumer.
@@ -435,6 +444,11 @@ func (m *Manager) runIdleReaper() {
 		}
 	}()
 
+	if m.reapingDisabled() {
+		slog.Info("idle reaper disabled", "idleTimeout", m.idleTimeout)
+		return
+	}
+
 	ticker := time.NewTicker(m.idleTimeout / 4)
 	defer ticker.Stop()
 
@@ -458,17 +472,15 @@ func (m *Manager) reapIdle() {
 // with a synthetic "now" states the elapsed time outright instead of hoping a
 // sleep outlasts a timeout.
 func (m *Manager) reapIdleAsOf(now time.Time) {
+	if m.reapingDisabled() {
+		return
+	}
 	procs := m.removeWhere(func(p *Process) bool {
 		if now.Sub(p.getLastActive()) <= m.idleTimeout {
 			return false
 		}
-		// A process waiting on background work looks exactly like an abandoned
-		// one — that is the whole problem, since the wait produces no events to
-		// refresh lastActive. Reaping it would kill the background tasks the
-		// session is waiting for, so it is spared until the agent gives up on
-		// them (see agent.BackgroundWaiter).
-		if p.waitingForBackgroundWork() {
-			slog.Debug("idle process spared, waiting on background work", "sessionId", p.sessionID)
+		if hold := p.reapHold(); hold != "" {
+			slog.Debug("idle process spared", "sessionId", p.sessionID, "waitingOn", hold)
 			return false
 		}
 		return true
@@ -480,6 +492,85 @@ func (m *Manager) reapIdleAsOf(now time.Time) {
 		// when the events channel closes — no need to emit here.
 		slog.Info("idle process reaped", "sessionId", proc.sessionID)
 	}
+}
+
+// reapingDisabled reports whether the configured idle timeout turns reaping off.
+// A non-positive timeout is an operator saying "never reap", and that is the only
+// reading worth having: read literally it says the opposite, since every process
+// is older than a zero timeout the instant it is created. It is also the reading
+// that keeps time.NewTicker, which panics on a non-positive interval, from ever
+// being handed one.
+func (m *Manager) reapingDisabled() bool {
+	return m.idleTimeout <= 0
+}
+
+// The holds reapHold can report, named so the reaper's log and the tests say the
+// same words the code does.
+const (
+	holdBackgroundWork = "background work"
+	holdTurnInProgress = "a turn in progress"
+	holdUserAnswer     = "a user answer"
+)
+
+// reapHold names what this process is still in the middle of, or "" when it is
+// in the middle of nothing and the reaper may collect it. It is the whole answer
+// to "is this process actually idle?", because lastActive is not: silence is the
+// normal condition of a wait, so a process going quiet says "abandoned" and
+// "busy" in exactly the same words. Each hold below is a case where reaping
+// would destroy the thing being waited on.
+//
+// None of them has a time budget. A build can outrun any timeout, a person
+// certainly can, and a hold that expires is a hold that does not work; what ends
+// each of them is the session itself moving on.
+//
+// The three are read one after another rather than under one lock. A process
+// that changes hold mid-check is one the reaper simply visits again a tick
+// later, and the alternative is reaching into the agent session while holding
+// the process lock.
+//
+// Order is most specific first, which usually decides only which name gets
+// logged: a prompt normally pauses the turn it was raised in, and a background
+// wait is a turn deliberately held open, so the turn check would catch either
+// one as well. Reaching that check on its own means the agent is simply busy.
+//
+// "Usually" is doing real work there, and none of these checks is a nicer label
+// for something a later one would catch regardless. A prompt raised after its
+// turn has already reported an end has no turn in progress behind it, so it is
+// held by the first check alone; drop that check as redundant and the reaper
+// collects a session with a live prompt on screen (there is a test for exactly
+// that state). Assume the same of the others before deleting one.
+func (p *Process) reapHold() string {
+	// Reaping a prompt answers the agent's question by killing it: the user
+	// comes back to a dead session and a card that can no longer be answered,
+	// because only the process that raised a prompt can take its answer. This
+	// hold stops being needed the day that stops being true
+	// (docs/code/agent-integration.md, "A Prompt Belongs to the Process That
+	// Raised It").
+	if p.awaitingUserAnswer() {
+		return holdUserAnswer
+	}
+	// Reaping this kills the background tasks the session is waiting for. The
+	// hold ends when the agent gives up on them (see agent.BackgroundWaiter).
+	if p.waitingForBackgroundWork() {
+		return holdBackgroundWork
+	}
+	// The agent is off doing something that produces no events — a build, a test
+	// run, a long tool call — and reaping it throws that work away mid-flight. A
+	// turn that has ended reports it (see setIdle), so requiring the report is
+	// what keeps "quiet" from passing for "done".
+	if p.turnInProgress() {
+		return holdTurnInProgress
+	}
+	return ""
+}
+
+// turnInProgress reports whether this process still owes the end of a turn.
+// Ending one is reported (setIdle), so anything short of that report — running,
+// or an idle that only paused the turn — is a turn still under way.
+func (p *Process) turnInProgress() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.state != ProcessStateIdle || !p.turnEnded
 }
 
 // SendMessage sends a message to the agent and sets running state.
@@ -508,6 +599,28 @@ func (p *Process) SendInterrupt() error {
 func (p *Process) waitingForBackgroundWork() bool {
 	waiter, ok := p.agentSession.(agent.BackgroundWaiter)
 	return ok && waiter.WaitingForBackgroundWork()
+}
+
+// awaitingUserAnswer reports whether a permission request or a question is
+// waiting for an answer that only a person can give.
+//
+// Not the same question as turnInProgress, in both directions: a withdrawn
+// prompt ends this wait while the turn runs on, and a prompt raised after a turn
+// has already reported its end leaves an answer outstanding with no turn behind
+// it. See promptPending.
+func (p *Process) awaitingUserAnswer() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.promptPending
+}
+
+// clearPendingPrompt records that the prompt the process was waiting on is gone,
+// for the case where nothing else says so: the agent withdrawing it leaves the
+// turn running, so no idle follows to clear the wait.
+func (p *Process) clearPendingPrompt() {
+	p.mu.Lock()
+	p.promptPending = false
+	p.mu.Unlock()
 }
 
 func (p *Process) touch() {
@@ -540,6 +653,9 @@ func (p *Process) SetRunning() {
 		return
 	}
 	p.state = ProcessStateRunning
+	// A prompt is only ever pending while idle, so leaving idle ends the wait.
+	// This is the path an answer takes (see SendQuestionResponse).
+	p.promptPending = false
 	p.mu.Unlock()
 
 	p.manager.emitStateChange(p.sessionID, ProcessStateRunning, false)
@@ -572,6 +688,10 @@ func (p *Process) setIdle(needsInput, interrupted bool) {
 	}
 
 	p.mu.Lock()
+	// Before the early return, which skips a redundant *emission*, not the
+	// bookkeeping: a second prompt raised while the first one is still on screen
+	// says nothing new downstream but is still a prompt waiting to be answered.
+	p.promptPending = needsInput
 	if p.state == ProcessStateIdle && (p.turnEnded || needsInput) {
 		p.mu.Unlock()
 		return
@@ -629,6 +749,10 @@ func (p *Process) streamEvents(ctx context.Context) {
 		seq, err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event))
 		if err != nil {
 			log.Error("failed to append to history", "error", err)
+		}
+
+		if eventType == agent.EventTypeRequestCancelled {
+			p.clearPendingPrompt()
 		}
 
 		if eventType.AwaitsUserInput() {

@@ -1,9 +1,12 @@
 package process
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -492,6 +495,66 @@ func TestManager_IdleReaper(t *testing.T) {
 	}
 }
 
+// A zero timeout means "never reap", and saying so takes a guard: taken
+// literally it means the opposite, since every process is older than a zero
+// timeout the moment it exists — and it panics time.NewTicker on the way, which
+// the reaper's own recover would turn into a silently dead goroutine rather than
+// a crash anyone notices.
+func TestManager_IdleReaper_ZeroTimeoutTurnsReapingOff(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 0)
+	defer m.Shutdown()
+
+	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+
+	m.reapIdleAsOf(time.Now().Add(100 * testIdleTimeout))
+	if m.GetProcess("sess-1") == nil {
+		t.Error("process reaped although a zero timeout turns reaping off")
+	}
+
+	// Run the loop on this goroutine: its recover swallows the ticker panic, so
+	// the log is the only place the crash would surface.
+	logged := captureLogs(t, m.runIdleReaper)
+	if strings.Contains(logged, "idle reaper crashed") {
+		t.Errorf("idle reaper crashed on a zero timeout:\n%s", logged)
+	}
+}
+
+// captureLogs runs fn with the default logger redirected, and returns what it
+// wrote. The panic logger writes through slog, so this is how a test sees a
+// panic that was recovered.
+func captureLogs(t *testing.T, fn func()) string {
+	t.Helper()
+	var sink lockedBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&sink, nil)))
+	defer slog.SetDefault(previous)
+	fn()
+	return sink.String()
+}
+
+// lockedBuffer is captureLogs' sink. Redirecting the default logger redirects
+// every goroutine's logging, not just fn's — the manager's own background
+// goroutines keep writing throughout — so the sink has to tolerate writers the
+// test never started.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // A background wait produces no events for as long as it lasts, so the reaper's
 // only measure of liveness says the process is abandoned exactly when killing it
 // would destroy the work being waited for.
@@ -745,7 +808,12 @@ func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
 		t.Error("expected process to not be closed while streaming events")
 	}
 
-	// And once the stream goes quiet the process must be reaped again.
+	// And once the turn those events belonged to is over, the process must be
+	// reaped again. Ending it is not incidental: a stream going quiet mid-turn
+	// is a process still working, and the reaper leaves that alone.
+	mock.session(t, "sess-1").emit(t, agent.DoneEvent{})
+	waitUntil(t, "the turn to end", func() bool { return proc.reapHold() == "" })
+
 	m.reapIdleAsOf(time.Now().Add(2 * testIdleTimeout))
 	if m.GetProcess("sess-1") != nil {
 		t.Error("expected process to be reaped once the stream went quiet")
@@ -943,5 +1011,247 @@ func TestForkAgentSession_AgentThatCannotFork(t *testing.T) {
 	}
 	if carried {
 		t.Error("carried = true on a failure")
+	}
+}
+
+// TestManager_IdleReaper_SparesATurnInProgress is the reaper's most expensive
+// mistake to make. A turn can run for minutes without producing a single event —
+// one Bash call around a build or a test suite is enough — and lastActive cannot
+// tell that apart from a session nobody came back to. Reaping it kills the build
+// and throws away the turn, so the turn has to report that it ended before the
+// clock is allowed to mean anything.
+func TestManager_IdleReaper_SparesATurnInProgress(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
+	defer m.Shutdown()
+
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	sess := mock.session(t, "sess-1")
+
+	if err := proc.SendMessage("run the build"); err != nil {
+		t.Fatalf("failed to send the message that starts the turn: %v", err)
+	}
+
+	// No events at all from here on: that is exactly what a long tool call looks
+	// like from outside, and how long it lasts is not the reaper's business.
+	m.reapIdleAsOf(time.Now().Add(100 * testIdleTimeout))
+	if m.GetProcess("sess-1") == nil {
+		t.Fatal("process reaped while its turn was still running")
+	}
+
+	// The turn ending is what hands the process back to the clock.
+	sess.emit(t, agent.DoneEvent{})
+	waitUntil(t, "the turn to end", func() bool { return proc.reapHold() == "" })
+
+	m.reapIdleAsOf(time.Now().Add(2 * testIdleTimeout))
+	if m.GetProcess("sess-1") != nil {
+		t.Error("expected process to be reaped once the turn had ended and gone quiet")
+	}
+}
+
+// TestManager_IdleReaper_SparesAnUnansweredPrompt pins the two halves of
+// "waiting for a person is not being idle": the pause survives any amount of
+// elapsed time, and it ends when the person answers.
+//
+// Both prompt types are covered because the reaper cannot tell them apart and
+// should not: a permission request is as much a question put to the user as
+// ask_user_question is.
+func TestManager_IdleReaper_SparesAnUnansweredPrompt(t *testing.T) {
+	prompts := map[string]agent.AgentEvent{
+		"question":   agent.AskUserQuestionEvent{RequestID: "req-1", ToolUseID: "tool-1"},
+		"permission": agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash", ToolUseID: "tool-1"},
+	}
+
+	for name, prompt := range prompts {
+		t.Run(name, func(t *testing.T) {
+			store, _ := session.NewFileStore(t.TempDir())
+			mock := &mockAgent{}
+			m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
+			defer m.Shutdown()
+
+			proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+			sess := mock.session(t, "sess-1")
+
+			// A prompt is something an agent raises mid-turn, so the turn has to
+			// be under way for the pause to mean anything.
+			if err := proc.SendMessage("do something"); err != nil {
+				t.Fatalf("failed to send the message that starts the turn: %v", err)
+			}
+			sess.emit(t, prompt)
+			waitUntil(t, "the turn to pause on the prompt", func() bool {
+				return proc.reapHold() == holdUserAnswer
+			})
+
+			// However long the user takes: the prompt is on screen and still
+			// answerable, so the process behind it has to still be there.
+			m.reapIdleAsOf(time.Now().Add(100 * testIdleTimeout))
+			if m.GetProcess("sess-1") == nil {
+				t.Fatal("process reaped while a prompt was waiting to be answered")
+			}
+
+			answer(t, proc, prompt)
+			waitUntil(t, "the turn to resume", func() bool { return proc.State() == ProcessStateRunning })
+
+			// Answering hands the process to the next hold, not to the clock:
+			// the turn resumes, and a resumed turn is not reapable either. It
+			// has to be that hold and not the prompt's, or the session goes on
+			// reporting a wait on a person who has already answered.
+			if hold := proc.reapHold(); hold != holdTurnInProgress {
+				t.Errorf("hold after answering = %q, want %q", hold, holdTurnInProgress)
+			}
+
+			// And with the prompt gone, nothing but the ordinary clock is left:
+			// once the turn the answer resumed is over and has gone quiet, the
+			// process is reaped like any other.
+			sess.emit(t, agent.DoneEvent{})
+			waitUntil(t, "the turn to end", func() bool { return proc.reapHold() == "" })
+
+			m.reapIdleAsOf(time.Now().Add(2 * testIdleTimeout))
+			if m.GetProcess("sess-1") != nil {
+				t.Error("expected process to be reaped once the answered turn went quiet")
+			}
+		})
+	}
+}
+
+// answer replies to a prompt the way chat.Client does, through the process
+// method that matches it — including the Touch that counts the reply as
+// activity.
+func answer(t *testing.T, p *Process, prompt agent.AgentEvent) {
+	t.Helper()
+	p.manager.Touch(p.sessionID)
+	var err error
+	switch prompt.(type) {
+	case agent.AskUserQuestionEvent:
+		err = p.SendQuestionResponse(agent.QuestionRequestData{RequestID: "req-1"}, map[string]string{"q": "a"})
+	case agent.PermissionRequestEvent:
+		err = p.SendPermissionResponse(agent.PermissionRequestData{RequestID: "req-1"}, agent.PermissionAllow)
+	default:
+		t.Fatalf("no answer for prompt %T", prompt)
+	}
+	if err != nil {
+		t.Fatalf("failed to answer the prompt: %v", err)
+	}
+}
+
+// TestManager_IdleReaper_DropsThePromptHoldWhenNobodyCanAnswer covers the two
+// ways a prompt stops waiting on the user without being answered. Neither may
+// leave the hold behind: a process held on a prompt that no longer exists is
+// never reaped at all, since nothing left in the session will clear it.
+//
+// The assertion is on the hold rather than on reaping, because the two endings
+// differ in what they leave behind and because every way of driving the reaper
+// to a decision here — ending the turn — clears the same flag under test.
+func TestManager_IdleReaper_DropsThePromptHoldWhenNobodyCanAnswer(t *testing.T) {
+	// Withdrawal is the case the flag exists for. The turn keeps running through
+	// it, so no idle follows to end the wait, and the turn is what holds the
+	// process afterwards. An interrupt ends the turn outright and leaves nothing.
+	endings := map[string]struct {
+		event     agent.AgentEvent
+		holdAfter string
+	}{
+		"the agent withdraws it": {agent.RequestCancelledEvent{RequestID: "req-1"}, holdTurnInProgress},
+		"the user interrupts":    {agent.InterruptedEvent{}, ""},
+	}
+
+	for name, ending := range endings {
+		t.Run(name, func(t *testing.T) {
+			store, _ := session.NewFileStore(t.TempDir())
+			mock := &mockAgent{}
+			m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
+			defer m.Shutdown()
+
+			proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+			sess := mock.session(t, "sess-1")
+
+			if err := proc.SendMessage("do something"); err != nil {
+				t.Fatalf("failed to send the message that starts the turn: %v", err)
+			}
+			sess.emit(t, agent.AskUserQuestionEvent{RequestID: "req-1", ToolUseID: "tool-1"})
+			waitUntil(t, "the turn to pause on the prompt", func() bool {
+				return proc.reapHold() == holdUserAnswer
+			})
+
+			sess.emit(t, ending.event)
+			waitUntil(t, "the prompt to stop holding the process", func() bool {
+				return proc.reapHold() == ending.holdAfter
+			})
+		})
+	}
+}
+
+// A second prompt raised while the turn is still paused says nothing new
+// downstream, so the state change is suppressed — but the wait it creates is
+// real. Reached by withdrawing the first prompt and asking for something else
+// without the turn resuming in between.
+func TestManager_IdleReaper_SparesAPromptRaisedWhileAlreadyPaused(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
+	defer m.Shutdown()
+
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	sess := mock.session(t, "sess-1")
+
+	if err := proc.SendMessage("do something"); err != nil {
+		t.Fatalf("failed to send the message that starts the turn: %v", err)
+	}
+	sess.emit(t, agent.AskUserQuestionEvent{RequestID: "req-1", ToolUseID: "tool-1"})
+	waitUntil(t, "the turn to pause on the first prompt", func() bool {
+		return proc.reapHold() == holdUserAnswer
+	})
+
+	sess.emit(t, agent.RequestCancelledEvent{RequestID: "req-1"})
+	waitUntil(t, "the first prompt to stop holding the process", func() bool {
+		return proc.reapHold() != holdUserAnswer
+	})
+
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-2", ToolName: "Bash", ToolUseID: "tool-2"})
+	waitUntil(t, "the turn to pause on the second prompt", func() bool {
+		return proc.reapHold() == holdUserAnswer
+	})
+
+	m.reapIdleAsOf(time.Now().Add(2 * testIdleTimeout))
+	if m.GetProcess("sess-1") == nil {
+		t.Error("process reaped while a second prompt was waiting to be answered")
+	}
+}
+
+// A prompt does not always pause a turn: one raised after the turn has already
+// reported its end leaves an answer outstanding with no turn behind it. That is
+// the only state in which the prompt hold is the sole thing keeping the process
+// alive — everywhere else the turn hold would cover for it — so it is the state
+// that decides whether that hold is a real check or just a nicer log line.
+func TestManager_IdleReaper_SparesAPromptRaisedAfterTheTurnEnded(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
+	defer m.Shutdown()
+
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	sess := mock.session(t, "sess-1")
+
+	if err := proc.SendMessage("do something"); err != nil {
+		t.Fatalf("failed to send the message that starts the turn: %v", err)
+	}
+	// The turn ends first, which is what makes this case different: from here on
+	// nothing is in progress.
+	sess.emit(t, agent.DoneEvent{})
+	waitUntil(t, "the turn to end", func() bool { return proc.reapHold() == "" })
+
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash", ToolUseID: "tool-1"})
+	// Waited on through the flag rather than through reapHold, so that the
+	// assertion below is what reports a missing hold. Waiting for the hold's
+	// *name* would time out first and pin only the label, which is how the rest
+	// of these tests miss the one consequence that costs a session.
+	waitUntil(t, "the prompt to register", func() bool { return proc.awaitingUserAnswer() })
+	if proc.turnInProgress() {
+		t.Fatal("precondition: no turn may be in progress, or the turn hold would cover for the prompt hold")
+	}
+
+	m.reapIdleAsOf(time.Now().Add(100 * testIdleTimeout))
+	if m.GetProcess("sess-1") == nil {
+		t.Error("process reaped although a prompt was still waiting to be answered")
 	}
 }
