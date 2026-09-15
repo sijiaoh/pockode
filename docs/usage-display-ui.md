@@ -354,9 +354,9 @@ below is a state of the Usage section inside the panel.
 | Session was forked (`forked_from` present) | One muted sub-line under the total: `Since this session was forked.` — including when the total is the empty line, which is when the copied history on screen behind the panel makes it easiest to misread |
 
 The missing-window row is defensive, not common: both shipped CLIs do report one
-(`modelUsage.contextWindow` on Claude, `info.model_context_window` on Codex, per
-`server/agent/*/usage.go`). It is defined anyway, because a CLI version that stops
-reporting it must not take the rest of the panel down with it.
+(`modelUsage.contextWindow` on Claude, `tokenUsage.modelContextWindow` on Codex,
+per `server/agent/*/usage.go`). It is defined anyway, because a CLI version that
+stops reporting it must not take the rest of the panel down with it.
 
 The empty line is the price of a permanent button, and it is the right price: an
 empty panel would read as a broken one, and `0` figures would claim the agent

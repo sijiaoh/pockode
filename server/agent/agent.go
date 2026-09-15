@@ -109,8 +109,10 @@ type Session interface {
 	Events() <-chan AgentEvent
 
 	// SendMessage sends a new message to the agent. Callers may send before the
-	// current turn has ended; what happens then is up to the CLI (Claude queues
-	// the message, Codex aborts the running turn and replaces it).
+	// current turn has ended; what happens then is up to the CLI. Claude queues
+	// the message; Codex steers the running turn with it, so the two messages
+	// share one turn and therefore one ending (verified on codex-cli 0.153.0 —
+	// the second turn/start returns the id of the turn already running).
 	SendMessage(prompt string) error
 
 	// SendPermissionResponse sends a permission response to the agent.
@@ -122,6 +124,16 @@ type Session interface {
 
 	// SendInterrupt sends an interrupt signal to stop the current task.
 	// This is a soft stop that preserves the session for future messages.
+	//
+	// Returning is not the stop landing: the InterruptedEvent on Events is what
+	// says the turn ended.
+	//
+	// A stop may arrive before the CLI has said a turn is under way, and an
+	// implementation must not drop it for that: the user pressed stop, and a
+	// stop that goes nowhere leaves the work running with nothing to say so.
+	// What this costs varies. Claude's interrupt names no turn, so there is
+	// nothing to wait for; Codex's has to name one, and holds the stop until the
+	// turn tells it its id (see codex.appSession.SendInterrupt).
 	SendInterrupt() error
 
 	// Close terminates the agent process and releases resources.

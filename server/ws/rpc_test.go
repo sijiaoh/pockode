@@ -760,7 +760,7 @@ func TestHandler_FailedFirstTurn_KeepsAgentTypeSwitchable(t *testing.T) {
 		t.Errorf("expected agent type change to be allowed, got %s", resp.Error.Message)
 	}
 
-	// The failed turn's process can still be alive — Codex's mcp-server outlives
+	// The failed turn's process can still be alive — Codex's app-server outlives
 	// a turn it could not run. Reusing it would send the next message to the
 	// agent the user just switched away from.
 	if env.getMainWorktree().ProcessManager.HasProcess("failed-session") {

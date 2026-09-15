@@ -9,14 +9,18 @@ import (
 )
 
 // usageObserver reads the token and context-window figures out of Codex's
-// `token_count` events and feeds them to the accumulator.
+// `thread/tokenUsage/updated` notifications and feeds them to the accumulator.
 //
 // Where the numbers come from, on codex-cli 0.153.0:
 //
-//   - `info.total_token_usage` — the thread's totals so far. Codex emits a
-//     token_count event during a turn as well as at the end of one, so these
-//     arrive more often than once per turn; taking deltas makes that harmless.
-//   - `info.last_token_usage` — one API request's own figures, not the turn's.
+//   - `tokenUsage.total` — the totals so far. Codex sends this notification
+//     during a turn as well as at the end of one, so they arrive more often
+//     than once per turn; taking deltas makes that harmless. The count is per
+//     process: it starts again from zero when a thread is resumed (measured —
+//     two turns in one process ran 16721 -> 33458, and a resume began afresh),
+//     which is the same per-process semantics agent.UsageAccumulator is built
+//     for.
+//   - `tokenUsage.last` — one API request's own figures, not the turn's.
 //     Its input_tokens is the size of the prompt that request sent, and so the
 //     only report of how large the conversation currently is. Measured on a turn
 //     that made six tool calls, i.e. seven requests: the input count in the
@@ -25,18 +29,16 @@ import (
 //     that had grown by one tool's output. Reading the totals as a context level
 //     would therefore multiply the level by the number of requests in the turn,
 //     which is the bug a Claude session showed as 904% of its window.
-//   - `info.model_context_window` — the window that prompt has to fit in.
+//   - `tokenUsage.modelContextWindow` — the window that prompt has to fit in.
 //   - No cost, ever. Codex reports rate limits, plan type and a credit balance
 //     and never a price, so a Codex session stores no cost (see session.Usage).
 //
-// `info` is optional in the event: a token_count carrying only `rate_limits`
-// says nothing about usage and is skipped.
-//
-// Compaction emits a token_count of its own, and it measured no request: every
-// field of last_token_usage is zero except total_tokens, which carries Codex's
+// Compaction emits a usage update of its own, and it measured no request: every
+// field of `last` is zero except totalTokens, which carries Codex's
 // estimate of the compacted history (6140, in a thread run against an 18000
 // token window until it compacted itself, whose next real request then measured
-// a prompt of 12616). Reporting zero is right for it — the store
+// a prompt of 12616; measured on the MCP channel, whose figures these are the
+// renamed form of). Reporting zero is right for it — the store
 // reads a zero context level as "not reported in this frame" and keeps the last
 // real measurement, so the reading falls once, when the next request measures
 // it, rather than dipping to a number no prompt ever had and bouncing back.
@@ -69,13 +71,13 @@ func newUsageObserver(log *slog.Logger, opts agent.StartOptions) *usageObserver 
 // differs on: input_tokens is the whole prompt with the cached tokens included,
 // where session.TokenUsage counts them separately.
 type codexTokenUsage struct {
-	InputTokens           int64 `json:"input_tokens"`
-	CachedInputTokens     int64 `json:"cached_input_tokens"`
-	CacheWriteInputTokens int64 `json:"cache_write_input_tokens"`
-	OutputTokens          int64 `json:"output_tokens"`
+	InputTokens           int64 `json:"inputTokens"`
+	CachedInputTokens     int64 `json:"cachedInputTokens"`
+	CacheWriteInputTokens int64 `json:"cacheWriteInputTokens"`
+	OutputTokens          int64 `json:"outputTokens"`
 	// TotalTokens is Codex's own sum, kept only to check the arithmetic below
 	// against it. See usageObserver.checkTotal.
-	TotalTokens int64 `json:"total_tokens"`
+	TotalTokens int64 `json:"totalTokens"`
 }
 
 // normalize converts to Pockode's convention by taking the cached and the
@@ -110,31 +112,38 @@ func (u codexTokenUsage) normalize() session.TokenUsage {
 	}
 }
 
-// observe handles one token_count event.
-func (o *usageObserver) observe(raw json.RawMessage) {
-	var event struct {
-		Info *struct {
-			TotalTokenUsage    codexTokenUsage `json:"total_token_usage"`
-			LastTokenUsage     codexTokenUsage `json:"last_token_usage"`
-			ModelContextWindow int64           `json:"model_context_window"`
-		} `json:"info"`
+// observe handles one thread/tokenUsage/updated notification.
+func (o *usageObserver) observe(params json.RawMessage) {
+	var notif struct {
+		TokenUsage struct {
+			Total              codexTokenUsage `json:"total"`
+			Last               codexTokenUsage `json:"last"`
+			ModelContextWindow int64           `json:"modelContextWindow"`
+		} `json:"tokenUsage"`
 	}
-	if err := json.Unmarshal(raw, &event); err != nil {
-		o.log.Warn("failed to parse token_count", "error", err)
-		return
-	}
-	if event.Info == nil {
+	if err := json.Unmarshal(params, &notif); err != nil {
+		o.log.Warn("failed to parse thread/tokenUsage/updated", "error", err)
 		return
 	}
 
-	total := event.Info.TotalTokenUsage.normalize()
-	o.checkTotal(event.Info.TotalTokenUsage, total)
+	if notif.TokenUsage.Total.TotalTokens == 0 {
+		// A frame that reports no consumption at all: nothing has been spent, so
+		// there is nothing to add and no prompt whose size could be the context
+		// level. Skipped rather than reported as zeros, because zeros are also
+		// what a frame whose shape we misread produces — and feeding those to
+		// the accumulator trips its "usage went backwards" warning, which exists
+		// to catch a real counter reset.
+		return
+	}
+
+	total := notif.TokenUsage.Total.normalize()
+	o.checkTotal(notif.TokenUsage.Total, total)
 
 	o.accumulator.Report(
 		total,
 		nil,
-		event.Info.LastTokenUsage.InputTokens,
-		event.Info.ModelContextWindow,
+		notif.TokenUsage.Last.InputTokens,
+		notif.TokenUsage.ModelContextWindow,
 	)
 }
 

@@ -361,9 +361,14 @@ export function isRPCTimeout(error: unknown): boolean {
 	);
 }
 
-// Where: server/agent/codex/codex.go's versionProbeTimeout (10s) and
-// handshakeTimeout (30s), which run in series inside codex.Start.
-const CODEX_START_BUDGET_MS = 10000 + 30000;
+// Where: server/agent/codex/codex.go's supportProbeTimeout (10s) and
+// startupTimeout (45s), which run in series inside codex.Start. The second one
+// covers the app-server handshake *and* opening the session's thread. No model
+// latency is involved, but that is not the same as local work: those two steps
+// were measured at 11-19s together on codex-cli 0.153.0, and the CLI reaches the
+// network during them. See the budget comment in codex.go before changing either
+// number - they have to move together.
+const CODEX_START_BUDGET_MS = 10000 + 45000;
 
 /**
  * Timeout for the RPCs that are given room to wait out an agent CLI start:
@@ -375,8 +380,8 @@ const CODEX_START_BUDGET_MS = 10000 + 30000;
  * (permission, question, interrupt) keep RPC_TIMEOUT_MS.
  *
  * Why it must exceed CODEX_START_BUDGET_MS: the server ends a hung start with an
- * error naming the step that stalled ("codex did not answer the MCP handshake
- * within 30s"). Give up before that error is written and the user gets
+ * error naming the step that stalled ("codex did not open a thread within
+ * 45s"). Give up before that error is written and the user gets
  * "Request timed out" instead — every time, not occasionally, since the two
  * deadlines are fixed. The extra margin covers what those two constants don't:
  * spawning the process and building its pipes, the file writes a request makes

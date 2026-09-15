@@ -2,8 +2,35 @@ import { DiffFile } from "@git-diff-view/react";
 import { describe, expect, it } from "vitest";
 import { parseCodexChanges } from "./codexChanges";
 
-// Captured from codex-cli 0.153.0 `patch_apply_begin` events. Paths arrive
-// absolute, and the key order is neither the prompt order nor sorted.
+// Captured from codex-cli 0.153.0 `item/started` fileChange items: the shape
+// the app-server channel sends. Paths arrive absolute, `diff` is the whole file
+// for an add and for a delete, and hunks without a header for an update.
+const ARRAY_MIXED = [
+	{
+		path: "/tmp/w/keep.txt",
+		kind: { type: "update", move_path: "/tmp/w/renamed.txt" },
+		diff: "@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n",
+	},
+	{ path: "/tmp/w/added.txt", kind: { type: "add" }, diff: "hello\nworld\n" },
+	{ path: "/tmp/w/doomed.txt", kind: { type: "delete" }, diff: "bye\n" },
+];
+
+const ARRAY_PLAIN_UPDATE = [
+	{
+		path: "/tmp/w/m.txt",
+		kind: { type: "update", move_path: null },
+		diff: "@@ -1 +1 @@\n-a\n+b\n",
+	},
+];
+
+const ARRAY_EMPTY_ADD = [
+	{ path: "/tmp/w/empty.txt", kind: { type: "add" }, diff: "" },
+];
+
+// Captured from codex-cli 0.153.0 `patch_apply_begin` events, the shape the MCP
+// channel sent. Records written before Pockode moved channels still hold it, and
+// history is replayed from those records. Paths arrive absolute, and the key
+// order is neither the prompt order nor sorted.
 const MIXED = {
 	"/tmp/w/keep.txt": {
 		type: "update",
@@ -50,6 +77,9 @@ const AT_AT_CONTENT = {
 };
 
 const ALL_FIXTURES = {
+	ARRAY_MIXED,
+	ARRAY_PLAIN_UPDATE,
+	ARRAY_EMPTY_ADD,
 	MIXED,
 	EMPTY_ADD,
 	PURE_RENAME,
@@ -59,6 +89,20 @@ const ALL_FIXTURES = {
 };
 
 describe("parseCodexChanges", () => {
+	// The shape the app-server channel sends. It carries the same three facts
+	// under different names, so it must produce exactly what the map shape does.
+	it("reads the array shape the same way as the map shape", () => {
+		expect(parseCodexChanges({ changes: ARRAY_MIXED })).toEqual(
+			parseCodexChanges({ changes: MIXED }),
+		);
+		expect(parseCodexChanges({ changes: ARRAY_PLAIN_UPDATE })).toEqual(
+			parseCodexChanges({ changes: PLAIN_UPDATE }),
+		);
+		expect(parseCodexChanges({ changes: ARRAY_EMPTY_ADD })).toEqual(
+			parseCodexChanges({ changes: EMPTY_ADD }),
+		);
+	});
+
 	it("maps the three variants to statuses, sorted by path", () => {
 		const changes = parseCodexChanges({ changes: MIXED });
 
@@ -147,6 +191,13 @@ describe("parseCodexChanges", () => {
 		expect(parseCodexChanges({ file_path: "/tmp/w/a.txt" })).toBeNull();
 		expect(parseCodexChanges({ changes: {} })).toBeNull();
 		expect(parseCodexChanges({ changes: { "/tmp/w/a.txt": {} } })).toBeNull();
+		expect(parseCodexChanges({ changes: [] })).toBeNull();
+		expect(
+			parseCodexChanges({ changes: [{ path: "/tmp/w/a.txt" }] }),
+		).toBeNull();
+		expect(
+			parseCodexChanges({ changes: [{ kind: { type: "add" }, diff: "x" }] }),
+		).toBeNull();
 		expect(parseCodexChanges(null)).toBeNull();
 	});
 });

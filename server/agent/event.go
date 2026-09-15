@@ -189,8 +189,9 @@ type AgentEvent interface {
 
 type TextEvent struct {
 	Content string
-	// ProviderMessageID names the agent message this text came out of, when the
-	// agent gives its messages ids. See EventRecord.ProviderMessageID.
+	// ProviderMessageID names the part of the agent's own conversation this text
+	// came out of, when the agent puts ids on them. See
+	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
 }
 
@@ -205,8 +206,9 @@ type ToolCallEvent struct {
 	ToolName  string
 	ToolInput json.RawMessage
 	ToolUseID string
-	// ProviderMessageID names the agent message this call came out of, when the
-	// agent gives its messages ids. See EventRecord.ProviderMessageID.
+	// ProviderMessageID names the part of the agent's own conversation this call
+	// came out of, when the agent puts ids on them. See
+	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
 }
 
@@ -229,8 +231,9 @@ type ToolResultEvent struct {
 	// IsError reports that the tool call failed. Best-effort: only set when the
 	// agent CLI says so, never inferred from the result text.
 	IsError bool
-	// ProviderMessageID names the agent message this result came out of, when
-	// the agent gives its messages ids. See EventRecord.ProviderMessageID.
+	// ProviderMessageID names the part of the agent's own conversation this
+	// result came out of, when the agent puts ids on them. See
+	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
 }
 
