@@ -293,7 +293,7 @@ func TestHandleProcessStateChange_IdleNoNeedsInput_NoSync(t *testing.T) {
 	}
 }
 
-func TestHandleProcessStateChange_Running_DoesNotClearNeedsInput(t *testing.T) {
+func TestHandleProcessStateChange_Running_KeepsNeedsInput(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
@@ -304,7 +304,7 @@ func TestHandleProcessStateChange_Running_DoesNotClearNeedsInput(t *testing.T) {
 		State:     process.ProcessStateRunning,
 	})
 
-	// Running should NOT clear needs_input — that is done by user events via ClearNeedsInput.
+	// Running should NOT clear needs_input — that is done by user events via HandleUserAction.
 	if len(store.needsInputCalls) != 0 {
 		t.Errorf("expected no SetNeedsInput calls on Running, got %d", len(store.needsInputCalls))
 	}
@@ -313,7 +313,13 @@ func TestHandleProcessStateChange_Running_DoesNotClearNeedsInput(t *testing.T) {
 	}
 }
 
-func TestHandleProcessStateChange_Ended_ClearsNeedsInputAndSyncsWork(t *testing.T) {
+// A dead process clears the session's own flag but must not touch the work item.
+// The work syncer's resume branch moves needs_input and waiting back to
+// in_progress, and the AutoResumer's process-ended stop — which runs a moment
+// later on the same event — stops in_progress work. Calling the syncer here
+// chains the two together, so every paused work ends up stopped as soon as its
+// process dies, which the idle reaper guarantees it eventually will.
+func TestHandleProcessStateChange_Ended_ClearsSessionFlagButNotTheWork(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
@@ -332,12 +338,8 @@ func TestHandleProcessStateChange_Ended_ClearsNeedsInputAndSyncsWork(t *testing.
 		t.Errorf("expected SetNeedsInput(sess-1, false), got %+v", store.needsInputCalls[0])
 	}
 
-	// Work syncer must be called to clear needs_input
-	if len(syncer.calls) != 1 {
-		t.Fatalf("expected 1 sync call, got %d", len(syncer.calls))
-	}
-	if syncer.calls[0].SessionID != "sess-1" || syncer.calls[0].NeedsInput {
-		t.Errorf("unexpected call: %+v", syncer.calls[0])
+	if len(syncer.calls) != 0 {
+		t.Errorf("a dead process must not resume its work item, got %d sync calls", len(syncer.calls))
 	}
 }
 
@@ -402,13 +404,13 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 	}
 }
 
-func TestClearNeedsInput_ClearsStoreAndSyncsWork(t *testing.T) {
+func TestHandleUserAction_ClearsStoreAndResumesWork(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
 	w.SetWorkNeedsInputSyncer(syncer)
 
-	w.ClearNeedsInput("sess-1")
+	w.HandleUserAction("sess-1")
 
 	if len(store.needsInputCalls) != 1 {
 		t.Fatalf("expected 1 SetNeedsInput call, got %d", len(store.needsInputCalls))
@@ -425,12 +427,12 @@ func TestClearNeedsInput_ClearsStoreAndSyncsWork(t *testing.T) {
 	}
 }
 
-func TestClearNeedsInput_NoSyncer_NoPanic(t *testing.T) {
+func TestHandleUserAction_NoSyncer_NoPanic(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 
 	// No syncer set — should not panic
-	w.ClearNeedsInput("sess-1")
+	w.HandleUserAction("sess-1")
 
 	if len(store.needsInputCalls) != 1 {
 		t.Fatalf("expected 1 SetNeedsInput call, got %d", len(store.needsInputCalls))
