@@ -173,7 +173,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `--work` | | `.` | 工作目录 |
 | `--data` | | `<work>/.pockode` | 数据目录 |
 | `--dev` | | `false` | 开发模式（启用时不 serve 静态文件） |
-| `--idle-timeout` | | `8h` | 空闲超时时间 |
+| `--idle-timeout` | | `5m` | 空闲超时时间（`0` 表示关闭回收） |
 | `--relay` | | `true` | 启用 relay 远程访问（`-relay=false` 禁用） |
 | `--relay-frontend-port` | | 同 server port | Relay 转发前端请求的目标端口 |
 | `--cloud-url` | | `https://cloud.pockode.com` | 云服务器 URL |
