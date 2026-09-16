@@ -136,6 +136,8 @@ func (h *clusterRPCHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req
 		h.handleNodeStart(ctx, conn, req)
 	case "node.stop":
 		h.handleNodeStop(ctx, conn, req)
+	case "node.cleanup":
+		h.handleNodeCleanup(ctx, conn, req)
 	default:
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeMethodNotFound, "method not found")
 	}
@@ -220,6 +222,10 @@ type NodeStartParams struct {
 }
 
 type NodeStopParams struct {
+	ID string `json:"id"`
+}
+
+type NodeCleanupParams struct {
 	ID string `json:"id"`
 }
 
@@ -490,5 +496,46 @@ func (h *clusterRPCHandler) handleNodeStop(ctx context.Context, conn *jsonrpc2.C
 	status := h.processManager.GetNodeStatus(n)
 	if err := conn.Reply(ctx, req.ID, status); err != nil {
 		h.log.Error("failed to send node.stop response", "error", err)
+	}
+}
+
+func (h *clusterRPCHandler) handleNodeCleanup(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params NodeCleanupParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if params.ID == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "id is required")
+		return
+	}
+
+	n, found, err := h.nodeStore.Get(params.ID)
+	if err != nil {
+		h.log.Error("failed to get node", "error", err)
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "internal error")
+		return
+	}
+	if !found {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "node not found")
+		return
+	}
+
+	if err := h.processManager.Cleanup(n); err != nil {
+		if errors.Is(err, node.ErrNodeStillRunning) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "node is still running")
+			return
+		}
+		h.log.Error("failed to clean up node", "error", err, "nodeId", n.ID)
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return
+	}
+
+	h.log.Info("node cleaned up", "nodeId", n.ID)
+
+	status := h.processManager.GetNodeStatus(n)
+	if err := conn.Reply(ctx, req.ID, status); err != nil {
+		h.log.Error("failed to send node.cleanup response", "error", err)
 	}
 }

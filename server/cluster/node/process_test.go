@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/pockode/server/internal/shutdown"
 	"github.com/pockode/server/internal/termtest"
+	"github.com/pockode/server/serverinfo"
 )
 
 // --- processExists ---
@@ -41,13 +43,12 @@ func TestProcessExists_InvalidPID(t *testing.T) {
 	}
 }
 
+// TestProcessExists_NonexistentPID guards the premise every stale-node test is
+// built on: that deadPID is a PID no process on this machine has. It skips
+// rather than fails when that is not true, because a machine with a process at
+// that PID has not broken anything — it has just taken the stand-in away.
 func TestProcessExists_NonexistentPID(t *testing.T) {
-	// Use a very high PID that's unlikely to exist
-	// Note: This test may be flaky on systems with many processes
-	pid := 999999999
-	if processExists(pid) {
-		t.Skipf("PID %d exists on this system, skipping", pid)
-	}
+	requireDeadPID(t)
 }
 
 // --- GetNodeStatus ---
@@ -78,29 +79,13 @@ func TestGetNodeStatus_Stopped(t *testing.T) {
 func TestGetNodeStatus_Running(t *testing.T) {
 	pm := NewProcessManager()
 	nodeDir := t.TempDir()
-	dataDir := filepath.Join(nodeDir, ".pockode")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create server.json with current process PID
-	serverInfo := struct {
-		PID       int    `json:"pid"`
-		Port      int    `json:"port"`
-		StartedAt string `json:"started_at"`
-		LocalURL  string `json:"local_url,omitempty"`
-		RemoteURL string `json:"remote_url,omitempty"`
-	}{
+	writeServerJSON(t, nodeDir, serverinfo.Info{
 		PID:       os.Getpid(),
 		Port:      9870,
 		StartedAt: "2025-06-14T10:00:00Z",
 		LocalURL:  "http://localhost:9870",
 		RemoteURL: "https://example.com",
-	}
-	data, _ := json.Marshal(serverInfo)
-	if err := os.WriteFile(filepath.Join(dataDir, "server.json"), data, 0644); err != nil {
-		t.Fatal(err)
-	}
+	})
 
 	node := Node{
 		ID:   "test-id",
@@ -132,25 +117,11 @@ func TestGetNodeStatus_Running(t *testing.T) {
 func TestGetNodeStatus_Running_EmptyURLs(t *testing.T) {
 	pm := NewProcessManager()
 	nodeDir := t.TempDir()
-	dataDir := filepath.Join(nodeDir, ".pockode")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create server.json without URL fields
-	serverInfo := struct {
-		PID       int    `json:"pid"`
-		Port      int    `json:"port"`
-		StartedAt string `json:"started_at"`
-	}{
+	writeServerJSON(t, nodeDir, serverinfo.Info{
 		PID:       os.Getpid(),
 		Port:      9870,
 		StartedAt: "2025-06-14T10:00:00Z",
-	}
-	data, _ := json.Marshal(serverInfo)
-	if err := os.WriteFile(filepath.Join(dataDir, "server.json"), data, 0644); err != nil {
-		t.Fatal(err)
-	}
+	})
 
 	node := Node{
 		ID:   "test-id",
@@ -173,30 +144,12 @@ func TestGetNodeStatus_Running_EmptyURLs(t *testing.T) {
 func TestGetNodeStatus_Stale_ProcessNotRunning(t *testing.T) {
 	pm := NewProcessManager()
 	nodeDir := t.TempDir()
-	dataDir := filepath.Join(nodeDir, ".pockode")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create server.json with a non-existent PID
-	serverInfo := struct {
-		PID       int    `json:"pid"`
-		Port      int    `json:"port"`
-		StartedAt string `json:"started_at"`
-	}{
-		PID:       999999999, // Very unlikely to exist
+	requireDeadPID(t)
+	writeServerJSON(t, nodeDir, serverinfo.Info{
+		PID:       deadPID,
 		Port:      9870,
 		StartedAt: "2025-06-14T10:00:00Z",
-	}
-	data, _ := json.Marshal(serverInfo)
-	if err := os.WriteFile(filepath.Join(dataDir, "server.json"), data, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Skip if PID happens to exist
-	if processExists(999999999) {
-		t.Skip("PID 999999999 exists, skipping")
-	}
+	})
 
 	node := Node{
 		ID:   "test-id",
@@ -216,15 +169,7 @@ func TestGetNodeStatus_Stale_ProcessNotRunning(t *testing.T) {
 func TestGetNodeStatus_Stale_CorruptedJSON(t *testing.T) {
 	pm := NewProcessManager()
 	nodeDir := t.TempDir()
-	dataDir := filepath.Join(nodeDir, ".pockode")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create corrupted server.json
-	if err := os.WriteFile(filepath.Join(dataDir, "server.json"), []byte("not valid json"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeRawServerJSON(t, nodeDir, []byte("not valid json"))
 
 	node := Node{
 		ID:   "test-id",
@@ -306,25 +251,11 @@ func TestStart_EmptyToken(t *testing.T) {
 func TestStart_AlreadyRunning(t *testing.T) {
 	pm := NewProcessManager()
 	nodeDir := t.TempDir()
-	dataDir := filepath.Join(nodeDir, ".pockode")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create server.json with current process PID to simulate running
-	serverInfo := struct {
-		PID       int    `json:"pid"`
-		Port      int    `json:"port"`
-		StartedAt string `json:"started_at"`
-	}{
+	writeServerJSON(t, nodeDir, serverinfo.Info{
 		PID:       os.Getpid(),
 		Port:      9870,
 		StartedAt: "2025-06-14T10:00:00Z",
-	}
-	data, _ := json.Marshal(serverInfo)
-	if err := os.WriteFile(filepath.Join(dataDir, "server.json"), data, 0644); err != nil {
-		t.Fatal(err)
-	}
+	})
 
 	node := Node{
 		ID:   "test-id",
@@ -398,31 +329,12 @@ func TestStop_NotRunning(t *testing.T) {
 func TestStop_StaleProcess(t *testing.T) {
 	pm := NewProcessManager()
 	nodeDir := t.TempDir()
-	dataDir := filepath.Join(nodeDir, ".pockode")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create server.json with a non-existent PID
-	serverInfo := struct {
-		PID       int    `json:"pid"`
-		Port      int    `json:"port"`
-		StartedAt string `json:"started_at"`
-	}{
-		PID:       999999999,
+	requireDeadPID(t)
+	serverJSONPath := writeServerJSON(t, nodeDir, serverinfo.Info{
+		PID:       deadPID,
 		Port:      9870,
 		StartedAt: "2025-06-14T10:00:00Z",
-	}
-	data, _ := json.Marshal(serverInfo)
-	serverJSONPath := filepath.Join(dataDir, "server.json")
-	if err := os.WriteFile(serverJSONPath, data, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Skip if PID happens to exist
-	if processExists(999999999) {
-		t.Skip("PID 999999999 exists, skipping")
-	}
+	})
 
 	node := Node{
 		ID:   "test-id",
@@ -466,6 +378,21 @@ const (
 	// helperReports exits as soon as it has written its report, for the tests
 	// that only care what the launch flags did to it.
 	helperReports = "reports"
+	// helperWritesServerInfo stands in for a node being started: it writes its
+	// own server.json into the directory named by helperDataDirEnv, but only
+	// after a pause, because what Start has to get right is waiting for the file
+	// this process writes rather than one that was already there. It shuts down
+	// when asked, like helperListens.
+	helperWritesServerInfo = "writes-server-info"
+
+	// helperDataDirEnv names the data directory helperWritesServerInfo writes
+	// its server.json into.
+	helperDataDirEnv = "POCKODE_TEST_NODE_HELPER_DATA_DIR"
+	// serverInfoDelay is how long that helper waits first. It has to outlast the
+	// first read in waitForServerInfo (100ms) by enough that a machine under
+	// load cannot reorder the two, while staying well inside the retries that
+	// follow it.
+	serverInfoDelay = 600 * time.Millisecond
 
 	// helperLifetime is a backstop, not a timeout the tests wait for: a helper
 	// left behind by a crashed test run has to go away on its own.
@@ -486,6 +413,17 @@ func TestMain(m *testing.M) {
 	switch mode {
 	case helperReports:
 		// The report was the whole job.
+	case helperWritesServerInfo:
+		time.Sleep(serverInfoDelay)
+		if err := serverinfo.Write(os.Getenv(helperDataDirEnv), 9871, "http://localhost:9871", "", ""); err != nil {
+			panic(err)
+		}
+		// Then behave like helperListens, so the test can stop it the way the
+		// cluster stops a node instead of leaving it to the backstop.
+		select {
+		case <-l.Done():
+		case <-time.After(helperLifetime):
+		}
 	case helperListens:
 		select {
 		case <-l.Done():
@@ -513,26 +451,12 @@ func TestStop_TerminatesProcessAndClearsServerInfo(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			nodeDir := t.TempDir()
-			dataDir := filepath.Join(nodeDir, ".pockode")
-			if err := os.MkdirAll(dataDir, 0755); err != nil {
-				t.Fatal(err)
-			}
-
 			helper := startHelperNode(t, tc.mode)
-			serverJSONPath := filepath.Join(dataDir, "server.json")
-			serverInfo := struct {
-				PID       int    `json:"pid"`
-				Port      int    `json:"port"`
-				StartedAt string `json:"started_at"`
-			}{
+			serverJSONPath := writeServerJSON(t, nodeDir, serverinfo.Info{
 				PID:       helper.pid,
 				Port:      9870,
 				StartedAt: "2025-06-14T10:00:00Z",
-			}
-			data, _ := json.Marshal(serverInfo)
-			if err := os.WriteFile(serverJSONPath, data, 0644); err != nil {
-				t.Fatal(err)
-			}
+			})
 
 			if err := NewProcessManager().Stop(Node{ID: "test-id", Path: nodeDir}); err != nil {
 				t.Fatalf("Stop() = %v, want nil", err)
@@ -636,4 +560,149 @@ func TestSetProcessDetached_TakesTheNodeOffTheClusterTerminal(t *testing.T) {
 	if !termtest.HasTerminal() {
 		t.Log("this process has no terminal of its own, so the helper had none to inherit: the assertion above cannot fail in this environment")
 	}
+}
+
+// --- Cleanup ---
+
+func TestCleanup_RemovesServerInfoThatIsAllThatIsLeftOfANode(t *testing.T) {
+	tests := []struct {
+		name string
+		// write leaves the node in the state under test and returns the path it
+		// wrote. A func rather than a payload because the two states are reached
+		// differently: one needs a PID this machine agrees is dead.
+		write func(t *testing.T, nodeDir string) string
+	}{
+		{"dead pid", func(t *testing.T, nodeDir string) string {
+			requireDeadPID(t)
+			return writeServerJSON(t, nodeDir, serverinfo.Info{PID: deadPID, Port: 9870})
+		}},
+		{"unreadable", func(t *testing.T, nodeDir string) string {
+			return writeRawServerJSON(t, nodeDir, []byte("not valid json"))
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			nodeDir := t.TempDir()
+			serverJSONPath := tc.write(t, nodeDir)
+			n := Node{ID: "test-id", Path: nodeDir}
+
+			if err := NewProcessManager().Cleanup(n); err != nil {
+				t.Fatalf("Cleanup() = %v, want nil", err)
+			}
+
+			if _, err := os.Stat(serverJSONPath); !os.IsNotExist(err) {
+				t.Errorf("server.json still present after Cleanup: %v", err)
+			}
+			if status := NewProcessManager().GetNodeStatus(n); status.Status != StatusStopped {
+				t.Errorf("status after Cleanup = %q, want %q", status.Status, StatusStopped)
+			}
+		})
+	}
+}
+
+// TestCleanup_OnANodeWithNothingToCleanUp pins the idempotence the frontend
+// relies on to offer cleanup without a confirmation: asking twice, or asking
+// about a node that was already stopped, is not an error the user can act on.
+func TestCleanup_OnANodeWithNothingToCleanUp(t *testing.T) {
+	n := Node{ID: "test-id", Path: t.TempDir()}
+
+	if err := NewProcessManager().Cleanup(n); err != nil {
+		t.Fatalf("Cleanup() on a stopped node = %v, want nil", err)
+	}
+}
+
+// TestCleanup_RefusesARunningNode: server.json is how everything else reaches a
+// running node, so removing one that is still alive would leave a server nobody
+// can find or stop.
+func TestCleanup_RefusesARunningNode(t *testing.T) {
+	nodeDir := t.TempDir()
+	serverJSONPath := writeServerJSON(t, nodeDir, serverinfo.Info{PID: os.Getpid(), Port: 9870})
+
+	err := NewProcessManager().Cleanup(Node{ID: "test-id", Path: nodeDir})
+	if !errors.Is(err, ErrNodeStillRunning) {
+		t.Errorf("Cleanup() on a running node = %v, want ErrNodeStillRunning", err)
+	}
+
+	if _, err := os.Stat(serverJSONPath); err != nil {
+		t.Errorf("server.json should survive a refused Cleanup: %v", err)
+	}
+}
+
+// --- Start against a real process ---
+
+// TestStart_WaitsForTheNodeItStartedRatherThanTheFileItFound is the regression
+// test for a stale node that would not start: the leftover server.json answered
+// the wait on its first read, so Start reported success within 100ms while every
+// status read afterwards still saw the dead PID and called the node stale.
+func TestStart_WaitsForTheNodeItStartedRatherThanTheFileItFound(t *testing.T) {
+	requireDeadPID(t)
+
+	nodeDir := t.TempDir()
+	dataDir := filepath.Join(nodeDir, ".pockode")
+	writeServerJSON(t, nodeDir, serverinfo.Info{PID: deadPID, Port: 9870})
+	n := Node{ID: "test-id", Path: nodeDir}
+
+	// The helper inherits these: Start hands the child os.Environ() plus the
+	// node's token.
+	t.Setenv(helperEnv, helperWritesServerInfo)
+	t.Setenv(helperReadyEnv, filepath.Join(t.TempDir(), "helper-ready"))
+	t.Setenv(helperDataDirEnv, dataDir)
+
+	pm := &ProcessManager{executablePath: os.Args[0]}
+	t.Cleanup(func() { _ = pm.Stop(n) })
+
+	if err := pm.Start(n, "test-token"); err != nil {
+		t.Fatalf("Start() = %v, want nil", err)
+	}
+
+	status := pm.GetNodeStatus(n)
+	if status.Status != StatusRunning {
+		t.Fatalf("status after Start = %q, want %q", status.Status, StatusRunning)
+	}
+	if status.Port == nil || *status.Port != 9871 {
+		t.Errorf("status.Port = %v, want the started node's 9871, not the stale file's", status.Port)
+	}
+}
+
+// --- test helpers ---
+
+// deadPID is a PID no process is expected to have. Tests that depend on that
+// call requireDeadPID.
+const deadPID = 999999999
+
+func requireDeadPID(t *testing.T) {
+	t.Helper()
+	if processExists(deadPID) {
+		t.Skipf("PID %d exists on this system, skipping", deadPID)
+	}
+}
+
+// writeServerJSON gives nodeDir the server.json a running node would have left
+// there and returns its path. Tests set the fields they assert on and leave the
+// rest zero.
+func writeServerJSON(t *testing.T, nodeDir string, info serverinfo.Info) string {
+	t.Helper()
+
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeRawServerJSON(t, nodeDir, data)
+}
+
+// writeRawServerJSON is writeServerJSON for content that is not a valid Info —
+// the state a node interrupted mid-write leaves behind.
+func writeRawServerJSON(t *testing.T, nodeDir string, content []byte) string {
+	t.Helper()
+
+	dataDir := filepath.Join(nodeDir, ".pockode")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dataDir, "server.json")
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
