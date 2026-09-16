@@ -39,7 +39,7 @@ func newTestManager(t *testing.T, store session.Store) *process.Manager {
 	t.Helper()
 	registry := agent.NewRegistry()
 	registry.Register(session.AgentTypeClaude, mockAgent{})
-	return process.NewManager(registry, t.TempDir(), "", "", store, time.Minute)
+	return process.NewManager(registry, t.TempDir(), "", "", store, session.LeaseBudgets{Idle: time.Minute})
 }
 
 // TestClient_RequestsNeedingLiveProcess covers what happens to a prompt whose

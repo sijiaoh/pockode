@@ -40,7 +40,7 @@ func newTestServer(t *testing.T, userToken, mcpToken string) (http.Handler, stri
 	workStore, _ := work.NewFileStore(dataDir)
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	scopeManager := worktree.NewManager(registry, newAgentRegistry(), dataDir, 10*time.Minute)
+	scopeManager := worktree.NewManager(registry, newAgentRegistry(), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
 	t.Cleanup(scopeManager.Shutdown)
 
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)

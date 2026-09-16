@@ -144,8 +144,8 @@ const orphanedWorkComment = "Stopped automatically: the Pockode server restarted
 // ask-user-question lives inside the process, so after a restart nobody can
 // answer it and the status would promise something that will never happen. That
 // premise is the whole reason, and a CLI that ever lets a later process answer a
-// pending prompt takes it away — along with the idle reaper's matching decision
-// to keep such a process alive indefinitely (docs/code/agent-integration.md,
+// pending prompt takes it away — along with the lease table's matching decision
+// to hold such a process for an hour (docs/code/agent-integration.md,
 // "A Prompt Belongs to the Process That Raised It").
 //
 // waiting is deliberately left alone. A work waiting on child work does not
@@ -348,7 +348,7 @@ func (r *AutoResumer) settled(sessionID string, activation uint64) bool {
 // dead process cannot settle. needs_input still needs its answer and waiting
 // still needs its child, and both are woken by events that outlive the process
 // — a user action, a child closing. Stopping them here would mean every paused
-// work turns stopped five minutes later when the idle reaper collects the
+// work turns stopped five minutes later when the idle lease collects the
 // process, for no reason the user can see.
 func (r *AutoResumer) handleProcessEnded(sessionID string, activation uint64) {
 	// Use the same settle delay as auto-continuation to allow step_done to propagate.

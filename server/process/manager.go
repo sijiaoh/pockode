@@ -47,7 +47,9 @@ type Manager struct {
 	// data dir, even for a named worktree whose dataDir differs.
 	mcpServerDir string
 	sessionStore session.Store
-	idleTimeout  time.Duration
+	// budgets is how long a session may hold its process in each kind of wait.
+	// The whole of this manager's lifecycle policy; see runLeaseReaper.
+	budgets session.LeaseBudgets
 
 	processesMu sync.Mutex
 	processes   map[string]*Process
@@ -104,15 +106,21 @@ type Process struct {
 	// activated mirrors the session's Activated flag so the store is written once,
 	// on the transition, rather than on every event the agent produces.
 	activated atomic.Bool
+	// leaseAskedFor and leaseAskedAt remember the expired lease this process has
+	// already been asked to give up, so one expiry sends one interrupt and the
+	// grace period after it is measurable. Guarded by mu; see Manager.requestStop.
+	leaseAskedFor time.Time
+	leaseAskedAt  time.Time
 	// toolActivity is what the calls still in flight are doing, for a client that
 	// subscribes after they said so. Its own lock; see toolActivity.
 	toolActivity toolActivity
 }
 
-// NewManager creates a new manager with the given idle timeout. dataDir is this
-// worktree's own data dir (session-scoped agent state); mcpServerDir is where the
-// server publishes server.json for the MCP proxy (the main data dir).
-func NewManager(agents *agent.Registry, workDir, dataDir, mcpServerDir string, store session.Store, idleTimeout time.Duration) *Manager {
+// NewManager creates a new manager whose processes live under the given lease
+// budgets. dataDir is this worktree's own data dir (session-scoped agent state);
+// mcpServerDir is where the server publishes server.json for the MCP proxy (the
+// main data dir).
+func NewManager(agents *agent.Registry, workDir, dataDir, mcpServerDir string, store session.Store, budgets session.LeaseBudgets) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		agents:       agents,
@@ -120,7 +128,7 @@ func NewManager(agents *agent.Registry, workDir, dataDir, mcpServerDir string, s
 		dataDir:      dataDir,
 		mcpServerDir: mcpServerDir,
 		sessionStore: store,
-		idleTimeout:  idleTimeout,
+		budgets:      budgets,
 		processes:    make(map[string]*Process),
 		settler:      session.NewTurnSettler(session.DefaultSettleDelay),
 		ctx:          ctx,
@@ -132,7 +140,7 @@ func NewManager(agents *agent.Registry, workDir, dataDir, mcpServerDir string, s
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		m.runIdleReaper()
+		m.runLeaseReaper()
 	}()
 	return m
 }
@@ -470,7 +478,7 @@ func (m *Manager) Shutdown() {
 			return
 		}
 	}
-	// The streams are done; this is the idle reaper, which stops on m.cancel.
+	// The streams are done; this is the lease reaper, which stops on m.cancel.
 	m.wg.Wait()
 
 	// Nothing is left to act on a turn ending, and the endings the shutdown
@@ -480,127 +488,246 @@ func (m *Manager) Shutdown() {
 	slog.Info("manager shutdown complete", "processesClosed", len(procs))
 }
 
-func (m *Manager) runIdleReaper() {
+// runLeaseReaper is the whole of the process lifecycle policy: a process lives
+// for as long as the session holding it has a lease it has not used up.
+//
+// What a lease is, and the four kinds, belong to the session layer
+// (session.Lease) because they are read off the turn state and nothing else.
+// What is here is the acting on one.
+func (m *Manager) runLeaseReaper() {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.LogPanic(r, "idle reaper crashed")
+			logger.LogPanic(r, "lease reaper crashed")
 		}
 	}()
 
-	if m.reapingDisabled() {
-		slog.Info("idle reaper disabled", "idleTimeout", m.idleTimeout)
+	tick := m.budgets.TickInterval()
+	if tick <= 0 {
+		slog.Info("lease reaper disabled, no budget is set", "budgets", m.budgets)
 		return
 	}
 
-	ticker := time.NewTicker(m.idleTimeout / 4)
+	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			m.reapIdle()
+			m.reapLeases()
 		case <-m.ctx.Done():
 			return
 		}
 	}
 }
 
-func (m *Manager) reapIdle() {
-	m.reapIdleAsOf(time.Now())
+func (m *Manager) reapLeases() {
+	m.reapLeasesAsOf(time.Now())
 }
 
-// reapIdleAsOf closes every process whose last activity is older than the idle
-// timeout, measured against the given instant. The instant is a parameter so
-// the reaping rule can be exercised without racing the wall clock: driving it
-// with a synthetic "now" states the elapsed time outright instead of hoping a
-// sleep outlasts a timeout.
-func (m *Manager) reapIdleAsOf(now time.Time) {
-	if m.reapingDisabled() {
-		return
-	}
-	procs := m.removeWhere(func(p *Process) bool {
-		if now.Sub(p.getLastActive()) <= m.idleTimeout {
-			return false
+// reapLeasesAsOf runs one pass of the lease table against the given instant.
+//
+// The instant is a parameter so the rule can be exercised without racing the
+// wall clock: driving it with a synthetic "now" states the elapsed time outright
+// instead of hoping a sleep outlasts a budget. It is the only way the table's
+// day-scale entries are testable at all.
+func (m *Manager) reapLeasesAsOf(now time.Time) {
+	for _, p := range m.liveProcesses() {
+		lease := m.budgets.LeaseFor(p.turnState(), p.getLastActive())
+		if !lease.Expired(now) {
+			continue
 		}
-		if hold := p.reapHold(); hold != "" {
-			slog.Debug("idle process spared", "sessionId", p.sessionID, "waitingOn", hold)
-			return false
-		}
-		return true
-	})
-	for _, proc := range procs {
-		proc.closed.Store(true)
-		proc.agentSession.Close()
-		// ProcessStateEnded is emitted by the streamEvents goroutine's defer
-		// when the events channel closes — no need to emit here.
-		slog.Info("idle process reaped", "sessionId", proc.sessionID)
+		m.enforce(p, lease, now)
 	}
 }
 
-// reapingDisabled reports whether the configured idle timeout turns reaping off.
-// A non-positive timeout is an operator saying "never reap", and that is the only
-// reading worth having: read literally it says the opposite, since every process
-// is older than a zero timeout the instant it is created. It is also the reading
-// that keeps time.NewTicker, which panics on a non-positive interval, from ever
-// being handed one.
-func (m *Manager) reapingDisabled() bool {
-	return m.idleTimeout <= 0
+// liveProcesses is a snapshot to iterate outside processesMu, which enforcing a
+// lease has to be: every action below either writes the session store or closes
+// a process, and both run listeners that take that lock.
+func (m *Manager) liveProcesses() []*Process {
+	m.processesMu.Lock()
+	defer m.processesMu.Unlock()
+
+	procs := make([]*Process, 0, len(m.processes))
+	for _, p := range m.processes {
+		procs = append(procs, p)
+	}
+	return procs
 }
 
-// The holds reapHold can report, named so the reaper's log and the tests say the
-// same words the code does.
+// leaseGrace is how long an expiry that has to ask the CLI to end a turn waits
+// for it to happen before ending the process instead.
+//
+// Two of the four expiries are requests, not decisions: an interrupt is a
+// message to the CLI, and the turn only ends when the CLI says so. A CLI that
+// ignores it — wedged, or holding a tool call that does not come back — would
+// otherwise leave a lease permanently expired and a process nothing collects,
+// which is the exact failure the lease table exists to remove. Long enough that
+// a CLI winding down a turn is never cut off, short enough that nobody waits on
+// a dead one.
+const leaseGrace = 30 * time.Second
+
+// enforce carries out one expired lease.
+//
+// Every one of the four ends in the session being idle and its process being
+// collected by the idle lease on a later pass. None of them writes turn state
+// directly: an expiry produces the same signal the equivalent real event would
+// (an interrupt, an ending), and session.ReduceTurn decides what that means, so
+// the reaper cannot invent a state the rest of the model does not know about.
+func (m *Manager) enforce(p *Process, lease session.Lease, now time.Time) {
+	log := slog.With("sessionId", p.sessionID, "waitingOn", lease.Kind, "waited", lease.Waited(now))
+
+	switch lease.Kind {
+	case session.LeaseIdle:
+		// Nothing is waiting on this process and nothing is lost by ending it;
+		// the next message starts a new one, resumed. The turn state is left
+		// exactly as it is — idle before, idle after.
+		m.closeProcess(p, now, "idle process collected", log)
+
+	case session.LeaseTurn:
+		// The stop is asked for, not taken: the InterruptedEvent that comes back
+		// is what ends the turn, so a CLI that is winding down finishes properly
+		// and the abort is recorded once, by the same path a user's Stop uses.
+		m.requestStop(p, lease, now, log,
+			"This turn ran for %s without ending, so Pockode stopped it.", turnTimeoutCode)
+
+	case session.LeaseAnswer:
+		// Withdrawing on the user's behalf is what an interrupt already is, and
+		// it is the only withdrawal available: answering the prompt properly
+		// needs the request data, which lives on the card in the client and not
+		// in anything the server keeps. Codex answers its outstanding approval
+		// with a cancel before it stops the turn; Claude has no equivalent, and
+		// whether its interrupt releases a control request it is blocking on has
+		// not been measured — which is precisely what the grace backstop in
+		// requestStop is for. Either way the wait ends.
+		//
+		// The answer is not lost with it. A question that expired can still be
+		// sent as an ordinary message afterwards, which is why an hour is a
+		// budget worth having (session.DefaultAnswerBudget); only a permission
+		// request is final, because a permission that expires is a denial.
+		m.requestStop(p, lease, now, log,
+			"No answer for %s, so Pockode withdrew the request and stopped waiting.", answerTimeoutCode)
+
+	case session.LeaseBackground:
+		// Nobody to ask: the CLI is not listening, it is waiting on work of its
+		// own. The ending is delivered on its behalf and everything downstream
+		// falls back to what it did before background waits existed — idle, then
+		// the usual auto-continue. Tasks still running die with the process when
+		// the idle lease collects it, and are reported on the next start by the
+		// adapter's own loss record.
+		m.endBackgroundWait(p, lease, now, log)
+	}
+}
+
+// The codes on the warnings an expiry writes into the transcript. A lease
+// running out is never silent: it changes what the session is doing, and the
+// user has to be able to see why from the transcript alone.
 const (
-	holdBackgroundWork = "background work"
-	holdTurnInProgress = "a turn in progress"
-	holdUserAnswer     = "a user answer"
+	turnTimeoutCode       = "turn_timeout"
+	answerTimeoutCode     = "answer_timeout"
+	backgroundTimeoutCode = "background_wait_timeout"
 )
 
-// reapHold names what this process is still in the middle of, or "" when it is
-// in the middle of nothing and the reaper may collect it. It is the whole answer
-// to "is this process actually idle?", because lastActive is not: silence is the
-// normal condition of a wait, so a process going quiet says "abandoned" and
-// "busy" in exactly the same words.
-//
-// Every hold is read off the session's turn state, and that is the point — the
-// three cases below used to be three independent flags kept by three different
-// pieces of code. Blocked on something only a person can clear, blocked on
-// background work, or simply mid-turn: they are the phases, in the order a
-// reaper wants to name them.
-//
-// The first two are narrower than the third and are read first mostly so the log
-// names the right thing — but not only for that, so do not delete one as a
-// prettier label. A prompt raised after its turn already reported an end has no
-// turn behind it (session.TurnState.Open), so the blocker check is the only
-// thing holding it, and there is a test for exactly that state.
-//
-// None of them has a time budget yet. A build can outrun any timeout, a person
-// certainly can, and a hold that expires is a hold that does not work; what ends
-// each of them is the session itself moving on. The budgets are what the lease
-// table adds on top of exactly this function.
-func (p *Process) reapHold() string {
-	turn := p.turnState()
-	// Reaping a prompt answers the agent's question by killing it: the user
-	// comes back to a dead session and a card that can no longer be answered,
-	// because only the process that raised a prompt can take its answer
-	// (docs/code/agent-integration.md, "A Prompt Belongs to the Process That
-	// Raised It").
-	if turn.AwaitingUserAnswer() {
-		return holdUserAnswer
+// backgroundTimeoutNote is the agent's copy of the news, handed to it with the
+// next prompt Pockode sends. Without it the agent is nudged to continue with no
+// idea that Pockode stopped waiting for its background task.
+const backgroundTimeoutNote = "Pockode saw no output for %s while waiting on your background task(s) and then ended " +
+	"that turn, because it cannot wait forever. Any task you started may still be running: check before assuming its " +
+	"result, and say so if you were still waiting on it."
+
+// backgroundTimeoutWarning says what Pockode observed — silence — rather than
+// that the task produced nothing, which it has no way of knowing: a task can
+// finish without the CLI resuming, and a message asserting otherwise would be
+// plainly wrong to the one user who checks.
+const backgroundTimeoutWarning = "No output for %s while waiting on background work, so this response is being treated as finished."
+
+// requestStop is the expiry that has to ask: warn in the transcript, send the
+// interrupt, and end the process instead if the turn is still there a grace
+// period later.
+func (m *Manager) requestStop(p *Process, lease session.Lease, now time.Time, log *slog.Logger, warning, code string) {
+	// Equal, not ==: a time.Time carries a monotonic reading and a location, and
+	// neither is part of "is this the same lease".
+	if asked, at := p.leaseAsk(); asked.Equal(lease.Since) {
+		if now.Sub(at) <= leaseGrace {
+			return
+		}
+		// The CLI was asked and did not answer. Ending the process is the one
+		// stop that does not need its cooperation; the turn is aborted by
+		// SignalProcessEnded, the same as any other process death.
+		m.closeProcess(p, now, "lease expired and the interrupt went unanswered", log)
+		return
 	}
-	// Reaping this kills the background tasks the session is waiting for. The
-	// wait ends when the CLI resumes output, or when the agent's own budget for
-	// it runs out and ends the turn.
-	if turn.WaitingForBackground() {
-		return holdBackgroundWork
+	p.noteLeaseAsk(lease.Since, now)
+
+	log.Warn("lease expired, stopping the turn")
+	p.inject(agent.WarningEvent{Message: fmt.Sprintf(warning, lease.Waited(now)), Code: code})
+	if err := p.SendInterrupt(); err != nil {
+		log.Error("failed to interrupt a turn whose lease expired", "error", err)
 	}
-	// The agent is off doing something that produces no events — a build, a test
-	// run, a long tool call — and reaping it throws that work away mid-flight. A
-	// turn only reaches idle by being ended, so requiring that ending is what
-	// keeps "quiet" from passing for "done".
-	if turn.InProgress() {
-		return holdTurnInProgress
+}
+
+// endBackgroundWait delivers the ending the CLI was never going to send.
+//
+// Both halves of "it must not be silent" are here: the warning the user reads in
+// the transcript, and the note the agent is handed on its next prompt.
+func (m *Manager) endBackgroundWait(p *Process, lease session.Lease, now time.Time, log *slog.Logger) {
+	waited := lease.Waited(now)
+	log.Warn("background wait budget exhausted, ending the parked turn")
+
+	p.noteAgent(fmt.Sprintf(backgroundTimeoutNote, waited))
+	p.inject(
+		agent.WarningEvent{Message: fmt.Sprintf(backgroundTimeoutWarning, waited), Code: backgroundTimeoutCode},
+		agent.DoneEvent{},
+	)
+}
+
+// closeProcess ends a process: take it out of the map first so nothing new is
+// handed to it, then close the agent session. ProcessStateEnded and the turn's
+// abort are emitted by the streamEvents goroutine's defer when the events
+// channel closes, and so is the onProcessEnd callback — which is why the
+// removal here goes through removeWhere rather than remove.
+//
+// The lease is re-read inside the lock, and that is the whole reason this is not
+// a plain delete. Everything the reaper decided was decided outside processesMu,
+// and the paths that hand a process work — GetOrCreateProcess, Touch — hold it:
+// without the re-check, a message sent between the snapshot and here would be
+// given to a process about to be killed, and the user's turn would vanish. A
+// message moves lastActive or the turn state, so the lease it was condemned on
+// is no longer expired and it is spared instead.
+func (m *Manager) closeProcess(p *Process, now time.Time, reason string, log *slog.Logger) {
+	removed := m.removeWhere(func(candidate *Process) bool {
+		return candidate == p && m.budgets.LeaseFor(p.turnState(), p.getLastActive()).Expired(now)
+	})
+	if len(removed) == 0 {
+		return
 	}
-	return ""
+	p.closed.Store(true)
+	p.agentSession.Close()
+	log.Info(reason)
+}
+
+// leaseAsk reports the lease this process has already been asked to give up and
+// when the asking happened, so one expiry produces one interrupt rather than one
+// per tick. Keyed on the lease's start, which is the phase it belongs to: a new
+// turn is a new lease and gets its own ask.
+func (p *Process) leaseAsk() (since time.Time, at time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.leaseAskedFor, p.leaseAskedAt
+}
+
+func (p *Process) noteLeaseAsk(since, at time.Time) {
+	p.mu.Lock()
+	p.leaseAskedFor, p.leaseAskedAt = since, at
+	p.mu.Unlock()
+}
+
+// noteAgent leaves an explanation for the agent, delivered with the next prompt
+// Pockode sends it. Agents that cannot carry one simply do not implement it —
+// there is nowhere to put the note, and the user has the warning either way.
+func (p *Process) noteAgent(note string) {
+	if notifier, ok := p.agentSession.(agent.SessionNotifier); ok {
+		notifier.QueueNote(note)
+	}
 }
 
 // SendMessage sends a message to the agent and starts a turn.
@@ -651,7 +778,8 @@ func (p *Process) signal(sig session.TurnSignal, requestID string) {
 }
 
 // applyTurn folds one input into the session's stored turn state and caches the
-// result for reapHold. It does not announce anything; emitTurn does.
+// result for the reaper to read without a store lookup per process per tick. It
+// does not announce anything; emitTurn does.
 //
 // Two callers need them apart. Process creation writes the state under
 // processesMu — so the event stream it is about to start cannot reduce anything
@@ -876,63 +1004,107 @@ func (p *Process) streamEvents(ctx context.Context) {
 
 	for event := range p.agentSession.Events() {
 		p.touch()
-
-		eventType := event.EventType()
-		log.Debug("streaming event", "type", eventType)
-
-		if eventType.ActivatesSession() {
-			p.markActivated(ctx, log)
-		}
-
-		p.toolActivity.observe(event)
-
-		// The turn state is decided before the record is written and announced
-		// after it, which is two separate promises. Deciding first means anything
-		// that sees the record sees the state it caused, already settled — which
-		// is also what lets a test use the record as its signal that an event has
-		// been processed. Announcing after means a listener woken by the change
-		// cannot go looking for a record that is not there yet.
-		in, reduce := turnInputFor(event)
-		reduce = reduce && p.acceptsTurnInput(in)
-		var transition session.TurnTransition
-		if reduce {
-			transition = p.applyTurn(ctx, in)
-		}
-
-		// Persist to history. An event that reports a latest value rather than a
-		// settled fact is broadcast and never stored, so it reaches subscribers
-		// with no sequence number — see agent.EventType.Persisted.
-		seq := session.NoHistorySeq
-		if eventType.Persisted() {
-			var err error
-			seq, err = p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event))
-			if err != nil {
-				log.Error("failed to append to history", "error", err)
-			}
-		}
-
-		if reduce {
-			// process_ended has its own announcement, made by the goroutine that
-			// owns this stream once the channel closes; it is the one state the
-			// turn cannot express, because the session outlives the process. The
-			// turn it aborted still has to settle, though, so the settler hears it
-			// either way.
-			if in.Signal == session.SignalProcessEnded {
-				p.manager.observeTurn(p.sessionID, transition)
-			} else {
-				p.manager.emitTurn(p.sessionID, transition)
-			}
-		}
-
-		if eventType.AwaitsUserInput() {
-			if err := p.sessionStore.Touch(ctx, p.sessionID); err != nil {
-				log.Error("failed to touch session", "error", err)
-			}
-		}
-
-		// Emit to listener (ChatMessagesWatcher)
-		p.manager.EmitMessage(p.sessionID, event, seq)
+		p.handleEvent(ctx, log, event)
 	}
 
 	log.Info("event stream ended")
+}
+
+// inject puts events the agent never sent through the same path its own take.
+//
+// The reaper is the caller: a lease running out on a background wait has to
+// deliver the ending the CLI was never going to send. Routed through handleEvent
+// rather than written separately so that a synthesized ending is recorded,
+// reduced and broadcast exactly like a real one — there is one definition of
+// what an event does to a session, and an expiry that took a shortcut past it
+// would be a second.
+//
+// context.Background rather than the manager's: the events an expiry produces
+// are the ones that still have to land when the server is on its way out, and
+// Shutdown already waits for this goroutine's caller.
+//
+// It deliberately does not touch lastActive, which streamEvents does for every
+// event it hands over. That timestamp answers "when did anything last happen to
+// this session", and Pockode explaining its own decision is not something
+// happening to the session: a background wait that has just used up a day of
+// budget should fall straight to the idle lease, not be granted a fresh five
+// minutes because of the ending Pockode itself wrote.
+func (p *Process) inject(events ...agent.AgentEvent) {
+	// Two ways this process may already be over, and neither is rare enough to
+	// skip: it was closed on purpose (the flag), or its CLI exited on its own and
+	// the stream goroutine has finished recording everything it ever will (the
+	// channel). Writing after either one puts an explanation into the transcript
+	// of a session that has already said its last word.
+	if p.closed.Load() {
+		return
+	}
+	select {
+	case <-p.done:
+		return
+	default:
+	}
+	log := slog.With("sessionId", p.sessionID, "injected", true)
+	for _, event := range events {
+		p.handleEvent(context.Background(), log, event)
+	}
+}
+
+// handleEvent is what one event does to a session: it may start the session, it
+// may move the turn, it is usually recorded, and it is always broadcast.
+func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent.AgentEvent) {
+	eventType := event.EventType()
+	log.Debug("streaming event", "type", eventType)
+
+	if eventType.ActivatesSession() {
+		p.markActivated(ctx, log)
+	}
+
+	p.toolActivity.observe(event)
+
+	// The turn state is decided before the record is written and announced
+	// after it, which is two separate promises. Deciding first means anything
+	// that sees the record sees the state it caused, already settled — which
+	// is also what lets a test use the record as its signal that an event has
+	// been processed. Announcing after means a listener woken by the change
+	// cannot go looking for a record that is not there yet.
+	in, reduce := turnInputFor(event)
+	reduce = reduce && p.acceptsTurnInput(in)
+	var transition session.TurnTransition
+	if reduce {
+		transition = p.applyTurn(ctx, in)
+	}
+
+	// Persist to history. An event that reports a latest value rather than a
+	// settled fact is broadcast and never stored, so it reaches subscribers
+	// with no sequence number — see agent.EventType.Persisted.
+	seq := session.NoHistorySeq
+	if eventType.Persisted() {
+		var err error
+		seq, err = p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event))
+		if err != nil {
+			log.Error("failed to append to history", "error", err)
+		}
+	}
+
+	if reduce {
+		// process_ended has its own announcement, made by the goroutine that
+		// owns this stream once the channel closes; it is the one state the
+		// turn cannot express, because the session outlives the process. The
+		// turn it aborted still has to settle, though, so the settler hears it
+		// either way.
+		if in.Signal == session.SignalProcessEnded {
+			p.manager.observeTurn(p.sessionID, transition)
+		} else {
+			p.manager.emitTurn(p.sessionID, transition)
+		}
+	}
+
+	if eventType.AwaitsUserInput() {
+		if err := p.sessionStore.Touch(ctx, p.sessionID); err != nil {
+			log.Error("failed to touch session", "error", err)
+		}
+	}
+
+	// Emit to listener (ChatMessagesWatcher)
+	p.manager.EmitMessage(p.sessionID, event, seq)
 }

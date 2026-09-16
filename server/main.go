@@ -142,7 +142,18 @@ func main() {
 	workDirFlag := flag.String("work", ".", "working directory")
 	dataDirFlag := flag.String("data", "", "data directory (default: <work>/.pockode)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
-	idleTimeoutFlag := flag.Duration("idle-timeout", 5*time.Minute, "idle timeout before stopping a session (0 disables reaping)")
+	// The four process lease budgets. Every value defaults to the one place they
+	// are written down (session.DefaultLeaseBudgets), and 0 means "no budget" for
+	// each of them — see session.Lease for what each wait costs while it is held.
+	leaseDefaults := session.DefaultLeaseBudgets()
+	idleTimeoutFlag := flag.Duration("idle-timeout", leaseDefaults.Idle,
+		"how long an idle session's process is kept alive for the next message (0 disables collecting it)")
+	turnTimeoutFlag := flag.Duration("turn-timeout", leaseDefaults.Turn,
+		"how long a turn may run before it is interrupted (0 for no limit)")
+	answerTimeoutFlag := flag.Duration("answer-timeout", leaseDefaults.Answer,
+		"how long a question or permission request waits for an answer before it is withdrawn (0 for no limit)")
+	backgroundTimeoutFlag := flag.Duration("background-timeout", leaseDefaults.Background,
+		"how long a turn parked on background work waits for the CLI to resume before it is ended (0 for no limit)")
 	relayFlag := flag.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
 	relayFrontendPortFlag := flag.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
 	cloudURLFlag := flag.String("cloud-url", "https://cloud.pockode.com", "cloud server URL")
@@ -251,7 +262,12 @@ Flags:
 		os.Exit(1)
 	}
 
-	idleTimeout := *idleTimeoutFlag
+	leaseBudgets := session.LeaseBudgets{
+		Turn:       *turnTimeoutFlag,
+		Answer:     *answerTimeoutFlag,
+		Background: *backgroundTimeoutFlag,
+		Idle:       *idleTimeoutFlag,
+	}
 
 	// Initialize settings store
 	settingsStore, err := settings.NewStore(dataDir)
@@ -306,7 +322,7 @@ Flags:
 	registry.SetBaseDirProvider(func() string {
 		return settingsStore.Get().WorktreeBaseDir
 	})
-	worktreeManager := worktree.NewManager(registry, agents, dataDir, idleTimeout)
+	worktreeManager := worktree.NewManager(registry, agents, dataDir, leaseBudgets)
 	worktreeManager.SetWorkAutoResumer(workAutoResumer)
 	// Route AutoResumer follow-up messages to each work's own worktree.
 	workAutoResumer.SetSenderResolver(worktreeManager)
@@ -434,7 +450,7 @@ Flags:
 
 	startup.PrintFooter()
 
-	slog.Info("server starting", "port", port, "workDir", workDir, "dataDir", dataDir, "devMode", devMode, "idleTimeout", idleTimeout)
+	slog.Info("server starting", "port", port, "workDir", workDir, "dataDir", dataDir, "devMode", devMode, "leaseBudgets", leaseBudgets)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server error", "error", err)
 		os.Exit(1)

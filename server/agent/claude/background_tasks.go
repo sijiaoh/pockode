@@ -31,10 +31,6 @@ type backgroundTaskTracker struct {
 	liveMu sync.Mutex
 	live   []string
 
-	// Parking the turn cannot be open-ended, so every parked turn is held by this
-	// timer and ended anyway once the budget runs out.
-	wait backgroundWait
-
 	// tasksMu guards the join from Claude's task lifecycle back to the tool call
 	// that started it; see startTask.
 	tasksMu sync.Mutex

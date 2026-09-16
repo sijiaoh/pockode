@@ -25,7 +25,7 @@ type Manager struct {
 	registry        *Registry
 	agents          *agent.Registry
 	dataDir         string
-	idleTimeout     time.Duration
+	leaseBudgets    session.LeaseBudgets
 	WorktreeWatcher *watch.WorktreeWatcher
 
 	workAutoResumer       *work.AutoResumer
@@ -36,12 +36,12 @@ type Manager struct {
 	worktrees map[string]*Worktree
 }
 
-func NewManager(registry *Registry, agents *agent.Registry, dataDir string, idleTimeout time.Duration) *Manager {
+func NewManager(registry *Registry, agents *agent.Registry, dataDir string, budgets session.LeaseBudgets) *Manager {
 	return &Manager{
 		registry:        registry,
 		agents:          agents,
 		dataDir:         dataDir,
-		idleTimeout:     idleTimeout,
+		leaseBudgets:    budgets,
 		WorktreeWatcher: watch.NewWorktreeWatcher(registry.MainDir()),
 		worktrees:       make(map[string]*Worktree),
 	}
@@ -269,7 +269,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	// The process manager's data dir is this worktree's own (wtDataDir), so agent
 	// session state lands next to the session store. MCP discovery still points at
 	// the main data dir (m.dataDir), the only place server.json is written.
-	processManager := process.NewManager(m.agents, workDir, wtDataDir, m.dataDir, sessionStore, m.idleTimeout)
+	processManager := process.NewManager(m.agents, workDir, wtDataDir, m.dataDir, sessionStore, m.leaseBudgets)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetProcessStateGetter(processManager)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)

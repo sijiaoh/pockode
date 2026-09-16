@@ -172,14 +172,12 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		cancel:          cancel,
 	}
 
-	backgroundTasks.wait.start(log, events, sess.queueNote, backgroundWaitBase)
-
 	// Background tasks the previous process took down with it. The agent is told
 	// on its next prompt; the user is told in the transcript, from the streaming
 	// goroutine below (the event channel has no consumer yet here).
 	lostBackground := lossStore.peek(log)
 	if lostBackground.LostTasks > 0 {
-		sess.queueNote(fmt.Sprintf(backgroundTasksLostNote, backgroundTaskCount(lostBackground.LostTasks)))
+		sess.QueueNote(fmt.Sprintf(backgroundTasksLostNote, backgroundTaskCount(lostBackground.LostTasks)))
 	}
 
 	// Stream events from the process.
@@ -192,8 +190,6 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			}
 		}()
 		defer close(events)
-		// Before close(events), which the fallback also writes to.
-		defer backgroundTasks.wait.stopWaiting()
 		defer cancel()
 
 		// Drain stderr before anything can block on the event channel: the
@@ -244,7 +240,7 @@ type cliSession struct {
 	closeOnce       sync.Once
 
 	noteMu sync.Mutex
-	note   string // pending explanation for the agent; see queueNote
+	note   string // pending explanation for the agent; see QueueNote
 }
 
 // Events returns the event channel.
@@ -252,12 +248,9 @@ func (s *cliSession) Events() <-chan agent.AgentEvent {
 	return s.events
 }
 
-// queueNote leaves an explanation for the agent, delivered with the next prompt
-// Pockode sends it. Used by the background wait fallback: the user sees a
-// warning in the transcript, and this is the agent's copy of the same news —
-// without it the agent would be nudged to continue with no idea that Pockode
-// stopped waiting for its background task.
-func (s *cliSession) queueNote(note string) {
+// QueueNote implements agent.SessionNotifier. Claude has somewhere to put a
+// note — the next prompt is a string this session builds — so it carries one.
+func (s *cliSession) QueueNote(note string) {
 	s.noteMu.Lock()
 	defer s.noteMu.Unlock()
 	s.note = note
@@ -953,27 +946,6 @@ type declineFunc func(requestID, message string)
 // line is retained for the cases (assistant, result, control_*) that decode a
 // superset struct.
 func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc, store attachments.Store) []agent.AgentEvent {
-	events := parseLineEvents(log, line, event, pendingRequests, backgroundTasks, decline, store)
-
-	// Keep the background wait fallback in step with what the user can see. Any
-	// ending that does reach them closes it, so the held-back ending is not
-	// delivered on top of it later; anything that shows the agent working pushes
-	// its deadline out, because the budget is for a silent wait and not for a
-	// turn that resumed and is busy.
-	for _, ev := range events {
-		if ev.EventType().AwaitsUserInput() {
-			backgroundTasks.wait.end()
-			break
-		}
-		if ev.EventType().IndicatesAgentActivity() {
-			backgroundTasks.wait.refresh()
-		}
-	}
-
-	return events
-}
-
-func parseLineEvents(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc, store attachments.Store) []agent.AgentEvent {
 	switch event.Type {
 	case "assistant":
 		return parseAssistantEvent(log, line, event)
@@ -1513,7 +1485,6 @@ func parseResultEvent(log *slog.Logger, line []byte, backgroundTasks *background
 	// endings and still go through.
 	if backgroundTasks.hasLive() {
 		log.Info("turn parked, background tasks are still running")
-		backgroundTasks.wait.extend()
 		return agent.BackgroundWaitEvent{}
 	}
 

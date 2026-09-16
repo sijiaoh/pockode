@@ -145,3 +145,23 @@ type Session interface {
 	// Close terminates the agent process and releases resources.
 	Close()
 }
+
+// SessionNotifier is implemented by agent sessions that can carry a message from
+// Pockode to the agent, delivered with the next prompt it is sent.
+//
+// It exists for the one thing Pockode does that the agent cannot see: ending a
+// turn the agent did not end. When a background wait's lease runs out the user
+// gets a warning in the transcript, and this is the agent's copy of the same
+// news — without it the agent is auto-continued with no idea that Pockode
+// stopped waiting for the background task it is still expecting a result from.
+//
+// Optional, because there is nowhere to put a note in a protocol that has no
+// room for one. An agent that does not implement it loses nothing it had: the
+// note is an explanation, never a correction, and the transcript carries the
+// fact regardless.
+type SessionNotifier interface {
+	// QueueNote replaces any note not yet delivered. Notes are explanations of
+	// something that has just happened, and the newer one is the one that is
+	// still true.
+	QueueNote(note string)
+}

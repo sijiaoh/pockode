@@ -142,10 +142,15 @@ const (
 	// because it is the only one that proves the CLI has resumed.
 	SignalOutput TurnSignal = "output"
 	// SignalNoise is the agent's process saying something that is not content —
-	// a `system` frame, a live progress line. It shows the turn is alive and
-	// deliberately does not clear a background blocker: the background task list
-	// changing is itself a `system` frame, so treating it as resumption would
-	// make a task *finishing* look like the turn coming back.
+	// a `system` frame, a live progress line. It moves nothing at all, and the
+	// two things it must not do are why it is named rather than dropped at the
+	// translation.
+	//
+	// It does not clear a background blocker: the background task list changing
+	// is itself a `system` frame, so treating it as resumption would make a task
+	// *finishing* look like the turn coming back. And it does not open a turn:
+	// noise keeps arriving after a turn is over, and a turn nothing started is a
+	// turn nothing will end.
 	SignalNoise TurnSignal = "noise"
 	// SignalPermissionRaised and SignalQuestionRaised carry the RequestID an
 	// answer will name.
@@ -255,7 +260,20 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 		next.Open = true
 
 	case SignalNoise:
-		next.Open = true
+		// Empty on purpose, and the emptiness is the rule: noise moves nothing.
+		//
+		// It used to open a turn, and that was a bug with a long tail. Noise goes
+		// on arriving after a turn is over — a background task that outlived its
+		// budget keeps reporting progress, a CLI emits system frames on the way
+		// up — so reading it as a turn left a session running with nothing to end
+		// it, because nothing had started one. No ending was coming, and no lease
+		// could collect the process. Content is what starts a turn nobody
+		// prompted (SignalOutput): content is the agent actually saying
+		// something.
+		//
+		// Listed rather than left to fall through so that the translation has
+		// somewhere to send these events and this reasoning has somewhere to
+		// live. Do not delete the case as dead code.
 
 	case SignalAnswered:
 		// Resolved, not expired: someone dealt with it. A signal naming a request

@@ -77,30 +77,31 @@ func (e EventType) AwaitsUserInput() bool {
 // turn is under way. They say the turn is alive; they do not say the agent has
 // contributed anything to it.
 //
-// It is a whitelist because being wrong is not symmetric. An event wrongly
-// counted as activity marks a session as having a turn under way with nothing
-// running, and nothing corrects that — not even the idle reaper, which spares a
-// turn in progress precisely because it cannot tell a busy one from a stuck one
-// (see Process.reapHold). The startup warning Codex emits for a session it
-// cannot resume did exactly that.
-// An event wrongly left out costs at most one missed transition, because the
-// send that started the turn has already opened it.
+// It is a whitelist for what it keeps *out*, not for what it lets in. A type
+// wrongly listed here is inert: it becomes session.SignalNoise, which moves no
+// turn at all, so the claim "this only arrives mid-turn" is one the reducer no
+// longer has to take on trust. That was not always so — noise used to open a
+// turn, and the startup warning Codex emits for a session it cannot resume
+// stranded one as `running` with nothing running — and the fix was to stop the
+// signal from being able to do that rather than to keep this list perfect.
+//
+// What the list still decides is the boundary with ActivatesSession below, where
+// being wrong is expensive in both directions, and that is where the care
+// belongs.
 //
 // Excluded, and why they are not oversights: AwaitsUserInput events end or block
 // the turn, so they drive those transitions instead (the two predicates never
-// overlap); warning is how a session-level problem is reported, which can happen
-// before the first message; request_cancelled withdraws a prompt the user may
-// never have answered, and must not be read as a turn starting; process_ended is
-// an obituary. The remaining types are only ever replayed from history, never
-// streamed.
+// overlap); request_cancelled and process_ended likewise have signals of their
+// own, named in process.turnInputFor before this predicate is ever asked; and a
+// warning is how a session-level problem is reported, which can happen before
+// the first message ever goes out. The remaining types are only ever replayed
+// from history, never streamed.
 //
 // System and tool_activity events belong here but not in ActivatesSession, and
 // the gap between the two predicates is exactly the set that must *not* end a
 // background wait: the background task list changing is a `system` frame, so
 // counting it would make a task finishing look like the turn coming back (see
-// process.turnInputFor). tool_activity is separately how a background task that
-// is visibly reporting progress stops counting against the CLI adapter's silence
-// budget (see claude.parseLine).
+// process.turnInputFor). That gap is this predicate's whole remaining job.
 func (e EventType) IndicatesAgentActivity() bool {
 	return e == EventTypeSystem || e == EventTypeToolActivity || e.ActivatesSession()
 }

@@ -63,7 +63,7 @@ func newStarterEnv(t *testing.T, defaults settings.Settings, seed ...agentrole.A
 	agents := agent.NewRegistry()
 	agents.Register(session.AgentTypeClaude, idleAgent{})
 	agents.Register(session.AgentTypeCodex, idleAgent{})
-	pm := process.NewManager(agents, t.TempDir(), dataDir, "", sessionStore, time.Minute)
+	pm := process.NewManager(agents, t.TempDir(), dataDir, "", sessionStore, session.LeaseBudgets{Idle: time.Minute})
 	t.Cleanup(pm.Shutdown)
 
 	wt := &Worktree{

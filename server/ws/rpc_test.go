@@ -139,7 +139,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	}
 
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, mockRegistry(ag), dataDir, 10*time.Minute)
+	worktreeManager := worktree.NewManager(registry, mockRegistry(ag), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
 	// Wired as main.go wires it, so that the env shows the real consequence of a
 	// user action on a session — and of the entry points that deliberately are
 	// not one. Without it the syncer is nil and any such assertion passes for the
@@ -452,7 +452,7 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	settingsStore, _ := settings.NewStore(dataDir)
 	workStore, _ := work.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, 10*time.Minute)
+	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
 	defer worktreeManager.Shutdown()
 
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
@@ -503,7 +503,7 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	settingsStore, _ := settings.NewStore(dataDir)
 	workStore, _ := work.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, 10*time.Minute)
+	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
 	defer worktreeManager.Shutdown()
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 

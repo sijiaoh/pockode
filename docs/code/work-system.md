@@ -369,13 +369,13 @@ something the process was not going to settle anyway. `needs_input` still needs
 its answer and `waiting` still needs its child, and both are woken by events that
 outlive the process — a user action, a child closing.
 
-The idle reaper is what turns that from a nicety into a requirement. A work
+The lease table is what turns that from a nicety into a requirement. A work
 paused through MCP (`work_needs_input`, `work_wait`) is paused by the agent
 itself, in the work store: nothing about it is visible to the session, so no
-prompt is outstanding there and none of the holds that keep the reaper off a
-process applies ([agent-integration.md](agent-integration.md#idle-timeout-cleanup),
-which also has the idle timeout's default and why it can be short). Once that
-agent finishes its turn, its process is precisely what the reaper collects — so a
+prompt is outstanding there and the session's lease is the plain idle one
+([agent-integration.md](agent-integration.md#the-lease-table), which also has the
+idle budget's default and why it can be short). Once that agent finishes its
+turn, its process is precisely what the reaper collects — so a
 rule that stopped paused work on process death would stop those work items a few
 minutes after they paused, with nothing on screen to explain it.
 
@@ -466,14 +466,16 @@ does, because a restart destroys a different set of things than a dead process:
 | `waiting` | preserved | Its children are on disk and still wake it when they close |
 
 `needs_input` is the one status treated more harshly here than on process death,
-and the reason is the same fact that makes the reaper spare a process paused on a
-prompt: a CLI's permission request and ask-user-question live inside the process
-that raised them and are not restored when a new one starts
+and the reason is the same fact that gives a prompt a lease of its own: a CLI's
+permission request and ask-user-question live inside the process that raised them
+and are not restored when a new one starts
 ([agent-integration.md](agent-integration.md#a-prompt-belongs-to-the-process-that-raised-it),
 which also records that both decisions expire if prompts ever become answerable
-across processes). Within one run of the server the idle reaper will not take
-that process away, so the card generally stays answerable and the work may go on
-saying `needs_input`. A restart removes the doubt: the question is certainly
+across processes). Within one run of the server that lease keeps the process for
+an hour, so the card generally stays answerable and the work may go on saying
+`needs_input`; when the hour runs out the prompt is withdrawn and the turn ends,
+which moves the work through the ordinary abort path rather than leaving it
+claiming to wait. A restart removes the doubt entirely: the question is certainly
 gone, and leaving the work `needs_input` would promise a resumption that can
 never arrive.
 
@@ -584,14 +586,15 @@ and rejected:
   agent's own live background tasks and delivers the completion notification into
   whatever turn is running, so the model can see it still has work pending and
   check it with `BashOutput`.
-- **Nothing downstream breaks.** The injected turn's events push the fallback
-  deadline out, its ending parks the turn again while the task set is still
-  non-empty, and it ends the wait exactly when the set has drained. The session
-  stays `running`; no spurious idle, nudge, or retry accounting.
+- **Nothing downstream breaks.** The injected turn's content clears the
+  `background` blocker — content is what proves the CLI resumed — and its own
+  ending parks the turn again while the task set is still non-empty. The wait
+  therefore ends exactly when the set has drained, and the lease it is holding is
+  measured from the last parking rather than the first.
 - **Deferring costs more than it saves.** The queue would have to survive process
   death and server restart or lose the message, and would hold it for up to the
-  fallback budget (30–120 minutes). A reopen or child-done that produces nothing
-  for two hours is a silent stall — exactly what "no silent failures" forbids —
+  background lease's budget. A reopen or child-done that produces nothing for
+  that long is a silent stall — exactly what "no silent failures" forbids —
   traded against a context interleave the agent can see and handle.
 
 If the interleave ever does prove to confuse models, the fix belongs at the

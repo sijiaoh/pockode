@@ -2,7 +2,6 @@ package claude
 
 import (
 	"testing"
-	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/contents"
@@ -185,27 +184,6 @@ func TestParseTaskEvent_OrdinaryResultIsNotStamped(t *testing.T) {
 	replay := parseTestLineWithTracker(testLogger(), []byte(bgPlaceholder), tracker)
 	if subtype := replay[0].(agent.ToolResultEvent).Subtype; subtype != "" {
 		t.Errorf("a settled call must not be stamped again, got %q", subtype)
-	}
-}
-
-// Activity is why a reporting background task stops spending the silence budget:
-// the frames that would refresh it were dropped before this existed.
-func TestParseTaskEvent_ActivityPushesTheBackgroundWaitDeadlineOut(t *testing.T) {
-	events := make(chan agent.AgentEvent, 4)
-
-	tracker := &backgroundTaskTracker{}
-	tracker.wait.start(testLogger(), events, func(string) {}, time.Hour)
-	defer tracker.wait.stopWaiting()
-
-	parseTestLineWithTracker(testLogger(), []byte(inlineTaskStarted), tracker)
-	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
-	parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
-	armed := rewindDeadline(t, &tracker.wait)
-
-	parseTestLineWithTracker(testLogger(), []byte(inlineTaskProgress), tracker)
-
-	if refreshed := waitDeadline(&tracker.wait); !refreshed.After(armed) {
-		t.Error("a task reporting progress must not count against the silence budget")
 	}
 }
 

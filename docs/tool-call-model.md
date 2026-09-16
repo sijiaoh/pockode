@@ -268,18 +268,19 @@ That needed a fourth predicate beside the three `EventType` already answered, an
 
 **`Persisted` is a denylist while the other three are allowlists**, and the
 asymmetry is deliberate rather than an oversight to be tidied up. The other three
-are allowlists because a wrong inclusion strands a session or confiscates the
-escape hatch, and nothing downstream corrects it
+are allowlists because of what a wrong inclusion costs on the expensive side:
+`AwaitsUserInput` and `ActivatesSession` confiscate the user's escape hatch or
+end a wait that is not over, and nothing downstream corrects either
 ([code/agent-integration.md](code/agent-integration.md#what-an-event-says-about-process-state)).
 Here the default is the safe one: an event says what was true at one moment and
 that stays true, so a new type nobody thought about is recorded. The cost of
 forgetting is one stored record nobody reads, not a hole in history.
 
-`IndicatesAgentActivity` being true has a second effect that is wanted rather
-than tolerated: the background-wait deadline is refreshed on any such event, so a
-background task that is visibly reporting progress stops counting against the
-30-minute silence budget ([Background
-Waits](code/agent-integration.md#background-waits)). Because that predicate is
+`IndicatesAgentActivity` being true says the turn is alive without saying the
+agent contributed anything to it, which is exactly what a progress line is. It
+does **not** buy a parked turn more time: the background budget is a flat cap on
+how long a turn may stay parked, not a silence budget ([The Lease
+Table](code/agent-integration.md#the-lease-table)). Because that predicate is
 written as a union with `ActivatesSession`, answering it `true` while
 `ActivatesSession` stays `false` means naming the type in it explicitly — which
 is what an allowlist is for.
