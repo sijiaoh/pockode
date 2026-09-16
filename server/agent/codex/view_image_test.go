@@ -459,19 +459,23 @@ func TestViewImage_UnparseableItemEmitsNothing(t *testing.T) {
 	}
 }
 
-func TestLocalPath(t *testing.T) {
+// A path that is not a file URI is already a path, and comes back as it was
+// written — including its separators, which Windows reads as well as its own.
+func TestLocalPath_PlainPathPassesThrough(t *testing.T) {
+	const raw = "/tmp/shot.png"
+	if got := localPath(raw); got != raw {
+		t.Errorf("localPath(%q) = %q, want it unchanged", raw, got)
+	}
+}
+
+func TestLocalPath_FileURI(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
-		// want is written as a POSIX path and converted, which is the identity
-		// everywhere but Windows.
+		// want is written as a POSIX path and converted to native separators,
+		// which is the identity everywhere but Windows.
 		want string
 	}{
-		{
-			name: "a plain path is what app-server sends",
-			raw:  "/tmp/shot.png",
-			want: "/tmp/shot.png",
-		},
 		{
 			name: "file URI is the form the MCP channel sent",
 			raw:  "file:///tmp/imgprobe/test.png",
