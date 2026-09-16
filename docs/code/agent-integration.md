@@ -457,18 +457,15 @@ The two agents hand over different things. Claude delivers the content itself,
 base64 inside the frame. Codex delivers a path, regularly one outside the work
 directory ([Codex Event Mapping](#codex-event-mapping)). That difference is
 settled in the parsers and nowhere above them: Codex's file is read when its
-event arrives and stored where Claude's inline content is stored, so a block has
-one field naming its content (`AttachmentID`) and a client has one way to fetch
-it. Only the Claude side of that is wired today — the Codex parser's image
-handling was written against the MCP channel and did not survive the move to the
-app-server one, so a Codex image reaches the transcript as whatever its
-`item/*` notification says and no further. The session still opens its
-attachment store, which is where the rebuilt handler will put the bytes. `Path` is description — which file was looked at, and whether the UI can
-offer to open it in the Files tab — and it is not the route to the bytes while
-there are stored bytes to reach. A block may well carry both; the path being
-present says nothing about where the content comes from. (The one time the path
-is read for content is when there is no stored content to read and the reason is
-`unavailable`; see [the table below](#what-is-kept-and-what-is-only-described).)
+`imageView` item completes and stored where Claude's inline content is stored,
+so a block has one field naming its content (`AttachmentID`) and a client has
+one way to fetch it. `Path` is description — which file was looked at, and
+whether the UI can offer to open it in the Files tab — and it is not the route
+to the bytes while there are stored bytes to reach. A block may well carry
+both; the path being present says nothing about where the content comes from.
+(The one time the path is read for content is when there is no stored content to
+read and the reason is `unavailable`; see
+[the table below](#what-is-kept-and-what-is-only-described).)
 
 The alternative was to let the client understand both shapes, which buys two
 loaders, two sets of failure wording and two click behaviours for what the user
@@ -1518,8 +1515,9 @@ when one begins, `item/completed` when it ends — wrapped in a turn.
 | `item/started`, `commandExecution` | `ToolCallEvent {ToolName: "Bash"}` |
 | `item/started`, `fileChange` | `ToolCallEvent {ToolName: "Edit"}` |
 | `item/started`, `mcpToolCall` | `ToolCallEvent {ToolName: "server:tool"}` |
+| `item/started`, `imageView` | `ToolCallEvent {ToolName: "Read"}` |
 | `item/completed`, `agentMessage` | `TextEvent` |
-| `item/completed`, the three item types above | `ToolResultEvent` |
+| `item/completed`, the four item types above | `ToolResultEvent` (`imageView`'s carries a file block, the rest text) |
 | `mcpServer/startupStatus/updated`, `status: "failed"` | `WarningEvent` per failed server |
 | `error` with `willRetry` | `WarningEvent` |
 | `warning`, `guardianWarning`, `configWarning` | `WarningEvent` |
@@ -1528,6 +1526,31 @@ when one begins, `item/completed` when it ends — wrapped in a turn.
 The tool names are Pockode's rather than Codex's: the frontend renders a command
 as `Bash` and a patch as `Edit` for either agent, so the mapping happens here
 instead of in a frontend branch on agent type.
+
+**`imageView` is the one item rendered as a tool it is not.** It is what Codex's
+`view_image` tool puts in front of the model, and it has no result of its own to
+report: `item/started` and `item/completed` carry the identical `{type, id,
+path}` and nothing else (measured end to end on codex-cli 0.153.0). Read as a
+`Read` call whose result is the file, it lands in the same chat UI as claude
+reading an image — one renderer, one set of failure wording — instead of earning
+a branch of its own for an operation that is a read. The result's file block is
+built by the parser, which is where the bytes are fetched and stored
+([One Route to the Bytes](#one-route-to-the-bytes)); the item is still reported
+when the path turns out to be unusable, with `omitted: unavailable`, because a
+transcript that says the turn looked at an image it could not fetch is worth more
+than one that says the turn never touched an image at all.
+
+**That path is not promised to be absolute.** The schema types it as a bare
+string, while `imageGeneration`'s `savedPath` in the very same union is typed
+`AbsolutePathBuf` — so the omission reads as deliberate, even though 0.153.0 was
+only observed sending absolute paths. A path that is not already anchored by the
+OS is therefore resolved against the thread's `cwd`, which is what a path the
+agent wrote means. Resolving it against the Pockode process's own working
+directory — what opening it unchanged would do — has nothing to do with the
+session, and would show the user a different file under the agent's name. The
+test is `pathutil.IsAnchored` rather than `filepath.IsAbs`, which reports the
+Windows `\shot.png` and `C:shot.png` forms as relative and would have them
+joined into nonsense.
 
 **Item types not in the table produce nothing**, which is a second and separate
 place work is dropped from the ignore list below: the echo of the prompt just
@@ -1618,6 +1641,16 @@ These are choices, recorded so they do not become blanks nobody knows about.
 - **The app-server's session-management surface** — listing, naming and searching
   threads — is not used at all. Pockode *is* the session manager; a second index
   of the same conversations could only disagree with the one the user sees.
+- **The `imageGeneration` item** is the model *making* an image rather than
+  looking at one, and it reports a `savedPath` the same machinery behind
+  `imageView` could read. Not wired up: it is a feature of its own, not part of
+  showing the user what the agent looked at, and unlike `imageView` it has not
+  been observed end to end — it carries a `status`, a `failure` and a `result`
+  whose meanings would be guesses. (The MCP channel's `image_generation_begin` /
+  `image_generation_end` were its predecessors, and were ignored for the same
+  reason; app-server has no notification by either name, so there is nothing to
+  add to `ignoredNotifications` — the item simply falls through the type switch
+  like reasoning and plans.)
 - **`agent.BackgroundWaiter`** has no Codex counterpart to implement. Codex has no
   concept of a task that outlives its turn, so the interface stays unimplemented
   and the idle reaper's exemption simply never applies

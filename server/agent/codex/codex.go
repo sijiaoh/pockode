@@ -202,11 +202,10 @@ type appSession struct {
 
 	// attachments is where the images this session's tools look at are kept, so
 	// the events naming them stay small enough to hold in the history (see
-	// package attachments). Nothing writes to it yet: the handler that did was
-	// written against the MCP channel and has to be rebuilt on the app-server
-	// one. The store is opened here rather than with that handler because
-	// opening it is what ties it to this session's data directory, and that is
-	// settled here and nowhere else.
+	// package attachments). handleImageViewCompleted is what writes to it. The
+	// store is opened here rather than there because opening it is what ties it
+	// to this session's data directory, and that is settled here and nowhere
+	// else.
 	attachments attachments.Store
 
 	stateMu  sync.Mutex // protects threadID, turnID and interruptPending

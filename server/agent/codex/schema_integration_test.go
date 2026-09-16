@@ -95,6 +95,13 @@ func TestIntegration_ProtocolSchemaStillFitsWhatWeSend(t *testing.T) {
 		}
 	})
 
+	// The image an agent says it looked at is read off this one field, and the
+	// item carries nothing else to fall back on. Losing it would turn every
+	// Codex image in the transcript into a silently empty row.
+	t.Run("an imageView item still names its path", func(t *testing.T) {
+		requireItemVariant(t, dir, "imageView", "path")
+	})
+
 	// web/src/lib/codexChanges.ts renders exactly these three and shows
 	// "Unsupported change type" for anything else, so a fourth would reach the
 	// user as a blank row in an approval prompt.
@@ -111,6 +118,23 @@ func TestIntegration_ProtocolSchemaStillFitsWhatWeSend(t *testing.T) {
 			}
 		}
 	})
+}
+
+// requireItemVariant finds the ThreadItem branch with the given `type` and
+// asserts the fields handleItemCompleted's case for it reads are still
+// required.
+func requireItemVariant(t *testing.T, dir, itemType string, required ...string) {
+	t.Helper()
+	for _, branch := range schemaBranches(t, dir, "codex_app_server_protocol.v2.schemas.json", "ThreadItem") {
+		props, _ := branch["properties"].(map[string]interface{})
+		disc, _ := props["type"].(map[string]interface{})
+		if !containsString(jsonStrings(disc["enum"]), itemType) {
+			continue
+		}
+		assertRequired(t, itemType, jsonStrings(branch["required"]), required)
+		return
+	}
+	t.Fatalf("ThreadItem no longer has a %q variant, which this package handles", itemType)
 }
 
 // generateSchemas asks the installed CLI for its own protocol schema.

@@ -228,7 +228,7 @@ func (s *appSession) handleItemStarted(params json.RawMessage) {
 		return
 	}
 
-	toolName, toolInput, ok := toolCallOf(item)
+	toolName, toolInput, ok := s.toolCallOf(item)
 	if !ok {
 		return
 	}
@@ -247,9 +247,10 @@ func (s *appSession) handleItemStarted(params json.RawMessage) {
 
 // toolCallOf renders an item as a tool call, or reports that it is not one.
 //
-// The tool names are Pockode's, not Codex's: "Bash" and "Edit" are what the
-// frontend renders a command and a patch as, for either agent.
-func toolCallOf(item threadItem) (toolName string, toolInput json.RawMessage, ok bool) {
+// The tool names are Pockode's, not Codex's: "Bash", "Edit" and "Read" are what
+// the frontend renders a command, a patch and a file the agent looked at as,
+// for either agent.
+func (s *appSession) toolCallOf(item threadItem) (toolName string, toolInput json.RawMessage, ok bool) {
 	switch item.Type {
 	case "commandExecution":
 		var ev struct {
@@ -293,6 +294,18 @@ func toolCallOf(item threadItem) (toolName string, toolInput json.RawMessage, ok
 		}
 		// server:tool, because the name is the only place it can be shown.
 		return ev.Server + ":" + ev.Tool, input, true
+
+	case "imageView":
+		raw, ok := imageViewPath(item)
+		if !ok {
+			return "", nil, false
+		}
+		// The path Codex named, made openable where it can be — and shown as it
+		// arrived where it cannot, since that is then the only description of
+		// the file there is. Resolved the same way here as in the result, so
+		// the call and the file below it name one file. See view_image.go.
+		input, _ := json.Marshal(map[string]string{"file_path": firstNonEmpty(s.imageViewLocalPath(raw), raw)})
+		return "Read", input, true
 	}
 
 	return "", nil, false
@@ -376,6 +389,9 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 
 	case "mcpToolCall":
 		s.emitEvent(mcpToolResult(item))
+
+	case "imageView":
+		s.handleImageViewCompleted(item)
 	}
 }
 
