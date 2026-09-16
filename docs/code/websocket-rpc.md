@@ -320,6 +320,16 @@ be cleaned up. The no-op check (already bound to this worktree) compares worktre
 *pointers*, not names, so a stale instance left over from a force-shutdown +
 same-name recreate is replaced by the live one instead of being silently reused.
 
+`bindWorktree` makes each bind atomic; it does not order two of them. Two
+`worktree.switch` requests in flight are two goroutines, so the connection ends
+up bound to whichever finished last, which need not be the one the client asked
+for last. Serializing them here would not help: a lock would decide only which
+goroutine gets to bind first, and which binding is the one still wanted is
+something only the client knows. So ordering is left to the client, and `wsStore`
+imposes it — one switch in flight at a time, re-aimed at the current target after
+each reply. What a stale bind did to the session list is in
+[subscription-system.md](subscription-system.md#why-only-one-worktreeswitch-is-ever-in-flight).
+
 Code: `server/ws/rpc.go` (`bindWorktree`, `trackSubscription`, `cleanup`),
 `server/ws/rpc_worktree.go` (`handleWorktreeSwitch`); regression coverage in
 `server/ws/rpc_lifecycle_test.go`.

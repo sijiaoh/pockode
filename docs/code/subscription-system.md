@@ -500,6 +500,40 @@ So switch start no longer calls `onReset`. Instead:
 
 `onReset` is now reserved for the cases where the data is genuinely untrustworthy — disable, disconnect, a failed (re)subscribe, or an `onSubscribed` that threw part-way through (see *Why a Throwing Snapshot Handler Is Reported Separately*: that last one leaves the subscription open, so the next notification refills what it cleared). Consumers that don't pass `onWorktreeSwitch` (git, git-diff, fs) simply keep their previous data until the new snapshot replaces it, turning the switch into a seamless refresh. This is a `keepPreviousData`-style trade-off: the placeholder briefly shows the old worktree's data, but it is data already on the client — no cross-worktree request is issued during the transition, so the security boundary (server-side `worktree.switch` validation) is untouched.
 
+### Why Only One `worktree.switch` Is Ever in Flight
+
+`onSwitchEnd` is what reopens every worktree-scoped subscription, so it must fire
+only once the connection is bound to the worktree the app is actually showing.
+That is not something the reply can be trusted to mean on its own.
+
+A connection has exactly one bound worktree, and the server answers each request
+on its own goroutine (`jsonrpc2.AsyncHandler`) — each bind is atomic, but nothing
+orders two of them
+([websocket-rpc.md](websocket-rpc.md#binding-a-worktree-vs-disconnect)). Two
+switches in flight therefore complete in either order, and the connection keeps
+whichever finished *last*, not whichever was requested last. Switching to a
+worktree the server still has to open is slow; switching to one it already holds
+is immediate. Move on while the first is still working and the order inverts: the
+fast switch to C binds and replies, the subscriptions reopen and show C correctly
+— and then B lands, rebinds the connection, and its switch-end refills the
+session list with B's sessions under C's URL. Nothing recovers it, because every
+later request, refresh included, is answered against B too.
+
+`wsStore` therefore runs switches through a single-flight loop
+(`runWorktreeSwitchLoop`) that re-reads `worktreeActions.getCurrent()` after each
+reply. Serializing removes the overlap; the re-read is what catches up, issuing a
+further switch whenever the reply arrived for a worktree the app has already left.
+`notifyWorktreeSwitchEnd` — and the `workDir` update beside it — fire only on the
+iteration that lands on target, so subscriptions are reopened once, against the
+worktree on screen.
+
+Only those two wait for that iteration. Clearing the worktree-scoped callback
+maps and invalidating the worktree-dependent queries happen on *every* successful
+reply, superseded ones included: the server binds before it answers, so by the
+time the reply lands the old worktree's data is stale whether or not the worktree
+that replaced it is still wanted — and the switch that supersedes it is about to
+invalidate the same things again.
+
 ### Why the Session List Keeps a Placeholder During a Switch
 
 The session list decides which chat `AppShell` renders, so "keep old data" is not enough on its own: the redirect / new-session recovery logic must also be prevented from acting on the stale list (which would hijack the URL toward a session that belongs to the old worktree). `useSessionSubscription` passes `onWorktreeSwitch: beginReload`:
