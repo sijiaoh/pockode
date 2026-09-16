@@ -67,7 +67,31 @@ describe("messageReducer", () => {
 				type: "tool_result",
 				toolUseId: "tool-1",
 				toolResult: "file.txt",
+				contents: undefined,
 				isError: false,
+			});
+		});
+
+		it("normalizes a tool_result that carried blocks", () => {
+			const event = normalizeEvent({
+				type: "tool_result",
+				tool_use_id: "tool-1",
+				tool_result: "",
+				contents: [
+					{ type: "text", text: "PDF file read" },
+					{
+						type: "file",
+						file: { mime: "application/pdf", omitted: "binary" },
+					},
+				],
+			});
+			expect(event).toMatchObject({
+				type: "tool_result",
+				toolUseId: "tool-1",
+				contents: [
+					{ type: "text", text: "PDF file read" },
+					{ type: "file", file: { mime: "application/pdf" } },
+				],
 			});
 		});
 
@@ -989,6 +1013,74 @@ describe("messageReducer", () => {
 			expect(updated.parts[0]).toMatchObject({
 				type: "tool_call",
 				tool: { id: "tool-1", result: "file.txt" },
+			});
+		});
+
+		it("carries a result's blocks onto the call that asked for it", () => {
+			const streaming: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "tool_call",
+						tool: { id: "tool-1", name: "Read", input: { file_path: "a.png" } },
+					},
+				],
+				status: "streaming",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([streaming], {
+				type: "tool_result",
+				toolUseId: "tool-1",
+				toolResult: "",
+				contents: [
+					{ type: "file", file: { mime: "image/png", attachment_id: "abc" } },
+				],
+				isError: false,
+			});
+			expect((messages[0] as AssistantMessage).parts[0]).toMatchObject({
+				type: "tool_call",
+				tool: {
+					id: "tool-1",
+					contents: [
+						{ type: "file", file: { mime: "image/png", attachment_id: "abc" } },
+					],
+				},
+			});
+		});
+
+		// A Task reports in prose, and a result delivered as blocks carries that
+		// prose inside them — reading only `toolResult` would leave it empty.
+		it("settles a Task from the prose in its blocks", () => {
+			const streaming: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "task",
+						task: {
+							toolUseId: "tool-1",
+							description: "Explore",
+							status: "running",
+						},
+					},
+				],
+				status: "streaming",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([streaming], {
+				type: "tool_result",
+				toolUseId: "tool-1",
+				toolResult: "",
+				contents: [
+					{ type: "text", text: "# Report" },
+					{ type: "file", file: { mime: "image/png", attachment_id: "abc" } },
+				],
+				isError: false,
+			});
+			expect((messages[0] as AssistantMessage).parts[0]).toMatchObject({
+				type: "task",
+				task: { status: "done", result: "# Report" },
 			});
 		});
 

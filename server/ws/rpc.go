@@ -520,6 +520,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSessionDetailSubscribe(ctx, conn, req, wt)
 	case "session.detail.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, wt.SessionDetailWatcher, "session detail")
+	// attachment namespace
+	case "attachment.get":
+		h.handleAttachmentGet(ctx, conn, req, wt)
 	// file namespace
 	case "file.get":
 		h.handleFileGet(ctx, conn, req, wt)

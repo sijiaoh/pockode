@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/filestore"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
@@ -153,6 +154,10 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	backgroundTasks := &backgroundTaskTracker{}
 	lossStore := newBackgroundLossStore(opts)
 
+	// Keeps the binary content a tool returns out of the session history; see
+	// package attachments.
+	attachmentStore := attachments.NewStore(opts.DataDir, opts.SessionID)
+
 	// Per-process for the same reason, and a stronger one: the CLI's usage totals
 	// restart with it. See agent.UsageAccumulator.
 	usage := newUsageObserver(log, opts)
@@ -216,7 +221,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			}
 		}
 
-		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, usage, sess.declineControlRequest)
+		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, usage, sess.declineControlRequest, attachmentStore)
 		agent.WaitForProcess(procCtx, log, proc, stderrCh, events)
 		resumeState.processExited(procCtx.Err() != nil)
 
@@ -517,7 +522,7 @@ func (s *cliSession) writeStdin(data []byte) error {
 	return err
 }
 
-func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, usage *usageObserver, decline declineFunc) {
+func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, usage *usageObserver, decline declineFunc, store attachments.Store) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
@@ -545,7 +550,7 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		}
 		usage.observe(line, event)
 
-		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, decline) {
+		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, decline, store) {
 			select {
 			case events <- ev:
 			case <-ctx.Done():
@@ -965,8 +970,8 @@ type declineFunc func(requestID, message string)
 // parseLine converts one already-decoded stream-json envelope into agent events.
 // line is retained for the cases (assistant, result, control_*) that decode a
 // superset struct.
-func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc) []agent.AgentEvent {
-	events := parseLineEvents(log, line, event, pendingRequests, backgroundTasks, decline)
+func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc, store attachments.Store) []agent.AgentEvent {
+	events := parseLineEvents(log, line, event, pendingRequests, backgroundTasks, decline, store)
 
 	// Keep the background wait fallback in step with what the user can see. Any
 	// ending that does reach them closes it, so the held-back ending is not
@@ -986,12 +991,12 @@ func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *s
 	return events
 }
 
-func parseLineEvents(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc) []agent.AgentEvent {
+func parseLineEvents(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc, store attachments.Store) []agent.AgentEvent {
 	switch event.Type {
 	case "assistant":
 		return parseAssistantEvent(log, line, event)
 	case "user":
-		return parseUserEvent(log, event)
+		return parseUserEvent(log, event, store)
 	case "result":
 		if ev := parseResultEvent(log, line, backgroundTasks); ev != nil {
 			return []agent.AgentEvent{ev}
@@ -1357,7 +1362,7 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent) []agent.
 	return events
 }
 
-func parseUserEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
+func parseUserEvent(log *slog.Logger, event cliEvent, store attachments.Store) []agent.AgentEvent {
 	if event.Message == nil {
 		return nil
 	}
@@ -1378,30 +1383,11 @@ func parseUserEvent(log *slog.Logger, event cliEvent) []agent.AgentEvent {
 	for _, block := range msg.Content {
 		switch block.Type {
 		case "tool_result":
-			// Check if content contains image (array with type:"image" elements).
-			// TODO: Support image display. Also note current HTTP relay has 10MB limit,
-			// which may need adjustment for large images.
-			if hasImageContent(block.Content) {
-				events = append(events, agent.WarningEvent{
-					Message: "Image content is not supported yet",
-					Code:    "image_not_supported",
-				})
-				continue
-			}
-
-			// Content is JSON: either a string ("...") or array/object.
-			// Unmarshal extracts the string value; for non-strings, use raw JSON.
-			var content string
-			if err := json.Unmarshal(block.Content, &content); err != nil {
-				if text, ok := textBlocksContent(block.Content); ok {
-					content = text
-				} else {
-					content = string(block.Content)
-				}
-			}
+			result := parseToolResult(log, store, block.Content)
 			events = append(events, agent.ToolResultEvent{
 				ToolUseID:         block.ToolUseID,
-				ToolResult:        content,
+				ToolResult:        result.text,
+				Contents:          result.blocks,
 				IsError:           block.IsError,
 				ProviderMessageID: event.UUID,
 			})
@@ -1471,55 +1457,6 @@ func extractEventsFromText(log *slog.Logger, text string) []agent.AgentEvent {
 	logIgnored(remaining)
 
 	return events
-}
-
-// textBlocksContent joins an all-text content block array into the text the
-// model itself saw. The Agent (subagent) tool reports this way, and its report
-// is Markdown: handing the raw JSON array to the UI would render the report as
-// a wall of escaped JSON. Anything but a pure text array is left alone.
-func textBlocksContent(content json.RawMessage) (string, bool) {
-	if len(content) == 0 || content[0] != '[' {
-		return "", false
-	}
-
-	var items []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(content, &items); err != nil || len(items) == 0 {
-		return "", false
-	}
-
-	texts := make([]string, 0, len(items))
-	for _, item := range items {
-		if item.Type != "text" {
-			return "", false
-		}
-		texts = append(texts, item.Text)
-	}
-	return strings.Join(texts, "\n"), true
-}
-
-// hasImageContent checks if JSON content contains image type elements.
-// Returns true if content is an array containing any element with type:"image".
-func hasImageContent(content json.RawMessage) bool {
-	if len(content) == 0 || content[0] != '[' {
-		return false
-	}
-
-	var items []struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(content, &items); err != nil {
-		return false
-	}
-
-	for _, item := range items {
-		if item.Type == "image" {
-			return true
-		}
-	}
-	return false
 }
 
 type resultEvent struct {

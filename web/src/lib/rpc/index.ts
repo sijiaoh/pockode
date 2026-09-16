@@ -3,6 +3,10 @@ export {
 	type AgentRoleActions,
 	createAgentRoleActions,
 } from "./agentRole";
+export {
+	type AttachmentActions,
+	createAttachmentActions,
+} from "./attachment";
 export { type ChatActions, createChatActions } from "./chat";
 export {
 	type Command,

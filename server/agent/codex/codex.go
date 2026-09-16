@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
@@ -133,6 +134,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		pendingApprovals:  &sync.Map{},
 		toolInputs:        map[string]json.RawMessage{},
 		resume:            newResumeStateStore(opts, log),
+		attachments:       attachments.NewStore(opts.DataDir, opts.SessionID),
 		// Per-process: Codex's totals count from the start of the app-server
 		// process holding the thread, and reset again on every resume. See
 		// agent.UsageAccumulator.
@@ -197,6 +199,14 @@ type appSession struct {
 	nextID            atomic.Int64
 	pendingRPCResults *sync.Map // id -> chan *rpcResponse
 	pendingApprovals  *sync.Map // request id -> chan approvalDecision
+
+	// attachments is where the images this session's tools look at are kept, so
+	// the events naming them stay small enough to hold in the history (see
+	// package attachments). handleImageViewCompleted is what writes to it. The
+	// store is opened here rather than there because opening it is what ties it
+	// to this session's data directory, and that is settled here and nowhere
+	// else.
+	attachments attachments.Store
 
 	stateMu  sync.Mutex // protects threadID, turnID and interruptPending
 	threadID string

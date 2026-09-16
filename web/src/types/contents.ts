@@ -1,7 +1,12 @@
 export type EntryType = "file" | "dir";
 /** `none` means the server sent no content; `omitted` says why. */
 export type Encoding = "text" | "base64" | "none";
-export type OmitReason = "too_large" | "binary";
+/**
+ * Why a response carries no content. Shared with the content blocks an agent
+ * produces (`FileBlock.omitted`), which is the same statement about the same
+ * kind of thing — one vocabulary rather than two that drift.
+ */
+export type OmitReason = "too_large" | "binary" | "unavailable";
 
 export interface Entry {
 	name: string;

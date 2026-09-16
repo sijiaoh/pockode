@@ -108,6 +108,11 @@ interface Props {
 	/** Opens another session of this worktree, which a fork's parent and child both are. */
 	onSelectSession?: (sessionId: string) => void;
 	onOpenWorkDetail?: (workId: string) => void;
+	/**
+	 * Opens a work-directory file in the Files viewer. Must be stable: it reaches
+	 * the memoized `MessageItem`.
+	 */
+	onOpenFile?: (path: string) => void;
 	onOpenWorkList?: () => void;
 	onOpenAgentRoleList?: () => void;
 	onOpenAgentRoleDetail?: (roleId: string) => void;
@@ -125,6 +130,7 @@ function ChatPanel({
 	onNavigateToSession,
 	onSelectSession,
 	onOpenWorkDetail,
+	onOpenFile,
 	onOpenWorkList,
 	onOpenAgentRoleList,
 	onOpenAgentRoleDetail,
@@ -360,6 +366,7 @@ function ChatPanel({
 			return (
 				<MessageList
 					key={sessionId}
+					sessionId={sessionId}
 					messages={messages}
 					isProcessRunning={isProcessRunning}
 					hasMoreHistory={hasMoreHistory}
@@ -372,6 +379,7 @@ function ChatPanel({
 					onQuestionRespond={handleQuestionRespond}
 					onHintClick={handleSend}
 					onOpenWorkDetail={onOpenWorkDetail}
+					onOpenFile={onOpenFile}
 					forkedFromSessionId={forkedFromSessionId}
 					onOpenSession={onSelectSession}
 					// Forking without a way to open the result would leave the user in

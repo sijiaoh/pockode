@@ -1,3 +1,4 @@
+import type { ContentBlock } from "../types/content";
 import type {
 	AskUserQuestion,
 	AssistantMessage,
@@ -13,6 +14,7 @@ import type {
 	UserMessage,
 } from "../types/message";
 import { generateUUID } from "../utils/uuid";
+import { contentBlocksText, parseContentBlocks } from "./contentBlocks";
 
 // Legacy history recorded system messages with origin "work" before the
 // concept was renamed to "system". Map the old value so old sessions still
@@ -44,6 +46,12 @@ export type NormalizedEvent =
 			type: "tool_result";
 			toolUseId: string;
 			toolResult: string;
+			/**
+			 * The result cut into blocks, set only when it was not prose alone.
+			 * When present it holds the whole result, text included, and
+			 * `toolResult` is empty.
+			 */
+			contents?: ContentBlock[];
 			isError: boolean;
 	  }
 	| { type: "warning"; message: string; code: string }
@@ -133,6 +141,7 @@ export function normalizeEvent(
 				type: "tool_result",
 				toolUseId: record.tool_use_id as string,
 				toolResult: (record.tool_result as string) ?? "",
+				contents: parseContentBlocks(record.contents),
 				isError: record.is_error === true,
 			};
 		case "warning":
@@ -488,6 +497,7 @@ function applyEvent(messages: Message[], event: NormalizedEvent): Message[] {
 			messages,
 			event.toolUseId,
 			event.toolResult,
+			event.contents,
 			event.isError,
 		);
 	}
@@ -756,6 +766,7 @@ function updateToolResult(
 	messages: Message[],
 	toolUseId: string,
 	toolResult: string,
+	contents: ContentBlock[] | undefined,
 	isError: boolean,
 ): Message[] {
 	// A tool_result almost always targets a tool_call in the most recent
@@ -777,11 +788,21 @@ function updateToolResult(
 		const part = msg.parts[partIndex];
 		let settled: ContentPart;
 		if (part.type === "tool_call") {
-			settled = { ...part, tool: { ...part.tool, result: toolResult } };
-		} else if (part.type === "task") {
 			settled = {
 				...part,
-				task: settleTaskRun(part.task, toolResult, isError),
+				tool: { ...part.tool, result: toolResult, contents },
+			};
+		} else if (part.type === "task") {
+			// A Task reports back in prose, so it has no use for the blocks — but
+			// a result that arrived as blocks carries its prose in them, and
+			// reading only `toolResult` would leave the Task looking empty.
+			settled = {
+				...part,
+				task: settleTaskRun(
+					part.task,
+					contents ? contentBlocksText(contents) : toolResult,
+					isError,
+				),
 			};
 		} else {
 			continue; // Type guard - never happens

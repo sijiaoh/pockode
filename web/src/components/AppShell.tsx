@@ -572,6 +572,7 @@ function AppShell() {
 					onNavigateToSession={handleNavigateToSession}
 					onSelectSession={handleSelectSession}
 					onOpenWorkDetail={handleOpenWorkDetail}
+					onOpenFile={handleSelectFile}
 					onOpenWorkList={handleOpenWorkList}
 					onOpenAgentRoleList={handleOpenAgentRoleList}
 					onOpenAgentRoleDetail={handleOpenAgentRoleDetail}

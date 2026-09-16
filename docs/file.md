@@ -16,6 +16,12 @@ React SPA ──WebSocket──▶ Go Server ──filesystem──▶ Workspace
 Browsing and editing go over the WebSocket; upload and download go over HTTP,
 for the reasons in [Transfer](#transfer).
 
+Everything here names a file by a path inside the workspace. Content an agent
+delivered in a conversation — the image a tool returned, a file it read from
+outside the work directory — is not in this namespace and is deliberately not
+served through it; it is addressed by id in the session's own attachment store
+([code/agent-integration.md](code/agent-integration.md#why-this-is-not-the-file-namespace)).
+
 ## Key Files
 
 | Layer | Path | Role |

@@ -297,7 +297,13 @@ function textMessage(id: string): Message {
 }
 
 function renderList(messages: Message[]) {
-	return render(<MessageList messages={messages} isProcessRunning={false} />);
+	return render(
+		<MessageList
+			sessionId="session-1"
+			messages={messages}
+			isProcessRunning={false}
+		/>,
+	);
 }
 
 const pill = () =>
@@ -391,6 +397,7 @@ describe("MessageList pending question pill", () => {
 
 		rerender(
 			<MessageList
+				sessionId="session-1"
 				messages={[questionMessage("m1", "r1", "answered")]}
 				isProcessRunning={false}
 			/>,
@@ -461,6 +468,7 @@ describe("MessageList history paging", () => {
 	function renderPaging() {
 		const onLoadMoreHistory = vi.fn();
 		const props = {
+			sessionId: "session-1",
 			isProcessRunning: false,
 			hasMoreHistory: true,
 			onLoadMoreHistory,
@@ -687,6 +695,7 @@ describe("MessageList history paging", () => {
 		const onLoadMoreHistory = vi.fn();
 		render(
 			<MessageList
+				sessionId="session-1"
 				messages={[textMessage("m1")]}
 				isProcessRunning={false}
 				hasMoreHistory
@@ -707,12 +716,17 @@ describe("MessageList history paging", () => {
 
 	it("says where the conversation starts, but only once the user has paged back", () => {
 		const { rerender } = render(
-			<MessageList messages={[textMessage("m1")]} isProcessRunning={false} />,
+			<MessageList
+				sessionId="session-1"
+				messages={[textMessage("m1")]}
+				isProcessRunning={false}
+			/>,
 		);
 		expect(screen.queryByText("Beginning of conversation")).toBeNull();
 
 		rerender(
 			<MessageList
+				sessionId="session-1"
 				messages={[textMessage("m1")]}
 				isProcessRunning={false}
 				loadedHistoryPages={1}
@@ -799,6 +813,7 @@ describe("MessageList following the tail", () => {
 		const question = questionMessage("q1", "r1");
 		render(
 			<MessageList
+				sessionId="session-1"
 				messages={[...transcript, question]}
 				isProcessRunning={false}
 			/>,
@@ -828,6 +843,7 @@ describe("MessageList following the tail", () => {
 
 	it("leaves a freshly paged-in view where the restore put it", () => {
 		const props = {
+			sessionId: "session-1",
 			isProcessRunning: false,
 			hasMoreHistory: true,
 			onLoadMoreHistory: vi.fn(),
@@ -876,6 +892,7 @@ describe("MessageList following the tail", () => {
 
 		rerender(
 			<MessageList
+				sessionId="session-1"
 				messages={[...transcript, userMessage("sent")]}
 				isProcessRunning={false}
 			/>,

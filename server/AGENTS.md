@@ -38,6 +38,7 @@ agent/                  # Agent 抽象（接口, 事件, 进程管理, 注册表
   codex/                # Codex CLI 实现
 agentrole/              # AgentRole 存储 + 类型定义
 apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代理共用）
+attachments/            # 按 session 存放事件里以 id 引用的内容（内容寻址）
 chat/                   # Chat 客户端
 command/                # 命令存储
 contents/               # 文件内容获取
@@ -80,6 +81,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `internal/proctree/proctree.go` | `tree_{unix,windows}.go` — 进程树终止：进程组 / Job Object，Windows 另加 `CREATE_NO_WINDOW` |
 | `git/command.go` | `terminate_{unix,windows}.go` — 超时的 git 怎么停：SIGTERM（git 自己清锁文件）/ 杀进程树（Windows 没有可发的停止请求）|
 | `agent/command.go` | `command_{unix,windows}.go` — AI CLI 的查找兜底目录 + `.cmd` 包装器的命令行构造 |
+| `agent/codex/view_image.go` | `fileuri_{unix,windows}.go` — `file://` URI 的 path 段转原生路径：Windows 上盘符是 URI 语法里的又一段，前导斜杠要去掉 |
 | `worktree/setup.go` | `hook_shell_{unix,windows}.go` — setup hook 的解释器（Windows 无 bash，探测 Git for Windows） |
 | `internal/pathutil/pathutil.go` | `equal_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
 | `internal/fsperm/fsperm.go` | `fsperm_{unix,windows}.go` — 0700/0600 mode 位 / 显式 DACL |
@@ -92,7 +94,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 |------|------|
 | `Equal(a, b)` | 原生路径相等判断（Windows 大小写不敏感）|
 | `ChildName(path, dir)` | path 是否在 dir 下，以及其下第一段的名字 |
-| `IsAnchored(path)` | 路径是否被 OS 锚定在别处——绝对路径，外加 `filepath.IsAbs` 判为相对的两种 Windows 形式：`\etc`（当前盘）和 `C:etc`（该盘的工作目录）。给「允许有意逃逸、但不能被锚在别处」的场景用（如 `../worktrees` 设置）|
+| `IsAnchored(path)` | 路径是否被 OS 锚定在别处——绝对路径，外加 `filepath.IsAbs` 判为相对的两种 Windows 形式：`\etc`（当前盘）和 `C:etc`（该盘的工作目录）。给「允许有意逃逸、但不能被锚在别处」的场景用（如 `../worktrees` 设置；codex 报的 `imageView` path 也用它判断要不要按 thread 的 cwd 解析）|
 | `TrimTildePrefix(path)` / `ExpandTilde(path)` | `~` 展开。`\` 只在 Windows 上算分隔符；Windows 上没有 shell 替我们展开 `~`，用户输入的 `~\projects` 是原样送达的 |
 
 参数一律是**原生路径**。外部来的值默认不是：git 的输出、手写的设置、我们自己 API 里的路径都用 `/`，进来时 `filepath.FromSlash`，出去时 `filepath.ToSlash`。
@@ -119,11 +121,11 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
   | 来源 | 调用点 | 为什么 Windows 上做不到 |
   |---|---|---|
-  | `internal/fifotest` | `contents`×1、`filetransfer`×2 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
+  | `internal/fifotest` | `agent/codex`×1、`contents`×1、`filetransfer`×2 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
   | `internal/symlinktest` | `contents`×1、`filetransfer`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
   | `internal/unwritabletest` | `filestore`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
 
-  **合计 5~7 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 2+3，开了是 3+0。别按单行的数去对账，按合计。
+  **合计 6~8 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 3+3，开了是 4+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 

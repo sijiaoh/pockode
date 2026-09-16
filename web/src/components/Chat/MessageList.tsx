@@ -119,6 +119,8 @@ function prefersReducedMotion(): boolean {
 
 interface Props {
 	messages: Message[];
+	/** The session this transcript belongs to; see `MessageItem`. */
+	sessionId: string;
 	isProcessRunning: boolean;
 	/** Whether the server still holds records older than `messages[0]`. */
 	hasMoreHistory?: boolean;
@@ -138,6 +140,8 @@ interface Props {
 	) => void;
 	onHintClick?: (hint: string) => void;
 	onOpenWorkDetail?: (workId: string) => void;
+	/** Opens a work-directory file in the Files viewer. Must be stable. */
+	onOpenFile?: (path: string) => void;
 	/** The session this one was forked from, if it was. */
 	forkedFromSessionId?: string;
 	onOpenSession?: (sessionId: string) => void;
@@ -147,6 +151,7 @@ interface Props {
 
 function MessageList({
 	messages,
+	sessionId,
 	isProcessRunning,
 	hasMoreHistory = false,
 	isLoadingMoreHistory = false,
@@ -158,6 +163,7 @@ function MessageList({
 	onQuestionRespond,
 	onHintClick,
 	onOpenWorkDetail,
+	onOpenFile,
 	forkedFromSessionId,
 	onOpenSession,
 	onForkMessage,
@@ -766,6 +772,7 @@ function MessageList({
 							>
 								<MessageItem
 									message={message}
+									sessionId={sessionId}
 									// Top of the loaded transcript is the session's own start
 									// only once there are no older pages left above it.
 									isFirst={index === 0 && !hasMoreHistory}
@@ -775,6 +782,7 @@ function MessageList({
 									onPermissionRespond={onPermissionRespond}
 									onQuestionRespond={onQuestionRespond}
 									onOpenWorkDetail={onOpenWorkDetail}
+									onOpenFile={onOpenFile}
 									onForkMessage={onForkMessage}
 								/>
 							</div>

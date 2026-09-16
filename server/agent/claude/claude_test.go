@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/attachments"
 )
 
 // parseTestLine mirrors streamOutput's decode-then-parse path so tests can feed
@@ -42,7 +43,7 @@ func parseTestLineFull(log *slog.Logger, line []byte, pendingRequests *sync.Map,
 	if err := json.Unmarshal(line, &event); err != nil {
 		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
 	}
-	return parseLine(log, line, event, pendingRequests, backgroundTasks, decline)
+	return parseLine(log, line, event, pendingRequests, backgroundTasks, decline, attachments.Store{})
 }
 
 // observeLine decodes a raw line and forwards it to observe (test helper).
@@ -253,14 +254,6 @@ func TestParseLine(t *testing.T) {
 			}},
 		},
 		{
-			name:  "user tool_result with image content returns warning",
-			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_img","content":[{"type":"image","source":{"type":"base64","data":"..."}},{"type":"text","text":"description"}]}]}}`,
-			expected: []agent.AgentEvent{agent.WarningEvent{
-				Message: "Image content is not supported yet",
-				Code:    "image_not_supported",
-			}},
-		},
-		{
 			// The Agent (subagent) tool reports this way and its report is
 			// Markdown: the UI has to receive the text, not the JSON around it.
 			name:  "user tool_result with text array content is joined",
@@ -271,13 +264,13 @@ func TestParseLine(t *testing.T) {
 			}},
 		},
 		{
-			// Anything that is not a pure text array stays raw rather than being
-			// silently reduced to the parts we happen to understand.
-			name:  "user tool_result with mixed array content stays raw",
+			// A block type nobody has seen yet keeps its raw JSON — visible, so
+			// it can be reported — without costing the text beside it.
+			name:  "user tool_result with an unknown block keeps its raw JSON",
 			input: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_mix","content":[{"type":"text","text":"line 1"},{"type":"other","text":"line 2"}]}]}}`,
 			expected: []agent.AgentEvent{agent.ToolResultEvent{
 				ToolUseID:  "toolu_mix",
-				ToolResult: `[{"type":"text","text":"line 1"},{"type":"other","text":"line 2"}]`,
+				ToolResult: "line 1\n" + `{"type":"other","text":"line 2"}`,
 			}},
 		},
 		{
