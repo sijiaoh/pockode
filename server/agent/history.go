@@ -22,8 +22,21 @@ type EventRecord struct {
 	Choice                string             `json:"choice,omitempty"`
 	Answers               map[string]string  `json:"answers,omitempty"`
 	Origin                MessageOrigin      `json:"origin,omitempty"`
-	Subtype               string             `json:"subtype,omitempty"`
-	Meta                  *MessageMeta       `json:"meta,omitempty"`
+	// Subtype says what kind of record this is within its type, for the two
+	// types that have kinds: a system-origin message (see MessageEvent), and a
+	// tool result that is not the whole story (see ToolResultBackgroundStarted).
+	Subtype string       `json:"subtype,omitempty"`
+	Meta    *MessageMeta `json:"meta,omitempty"`
+	// DurationMs and ExitCode are what an agent CLI reported about a finished
+	// tool call as figures rather than as prose; see ToolResultEvent.
+	DurationMs int64 `json:"duration_ms,omitempty"`
+	ExitCode   *int  `json:"exit_code,omitempty"`
+	// Activity and OutputDelta belong to tool_activity records, which are
+	// broadcast and never stored — see EventType.Persisted. They are fields of
+	// EventRecord anyway because EventRecord is the whole of how an event is
+	// serialized, for the wire as much as for history.
+	Activity    string `json:"activity,omitempty"`
+	OutputDelta string `json:"output_delta,omitempty"`
 	// ProviderMessageID is the agent's own id for the piece of its conversation
 	// this event was parsed out of, when the agent hands one out. It is a fact
 	// the event arrived with, not Pockode state, which is why it is recorded

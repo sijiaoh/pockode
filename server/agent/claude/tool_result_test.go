@@ -56,7 +56,7 @@ func parseToolResultLine(t *testing.T, store attachments.Store, content string) 
 	if err := json.Unmarshal(toolResultLine(content), &event); err != nil {
 		t.Fatalf("decode line: %v", err)
 	}
-	events := parseUserEvent(discardLogger(), event, store)
+	events := parseUserEvent(discardLogger(), event, &backgroundTaskTracker{}, store)
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d: %#v", len(events), events)
 	}

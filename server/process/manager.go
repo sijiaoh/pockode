@@ -104,6 +104,9 @@ type Process struct {
 	// activated mirrors the session's Activated flag so the store is written once,
 	// on the transition, rather than on every event the agent produces.
 	activated atomic.Bool
+	// toolActivity is what the calls still in flight are doing, for a client that
+	// subscribes after they said so. Its own lock; see toolActivity.
+	toolActivity toolActivity
 }
 
 // NewManager creates a new manager with the given idle timeout. dataDir is this
@@ -329,6 +332,16 @@ func (m *Manager) GetProcessState(sessionID string) string {
 		return string(ProcessStateEnded)
 	}
 	return string(proc.State())
+}
+
+// GetToolActivity returns what each tool call still in flight last reported
+// doing, by tool_use_id. Nil when no process exists or nothing is in flight.
+func (m *Manager) GetToolActivity(sessionID string) map[string]string {
+	proc := m.GetProcess(sessionID)
+	if proc == nil {
+		return nil
+	}
+	return proc.toolActivity.snapshot()
 }
 
 // ProcessCount returns the number of running processes.
@@ -745,10 +758,18 @@ func (p *Process) streamEvents(ctx context.Context) {
 			p.markActivated(ctx, log)
 		}
 
-		// Persist to history
-		seq, err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event))
-		if err != nil {
-			log.Error("failed to append to history", "error", err)
+		p.toolActivity.observe(event)
+
+		// Persist to history. An event that reports a latest value rather than a
+		// settled fact is broadcast and never stored, so it reaches subscribers
+		// with no sequence number — see agent.EventType.Persisted.
+		seq := session.NoHistorySeq
+		if eventType.Persisted() {
+			var err error
+			seq, err = p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event))
+			if err != nil {
+				log.Error("failed to append to history", "error", err)
+			}
 		}
 
 		if eventType == agent.EventTypeRequestCancelled {

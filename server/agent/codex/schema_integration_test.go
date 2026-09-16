@@ -102,6 +102,23 @@ func TestIntegration_ProtocolSchemaStillFitsWhatWeSend(t *testing.T) {
 		requireItemVariant(t, dir, "imageView", "path")
 	})
 
+	// The only account of a command while it runs, and a one-line status from an
+	// MCP tool. Both are forwarded as activity on the call, so a renamed field
+	// would leave a long-running row silent rather than fail anywhere.
+	t.Run("live progress notifications still carry what is forwarded", func(t *testing.T) {
+		requireRequiredIn(t, dir, "codex_app_server_protocol.v2.schemas.json",
+			"CommandExecutionOutputDeltaNotification", "itemId", "delta")
+		requireRequiredIn(t, dir, "codex_app_server_protocol.v2.schemas.json",
+			"McpToolCallProgressNotification", "itemId", "message")
+	})
+
+	// Codex's own parse of a command, carried into the call's input because it
+	// is a better source for a row's title than re-guessing from the command
+	// string. Required today, which is what lets item/started carry it.
+	t.Run("a commandExecution still parses its own command", func(t *testing.T) {
+		requireItemVariant(t, dir, "commandExecution", "command", "commandActions")
+	})
+
 	// web/src/lib/codexChanges.ts renders exactly these three and shows
 	// "Unsupported change type" for anything else, so a fourth would reach the
 	// user as a blank row in an approval prompt.

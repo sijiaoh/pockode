@@ -59,6 +59,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		HasMore:       page.HasMore,
 		NextBeforeSeq: page.NextBeforeSeq,
 		State:         wt.ProcessManager.GetProcessState(params.SessionID),
+		ToolActivity:  wt.ProcessManager.GetToolActivity(params.SessionID),
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)

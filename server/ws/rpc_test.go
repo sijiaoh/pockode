@@ -586,6 +586,34 @@ func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
 	}
 }
 
+// The other half of what a reconnecting client needs: a tool_activity event is
+// never recorded, so a client that subscribes after one arrived can only learn
+// what a long-running call is doing from the reply itself. On a phone that is
+// the normal case — see rpc.ChatMessagesSubscribeResult.ToolActivity.
+func TestHandler_ChatMessagesSubscribe_CarriesLiveToolActivity(t *testing.T) {
+	mock := &mockAgent{
+		events: []agent.AgentEvent{
+			agent.ToolCallEvent{ToolUseID: "call-1", ToolName: "Bash"},
+			agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "tick 3 of 6"},
+			// A backgrounded call returns a placeholder and keeps working.
+			agent.ToolResultEvent{ToolUseID: "call-1", ToolResult: "running in background", Subtype: agent.ToolResultBackgroundStarted},
+			agent.DoneEvent{},
+		},
+	}
+	env := newTestEnv(t, mock)
+	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
+
+	env.subscribeChatMessages("sess")
+	env.sendMessage("sess", "start it")
+	env.awaitResponseComplete()
+
+	// A second client, arriving after every one of those events.
+	result := env.subscribeChatMessages("sess")
+	if got := result.ToolActivity["call-1"]; got != "tick 3 of 6" {
+		t.Errorf("tool_activity[call-1] = %q, want the last thing the call reported", got)
+	}
+}
+
 func TestHandler_ChatMessagesSubscribe_InvalidSession(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 

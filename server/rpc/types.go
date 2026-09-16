@@ -408,6 +408,13 @@ type ChatMessagesSubscribeResult struct {
 	// HasMore is false. See ChatMessagesHistoryParams.BeforeSeq.
 	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
 	State         string             `json:"state"` // "idle" | "running" | "ended"
+	// ToolActivity is what each tool call still in flight last reported doing,
+	// by tool_use_id. It is here rather than in History because a tool_activity
+	// event is the latest value of something still changing and is never
+	// recorded (see agent.EventType.Persisted) — so a client that subscribes
+	// mid-run would otherwise have missed every one of them, which on a phone is
+	// the normal case. Absent when nothing is in flight.
+	ToolActivity map[string]string `json:"tool_activity,omitempty"`
 }
 
 // ChatMessagesHistoryParams asks for the page of history older than one the

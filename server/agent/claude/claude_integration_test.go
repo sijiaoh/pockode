@@ -727,13 +727,37 @@ waitForKill:
 	}
 	defer resumed.Close()
 
+	var settled []agent.ToolResultEvent
 	for {
 		select {
 		case event, ok := <-resumed.Events():
 			if !ok {
 				t.Fatal("the resumed session never mentioned the lost background task")
 			}
-			if warning, isWarning := event.(agent.WarningEvent); isWarning && warning.Code == backgroundTasksLostCode {
+			switch e := event.(type) {
+			case agent.ToolResultEvent:
+				if e.Subtype == agent.ToolResultBackgroundLost {
+					settled = append(settled, e)
+				}
+			case agent.WarningEvent:
+				if e.Code != backgroundTasksLostCode {
+					continue
+				}
+				// The warning explains the loss, but only the per-call results
+				// settle the rows: without them the call that started the task
+				// goes on showing it as running, directly above the sentence
+				// saying it is not.
+				if len(settled) == 0 {
+					t.Fatal("the loss was explained but the call it happened to was left saying it is still running")
+				}
+				for _, result := range settled {
+					if result.ToolUseID == "" {
+						t.Errorf("a settled result names no call: %#v", result)
+					}
+					if !result.IsError {
+						t.Errorf("work killed before it finished is not a success: %#v", result)
+					}
+				}
 				return
 			}
 		case <-ctx.Done():
