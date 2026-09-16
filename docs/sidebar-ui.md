@@ -340,13 +340,14 @@ token-layer one: it clears AA over every surface the app paints and the
 non-text floor as a border, and no `bg-th-text-muted` tint carries text any
 more — the one that did, the expired chip in `Chat/AskUserQuestionItem.tsx`,
 is an opaque `bg-th-bg-tertiary` now. What it would still fail is the alpha
-ceiling, since `ui/Sheet.tsx`'s drag handle is `bg-th-text-muted/30` and no
+ceiling, since the shared `Sheet`'s drag handle is `bg-th-text-muted/30` and no
 value of the token can lift it: the extreme token, black or white at 30% over
 the sheet's own surface, reaches about 2.1 in the light variants and 2.7 in
 the dark ones, both short of the non-text floor. Whether a drag handle is
-decoration or an affordance owing 3:1 is the judgement call, and web-cluster's
-own handle answers it the other way, opaque — that disagreement is its own
-piece of work.
+decoration or an affordance owing 3:1 is the judgement call, and it is now one
+call rather than two: `web-cluster` used to answer it the other way with an
+opaque handle of its own, and that handle went when its overlay did — both
+projects draw this one.
 
 **On rows, though, neither panel has a standing annotation any more, and that is
 the resolution of "accent meant too many things" rather than a gap in it.** The
@@ -387,10 +388,10 @@ Two of the redesign's outcomes reach past the panel they were found in, so they
 are flagged here rather than left where they were diagnosed:
 
 - **The `Sheet` height cap is not a Git fix.** The branch sheet is where an
-  uncapped desktop content box was found, but the cap landed in `ui/Sheet` and
-  every sheet in the app benefits — including `WorktreeCreateSheet`, which
-  belongs to neither panel. The root cause is written up once, in
-  [git-ui.md](git-ui.md#branch).
+  uncapped desktop content box was found, but the cap landed in the shared
+  `Sheet` and every sheet in the app benefits — including
+  `WorktreeCreateSheet`, which belongs to neither panel. The root cause is
+  written up once, in [git-ui.md](git-ui.md#branch).
 - **Sticky group headers are still owed a check on a real device.** The
   reasoning behind them is from source and spec, not from a rendered page.
   [git-ui.md](git-ui.md#group-headers) states the check and the one-line

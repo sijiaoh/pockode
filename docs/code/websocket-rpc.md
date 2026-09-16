@@ -449,7 +449,10 @@ rather than showing a loading spinner indefinitely.
 Because reconnection never gives up, the banner is the only thing that tells a
 blip apart from an outage: after the fifth drop (about 15 s of accumulated
 backoff) it escalates from "Reconnecting..." to "Can't reach the server" and
-offers a manual retry (`web/src/components/ui/ReconnectBanner.tsx`).
+offers a manual retry. The escalation and the copy live in
+`packages/shared/src/components/ReconnectBanner.tsx`, because web-cluster's
+banner is the same one; `web/src/components/ui/ReconnectBanner.tsx` is the
+wrapper that reads this project's store.
 
 The tunnel between pockode and the cloud has its own, separate backoff, whose
 ceiling is tied to the cloud's reconnect grace period — see the cloud's relay

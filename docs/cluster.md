@@ -31,7 +31,7 @@ type Node struct {
 }
 ```
 
-The path must point to a directory. If the directory does not exist, the request is rejected with `invalid node: path does not exist`; the frontend detects this and asks whether to create it, retrying with `create_missing_dir` set (see [Frontend UX](#frontend-ux)). A path that exists but is not a directory (or is otherwise inaccessible, e.g. permission denied) is always rejected and never offered for creation. Duplicate paths are rejected.
+The path must point to a directory. If the directory does not exist, the request is rejected with `invalid node: path does not exist`; the frontend detects this and offers to create it in place, retrying with `create_missing_dir` set (see [Frontend UX](#frontend-ux)). A path that exists but is not a directory (or is otherwise inaccessible, e.g. permission denied) is always rejected and never offered for creation. Duplicate paths are rejected.
 
 **Path expansion:**
 - `~` or `~/...` → expanded to user's home directory (e.g., `~/projects/my-app` → `/home/user/projects/my-app`); `~\...` works the same on Windows (see [Paths on Windows](platforms.md#paths-on-windows))
@@ -80,13 +80,20 @@ The file is deleted when the server shuts down gracefully.
 
 **Operations:**
 
-- **Start**: Spawns a new Pockode process for the node (requires auth token)
+- **Start**: Spawns a new Pockode process for the node (requires auth token).
+  A stale `server.json` is removed before the process is spawned: the wait for
+  the node to come up is a wait for that file to appear, and a leftover one
+  would answer it on the first read — reporting a node started that never was
 - **Stop**: Asks the node to exit, then force-kills it after a 5 second grace
   period. Either way the node is gone and its `server.json` removed before the
   operation reports success, so stopping a node never leaves stale state behind.
   The polite step is platform-specific — SIGTERM on unix, a named event on
   Windows (see [Asking a node to exit on Windows](#asking-a-node-to-exit-on-windows))
-- **Clean Up**: For stale nodes, removes the orphaned server.json file
+- **Clean Up**: Removes the orphaned `server.json` a stale node left behind, and
+  nothing else — the project directory is not this operation's business. It is
+  idempotent (a node with no `server.json` is already where Clean Up is trying
+  to get it) and refuses a node whose process is alive, because that file is how
+  the rest of the system reaches a running server
 
 **How the spawned node receives its token:** the cluster passes the auth token to
 each node server through the `POCKODE_AUTH_TOKEN` environment variable, never as a
@@ -99,9 +106,10 @@ environment (`/proc/<pid>/environ`) is readable only by the owner and root. See
 `server/cluster/node/process.go` (`nodeEnv`) and `server/authtoken/`.
 
 If `node.stop` cannot find the saved process, the backend removes any stale
-`server.json` state it can clean up and returns `"node not running"`. The
-frontend treats this as a warning, refreshes `node.list`, and continues to show
-cleanup guidance if stale state remains.
+`server.json` state it can clean up and returns `"node not running"` — stopping
+what is already gone is a failed stop, not a success. Removing stale state on
+purpose is `node.cleanup`, which says so in its name and reports the node's
+status like every other node call.
 
 ### Asking a node to exit on Windows
 
@@ -201,31 +209,94 @@ The key differs from main mode (`auth_token`) to avoid conflicts when both modes
 ### Frontend UX
 
 The cluster frontend is a mobile-first operations dashboard. Its primary job is
-to show which project nodes are running and expose the next useful action:
+to show which project nodes are running and expose the next useful action. This
+section describes what it does; the reasoning behind that shape, and the
+alternatives that were rejected on the way to it, are in
+[cluster-ui.md](cluster-ui.md).
 
-- Initial connection uses a full-screen loading state. If it never succeeds the
-  screen changes to "Cluster unreachable", because retries run for as long as the
-  tab is open and an indefinite spinner would explain nothing. `version === null`
-  is the test for "never authenticated", since the status alone cannot tell a
-  first connect from a reconnect.
-- Reconnection *after* a successful connect keeps the last known node list visible
-  and shows an inline warning that the status may be stale.
-- Node cards show status, shortened path, runtime metadata, and the primary
-  action for the current state: Start, Stop, or Clean Up.
-- Stale nodes are treated as a recoverable state. The UI explains that the
-  process is gone but server info remains, then offers Clean Up.
-- Stop requests that return `"node not running"` are shown as warnings, not
-  fatal action errors, because the saved process was already gone.
-- Action warnings and errors are shown inline above the node list so they do
-  not cover mobile controls.
-- When adding or editing a node whose path does not exist yet, the form does not
-  reject it outright. Instead it asks "Create directory?" in a confirmation
-  dialog (confirm label "Create & Add" when adding, "Create & Save" when
-  editing). Confirming retries the request with `create_missing_dir` set so the
-  backend creates the directory (with parents) and completes the operation in a
-  single request; cancelling keeps the form and its entered path and returns
-  focus to the path input. Other path errors (not a directory, permission
-  denied, duplicate) stay as inline errors with no create option.
+- **Token screen.** The field can be revealed, and says where the token comes
+  from (the `--auth-token` the cluster was started with). A cluster token is
+  long and random and usually typed on a phone keyboard; typing it blind and
+  being turned away is the worst way to learn a character was wrong. A token the
+  cluster rejects leads to an "Authentication failed" screen carrying the
+  server's own message; its Try Again is what discards the stored token and
+  returns here, so a token that failed for a reason other than being wrong is
+  not thrown away on the user's behalf.
+- **Connecting** uses a full-screen loading state, held back 300 ms so a connect
+  that is about to succeed says nothing at all. If it never succeeds the screen
+  changes to "Cluster unreachable" with a Retry, because retries run for as long
+  as the tab is open and an indefinite spinner would explain nothing.
+  `version === null` is the test for "never authenticated", since the status
+  alone cannot tell a first connect from a reconnect.
+- **Reconnecting** after a successful connect keeps the last known node list
+  visible. The header's status line switches from "Connected" to
+  "Reconnecting...", and a banner above the list escalates: "Reconnecting..."
+  for the first few attempts, then "Can't reach the server. Still trying..."
+  with a **Retry now** button once the backoff is long enough that skipping the
+  wait is worth offering (the threshold and the copy are shared with `web` — see
+  [code/websocket-rpc.md](code/websocket-rpc.md)). Retry now skips the wait, not
+  the backoff: the attempt count carries on where it was, so repeated taps
+  cannot walk the delay back to one second.
+- **The list is grouped, not filtered**: **Needs attention** (stale) →
+  **Running** → **Stopped**, each header sticky and carrying its own count,
+  empty sections not drawn, and nodes sorted by name inside one. When more than
+  one node is stale the attention header offers **Clean up all** — leftovers
+  arrive in batches, since one reboot orphans every node on the machine.
+- **A cluster with no nodes registered** shows neither groups nor an empty
+  list but an explanation and an Add node button, which is the only thing there
+  is to do next.
+- **The polling that keeps the list fresh** stops while the tab is in the
+  background and catches up the moment it returns. Each poll asks the host about
+  every registered project directory, and nobody is reading a hidden tab.
+- **A node card's primary button** is **Open** for a running node, **Start** for
+  a stopped or stale one. Open goes to `remote_url` when the cluster has one,
+  since a phone on mobile data cannot reach `localhost`; `Local` appears beside
+  it only when both URLs exist. A running node that reported no address at all
+  says so rather than offering a button that leads nowhere. Stop (running only),
+  *Start with a different token…* (on a stopped or stale node, once a token is
+  remembered), Edit and Delete live in the card's overflow menu.
+- **Stale nodes are a recoverable state**: the card says the server exited
+  without cleaning up and that nothing is running, and offers **Start** (which
+  clears the leftover itself) alongside **Clean up**.
+- **Only Stop and Delete ask for confirmation**; Clean Up runs on tap, since it
+  removes a file describing a process that is already gone. Stop's confirmation
+  names the actual cost (AI sessions in that project end).
+  Delete confirms, naming what it does *not* touch (the project directory), and
+  for a running node offers Stop and delete / Delete anyway / Cancel, because
+  `node.delete` leaves the server running and unmanageable.
+- **Every confirmation the card raises is asked inside the sheet that raised
+  it**, replacing its contents rather than stacking on it. No overlay in the
+  cluster frontend opens on top of another.
+- **An error belonging to one node is shown in that node's card**, not above a
+  list the user may have scrolled away from; a failure to load the list at all
+  replaces the list with its own message and a Retry. Neither expires on a timer
+  — a notice reporting something the user must act on should not vanish while it
+  is being read — and a node's error clears when the next action on that node
+  succeeds.
+- **When adding or editing a node whose path does not exist yet**, the form does
+  not reject it outright and does not raise a dialog. A notice appears under the
+  path field saying the directory will be created, and the submit button
+  relabels to **Create & Add** / **Create & Save**; the next press retries with
+  `create_missing_dir` set, so the backend creates the directory (with parents)
+  and completes the operation in a single request. Editing the path withdraws
+  the offer, which keeps correcting a typo as cheap as accepting. Other path
+  errors (not a directory, permission denied, could not create) are shown as the
+  backend worded them, with no create option — creating is not what would fix
+  them.
+- **The cluster version** is printed after the last card rather than pinned to
+  the viewport corner, where it floated over whatever scrolled underneath it.
+- **Start's token is remembered for the session, in memory only.** It is the
+  token the *spawned node server* uses for its own auth, not the cluster token,
+  so it is never defaulted from `cluster_auth_token`: one leaked node must not
+  hand over the cluster. The first Start of a session opens a sheet offering
+  **Generate** (32 random characters) and **Copy** — and if the clipboard is
+  unavailable, as it is outside a secure context, the token is shown in full so
+  it can be written down rather than lost; every later Start is one tap, and the
+  card says "Using the saved node token" while it runs. The overflow menu keeps
+  **Start with a different token…** as the way back to the sheet. A token is
+  remembered only once it has actually started something, and a failed start
+  leaves the sheet, the typed token and the reason on screen. A reload asks once
+  more — the price of not making a second secret durable in browser storage.
 
 ### Available Methods
 
@@ -242,6 +313,7 @@ After authentication:
 | `node.status` | Returns node status (params: `{id}`) |
 | `node.start` | Starts a node's server (params: `{id, token}`) |
 | `node.stop` | Stops a node's server (params: `{id}`) |
+| `node.cleanup` | Removes a stale node's leftover `server.json` (params: `{id}`); returns the node's status |
 
 ## Startup Output
 
