@@ -757,7 +757,15 @@ func TestRename(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(workDir, "run.sh"), []byte("#!/bin/sh\n"), 0755); err != nil {
 			t.Fatalf("failed to create file: %v", err)
 		}
-		before, err := os.Stat(filepath.Join(workDir, "run.sh"))
+		// Read through an open handle, not the path: on Windows os.SameFile
+		// compares file ids that a path-based stat only fetches when asked, by
+		// reopening the path — which by then is the name the rename took away.
+		f, err := os.Open(filepath.Join(workDir, "run.sh"))
+		if err != nil {
+			t.Fatalf("failed to open file: %v", err)
+		}
+		defer f.Close()
+		before, err := f.Stat()
 		if err != nil {
 			t.Fatalf("failed to stat file: %v", err)
 		}
