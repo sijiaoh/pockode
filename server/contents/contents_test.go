@@ -754,18 +754,22 @@ func TestRename(t *testing.T) {
 	// anything holding the file open.
 	t.Run("keeps the file's identity", func(t *testing.T) {
 		workDir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(workDir, "run.sh"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		original := filepath.Join(workDir, "run.sh")
+		if err := os.WriteFile(original, []byte("#!/bin/sh\n"), 0755); err != nil {
 			t.Fatalf("failed to create file: %v", err)
 		}
-		// Read through an open handle, not the path: on Windows os.SameFile
-		// compares file ids that a path-based stat only fetches when asked, by
-		// reopening the path — which by then is the name the rename took away.
-		f, err := os.Open(filepath.Join(workDir, "run.sh"))
-		if err != nil {
-			t.Fatalf("failed to open file: %v", err)
+		// A second name for the file, taken before the rename and read after
+		// it, is what identity is compared against. The old path cannot answer
+		// it: on Windows os.SameFile fetches the file id by reopening the path,
+		// which the rename has taken away. Holding the file open instead would
+		// ask the wrong question entirely — Windows refuses to rename a file
+		// another handle has open, and Rename reports that rather than waiting
+		// it out.
+		link := filepath.Join(workDir, "same-file")
+		if err := os.Link(original, link); err != nil {
+			t.Skipf("filesystem cannot hold a second name for the file: %v", err)
 		}
-		defer f.Close()
-		before, err := f.Stat()
+		before, err := os.Stat(original)
 		if err != nil {
 			t.Fatalf("failed to stat file: %v", err)
 		}
@@ -778,7 +782,11 @@ func TestRename(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to stat renamed file: %v", err)
 		}
-		if !os.SameFile(before, after) {
+		linked, err := os.Stat(link)
+		if err != nil {
+			t.Fatalf("failed to stat the file's other name: %v", err)
+		}
+		if !os.SameFile(linked, after) {
 			t.Error("renamed file is a different file")
 		}
 		if runtime.GOOS != "windows" && after.Mode() != before.Mode() {
