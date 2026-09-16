@@ -346,13 +346,17 @@ server sends the resulting table to the frontend (`agent.list`), so the UI asks
 
 - **`"none"`** — the agent cannot reopen an earlier conversation at all, so there
   is no fork to have memory in: the session shows no `…` at all and the
-  backend refuses the request (*Blocked and failed* below). Codex is this case —
-  a thread lives in the memory of the process that created it
-  ([code/agent-integration.md](code/agent-integration.md#no-forking)).
-- **`"any_message"`** — the agent can reopen a conversation at a chosen message in
+  backend refuses the request (*Blocked and failed* below). **No shipped agent
+  answers this today** — Codex did until it gained the ability to reopen a
+  conversation from disk
+  ([code/agent-integration.md](code/agent-integration.md#session-forking)). The
+  case stays described because the UI reads a declaration, not a list of agents.
+- **`"any_message"`** — the agent can reopen a conversation at a chosen point in
   it, so a fork can carry memory wherever the anchor sits, and a live source
   process does not matter: the point is pinned, so whatever the source adds falls
-  past it. Claude is this case (`--resume-session-at`).
+  past it. Both shipped agents are this case, each pinning the finest point its own
+  CLI offers: Claude a message (`--resume-session-at`), Codex a turn
+  (`thread/fork`).
 
 Pinning the resume point is what makes the feature work, and it is the only thing
 that does: a fork whose kept records name no point carries nothing at all. There
@@ -362,9 +366,9 @@ can be long afterwards, and after the user has gone back to talking to the
 source, so an uncut replay would deliver the very turns the fork was taken to
 leave behind ([code/agent-integration.md](code/agent-integration.md#forking)).
 Two kinds of fork name no point: one taken in a session that predates Pockode
-storing the CLI's message ids, and one taken in a session the agent never spoke
-in at all, which has no memory to carry in any case. Both get the same warning as
-any other fork that could not carry memory.
+storing the CLI's own ids, and one taken in a session the agent never spoke in at
+all, which has no memory to carry in any case. Both get the same warning as any
+other fork that could not carry memory.
 
 **The fork sheet promises nothing about memory, and that is deliberate.** An agent
 that cannot follow a fork never gets that far — there is no `…` to press, so
@@ -484,19 +488,24 @@ says nothing about an action that was never on offer in the first place, which i
 the distinction the two cases below turn on.
 
 **The agent cannot fork at all** — the frontend is sent `fork_support: "none"` for
-it, the server's answer for an agent that implements no `agent.SessionForker`;
-Codex is that agent. **The whole session renders no `…`** — and since fork is the
-menu's only row today, no slot either: the bubbles get the 44px back
-(*Which rows reserve a slot*). Not a menu holding a permanently dead row: a
-Codex transcript whose every message opens onto the same refusal is noise that
-never becomes usable. Fork is not an action being refused in these sessions; it
-is a feature that has never applied to them. `session.fork` refuses the same
-case on the backend (`ErrForkUnsupported`): hiding it here is the experience,
-refusing it there is the contract.
+it, the server's answer for an agent that implements no `agent.SessionForker`.
+**The whole session renders no `…`** — and since fork is the menu's only row
+today, no slot either: the bubbles get the 44px back (*Which rows reserve a
+slot*). Not a menu holding a permanently dead row: a transcript whose every
+message opens onto the same refusal is noise that never becomes usable. Fork is
+not an action being refused in such a session; it is a feature that has never
+applied to it. `session.fork` refuses the same case on the backend
+(`ErrForkUnsupported`): hiding it here is the experience, refusing it there is the
+contract.
 
-The cost of that choice, recorded because it is deliberate: the sentence *"Codex
-cannot reopen an earlier conversation, so its sessions cannot be forked"* now has
-nowhere in the frontend to be said, and the helper that produced it
+No shipped agent answers `"none"` today (*What the agent remembers*), which is not
+a reason to delete this branch: it is the frontend's half of a declaration the
+server makes, and it is what decides whether the slot is drawn the day a third
+agent arrives.
+
+The cost of that choice, recorded because it is deliberate: the sentence *"this
+agent cannot reopen an earlier conversation, so its sessions cannot be forked"*
+has nowhere in the frontend to be said, and the helper that produced it
 (`forkBlockedReason` in `lib/agentType.ts`) is gone. A per-message menu was the
 wrong place to say it — it is a fact about the session, and it would have been
 said forty times. If it is worth saying, the place is somewhere session-scoped —

@@ -29,6 +29,15 @@ const QUESTION_VISIBLE_RATIO = 0.99;
 /** Streaming output reflows constantly; showing instantly would flicker. */
 const PILL_SHOW_DELAY_MS = 250;
 const HIGHLIGHT_DURATION_MS = 1500;
+/**
+ * How long a restored page keeps being corrected after it lands. The restore is
+ * measured the moment the page is committed, and what it measures is not final:
+ * syntax highlighting, a diagram and an image all settle a few frames later and
+ * each of them changes a height the restore was computed from. Long enough to
+ * cover those, short enough that a correction can never land on a view the user
+ * has since moved somewhere themselves.
+ */
+const RESTORE_SETTLE_MS = 500;
 const HIGHLIGHT_CLASS = "question-highlight";
 
 interface QuestionVisibility {
@@ -58,6 +67,50 @@ function findMessageElement(
 		if (el.dataset.messageId === messageId) return el;
 	}
 	return null;
+}
+
+interface ScrollAnchor {
+	messageId: string;
+	offsetTop: number;
+	scrollTop: number;
+	/** The container's height when the page was asked for; see the restore. */
+	scrollHeight: number;
+}
+
+/**
+ * Puts the view back over the message the anchor was pinned to. False when that
+ * message is no longer in the list, which the caller has to answer for.
+ */
+function restoreToAnchor(el: HTMLElement, anchor: ScrollAnchor): boolean {
+	const anchored = findMessageElement(el, anchor.messageId);
+	if (!anchored) return false;
+	el.scrollTop = anchor.scrollTop + (anchored.offsetTop - anchor.offsetTop);
+	return true;
+}
+
+/**
+ * Whether the page that just landed got anywhere — the one thing that has to be
+ * true before the next one may be asked for.
+ *
+ * Normally that means the view is further down than it was, which is the same
+ * thing as the sentinel having been pushed up and away. Until the transcript
+ * fills the viewport, though, there is nothing to scroll at all (the content box
+ * carries `min-h-full`) and nothing else moves either: the rows sit on the bottom
+ * edge (`justify-end`), so a page fills space that was empty above them and
+ * leaves every height and offset below it exactly as it was. The only thing that
+ * changes there is which message is first — and the anchor was pinned to the one
+ * that was, which an empty page leaves in place.
+ */
+function madeProgress(el: HTMLElement, anchor: ScrollAnchor): boolean {
+	if (el.scrollHeight > el.clientHeight) return el.scrollTop > anchor.scrollTop;
+	const first = el.querySelector<HTMLElement>("[data-message-id]");
+	return !!first && first.dataset.messageId !== anchor.messageId;
+}
+
+function isAtBottom(el: HTMLElement): boolean {
+	return (
+		el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_THRESHOLD
+	);
 }
 
 function prefersReducedMotion(): boolean {
@@ -120,59 +173,196 @@ function MessageList({
 	const contentRef = useRef<HTMLDivElement>(null);
 	const sentinelRef = useRef<HTMLDivElement>(null);
 	const [showScrollButton, setShowScrollButton] = useState(false);
-	const isAtBottomRef = useRef(true);
+	/**
+	 * Whether the view should stay pinned to the tail. This is the user's intent,
+	 * not a sample of where the view currently sits: the user scrolling off the
+	 * tail clears it, and their scrolling back to it, the scroll-to-bottom button,
+	 * or sending a message sets it again. A position sample cannot stand in for
+	 * it, because a programmatic smooth scroll dispatches the same scroll events
+	 * as a drag and every frame of one reads as "not at bottom".
+	 */
+	const followRef = useRef(true);
+	/**
+	 * Whether the scrolling now in progress is the user's. Set by the gestures
+	 * that scroll the container, and dropped both when a gesture comes to rest at
+	 * the tail and whenever we start a scroll of our own — those declare the
+	 * intent themselves and must not have it overwritten by where they land. It
+	 * has to outlive the gesture rather than be paired with it tick by tick:
+	 * gesture events arrive before the scrolling they cause, and iOS momentum
+	 * goes on scrolling long after the last `touchmove`.
+	 */
+	const userScrolledRef = useRef(false);
 	// Where the view sat when an older page was asked for, pinned to the message
 	// that was then at the top. A height difference would not do: the agent can
 	// go on writing at the bottom while the page is in flight, and that growth is
 	// indistinguishable from the growth above that has to be compensated for.
-	const scrollAnchorRef = useRef<{
-		messageId: string;
-		offsetTop: number;
-		scrollTop: number;
-	} | null>(null);
+	const scrollAnchorRef = useRef<ScrollAnchor | null>(null);
+	// The anchor of the page that has landed but not settled yet, kept past the
+	// restore so the correction can be repeated as the page finishes rendering.
+	const restoreRef = useRef<ScrollAnchor | null>(null);
+	const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	/**
+	 * Whether paging has stopped because the last page left the view where it
+	 * was. Nothing re-arms the sentinel while this is set, which is what makes the
+	 * runaway impossible; a gesture from the user starts it again.
+	 */
+	const pagingStalledRef = useRef(false);
+	/**
+	 * Bumped to re-observe the sentinel. Deliberately not `loadedHistoryPages`:
+	 * re-observing on the page itself is what produced the loop, because a fresh
+	 * observer reports a sentinel that is still on screen straight away, and a
+	 * restore that moved nothing leaves it exactly there.
+	 */
+	const [sentinelArmKey, setSentinelArmKey] = useState(0);
+	// Mirrors the prop rather than closing over it: `requestOlderPage` must keep
+	// its identity, or the sentinel effect below would re-observe — that is, re-arm
+	// — every time a page starts or finishes loading.
+	const isLoadingMoreRef = useRef(isLoadingMoreHistory);
+	useEffect(() => {
+		isLoadingMoreRef.current = isLoadingMoreHistory;
+	}, [isLoadingMoreHistory]);
+
+	const cancelRestoreWindow = useCallback(() => {
+		restoreRef.current = null;
+		if (restoreTimerRef.current !== null) {
+			clearTimeout(restoreTimerRef.current);
+			restoreTimerRef.current = null;
+		}
+	}, []);
+
+	// A window left open outlives the transcript it belongs to: its timer would
+	// come back to a tree that has been unmounted or switched to another session.
+	useEffect(() => cancelRestoreWindow, [cancelRestoreWindow]);
+
+	/**
+	 * Gives up on the page that landed because something else now owns the view —
+	 * a gesture, or a scroll started here with an intent of its own. Correcting
+	 * from here would pull the view off wherever it was deliberately taken, and
+	 * whether that page helped can no longer be told, so paging waits to be asked
+	 * again instead of deciding for itself.
+	 */
+	const abandonRestoreWindow = useCallback(() => {
+		if (!restoreRef.current) return;
+		cancelRestoreWindow();
+		pagingStalledRef.current = true;
+	}, [cancelRestoreWindow]);
+
+	/**
+	 * The gate that makes the paging loop impossible: the next page may only be
+	 * asked for once the one that landed got somewhere (see `madeProgress`). A
+	 * page that got nowhere — an empty one, or one whose restore failed — leaves
+	 * the sentinel on screen, and arming again there is precisely the tight loop
+	 * this exists to prevent.
+	 */
+	const closeRestoreWindow = useCallback(() => {
+		const anchor = restoreRef.current;
+		const el = scrollRef.current;
+		cancelRestoreWindow();
+		if (!anchor || !el) return;
+
+		if (madeProgress(el, anchor)) {
+			// A page that did not fill the viewport leaves the sentinel in view, and
+			// the fresh observer reports that immediately: paging goes on, one page
+			// per settled restore, until the view has something to move over.
+			setSentinelArmKey((key) => key + 1);
+			return;
+		}
+
+		pagingStalledRef.current = true;
+		console.warn(
+			"Earlier page left the view where it was; paused loading more until the reader scrolls again",
+		);
+	}, [cancelRestoreWindow]);
 
 	const totalCount = messages.length;
 	// Scroll container is only mounted when messages are non-empty (see early return below).
 	// Effects that attach to the container must re-run on this transition.
 	const hasMessages = totalCount > 0;
 
-	// Track at-bottom state via scroll events
+	// Keep the button and the follow intent in step with the view.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: hasMessages triggers re-attach when scroll container mounts
 	useEffect(() => {
 		const el = scrollRef.current;
 		if (!el) return;
 
+		const noteGesture = () => {
+			userScrolledRef.current = true;
+			// The user is steering now, so the page that just landed stops being
+			// corrected.
+			if (restoreRef.current) {
+				abandonRestoreWindow();
+				return;
+			}
+			// Paging stopped because the last page moved nothing. Asking for more by
+			// hand is what starts it again — bounded by the reader's gestures, which
+			// is the whole difference from the loop this replaces.
+			if (pagingStalledRef.current) {
+				pagingStalledRef.current = false;
+				setSentinelArmKey((key) => key + 1);
+			}
+		};
+
 		const handleScroll = () => {
-			const atBottom =
-				el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_THRESHOLD;
-			isAtBottomRef.current = atBottom;
+			const atBottom = isAtBottom(el);
 			setShowScrollButton(!atBottom);
+			// Only the user's own scrolling moves the intent, because only it *is*
+			// the intent. Every programmatic scroll already carries one, declared
+			// where it is started, and would otherwise overwrite it on arrival: the
+			// jump to a question that happens to land near the end of the transcript
+			// would resume following and let the next reflow drag that question
+			// straight back off the screen.
+			if (!userScrolledRef.current) return;
+			followRef.current = atBottom;
+			// Coming to rest at the tail settles the gesture; anything after it has
+			// to be a fresh one. A gesture that ends elsewhere stays armed, because
+			// momentum can still be carrying it.
+			if (atBottom) userScrolledRef.current = false;
 		};
 
 		el.addEventListener("scroll", handleScroll, { passive: true });
-		return () => el.removeEventListener("scroll", handleScroll);
-	}, [hasMessages]);
+		// The gestures that can scroll this container. `pointerdown` covers both
+		// dragging the scrollbar and the start of a touch drag. A tap that never
+		// scrolls cannot move the follow intent — that is only read once a scroll
+		// event reports where the gesture left the view — but it does end a restore
+		// in progress, which costs at most the automatic continuation of one page.
+		el.addEventListener("wheel", noteGesture, { passive: true });
+		el.addEventListener("touchmove", noteGesture, { passive: true });
+		el.addEventListener("pointerdown", noteGesture, { passive: true });
+		el.addEventListener("keydown", noteGesture);
+		return () => {
+			el.removeEventListener("scroll", handleScroll);
+			el.removeEventListener("wheel", noteGesture);
+			el.removeEventListener("touchmove", noteGesture);
+			el.removeEventListener("pointerdown", noteGesture);
+			el.removeEventListener("keydown", noteGesture);
+		};
+	}, [hasMessages, abandonRestoreWindow]);
 
-	// Every request re-pins the anchor, so a page that failed cannot leave a stale
-	// one behind for the retry to restore to.
+	// Every request that actually starts re-pins the anchor, so a page that failed
+	// cannot leave a stale one behind for the retry to restore to. A request that
+	// the hook drops because a page is already in flight must not re-pin: the page
+	// on its way will be restored against the view as it was when it was asked
+	// for, not as it is now.
 	const requestOlderPage = useCallback(() => {
 		const scrollEl = scrollRef.current;
 		const first =
 			contentRef.current?.querySelector<HTMLElement>("[data-message-id]");
-		if (scrollEl && first?.dataset.messageId) {
+		if (!isLoadingMoreRef.current && scrollEl && first?.dataset.messageId) {
 			scrollAnchorRef.current = {
 				messageId: first.dataset.messageId,
 				offsetTop: first.offsetTop,
 				scrollTop: scrollEl.scrollTop,
+				scrollHeight: scrollEl.scrollHeight,
 			};
 		}
 		onLoadMoreHistory?.();
 	}, [onLoadMoreHistory]);
 
-	// Re-created after each page so it fires again while the sentinel is still in
-	// view; skipped entirely once a page has failed, since the sentinel does not
-	// move and the observer would retry in a tight loop behind the user's back.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: loadedHistoryPages is an intentional trigger to re-observe after a prepend
+	// Re-created whenever paging is armed again — see `sentinelArmKey` — so a page
+	// that did not fill the viewport still leads to the next one; skipped entirely
+	// once a page has failed, since the sentinel does not move and the observer
+	// would retry in a tight loop behind the user's back.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: sentinelArmKey is an intentional trigger to re-observe once a restore has settled
 	useEffect(() => {
 		const sentinel = sentinelRef.current;
 		const scrollEl = scrollRef.current;
@@ -187,7 +377,7 @@ function MessageList({
 
 		observer.observe(sentinel);
 		return () => observer.disconnect();
-	}, [hasMoreHistory, historyError, loadedHistoryPages, requestOlderPage]);
+	}, [hasMoreHistory, historyError, sentinelArmKey, requestOlderPage]);
 
 	// Hold the view still over the messages that were already on screen after an
 	// older page is spliced in above them.
@@ -203,9 +393,24 @@ function MessageList({
 		// added nothing at the bottom: a prepend is not new content to follow.
 		prevTotalCountRef.current = totalCount;
 
-		const anchored = findMessageElement(el, anchor.messageId);
-		if (!anchored) return;
-		el.scrollTop = anchor.scrollTop + (anchored.offsetTop - anchor.offsetTop);
+		if (!restoreToAnchor(el, anchor)) {
+			// Never silently: with the anchor row gone there is nothing to measure
+			// against, and the view would simply stay at the top — which is the one
+			// state that asks for page after page. Falling back to the height the
+			// container gained is cruder (the agent may have been writing at the
+			// bottom meanwhile, and that growth counts here too), but it moves the
+			// view off the sentinel, and the gate below judges whether it did.
+			console.warn(
+				`Lost the scroll anchor (message ${anchor.messageId}), restoring the view by height instead`,
+			);
+			el.scrollTop = anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight);
+		}
+
+		// The restore above was measured against a page that has not finished
+		// rendering. Keep correcting it until it has.
+		cancelRestoreWindow();
+		restoreRef.current = anchor;
+		restoreTimerRef.current = setTimeout(closeRestoreWindow, RESTORE_SETTLE_MS);
 	}, [loadedHistoryPages]);
 
 	// Initial scroll to bottom (before paint)
@@ -219,15 +424,29 @@ function MessageList({
 
 	// Scroll to bottom when new messages are added (e.g. user sends a message).
 	// ResizeObserver alone is not reliable here: it fires asynchronously, and
-	// isAtBottomRef may become stale by that time. useLayoutEffect fires
-	// synchronously after DOM commit, so it captures isAtBottomRef before any
+	// followRef may become stale by that time. useLayoutEffect fires
+	// synchronously after DOM commit, so it captures followRef before any
 	// async events can modify it.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: totalCount is the trigger — messages is read for the one row this commit appended
 	useLayoutEffect(() => {
 		const prev = prevTotalCountRef.current;
 		prevTotalCountRef.current = totalCount;
+		if (totalCount <= prev) return;
+
+		// Sending a message is an explicit return to the tail: the user has just
+		// written at the end of the conversation, so that is where they are reading
+		// next, even if they had scrolled away. System-driven rows are nobody's
+		// gesture and say nothing about intent.
+		const last = messages[totalCount - 1];
+		if (last.role === "user" && last.source !== "system") {
+			followRef.current = true;
+			userScrolledRef.current = false;
+			setShowScrollButton(false);
+			abandonRestoreWindow();
+		}
 
 		const el = scrollRef.current;
-		if (el && totalCount > prev && isAtBottomRef.current) {
+		if (el && followRef.current) {
 			el.scrollTop = el.scrollHeight;
 		}
 	}, [totalCount]);
@@ -240,12 +459,27 @@ function MessageList({
 		if (!content || !scrollEl) return;
 
 		const observer = new ResizeObserver(() => {
-			if (isAtBottomRef.current) {
+			// A page still settling owns the view: the reader asked for the history
+			// above, and every height that lands inside it has to be compensated for
+			// again, or the view drifts off what the restore put in front of them.
+			const restoring = restoreRef.current;
+			if (restoring) {
+				restoreToAnchor(scrollEl, restoring);
+				return;
+			}
+			if (followRef.current) {
 				scrollEl.scrollTop = scrollEl.scrollHeight;
 			}
 		});
 
 		observer.observe(content);
+		// The container is watched as well as its content: the input box grows as
+		// it is typed into, an error bar can appear above it, and the software
+		// keyboard takes half the screen. None of that changes the content's
+		// height, yet all of it pushes the tail out of view. A transcript shorter
+		// than the viewport is held down by `min-h-full` + `justify-end` below
+		// instead (`78d8d81`, re-derived in `85c0a9a`); this is the other half.
+		observer.observe(scrollEl);
 		return () => observer.disconnect();
 	}, [hasMessages]);
 
@@ -387,13 +621,20 @@ function MessageList({
 			const card = findQuestionCard(scrollEl, requestId);
 			if (!card) return;
 
-			// Jumping is a deliberate move away from the tail. Without dropping the
-			// at-bottom flag first, the auto-follow would undo the jump: the next
-			// reflow of streaming output reaches the ResizeObserver while
-			// `isAtBottomRef` is still set (scroll events from the smooth scroll have
-			// not been dispatched yet) and snaps back to the bottom.
-			isAtBottomRef.current = false;
+			// Jumping is a deliberate move away from the tail, and following stays
+			// off until the user asks for it back. Without dropping the flag first,
+			// the auto-follow would undo the jump: the next reflow of
+			// streaming output reaches the ResizeObserver while `followRef` is still
+			// set (scroll events from the smooth scroll have not been dispatched yet)
+			// and snaps back to the bottom. The gesture flag is dropped along with
+			// it: the scrolling from here on is this jump's, not the user's, so its
+			// arrival must not be read as them choosing where to stop.
+			followRef.current = false;
+			userScrolledRef.current = false;
 			setShowScrollButton(true);
+			// This jump is where the view is meant to be now, so a page still
+			// settling above does not get to correct it back.
+			abandonRestoreWindow();
 
 			card.scrollIntoView({
 				block: "start",
@@ -416,7 +657,7 @@ function MessageList({
 				.querySelector<HTMLElement>("[data-question-header]")
 				?.focus({ preventScroll: true });
 		},
-		[clearHighlight],
+		[clearHighlight, abandonRestoreWindow],
 	);
 
 	// Every loaded message is rendered, and a question the server has not sent yet
@@ -426,11 +667,24 @@ function MessageList({
 	}, [target, scrollToQuestion]);
 
 	const handleScrollToBottom = useCallback(() => {
-		scrollRef.current?.scrollTo({
-			top: scrollRef.current.scrollHeight,
-			behavior: "smooth",
+		const el = scrollRef.current;
+		if (!el) return;
+
+		// Following is restored first so that the effects above own the endpoint as
+		// the content settles. Scrolling to the scrollHeight of this one frame is
+		// what made the button unreliable: anything that finishes rendering during
+		// the animation — syntax highlighting, a diagram, an image — moves the
+		// bottom past the target the animation was given.
+		followRef.current = true;
+		userScrolledRef.current = false;
+		setShowScrollButton(false);
+		abandonRestoreWindow();
+
+		el.scrollTo({
+			top: el.scrollHeight,
+			behavior: prefersReducedMotion() ? "auto" : "smooth",
 		});
-	}, []);
+	}, [abandonRestoreWindow]);
 
 	// Only once the whole transcript is loaded: pinned above a page that is still
 	// the middle of a conversation, the banner would claim a position it does not
@@ -456,9 +710,13 @@ function MessageList({
 
 	return (
 		<div className="relative min-h-0 flex-1 overflow-hidden">
+			{/* Browser scroll anchoring is off because the anchoring here is written
+			    by hand: left on, it rewrites scrollTop under the paging restore and
+			    the follow effects, and Safari does not implement it at all, so the
+			    two would not even disagree the same way on each platform. */}
 			<div
 				ref={scrollRef}
-				className="h-full overflow-x-hidden overflow-y-auto overscroll-y-contain"
+				className="h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]"
 			>
 				<div
 					ref={contentRef}

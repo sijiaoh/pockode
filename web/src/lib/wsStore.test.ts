@@ -409,14 +409,14 @@ describe("wsStore", { timeout: 20_000 }, () => {
 		});
 
 		it("marks a request the client gave up on as a timeout", async () => {
-			const { isRPCTimeout } = await import("./wsStore");
+			const { RPC_TIMEOUT_MS, isRPCTimeout } = await import("./wsStore");
 			const wsActions = await getWsActions();
 
 			await connectAndAuth();
 			getMockWs()?.mockNoResponse();
 
 			const caught = wsActions.getFile("big.png").catch((error) => error);
-			await vi.advanceTimersByTimeAsync(30_000);
+			await vi.advanceTimersByTimeAsync(RPC_TIMEOUT_MS);
 
 			// Callers use this to tell "we stopped waiting" — where the server may
 			// still be working and a retry would duplicate it — from a real failure.
@@ -424,7 +424,8 @@ describe("wsStore", { timeout: 20_000 }, () => {
 		});
 
 		it("waits longer on agent-starting requests than on other requests", async () => {
-			const { isRPCTimeout } = await import("./wsStore");
+			const { AGENT_START_RPC_TIMEOUT_MS, RPC_TIMEOUT_MS, isRPCTimeout } =
+				await import("./wsStore");
 			const wsActions = await getWsActions();
 
 			await connectAndAuth();
@@ -443,16 +444,18 @@ describe("wsStore", { timeout: 20_000 }, () => {
 				return { caught, settled };
 			});
 
-			await vi.advanceTimersByTimeAsync(30_000);
+			await vi.advanceTimersByTimeAsync(RPC_TIMEOUT_MS);
 			expect(isRPCTimeout(await otherRequest)).toBe(true);
-			// An agent CLI starts on these requests' path, and the server spends up
-			// to 40s on that before answering. Giving up here would throw away the
-			// reply that says which startup step stalled.
+			// An agent CLI starts on these requests' path, and the server spends its
+			// whole start budget on that before answering. Giving up here would throw
+			// away the reply that says which startup step stalled.
 			for (const { settled } of agentStarters) {
 				expect(settled.done).toBe(false);
 			}
 
-			await vi.advanceTimersByTimeAsync(30_000);
+			await vi.advanceTimersByTimeAsync(
+				AGENT_START_RPC_TIMEOUT_MS - RPC_TIMEOUT_MS,
+			);
 			for (const { caught } of agentStarters) {
 				expect(isRPCTimeout(await caught)).toBe(true);
 			}

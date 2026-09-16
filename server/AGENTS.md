@@ -119,11 +119,11 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
   | 来源 | 调用点 | 为什么 Windows 上做不到 |
   |---|---|---|
-  | `internal/fifotest` | `agent/codex`×1、`contents`×1、`filetransfer`×2 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
+  | `internal/fifotest` | `contents`×1、`filetransfer`×2 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
   | `internal/symlinktest` | `contents`×1、`filetransfer`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
   | `internal/unwritabletest` | `filestore`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
 
-  **合计 6~8 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 3+3，开了是 4+0。别按单行的数去对账，按合计。
+  **合计 5~7 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 2+3，开了是 3+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 
@@ -173,7 +173,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `--work` | | `.` | 工作目录 |
 | `--data` | | `<work>/.pockode` | 数据目录 |
 | `--dev` | | `false` | 开发模式（启用时不 serve 静态文件） |
-| `--idle-timeout` | | `8h` | 空闲超时时间 |
+| `--idle-timeout` | | `5m` | 空闲超时时间（`0` 表示关闭回收） |
 | `--relay` | | `true` | 启用 relay 远程访问（`-relay=false` 禁用） |
 | `--relay-frontend-port` | | 同 server port | Relay 转发前端请求的目标端口 |
 | `--cloud-url` | | `https://cloud.pockode.com` | 云服务器 URL |

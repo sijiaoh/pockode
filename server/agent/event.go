@@ -47,8 +47,10 @@ func (e EventType) AwaitsUserInput() bool {
 //
 // It is a whitelist because being wrong is not symmetric. An event wrongly
 // counted as activity marks a session running with nothing running, and nothing
-// corrects that until the idle reaper collects the process hours later — the
-// startup warning Codex emits for a session it cannot resume did exactly that.
+// corrects that — not even the idle reaper, which spares a turn in progress
+// precisely because it cannot tell a busy one from a stuck one (see
+// Process.reapHold). The startup warning Codex emits for a session it cannot
+// resume did exactly that.
 // An event wrongly left out costs at most one missed transition, because the
 // send that started the turn has already set running.
 //
@@ -189,8 +191,9 @@ type AgentEvent interface {
 
 type TextEvent struct {
 	Content string
-	// ProviderMessageID names the agent message this text came out of, when the
-	// agent gives its messages ids. See EventRecord.ProviderMessageID.
+	// ProviderMessageID names the part of the agent's own conversation this text
+	// came out of, when the agent puts ids on them. See
+	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
 }
 
@@ -205,8 +208,9 @@ type ToolCallEvent struct {
 	ToolName  string
 	ToolInput json.RawMessage
 	ToolUseID string
-	// ProviderMessageID names the agent message this call came out of, when the
-	// agent gives its messages ids. See EventRecord.ProviderMessageID.
+	// ProviderMessageID names the part of the agent's own conversation this call
+	// came out of, when the agent puts ids on them. See
+	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
 }
 
@@ -238,8 +242,9 @@ type ToolResultEvent struct {
 	// IsError reports that the tool call failed. Best-effort: only set when the
 	// agent CLI says so, never inferred from the result text.
 	IsError bool
-	// ProviderMessageID names the agent message this result came out of, when
-	// the agent gives its messages ids. See EventRecord.ProviderMessageID.
+	// ProviderMessageID names the part of the agent's own conversation this
+	// result came out of, when the agent puts ids on them. See
+	// EventRecord.ProviderMessageID.
 	ProviderMessageID string
 }
 

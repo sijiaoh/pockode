@@ -68,14 +68,15 @@ State](code/agent-integration.md#what-an-event-says-about-process-state).
 #### What Is Not an Event
 
 Not everything a CLI frame carries belongs in the stream. Token counts, cost and
-context size arrive on the same `result` / `token_count` frames the parser reads,
-and are deliberately routed around it: an event is a fixed record of one moment,
-persisted and broadcast, while a running total is state the session store owns and
-every reader has to see the current value of. Putting the total in the stream
-would write a figure into the transcript that the next turn makes wrong. Codex's `token_count`
-frame is therefore handled by an explicit case that feeds the usage observer and
-emits nothing — not by the ignore list, which is for events Pockode has no surface
-for yet. See [Usage Reporting](code/agent-integration.md#usage-reporting).
+context size arrive on frames the parser reads — Claude's `result`, Codex's
+`thread/tokenUsage/updated` — and are deliberately routed around it: an event is a
+fixed record of one moment, persisted and broadcast, while a running total is state
+the session store owns and every reader has to see the current value of. Putting
+the total in the stream would write a figure into the transcript that the next turn
+makes wrong. Codex's usage notification is therefore handled by an explicit case
+that feeds the usage observer and emits nothing — not by the ignore list, which is
+for notifications Pockode has no surface for yet. See
+[Usage Reporting](code/agent-integration.md#usage-reporting).
 
 The same test applies to anything new: if a later reader needs *the latest* value,
 it is state and needs an owner; if it needs *what happened*, it is an event.
@@ -130,8 +131,8 @@ before they reach here, and what a fork has to do about it are in
 
 Each backend maps its CLI's output to this event set: `server/agent/claude/claude.go`
 scans stream-json line-by-line (`streamOutput()` → `parseLine()`), and
-`server/agent/codex/codex.go` reads MCP JSON-RPC notifications and `tools/call`
-results.
+`server/agent/codex/events.go` maps the app-server channel's JSON-RPC
+notifications — thread items and turn boundaries — onto the same set.
 
 Both parsers forward only what they recognise. The CLIs emit far more than Pockode
 can render and both keep adding types, so each parser also names the types it

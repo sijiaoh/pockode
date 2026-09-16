@@ -140,6 +140,11 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, mockRegistry(ag), dataDir, 10*time.Minute)
+	// Wired as main.go wires it, so that the env shows the real consequence of a
+	// user action on a session — and of the entry points that deliberately are
+	// not one. Without it the syncer is nil and any such assertion passes for the
+	// wrong reason.
+	worktreeManager.SetWorkStatusSyncer(work.NewStatusSyncer(workStore))
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
 	workOps := work.NewOperations(workStore, workStarter, nil)
@@ -381,6 +386,62 @@ func (e *testEnv) awaitResponseComplete() {
 func (e *testEnv) skipN(n int) {
 	for i := 0; i < n; i++ {
 		e.readFrame()
+	}
+}
+
+// startWorkWithStatus starts a story, leaves its work in status and returns the
+// session the work is bound to. Callers read the work's status right after the
+// RPC under test replies: every transition it can cause runs inline in the
+// handler, so nothing has to settle for the assertion to be decisive.
+func startWorkWithStatus(t *testing.T, env *testEnv, status work.WorkStatus) (workID, sessionID string) {
+	t.Helper()
+
+	storyResp := env.call("work.create", rpc.WorkCreateParams{
+		Type:        work.WorkTypeStory,
+		AgentRoleID: env.testRoleID,
+		Title:       "Story",
+	})
+	var story work.Work
+	if err := json.Unmarshal(storyResp.Result, &story); err != nil {
+		t.Fatal(err)
+	}
+
+	startResp := env.call("work.start", rpc.WorkStartParams{ID: story.ID})
+	var started work.Work
+	if err := json.Unmarshal(startResp.Result, &started); err != nil {
+		t.Fatal(err)
+	}
+	if started.SessionID == "" {
+		t.Fatal("expected a session after start")
+	}
+
+	var err error
+	switch status {
+	case work.StatusNeedsInput:
+		err = env.workStore.MarkNeedsInput(bgCtx, story.ID)
+	case work.StatusWaiting:
+		err = env.workStore.MarkWaiting(bgCtx, story.ID)
+	case work.StatusInProgress:
+		// work.start already left it there.
+	default:
+		t.Fatalf("unsupported status %q", status)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return story.ID, started.SessionID
+}
+
+func requireWorkStatus(t *testing.T, env *testEnv, workID string, want work.WorkStatus, why string) {
+	t.Helper()
+
+	w, found, err := env.workStore.Get(workID)
+	if err != nil || !found {
+		t.Fatalf("get work: %v, found=%v", err, found)
+	}
+	if w.Status != want {
+		t.Errorf("status = %q, want %q — %s", w.Status, want, why)
 	}
 }
 
@@ -760,7 +821,7 @@ func TestHandler_FailedFirstTurn_KeepsAgentTypeSwitchable(t *testing.T) {
 		t.Errorf("expected agent type change to be allowed, got %s", resp.Error.Message)
 	}
 
-	// The failed turn's process can still be alive — Codex's mcp-server outlives
+	// The failed turn's process can still be alive — Codex's app-server outlives
 	// a turn it could not run. Reusing it would send the next message to the
 	// agent the user just switched away from.
 	if env.getMainWorktree().ProcessManager.HasProcess("failed-session") {

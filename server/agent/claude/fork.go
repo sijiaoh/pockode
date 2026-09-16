@@ -150,16 +150,7 @@ func carriableProviderSession(opts agent.ForkOptions, log *slog.Logger) (provide
 // (measured on 2.1.263), whereas stepping back to the previous message would
 // take away the very message the user forked at.
 func forkAnchorMessage(history []json.RawMessage) string {
-	for i := len(history) - 1; i >= 0; i-- {
-		var rec agent.EventRecord
-		if err := json.Unmarshal(history[i], &rec); err != nil {
-			continue
-		}
-		if rec.ProviderMessageID != "" {
-			return rec.ProviderMessageID
-		}
-	}
-	return ""
+	return agent.LastProviderMessageID(history)
 }
 
 // seedResumeState writes the state the forked session's first launch reads.

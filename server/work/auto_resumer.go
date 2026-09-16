@@ -43,7 +43,7 @@ type StepProvider interface {
 // Process lifecycle sync:
 //   - idle → send a continuation message to resume in_progress work.
 //   - running → transition stopped work back to in_progress.
-//   - ended → transition in_progress/needs_input work to stopped.
+//   - ended → transition in_progress work to stopped.
 //
 // Child closure: When a child Work closes, notify its parent. Waiting parents
 // transition to in_progress; other active parents (in_progress, needs_input,
@@ -136,9 +136,21 @@ const orphanedWorkComment = "Stopped automatically: the Pockode server restarted
 	"No agent process survives a restart, so anything that was running for this work — including background tasks — " +
 	"is gone and no result is coming from it. Reopen the work to continue it."
 
-// StopOrphanedWork transitions all in_progress, needs_input, and waiting work items to stopped.
-// Call this at server startup before any sessions are created, so that work
-// items left running from a previous server run are properly marked.
+// StopOrphanedWork transitions in_progress and needs_input work items to
+// stopped. Call this at server startup before any sessions are created, so that
+// work items left running from a previous server run are properly marked.
+//
+// needs_input is included because the question itself did not survive: a CLI's
+// ask-user-question lives inside the process, so after a restart nobody can
+// answer it and the status would promise something that will never happen. That
+// premise is the whole reason, and a CLI that ever lets a later process answer a
+// pending prompt takes it away — along with the idle reaper's matching decision
+// to keep such a process alive indefinitely (docs/code/agent-integration.md,
+// "A Prompt Belongs to the Process That Raised It").
+//
+// waiting is deliberately left alone. A work waiting on child work does not
+// depend on its own process to be woken — the child's closure reactivates it
+// just as well after a restart, so there is nothing to interrupt.
 func (r *AutoResumer) StopOrphanedWork() {
 	works, err := r.workStore.List()
 	if err != nil {
@@ -147,7 +159,7 @@ func (r *AutoResumer) StopOrphanedWork() {
 	}
 
 	for _, w := range works {
-		if w.Status != StatusInProgress && w.Status != StatusNeedsInput && w.Status != StatusWaiting {
+		if w.Status != StatusInProgress && w.Status != StatusNeedsInput {
 			continue
 		}
 		if err := r.stopWork(w.ID); err != nil {
@@ -242,7 +254,7 @@ func (r *AutoResumer) stepCount(w Work) int {
 //   - running → reactivate stopped work to in_progress.
 //   - idle → send auto-continuation message for in_progress work.
 //   - idle (interrupted) → stop work without auto-continuation.
-//   - ended → transition in_progress/needs_input work to stopped.
+//   - ended → transition in_progress work to stopped.
 //
 // Parameters are extracted from process.StateChangeEvent to avoid importing the process package.
 func (r *AutoResumer) HandleProcessStateChange(sessionID, state string, needsInput, isInitial, interrupted bool) {
@@ -328,8 +340,16 @@ func (r *AutoResumer) settled(sessionID string, activation uint64) bool {
 	return true
 }
 
-// handleProcessEnded transitions in_progress/needs_input/waiting work to stopped when its process terminates.
-// This catches cases like user interrupt or unexpected process exit.
+// handleProcessEnded transitions in_progress work to stopped when its process
+// terminates. This catches cases like user interrupt or unexpected process exit.
+//
+// Only in_progress. A process dying says the work is no longer being carried
+// out; it says nothing about a work that was already paused on something a
+// dead process cannot settle. needs_input still needs its answer and waiting
+// still needs its child, and both are woken by events that outlive the process
+// — a user action, a child closing. Stopping them here would mean every paused
+// work turns stopped five minutes later when the idle reaper collects the
+// process, for no reason the user can see.
 func (r *AutoResumer) handleProcessEnded(sessionID string, activation uint64) {
 	// Use the same settle delay as auto-continuation to allow step_done to propagate.
 	if !r.settled(sessionID, activation) {
@@ -341,7 +361,7 @@ func (r *AutoResumer) handleProcessEnded(sessionID string, activation uint64) {
 	// item ever gets — OnWorkChange never fires for one.
 	defer r.forgetSession(sessionID)
 
-	w := r.findWorkBySessionID(sessionID, StatusInProgress, StatusNeedsInput, StatusWaiting)
+	w := r.findWorkBySessionID(sessionID, StatusInProgress)
 	if w == nil {
 		return
 	}

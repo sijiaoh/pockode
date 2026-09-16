@@ -29,7 +29,7 @@ type Manager struct {
 	WorktreeWatcher *watch.WorktreeWatcher
 
 	workAutoResumer       *work.AutoResumer
-	workNeedsInputSyncer  *work.NeedsInputSyncer
+	workStatusSyncer      *work.StatusSyncer
 	sessionChangeListener session.OnChangeListener
 
 	mu        sync.Mutex
@@ -74,8 +74,8 @@ func (m *Manager) ResolveSender(name string) (work.MessageSender, func(), error)
 	return wt.ChatClient, func() { m.Release(wt) }, nil
 }
 
-func (m *Manager) SetWorkNeedsInputSyncer(s *work.NeedsInputSyncer) {
-	m.workNeedsInputSyncer = s
+func (m *Manager) SetWorkStatusSyncer(s *work.StatusSyncer) {
+	m.workStatusSyncer = s
 }
 
 // SetSessionChangeListener registers a listener on every worktree's session
@@ -273,8 +273,8 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetProcessStateGetter(processManager)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
-	if m.workNeedsInputSyncer != nil {
-		sessionListWatcher.SetWorkNeedsInputSyncer(m.workNeedsInputSyncer)
+	if m.workStatusSyncer != nil {
+		sessionListWatcher.SetWorkStatusSyncer(m.workStatusSyncer)
 	}
 	processManager.SetOnStateChange(func(e process.StateChangeEvent) {
 		sessionListWatcher.HandleProcessStateChange(e)

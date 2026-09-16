@@ -142,7 +142,7 @@ func main() {
 	workDirFlag := flag.String("work", ".", "working directory")
 	dataDirFlag := flag.String("data", "", "data directory (default: <work>/.pockode)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
-	idleTimeoutFlag := flag.Duration("idle-timeout", 8*time.Hour, "idle timeout before stopping")
+	idleTimeoutFlag := flag.Duration("idle-timeout", 5*time.Minute, "idle timeout before stopping a session (0 disables reaping)")
 	relayFlag := flag.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
 	relayFrontendPortFlag := flag.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
 	cloudURLFlag := flag.String("cloud-url", "https://cloud.pockode.com", "cloud server URL")
@@ -311,7 +311,7 @@ Flags:
 	worktreeManager.SetWorkAutoResumer(workAutoResumer)
 	// Route AutoResumer follow-up messages to each work's own worktree.
 	workAutoResumer.SetSenderResolver(worktreeManager)
-	worktreeManager.SetWorkNeedsInputSyncer(work.NewNeedsInputSyncer(workStore))
+	worktreeManager.SetWorkStatusSyncer(work.NewStatusSyncer(workStore))
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
 	// Single implementation of the start/reopen transitions, shared by both the

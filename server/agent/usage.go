@@ -13,9 +13,9 @@ import (
 // Both CLIs report cumulative figures, and both count from the start of the
 // *process* rather than of the session: Claude's result frame carries
 // `modelUsage` and `total_cost_usd` accumulated since the CLI started, Codex's
-// `token_count` carries `info.total_token_usage` for the thread its mcp-server
-// process is holding. A session outlives many processes — every restart and
-// every resume is a new one — and on a resumed session both counters start again
+// `thread/tokenUsage/updated` carries `tokenUsage.total` for the thread its
+// app-server process is holding. A session outlives many processes — every
+// restart and every resume is a new one — and on a resumed session both counters start again
 // from zero (verified against claude 2.1.263 and codex-cli 0.153.0). So storing
 // the reported total would lose everything consumed before the last restart,
 // while adding it on every turn would count each turn again for every later turn

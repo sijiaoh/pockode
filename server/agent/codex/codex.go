@@ -1,4 +1,19 @@
-// Package codex implements Agent interface using Codex CLI via MCP over STDIO.
+// Package codex implements Agent interface using Codex CLI's app-server
+// JSON-RPC channel over STDIO.
+//
+// Why app-server and not `codex mcp-server`, which this used to speak: a thread
+// created over MCP lives in the memory of the process that created it, so every
+// restart of the CLI threw the conversation away. app-server's `thread/resume`
+// loads a thread back from its rollout file on disk, which is what lets a
+// session survive a restart at all — and it reopens threads the MCP channel
+// created too, so sessions recorded before this change are not lost.
+//
+// The trade is that `codex app-server` is marked [experimental] in `codex
+// --help` while `mcp-server` is not. What makes that acceptable is that the CLI
+// generates the JSON schema for its own protocol, so the shapes this package
+// depends on can be asked about instead of waited for:
+// TestIntegration_ProtocolSchemaStillFitsWhatWeSend does the asking, and costs
+// no tokens because generation never reaches a model.
 package codex
 
 import (
@@ -10,7 +25,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,14 +38,32 @@ import (
 
 const Binary = "codex"
 
+// appServerSubcommand is the CLI entry point for the JSON-RPC channel.
+const appServerSubcommand = "app-server"
+
 // Startup steps must be bounded: process.Manager calls Agent.Start while holding
 // its worktree-wide process lock, so a step that never returns deadlocks every
 // session of the worktree. A timeout downgrades that to a recoverable start
 // failure.
 //
-// Both budgets cover local work only — `--version` just prints a string, and the
-// MCP handshake is answered before Codex does anything with the model — so they
-// are sized for a cold start on a loaded machine, not for model latency.
+// Neither budget covers model latency: `--help` just lists subcommands, and the
+// startup budget covers the `initialize` handshake plus one `thread/start`,
+// `thread/resume` or `thread/fork`, none of which sends a prompt anywhere.
+//
+// That is not the same as covering only local work, and measuring says so. On
+// codex-cli 0.153.0, with no prompt in sight, `initialize` took 2.3-4.9s and
+// `thread/start` 8.6-14.2s over five cold runs — 11-19s together — and the CLI
+// logs its own network timeouts during the handshake ("failed to refresh
+// available models"). So the CLI does reach the network here, and the 30s this
+// budget started at was a margin of well under 2x on a bad day rather than the
+// wide one those figures look like — two integration runs on a contended machine
+// exceeded it. Hence 45s: about 3x the worst measured start.
+//
+// The asymmetry is what picks the number. The budget is only ever spent in full
+// when a start is genuinely stuck, and then it decides how long the user waits
+// to be told. Set it too low and it kills starts that would have succeeded, and
+// the user pays the whole wait again on the retry. Waiting longer to report a
+// real failure is the cheaper of the two mistakes.
 //
 // The client is sized against their sum: web/src/lib/wsStore.ts mirrors it as
 // CODEX_START_BUDGET_MS and keeps the timeout of the requests that run Start
@@ -40,11 +72,21 @@ const Binary = "codex"
 // step then goes into a reply nobody is waiting for. Grow these two and the web
 // constant together.
 const (
-	versionProbeTimeout = 10 * time.Second
-	handshakeTimeout    = 30 * time.Second
+	supportProbeTimeout = 10 * time.Second
+	startupTimeout      = 45 * time.Second
 )
 
-// Agent implements agent.Agent using Codex CLI via MCP.
+// threadSource classifies this thread for Codex's own bookkeeping. It lands in
+// the rollout's `thread_source`, next to `originator` (which takes clientInfo's
+// name, also "pockode").
+//
+// It does not change the rollout's `source` field: on codex-cli 0.153.0 that one
+// is hard-coded per channel and reads "vscode" for everything app-server
+// creates, whatever is passed here (measured). Passing it is still the only way
+// to say whose thread this is.
+const threadSource = "pockode"
+
+// Agent implements agent.Agent using the Codex CLI app-server.
 type Agent struct{}
 
 // New creates a new Codex Agent.
@@ -52,12 +94,12 @@ func New() *Agent {
 	return &Agent{}
 }
 
-// Start launches a persistent Codex MCP server process.
+// Start launches a persistent `codex app-server` process and opens this
+// session's thread on it — resuming the recorded one when there is one.
 func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	procCtx, cancel := context.WithCancel(ctx)
 
-	mcpSubcommand, err := getMCPSubcommand(procCtx)
-	if err != nil {
+	if err := checkAppServerSupport(procCtx); err != nil {
 		cancel()
 		return nil, err
 	}
@@ -70,17 +112,17 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 	log := slog.With("sessionId", opts.SessionID, "agent", "codex")
 
-	proc, err := agent.StartProcess(procCtx, log, Binary, []string{mcpSubcommand}, opts.WorkDir)
+	proc, err := agent.StartProcess(procCtx, log, Binary, []string{appServerSubcommand}, opts.WorkDir)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to start codex: %w", err)
 	}
 
-	log.Info("codex process started", "pid", proc.Pid(), "subcommand", mcpSubcommand)
+	log.Info("codex process started", "pid", proc.Pid(), "subcommand", appServerSubcommand)
 
 	events := make(chan agent.AgentEvent, 100)
 
-	sess := &mcpSession{
+	sess := &appSession{
 		log:               log,
 		events:            events,
 		stdin:             proc.Stdin,
@@ -89,15 +131,14 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		opts:              opts,
 		exe:               exe,
 		pendingRPCResults: &sync.Map{},
-		pendingElicit:     &sync.Map{},
+		pendingApprovals:  &sync.Map{},
+		toolInputs:        map[string]json.RawMessage{},
+		resume:            newResumeStateStore(opts, log),
 		attachments:       attachments.NewStore(opts.DataDir, opts.SessionID),
-		// Per-process: Codex's totals count from the start of the mcp-server
-		// process holding the thread. See agent.UsageAccumulator.
+		// Per-process: Codex's totals count from the start of the app-server
+		// process holding the thread, and reset again on every resume. See
+		// agent.UsageAccumulator.
 		usage: newUsageObserver(log, opts),
-	}
-
-	if opts.Resume {
-		sess.warnSessionNotResumable()
 	}
 
 	go func() {
@@ -106,39 +147,46 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 				logger.LogPanic(r, "codex process crashed", "sessionId", opts.SessionID)
 			}
 		}()
-		defer close(events)
-		defer cancel()
+		defer sess.closeEvents()
 
 		stderrCh := agent.ReadStderr(proc.Stderr, "codex")
-		sess.runMCPLoop(procCtx, proc.Stdout)
-		sess.cleanupPendingElicitations()
+		sess.runReadLoop(proc.Stdout)
+		sess.cancelPendingApprovals()
 		agent.WaitForProcess(procCtx, log, proc, stderrCh, events)
 
-		select {
-		case events <- agent.ProcessEndedEvent{}:
-		case <-procCtx.Done():
-		}
+		agent.EmitProcessEnded(log, events)
 	}()
 
-	// Initialize the MCP connection before returning. The deadline lives on a
-	// child context so it expires with the handshake instead of taking procCtx —
+	// Handshake and open the thread before returning. The deadline lives on a
+	// child context so it expires with the startup instead of taking procCtx —
 	// and the running CLI — down with it.
-	initCtx, cancelInit := context.WithTimeout(procCtx, handshakeTimeout)
-	defer cancelInit()
+	startCtx, cancelStart := context.WithTimeout(procCtx, startupTimeout)
+	defer cancelStart()
 
-	if err := sess.initialize(initCtx); err != nil {
+	if err := sess.initialize(startCtx); err != nil {
 		sess.Close()
-		if errors.Is(initCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("codex did not answer the MCP handshake within %s", handshakeTimeout)
-		}
-		return nil, fmt.Errorf("MCP initialize failed: %w", err)
+		return nil, startupError(startCtx, "answer the app-server handshake", err)
+	}
+	if err := sess.openThread(startCtx); err != nil {
+		sess.Close()
+		return nil, startupError(startCtx, "open a thread", err)
 	}
 
 	return sess, nil
 }
 
-// mcpSession implements agent.Session for Codex MCP.
-type mcpSession struct {
+// startupError names the step that failed, and says so as a timeout when that is
+// what happened: "codex did not open a thread within 30s" is actionable where
+// "context deadline exceeded" is not.
+func startupError(ctx context.Context, step string, err error) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("codex did not %s within %s", step, startupTimeout)
+	}
+	return fmt.Errorf("codex failed to %s: %w", step, err)
+}
+
+// appSession implements agent.Session over the Codex app-server protocol.
+type appSession struct {
 	log     *slog.Logger
 	events  chan agent.AgentEvent
 	stdin   io.WriteCloser
@@ -146,117 +194,178 @@ type mcpSession struct {
 	cancel  func()
 	procCtx context.Context
 	opts    agent.StartOptions
-	exe     string // resolved executable path for MCP server config
+	exe     string // resolved executable path for the MCP server config
 
 	nextID            atomic.Int64
 	pendingRPCResults *sync.Map // id -> chan *rpcResponse
-	pendingElicit     *sync.Map // id -> chan elicitAnswer
+	pendingApprovals  *sync.Map // request id -> chan approvalDecision
 
-	// attachments holds the images the session's tools looked at, so the events
-	// naming them stay small enough to keep in the history. See handleViewImage.
+	// attachments is where the images this session's tools look at are kept, so
+	// the events naming them stay small enough to hold in the history (see
+	// package attachments). Nothing writes to it yet: the handler that did was
+	// written against the MCP channel and has to be rebuilt on the app-server
+	// one. The store is opened here rather than with that handler because
+	// opening it is what ties it to this session's data directory, and that is
+	// settled here and nowhere else.
 	attachments attachments.Store
 
-	idMu     sync.Mutex // protects threadID
+	stateMu  sync.Mutex // protects threadID, turnID and interruptPending
 	threadID string
+	turnID   string // the turn currently running, or empty between turns
+	// interruptPending is a stop that arrived before there was a turn to name.
+	// See SendInterrupt.
+	interruptPending bool
 
-	usage *usageObserver
+	// toolInputs holds the rendered input of items still in flight, keyed by
+	// item id. An approval request names only the item it is about, so this is
+	// where the description of a file change comes from — it arrives in the
+	// item/started that precedes the approval and nowhere else.
+	toolInputsMu sync.Mutex
+	toolInputs   map[string]json.RawMessage
+
+	usage  *usageObserver
+	resume *resumeStateStore
+
+	// eventsMu is held for reading by every sender and for writing by the one
+	// close, so that no send can be in flight while the channel is closed. See
+	// emitEvent.
+	eventsMu     sync.RWMutex
+	eventsClosed bool
 
 	closeOnce sync.Once
 }
 
 // Events returns the event channel.
-func (s *mcpSession) Events() <-chan agent.AgentEvent {
+func (s *appSession) Events() <-chan agent.AgentEvent {
 	return s.events
 }
 
-// SendMessage sends a message to Codex.
-func (s *mcpSession) SendMessage(prompt string) error {
+// SendMessage starts a turn on this session's thread.
+//
+// The reply to `turn/start` only says the turn was accepted; the turn itself
+// ends later, with the turn/completed notification that produces this turn's
+// done, error or interrupted event.
+//
+// Sending while a turn is already running steers that turn rather than starting
+// a second one: the reply carries the running turn's id, both messages are
+// answered inside it, and one turn/completed ends them both (verified on
+// codex-cli 0.153.0). That is a change from the MCP channel, which aborted the
+// running turn and replaced it — and it is the better of the two, since nothing
+// the agent had already done is thrown away. It is also why nothing here counts
+// endings per message; see agent.Session.
+func (s *appSession) SendMessage(prompt string) error {
 	s.log.Debug("sending prompt", "length", len(prompt))
 
-	s.idMu.Lock()
-	threadID := s.threadID
-	s.idMu.Unlock()
+	// A new prompt is the user asking for work, which retires a stop that never
+	// found a turn to name — one pressed while the session was idle, or one that
+	// lost the race with the turn it meant to stop. Without this, that stop would
+	// be carried out on the turn this prompt is about to start.
+	s.forgetWaitingStop()
 
+	threadID := s.currentThreadID()
 	if threadID == "" {
-		// First message: start a new session.
-		return s.callToolAsync("codex", s.buildStartConfig(prompt))
+		// Start opens the thread before returning a session, so reaching here
+		// means the process died between then and now.
+		return errors.New("codex session has no open thread")
 	}
 
-	// Subsequent messages continue the same thread. `threadId` is what current
-	// CLIs read; `conversationId` is its deprecated predecessor, still accepted
-	// and the only key CLIs before the rename understand. Sending both keeps one
-	// call working across versions — neither side rejects the extra field.
-	return s.callToolAsync("codex-reply", map[string]interface{}{
-		"threadId":       threadID,
-		"conversationId": threadID,
-		"prompt":         prompt,
+	params := map[string]interface{}{
+		"threadId": threadID,
+		"input":    []map[string]interface{}{{"type": "text", "text": prompt}},
+	}
+
+	return s.sendRPCAsync("turn/start", params, func(_ json.RawMessage, err error) {
+		if err == nil {
+			return
+		}
+		// No turn started, so nothing else will end this one.
+		s.emitEvent(agent.ErrorEvent{Error: fmt.Sprintf("codex could not start the turn: %s", err)})
 	})
 }
 
-// SendPermissionResponse sends a permission response.
-func (s *mcpSession) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
+// SendPermissionResponse answers the approval request the user just decided on.
+func (s *appSession) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
 	var decision string
 	switch choice {
 	case agent.PermissionAllow:
-		decision = "approved"
+		decision = decisionAccept
 	case agent.PermissionAlwaysAllow:
-		decision = "approved_for_session"
+		decision = decisionAcceptForSession
 	default:
-		decision = "denied"
+		// decline, not cancel: a refusal tells the model to try something else
+		// and the turn carries on, which is what Codex has always done here.
+		decision = decisionDecline
 	}
-
-	if pending, ok := s.pendingElicit.LoadAndDelete(data.RequestID); ok {
-		ch := pending.(chan elicitAnswer)
-		select {
-		case ch <- elicitAnswer{decision: decision}:
-		default:
-		}
-	}
+	s.answerApproval(data.RequestID, decision)
 	return nil
 }
 
-// SendQuestionResponse is not applicable for Codex (Codex doesn't use AskUserQuestion).
-func (s *mcpSession) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
-	// Codex uses elicitation for permissions, not AskUserQuestion.
+// SendQuestionResponse is not applicable for Codex: nothing in this package
+// emits AskUserQuestionEvent, so no answer can ever arrive here.
+//
+// The app-server protocol does have a counterpart (`item/tool/requestUserInput`,
+// marked EXPERIMENTAL in the schema), but wiring it up is a feature of its own
+// rather than part of moving channels; handleRequestUserInput declines it for
+// now.
+func (s *appSession) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
 	return nil
 }
 
-// SendInterrupt sends an abort by cancelling the current tool call.
-func (s *mcpSession) SendInterrupt() error {
-	s.log.Info("sending interrupt (cancel notification)")
+// SendInterrupt stops the running turn, or the one about to start.
+//
+// turn/interrupt has to name a turn, and the id only arrives with turn/started —
+// which trails the prompt by however long the CLI takes to get going, measured at
+// over two seconds on a loaded machine. A stop pressed inside that window used to
+// find no turn and send nothing, silently: the user's stop was dropped and the
+// turn they wanted stopped ran to completion. So a stop with no turn to name is
+// remembered instead, and handleTurnStarted carries it out on the turn it was
+// meant for.
+func (s *appSession) SendInterrupt() error {
+	// Pending approvals first, so RequestCancelledEvent is enqueued before the
+	// InterruptedEvent that turn/completed produces. A turn blocked on an
+	// approval is also not looking at its interrupt request, so answering is
+	// what actually unblocks it — `cancel` is the decision that refuses and ends
+	// the turn in one step.
+	s.cancelPendingApprovals()
 
-	// Resolve pending elicitations FIRST so RequestCancelledEvent is enqueued
-	// before InterruptedEvent (which is emitted when callToolAsync receives
-	// the synthetic RPC response below).
-	s.cleanupPendingElicitations()
+	threadID, turnID := s.claimTurnToInterrupt()
+	if turnID == "" {
+		s.log.Info("no codex turn to interrupt yet, stopping the one that starts next")
+		return nil
+	}
+	return s.interruptTurn(threadID, turnID)
+}
 
-	// Send MCP cancellation for pending requests.
-	s.pendingRPCResults.Range(func(key, value any) bool {
-		id := key.(int64)
-		notification := rpcRequest{
-			JSONRPC: "2.0",
-			Method:  "notifications/cancelled",
-			Params:  json.RawMessage(fmt.Sprintf(`{"requestId":%d,"reason":"user interrupted"}`, id)),
-		}
-		if data, err := json.Marshal(notification); err == nil {
-			s.writeStdin(data)
-		}
+// claimTurnToInterrupt returns the turn to stop, or records that the next one to
+// start is to be stopped as soon as it names itself.
+func (s *appSession) claimTurnToInterrupt() (threadID, turnID string) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.turnID == "" {
+		s.interruptPending = true
+		return "", ""
+	}
+	return s.threadID, s.turnID
+}
 
-		// Unblock the callToolAsync goroutine with a synthetic response: Codex
-		// answers neither the cancelled tools/call nor any other pending request.
-		ch := value.(chan *rpcResponse)
-		select {
-		case ch <- &rpcResponse{abortReason: abortReasonInterrupted}:
-		default:
+func (s *appSession) interruptTurn(threadID, turnID string) error {
+	s.log.Info("interrupting codex turn", "turnId", turnID)
+
+	return s.sendRPCAsync("turn/interrupt", map[string]interface{}{
+		"threadId": threadID,
+		"turnId":   turnID,
+	}, func(_ json.RawMessage, err error) {
+		if err != nil {
+			// Losing the race with a turn that was ending anyway is the ordinary
+			// cause ("no active turn to interrupt"), and that turn's own
+			// turn/completed is already on its way.
+			s.log.Warn("codex refused the interrupt", "error", err, "turnId", turnID)
 		}
-		return true
 	})
-
-	return nil
 }
 
 // Close terminates the Codex process.
-func (s *mcpSession) Close() {
+func (s *appSession) Close() {
 	s.closeOnce.Do(func() {
 		s.log.Info("terminating codex process")
 		s.cancel()
@@ -266,7 +375,278 @@ func (s *mcpSession) Close() {
 	})
 }
 
-// --- MCP JSON-RPC 2.0 ---
+// --- Thread lifecycle ---
+
+// initialize performs the app-server handshake.
+func (s *appSession) initialize(ctx context.Context) error {
+	params := map[string]interface{}{
+		"clientInfo": map[string]interface{}{
+			"name":    "pockode",
+			"version": "1.0.0",
+		},
+		"capabilities": map[string]interface{}{
+			// A fork anchor can be refused outright without it —
+			// `thread/fork.beforeTurnId requires experimentalApi capability`.
+			// Only beforeTurnId was seen refused that way; lastTurnId, the one
+			// forkThread sends, is in the schema generated without
+			// --experimental too, so it may well not need the flag. Declaring it
+			// settles that rather than leaving it to be rediscovered, and costs
+			// nothing: capabilities are negotiated once, at the handshake, and
+			// nothing arrives because of it that the notification dispatch does
+			// not already ignore by default.
+			"experimentalApi": true,
+		},
+	}
+	result, err := s.sendRPC(ctx, "initialize", params)
+	if err != nil {
+		return err
+	}
+	s.log.Info("codex app-server initialized", "result", string(result))
+
+	notification := rpcRequest{JSONRPC: "2.0", Method: "initialized"}
+	data, err := json.Marshal(notification)
+	if err != nil {
+		return err
+	}
+	return s.writeStdin(data)
+}
+
+// openThread gives this session a thread to talk in: the fork it was created as,
+// the thread it already has, or a new one.
+//
+// Reopening that fails does not fail the session. A thread whose rollout is gone
+// (deleted, or written by a Codex install that is no longer there) would
+// otherwise make the session permanently unusable. It starts a fresh thread
+// instead and says so — the user needs to know the agent no longer remembers the
+// transcript they are looking at, and Pockode's own history is unaffected.
+func (s *appSession) openThread(ctx context.Context) error {
+	state, _ := s.resume.load()
+
+	switch {
+	case state.ForkAtTurnID != "":
+		return s.openRecordedThread(ctx, state, s.forkThread,
+			"Codex could not reopen the conversation this session was forked from (%s), so it is starting without it. The transcript above is unaffected.")
+	case state.ThreadID != "":
+		return s.openRecordedThread(ctx, state, s.resumeThread,
+			"Codex could not reopen this session's earlier conversation (%s), so it is starting over without those messages. The transcript above is unaffected.")
+	default:
+		return s.startThread(ctx)
+	}
+}
+
+// openRecordedThread reopens the thread the recorded state names, degrading to a
+// new one when Codex will not.
+//
+// The degradation is always to a *new* thread, never to a lesser way of reopening
+// the same conversation. A fork whose fork failed must not fall back to resuming
+// the thread it was forked from: the two sessions would then write their turns
+// into one conversation, which is the one thing forking exists to prevent.
+func (s *appSession) openRecordedThread(ctx context.Context, state codexResumeState, open func(context.Context, codexResumeState) error, degraded string) error {
+	if err := open(ctx, state); err == nil {
+		return nil
+	} else if ctx.Err() != nil {
+		// Out of budget, or the process is gone: a new thread would not fare
+		// better, and starting one would burn the recorded id for nothing.
+		return err
+	} else {
+		s.log.Warn("could not reopen codex thread, starting a new one",
+			"threadId", state.ThreadID, "forkAtTurnId", state.ForkAtTurnID, "error", err)
+		s.emitEvent(agent.WarningEvent{
+			Message: fmt.Sprintf(degraded, err),
+			Code:    "session_not_resumable",
+		})
+	}
+
+	return s.startThread(ctx)
+}
+
+func (s *appSession) startThread(ctx context.Context) error {
+	params := s.buildThreadParams()
+	params["threadSource"] = threadSource
+
+	result, err := s.sendRPC(ctx, "thread/start", params)
+	if err != nil {
+		return err
+	}
+	return s.adoptThread(result)
+}
+
+func (s *appSession) resumeThread(ctx context.Context, state codexResumeState) error {
+	s.log.Info("resuming codex thread", "threadId", state.ThreadID)
+
+	params := s.buildThreadParams()
+	params["threadId"] = state.ThreadID
+	// Pockode keeps its own transcript and renders from it, so hydrating the
+	// thread's turns into the reply would only cost the time to serialise them.
+	// The CLI has deprecated full hydration in favour of this flag.
+	params["excludeTurns"] = true
+
+	result, err := s.sendRPC(ctx, "thread/resume", params)
+	if err != nil {
+		return err
+	}
+	return s.adoptThread(result)
+}
+
+// forkThread opens a copy of the source's thread carrying its conversation
+// through the turn the fork was taken at, and leaves the source untouched.
+//
+// `lastTurnId` is inclusive, so the fork keeps the whole turn its anchor sits in
+// — including anything the agent went on to do later in that same turn, which
+// the forked transcript may stop short of. A turn is as coarse as that gets:
+// a message sent while one was already running is steered into it rather than
+// starting its own, so a fork taken at such a message carries the answer to it
+// as well. The alternative selector, `beforeTurnId`, would cut the turn away
+// entirely: the agent would then not remember the very exchange the user forked
+// at, prompt included, while the transcript in front of them shows it. Carrying
+// a little more than is shown is the smaller of the two mismatches, and it is
+// the one Claude's fork makes too (at the finer grain of a message, which is as
+// fine as each CLI's own anchors go).
+//
+// The anchor turn "cannot be in progress", says the protocol schema codex-cli
+// 0.153.0 generates — which is what a fork taken from a session mid-turn and
+// typed into before that turn ends would name. Whatever Codex answers to that
+// lands in openRecordedThread's degradation: a new thread, and the user is told.
+func (s *appSession) forkThread(ctx context.Context, state codexResumeState) error {
+	s.log.Info("forking codex thread", "sourceThreadId", state.ThreadID, "lastTurnId", state.ForkAtTurnID)
+
+	params := s.buildThreadParams()
+	params["threadSource"] = threadSource
+	params["threadId"] = state.ThreadID
+	params["lastTurnId"] = state.ForkAtTurnID
+	// As for a resume: Pockode renders the copied conversation from its own
+	// history, so hydrating the fork's turns into the reply would buy nothing.
+	params["excludeTurns"] = true
+
+	result, err := s.sendRPC(ctx, "thread/fork", params)
+	if err != nil {
+		return err
+	}
+	return s.adoptThread(result)
+}
+
+// adoptThread records the thread a start, resume or fork opened. All three
+// replies carry the same `thread` object — a new id for a start or a fork, the
+// id it was given for a resume.
+func (s *appSession) adoptThread(result json.RawMessage) error {
+	var parsed struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		return fmt.Errorf("parse thread reply: %w", err)
+	}
+	if parsed.Thread.ID == "" {
+		return errors.New("codex opened a thread without reporting its id")
+	}
+
+	s.stateMu.Lock()
+	s.threadID = parsed.Thread.ID
+	s.stateMu.Unlock()
+
+	s.resume.record(parsed.Thread.ID)
+	return nil
+}
+
+// buildThreadParams builds the settings shared by thread/start and thread/resume.
+func (s *appSession) buildThreadParams() map[string]interface{} {
+	overrides := map[string]interface{}{}
+	if !s.opts.DisableMCP {
+		overrides["mcp_servers"] = map[string]interface{}{
+			"pockode": map[string]interface{}{
+				"command": s.exe,
+				"args":    []string{"mcp", "--data-dir", s.opts.MCPDir()},
+			},
+		}
+	}
+
+	// Effort has no field of its own on thread/start — checked against the
+	// protocol schema codex-cli 0.153.0 generates — so it rides in as a config
+	// override, under the key config.toml uses. Codex forwards the value to the
+	// API's reasoning.effort without checking it, which is why
+	// session.IsValidEffort has to.
+	if s.opts.Effort != "" {
+		overrides["model_reasoning_effort"] = s.opts.Effort
+	}
+
+	params := map[string]interface{}{
+		"cwd":    s.opts.WorkDir,
+		"config": overrides,
+	}
+
+	if s.opts.Model != "" {
+		params["model"] = s.opts.Model
+	}
+
+	switch s.opts.Mode {
+	case session.ModeYolo:
+		params["approvalPolicy"] = "never"
+		params["sandbox"] = "danger-full-access"
+	default:
+		// "on-request" + "workspace-write" is Codex's own auto mode: work inside
+		// the sandbox runs unprompted, only escapes from it (writes outside
+		// WorkDir, network) ask for approval.
+		//
+		// Not "untrusted", which asks before every command. This channel does
+		// accept it — unlike the MCP one, which rejected it outright — so the
+		// choice is now a product one rather than a limit of the CLI: approving
+		// every command one at a time on a phone is not a session anyone can
+		// use. See docs/code/agent-integration.md.
+		params["approvalPolicy"] = "on-request"
+		params["sandbox"] = "workspace-write"
+	}
+
+	return params
+}
+
+func (s *appSession) currentThreadID() string {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.threadID
+}
+
+func (s *appSession) currentTurn() (threadID, turnID string) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.threadID, s.turnID
+}
+
+// adoptTurn records the turn now running and reports whether a stop was waiting
+// for it, which is the caller's cue to send the interrupt.
+//
+// Driven by notifications, which arrive on the single reader goroutine, so the
+// recorded turn can never describe one that has already been replaced. The turn
+// id the turn/start reply carries is deliberately not used for this: that reply
+// is handled on a goroutine of its own, and a slow one could put a finished turn
+// back after turn/completed had cleared it.
+func (s *appSession) adoptTurn(turnID string) (threadID string, interrupt bool) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	s.turnID = turnID
+	interrupt = s.interruptPending
+	s.interruptPending = false
+	return s.threadID, interrupt
+}
+
+// clearTurn forgets the turn that just ended, along with any stop still waiting
+// for one. A turn that ended on its own has nothing left to stop, and carrying
+// the stop forward would kill whatever the user sends next.
+func (s *appSession) clearTurn() {
+	s.stateMu.Lock()
+	s.turnID = ""
+	s.interruptPending = false
+	s.stateMu.Unlock()
+}
+
+// forgetWaitingStop drops a stop that is still waiting for a turn to name.
+func (s *appSession) forgetWaitingStop() {
+	s.stateMu.Lock()
+	s.interruptPending = false
+	s.stateMu.Unlock()
+}
+
+// --- JSON-RPC 2.0 ---
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -276,20 +656,17 @@ type rpcRequest struct {
 }
 
 type rpcResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      *int64          `json:"id,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *rpcError       `json:"error,omitempty"`
-
-	// abortReason is only set on responses Pockode synthesizes for a turn Codex
-	// aborted. Codex never answers the tools/call of an aborted turn, so without
-	// a synthetic response the turn would stay "running" until the process exits.
-	abortReason string
+	Result json.RawMessage
+	Error  *rpcError
 }
 
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+func (e *rpcError) Error() string {
+	return e.Message
 }
 
 // rpcMessage is used to determine the type of incoming message.
@@ -302,75 +679,18 @@ type rpcMessage struct {
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
-type elicitAnswer struct {
-	decision string
-}
-
-// initialize sends the MCP initialize handshake.
-func (s *mcpSession) initialize(ctx context.Context) error {
-	params := map[string]interface{}{
-		"protocolVersion": "2025-03-26",
-		"capabilities": map[string]interface{}{
-			"elicitation": map[string]interface{}{},
-		},
-		"clientInfo": map[string]interface{}{
-			"name":    "pockode",
-			"version": "1.0.0",
-		},
-	}
-	result, err := s.sendRPC(ctx, "initialize", params)
+// sendRPC sends a request and waits for its reply.
+func (s *appSession) sendRPC(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+	id, ch, err := s.writeRPC(method, params)
 	if err != nil {
-		return fmt.Errorf("initialize: %w", err)
+		return nil, err
 	}
-	s.log.Info("MCP initialized", "result", string(result))
-
-	// Send initialized notification.
-	notification := rpcRequest{
-		JSONRPC: "2.0",
-		Method:  "notifications/initialized",
-	}
-	data, err := json.Marshal(notification)
-	if err != nil {
-		return err
-	}
-	return s.writeStdin(data)
-}
-
-// sendRPC sends a JSON-RPC request and waits for the response.
-func (s *mcpSession) sendRPC(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
-	id := s.nextID.Add(1)
-	ch := make(chan *rpcResponse, 1)
-	s.pendingRPCResults.Store(id, ch)
 	defer s.pendingRPCResults.Delete(id)
-
-	paramsData, err := json.Marshal(params)
-	if err != nil {
-		return nil, err
-	}
-
-	req := rpcRequest{
-		JSONRPC: "2.0",
-		ID:      &id,
-		Method:  method,
-		Params:  paramsData,
-	}
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := s.writeStdin(data); err != nil {
-		return nil, err
-	}
 
 	select {
 	case resp := <-ch:
-		// An interrupt resolves every pending request, this one included.
-		if resp.abortReason != "" {
-			return nil, fmt.Errorf("%s cancelled: %s", method, resp.abortReason)
-		}
 		if resp.Error != nil {
-			return nil, fmt.Errorf("RPC error %d: %s", resp.Error.Code, resp.Error.Message)
+			return nil, resp.Error
 		}
 		return resp.Result, nil
 	case <-ctx.Done():
@@ -378,119 +698,57 @@ func (s *mcpSession) sendRPC(ctx context.Context, method string, params interfac
 	}
 }
 
-// callToolAsync sends a tools/call request and processes the result asynchronously.
-// Events are emitted via the events channel as they arrive (from notifications).
-// The tool call result triggers a DoneEvent.
-func (s *mcpSession) callToolAsync(toolName string, args interface{}) error {
-	id := s.nextID.Add(1)
-	ch := make(chan *rpcResponse, 1)
-	s.pendingRPCResults.Store(id, ch)
-
-	params := map[string]interface{}{
-		"name":      toolName,
-		"arguments": args,
-	}
-	paramsData, err := json.Marshal(params)
+// sendRPCAsync sends a request and hands the reply to done on a goroutine, so
+// the caller is not held up for as long as the CLI takes to answer. done is not
+// called when the process ends first: everything waiting on that process is
+// already being ended by ProcessEndedEvent.
+func (s *appSession) sendRPCAsync(method string, params interface{}, done func(json.RawMessage, error)) error {
+	id, ch, err := s.writeRPC(method, params)
 	if err != nil {
-		s.pendingRPCResults.Delete(id)
 		return err
 	}
 
-	req := rpcRequest{
-		JSONRPC: "2.0",
-		ID:      &id,
-		Method:  "tools/call",
-		Params:  paramsData,
-	}
-	data, err := json.Marshal(req)
-	if err != nil {
-		s.pendingRPCResults.Delete(id)
-		return err
-	}
-
-	if err := s.writeStdin(data); err != nil {
-		s.pendingRPCResults.Delete(id)
-		return err
-	}
-
-	// Wait for the response in a goroutine to keep SendMessage non-blocking.
 	go func() {
 		defer s.pendingRPCResults.Delete(id)
-		var resp *rpcResponse
 		select {
-		case resp = <-ch:
+		case resp := <-ch:
+			if resp.Error != nil {
+				done(nil, resp.Error)
+				return
+			}
+			done(resp.Result, nil)
 		case <-s.procCtx.Done():
-			return
 		}
-		if resp == nil {
-			return
-		}
-		if resp.abortReason != "" {
-			s.emitEvent(abortEvent(resp.abortReason))
-			return
-		}
-		if resp.Error != nil {
-			s.emitEvent(agent.ErrorEvent{Error: fmt.Sprintf("codex tool call failed: %s", resp.Error.Message)})
-			return
-		}
-		s.emitEvent(s.parseTurnResult(resp.Result))
 	}()
 
 	return nil
 }
 
-// buildStartConfig builds the Codex session start configuration.
-func (s *mcpSession) buildStartConfig(prompt string) map[string]interface{} {
-	overrides := map[string]interface{}{}
-	if !s.opts.DisableMCP {
-		overrides["mcp_servers"] = map[string]interface{}{
-			"pockode": map[string]interface{}{
-				"command": s.exe,
-				"args":    []string{"mcp", "--data-dir", s.opts.MCPDir()},
-			},
-		}
+// writeRPC registers a reply channel and writes the request.
+func (s *appSession) writeRPC(method string, params interface{}) (int64, chan *rpcResponse, error) {
+	paramsData, err := json.Marshal(params)
+	if err != nil {
+		return 0, nil, err
 	}
 
-	// Effort gets no field of its own on the `codex` tool call — its input
-	// schema has none (checked against the tool list codex mcp-server reports on
-	// codex-cli 0.153.0) — so it rides in as a config override, under the key
-	// config.toml uses. Codex forwards the value to the API's reasoning.effort
-	// without checking it, which is why session.IsValidEffort has to.
-	if s.opts.Effort != "" {
-		overrides["model_reasoning_effort"] = s.opts.Effort
-	}
+	id := s.nextID.Add(1)
+	ch := make(chan *rpcResponse, 1)
+	s.pendingRPCResults.Store(id, ch)
 
-	config := map[string]interface{}{
-		"prompt": prompt,
-		"cwd":    s.opts.WorkDir,
-		"config": overrides,
+	req := rpcRequest{JSONRPC: "2.0", ID: &id, Method: method, Params: paramsData}
+	data, err := json.Marshal(req)
+	if err == nil {
+		err = s.writeStdin(data)
 	}
-
-	if s.opts.Model != "" {
-		config["model"] = s.opts.Model
+	if err != nil {
+		s.pendingRPCResults.Delete(id)
+		return 0, nil, err
 	}
-
-	switch s.opts.Mode {
-	case session.ModeYolo:
-		config["approval-policy"] = "never"
-		config["sandbox"] = "danger-full-access"
-	default:
-		// Not "untrusted": current Codex CLIs reject that policy from both the tool
-		// arg ("unknown variant `untrusted`", failing the session's first call, so
-		// not one message gets through) and config.toml ("no longer supported");
-		// verified on codex-cli 0.153.0. "on-request" + "workspace-write" is Codex's
-		// own auto mode and is valid on old and new CLIs alike: work inside the
-		// sandbox runs unprompted, only escapes from it (writes outside WorkDir,
-		// network) ask for approval.
-		config["approval-policy"] = "on-request"
-		config["sandbox"] = "workspace-write"
-	}
-
-	return config
+	return id, ch, nil
 }
 
-// runMCPLoop reads JSON-RPC messages from stdout and dispatches them.
-func (s *mcpSession) runMCPLoop(ctx context.Context, stdout io.Reader) {
+// runReadLoop reads JSON-RPC messages from stdout and dispatches them.
+func (s *appSession) runReadLoop(stdout io.Reader) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
@@ -506,14 +764,12 @@ func (s *mcpSession) runMCPLoop(ctx context.Context, stdout io.Reader) {
 			continue
 		}
 
-		if msg.Method != "" && msg.ID != nil {
-			// Server-to-client request (e.g., elicitation/create).
-			s.handleServerRequest(ctx, msg)
-		} else if msg.Method != "" {
-			// Notification (e.g., codex/event).
+		switch {
+		case msg.Method != "" && msg.ID != nil:
+			s.handleServerRequest(msg)
+		case msg.Method != "":
 			s.handleNotification(msg)
-		} else if msg.ID != nil {
-			// Response to our request.
+		case msg.ID != nil:
 			s.handleResponse(msg)
 		}
 	}
@@ -523,545 +779,72 @@ func (s *mcpSession) runMCPLoop(ctx context.Context, stdout io.Reader) {
 	}
 }
 
-// handleResponse routes a JSON-RPC response to the waiting caller.
-func (s *mcpSession) handleResponse(msg rpcMessage) {
-	id := *msg.ID
-	if pending, ok := s.pendingRPCResults.Load(id); ok {
-		ch := pending.(chan *rpcResponse)
-		resp := &rpcResponse{
-			JSONRPC: msg.JSONRPC,
-			ID:      msg.ID,
-			Result:  msg.Result,
-			Error:   msg.Error,
-		}
-		select {
-		case ch <- resp:
-		default:
-		}
-	}
-}
-
-// handleNotification processes notifications from the Codex MCP server.
-func (s *mcpSession) handleNotification(msg rpcMessage) {
-	switch msg.Method {
-	case "codex/event":
-		s.handleCodexEventDirect(msg.Params)
-	case "notifications/message":
-		s.handleCodexEventLogging(msg.Params)
-	default:
-		s.log.Debug("unhandled notification", "method", msg.Method)
-	}
-}
-
-// handleCodexEventDirect handles the codex/event custom notification.
-// Wire format: {"jsonrpc":"2.0","method":"codex/event","params":{"_meta":{"requestId":2},"msg":{...}}}
-func (s *mcpSession) handleCodexEventDirect(params json.RawMessage) {
-	var notif struct {
-		Meta json.RawMessage `json:"_meta"`
-		Msg  json.RawMessage `json:"msg"`
-	}
-	if err := json.Unmarshal(params, &notif); err != nil {
-		s.log.Warn("failed to parse codex/event params", "error", err)
+// handleResponse routes a reply to the waiting caller.
+func (s *appSession) handleResponse(msg rpcMessage) {
+	pending, ok := s.pendingRPCResults.Load(*msg.ID)
+	if !ok {
+		s.log.Debug("reply to a request nobody is waiting for", "id", *msg.ID)
 		return
 	}
-	s.processCodexMsg(notif.Msg, requestIDFromMeta(notif.Meta))
-}
-
-// requestIDFromMeta extracts the id of the tools/call an event belongs to.
-// Codex mirrors the id type the client used, and Pockode only ever sends
-// numeric ids, so anything else did not originate from one of our calls.
-func requestIDFromMeta(meta json.RawMessage) *int64 {
-	if len(meta) == 0 {
-		return nil
-	}
-	var parsed struct {
-		RequestID *int64 `json:"requestId"`
-	}
-	if err := json.Unmarshal(meta, &parsed); err != nil {
-		return nil
-	}
-	return parsed.RequestID
-}
-
-// handleCodexEventLogging handles the standard MCP notifications/message, the
-// channel CLIs older than the codex/event notification used.
-// Wire format: {"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":{"msg":{...}}}}
-func (s *mcpSession) handleCodexEventLogging(params json.RawMessage) {
-	var notif struct {
-		Data struct {
-			Msg json.RawMessage `json:"msg"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(params, &notif); err != nil {
-		s.log.Warn("failed to parse notifications/message params", "error", err)
-		return
-	}
-	s.processCodexMsg(notif.Data.Msg, nil)
-}
-
-// ignoredCodexEvents are event types Pockode deliberately drops, listed so the
-// default branch keeps meaning "type we have never seen".
-//
-// Why a list and not a blanket "forward what we do not recognise": Codex emits
-// 70+ event types, most of them per-turn bookkeeping or duplicates of data we
-// already render, and it keeps adding more — anything forwarded by default ends
-// up as transcript noise.
-//
-// Two groups deserve a note beyond their heading below: item_started and
-// item_completed mirror the whole turn a second time in the "thread item"
-// shape, and the last group (reasoning, plan, web search, turn diff) carries
-// information Pockode simply has no surface for yet — dropped by choice, not by
-// accident.
-var ignoredCodexEvents = map[string]bool{
-	// Turn bookkeeping.
-	"task_started":        true,
-	"turn_started":        true, // newer alias of task_started
-	"task_complete":       true, // the tools/call result ends the turn
-	"turn_complete":       true, // newer alias of task_complete
-	"shutdown_complete":   true,
-	"context_compacted":   true,
-	"thread_goal_updated": true,
-	"hook_started":        true,
-	"hook_completed":      true,
-	"mcp_startup_update":  true, // per-server progress; the summary is reported
-	"deprecation_notice":  true, // aimed at CLI users, not at this session
-
-	// Second copies of content rendered elsewhere.
-	"user_message":      true, // echo of the prompt Pockode just sent
-	"raw_response_item": true,
-	"item_started":      true,
-	"item_completed":    true,
-
-	// Approval requests reach the user as an elicitation instead. Codex emits
-	// the begin event of a command or patch *before* asking for approval, and
-	// the approval request repeats that call_id, so rendering both shows the
-	// same work twice and leaves one copy without a result.
-	"exec_approval_request":        true,
-	"apply_patch_approval_request": true,
-
-	// Incremental copies of content that also arrives complete.
-	"agent_message_content_delta": true,
-	"reasoning_content_delta":     true,
-	"reasoning_raw_content_delta": true,
-	"exec_command_output_delta":   true,
-	"plan_delta":                  true,
-	"patch_apply_updated":         true, // partial patch preview; the begin/end pair is rendered
-
-	// Image generation, which reports the images it wrote the way view_image
-	// reports the one it read: by path. Left unhandled rather than assumed to
-	// match, because the tool could not be reached to see one — it is not in
-	// the sessions Pockode starts — and the field names are only what the
-	// binary's strings suggest. Listed here so it is on the record as
-	// unsupported instead of looking like a type nobody has noticed.
-	"image_generation_begin": true,
-	"image_generation_end":   true,
-
-	// Real information with no surface in Pockode yet.
-	"agent_reasoning":               true,
-	"agent_reasoning_raw_content":   true,
-	"agent_reasoning_section_break": true,
-	"plan_update":                   true,
-	"turn_diff":                     true,
-	"web_search_begin":              true,
-	"web_search_end":                true,
-}
-
-// processCodexMsg processes a single Codex event message. requestID identifies
-// the tools/call the event belongs to, when the notification carried one.
-func (s *mcpSession) processCodexMsg(raw json.RawMessage, requestID *int64) {
-	if len(raw) == 0 {
-		return
-	}
-
-	var codexMsg struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(raw, &codexMsg); err != nil {
-		s.log.Debug("codex event msg not structured", "error", err)
-		return
-	}
-
-	switch codexMsg.Type {
-	case "token_count":
-		// Usage accounting, not a transcript entry: it updates the session's
-		// totals through the observer and produces no event.
-		s.usage.observe(raw)
-
-	case "session_configured":
-		// Start of the session, and the earliest report of the thread id that
-		// every following turn has to be sent to.
-		s.rememberThreadIDFromEvent(raw)
-
-	case "agent_message":
-		var ev struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			s.log.Warn("failed to parse agent_message", "error", err)
-			return
-		}
-		if ev.Message != "" {
-			s.emitEvent(agent.TextEvent{Content: ev.Message})
-		}
-
-	case "exec_command_begin":
-		var ev struct {
-			CallID  string          `json:"call_id"`
-			Command json.RawMessage `json:"command"`
-			Cwd     string          `json:"cwd"`
-		}
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			s.log.Warn("failed to parse exec_command_begin", "error", err)
-			return
-		}
-		command := normalizeCommand(ev.Command)
-		inputMap := map[string]interface{}{
-			"command": command,
-			"cwd":     ev.Cwd,
-		}
-		input, _ := json.Marshal(inputMap)
-		s.emitEvent(agent.ToolCallEvent{
-			ToolUseID: ev.CallID,
-			ToolName:  "Bash",
-			ToolInput: input,
-		})
-
-	case "exec_command_end":
-		var ev struct {
-			CallID string `json:"call_id"`
-			// formatted_output is the output as the model saw it: the merged
-			// stream, truncated, with a note when the command timed out. The
-			// other fields back it up for CLIs that omit it.
-			FormattedOutput  string `json:"formatted_output"`
-			AggregatedOutput string `json:"aggregated_output"`
-			Stdout           string `json:"stdout"`
-			Stderr           string `json:"stderr"`
-			ExitCode         int    `json:"exit_code"`
-		}
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			s.log.Warn("failed to parse exec_command_end", "error", err)
-			return
-		}
-		result := firstNonEmpty(ev.FormattedOutput, ev.AggregatedOutput, joinOutput(ev.Stdout, ev.Stderr))
-		if result == "" && ev.ExitCode != 0 {
-			// A silent failure is still a failure: without this the user sees an
-			// empty result and no hint that the command did not succeed.
-			result = fmt.Sprintf("(no output, exit code %d)", ev.ExitCode)
-		}
-		s.emitEvent(agent.ToolResultEvent{
-			ToolUseID:  ev.CallID,
-			ToolResult: result,
-			IsError:    ev.ExitCode != 0,
-		})
-
-	case "patch_apply_begin":
-		var ev struct {
-			CallID  string          `json:"call_id"`
-			Changes json.RawMessage `json:"changes"`
-		}
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			s.log.Warn("failed to parse patch_apply_begin", "error", err)
-			return
-		}
-		s.emitEvent(agent.ToolCallEvent{
-			ToolUseID: ev.CallID,
-			ToolName:  "Edit",
-			ToolInput: buildEditInput(ev.Changes),
-		})
-
-	case "patch_apply_end":
-		var ev struct {
-			CallID  string `json:"call_id"`
-			Stdout  string `json:"stdout"`
-			Stderr  string `json:"stderr"`
-			Success bool   `json:"success"`
-		}
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			s.log.Warn("failed to parse patch_apply_end", "error", err)
-			return
-		}
-		result := ev.Stdout
-		if !ev.Success && ev.Stderr != "" {
-			result = ev.Stderr
-		}
-		s.emitEvent(agent.ToolResultEvent{
-			ToolUseID:  ev.CallID,
-			ToolResult: result,
-			IsError:    !ev.Success,
-		})
-
-	case "mcp_tool_call_begin":
-		var ev struct {
-			CallID     string `json:"call_id"`
-			Invocation struct {
-				Server    string          `json:"server"`
-				Tool      string          `json:"tool"`
-				Arguments json.RawMessage `json:"arguments"`
-			} `json:"invocation"`
-		}
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			s.log.Warn("failed to parse mcp_tool_call_begin", "error", err)
-			return
-		}
-		// Use arguments directly as input; server:tool is encoded in the name.
-		input := ev.Invocation.Arguments
-		if len(input) == 0 {
-			input = json.RawMessage("{}")
-		}
-		s.emitEvent(agent.ToolCallEvent{
-			ToolUseID: ev.CallID,
-			ToolName:  ev.Invocation.Server + ":" + ev.Invocation.Tool,
-			ToolInput: input,
-		})
-
-	case "mcp_tool_call_end":
-		var ev struct {
-			CallID string `json:"call_id"`
-			Result struct {
-				Ok *struct {
-					Content []struct {
-						Text string `json:"text"`
-					} `json:"content"`
-					IsError bool `json:"isError"`
-				} `json:"Ok"`
-				Err string `json:"Err"`
-			} `json:"result"`
-		}
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			s.log.Warn("failed to parse mcp_tool_call_end", "error", err)
-			return
-		}
-		var result string
-		if ev.Result.Err != "" {
-			result = ev.Result.Err
-		} else if ev.Result.Ok != nil {
-			var parts []string
-			for _, c := range ev.Result.Ok.Content {
-				if c.Text != "" {
-					parts = append(parts, c.Text)
-				}
-			}
-			result = strings.Join(parts, "\n")
-		}
-		s.emitEvent(agent.ToolResultEvent{
-			ToolUseID:  ev.CallID,
-			ToolResult: result,
-			IsError:    ev.Result.Err != "" || (ev.Result.Ok != nil && ev.Result.Ok.IsError),
-		})
-
-	case "mcp_startup_complete":
-		var ev struct {
-			Failed []struct {
-				Server string `json:"server"`
-				Error  string `json:"error"`
-			} `json:"failed"`
-		}
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			s.log.Warn("failed to parse mcp_startup_complete", "error", err)
-			return
-		}
-		// A server that fails to start silently removes its tools from the
-		// session — for the pockode server that means no work_* tools at all.
-		for _, failed := range ev.Failed {
-			s.log.Warn("codex MCP server failed to start", "server", failed.Server, "error", failed.Error)
-			s.emitEvent(agent.WarningEvent{
-				Message: fmt.Sprintf("MCP server %q failed to start, its tools are unavailable: %s", failed.Server, failed.Error),
-				Code:    "mcp_startup_failed",
-			})
-		}
-
-	case "stream_error", "warning", "guardian_warning":
-		// Non-fatal: the turn keeps going. Surfacing them is what explains a
-		// stalled turn (stream retries) or a guardrail that changed what ran.
-		var ev struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			s.log.Warn("failed to parse codex warning event", "type", codexMsg.Type, "error", err)
-			return
-		}
-		if ev.Message == "" {
-			s.log.Debug("ignoring codex warning without a message", "type", codexMsg.Type)
-			return
-		}
-		s.emitEvent(agent.WarningEvent{Message: ev.Message, Code: codexMsg.Type})
-
-	case "error":
-		// Fatal for the turn, and Codex answers the tools/call with the same
-		// message and isError set. parseTurnResult reports it from there, which
-		// also covers the failures that never produce an error event.
-		var ev struct {
-			Message string `json:"message"`
-			// A plain string for most causes, an object for the ones that carry
-			// details (an HTTP status, for example).
-			Info json.RawMessage `json:"codex_error_info"`
-		}
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			s.log.Warn("failed to parse codex error event", "error", err)
-			return
-		}
-		s.log.Info("codex reported a turn error", "message", ev.Message, "info", string(ev.Info))
-
-	case "view_image_tool_call":
-		s.handleViewImage(raw)
-
-	case "turn_aborted":
-		var ev struct {
-			Reason string `json:"reason"`
-		}
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			// Deliberately no early return: an abort we cannot read is still an
-			// abort, and leaving the turn pending would hang the session.
-			s.log.Warn("failed to parse turn_aborted", "error", err)
-		}
-		s.log.Info("codex turn aborted", "reason", ev.Reason)
-		s.abortPendingTurn(requestID, ev.Reason)
-
-	default:
-		if ignoredCodexEvents[codexMsg.Type] {
-			return
-		}
-		s.log.Debug("unhandled codex event type", "type", codexMsg.Type)
-	}
-}
-
-// handleServerRequest handles JSON-RPC requests from the server (e.g., elicitation).
-func (s *mcpSession) handleServerRequest(ctx context.Context, msg rpcMessage) {
-	switch msg.Method {
-	case "elicitation/create":
-		go s.handleElicitation(ctx, msg)
-	default:
-		s.log.Debug("unhandled server request", "method", msg.Method)
-		// Respond with method not found.
-		s.sendRPCResponse(*msg.ID, nil, &rpcError{Code: -32601, Message: "method not found"})
-	}
-}
-
-// handleElicitation handles an elicitation request (permission prompt) from Codex.
-func (s *mcpSession) handleElicitation(ctx context.Context, msg rpcMessage) {
-	var params struct {
-		Message            string          `json:"message"`
-		CodexElicitation   string          `json:"codex_elicitation"`
-		CodexCallID        string          `json:"codex_call_id"`
-		CodexCommand       json.RawMessage `json:"codex_command"`
-		CodexCwd           string          `json:"codex_cwd"`
-		CodexChanges       json.RawMessage `json:"codex_changes"`
-		CodexMCPToolCallID string          `json:"codex_mcp_tool_call_id"`
-		CodexEventID       string          `json:"codex_event_id"`
-	}
-	if err := json.Unmarshal(msg.Params, &params); err != nil {
-		s.log.Warn("failed to parse elicitation params", "error", err)
-		// Deliberately not deniedByUser: nobody decided anything here, and this
-		// text is what the model gets told, so blaming the user for a request we
-		// could not read would send it looking in the wrong place.
-		s.sendRPCResponse(*msg.ID, denialResponse("Pockode could not read this approval request."), nil)
-		return
-	}
-
-	requestID := params.CodexCallID
-	if requestID == "" {
-		requestID = fmt.Sprintf("elicit-%d", *msg.ID)
-	}
-
-	// Route based on elicitation type. Codex only ever sends these two, and a
-	// patch approval describes its edits in codex_changes, not codex_command.
-	toolName := "Bash"
-	var toolInput json.RawMessage
-	switch params.CodexElicitation {
-	case "patch-approval":
-		toolName = "Edit"
-		toolInput = buildEditInput(params.CodexChanges)
-	default:
-		command := normalizeCommand(params.CodexCommand)
-		inputMap := map[string]interface{}{
-			"command": command,
-			"cwd":     params.CodexCwd,
-		}
-		toolInput, _ = json.Marshal(inputMap)
-	}
-
-	ch := make(chan elicitAnswer, 1)
-	s.pendingElicit.Store(requestID, ch)
-
-	// ToolUseID is the id of the command or patch being approved, so the prompt
-	// points at the same call as the tool events. codex_mcp_tool_call_id, which
-	// identifies the whole tools/call, is the fallback for CLIs that omit it.
-	s.emitEvent(agent.PermissionRequestEvent{
-		RequestID: requestID,
-		ToolName:  toolName,
-		ToolInput: toolInput,
-		ToolUseID: firstNonEmpty(params.CodexCallID, params.CodexMCPToolCallID),
-	})
-
-	// Wait for user response.
-	var answer elicitAnswer
+	ch := pending.(chan *rpcResponse)
 	select {
-	case answer = <-ch:
-	case <-ctx.Done():
-		answer = elicitAnswer{decision: "denied"}
-	}
-
-	s.pendingElicit.Delete(requestID)
-
-	s.sendRPCResponse(*msg.ID, elicitationResponse(answer.decision), nil)
-}
-
-// deniedByUser is the reason Codex hands the model when the user refuses; it
-// reaches the transcript as Rejected("..."), so it has to read as an
-// explanation rather than a status code.
-const deniedByUser = "The user denied this request."
-
-// elicitationResponse answers one elicitation. Anything that is not an approval
-// denies, so a decision we do not recognise fails closed.
-func elicitationResponse(decision string) map[string]interface{} {
-	if decision == "approved" || decision == "approved_for_session" {
-		return map[string]interface{}{"action": "accept", "decision": decision}
-	}
-	return denialResponse(deniedByUser)
-}
-
-// denialResponse refuses an elicitation, telling Codex why.
-//
-// Codex deserializes `decision` into its ReviewDecision, which is externally
-// tagged: the approvals are unit variants and travel as bare strings, but
-// `denied` is a struct variant and needs {"denied": {"rejection": "..."}}. The
-// bare string "denied" fails to deserialize, after which Codex reports
-// "approval request failed" to the model instead of the refusal. It still
-// blocks the request either way, which is why that mistake survives any test
-// that only checks the denied work did not happen — the difference is in what
-// comes back. `rejection` is the text the model reads, and for a patch it also
-// returns as patch_apply_end's stderr. Verified against codex-cli 0.153.0.
-func denialResponse(rejection string) map[string]interface{} {
-	return map[string]interface{}{
-		// MCP's own field, which Codex does not appear to read at all: the
-		// "deny" this used to send is not one of MCP's values and Codex took it
-		// regardless. "decline" is the value MCP defines for a refusal.
-		"action":   "decline",
-		"decision": map[string]interface{}{"denied": map[string]interface{}{"rejection": rejection}},
+	case ch <- &rpcResponse{Result: msg.Result, Error: msg.Error}:
+	default:
 	}
 }
 
 // --- Helpers ---
 
-func (s *mcpSession) emitEvent(event agent.AgentEvent) {
+// emitEvent puts an event on the channel, from whichever goroutine produced it.
+//
+// The lock is what makes that safe from the goroutines that are not the reader:
+// an approval waiting on the user, or the reply to an async request. Those can
+// reach here for the first time after the reader has already closed the channel,
+// and a send on a closed channel panics — on a goroutine with no recover, which
+// takes the whole server with it. Holding it as a reader keeps the close out
+// until every sender in flight has left, and closed tells the ones that arrive
+// afterwards that there is nowhere to put this.
+//
+// Senders parked in the select do not hold the close out forever: closeEvents
+// cancels procCtx before it asks for the lock, which frees every one of them.
+//
+// A lock rather than joining the senders, which is how the Claude session keeps
+// its one off-reader emitter out of the way (background_wait, waited for before
+// the close). There is no fixed set to join here: a goroutine is spawned per
+// approval and per async request, so there is nothing to hold a WaitGroup that
+// the close could not race with.
+func (s *appSession) emitEvent(event agent.AgentEvent) {
+	s.eventsMu.RLock()
+	defer s.eventsMu.RUnlock()
+	if s.eventsClosed {
+		return
+	}
 	select {
 	case s.events <- event:
 	case <-s.procCtx.Done():
 	}
 }
 
-func (s *mcpSession) sendRPCResponse(id int64, result interface{}, rpcErr *rpcError) {
+// closeEvents ends the session's event stream, after the senders still inside
+// emitEvent have left. Cancelling first is what lets them leave: it is the other
+// half of every select in there, and of every wait an approval is parked on.
+func (s *appSession) closeEvents() {
+	s.cancel()
+
+	s.eventsMu.Lock()
+	defer s.eventsMu.Unlock()
+	s.eventsClosed = true
+	close(s.events)
+}
+
+func (s *appSession) sendRPCResponse(id int64, result interface{}, rpcErr *rpcError) {
 	resp := struct {
 		JSONRPC string      `json:"jsonrpc"`
 		ID      int64       `json:"id"`
 		Result  interface{} `json:"result,omitempty"`
 		Error   *rpcError   `json:"error,omitempty"`
-	}{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result:  result,
-		Error:   rpcErr,
-	}
+	}{JSONRPC: "2.0", ID: id, Result: result, Error: rpcErr}
+
 	data, err := json.Marshal(resp)
 	if err != nil {
 		s.log.Error("failed to marshal RPC response", "error", err)
@@ -1072,206 +855,12 @@ func (s *mcpSession) sendRPCResponse(id int64, result interface{}, rpcErr *rpcEr
 	}
 }
 
-func (s *mcpSession) writeStdin(data []byte) error {
+func (s *appSession) writeStdin(data []byte) error {
 	s.stdinMu.Lock()
 	defer s.stdinMu.Unlock()
 	_, err := s.stdin.Write(append(data, '\n'))
 	return err
 }
-
-// turnResult is the tools/call payload Codex returns when a turn ends.
-//
-// `structuredContent.threadId` is the only identifier current CLIs report here;
-// older ones exposed the same value as sessionId/conversationId. `isError` is
-// how a failed turn is reported: the JSON-RPC frame stays a success, so a turn
-// that died on an API error, an unusable thread id or a runtime failure is
-// indistinguishable from a completed one unless this field is read.
-type turnResult struct {
-	Content []struct {
-		Text string `json:"text"`
-	} `json:"content"`
-	StructuredContent struct {
-		ThreadID string `json:"threadId"`
-		Content  string `json:"content"`
-	} `json:"structuredContent"`
-	IsError bool `json:"isError"`
-
-	// Identifier fields of pre-threadId CLIs.
-	SessionID      string `json:"sessionId"`
-	ConversationID string `json:"conversationId"`
-
-	// How CLIs before the MCP result shape was standardised reported a failed
-	// turn: a bare {"error": "..."} object with no isError flag.
-	LegacyError string `json:"error"`
-}
-
-// text returns the turn's closing message: the agent's last message on success,
-// the failure description when isError is set.
-func (r turnResult) text() string {
-	if r.StructuredContent.Content != "" {
-		return r.StructuredContent.Content
-	}
-	var parts []string
-	for _, c := range r.Content {
-		if c.Text != "" {
-			parts = append(parts, c.Text)
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
-// parseTurnResult converts the tools/call result into the event that ends the turn.
-func (s *mcpSession) parseTurnResult(result json.RawMessage) agent.AgentEvent {
-	if len(result) == 0 {
-		return agent.DoneEvent{}
-	}
-
-	var parsed turnResult
-	if err := json.Unmarshal(result, &parsed); err != nil {
-		s.log.Warn("failed to parse codex tool call result", "error", err)
-		return agent.DoneEvent{}
-	}
-
-	if parsed.IsError || parsed.LegacyError != "" {
-		// A failed turn's thread id is not evidence that the thread exists:
-		// Codex answers a reply to an unknown thread with "Session not found
-		// for thread_id: X" and echoes X straight back in structuredContent
-		// (verified against the CLI). Adopting it re-pins the dead id on every
-		// attempt, so a session that ends up holding one never recovers.
-		//
-		// An id already held is deliberately left alone rather than cleared:
-		// session_configured or a completed turn confirmed it, and a turn that
-		// dies on an expired login or a budget cap still ran inside a
-		// registered thread that codex-reply still works against (also
-		// verified) — clearing it would drop the agent's context for nothing.
-		return agent.ErrorEvent{Error: firstNonEmpty(
-			parsed.text(),
-			parsed.LegacyError,
-			"codex reported an error without a message",
-		)}
-	}
-
-	s.rememberThreadID(parsed.StructuredContent.ThreadID, parsed.ConversationID, parsed.SessionID)
-
-	return agent.DoneEvent{}
-}
-
-const (
-	abortReasonInterrupted   = "interrupted"
-	abortReasonBudgetLimited = "budget_limited"
-)
-
-// abortEvent maps a Codex turn abort to the event that ends the turn.
-//
-// Everything except a budget cap is a stop somebody asked for (the user
-// interrupting, a turn being replaced, a review ending), which is what
-// InterruptedEvent means: work.AutoResumer stops the work item instead of
-// continuing it. A budget cap is a failure the user has to be told about, so it
-// surfaces as an error rather than a silent stop.
-func abortEvent(reason string) agent.AgentEvent {
-	if reason == abortReasonBudgetLimited {
-		return agent.ErrorEvent{Error: "codex aborted the turn: budget limit reached"}
-	}
-	return agent.InterruptedEvent{}
-}
-
-// abortPendingTurn resolves the tools/call that the aborted turn belongs to.
-// requestID comes from the event's _meta and is what keeps a late abort of a
-// finished turn from ending the turn that is running now.
-func (s *mcpSession) abortPendingTurn(requestID *int64, reason string) {
-	if requestID == nil {
-		s.log.Debug("ignoring turn_aborted without request id", "reason", reason)
-		return
-	}
-	pending, ok := s.pendingRPCResults.Load(*requestID)
-	if !ok {
-		s.log.Debug("ignoring turn_aborted for a settled request", "requestId", *requestID, "reason", reason)
-		return
-	}
-	ch := pending.(chan *rpcResponse)
-	select {
-	case ch <- &rpcResponse{abortReason: reason}:
-	default:
-	}
-}
-
-// rememberThreadID stores the first non-empty thread identifier, in preference
-// order. Codex reports it under different names depending on its version.
-//
-// Only call it for a thread Codex has confirmed exists: a session_configured
-// event (the server registered it) or a turn that completed on it. A failed
-// turn is not a confirmation — Codex echoes back the very thread id it just
-// rejected as unknown, so believing it pins a dead id in place for good.
-func (s *mcpSession) rememberThreadID(candidates ...string) {
-	for _, id := range candidates {
-		if id == "" {
-			continue
-		}
-		s.idMu.Lock()
-		changed := s.threadID != id
-		s.threadID = id
-		s.idMu.Unlock()
-		if changed {
-			s.log.Debug("codex thread ID updated", "threadId", id)
-		}
-		return
-	}
-}
-
-// rememberThreadIDFromEvent reads the thread identifier out of a
-// session_configured event. Which field holds it depends on the CLI version:
-// current ones send thread_id, older ones only session_id.
-func (s *mcpSession) rememberThreadIDFromEvent(raw json.RawMessage) {
-	var ev struct {
-		ThreadID       string `json:"thread_id"`
-		ConversationID string `json:"conversation_id"`
-		SessionID      string `json:"session_id"`
-	}
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		return
-	}
-	s.rememberThreadID(ev.ThreadID, ev.ConversationID, ev.SessionID)
-}
-
-// --- Lifecycle helpers ---
-
-// cleanupPendingElicitations resolves all pending elicitations by denying them
-// and emitting RequestCancelledEvent for each. Called during interrupt and
-// after process exit (as a safety net for in-flight permission dialogs).
-func (s *mcpSession) cleanupPendingElicitations() {
-	s.pendingElicit.Range(func(key, value any) bool {
-		requestID := key.(string)
-		ch := value.(chan elicitAnswer)
-		select {
-		case ch <- elicitAnswer{decision: "denied"}:
-		default:
-		}
-		s.emitEvent(agent.RequestCancelledEvent{RequestID: requestID})
-		return true
-	})
-}
-
-// --- Resume ---
-
-// warnSessionNotResumable tells the user that a restarted session starts over.
-//
-// Codex keeps threads in the memory of the mcp-server process that created
-// them: codex-reply resolves a thread id against an in-memory map and answers
-// "Session not found for thread_id" for anything else, verified against the
-// real CLI. So a thread id carried across process restarts is not just useless,
-// it makes every following message fail — the only way to keep the session
-// usable is to start a new thread, and the only honest thing to do is say that
-// the earlier turns are gone from the agent's memory (Pockode's own transcript
-// keeps them).
-func (s *mcpSession) warnSessionNotResumable() {
-	s.log.Info("codex session restarted without its previous thread")
-	s.emitEvent(agent.WarningEvent{
-		Message: "Codex cannot continue a conversation across restarts, so it does not have the earlier messages of this session.",
-		Code:    "session_not_resumable",
-	})
-}
-
-// --- Codex message helpers ---
 
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
@@ -1282,71 +871,22 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// joinOutput merges the two captured streams for CLIs that report them
-// separately instead of as one aggregated stream.
-func joinOutput(stdout, stderr string) string {
-	if stdout != "" && stderr != "" {
-		return stdout + "\n" + stderr
-	}
-	return firstNonEmpty(stdout, stderr)
-}
-
-// normalizeCommand converts a Codex command field (string or array) to a plain string.
-// Codex emits command as either a JSON string or a JSON array of strings.
-func normalizeCommand(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s
-	}
-	var arr []string
-	if err := json.Unmarshal(raw, &arr); err == nil {
-		return strings.Join(arr, " ")
-	}
-	return ""
-}
-
-// buildEditInput builds the ToolInput JSON for an Edit permission/tool-call event.
-// Used by both patch_apply_begin notifications and patch_apply elicitations.
-func buildEditInput(changes json.RawMessage) json.RawMessage {
-	inputMap := map[string]interface{}{
-		"changes": changes,
-	}
-	if fp := extractFilePath(changes); fp != "" {
-		inputMap["file_path"] = fp
-	}
-	data, _ := json.Marshal(inputMap)
-	return data
-}
-
-// extractFilePath extracts the file path from a Codex patch changes object.
-// Returns the single file path when exactly one file is changed, empty otherwise.
-func extractFilePath(changes json.RawMessage) string {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(changes, &m); err != nil {
-		return ""
-	}
-	if len(m) == 1 {
-		for k := range m {
-			return k
-		}
-	}
-	return ""
-}
-
 // --- Version detection ---
 
-// getMCPSubcommand determines the correct MCP subcommand based on codex version.
-// Versions >= 0.43.0-alpha.5 use "mcp-server", older versions use "mcp".
-func getMCPSubcommand(ctx context.Context) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
+// checkAppServerSupport refuses to start when the installed CLI has no
+// app-server subcommand, which is the whole of what this package speaks.
+//
+// The subcommand list is asked for directly rather than derived from
+// `--version`: the version this channel appeared in is not documented anywhere
+// Pockode can check, and a wrong guess would either lock out installs that work
+// or let a failure surface as an unreadable JSON-RPC error much later.
+func checkAppServerSupport(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, supportProbeTimeout)
 	defer cancel()
 
-	cmd, err := agent.CommandContext(ctx, Binary, "--version")
+	cmd, err := agent.CommandContext(ctx, Binary, "--help")
 	if err != nil {
-		return "", err
+		return err
 	}
 	// The context kills the process, but Wait still blocks until the stdout pipe
 	// closes — a grandchild holding it open would restore the unbounded wait this
@@ -1356,66 +896,31 @@ func getMCPSubcommand(ctx context.Context) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return "", fmt.Errorf("codex --version did not finish within %s", versionProbeTimeout)
+			return fmt.Errorf("codex --help did not finish within %s", supportProbeTimeout)
 		}
-		return "", fmt.Errorf("could not run %s --version: %w", Binary, err)
+		return fmt.Errorf("could not run %s --help: %w", Binary, err)
 	}
 
-	version := strings.TrimSpace(string(out))
-	return parseMCPSubcommand(version), nil
+	if !listsAppServer(string(out)) {
+		return errors.New("this codex CLI has no `app-server` subcommand, which Pockode needs to run a Codex session; update codex and try again")
+	}
+	return nil
 }
 
-// parseMCPSubcommand extracts the subcommand from the version string.
-// Exported for testing.
-func parseMCPSubcommand(version string) string {
-	// Expected format: "codex-cli X.Y.Z" or "codex-cli X.Y.Z-alpha.N"
-	parts := strings.Fields(version)
-	if len(parts) < 2 {
-		return "mcp"
-	}
-
-	versionStr := parts[len(parts)-1]
-	segments := strings.SplitN(versionStr, ".", 3)
-	if len(segments) < 3 {
-		return "mcp"
-	}
-
-	major, err1 := strconv.Atoi(segments[0])
-	minor, err2 := strconv.Atoi(segments[1])
-	if err1 != nil || err2 != nil {
-		return "mcp"
-	}
-
-	if major > 0 || minor > 43 {
-		return "mcp-server"
-	}
-
-	if minor == 43 {
-		// Parse patch: "0-alpha.5" or "0"
-		patchStr := segments[2]
-		patchParts := strings.SplitN(patchStr, "-", 2)
-		patch, err := strconv.Atoi(patchParts[0])
-		if err != nil {
-			return "mcp"
+// listsAppServer reports whether `codex --help` offers the app-server
+// subcommand. Subcommands are listed one per line as an indented name followed
+// by its description, so the name is the line's first field — matching anywhere
+// in the text would also hit the prose of neighbouring entries ("remote-control
+// [experimental] Manage the app-server daemon ...", on codex-cli 0.153.0).
+func listsAppServer(help string) bool {
+	for _, line := range strings.Split(help, "\n") {
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			continue
 		}
-		if patch > 0 {
-			return "mcp-server"
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == appServerSubcommand {
+			return true
 		}
-		// patch == 0: check alpha version
-		if len(patchParts) > 1 && strings.HasPrefix(patchParts[1], "alpha.") {
-			alphaStr := strings.TrimPrefix(patchParts[1], "alpha.")
-			alphaNum, err := strconv.Atoi(alphaStr)
-			if err != nil {
-				return "mcp"
-			}
-			if alphaNum >= 5 {
-				return "mcp-server"
-			}
-			return "mcp"
-		}
-		// 0.43.0 stable
-		return "mcp-server"
 	}
-
-	return "mcp"
+	return false
 }

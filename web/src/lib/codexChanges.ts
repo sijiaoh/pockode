@@ -97,29 +97,90 @@ function toChangeView(path: string, change: Record<string, unknown>) {
 }
 
 /**
- * Recognize a Codex `codex_changes` payload and turn each change into a
- * renderable diff. Returns null when the input is not such a payload, letting
- * the caller fall back to the raw result.
+ * One change, reduced to what toChangeView reads: the path it applies to and
+ * the change itself in the map shape's vocabulary.
+ */
+interface ChangeEntry {
+	path: string;
+	change: Record<string, unknown>;
+}
+
+/**
+ * Normalize one entry of the app-server `changes` array into the shape
+ * toChangeView reads.
  *
- * Every value must carry a string `type`: a malformed entry sends the whole
+ * The two shapes carry the same three facts under different names. Where the
+ * map keyed a change by its path and named the payload `content` or
+ * `unified_diff`, the array carries the path inside the entry and calls both
+ * `diff`; `move_path` moved from the change into its `kind`. Measured on
+ * codex-cli 0.153.0: `diff` is the file's whole content for an add and for a
+ * delete, and hunks without a file header for an update.
+ *
+ * Returns null when the entry is not one, which sends the whole payload to the
+ * caller's fallback rather than rendering half a patch.
+ */
+function fromArrayEntry(value: unknown): ChangeEntry | null {
+	const entry = asRecord(value);
+	if (!entry || typeof entry.path !== "string") return null;
+
+	const kind = asRecord(entry.kind);
+	if (!kind || typeof kind.type !== "string") return null;
+
+	const diff = asString(entry.diff);
+	if (kind.type === "update") {
+		return {
+			path: entry.path,
+			change: { type: "update", unified_diff: diff, move_path: kind.move_path },
+		};
+	}
+	return { path: entry.path, change: { type: kind.type, content: diff } };
+}
+
+/**
+ * Recognize a Codex changes payload and turn each change into a renderable
+ * diff. Returns null when the input is not such a payload, letting the caller
+ * fall back to the raw result.
+ *
+ * Two shapes are accepted, and both have to be: the app-server channel sends an
+ * array of changes, while records written before Pockode moved to that channel
+ * hold the MCP channel's map of path to change. History is replayed from those
+ * records, so dropping the map shape would blank out every patch in every Codex
+ * session that predates the move.
+ *
+ * Every change must carry a string type: a malformed entry sends the whole
  * payload back to the fallback rather than rendering half a patch.
  */
 export function parseCodexChanges(input: unknown): CodexChangeView[] | null {
 	const record = asRecord(input);
 	if (!record) return null;
 
-	const changes = asRecord(record.changes);
-	if (!changes) return null;
+	const entries = changeEntries(record.changes);
+	if (!entries || entries.length === 0) return null;
 
-	const entries = Object.entries(changes);
-	if (entries.length === 0) return null;
+	return entries
+		.map((entry) => toChangeView(entry.path, entry.change))
+		.sort((a, b) => a.path.localeCompare(b.path));
+}
 
-	const views: CodexChangeView[] = [];
-	for (const [path, value] of entries) {
-		const change = asRecord(value);
-		if (!change || typeof change.type !== "string") return null;
-		views.push(toChangeView(path, change));
+/** The changes of either shape, or null when this is not a changes payload. */
+function changeEntries(changes: unknown): ChangeEntry[] | null {
+	const entries: ChangeEntry[] = [];
+
+	if (Array.isArray(changes)) {
+		for (const value of changes) {
+			const entry = fromArrayEntry(value);
+			if (!entry) return null;
+			entries.push(entry);
+		}
+		return entries;
 	}
 
-	return views.sort((a, b) => a.path.localeCompare(b.path));
+	const map = asRecord(changes);
+	if (!map) return null;
+	for (const [path, value] of Object.entries(map)) {
+		const change = asRecord(value);
+		if (!change || typeof change.type !== "string") return null;
+		entries.push({ path, change });
+	}
+	return entries;
 }

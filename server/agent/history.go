@@ -24,18 +24,24 @@ type EventRecord struct {
 	Origin                MessageOrigin      `json:"origin,omitempty"`
 	Subtype               string             `json:"subtype,omitempty"`
 	Meta                  *MessageMeta       `json:"meta,omitempty"`
-	// ProviderMessageID is the agent's own id for the message this event was
-	// parsed out of, when the agent hands one out. It is a fact the event
-	// arrived with, not Pockode state, which is why it is recorded here rather
-	// than tracked alongside the session.
+	// ProviderMessageID is the agent's own id for the piece of its conversation
+	// this event was parsed out of, when the agent hands one out. It is a fact
+	// the event arrived with, not Pockode state, which is why it is recorded
+	// here rather than tracked alongside the session.
 	//
 	// It exists so a fork can name the point it was cut at in the agent's own
-	// terms: Pockode's history sequence means nothing to a CLI, and one message
-	// of the agent's can produce several records here (an assistant turn with
-	// text and a tool call), so position cannot be recovered from the records
-	// either. Empty for events with no message behind them (a warning Pockode
-	// raised itself), for agents that expose no ids, and for every record
-	// written before this field existed.
+	// terms: Pockode's history sequence means nothing to a CLI, and one piece of
+	// the agent's conversation can produce several records here (an assistant
+	// turn with text and a tool call), so position cannot be recovered from the
+	// records either. Empty for events with nothing of the agent's behind them
+	// (a warning Pockode raised itself), for agents that expose no ids, and for
+	// every record written before this field existed.
+	//
+	// What the id names is each agent's own business, since only that agent ever
+	// reads it back: the anchor it accepts for reopening a conversation is what
+	// belongs here. Claude names a transcript message (`--resume-session-at`),
+	// Codex a turn (`thread/fork`'s `lastTurnId`), which is why the name says
+	// message but the granularity does not have to be one.
 	ProviderMessageID string `json:"provider_message_id,omitempty"`
 }
 

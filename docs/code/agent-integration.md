@@ -48,7 +48,7 @@ Pockode integrates AI Agents (Claude and Codex) through subprocess management. T
 ┌─────────────────────────────────────────────────────────────────────┐
 │  External CLI                                                        │
 │  ├─ Claude: stream-json                                              │
-│  └─ Codex: MCP JSON-RPC                                              │
+│  └─ Codex: app-server JSON-RPC                                       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -82,7 +82,8 @@ type Session interface {
 **Design Decisions**:
 
 - **Long-lived Session**: A Session is a persistent subprocess, not request-response. It survives across multiple messages, supporting continuous context conversations
-- **Channel event stream**: Uses unbuffered channels for low-latency event delivery. Consumers can cancel via `ctx.Done()`
+- **Channel event stream**: Uses unbuffered channels for low-latency event delivery. A consumer drains `Events()` until the agent closes it — that close is the end of the session, and it is what `process.Manager.Close` waits for before letting a caller delete what the session writes to
+- **`process_ended` waits for its consumer**: every other send on the channel steps aside when the session's context is cancelled, which is right for output overtaken by a shutdown. The last event cannot: it is needed *most* when that context has just been cancelled on purpose — a reaped or deleted session — and a `select` over the two has both cases ready, so Go picks at random and half the closes never reach the client, which goes on showing the session as running until it refetches history. `agent.EmitProcessEnded` therefore waits for the consumer instead, with only a 10s backstop against a read loop that has stopped draining without closing the session (a panic recovered above it). The guarantee ends at that consumer: the next hop, `watch.ChatMessagesWatcher.OnChatMessage`, is a bounded queue that drops on overflow like every other chat event, and a client that loses one recovers by refetching history. What was fixed is the hop that dropped the event *by design*, on exactly the closes a user asked for
 - **Close() returns nothing**: Session closure is a best-effort operation; errors don't affect the outcome
 
 ### Event Types
@@ -134,11 +135,13 @@ marked `running` forever, which `work.AutoResumer` reads as "the agent is workin
 and never corrects.
 
 That asymmetry is why `IndicatesAgentActivity` lists what counts as activity
-rather than what doesn't: a wrong inclusion strands a session until the idle
-reaper collects it hours later, while a wrong exclusion costs one missed
-transition that the send path had already made. A new event type is therefore
+rather than what doesn't, and nothing downstream softens a wrong inclusion: the
+idle reaper will not collect the stranded session either, because a session
+marked `running` is a turn in progress and turns in progress are never reaped
+([Idle Timeout Cleanup](#idle-timeout-cleanup)). A new event type is therefore
 inert by default, and adding it to the list is a deliberate claim that it cannot
-arrive between turns.
+arrive between turns; the rest of that trade-off is at
+`agent.EventType.IndicatesAgentActivity`.
 
 #### Why `ActivatesSession` Is Not `IndicatesAgentActivity`
 
@@ -236,26 +239,36 @@ across — belongs to the agent, and whether it can is the agent's own answer.
 **The agent declares what it can do by implementing `agent.SessionForker`, and
 everything else reads that declaration through `agent.ForkSupportOf`.** The
 capability and the work behind it are one interface: an agent that cannot be
-forked implements nothing (Codex's `fork.go` holds only the reasoning), and one
-that can cannot promise a capability it has no code for. There is no way to
-configure the two halves into disagreeing, so nothing has to check a declaration
-against an implementation.
+forked implements nothing at all, and one that can cannot promise a capability it
+has no code for. There is no way to configure the two halves into disagreeing, so
+nothing has to check a declaration against an implementation.
 
 `SessionForker.ForkSupport` then says *where* a fork may be taken from; it never
 answers `ForkUnsupported`, which is what `ForkSupportOf` returns when the
-interface is absent. Between them they make two `agent.ForkSupport` values, and
-they are the two facts that are true today:
+interface is absent. Between them they make two `agent.ForkSupport` values:
 
 | `agent.ForkSupport` | What the CLI can reopen | What Pockode does with it |
 |---------------------|-------------------------|---------------------------|
 | `ForkUnsupported` (`"none"`) | nothing — it cannot reopen an earlier conversation at all | the fork is refused: `chat.Client.Fork` answers `ErrForkUnsupported` before creating anything, and the frontend offers no fork action in such a session at all ([session-fork-ui.md](../session-fork-ui.md#blocked-and-failed)) |
 | `ForkFromAnyMessage` (`"any_message"`) | a conversation at a chosen point inside it | forking is offered from any message and can carry the agent's memory from any of them |
 
-The type stays a named string rather than a bool because the two values are two
-capabilities rather than yes and no, and a third is in sight — `codex exec fork`
-reopens a whole session and nothing finer, which the frontend would have to tell
-apart from both of today's. Collapsing it would cost a synchronised
-frontend-and-backend change to grow it back, since it goes over the wire.
+**Both agents Pockode ships answer `ForkFromAnyMessage`**, so nothing returns
+`ForkUnsupported` today: it is what `ForkSupportOf` answers for an agent that
+implements no `SessionForker`, and the refusal path below is what would meet one
+if it appeared. Codex reached that value by changing channels, not by the CLI
+learning something — its answer used to be `ForkUnsupported`, and the reason was
+always the channel Pockode spoke rather than the CLI
+([Forking a Thread](#forking-a-thread)).
+
+The type stays a named string rather than a bool even so. The values are
+capabilities, not yes and no: an agent able to reopen a whole conversation and
+nothing finer would fork from the end of one and from nowhere else, which the
+frontend has to tell apart from both of today's values, since it decides which
+messages offer the row and what a disabled row says. `codex exec fork` is shaped
+that way — it takes a session id and no message selector — so an agent reached
+through a channel like that one would need such a value. Collapsing it to a bool
+would cost a synchronised frontend-and-backend change to grow it back, since it
+goes over the wire.
 
 Nothing on the subject of forking asks *which* agent it is holding: no branch
 anywhere in the backend or the frontend compares an agent type to `"codex"` to
@@ -334,8 +347,11 @@ the agent half of its engine selector locks, which is right: that transcript was
 produced by that agent. Model and effort stay open, as they are on any other
 activated session — those can change mid-conversation, the agent cannot. The cost
 is that activation stops implying "a CLI has run for this session" — an inference
-[Claude had to be taught to stop making](#forking). Codex never meets it: [its
-forks are refused](#no-forking) before there is a session to activate.
+[Claude had to be taught to stop making](#forking). Codex never had to learn it:
+nothing on its side reads activation, and its recorded state names where the
+conversation lives rather than whether one has run, so a fork that has not
+launched yet is already indistinguishable from a session that never started
+([Thread Recovery](#thread-recovery)).
 
 **A fork inherits the whole engine choice — agent, mode, model and effort** —
 rather than starting from the defaults (`FileStore.CreateFork`). The argument for
@@ -380,22 +396,32 @@ type EventRecord struct {
 
 **Design Decision**: A single format avoids type conversion errors during serialization/deserialization.
 
-`ProviderMessageID` is the agent's own id for the message this event was parsed
-out of — Claude's per-frame `uuid`, which is also the uuid of the matching entry
-in the CLI's transcript. It is a fact the event arrived with rather than Pockode
+`ProviderMessageID` is the agent's own id for the piece of its conversation this
+event was parsed out of. It is a fact the event arrived with rather than Pockode
 state, which is why it lives on the record. It exists so a fork can name its cut
 point in the agent's own terms ([Session Forking](#session-forking)): `HistorySeq`
-means nothing to a CLI, and one agent message can produce several records here, so
-position cannot be recovered from the records either. Empty for events with no
-message behind them (a warning Pockode raised itself), for agents that expose no
-ids, and for every record written before the field existed — which is why every
-reader treats it as optional rather than assuming it.
+means nothing to a CLI, and one piece of an agent's conversation can produce
+several records here, so position cannot be recovered from the records either.
+Empty for events with nothing of the agent's behind them (a warning Pockode
+raised itself), for agents that expose no ids, and for every record written
+before the field existed — which is why every reader treats it as optional rather
+than assuming it.
+
+**What the id names is each agent's own business**, since only that agent ever
+reads it back: whatever anchor it accepts for reopening a conversation is what
+belongs here. Claude stores a transcript message's `uuid`, the anchor
+`--resume-session-at` takes; Codex stores a turn id, the anchor `thread/fork`'s
+`lastTurnId` takes. So the field says *message* while the granularity does not
+have to be one, and the consequences of the coarser grain are Codex's to state
+([Forking a Thread](#forking-a-thread)). The search for the last record carrying
+one is shared — `agent.LastProviderMessageID` — because skipping the trailing
+records Pockode wrote itself is the same job for both.
 
 `IsError` is best-effort and is only ever set from what the CLI itself reports —
-Claude's `is_error` on a `tool_result` block, Codex's command exit code, patch
-`success`, and MCP call error. It is never inferred from the result text: a
-wrong "failed" badge is worse than no badge, so a CLI that stays silent leaves
-the call looking successful.
+Claude's `is_error` on a `tool_result` block, and the `status` Codex puts on a
+finished thread item. It is never inferred from the result text: a wrong "failed"
+badge is worse than no badge, so a CLI that stays silent leaves the call looking
+successful.
 
 `Contents` holds a tool result that is not prose, cut into ordered blocks; it
 and `ToolResult` are the same field in two shapes and never both set. See
@@ -433,7 +459,11 @@ directory ([Codex Event Mapping](#codex-event-mapping)). That difference is
 settled in the parsers and nowhere above them: Codex's file is read when its
 event arrives and stored where Claude's inline content is stored, so a block has
 one field naming its content (`AttachmentID`) and a client has one way to fetch
-it. `Path` is description — which file was looked at, and whether the UI can
+it. Only the Claude side of that is wired today — the Codex parser's image
+handling was written against the MCP channel and did not survive the move to the
+app-server one, so a Codex image reaches the transcript as whatever its
+`item/*` notification says and no further. The session still opens its
+attachment store, which is where the rebuilt handler will put the bytes. `Path` is description — which file was looked at, and whether the UI can
 offer to open it in the Files tab — and it is not the route to the bytes while
 there are stored bytes to reach. A block may well carry both; the path being
 present says nothing about where the content comes from. (The one time the path
@@ -542,23 +572,25 @@ the same as a missing file is on `file.get`.
 
 ## Protocol Baselines
 
-Nothing below is a spec. The event payloads are unversioned — Codex's MCP envelope
-does carry a `protocolVersion`, but it says nothing about the `codex/event` shapes
-inside it, and Claude negotiates named capabilities in `init` precisely because
-there is no version to branch on. So every mapping here describes one observed
-CLI: **Claude Code 2.1.222** and **Codex 0.130.0**.
+Nothing below is a spec. The event payloads are unversioned — Claude negotiates
+named capabilities in `init` precisely because there is no version to branch on,
+and Codex's app-server declares no protocol version at all. So every mapping here
+describes one observed CLI: **Claude Code 2.1.222** and **codex-cli 0.153.0**.
 
 Each was established by running that CLI with Pockode's own arguments and reading
 the shipped source of truth rather than the published docs: the zod schemas
 embedded in the Claude binary, whose `.describe()` annotations the online
-documentation omits or contradicts, and the `protocol/` and `mcp-server/` crates
-at the matching `openai/codex` tag.
+documentation omits or contradicts, and — for Codex — the JSON schema the CLI
+generates for its own app-server protocol (`codex app-server
+generate-json-schema --experimental`), which is the same artefact upstream offers
+third parties for generating bindings.
 
-Codex is by now the exception to that "one observed CLI": the event mapping was
-read at 0.130.0, but the approval path — policy values, elicitation payloads,
-response shapes, and where begin events fall around an approval — was re-checked
-live against **0.153.0**, which is where the captured approval fixtures in
-`agent/codex/mcp_test.go` come from.
+Codex has a single baseline again because the whole channel was replaced at
+0.153.0 ([Codex Implementation](#codex-implementation)); the fixtures in
+`agent/codex/appserver_test.go` and `usage_test.go` are frames captured from that
+version. The one exception is noted where it applies: the compaction usage frames
+are the MCP channel's, transcribed field-for-field, because compaction cannot be
+reproduced cheaply and the behaviour under test is identical on both channels.
 
 Claude has a smaller exception. The mapping was read at 2.1.222, but the
 `tool_result` content shapes and the subagent tool's name were checked live
@@ -751,7 +783,9 @@ ability to resume that session. It is not on a hot path — it changes when the
 provider ID changes or the ladder moves — so the fsync costs nothing measurable.
 Sessions with no Pockode session ID (integration tests) skip the write entirely,
 since `path()` would otherwise collapse to one file shared by all of them. Codex
-has no counterpart because its threads cannot outlive the CLI process at all (see [Codex Implementation](#codex-implementation)).
+keeps a `codex_resume.json` of its own, written the same way for the same reason
+and with a much smaller job — see [Thread Recovery](#thread-recovery) for why it
+needs no ladder.
 
 ### Forking
 
@@ -861,10 +895,11 @@ was copied in: resuming it would fail, walk the ladder, and arrive at the
 `--session-id` launch it should have started with — after telling the user Claude
 "could not reopen this session's earlier conversation", about a conversation it
 never had. Claude's answer records the fact in the state file that already decides
-how the session opens; Codex needs no answer to the same problem, having no forked
-session to answer for ([the fork is refused](#no-forking)). `unstarted` only means
-anything while no provider ID is recorded, because recording one is precisely what
-stops a session being unstarted.
+how the session opens; Codex needs no such flag, because its state file records
+only where a conversation lives, so a fork that has not launched yet looks exactly
+like a session that never started ([Thread Recovery](#thread-recovery)).
+`unstarted` only means anything while no provider ID is recorded, because
+recording one is precisely what stops a session being unstarted.
 
 ### Message Type Mapping
 
@@ -1153,213 +1188,440 @@ Pending control requests we need to correlate later are tracked via `pendingRequ
 
 ## Codex Implementation
 
-### MCP Protocol Differences
+### Why the app-server Channel
+
+Pockode used to speak `codex mcp-server`, whose two tools were `codex` (start a
+thread) and `codex-reply` (continue one by id). That channel had a single defect
+that everything else about Codex followed from: **a thread lived in the memory of
+the process that created it.** `codex-reply` resolved thread ids against an
+in-memory map and answered `Session not found for thread_id` for anything else,
+so a restarted session could not continue its conversation, could not be forked,
+and lost the agent's memory to every mode or model change. Pockode's own
+transcript survived all of that, which is what made the loss easy to miss.
+
+`codex app-server` — the same binary, a different subcommand — removes the defect
+rather than working around it. `thread/resume {threadId}` loads a thread back from
+its rollout file on disk, `thread/fork` does the same and cuts the copy at a
+chosen turn, and both reopen threads the **MCP channel** created, so no session
+recorded before the move was lost (measured on codex-cli 0.153.0, against a
+rollout Pockode's own integration tests had left behind).
+
+Two things about the old conclusion are worth keeping straight, because the
+version of it that said *Codex cannot reopen a conversation* was always too
+strong:
+
+- **The limit was the channel, not the CLI.** The MCP server offered no way to
+  open a thread from the rollout files on disk. That was the limit that applied,
+  because that was the channel Pockode spoke.
+- **The remaining `exec` channel is still not the answer.** `codex exec` runs one
+  turn per process, and `codex exec fork <SESSION_ID>` takes a session id and no
+  message selector of any kind — whole-conversation forks and never the one this
+  feature is for. More decisively, its `--help` offers no way to put an approval
+  in front of a user at all: the choices are `--approve-for-me` and a full bypass,
+  so there is nowhere for a `PermissionRequestEvent` to come from. That is read
+  off the interface surface, not from a live run.
+
+The trade is that `codex app-server` is marked `[experimental]` in `codex --help`
+where `mcp-server` is not, and that the handshake declares an `experimentalApi`
+capability on top of that ([Startup](#startup)). What makes it acceptable is that the
+protocol is machine-checkable: the CLI generates the JSON schema for it (`codex
+app-server generate-json-schema --experimental`), so a shape that moves can be
+found by asking rather than by a user running into it.
+`TestIntegration_ProtocolSchemaStillFitsWhatWeSend` is where that is asked. It
+generates the schema and asserts the shapes this package depends on — the fields
+each of `thread/start`, `thread/resume` and `thread/fork` is sent, the `turnId`
+that `item/started` and `item/completed` must keep marking required, the four
+approval decisions, and the three `PatchChangeKind` variants
+`web/src/lib/codexChanges.ts` renders. A schema that *grows* is not drift and the
+test ignores it; what it catches is a field disappearing, a required field
+becoming optional, or a union gaining a case that would be silently dropped.
+
+It sits behind the `integration` tag because it needs `codex` installed, but
+unlike its neighbours there it **spends no tokens and never reaches a model** —
+generation is local, and the whole check runs in under a second. CI does not run
+it, for the same reason CI runs no integration test: no CLI on the runner.
+
+"app-server is the channel the official VS Code extension speaks" is an
+**inference**, not a measurement, and the paragraph above deliberately does not
+rest on it. The evidence for it is indirect: upstream ships `generate-ts` /
+`generate-json-schema` for third parties to build bindings from, and `thread/start`
+writes `source: "vscode"` into the rollout of every thread it creates whatever the
+client passes.
+
+### Channel Differences
 
 | Aspect | Claude | Codex |
 |--------|--------|-------|
-| Protocol | stream-json | MCP JSON-RPC 2.0 |
-| Tool calls | Stateless (request → response) | Stateful (call → wait for result) |
-| Permission requests | `PermissionUpdate` objects | Elicitation mechanism |
-| Session recovery | `claude_resume.json` → a `--resume` → `--fork-session` → new-session ladder ([above](#session-recovery-ladder)) | none — see below |
-| Session forking | implements `agent.SessionForker`, declaring `ForkFromAnyMessage` — carries the agent's side from any message in the conversation ([above](#forking)) | implements nothing, which reads as `ForkUnsupported` — the fork is refused ([below](#no-forking)) |
+| Protocol | stream-json, one JSON object per line | JSON-RPC 2.0 over stdio (`codex app-server`) |
+| Turn boundary | one `result` frame | `turn/started` … `turn/completed` |
+| A message sent mid-turn | queued behind the running turn | **steers** it: both messages share one turn and therefore one ending |
+| Permission requests | `control_request` / `can_use_tool` | server→client JSON-RPC *requests*, answered with a `decision` |
+| Interrupt | `control_request` / `interrupt` | `turn/interrupt {threadId, turnId}` |
+| Session recovery | `claude_resume.json` + a recovery ladder ([above](#session-recovery-ladder)) | `codex_resume.json` + `thread/resume` ([below](#thread-recovery)) |
+| Session forking | `--resume-session-at <message uuid>` ([above](#forking)) | `thread/fork` + `lastTurnId` ([below](#forking-a-thread)) |
 
-### MCP Initialization
+The steering row is the one that changed a contract rather than a mechanism. The
+MCP channel aborted a running turn and replaced it with the new message; the
+app-server answers both inside the turn already running, and the second
+`turn/start` returns that turn's own id (measured on codex-cli 0.153.0). It is the
+better of the two — nothing the agent had already done is thrown away — but it is
+why `agent.Session.SendMessage` promises nothing about endings *per message*, and
+why Codex's adapter counts nothing per message either.
 
-```go
-// agent/codex/codex.go
-params := map[string]any{
-    "protocolVersion": "2025-03-26",
-    "capabilities": map[string]any{
-        "elicitation": map[string]any{},
-    },
-    "clientInfo": map[string]any{
-        "name":    "pockode",
-        "version": "1.0.0",
-    },
-}
-```
+### Startup
 
-After initialization, sends `notifications/initialized` notification.
+`Start` does three bounded things before it hands back a session: probe that the
+CLI has the subcommand, answer the JSON-RPC handshake, and open this session's
+thread. All three are bounded because `Start` runs under the process manager's
+worktree-wide lock ([Lock Strategy](#lock-strategy)), where a step that never
+returns freezes every session in the worktree rather than just this one.
 
-Both waits on the CLI here — the `--version` probe that chooses `mcp-server` over
-`mcp`, and the handshake itself — run under a deadline, because `Start` runs
-under the manager's process lock ([Lock Strategy](#lock-strategy)). Either one
-expiring fails the start with a message naming the step that timed out. An expired
-handshake also closes the session it was initializing: an MCP connection that
-never came up leaves nothing to continue from.
+**The capability probe reads `codex --help`, not `codex --version`.** The version
+that introduced `app-server` is not documented anywhere Pockode can check, so a
+version comparison would be a guess in both directions: too high locks out installs
+that work, too low defers the failure into an unreadable JSON-RPC error much later.
+Asking which subcommands exist answers the actual question. The match is on the
+line's first field rather than anywhere in the text, because other entries'
+descriptions mention the string too — `agents` and `remote-control` both do on
+0.153.0.
 
-### Asynchronous Tool Calls
+**The handshake declares `capabilities.experimentalApi: true`.** Without it a
+fork anchor can be refused outright — `thread/fork.beforeTurnId requires
+experimentalApi capability`. Only `beforeTurnId` was observed being refused that
+way; `lastTurnId`, the one Pockode actually sends, is present in the schema
+generated *without* `--experimental` as well, so it may not need the flag at all.
+Declaring it settles the question without having to keep answering it: capabilities
+are negotiated once, at the handshake, and nothing arrives because of it that the
+notification dispatch does not already drop by default.
 
-```go
-func (c *Codex) SendMessage(prompt string) error {
-    return c.callToolAsync("codex", map[string]any{
-        "prompt": prompt,
-        "cwd":    c.cwd,
-        "config": config,
-    })
-}
-```
+**Pockode's MCP server rides in as a config override.** The thread parameters
+carry a `config` map that overrides `config.toml` for this thread only, and
+`mcp_servers.pockode` there is what gives the agent its `work_*` tools — the
+counterpart of Claude's `--mcp-config`, with no file to write and therefore none
+of the atomic-rewrite problem that one has. `model_reasoning_effort` rides in the
+same way, for a different reason ([Session Effort](#session-effort)).
 
-- Generates unique request ID, stores in `pendingRPCResults` map
-- Sends `tools/call` request (non-blocking)
-- Goroutine waits for the response and turns it into the event that ends the turn
+**`threadSource` says whose thread this is, and does not say it where you would
+expect.** It lands in the rollout's `thread_source`, next to `originator` (which
+takes `clientInfo.name`, also `pockode`). It does *not* change the rollout's
+`source` field: on 0.153.0 that one is hard-coded per channel and reads `vscode`
+for everything app-server creates, whatever is passed (measured — which is also
+the second piece of indirect evidence behind the VS Code inference above).
 
-The response identifies the conversation by **thread ID**, taken from only two places — the `session_configured` event and `structuredContent.threadId` on a *successful* `tools/call` result — so a future upstream field of the same name elsewhere cannot hijack it. Follow-up turns pass it back as `threadId`; `conversationId` is its deprecated predecessor and is sent alongside so one call works across CLI versions. Codex renamed this identifier over time (`sessionId` → `conversationId` → `threadId`), and picking the wrong name is not a visible failure: the reply is rejected inside a *successful* JSON-RPC frame, so the turn looks completed while the message was never delivered.
+The two budgets — 10s for the probe, 45s for the handshake plus opening the thread
+— carry no model latency: nothing in either step sends a prompt anywhere, and a
+resume or a fork is told to skip hydrating the thread's turns (`excludeTurns`,
+since Pockode renders from its own history).
 
-That is also why the result's `isError` flag decides between `DoneEvent` and `ErrorEvent`. The MCP frame stays a success for API errors, unusable thread IDs and runtime failures alike — reading only the JSON-RPC error field reports every one of them as a normal completion. The same flag decides whether the thread ID in that result is worth keeping. A failed turn is no evidence that its thread exists, because Codex answers a reply to an unknown thread with `Session not found for thread_id: X` and echoes X straight back in `structuredContent` — believing it re-pins the dead ID on every attempt, and the session can never recover on its own. A failure therefore never adopts a thread ID, and equally never drops one that `session_configured` or a completed turn has already confirmed: a turn that dies on an expired login or a budget cap still ran inside a registered thread, and replying into it works.
+**That is not the same as "local work", and it is worth being exact about,
+because the margin is thinner than it looks.** Measured on 0.153.0 with no prompt
+involved, over five cold runs: `initialize` 2.3–4.9s, `thread/start` 8.6–14.2s,
+11–19s together. The CLI logs its own network timeouts while doing it (`failed to
+refresh available models`), so it is reaching the network during the handshake,
+not just reading disk. Against the 30s this budget started at that is a margin of
+well under 2x, and two integration runs on a contended machine exceeded it
+outright, failing with `codex did not answer the app-server handshake within 30s`
+and `codex did not open a thread within 30s`. Hence 45s, about 3x the worst
+measured start.
 
-**Known limitation**: a confirmed thread ID is never cleared again. Nothing ever
-assigns `threadID` an empty value, so if the thread does stop working later,
-every `codex-reply` for the remaining life of the process fails the same way. The
-session only heals when that process goes away — the idle reaper, a mode change,
-a restart — and the next message opens a fresh thread. Clearing it would take a
-precise signal, and the only one Codex offers is the English string `Session not
-found for thread_id`, the kind of error-text matching the rest of this file
-exists to avoid. The stale ID is the cheaper side of that trade: a string match
-misfires the day upstream rewords it, and throws away the agent-side context of a
-thread that was working fine.
+The asymmetry is what picks the number. The budget is only ever spent in full
+when a start is genuinely stuck, and then all it decides is how long the user
+waits to be told so. Set it too low and it kills starts that would have
+succeeded — and the user pays the whole wait again on the retry. Waiting longer
+to report a real failure is the cheaper of the two mistakes.
 
-An aborted turn gets **no response at all**: Codex answers neither the cancelled `tools/call` nor an interrupted one. Pockode resolves the pending request itself when it sees `turn_aborted` (or when it sends the interrupt), matching the event's `_meta.requestId` against the pending call so a late abort of a finished turn cannot end the turn running now. `budget_limited` becomes an `ErrorEvent`, every other reason an `InterruptedEvent` — the latter stops the work item rather than letting `work.AutoResumer` continue it.
+`web/src/lib/wsStore.ts` mirrors their sum as `CODEX_START_BUDGET_MS` and keeps
+the timeout of the requests that run `Start` above it: if the client gave up
+first, the error naming the stalled step would go into a reply nobody is waiting
+for. The two constants have to grow together.
 
-**Known limitation**: that correlation is also the fallback's floor. An abort
-carrying no `_meta.requestId` matches no pending call and resolves nothing, so the
-turn stays running until the process exits. Only CLIs old enough to deliver events
-over the `notifications/message` channel do this, and Pockode does not compensate:
-writing a fallback for a version nobody could run and observe is the guesswork
-these baselines exist to replace.
+### Thread Recovery
 
-### No Session Recovery
+A session's thread id lives in `codex_resume.json` under the session directory,
+written atomically for the same reason Claude's is — a half-written one silently
+costs the user the ability to reopen that conversation. Sessions with no Pockode
+session id (integration tests) skip the write, since the path would otherwise
+collapse to one file shared by all of them.
 
-Codex is the one agent Pockode cannot resume. A thread lives in the memory of the `mcp-server` process that created it — `codex-reply` resolves thread IDs against an in-memory map and answers `Session not found for thread_id` for anything else, confirmed by replaying a thread ID into a fresh process. So a stored thread ID does not merely fail to help, it makes **every** message of the restarted session fail; Pockode therefore starts a new thread and emits a warning saying the agent no longer has the earlier turns. Pockode's own transcript keeps them, which is what makes the loss easy to miss.
+**There is no recovery ladder, and the difference from Claude is the point.**
+Claude's ladder exists because its CLI *claims* a session id the moment it starts,
+so reusing one is fatal and a failed launch has to be told apart from a stale
+mapping. A Codex thread id is only ever a key into a rollout file: `thread/resume`
+either finds it or says so, at the one moment it matters, in one step. So the
+state file holds where the conversation is and nothing about whether a session has
+ever run — which is also why `ForkSession` writing nothing is a complete answer
+([below](#forking-a-thread)) where Claude needed an `unstarted` flag.
 
-### No Forking
+**Reopening that fails does not fail the session.** A rollout that is gone —
+deleted, or written by a Codex install that is no longer there — would otherwise
+make the session permanently unusable. Codex starts a fresh thread instead,
+records the new id over the dead one so the next restart does not repeat the same
+failure, and emits a `session_not_resumable` warning carrying Codex's own reason.
+The user needs to know the agent no longer remembers the transcript in front of
+them.
 
-Codex implements no `agent.SessionForker` — the whole of how an agent says it
-cannot be forked — so `agent.ForkSupportOf` answers `ForkUnsupported` for it and
-`session.fork` refuses the request rather than producing a session whose agent has
-never seen the transcript it shows (see [Session Forking](#session-forking)).
+**One failure deliberately does not degrade**: the startup budget running out. A
+timeout says nothing about whether the thread is good, and starting a new one
+would burn a recorded id for nothing. It is returned as a start failure instead.
 
-The reason is the same in-memory thread: the fork would run in its own process, and
-even a fork taken from a still-live source cannot reach that source's thread —
-pointing it there would not fork the conversation but share it, each session writing
-turns the other never asked for.
+**Two live processes on one thread do not silently share it.** A second
+`thread/resume` of a thread another process is holding is refused outright
+(`-32600 thread <id> already has an active writer`, measured on 0.153.0). Pockode
+runs one process per session, so reaching this means a process leaked; it takes
+the same degradation path as a missing rollout, and the warning carries Codex's
+wording so the cause is visible rather than guessed at.
 
-Two things about that conclusion are worth keeping straight, because a stronger
-version of it is wrong:
+### Forking a Thread
 
-- **The MCP channel has no fork and no recovery.** Re-verified against codex-cli
-  0.153.0: its MCP server offers only `codex` (start a thread) and `codex-reply`
-  (continue one by id), with no way to open a thread from the rollout files on disk.
-  This is the channel Pockode speaks, so this is the limit that applies.
-- **The CLI as a whole is not that limited.** The same version has a
-  `codex exec fork <SESSION_ID>` that reopens a session from disk, across processes.
-  So "Codex cannot reopen a conversation" is only true of the MCP channel. What is
-  true of the CLI either way is that `fork` takes **nothing but a session id** — no
-  message selector of any kind — so even reaching it would give whole-conversation
-  forks and never the one this feature is for. Moving to the `exec` channel would be
-  a rewrite of the Codex integration, not a fork feature.
+`Agent.ForkSession` starts no process. It writes the forked session's
+`codex_resume.json` with the *source's* thread id and a `forkAtTurnId`, and the
+first process that session ever starts opens its thread with `thread/fork` instead
+of `thread/resume`. Deferring the work is what keeps a fork from costing a process
+for a session the user may never type into, and it stays correct however long the
+wait is, because the anchor is a turn id rather than anything sampled from the
+source's current state.
 
-Because the fork is refused up front, nothing downstream has to cope with it: there
-is no forked Codex session to be [activated](#activation) at birth, and so no first
-`Start` carrying `Resume` for a conversation that never happened — and therefore no
-second wording of the same fact to suppress.
+**One field carries the intent, and recording a thread is what retires it.** The
+state is written whole, so the moment the fork has been taken and the new thread
+recorded, `forkAtTurnId` is gone and the next launch resumes the fork's own thread
+rather than forking the source again.
 
-### Elicitation (Permission Requests)
+**The anchor is `lastTurnId`, which is inclusive, and not `beforeTurnId`.** A turn
+is the finest anchor this channel offers, so the fork keeps the whole turn the
+anchor sits in — including anything the agent went on to do later inside it, which
+the copied transcript may stop short of. Steering makes that visible: a message
+sent while a turn was running belongs to that turn, so a fork taken at it carries
+the answer to it as well. The alternative cuts the turn away entirely, which would
+leave the agent not remembering the very exchange the user forked at — prompt
+included — while the transcript in front of them shows it. Carrying slightly more
+than is shown is the smaller of the two mismatches, and it is the direction
+Claude's fork errs in too, at the finer grain of a message.
 
-Codex uses `elicitation/create` notifications to request user authorization.
-Which actions get this far is a question of the session mode rather than of this
-path: in `default`, almost nothing inside Codex's sandbox reaches it (see
-[Session Modes](#session-modes)):
+**The turn id comes from the notification the item arrived in**, not from the
+session's idea of which turn is running. `item/started` and `item/completed` both
+carry `turnId` as a required field (checked against the generated schema), and
+which turn a record belongs to is a fact that arrived with it — reading it back off
+the session would stamp an empty id on any item processed after `turn/completed`
+had moved on, silently making that record unusable as an anchor. It is stored in
+`EventRecord.ProviderMessageID`, the same field Claude puts a message uuid in
+([EventRecord](#eventrecord-unified-event-format)).
 
-```json
-{
-    "jsonrpc": "2.0",
-    "method": "elicitation/create",
-    "params": {
-        "message": "Allow Codex to run `ls -la` in `/tmp`?",
-        "codex_elicitation": "exec-approval",
-        "codex_call_id": "...",
-        "codex_command": ["ls", "-la"],
-        "codex_cwd": "/tmp"
-    }
-}
-```
+**An anchor turn that is still running is refused**, says the schema the CLI
+generates (*The referenced turn cannot be in progress*) — which is what a fork
+taken from a session mid-turn, and typed into before that turn ends, would name.
+Whatever Codex answers to it lands in the degradation below. Recorded as the
+schema's claim rather than as a measurement.
 
-`codex_elicitation` has exactly two values, `exec-approval` and `patch-approval`, and they describe their subject differently: an exec approval carries `codex_command`/`codex_cwd`, a patch approval carries `codex_changes`. Routing on the wrong value degrades quietly — a file edit is then shown as a shell command with nothing in it.
+**A fork that fails degrades to a new thread and never to resuming the source.**
+That is the one constraint here that cannot be relaxed: two sessions resuming one
+thread would write their turns into a single conversation, which is precisely what
+forking exists to prevent. The user is told, exactly as for a source with nothing
+to reopen.
 
-Pockode handling flow:
-1. Parse elicitation, route to appropriate tool (Bash/Edit)
-2. Send `PermissionRequestEvent`
-3. Store response channel in `pendingElicit` map
-4. Wait for user response via `chat.permission_response`
-5. Send MCP response: `{"action": "accept", "decision": "approved"}`
+**`carried == true` can still be an over-promise, and knowingly is.** A source
+that once degraded to a new thread has history naming turns of *both*, and an
+anchor landing on the abandoned one is a fork Codex will refuse. Nothing on
+Pockode's side can tell those ids apart — only the thread knows which turns are
+its own — so the question is left to the one place that can answer it: the fork is
+attempted at first launch, and a refusal lands in the degradation above. The
+ending is honest even where the promise was not.
 
-`decision` is deserialized into Codex's `ReviewDecision`, an externally tagged
-enum, so the two answers do not have the same shape. The approvals are unit
-variants and travel as bare strings (`"approved"`, `"approved_for_session"`), but
-a refusal is a struct variant and has to carry its reason:
+**`ForkSupport` is a static declaration and probes nothing.** It is read on every
+`agent.list` call, and probing would mean spawning a process to answer a question
+about the installation rather than about any session. If `lastTurnId` is renamed
+or withdrawn by a Codex release, the cost is bounded and visible: forks are still
+offered, the first launch fails to fork, and it degrades to a new thread with the
+user told — the same answer as an unreopenable source, one step later.
 
-```json
-{"action": "decline", "decision": {"denied": {"rejection": "The user denied this request."}}}
-```
+### Approvals
 
-Sending the bare string `"denied"` fails silently in the direction that matters:
-Codex still blocks the request — an approval it cannot read is not an approval —
-but it drops the refusal, logs `failed to deserialize {Exec,Patch}ApprovalResponse`
-to stderr, and tells the model `approval request failed` instead of why. Because
-it blocks either way, no assertion that the denied work did not happen can tell
-the two apart; the difference is only in what comes back. The `rejection` string
-is what the model reads, and for a patch it is also `patch_apply_end`'s `stderr`,
-so it reaches the transcript as user-visible text rather than a log line.
+Codex asks for approval by making a JSON-RPC **request** of Pockode —
+`item/commandExecution/requestApproval` or `item/fileChange/requestApproval` —
+which is answered with one `decision` string: `accept`, `acceptForSession` (the
+*Always Allow* answer, which lasts as long as the thread) or `decline`. There is
+no externally tagged enum and no rejection payload; the MCP channel's
+`{"denied": {"rejection": …}}` shape is gone with it. Which actions get this far
+at all is a question of the session mode rather than of this path (see
+[Session Modes](#session-modes)).
 
-The two kinds are not equally reachable from a test, which is why only one of
-them is in the integration suite. An exec approval is asked *before* the command
-runs and the approved command then runs outside the sandbox, so it needs nothing
-working from the sandbox. A patch approval does: `apply_patch` verifies its
-target through Codex's filesystem sandbox helper — bubblewrap on Linux — so on a
-host that restricts unprivileged user namespaces
+Each request is handled on its own goroutine, because everything else the CLI has
+to say keeps arriving while the user decides.
+
+**A request is answered, always.** Every server→client request Pockode does not
+serve gets a definite reply rather than silence: an MCP elicitation is declined
+(the one server Pockode installs never elicits, so it can only come from one the
+user configured in Codex themselves), a `granular` permission grant hands back an
+empty permission set, `item/tool/requestUserInput` hands back no answers, and
+anything unrecognised gets `-32601`. Refusing costs one call; not answering hangs
+the turn for the life of the process. Unrecognised methods are logged at **warn**,
+not debug — the protocol still defines the v1 `execCommandApproval` /
+`applyPatchApproval` pair, which 0.153.0 does not send here, and the day something
+starts sending it should read as a log line rather than as a turn that mysteriously
+gave up.
+
+**A file-change approval does not carry its own patch.** The patch arrives in the
+`item/started` that precedes the approval and nowhere else, so the session keeps
+the rendered input of in-flight items and the prompt reuses it — which also makes
+the prompt and the transcript row agree, since it is literally the same rendering.
+Two shapes have nothing to reuse: a file change whose `item/started` was never
+seen, and a command approval of `kind: "writeStdin"` (input sent to a terminal
+already running), which has no command of its own. Both fall back to the request's
+own `reason` — the CLI's explanation of why it is asking, which every
+`on-request` approval observed on 0.153.0 carried ("May I read old.txt outside the
+sandbox to make your requested edit?") — because a prompt that says why beats an
+empty box the user is still expected to decide on.
+
+`reason` is nullable, so the fallback needs one of its own: empty fields are
+dropped, and a request that described nothing at all gets a sentence saying so
+and suggesting denial. This is not cosmetic. The frontend summarises a request by
+the first non-empty string in its input and hides the body when every field is
+empty, so `{"reason": "", "kind": ""}` renders as a prompt with no question in
+it — while still blocking the turn until the user answers.
+
+**Two approvals must never share one request id.** The CLI sends an `approvalId`
+wherever one item can raise several callbacks, and that is what keeps them apart;
+the id of the item is used only when there is no `approvalId`. If two live
+approvals ever did collide, one would replace the other and the user's single
+answer would settle whichever was still there, leaving the other's request
+unanswered forever — a turn wedged for the life of the process. So a collision is
+logged as an error and the second approval is declined outright: refusing one
+request costs that request, while wedging costs the session.
+
+**Interrupting answers the prompts before it interrupts.** A turn blocked on an
+approval is not reading its interrupt request, so answering is what actually
+unblocks it — with `cancel`, the decision that refuses *and* ends the turn.
+`RequestCancelledEvent` is emitted before the decision is handed over, not after:
+the decision is what lets `turn/completed` arrive, and an ending that overtakes
+the withdrawal leaves a prompt on screen that nothing will ever take away.
+
+The two kinds are not equally reachable from a test, which is why only the command
+one is in the integration suite. A command approval is asked *before* the command
+runs, so it needs nothing working from the sandbox. A file change does:
+`apply_patch` verifies its target through Codex's sandbox helper — bubblewrap on
+Linux — so on a host that restricts unprivileged user namespaces
 (`kernel.apparmor_restrict_unprivileged_userns=1`, the Ubuntu 24.04 default) the
-patch fails while merely *reading* the file, long before Codex decides an
-approval is needed. No prompt can work around that. So the patch path is pinned
-by unit tests against captured payloads instead, and reproducing it live means a
-privileged container.
+patch fails while merely *reading* the file, long before an approval is needed. No
+prompt works around that, so the file-change path is pinned by unit tests against
+captured payloads and reproducing it live means a privileged container.
 
 ### Codex Event Mapping
 
-| Codex Event | Agent Event |
-|-------------|-------------|
-| `agent_message` | `TextEvent` |
-| `exec_command_begin` | `ToolCallEvent {ToolName: "Bash"}` |
-| `exec_command_end` | `ToolResultEvent` (`formatted_output`, falling back to the raw streams) |
-| `patch_apply_begin` | `ToolCallEvent {ToolName: "Edit"}` |
-| `patch_apply_end` | `ToolResultEvent` |
-| `mcp_tool_call_begin` | `ToolCallEvent {ToolName: "server:tool"}` |
-| `mcp_tool_call_end` | `ToolResultEvent` |
-| `view_image_tool_call` | `ToolCallEvent {ToolName: "Read"}` + `ToolResultEvent` with one file block |
-| `mcp_startup_complete` (with failures) | `WarningEvent` per failed server |
-| `stream_error`, `warning`, `guardian_warning` | `WarningEvent` |
-| `turn_aborted` | `InterruptedEvent` / `ErrorEvent` (see above) |
+The channel reports work as **thread items** with a lifecycle — `item/started`
+when one begins, `item/completed` when it ends — wrapped in a turn.
 
-These are legacy event names, and matching on them is still correct even though
-upstream now constructs `ItemStarted` / `ItemCompleted` "thread item" events in
-their place: `as_legacy_events` fans those items back out into their legacy
-counterparts, which is where `patch_apply_begin` and `mcp_tool_call_begin` still
-arrive from. So the place an event is constructed answers the wrong question —
-whether a legacy event still reaches us is decided by that compatibility layer,
-and reading only the constructor makes a live event look removed.
+| Notification | Agent Event |
+|---|---|
+| `turn/started` | (none — supplies the turn id `turn/interrupt` has to name, and is where a stop that arrived before it is carried out) |
+| `turn/completed`, `status: "interrupted"` | `InterruptedEvent` |
+| `turn/completed`, `status: "failed"` | `ErrorEvent` |
+| `turn/completed`, otherwise | `DoneEvent` |
+| `item/started`, `commandExecution` | `ToolCallEvent {ToolName: "Bash"}` |
+| `item/started`, `fileChange` | `ToolCallEvent {ToolName: "Edit"}` |
+| `item/started`, `mcpToolCall` | `ToolCallEvent {ToolName: "server:tool"}` |
+| `item/completed`, `agentMessage` | `TextEvent` |
+| `item/completed`, the three item types above | `ToolResultEvent` |
+| `mcpServer/startupStatus/updated`, `status: "failed"` | `WarningEvent` per failed server |
+| `error` with `willRetry` | `WarningEvent` |
+| `warning`, `guardianWarning`, `configWarning` | `WarningEvent` |
+| `thread/tokenUsage/updated` | (none — feeds the usage observer, see [Usage Reporting](#usage-reporting)) |
 
-`exec_approval_request` and `apply_patch_approval_request` deliberately map to nothing. Each announces the same approval Codex is already raising as an `elicitation/create` with the same `call_id`, and that elicitation is what becomes the `PermissionRequestEvent` — so anything derived from these two would be a second copy of a prompt the user already has. They are no better as a source for the tool call: a patch has already emitted `patch_apply_begin` by the time it asks, so that would double it, while a command emits `exec_command_begin` only once approved (checked on codex-cli 0.153.0). Where the begin event falls relative to the approval is per-kind, not a rule to build on.
+The tool names are Pockode's rather than Codex's: the frontend renders a command
+as `Bash` and a patch as `Edit` for either agent, so the mapping happens here
+instead of in a frontend branch on agent type.
 
-A refusal reports back differently by kind too, which is why the tool result is not where a denial can be detected. A denied patch still gets a `patch_apply_end` (`success: false`, `stderr` set to the `rejection` string). A denied command gets nothing at all — no begin, no end — and the refusal reaches the model only inside its own tool output.
+**Item types not in the table produce nothing**, which is a second and separate
+place work is dropped from the ignore list below: the echo of the prompt just
+sent, reasoning, plans and web searches all arrive as ordinary `item/*`
+notifications and fall through the type switch. They are dropped for the same
+reason — no surface to render them on — and would be picked up by adding a case
+rather than by removing a list entry.
 
-The `error` event is likewise logged and not forwarded. Upstream's tool runner
-always answers the `tools/call` and stops the turn after emitting it, so the
-result already becomes an `ErrorEvent` — emitting one here too would report the
-same failure twice.
+**A patch's `changes` payload is forwarded as Codex sent it**, and its shape
+changed with the channel: the MCP channel sent a map of path to change
+(`content` or `unified_diff`, with `move_path` on the change), the app-server
+sends an array of `{path, kind, diff}` (measured on 0.153.0: `diff` is the whole
+file for an add or a delete, and hunks without a file header for an update).
+`web/src/lib/codexChanges.ts` reads **both**, and has to keep doing so: history is
+replayed from the records as they were written, so dropping the old shape would
+blank out every patch in every Codex session that predates the move. A malformed
+entry sends the whole payload to the raw-result fallback rather than rendering
+half a patch.
 
-Everything else is dropped through an explicit ignore list (`ignoredCodexEvents`) rather than forwarded. Codex emits 70+ event types — per-turn bookkeeping, token deltas, and a second copy of the whole turn in "thread item" shape — so a parser that forwards what it does not recognise fills the transcript with noise every time upstream adds a type. The list also keeps the default branch meaning "type we have never seen", which is what the debug log is for. Events that carry real information Pockode has no surface for yet (`agent_reasoning*`, `plan_update`, `web_search_*`, `turn_diff`) are listed there by choice, not by accident. `image_generation_begin` / `image_generation_end` are listed for a different reason: the tool is not reachable from the sessions Pockode starts, so its event shape could not be observed, and a handler written from the field names the binary happens to contain would be a guess wearing a test.
+**Exactly one event ends a turn**, which is the contract
+`agent.Session.Events` describes, and `turn/completed` is the only thing that
+produces one. A frame that cannot be parsed still ends the turn — deliberately,
+since a turn left pending waits for an event that is never coming. The `error`
+notification is the one thing that looks like an ending and is not forwarded as
+one: a failure the turn does not survive is already reported by `turn/completed`,
+and emitting here too would show the user the same failure twice. Only
+`willRetry` is forwarded, because that turn goes on and the retries are what
+explain a turn that has apparently stalled. It keeps the MCP channel's
+`stream_error` code so that a transcript recorded before the move and one recorded
+after carry the same code for the same event; nothing branches on the value.
 
-`view_image_tool_call` is one Codex event and two Pockode events, the call and its result, because that is the pair every other tool produces and it is what puts a viewed image into the same chat UI as claude reading one. Codex hands over a path and not the bytes, and the path is regularly outside the work directory — `/tmp` is where it puts an image it fetched. The file is therefore read at that moment and copied into the session's attachment store, and the event carries the attachment's id. Doing it this way is what keeps the client's only route to a file the work-directory-relative one it already has: widening `file.get` or the download endpoint to accept an absolute path would turn a chat event into a request for any file the server process can read. Reading it here adds no reach, since the bytes are read under the agent's own authority at the moment the agent says it read them itself. A file that cannot be read is still reported, as a block whose `omitted` says why — a viewed image that silently vanishes from the transcript is indistinguishable from a bug.
+**Failure is read off the item's `status`, not off an exit code.** Codex has
+already folded the exit code into it (a command exiting 2 reports `failed`,
+measured on 0.153.0), and `status` also covers failures that produce no exit code
+at all — a declined approval reports `declined`, which is how a refusal reaches the
+transcript as words rather than as an empty successful-looking row.
+
+**`configWarning` reaches the transcript on purpose.** It is how the user finds
+out that, say, bubblewrap is missing and the sandbox could not start — which is
+also the explanation for why every single command is suddenly asking for approval.
+The cost is that a standing misconfiguration repeats its line on every process
+start; silence would cost the user any way of understanding the prompts.
+
+**Everything else is dropped through an explicit list** (`ignoredNotifications`)
+rather than forwarded. The app-server defines 81 notifications, most of them
+per-turn bookkeeping or increments of content that also arrives whole, and
+upstream keeps adding more — a parser that forwards what it does not recognise
+fills the transcript with noise on every CLI update. The list also keeps the
+default branch meaning "a method we have never seen", which is what its debug log
+is for. Only methods actually observed on 0.153.0, plus those whose names say
+plainly what they are, are listed; guessing at the rest would put entries there on
+no evidence. Reasoning, plans and the turn's accumulated diff are listed by choice
+rather than by accident — they carry real information Pockode has no surface for
+yet, and their whole form is dropped alongside their increments, so they are not
+increments of anything rendered.
+
+Two entries there are not increments of anything and are listed for reasons of
+their own. `item/fileChange/outputDelta` is dead: the schema says outright that
+the server no longer emits it. `item/fileChange/patchUpdated` is a *revision* of
+a patch already shown — it carries the whole `changes` array again — so dropping
+it would leave a superseded patch in an approval prompt if it ever arrived. It is
+listed on a measurement rather than on its name: an `apply_patch` driven end to
+end on 0.153.0 never sent it, and `item/started` carried the final patch, byte for
+byte what `item/completed` then repeated. Nothing Pockode offers can revise a
+patch either — that is the editable approval surface of a desktop client. If
+either of those stops being true it has to be wired to `rememberToolInput`, since
+the prompt reads from there.
+
+### Deliberately Not Wired Up
+
+These are choices, recorded so they do not become blanks nobody knows about.
+
+- **`item/tool/requestUserInput`** is Codex's counterpart to Claude's
+  AskUserQuestion, and Pockode already has the surface for it
+  (`AskUserQuestionEvent`). It is not wired up: it is a feature of its own rather
+  than part of changing channels, and the schema marks it EXPERIMENTAL, so what it
+  would be wired *to* is not settled. It is declined rather than ignored, so the
+  model is told nobody answered and carries on.
+- **`thread/settings/update`** can change model and reasoning effort without
+  restarting the process — something Claude cannot do. Pockode still restarts, so
+  the two agents keep one code path; the win is now cheap in any case, since the
+  restarted process resumes the thread ([Session Models](#session-models)).
+- **The `granular` approval policy** (`AskForApproval` is `untrusted`,
+  `on-request`, `never` or a `granular` object) would let individual approval
+  classes be turned on one at a time. Not adopted: the product question it answers
+  is the one [Session Modes](#session-modes) settles, and a third mode needs a
+  reason in the UI before it needs a policy value.
+- **The app-server's session-management surface** — listing, naming and searching
+  threads — is not used at all. Pockode *is* the session manager; a second index
+  of the same conversations could only disagree with the one the user sees.
+- **`agent.BackgroundWaiter`** has no Codex counterpart to implement. Codex has no
+  concept of a task that outlives its turn, so the interface stays unimplemented
+  and the idle reaper's exemption simply never applies
+  ([Background Waits](#background-waits)).
 
 ## Usage Reporting
 
@@ -1368,7 +1630,7 @@ Both CLIs say, every turn, how many tokens the conversation has consumed and
 beside the event stream rather than through it:
 
 ```
-CLI frame (Claude's `result`, Codex's `token_count`)
+CLI frame (Claude's `result`, Codex's `thread/tokenUsage/updated`)
   ├─ parser        → AgentEvent → history + broadcast    what was said
   └─ usageObserver → UsageAccumulator → OnUsage → store  what it cost
 ```
@@ -1378,7 +1640,9 @@ of the stream the parser is reading, `agent.UsageAccumulator` turns them into
 increments, and `StartOptions.OnUsage` hands those to the session store, which
 folds them into `SessionMeta.Usage` (`session/usage.go`). A frame need not take
 both branches: Claude's `result` ends a turn and also reports its cost, while
-Codex's `token_count` has nothing to say to the transcript at all.
+Codex's `thread/tokenUsage/updated` has nothing to say to the transcript at all —
+it arrives several times within a turn as well as at the end of one, which taking
+deltas makes harmless.
 
 **Usage is not an event.** Every `AgentEvent` is persisted into history and
 broadcast to chat subscribers, and a history record is fixed at the moment it was
@@ -1388,13 +1652,17 @@ see the current value of. Shipping it as an event would put a number into the
 transcript that goes stale as soon as the next turn lands, and any reader
 recomputing the total would be re-deriving state the store already holds. This is
 the *events are events, state is state* rule in `AGENTS.md`. The parser side of it
-is visible in Codex's `token_count`, handled by an explicit case that feeds the
-usage observer and emits nothing, rather than left in `ignoredCodexEvents`: it is
-not an event Pockode has no surface for, it is not an event at all.
+is visible in Codex's `thread/tokenUsage/updated`, handled by an explicit case that
+feeds the usage observer and emits nothing, rather than left in
+`ignoredNotifications`: it is not a notification Pockode has no surface for, it is
+not an event at all.
 
 **Increments, not the totals as reported.** Both CLIs count from the start of
 their own *process*, not of the session — a resumed session's counters start
-again at zero (measured on claude 2.1.263 and codex-cli 0.153.0). A session
+again at zero (measured on claude 2.1.263 and codex-cli 0.153.0; two turns inside
+one Codex process ran 16,721 → 33,458, and the resume that followed began afresh).
+That Codex can now resume at all does not change this — the counters still belong
+to the process, which is what `agent.UsageAccumulator` is built for. A session
 outlives many processes, so storing what was reported would drop everything spent
 before the last restart, and adding it every turn would count each turn again for
 every later turn. One accumulator per process, contributing only what is new,
@@ -1407,7 +1675,7 @@ double-counting or under-counting on no evidence.
 **One convention across backends.** Counts are stored Anthropic-style, with
 cache reads and cache writes beside the input count rather than inside it. Codex
 reports the other convention, so its parser subtracts them back out and then
-checks its normalised sum against Codex's own `total_tokens`, warning once if
+checks its normalised sum against Codex's own `totalTokens`, warning once if
 they disagree — the assumption cannot be proven against the one provider
 available for testing, so it is wired to announce itself if it ever goes stale.
 Without a single convention, adding two sessions' totals would add up two
@@ -1437,7 +1705,7 @@ behaviour above, and reading the wrong one is the whole history of this section:
 | | The level | The total it is not |
 |---|---|---|
 | Claude | the last main-conversation `assistant` frame's `message.usage`, summed as `input + cache_read + cache_creation` | `result.usage` — every request the turn made, added up. A seven-request turn reported `cache_read_input_tokens: 163135`, to the token the sum of its seven per-request reads |
-| Codex | `info.last_token_usage.input_tokens`, which is one request's whole prompt with its cached part already inside it | `info.total_token_usage` — the thread's running total. The same shape of turn had it at 87,193 while the level was 12,726 |
+| Codex | `tokenUsage.last.inputTokens`, which is one request's whole prompt with its cached part already inside it | `tokenUsage.total` — the running total since this process opened the thread. The same shape of turn had it at 87,193 while the level was 12,726 |
 
 Read either total as a level and the reading is inflated by every request it has
 already summed over — for Claude every request in the turn, for Codex every
@@ -1446,15 +1714,17 @@ Claude needs one filter besides: an `assistant` frame carrying
 `parent_tool_use_id` belongs to a subagent's own conversation (11,800 against the
 main conversation's 24,034), and a turn that ends in a Task call would otherwise
 report the subagent's context as the session's. Codex needs no equivalent — one
-`mcp-server` process carries one thread.
+app-server process carries one thread.
 
 **Two fields that look like the level after compaction, and are not.** Claude's
 `compact_boundary.compact_metadata.post_tokens` counts only the conversation that
 was kept, without the system prompt and tool definitions the next request still
 sends: `pre_tokens` 66,631 against a measured prompt of 66,200, but `post_tokens`
-3,026 against a measured 24,876. Codex's compaction `token_count` zeroes
-`last_token_usage` apart from a `total_tokens` of 6,140 — its own estimate of the
-compacted history, where the next real request measured 12,616. Either would make
+3,026 against a measured 24,876. Codex's compaction usage frame zeroes every
+field of `last` apart from a `totalTokens` of 6,140 — its own estimate of the
+compacted history, where the next real request measured 12,616 (measured on the
+MCP channel, whose counters these are the renamed form of: compaction is not cheap
+to reproduce and the behaviour under test is the same on both). Either would make
 the reading collapse and then jump back. Taking the level from the fields above
 instead means a compaction frame reports no level at all, and `session/usage.go`
 reads that zero as *this frame measured nothing* — never *the conversation is
@@ -1494,16 +1764,20 @@ behind its copied history were spent by the session it came from.
 
 A session runs in one of two modes, `default` or `yolo`, and each CLI is told
 which one at startup and only there — Claude through its arguments, Codex through
-the `approval-policy` / `sandbox` pair on the `codex` tool call, which
-`codex-reply` does not accept. `session.set_mode` therefore closes the running
-process instead of retuning it. For Codex that costs more than a restart: the
-thread cannot be resumed, so switching mode mid-session takes the earlier turns
-away from the agent (see [No Session Recovery](#no-session-recovery)).
+the `approvalPolicy` / `sandbox` pair on `thread/start`, `thread/resume` and
+`thread/fork`. `session.set_mode` therefore closes the running process instead of
+retuning it. For Codex that now costs exactly a restart: the new process resumes
+the same thread with the new pair, so the agent keeps the conversation
+([Thread Recovery](#thread-recovery)). It used to cost the conversation with it,
+which is the single largest thing the channel move bought
+([Why the app-server Channel](#why-the-app-server-channel)). Codex could avoid even
+the restart ([Deliberately Not Wired Up](#deliberately-not-wired-up)); doing so
+would buy one agent a path the other cannot have.
 
 | Mode | Claude | Codex |
 |---|---|---|
-| `default` | `--permission-prompt-tool stdio`, no allowlist | `approval-policy: on-request`, `sandbox: workspace-write` |
-| `yolo` | adds `--permission-mode bypassPermissions` | `approval-policy: never`, `sandbox: danger-full-access` |
+| `default` | `--permission-prompt-tool stdio`, no allowlist | `approvalPolicy: on-request`, `sandbox: workspace-write` |
+| `yolo` | adds `--permission-mode bypassPermissions` | `approvalPolicy: never`, `sandbox: danger-full-access` |
 
 Read as a promise to the user, those two `default` cells say different things.
 Claude's puts everything its own rules gate — file edits and commands among
@@ -1513,18 +1787,23 @@ directory, `$TMPDIR` and `/tmp` are writable (checked on Linux, codex-cli
 0.153.0) and work there simply happens. Only what the sandbox refuses — writing
 outside those roots, reaching the network — can produce a prompt at all.
 
-**That gap cannot be closed.** `untrusted`, the policy Pockode relied on to make
-Codex ask before running a command, is gone: `approval-policy` now enumerates
-`on-request` and `never` and nothing else, from the tool schema and `config.toml`
-alike (`codex.go:buildStartConfig` carries the exact errors). What is left is a
-choice between sandbox modes, and `read-only` — the only remaining setting that
-would still put an approval in front of workspace edits — was rejected on product
-grounds rather than technical ones: on a phone, tapping approve for every write of
-a multi-file edit is not a safety feature, it is an unusable session. So `default`
-maps to `on-request` + `workspace-write` — the pairing Codex itself runs by
-default, which `codex doctor` reports as `approval policy OnRequest` with a
-restricted filesystem and network sandbox — and "Codex changed files without
-asking" is the accepted cost of that trade rather than a regression to undo.
+**That gap is now a choice, not a limit.** It used to be both: the MCP channel
+rejected `untrusted` — the policy that asks before every command — outright, so
+the wording here said the gap could not be closed. The app-server channel accepts
+it, and it is a real gate rather than an after-the-fact escalation: asked to run
+`touch SHOULD_NOT_EXIST` and declined, the file was **not created** (measured on
+codex-cli 0.153.0). The schema the CLI generates lists `untrusted`, `on-request`,
+`never` and a `granular` object.
+
+The mapping stays where it was anyway, because the argument that decided it was
+never a technical one: on a phone, tapping approve for every write of a multi-file
+edit is not a safety feature, it is an unusable session. That applies to
+`untrusted` exactly as it applied to a `read-only` sandbox. So `default` maps to
+`on-request` + `workspace-write` — the pairing Codex itself runs by default, which
+`codex doctor` reports as `approval policy OnRequest` with a restricted filesystem
+and network sandbox — and "Codex changed files without asking" remains the
+accepted cost of that trade. **What changed is why**: this is a difference Pockode
+chooses knowing it could be removed, not one it cannot reach.
 
 **Under `on-request` the prompt is a model decision, not a gate.** The CLI
 describes the policy as "the model decides when to ask the user for approval"
@@ -1577,7 +1856,8 @@ Those destinations are Claude's, and Pockode picks none of them:
 `PermissionAlwaysAllow` echoes back the `PermissionSuggestions` the CLI attached
 to its own request, so the CLI decides where its rule is stored. Codex has no
 equivalent — its answer is one `decision` field, and always-allow becomes
-`approved_for_session`, which dies with the thread.
+`acceptForSession`, which lasts as long as the thread and is not written anywhere
+([Approvals](#approvals)).
 
 ## Process Management
 
@@ -1617,7 +1897,7 @@ platform-independent so it can be tested everywhere rather than only on a Window
 runner.
 
 Both halves are the same code path for every caller. A short probe that has to
-be abandonable — `codex --version` behind a timeout — uses `agent.CommandContext`,
+be abandonable — `codex --help` behind a timeout — uses `agent.CommandContext`,
 which is `agent.Command` plus a context; a session process uses
 `agent.StartProcess`, which owns its own lifecycle (below).
 
@@ -1701,18 +1981,56 @@ asymmetry matters at both ends:
 - A pending permission prompt disappears with its turn. The interrupt or error
   that ends it has to be reported even though the process is already idle, or the
   session waits forever for an answer to a prompt nobody can see.
-- Agents can announce the same end twice — Codex answers an aborted call while
-  Pockode synthesizes a response for the same call — and a second idle reads
-  downstream as a second stop.
+- Agents can announce the same end twice — Claude acknowledges an interrupt with
+  a `control_response` and then ends the same turn again with an aborted `result`
+  — and a second idle reads downstream as a second stop.
+
+#### A Prompt Belongs to the Process That Raised It
 
 A message starts a process when the session has none; an answer does not.
 `chat.Client` sends permission and question responses only to a process that is
-already there, and reports `ErrSessionNotRunning` otherwise. An answer belongs to
-the process that asked, so a prompt outliving its process — reaped after an idle
-timeout, or replayed from history after a restart, with the card still on screen —
-can no longer be answered. Starting a process to receive it delivers the answer
-nowhere and leaves that process running with no turn to end it. An interrupt in
-the same situation succeeds silently: nothing to stop is what the caller wanted.
+already there (`chat.Client.liveProcess`), and reports `ErrSessionNotRunning`
+otherwise. That is not caution on Pockode's part, it is the shape of the
+transport. A prompt is a request still in flight on the process's own stdio
+connection, addressed by an id that only that connection ever issued:
+
+| CLI | How the prompt arrives | How an answer is addressed |
+|---|---|---|
+| Claude | `control_request` | `control_response` carrying the same `request_id`, matched against the session's own pending-request map |
+| Codex | MCP `elicitation/create` | a JSON-RPC response to that request's id on the same connection |
+
+Neither id outlives the connection that issued it, and nothing replays an
+in-flight request into a later process — so an answer has exactly one possible
+recipient, and it is a live one. Starting a process to take an answer therefore
+delivers it nowhere and leaves that process running with no turn to end it. An
+interrupt in the same situation succeeds silently: nothing to stop is what the
+caller wanted.
+
+A prompt can therefore outlive the only thing that could answer it — replayed
+from history after a restart, with the card still on screen. Two rules elsewhere
+exist to keep that window as narrow as the premise allows, and they point in
+opposite directions for the same reason:
+
+- **While the server runs, Pockode does not take the process away itself.** The
+  idle reaper spares a process paused on a prompt and gives that hold no time
+  budget ([Idle Timeout Cleanup](#idle-timeout-cleanup)), because only that
+  process can still take the answer. A CLI that dies on its own still ends the
+  session, and the card with it — but that is the CLI's doing, not a card
+  expired by a timer nobody asked for.
+- **Across a restart, the work is not kept waiting.** Startup stops
+  `needs_input` work instead of preserving it
+  ([work-system.md](work-system.md#triggers), Trigger C): the process is gone,
+  so the question is gone, and the status would be promising a resumption that
+  cannot arrive.
+
+**Both rules stand on this premise and have to be revisited if it changes.** The
+change to watch for is a CLI re-offering its outstanding prompts to a resumed
+session, or accepting an answer addressed by something more durable than a live
+request id. Either one turns the reaper's unbounded hold into a plain resource
+leak — the process would no longer be the only way back to the question — and
+turns a `needs_input` work preserved across a restart from a lie into the correct
+answer. Neither rule has a second reason to fall back on, which is why the
+premise is written down once here instead of being re-derived at each of them.
 
 ### Event Stream Handling
 
@@ -1751,7 +2069,7 @@ func (m *Manager) runIdleReaper() {
     ticker := time.NewTicker(idleTimeout / 4) // Check frequency = timeout/4
     for range ticker.C {
         for sessionID, proc := range processes {
-            if now.Sub(proc.lastActive) > idleTimeout {
+            if now.Sub(proc.lastActive) > idleTimeout && proc.reapHold() == "" {
                 proc.agentSession.Close()
                 delete(processes, sessionID)
             }
@@ -1762,9 +2080,77 @@ func (m *Manager) runIdleReaper() {
 
 **Design Decision**: Check frequency is 1/4 of timeout duration, balancing response speed with CPU overhead.
 
-A process is spared while it is holding a turn open for background work, which is
-the one case where no events for hours does not mean abandoned; see
-[Background Waits](#background-waits).
+The timeout is only half the rule. `lastActive` measures silence, and silence is
+the normal condition of a wait, so on its own it says "abandoned" exactly when
+collecting the process would destroy what it is waiting for. What the reaper
+actually asks is `Process.reapHold`: the name of the thing this process is still
+in the middle of, or `""` when it is in the middle of nothing.
+
+Three things hold a process, checked most specific first because the name is
+what gets logged:
+
+- **Paused on an unanswered prompt** (`permission_request`, `ask_user_question`).
+  Reaping one answers the agent's question by killing it, and no later process
+  can make up for that: the prompt belongs to the process that raised it
+  ([A Prompt Belongs to the Process That Raised It](#a-prompt-belongs-to-the-process-that-raised-it)).
+
+  The predicate is `Process.awaitingUserAnswer`, which tracks the outstanding
+  answer separately from the turn rather than reading it off `turnEnded`. The
+  two come apart in both directions — an agent can withdraw a prompt without
+  ending the turn, which the frontend shows as a card moving from `pending` to
+  `expired`, and a prompt raised after a turn has reported its end outlives that
+  turn. Which flag answers which question is worked out at
+  `Process.promptPending`.
+- **Waiting on background work** — a turn held open for background tasks, which
+  would be killed with the process; see [Background Waits](#background-waits).
+- **A turn in progress** — the state is not a reported idle (`state != idle` or
+  `!turnEnded`). This is the hold that does the most work, and the one that had
+  to be written: a turn can run for minutes without producing a single event —
+  one `Bash` call around a build or a test suite is enough — and to `lastActive`
+  that is indistinguishable from a session nobody came back to. Requiring the
+  turn's own report of having ended is what keeps "quiet" from passing for
+  "done".
+
+  It is also the widest, and it comes close enough to covering the other two
+  that the gaps are worth stating: a prompt raised after its turn already
+  reported an end has no turn behind it and is held by the prompt check alone.
+  So the earlier checks are not prettier labels for cases this one would catch
+  anyway — dropping one can cost a session rather than a log line. Which check
+  covers which case is worked out at `Process.reapHold`.
+
+None of the three holds has a time budget, and none can: a build outruns any
+timeout worth setting and a person outruns it by more. Each ends when the session
+itself moves on — the turn reports its end, the agent gives up on its background
+tasks, the prompt is answered or withdrawn.
+
+So a process outlives the timeout whenever the session never moves on: a session
+left on an unanswered question keeps its process for as long as the server runs,
+and so does a CLI that stays alive without ever ending its turn. Both are
+deliberate. The alternative to the first is a prompt on screen that answers
+`ErrSessionNotRunning`
+([the premise above](#a-prompt-belongs-to-the-process-that-raised-it));
+the alternative to the second is killing builds, and nothing distinguishes a slow
+turn from a stuck one from outside. A CLI that actually dies closes its event
+stream, which ends the process through the ordinary path rather than the reaper.
+
+Because the holds carry the whole rule, the timeout itself only has to answer
+"how long may a session that is in the middle of nothing keep a CLI alive?", and
+the answer is short: `--idle-timeout` defaults to **5m**. A reaped process costs
+the next message a resume, and nothing else — history lives in the store, and
+`process_ended` reaches the client either way. What it costs the *work* bound to
+that session is the other half of this story, and the short version is "nothing
+it was not already exposed to": a reaped process is an ordinary process death, so
+it stops `in_progress` work and leaves paused work alone
+([work-system.md](work-system.md#triggers), Trigger A). That rule and this one are
+written against each other — narrowing what a death stops is only safe because
+the holds keep the reaper off the sessions somebody is waiting on, and the holds
+are only affordable because a reaped session is cheap to resume.
+
+`--idle-timeout=0` turns reaping off rather than reaping everything — worth
+saying because the literal reading is the opposite one: every process is older
+than a zero timeout the instant it is created. An operator who writes zero means
+"never", and `Manager.reapingDisabled` is the single place that reading is
+written down, asked by both the ticker and the reaping rule.
 
 ## Session Management
 
@@ -1838,16 +2224,16 @@ it: `settings.update` carries the whole settings object, so a model picked for
 the previous agent would otherwise come back with the write and be rejected.
 
 Like the mode, the model is only read when a CLI is launched: Claude gets
-`--model` in its arguments, Codex gets `model` on the `codex` tool call, which
-`codex-reply` does not accept. `session.set_model` therefore closes the running
-process, at the same cost for Codex as a mode change (see
+`--model` in its arguments, Codex gets `model` on whichever of `thread/start`,
+`thread/resume` or `thread/fork` opens its thread. `session.set_model` therefore
+closes the running process, at the same cost for Codex as a mode change (see
 [Session Modes](#session-modes)).
 
 A session that has already started can still change its model, unlike its
 [agent type](#activation), because nothing outside the next launch is keyed to
-it: Claude's resume file is written per session, not per model, so the session
-resumes across the change with its context intact. Codex's thread does not
-survive it — but that is true of every restart, not of model changes.
+it: each agent's resume file is written per session, not per model, so the session
+resumes across the change with its context intact. That now holds for Codex too —
+its thread is keyed by nothing the model touches.
 
 Switching agents drops a model the new agent does not have, rather than trying
 to map it — no model is shared between agents. Both halves of that invariant
@@ -1879,10 +2265,11 @@ like next to `IsValidModel`: a level it let through would not fail anywhere
 downstream — it would run the turn at something the user did not choose and say
 nothing.
 
-**Codex receives it as a config override rather than an argument.** The `codex`
-tool call's input schema has no effort field at all, so the level rides in as a
-`config` override under `model_reasoning_effort` — the key `config.toml` uses for
-the same setting. Claude simply takes `--effort`.
+**Codex receives it as a config override rather than an argument.** The thread
+parameters have no effort field at all — checked against the protocol schema the
+CLI generates — so the level rides in as a `config` override under
+`model_reasoning_effort`, the key `config.toml` uses for the same setting. Claude
+simply takes `--effort`.
 
 **The levels belong to the agent, not to the model.** Claude's `--effort` is a
 session flag whose accepted set does not vary with the model, and every model in
@@ -1914,10 +2301,14 @@ reason at all is not a choice worth offering.
 - Claude's [recovery ladder](#session-recovery-ladder), which receives it as
   `StartOptions.Resume` — overridden for a forked session, whose transcript is
   [not a conversation of its own](#forking).
-- Codex, through the same field, to warn that the agent has lost the earlier turns
-  — its threads never survive the process that made them. A forked Codex session
-  never reaches this: [the fork is refused](#no-forking) instead.
 - `session.set_agent_type`, which refuses to switch a started session's backend.
+
+Codex used to be a third reader, through the same field, to warn that a restarted
+session had lost the agent's earlier turns. It no longer reads it at all: a thread
+now survives its process, so whether the agent still remembers is answered by
+whether the recorded thread reopens — a question `thread/resume` settles at the
+one moment it matters ([Thread Recovery](#thread-recovery)) rather than something
+to infer from activation.
 
 It is set from the event stream — the first event answering
 `ActivatesSession` — rather than when the process is created. Spawning a CLI
@@ -1925,10 +2316,8 @@ proves nothing about the session behind it, and the difference is the whole poin
 of the flag: a first message that dies before the agent says anything (expired
 login, provider outage) leaves a session that never really started, and the user
 should be able to point it at a different agent instead of retrying the broken one
-forever. Codex's warning gets more accurate for free: a session whose first turn
-died before the agent spoke no longer claims to have lost context it never had.
-`process/manager.go` owns the write because the event stream passes through it
-already, next to the history append.
+forever. `process/manager.go` owns the write because the event stream passes
+through it already, next to the history append.
 
 The write happens on the transition only, guarded by an `atomic.Bool` seeded from
 the session's existing flag, so an active session does not rewrite the index and
@@ -2038,8 +2427,8 @@ hang one session: it freezes every process operation in the worktree, behind a
 frontend that can only spin. Every step of `Start` that waits on something
 outside the process therefore owes a bound, which turns a hang into an ordinary
 start failure: the lock is released and the request is answered, instead of
-neither. Codex is the only agent that has any — the version probe and the MCP
-handshake ([MCP Initialization](#mcp-initialization)); Claude's `Start` spawns
+neither. Codex is the only agent that has any — the subcommand probe, and the
+handshake plus opening the thread ([Startup](#startup)); Claude's `Start` spawns
 and returns.
 
 Those bounds are also a promise to the client. `chat.message` runs this path, and
@@ -2052,7 +2441,36 @@ stalled start still surfaces as a plain timeout.
 
 ### Ending a Turn Exactly Once
 
-Codex has no session-wide interrupt flag. A turn ends when its pending `tools/call` channel receives a value — from the CLI's response, from `SendInterrupt`, or from `turn_aborted` — and the channel is buffered with a non-blocking send, so whichever arrives first wins and the rest are dropped. Keying on the request ID instead of a flag is what makes a late event of a previous turn harmless: it simply finds no pending call of its own.
+Both agents promise exactly one `AwaitsUserInput` event per turn, and each gets
+there differently.
+
+Codex gets there for free: `turn/completed` is a notification the CLI sends once
+per turn, and it is the only thing that produces an ending. Nothing has to be
+correlated, because the ending is announced rather than inferred — which is what
+the MCP channel could not do, where an aborted `tools/call` was simply never
+answered and Pockode had to resolve the pending request itself. The one rule left
+is that a `turn/completed` Pockode cannot parse still ends the turn: a turn left
+pending waits for an event that is never coming.
+
+An interrupt does not end a turn by itself. `turn/interrupt` asks, and the turn's
+own `turn/completed` — `status: "interrupted"` — is still what ends it. A turn
+blocked on an approval is a separate case, since it is not reading its interrupt
+at all; see [Approvals](#approvals).
+
+**A stop can arrive before there is a turn to stop.** `turn/interrupt` has to name
+a turn id, and that id arrives with `turn/started`, which trails the prompt by
+however long the CLI takes to get going — measured at over two seconds on a loaded
+machine, which is well inside the time a user takes to change their mind. A stop
+in that window has nothing to name, so it is remembered and carried out by
+`handleTurnStarted` on the turn it was meant for. It does not outlive that turn:
+`turn/completed` clears it, because a turn that ended on its own leaves nothing to
+stop and a stop carried forward would kill whatever the user sends next.
+
+The turn id in the `turn/start` *reply* is deliberately not used for this, though
+it is there. That reply is handled on a goroutine of its own, while every
+`turn/started` and `turn/completed` arrives on the single reader — so adopting the
+reply's id could put a finished turn back after `turn/completed` had cleared it,
+and leave the session holding a turn that no longer exists.
 
 ### Resource Cleanup Order
 
@@ -2096,7 +2514,7 @@ if errors.Is(err, bufio.ErrTooLong) {
 
 The following conditions send an `ErrorEvent` and end the session:
 - Process crash (`Process.Wait()` returns non-context error)
-- MCP initialization failure
+- A handshake that never completes, on either channel
 - Critical I/O errors
 
 ## Code Paths
@@ -2109,8 +2527,9 @@ The following conditions send an `ErrorEvent` and end the session:
 | Subprocess lifecycle | `server/agent/process.go`, `server/internal/proctree/` |
 | Claude implementation | `server/agent/claude/claude.go` |
 | Claude background waits | `server/agent/claude/background_tasks.go`, `background_wait.go`, `background_loss.go` |
-| Codex implementation | `server/agent/codex/codex.go` |
+| Codex implementation | `server/agent/codex/codex.go` (process, JSON-RPC, thread lifecycle), `events.go` (notification mapping), `approval.go` (server requests), `resume.go` (`codex_resume.json`) |
 | Session forking | `server/agent/fork.go`, `claude/fork.go`, `codex/fork.go` |
+| Codex protocol drift check | `server/agent/codex/schema_integration_test.go` |
 | Fork capability over the wire | `server/ws/rpc_agent.go`, `web/src/lib/rpc/agent.ts`, `web/src/hooks/useForkSupport.ts` |
 | Chat client | `server/chat/client.go` |
 | Process management | `server/process/manager.go` |
