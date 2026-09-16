@@ -1,8 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { AGENT_TYPE_INFO } from "../../lib/agentType";
+import { messagePreview } from "../../lib/messagePreview";
 import type { Message } from "../../types/message";
 import type { AgentType } from "../../types/settings";
-import { messagePreview } from "../../utils/messagePreview";
 import { Sheet, Spinner } from "../ui";
 
 interface Props {

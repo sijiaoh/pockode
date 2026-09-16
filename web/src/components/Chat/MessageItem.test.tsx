@@ -242,7 +242,12 @@ describe("MessageItem", () => {
 				{ type: "text", content: "I'll read the file" },
 				{
 					type: "tool_call",
-					tool: { id: "tool-1", name: "Read", input: { file: "test.go" } },
+					tool: {
+						id: "tool-1",
+						name: "Read",
+						input: { file: "test.go" },
+						status: "success",
+					},
 				},
 			],
 			status: "complete",
@@ -265,6 +270,7 @@ describe("MessageItem", () => {
 						id: "tool-2",
 						name: "Bash",
 						input: { command: "ls" },
+						status: "success",
 						result: "file1.txt\nfile2.txt",
 					},
 				},
@@ -297,6 +303,7 @@ describe("MessageItem", () => {
 						id: "tool-2b",
 						name: "Read",
 						input: { file_path: "/Users/test/project/doc.pdf" },
+						status: "success",
 						// claude's block names no file — it hands over the bytes
 						// alone — so the name under the entry is the one the call
 						// itself read, which is what makes this entry say as much
@@ -344,6 +351,7 @@ describe("MessageItem", () => {
 						id: "tool-2c",
 						name: "ToolSearch",
 						input: { query: "notebook" },
+						status: "success",
 						contents: [
 							{ type: "tool_reference", toolName: "NotebookEdit" },
 							{ type: "tool_reference", toolName: "Read" },
@@ -723,14 +731,14 @@ describe("MessageItem", () => {
 		});
 	});
 
-	// The formatting rules themselves are covered in utils/path.test.ts; this only
-	// checks that the tool call's file_path and the work dir reach the formatter.
+	// The summary rules themselves are covered in lib/toolSummary.test.ts; this
+	// only checks that the call's input and the work dir reach the derivation.
 	describe("file path display", () => {
 		beforeEach(() => {
 			mockWorkDir.value = "/Users/test/project";
 		});
 
-		it("summarizes a file tool call as filename plus relative dir", () => {
+		it("shows a file call's path relative to the work directory", () => {
 			const message: Message = {
 				id: "fp-1",
 				role: "assistant",
@@ -743,6 +751,7 @@ describe("MessageItem", () => {
 							input: {
 								file_path: "/Users/test/project/src/components/Button.tsx",
 							},
+							status: "success",
 						},
 					},
 				],
@@ -751,9 +760,9 @@ describe("MessageItem", () => {
 			};
 
 			render(<MessageItem sessionId="session-1" message={message} />);
-			expect(
-				screen.getByText("Button.tsx (src/components)"),
-			).toBeInTheDocument();
+			// Two spans: the directories may be cut, the file name may not.
+			expect(screen.getByText("src/components/")).toBeInTheDocument();
+			expect(screen.getByText("Button.tsx")).toBeInTheDocument();
 		});
 	});
 });

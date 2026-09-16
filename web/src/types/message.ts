@@ -83,10 +83,44 @@ export type MessageStatus =
 	| "interrupted"
 	| "process_ended";
 
-export interface ToolCall {
+/**
+ * How one tool call stands right now. Derived by the message reducer from the
+ * records it has — never sent on the wire, because every input to the
+ * derivation already is (docs/tool-call-model.md#toolrun).
+ *
+ * `background` is not a finished state: it is `running` wearing a badge, for a
+ * call that handed its work to something outliving the turn.
+ */
+export type ToolRunStatus =
+	| "running"
+	| "background"
+	| "success"
+	| "error"
+	| "interrupted";
+
+/**
+ * One tool call and everything known about it, subagent calls included: a Task
+ * *is* a tool call, and keeping a second shape for it meant two status
+ * machines and two settle-on-interrupt paths for one thing. `TaskItem` stays,
+ * as the renderer for that category.
+ *
+ * The reducer is the only author. A renderer switches on `status` and infers
+ * nothing of its own.
+ */
+export interface ToolRun {
 	id: string;
 	name: string;
+	/** Complete, never truncated: the row's summary is derived from it. */
 	input: unknown;
+	status: ToolRunStatus;
+	/**
+	 * The latest one-line status of a call still running. Live state: it comes
+	 * from `tool_activity`, which is never persisted, so a replayed run has none
+	 * and is still correct — `status` is what carries "still going".
+	 */
+	activity?: string;
+	/** A running call's output so far, accumulated from the deltas. Live state. */
+	output?: string;
 	/** Empty when the result arrived as `contents` instead. */
 	result?: string;
 	/**
@@ -95,39 +129,37 @@ export interface ToolCall {
 	 * whole result, prose included, in the agent's own order.
 	 */
 	contents?: ContentBlock[];
+	/**
+	 * What this call handed back to the agent while its real work carried on:
+	 * the placeholder text of a backgrounded call. Kept beside the outcome
+	 * rather than replaced by it — showing only the outcome would assert the
+	 * agent read something it never did.
+	 */
+	placeholderResult?: string;
+	/** Set once the call is known to have left work running past the turn. */
+	fromBackground?: boolean;
+	/**
+	 * How long the call took, when the engine reported it as a figure (Codex
+	 * does, Claude does not). Never inferred from arrival times: a replayed
+	 * record has no honest one.
+	 */
+	durationMs?: number;
+	/** The command's exit status, when the engine reports one separately. */
+	exitCode?: number;
+	/**
+	 * When this client first saw the call. Live only — a history record carries
+	 * no timestamp, so a replayed run gets none and draws no stopwatch.
+	 */
+	seenAt?: Date;
 }
 
 export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
 
 export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired";
 
-export type TaskRunStatus = "running" | "done" | "failed" | "interrupted";
-
-/**
- * The current state of one Claude Task (subagent) call. Maintained solely by
- * the message reducer, so the UI never has to infer a Task's state from the
- * events that produced it.
- */
-export interface TaskRun {
-	toolUseId: string;
-	/** Task input.description, falling back to subagentType, then "Task". */
-	description: string;
-	subagentType?: string;
-	/** Task input.prompt — the only place the subagent's brief is visible. */
-	prompt?: string;
-	status: TaskRunStatus;
-	result?: string;
-	/**
-	 * A result that arrived after the turn was cut short. The content is kept,
-	 * but the status stays interrupted: a late result cannot make the UI claim
-	 * the Task finished normally.
-	 */
-	resultAfterInterrupt?: boolean;
-}
-
 export type ContentPart =
 	| { type: "text"; content: string }
-	| { type: "tool_call"; tool: ToolCall }
+	| { type: "tool_call"; tool: ToolRun }
 	| { type: "system"; content: string }
 	| { type: "warning"; message: string; code: string }
 	| {
@@ -141,7 +173,6 @@ export type ContentPart =
 			status: QuestionStatus;
 			answers?: Record<string, string>;
 	  }
-	| { type: "task"; task: TaskRun }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
 
@@ -500,6 +531,15 @@ export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
 	 * session's settings come from `session.detail.subscribe` instead.
 	 */
 	state: ProcessState;
+	/**
+	 * What each call still in flight last reported doing, by `tool_use_id`. Not
+	 * in `history`: a `tool_activity` is never recorded, and this is how a client
+	 * that subscribes mid-run — the normal case on a phone — learns what a
+	 * background call that started half an hour ago is up to. Absent when no call
+	 * is in flight; a transcript with none is still correct, because the spinner
+	 * and the badge come from the derived status.
+	 */
+	tool_activity?: Record<string, string>;
 }
 
 export interface ChatMessagesHistoryParams {
@@ -566,6 +606,7 @@ export type ServerMethod =
 	| "text"
 	| "tool_call"
 	| "tool_result"
+	| "tool_activity"
 	| "warning"
 	| "error"
 	| "done"
@@ -597,10 +638,34 @@ export type ServerNotification =
 			type: "tool_result";
 			tool_use_id: string;
 			tool_result: string;
-			/** Absent when the result was prose alone; see `ToolCall.contents`. */
+			/** Absent when the result was prose alone; see `ToolRun.contents`. */
 			contents?: ContentBlock[];
 			/** Absent unless the agent CLI reported the tool call as failed. */
 			is_error?: boolean;
+			/**
+			 * What kind of result this is, for the results that are not simply
+			 * "what the call produced": `background_started` marks the placeholder
+			 * a backgrounded call handed back, `background_result` the real
+			 * outcome that arrived after the turn, and `background_lost` the one
+			 * Pockode wrote itself after the CLI process died with the work still
+			 * running. Absent on every ordinary one.
+			 */
+			subtype?: string;
+			/** Absent, or 0, from an engine that reports no duration (Claude). */
+			duration_ms?: number;
+			/** Absent for every tool that is not a command that ran. */
+			exit_code?: number;
+	  }
+	| {
+			/**
+			 * What a call that has not returned is doing. Never persisted, so it
+			 * carries no seq and never appears in a history page: `activity` is a
+			 * latest value and `output_delta` accumulates.
+			 */
+			type: "tool_activity";
+			tool_use_id: string;
+			activity?: string;
+			output_delta?: string;
 	  }
 	| {
 			type: "warning";

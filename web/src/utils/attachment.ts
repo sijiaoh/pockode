@@ -58,6 +58,10 @@ export function attachmentSource(
 	sessionId: string,
 	workDir: string,
 ): AttachmentSource | null {
+	// `not_fetched` joins the two content statements here rather than with
+	// `unavailable`: the server chose not to push the bytes into the transcript,
+	// and fetching them behind the user's back is exactly that choice reversed.
+	// The path stays, which is how the file is still reachable.
 	if (file.omitted && file.omitted !== "unavailable") return null;
 	if (file.attachment_id) {
 		return { kind: "attachment", sessionId, id: file.attachment_id };
@@ -135,6 +139,16 @@ export function omittedLabel(file: { omitted?: OmitReason }): string | null {
 			return "Can't be previewed";
 		case "unavailable":
 			return "Not available";
+		// Deliberately not read, rather than unreadable: a background task's log
+		// can be arbitrarily large, and the path beside it is how to reach it.
+		//
+		// The sentence stops at the statement and does not tell the reader to
+		// open it. A CLI writes a background log wherever it likes, which is
+		// often outside the work directory, and every route into a file takes a
+		// work-directory-relative path — so there is no Open beside a good half
+		// of these. The strip draws that button when there is one to draw.
+		case "not_fetched":
+			return "Not fetched";
 		default:
 			return null;
 	}
