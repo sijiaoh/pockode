@@ -152,6 +152,51 @@ describe("WorkDetailOverlay", () => {
 		expectToAppearBefore(tasksHeading, commentsHeading);
 	});
 
+	// The open item comes from the detail subscription, but its children are
+	// other work items — the list store is the only thing that knows them, and it
+	// carries rows alone.
+	it("lists a story's children from the work list store", async () => {
+		const user = userEvent.setup();
+		const onOpenWorkDetail = vi.fn();
+		useWorkStore.setState({
+			works: [
+				{
+					id: "task-1",
+					type: "task",
+					parent_id: "work-1",
+					agent_role_id: "role-1",
+					title: "Wire it up",
+					status: "open",
+					updated_at: "2026-03-04T00:00:00Z",
+				},
+			],
+			isLoading: false,
+			error: null,
+		});
+		mockUseWorkDetailSubscription.mockReturnValue({
+			work: createWork(),
+			comments: [],
+			loading: false,
+			error: null,
+		});
+
+		render(
+			<WorkDetailOverlay
+				workId="work-1"
+				onBack={vi.fn()}
+				onNavigateToSession={vi.fn()}
+				onOpenWorkDetail={onOpenWorkDetail}
+			/>,
+		);
+
+		expect(
+			screen.getByRole("heading", { name: "Tasks (0/1)" }),
+		).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Wire it up" }));
+		expect(onOpenWorkDetail).toHaveBeenCalledWith("task-1");
+	});
+
 	// Usage rides on the detail subscription rather than on Work, so this is also
 	// the assertion that the page reads it from there.
 	it("puts the usage the subscription carries between steps and tasks", () => {

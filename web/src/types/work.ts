@@ -10,20 +10,42 @@ export type WorkStatus =
 	| "stopped"
 	| "closed";
 
-export interface Work {
+/**
+ * One row of the work list, as `work.list.subscribe` sends it: what drawing a
+ * row needs, and nothing more. The whole item is `Work` below, and reaching it
+ * means subscribing to `work.detail` for the one item you have open.
+ *
+ * What the row leaves out and why is docs/projects/api.md, *Work List Rows vs
+ * Work Detail*. Before adding a field, note that several of the ones here are
+ * not drawn on the row that carries them — `parent_id`, `status` and
+ * `session_id` answer questions (the story/task tree, `isWorktreeBound`, which
+ * sessions belong to work) that need the *whole* list to resolve one item, and
+ * so have nowhere else to be answered from. "A row needs it" is that, not
+ * "something on screen reads it".
+ */
+export interface WorkListItem {
 	id: string;
 	type: WorkType;
 	parent_id?: string;
 	agent_role_id?: string;
 	title: string;
-	body?: string;
 	status: WorkStatus;
 	session_id?: string;
 	/** Worktree the work runs in (empty/undefined = main). Read-only, captured by backend. */
 	worktree?: string;
+	updated_at: string;
+}
+
+/**
+ * A whole work item, as `work.detail.subscribe` reports it — and as
+ * `work.create` / `work.start` answer, the two calls that speak for the single
+ * item they acted on. Extending the row is what keeps the two in step: a field
+ * added here stays out of the list until someone puts it there deliberately.
+ */
+export interface Work extends WorkListItem {
+	body?: string;
 	current_step?: number;
 	created_at: string;
-	updated_at: string;
 }
 
 export interface WorkCreateParams {
@@ -54,20 +76,20 @@ export interface Comment {
 }
 
 export interface WorkListSubscribeResult {
-	items: Work[];
+	items: WorkListItem[];
 }
 
 export type WorkListChangedNotification =
-	| { id: string; operation: "create" | "update"; work: Work }
+	| { id: string; operation: "create" | "update"; work: WorkListItem }
 	| { id: string; operation: "delete"; workId: string }
-	| { id: string; operation: "sync"; works: Work[] };
+	| { id: string; operation: "sync"; works: WorkListItem[] };
 
 /**
  * What a work item consumed, as the sessions beneath it reported it.
  *
- * It rides on the detail result and notification below, never on `Work`: `Work`
- * is the one shape the list and the detail share, so a field here would ship a
- * subtree aggregation to every row of the work list.
+ * It rides on the detail result and notification below, never on `Work`: usage
+ * is computed by walking every session under the item, so a field there would
+ * make every reader of a work item pay for that walk.
  *
  * No context window at any level — a window belongs to one live conversation,
  * and the sum of several means nothing.
@@ -80,8 +102,8 @@ export interface WorkUsage {
 	/**
 	 * Descendants counted into `total`, at any depth; 0 when there are none.
 	 * Always sent, and the only thing that decides whether the page shows one
-	 * column or two: `Work` carries no usage, so the client has no consumption
-	 * figure for any item but the one it has open.
+	 * column or two: only the detail carries usage, so the client has no
+	 * consumption figure for any item but the one it has open.
 	 */
 	descendant_count: number;
 	/**

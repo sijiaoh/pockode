@@ -20,7 +20,7 @@ import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
-import type { Comment, Work, WorkType } from "../../types/work";
+import type { Comment, Work, WorkListItem, WorkType } from "../../types/work";
 import { formatStepCount, getStepProgress } from "../../utils/workSteps";
 import { MarkdownContent } from "../Chat/MarkdownContent";
 import BackButton from "../ui/BackButton";
@@ -639,7 +639,7 @@ function ChildrenSection({
 	onNavigateToSession,
 }: {
 	storyId: string;
-	tasks: Work[];
+	tasks: WorkListItem[];
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
@@ -684,7 +684,7 @@ function ChildRow({
 	onOpenWorkDetail,
 	onNavigateToSession,
 }: {
-	work: Work;
+	work: WorkListItem;
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string, worktree: string) => void;

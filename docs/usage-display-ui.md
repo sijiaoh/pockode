@@ -102,8 +102,8 @@ interface WorkUsage {
 	/**
 	 * Descendants counted into `total`, at any depth; 0 when there are none.
 	 * Required, and the only thing that decides whether the page shows one column
-	 * or two — `Work` carries no usage, so the client cannot count or sum the
-	 * subtree itself.
+	 * or two — only the detail carries usage, so the client cannot count or sum
+	 * the subtree itself.
 	 */
 	descendant_count: number;
 	/**
@@ -127,9 +127,11 @@ sidebar.
 
 `WorkUsage` goes on **`WorkDetailSubscribeResult` and
 `WorkDetailChangedNotification`, beside `work` and `comments` — not on `Work`.**
-`Work` is one shape shared by the list and the detail (`web/src/types/work.ts`),
-so a field added there would ship the aggregate to every row of the work list on
-every change: the thing the requirement rules out, arriving by accident.
+The list has its own narrower wire shape, `WorkListItem`
+(`web/src/types/work.ts`), for exactly this kind of reason, so the list is
+already safe from it. `Work` is what `work.detail` reports, and the aggregate
+does not belong on it either — the reason is
+[code/work-system.md](code/work-system.md#usage-aggregation).
 
 ### A fork starts at zero
 

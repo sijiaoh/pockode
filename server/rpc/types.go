@@ -553,8 +553,66 @@ type WorkReopenParams struct {
 	ID string `json:"id"`
 }
 
+// WorkListItem is one row of the work list: what drawing a row needs, and
+// nothing more.
+//
+// The rest of a work item — Body above all, but also CurrentStep and CreatedAt —
+// is reported by work.detail.subscribe, for the one item a client has open. Every
+// subscriber holds the whole project's list, and a change to any one work item
+// pushes that item's row to all of them, so a field here is paid for by clients
+// that are not looking at that work item at all. Body is the one that makes this
+// expensive rather than merely untidy:
+// it is unbounded user-authored prose, it is the field most often edited, and no
+// row renders it.
+//
+// Several fields that stayed are not drawn on the row they arrive on. ParentID
+// and Status build the story/task tree and answer whether a work's worktree is
+// still free to change, which is what decides if its badge may be shown at all;
+// SessionID is how the session list learns which of its sessions belong to work.
+// Both rules need the *whole* list to resolve one item, so they can only be
+// answered here (web/src/lib/workStore.ts, docs/projects/api.md#work-list-rows-vs-work-detail).
+type WorkListItem struct {
+	ID          string          `json:"id"`
+	Type        work.WorkType   `json:"type"`
+	ParentID    string          `json:"parent_id,omitempty"`
+	AgentRoleID string          `json:"agent_role_id,omitempty"`
+	Title       string          `json:"title"`
+	Status      work.WorkStatus `json:"status"`
+	SessionID   string          `json:"session_id,omitempty"`
+	Worktree    string          `json:"worktree,omitempty"`
+	// UpdatedAt is what the closed group is ordered by.
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// NewWorkListItem builds the row for a work item. Every producer of a row goes
+// through here so that narrowing work.Work down to a row is decided in one
+// place.
+func NewWorkListItem(w work.Work) WorkListItem {
+	return WorkListItem{
+		ID:          w.ID,
+		Type:        w.Type,
+		ParentID:    w.ParentID,
+		AgentRoleID: w.AgentRoleID,
+		Title:       w.Title,
+		Status:      w.Status,
+		SessionID:   w.SessionID,
+		Worktree:    w.Worktree,
+		UpdatedAt:   w.UpdatedAt,
+	}
+}
+
+// NewWorkListItems narrows a whole list. An empty store yields an empty slice
+// rather than nil, so a client with no work items is sent [] and not null.
+func NewWorkListItems(works []work.Work) []WorkListItem {
+	items := make([]WorkListItem, len(works))
+	for i, w := range works {
+		items[i] = NewWorkListItem(w)
+	}
+	return items
+}
+
 type WorkListSubscribeResult struct {
-	Items []work.Work `json:"items"`
+	Items []WorkListItem `json:"items"`
 }
 
 type WorkCommentListParams struct {
@@ -579,8 +637,7 @@ type WorkDetailSubscribeParams struct {
 type WorkDetailSubscribeResult struct {
 	Work     work.Work      `json:"work"`
 	Comments []work.Comment `json:"comments"`
-	// Usage is the detail's alone, never Work's — see work.Usage. The list
-	// result above carries Work and must stay that way.
+	// Usage is the detail's alone, never Work's — see work.Usage.
 	Usage work.Usage `json:"usage"`
 }
 

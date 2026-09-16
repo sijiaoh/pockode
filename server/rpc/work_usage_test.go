@@ -8,25 +8,6 @@ import (
 	"github.com/pockode/server/work"
 )
 
-// A work item's usage is an aggregation over its whole subtree. The list result
-// carries work.Work for every work item in the app, so that shape must never
-// grow a usage field — putting one there would make opening the list aggregate
-// every tree in it.
-func TestWorkListCarriesNoUsage(t *testing.T) {
-	items, err := json.Marshal(WorkListSubscribeResult{Items: []work.Work{
-		{ID: "w1", Title: "Some story", SessionID: "sess-1"},
-	}})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	for _, unwanted := range []string{"usage", "input_tokens", "cost_usd", "descendant_count"} {
-		if strings.Contains(string(items), unwanted) {
-			t.Errorf("list row mentions %q: %s", unwanted, items)
-		}
-	}
-}
-
 // The detail result is where it lives, and every field the client needs to
 // display it honestly has to be there — including the two counts it cannot
 // derive: how many work items the total covers, and how many of them spent

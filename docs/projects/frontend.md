@@ -10,7 +10,7 @@ Two Zustand stores hold entity state:
 
 | Store | State | File |
 |---|---|---|
-| `useWorkStore` | `works: Work[]`, `isLoading`, `error` | `web/src/lib/workStore.ts` |
+| `useWorkStore` | `works: WorkListItem[]`, `isLoading`, `error` | `web/src/lib/workStore.ts` |
 | `useAgentRoleStore` | `roles: AgentRole[]`, `isLoading`, `error` | `web/src/lib/agentRoleStore.ts` |
 
 Both stores expose the same action pattern:
@@ -109,7 +109,7 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 5. Each story row shows: status icon, title, task progress (`closedTasks/totalTasks tasks`), and a `WorktreeBadge` marking which worktree the story (and its whole subtree) runs in — the list is global across worktrees, so the badge is what tells rows apart. Tasks normally share their story's worktree, so repeating the badge on every task row would only add noise. Stories still in `open` status show no badge, since their worktree is only fixed once they start.
 6. A "New Story" button at the top opens an inline creation form (title + role selector)
 
-**Task progress:** Tasks are indexed by `parent_id` into a `Map<string, Work[]>`. For each story, closed count is tasks with status `closed`.
+**Task progress:** Tasks are indexed by `parent_id` into a `Map<string, WorkListItem[]>`. For each story, closed count is tasks with status `closed`.
 
 ### WorkDetailOverlay
 

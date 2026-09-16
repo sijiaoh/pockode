@@ -17,7 +17,7 @@ import type {
 	SessionMode,
 } from "../../types/message";
 import type { AgentType } from "../../types/settings";
-import type { Work } from "../../types/work";
+import type { WorkListItem } from "../../types/work";
 import ChatPanel from "./ChatPanel";
 
 // Mock scrollTo (not available in jsdom)
@@ -237,7 +237,7 @@ describe("ChatPanel", () => {
 
 	// The work this session runs, as the global subscription would have it.
 	const seedWork = (
-		overrides: Partial<Work> & Pick<Work, "status">,
+		overrides: Partial<WorkListItem> & Pick<WorkListItem, "status">,
 		steps?: string[],
 	) => {
 		useAgentRoleStore.getState().setRoles([
@@ -257,14 +257,13 @@ describe("ChatPanel", () => {
 				agent_role_id: "role-1",
 				title: "Ship the status bar",
 				session_id: "test-session",
-				created_at: "2024-01-01T00:00:00Z",
 				updated_at: "2024-01-01T00:00:00Z",
 				...overrides,
 			},
 		]);
 	};
 
-	const setWorkStatus = (status: Work["status"]) => {
+	const setWorkStatus = (status: WorkListItem["status"]) => {
 		act(() => {
 			useWorkStore
 				.getState()
@@ -1243,7 +1242,7 @@ describe("ChatPanel", () => {
 		it("opens the work detail from the event it happened to", async () => {
 			const user = userEvent.setup();
 			const onOpenWorkDetail = vi.fn();
-			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+			seedWork({ status: "in_progress" }, ["a", "b", "c"]);
 			render(
 				<ChatPanel {...defaultProps} onOpenWorkDetail={onOpenWorkDetail} />,
 			);
@@ -1258,7 +1257,7 @@ describe("ChatPanel", () => {
 		});
 
 		it("leaves the work's status out of the chat entirely", async () => {
-			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+			seedWork({ status: "in_progress" }, ["a", "b", "c"]);
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
@@ -1287,7 +1286,7 @@ describe("ChatPanel", () => {
 		});
 
 		it("lets the chat keep streaming after the work has closed", async () => {
-			seedWork({ status: "in_progress", current_step: 1 }, ["a", "b", "c"]);
+			seedWork({ status: "in_progress" }, ["a", "b", "c"]);
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 

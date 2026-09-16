@@ -329,7 +329,7 @@ type workDetailChangedParams struct {
 	Work     work.Work      `json:"work"`
 	Comments []work.Comment `json:"comments"`
 	// Usage rides on the notification rather than on Work, for the reason
-	// work.Usage documents: Work is also every row of the work list.
+	// work.Usage documents.
 	Usage work.Usage `json:"usage"`
 }
 

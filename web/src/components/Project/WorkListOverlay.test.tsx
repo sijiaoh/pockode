@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkStore } from "../../lib/workStore";
-import type { Work } from "../../types/work";
+import type { WorkListItem } from "../../types/work";
 import WorkListOverlay from "./WorkListOverlay";
 
 vi.mock("../ui/BackToChatButton", () => ({
@@ -21,12 +21,11 @@ vi.mock("../Worktree", () => ({
 	WorktreeBadge: () => null,
 }));
 
-const createWork = (overrides: Partial<Work>): Work => ({
+const createWork = (overrides: Partial<WorkListItem>): WorkListItem => ({
 	id: "work-1",
 	type: "story",
 	title: "Story",
 	status: "open",
-	created_at: "2026-03-04T00:00:00Z",
 	updated_at: "2026-03-04T00:00:00Z",
 	...overrides,
 });
@@ -128,7 +127,6 @@ describe("WorkListOverlay", () => {
 					type: "story",
 					title: "Older Updated Story",
 					status: "closed",
-					created_at: "2026-03-05T00:00:00Z",
 					updated_at: "2026-03-01T00:00:00Z",
 				}),
 				createWork({
@@ -136,7 +134,6 @@ describe("WorkListOverlay", () => {
 					type: "story",
 					title: "Newer Updated Story",
 					status: "closed",
-					created_at: "2026-03-01T00:00:00Z",
 					updated_at: "2026-03-05T00:00:00Z",
 				}),
 			],

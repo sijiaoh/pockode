@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWorkStore } from "../../lib/workStore";
 import { worktreeActions } from "../../lib/worktreeStore";
 import type { WorktreeInfo } from "../../types/message";
-import type { Work, WorkStatus } from "../../types/work";
+import type { WorkListItem, WorkStatus } from "../../types/work";
 import WorktreeBadge from "./WorktreeBadge";
 
 let mockWorktrees: WorktreeInfo[] = [];
@@ -35,19 +35,20 @@ vi.mock("@tanstack/react-router", () => ({
 	),
 }));
 
-function makeWork(overrides: Partial<Work> & { status: WorkStatus }): Work {
+function makeWork(
+	overrides: Partial<WorkListItem> & { status: WorkStatus },
+): WorkListItem {
 	return {
 		id: "work-1",
 		type: "story",
 		title: "Work",
-		created_at: "2026-01-01T00:00:00Z",
 		updated_at: "2026-01-01T00:00:00Z",
 		...overrides,
 	};
 }
 
 /** Renders the badge for `work`; `others` populates the store's work list. */
-function renderBadge(work: Work, others: Work[] = []) {
+function renderBadge(work: WorkListItem, others: WorkListItem[] = []) {
 	useWorkStore.setState({ works: [work, ...others] });
 	const queryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false } },

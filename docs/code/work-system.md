@@ -263,6 +263,12 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `agent_role_get` | Get role details including system prompt |
 | `agent_role_reset_defaults` | Reset to default roles |
 
+Two of these return less than their name suggests: `work_list` omits the body and
+`agent_role_list` omits the role prompt, so that listing cannot pull someone
+else's instructions into the agent's context. That is a containment rule, not a
+size one, and it is stated with the rest of the tool shapes in
+[api.md](../projects/api.md#security-prompt-injection-prevention).
+
 ### MCP Server Architecture
 
 ```
@@ -667,18 +673,21 @@ are the same units added the same way. Where those units come from is [Usage
 Reporting](agent-integration.md#usage-reporting); what a user sees of them is
 [usage-display-ui.md](../usage-display-ui.md).
 
-**It rides on the detail, never on `Work`.** `Work` is the one shape the work
-list and the work detail share, so a `Usage` field on it would make every row of
-a global list carry a subtree aggregation. The field lives on
-`rpc.WorkDetailSubscribeResult` and on the `work.detail.changed` notification
-instead, and a test in `server/rpc/work_usage_test.go` holds the list to that.
+**It rides on the detail, never on `Work`.** `Work` is the record the store
+holds, while a usage figure is produced by walking every session in the item's
+subtree — a `Usage` field on it would hand that walk to every reader of a work
+item, `Store.List` first among them, which `AggregateUsage` itself calls to find
+the subtree. The field lives on `rpc.WorkDetailSubscribeResult` and on the
+`work.detail.changed` notification instead, and the list is held to it by
+`server/rpc/work_list_item_test.go`, which pins a row's fields as an exact set:
+widening `WorkListItem` to carry an aggregation fails there.
 
 Four facts go out:
 
 | Field | Why it is on the wire |
 |---|---|
 | `own` | the work's own session lives in the work's worktree, which is not necessarily the active one — reaching its usage from the work detail would mean a second, cross-worktree session subscription |
-| `total` | usage is not on `Work`, by the rule just above, so the client holds no consumption figure for any work item but the one it has open — it cannot sum its own children even though it has them |
+| `total` | usage is not on the list row, by the rule just above, so the client holds no consumption figure for any work item but the one it has open — it cannot sum its own children even though it has them |
 | `descendant_count` | same reason; it is also what decides whether a total is worth showing, a question that must **not** be answered by comparing `total` against `own` — that would make a column appear the moment a child's first turn lands |
 | `unpriced_session_count` | how many sessions in the subtree spent tokens while their agent reported no price. A tree mixing Claude (which prices) and Codex (which never does) would otherwise report a total that looks complete and is not |
 
@@ -757,18 +766,18 @@ case — the rules are in
 ```typescript
 // web/src/lib/workStore.ts
 interface WorkStore {
-    works: Work[];
+    works: WorkListItem[];
     isLoading: boolean;
     error: string | null;
 
-    setWorks: (works: Work[]) => void;
-    updateWorks: (updater: (old: Work[]) => Work[]) => void;
+    setWorks: (works: WorkListItem[]) => void;
+    updateWorks: (updater: (old: WorkListItem[]) => WorkListItem[]) => void;
     setError: (error: string) => void;
     reset: () => void;
 }
 
 // Collect active session IDs for routing
-export function collectWorkSessionIds(works: Work[]): Set<string> {
+export function collectWorkSessionIds(works: WorkListItem[]): Set<string> {
     const ids = new Set<string>();
     for (const w of works) {
         if (w.session_id) ids.add(w.session_id);
@@ -778,6 +787,33 @@ export function collectWorkSessionIds(works: Work[]): Set<string> {
 ```
 
 The frontend subscribes to work changes via WebSocket and updates the Zustand store. Session IDs are collected to route chat messages to the correct work context.
+
+### The List Holds Rows, the Detail Page Holds the Item
+
+The store holds `WorkListItem`, not `Work`. Which fields that leaves out, and
+why, is [api.md](../projects/api.md#work-list-rows-vs-work-detail); what the
+frontend adds is a type that keeps the two from drifting apart —
+`Work extends WorkListItem` (`web/src/types/work.ts`), so a field added to the
+item is detail-only until someone puts it on the row deliberately.
+
+The split decides where each surface reads from:
+
+- **`WorkDetailOverlay` reads the open item from `useWorkDetailSubscription`,
+  never from the store** — and not just the detail-only fields, but every field
+  of it, `title` and `status` included. Taking those off the row instead would
+  give one item on one page two sources that can disagree.
+- **It still reads the store for the parts of the page that are about *other*
+  work items**: the parent's title above the heading, a story's child rows, and
+  the child count the delete confirmation names. The detail subscription speaks
+  for one item, so those can only come from the list — and a row is all they
+  need.
+- **The list side never wanted the dropped fields.** `WorkListOverlay`,
+  `ProjectTab`'s `needs_input` dot, `WorktreeBadge` / `isWorktreeBound` and
+  `collectWorkSessionIds` read none of them, which is why narrowing the store
+  changed no behaviour.
+
+`work.create` and `work.start` still answer with a whole `Work`: like the
+detail, they speak for the single item they acted on.
 
 ### One Vocabulary for Work Status
 

@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useWorkStore } from "../lib/workStore";
 import { useWSStore } from "../lib/wsStore";
-import type { Work, WorkListChangedNotification } from "../types/work";
+import type { WorkListChangedNotification, WorkListItem } from "../types/work";
 import { useSubscription } from "./useSubscription";
 
 export function useWorkSubscription(enabled: boolean) {
@@ -50,18 +50,16 @@ export function useWorkSubscription(enabled: boolean) {
 		[setError],
 	);
 
-	const { refresh } = useSubscription<WorkListChangedNotification, Work[]>(
-		workListSubscribe,
-		workListUnsubscribe,
-		handleNotification,
-		{
-			enabled,
-			resubscribeOnWorktreeChange: false,
-			onSubscribed: setWorks,
-			onReset: reset,
-			onError: handleError,
-		},
-	);
+	const { refresh } = useSubscription<
+		WorkListChangedNotification,
+		WorkListItem[]
+	>(workListSubscribe, workListUnsubscribe, handleNotification, {
+		enabled,
+		resubscribeOnWorktreeChange: false,
+		onSubscribed: setWorks,
+		onReset: reset,
+		onError: handleError,
+	});
 
 	return { refresh };
 }

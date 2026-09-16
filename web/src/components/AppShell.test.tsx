@@ -304,7 +304,6 @@ describe("AppShell cross-worktree navigation", () => {
 					title: "a task",
 					status: "in_progress",
 					session_id: "x",
-					created_at: "2024-01-01T00:00:00Z",
 					updated_at: "2024-01-01T00:00:00Z",
 				},
 			],

@@ -46,7 +46,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | wsStore | WebSocket, RPC, subscriptions | Single hub for all communication |
 | sessionStore | Chat session list | State/Actions interface split |
 | sessionDetailStore | The open session's own metadata | One session at a time, read through a selector that checks whose it is |
-| workStore | Work items | State/Actions interface split |
+| workStore | Work list rows | State/Actions interface split |
 | agentRoleStore | AI roles | State/Actions interface split |
 | agentOptionsStore | Selectable models and effort levels per agent | Fetched once per connection, not subscribed |
 | settingsStore | App settings, and why they are missing when they are | Holds the subscription's `refresh` too: the Retry is far below the hook that owns it |

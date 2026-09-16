@@ -32,10 +32,10 @@ import type {
 	SettingsSubscribeResult,
 } from "../types/settings";
 import type {
-	Work,
 	WorkDetailChangedNotification,
 	WorkDetailSubscribeResult,
 	WorkListChangedNotification,
+	WorkListItem,
 	WorkListSubscribeResult,
 } from "../types/work";
 import { getWebSocketUrl } from "../utils/config";
@@ -139,7 +139,7 @@ export interface WatchActions {
 	settingsUnsubscribe: (id: string) => Promise<void>;
 	workListSubscribe: (
 		callback: (params: WorkListChangedNotification) => void,
-	) => Promise<WatchSubscribeResult<Work[]>>;
+	) => Promise<WatchSubscribeResult<WorkListItem[]>>;
 	workListUnsubscribe: (id: string) => Promise<void>;
 	workDetailSubscribe: (
 		workId: string,

@@ -9,10 +9,11 @@ import (
 // Usage is what a work item has consumed: its own session's share, and the share
 // of the whole subtree beneath it.
 //
-// It belongs to a work item's *detail*, never to Work itself. Work is the one
-// shape the list and the detail share, so a field added there would make every
-// row of the work list carry a subtree aggregation — which is both the expensive
-// thing and the thing nobody asked for.
+// It belongs to a work item's *detail*, never to Work itself. Work is the record
+// the store holds; this is derived at read time by walking every session in the
+// subtree, which the store knows nothing about. A field here would put that walk
+// behind every reader of a Work — Store.List above all, which AggregateUsage
+// itself calls to find the subtree.
 //
 // No context window here, at any level: a window is a property of one live
 // conversation, and there is no meaning to the sum of several.

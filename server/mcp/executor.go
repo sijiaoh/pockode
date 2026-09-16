@@ -125,6 +125,55 @@ func (e *Executor) Execute(ctx context.Context, name string, args json.RawMessag
 	}
 }
 
+// workSummary is one entry of the work_list result: enough for the agent to
+// pick an item and walk the story/task tree, and nothing more.
+//
+// Body is left out to contain prompt injection, not to save bytes. A body is
+// user-authored instructions, so a list that carried them would let every
+// unrelated work item in the project speak into the agent's context on a call
+// the agent made to find one item. Reading a body has to be the deliberate act
+// of asking for that item — which is what work_get is. Same rule, same reason,
+// for agent_role_list and role_prompt; see the security section of
+// docs/projects/api.md. The saved context is real but incidental: do not let it
+// argue the field back in if a listing ever looks cheap enough.
+//
+// It is named apart from rpc.WorkListItem (server/rpc/types.go), and is
+// deliberately not that type. rpc.WorkListItem is the row the web list draws,
+// and its extra fields exist for the UI: session_id maps rows to the session
+// list, worktree feeds a badge, updated_at orders the closed group. None of them
+// mean anything to an agent, and sharing the type would let a field added for a
+// badge widen every agent's list output.
+type workSummary struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	ParentID    string `json:"parent_id,omitempty"`
+	AgentRoleID string `json:"agent_role_id,omitempty"`
+	Status      string `json:"status"`
+	Title       string `json:"title"`
+}
+
+// workDetail is what work_get returns: the summary plus the one field a summary
+// is not allowed to carry. It is built from the summary rather than beside it,
+// so that relationship holds by construction and the two shapes cannot drift
+// into disagreeing about the same field.
+type workDetail struct {
+	workSummary
+	Body string `json:"body,omitempty"`
+}
+
+// newWorkSummary narrows a work item to its summary. Both tools go through here
+// so the narrowing is decided in one place.
+func newWorkSummary(w work.Work) workSummary {
+	return workSummary{
+		ID:          w.ID,
+		Type:        string(w.Type),
+		ParentID:    w.ParentID,
+		AgentRoleID: w.AgentRoleID,
+		Status:      string(w.Status),
+		Title:       w.Title,
+	}
+}
+
 func (e *Executor) workList(args json.RawMessage) (string, error) {
 	var params struct {
 		ParentID string `json:"parent_id"`
@@ -152,24 +201,9 @@ func (e *Executor) workList(args json.RawMessage) (string, error) {
 
 	// Always return JSON array for consistent parsing by the AI agent.
 	// Formatted text would risk prompt injection via user-supplied titles.
-	type workItem struct {
-		ID          string `json:"id"`
-		Type        string `json:"type"`
-		ParentID    string `json:"parent_id,omitempty"`
-		AgentRoleID string `json:"agent_role_id,omitempty"`
-		Status      string `json:"status"`
-		Title       string `json:"title"`
-	}
-	items := make([]workItem, len(works))
+	items := make([]workSummary, len(works))
 	for i, w := range works {
-		items[i] = workItem{
-			ID:          w.ID,
-			Type:        string(w.Type),
-			ParentID:    w.ParentID,
-			AgentRoleID: w.AgentRoleID,
-			Status:      string(w.Status),
-			Title:       w.Title,
-		}
+		items[i] = newWorkSummary(w)
 	}
 	b, err := json.Marshal(items)
 	if err != nil {
@@ -275,22 +309,8 @@ func (e *Executor) workGet(args json.RawMessage) (string, error) {
 		return "", userErrorf("work %s not found", params.ID)
 	}
 
-	type workDetail struct {
-		ID          string `json:"id"`
-		Type        string `json:"type"`
-		ParentID    string `json:"parent_id,omitempty"`
-		AgentRoleID string `json:"agent_role_id,omitempty"`
-		Status      string `json:"status"`
-		Title       string `json:"title"`
-		Body        string `json:"body,omitempty"`
-	}
 	b, err := json.Marshal(workDetail{
-		ID:          w.ID,
-		Type:        string(w.Type),
-		ParentID:    w.ParentID,
-		AgentRoleID: w.AgentRoleID,
-		Status:      string(w.Status),
-		Title:       w.Title,
+		workSummary: newWorkSummary(w),
 		Body:        w.Body,
 	})
 	if err != nil {

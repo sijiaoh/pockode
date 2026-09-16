@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -204,6 +206,119 @@ func TestWorkList_FilterByParentID(t *testing.T) {
 	}
 }
 
+// summaryKeys is the exact key set a work_list entry carries. parent_id is
+// omitempty, so a task carries it and a story does not.
+//
+// Pinned exactly rather than as a "must not contain body" check: the thing that
+// would go wrong here is someone widening workSummary — deciding an agent also
+// wants the worktree, say — and a deny-list would wave that through. It is also
+// why the story/task expectation is driven off the item's type rather than off
+// which keys the entry happens to have.
+func summaryKeys(isTask bool) []string {
+	keys := []string{"id", "type", "agent_role_id", "status", "title"}
+	if isTask {
+		keys = append(keys, "parent_id")
+	}
+	return keys
+}
+
+// assertKeys compares the object's key set against want, order-insensitively.
+func assertKeys(t *testing.T, label string, obj map[string]json.RawMessage, want []string) {
+	t.Helper()
+	got := slices.Sorted(maps.Keys(obj))
+	want = slices.Sorted(slices.Values(want))
+	if !slices.Equal(got, want) {
+		t.Errorf("%s keys = %v, want %v", label, got, want)
+	}
+}
+
+// decodeObject decodes a tool result that is a single JSON object.
+func decodeObject(t *testing.T, text string) map[string]json.RawMessage {
+	t.Helper()
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &obj); err != nil {
+		t.Fatalf("decode %q: %v", text, err)
+	}
+	return obj
+}
+
+// stringField decodes one string-valued key of a decoded object.
+func stringField(t *testing.T, obj map[string]json.RawMessage, key string) string {
+	t.Helper()
+	raw, ok := obj[key]
+	if !ok {
+		t.Fatalf("missing key %q", key)
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("decode %s: %v", key, err)
+	}
+	return v
+}
+
+// TestWorkList_CarriesOnlySummaryFields is the guard for the summary/detail
+// split: work_list is the call an agent makes to find one item, so it must not
+// hand over the bodies of all the others. See workSummary.
+func TestWorkList_CarriesOnlySummaryFields(t *testing.T) {
+	ts := newTestExec(t)
+
+	storyResult := callTool(t, ts.exec, "work_create", map[string]string{
+		"type": "story", "title": "Parent Story", "body": "Long prose the list must not carry",
+		"agent_role_id": ts.roleID,
+	})
+	storyID := extractID(t, toolText(storyResult))
+	callTool(t, ts.exec, "work_create", map[string]string{
+		"type": "task", "parent_id": storyID, "title": "Child Task",
+		"body": "More prose", "agent_role_id": ts.roleID,
+	})
+	// Starting the story gives it a session_id and moves it to in_progress, so
+	// the assertion covers a running work item and not only a freshly created
+	// one — session_id is exactly the kind of field that could leak into a summary.
+	callTool(t, ts.exec, "work_start", map[string]string{"id": storyID})
+
+	text := toolText(callTool(t, ts.exec, "work_list", map[string]string{}))
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &entries); err != nil {
+		t.Fatalf("decode %q: %v", text, err)
+	}
+
+	byTitle := make(map[string]map[string]json.RawMessage, len(entries))
+	for _, entry := range entries {
+		byTitle[stringField(t, entry, "title")] = entry
+	}
+	for title, isTask := range map[string]bool{"Parent Story": false, "Child Task": true} {
+		entry, ok := byTitle[title]
+		if !ok {
+			t.Fatalf("work_list is missing %q; got %q", title, text)
+		}
+		assertKeys(t, title, entry, summaryKeys(isTask))
+	}
+}
+
+// TestWorkGet_DetailIsSummaryPlusBody pins the other half of the split: what
+// work_list withholds must still be reachable for the one item the agent named.
+func TestWorkGet_DetailIsSummaryPlusBody(t *testing.T) {
+	ts := newTestExec(t)
+
+	createResult := callTool(t, ts.exec, "work_create", map[string]string{
+		"type": "story", "title": "My Story", "body": "Details here", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(createResult))
+
+	result := callTool(t, ts.exec, "work_get", map[string]string{"id": id})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	detail := decodeObject(t, toolText(result))
+	assertKeys(t, "detail", detail, append(summaryKeys(false), "body"))
+
+	for key, want := range map[string]string{"title": "My Story", "body": "Details here"} {
+		if got := stringField(t, detail, key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
 // --- Tool: work_update ---
 
 func TestWorkUpdate(t *testing.T) {
@@ -238,28 +353,6 @@ func TestWorkUpdate_NotFound(t *testing.T) {
 }
 
 // --- Tool: work_get ---
-
-func TestWorkGet(t *testing.T) {
-	ts := newTestExec(t)
-
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "My Story", "body": "Details here", "agent_role_id": ts.roleID,
-	})
-	id := extractID(t, toolText(createResult))
-
-	result := callTool(t, ts.exec, "work_get", map[string]string{"id": id})
-
-	if result.IsError {
-		t.Fatalf("unexpected error: %s", toolText(result))
-	}
-	text := toolText(result)
-	if !strings.Contains(text, "My Story") {
-		t.Errorf("result = %q, want to contain title", text)
-	}
-	if !strings.Contains(text, "Details here") {
-		t.Errorf("result = %q, want to contain body", text)
-	}
-}
 
 func TestWorkGet_NotFound(t *testing.T) {
 	ts := newTestExec(t)

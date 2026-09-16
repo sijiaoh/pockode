@@ -1,15 +1,15 @@
 import { create } from "zustand";
-import type { Work } from "../types/work";
+import type { WorkListItem } from "../types/work";
 
 interface WorkState {
-	works: Work[];
+	works: WorkListItem[];
 	isLoading: boolean;
 	error: string | null;
 }
 
 interface WorkActions {
-	setWorks: (works: Work[]) => void;
-	updateWorks: (updater: (old: Work[]) => Work[]) => void;
+	setWorks: (works: WorkListItem[]) => void;
+	updateWorks: (updater: (old: WorkListItem[]) => WorkListItem[]) => void;
 	setError: (error: string) => void;
 	reset: () => void;
 }
@@ -27,7 +27,7 @@ export const useWorkStore = create<WorkStore>((set) => ({
 }));
 
 /** The only fields needed to walk a work up to its root. */
-type WorkNode = Pick<Work, "id" | "parent_id" | "status">;
+type WorkNode = Pick<WorkListItem, "id" | "parent_id" | "status">;
 
 /**
  * Whether a work's worktree is already decided and can no longer change.
@@ -38,12 +38,15 @@ type WorkNode = Pick<Work, "id" | "parent_id" | "status">;
  * rewrites every still-open descendant to match. So an open work is decided as
  * soon as its root has started, and undecided before that.
  */
-export function isWorktreeBound(works: Work[], work: WorkNode): boolean {
+export function isWorktreeBound(
+	works: WorkListItem[],
+	work: WorkNode,
+): boolean {
 	if (work.status !== "open") return true;
 	return findRootWork(works, work).status !== "open";
 }
 
-function findRootWork(works: Work[], work: WorkNode): WorkNode {
+function findRootWork(works: WorkListItem[], work: WorkNode): WorkNode {
 	const seen = new Set<string>([work.id]);
 	let current = work;
 	while (current.parent_id) {
@@ -58,7 +61,7 @@ function findRootWork(works: Work[], work: WorkNode): WorkNode {
 	return current;
 }
 
-export function collectWorkSessionIds(works: Work[]): Set<string> {
+export function collectWorkSessionIds(works: WorkListItem[]): Set<string> {
 	const ids = new Set<string>();
 	for (const w of works) {
 		if (w.session_id) ids.add(w.session_id);

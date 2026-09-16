@@ -25,7 +25,7 @@ type propertySchema struct {
 var toolDefinitions = []toolDefinition{
 	{
 		Name:        "work_list",
-		Description: "List work items (stories and tasks). Returns all work items, optionally filtered by parent_id.",
+		Description: "List work items (stories and tasks), optionally filtered by parent_id. Each item is a summary and does not include the body. Call work_get with an item's id to read its body.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{

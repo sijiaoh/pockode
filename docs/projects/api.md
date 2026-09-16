@@ -33,7 +33,7 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 
 ### Security: Prompt Injection Prevention
 
-`work_list` deliberately excludes `body` from its response. Work bodies contain user-authored instructions that could include adversarial prompts. By returning only metadata (id, type, status, title), listing is safe. The agent must call `work_get` to read a specific item's body, limiting exposure to one item at a time.
+`work_list` deliberately excludes `body` from its response. Work bodies contain user-authored instructions that could include adversarial prompts, so a listing that carried them would let every unrelated item in the project speak into the agent's context on a call it made to find one item. The summary it returns instead (shape in the table above) is metadata only, so listing is safe; reading a body has to be the deliberate act of naming that item, which is what `work_get` is. The narrowing lives in one place — `workSummary` / `newWorkSummary` in `server/mcp/executor.go`, which `work_get`'s reply also builds on, so the detail is the summary plus `body` by construction. (It is named apart from the WebSocket layer's `WorkListItem` below on purpose: that one is the web list's row and carries fields only the UI needs.)
 
 Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to retrieve it for a specific role.
 
@@ -67,7 +67,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.comment.update` | `WorkCommentUpdateParams` | `Comment` | Update a comment's body |
 | `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage}` | Subscribe to a single work item + comments + the token usage of its subtree ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) |
 | `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
-| `work.list.subscribe` | `SubscribeParams` | `{items: Work[]}` | Subscribe + get current snapshot |
+| `work.list.subscribe` | `SubscribeParams` | `{items: WorkListItem[]}` | Subscribe + get current snapshot ([what a row carries](#work-list-rows-vs-work-detail)) |
 | `work.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
 #### Agent Role
@@ -93,6 +93,7 @@ WorkReopenParams          { id }
 WorkCommentListParams     { work_id }
 WorkCommentUpdateParams   { id, body }
 WorkDetailSubscribeParams { id, work_id }
+WorkListItem              { id, type, parent_id?, agent_role_id?, title, status, session_id?, worktree?, updated_at }
 
 SubscribeParams           { id }   // the whole of a subscribe with no other arguments
 
@@ -102,6 +103,34 @@ AgentRoleDeleteParams   { id }
 ```
 
 Defined in `server/rpc/types.go`.
+
+### Work List Rows vs Work Detail
+
+`work.list.subscribe` carries `WorkListItem`, not the whole `Work`. Every
+subscriber holds the whole project's list, and a change to any one work item
+pushes that item's row to all of them, so a row carries only what drawing a row
+needs:
+
+| Field | Why the list needs it |
+|-------|----------------------|
+| `id` | identity |
+| `type` | story rows group task rows beneath them |
+| `parent_id` | builds that tree; also walks a work up to its root |
+| `agent_role_id` | the role name shown on the row |
+| `title`, `status` | the row itself |
+| `session_id` | the row's **Chat** shortcut, and how the session list learns which sessions belong to work |
+| `worktree` | the row's worktree badge (the list spans every worktree) |
+| `updated_at` | orders the closed group |
+
+`body`, `current_step` and `created_at` are **detail-only**: no row renders them,
+and `body` is unbounded user-authored prose — editing one work item's body would
+otherwise push the whole of it to every subscriber, including the clients looking
+at a different work item. A client that needs them subscribes to `work.detail`,
+which carries the full `Work`.
+
+The narrowing lives in one place, `rpc.NewWorkListItem`, so that what a row
+carries is decided once rather than at each producer. `rpc.NewSessionListItem`
+does the same for the session list, for the same reason.
 
 ### `work.start` Atomicity
 
@@ -161,7 +190,8 @@ Store (mutation)
 
 **Incremental** (method: `work.list.changed` or `agent_role.list.changed`):
 
-For `create` and `update`, the full object is included:
+For `create` and `update`, the item is included — a `WorkListItem` row for
+`work.list.changed`, the full object for `agent_role.list.changed`:
 ```json
 { "id": "<sub-id>", "operation": "create", "work": {...} }
 ```

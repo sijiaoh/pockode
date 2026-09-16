@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"sync/atomic"
 
+	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/work"
 )
 
@@ -57,16 +58,22 @@ func (w *WorkListWatcher) notifyChange(event work.ChangeEvent) {
 		return
 	}
 
+	// Built once and shared by pointer across subscribers: NotifyAll calls this
+	// per subscription, and the row is read-only from here on.
+	var row *rpc.WorkListItem
+	if event.Op != work.OperationDelete {
+		item := rpc.NewWorkListItem(event.Work)
+		row = &item
+	}
+
 	w.NotifyAll("work.list.changed", func(sub *Subscription) any {
 		params := workListChangedParams{
 			ID:        sub.ID,
 			Operation: string(event.Op),
+			Work:      row,
 		}
 		if event.Op == work.OperationDelete {
 			params.WorkID = event.Work.ID
-		} else {
-			item := event.Work
-			params.Work = &item
 		}
 		return params
 	})
@@ -86,11 +93,13 @@ func (w *WorkListWatcher) notifySync() {
 		return
 	}
 
+	items := rpc.NewWorkListItems(works)
+
 	w.NotifyAll("work.list.changed", func(sub *Subscription) any {
 		return workListSyncParams{
 			ID:        sub.ID,
 			Operation: "sync",
-			Works:     works,
+			Works:     items,
 		}
 	})
 
@@ -102,7 +111,7 @@ func (w *WorkListWatcher) notifySync() {
 //
 // Registered before the list is read, so a change landing between the two is
 // notified rather than lost; see BaseWatcher.AddSubscription.
-func (w *WorkListWatcher) Subscribe(id string, notifier Notifier) ([]work.Work, error) {
+func (w *WorkListWatcher) Subscribe(id string, notifier Notifier) ([]rpc.WorkListItem, error) {
 	sub := &Subscription{
 		ID:       id,
 		Notifier: notifier,
@@ -117,20 +126,20 @@ func (w *WorkListWatcher) Subscribe(id string, notifier Notifier) ([]work.Work, 
 		return nil, err
 	}
 
-	return works, nil
+	return rpc.NewWorkListItems(works), nil
 }
 
 type workListChangedParams struct {
-	ID        string     `json:"id"`
-	Operation string     `json:"operation"`
-	Work      *work.Work `json:"work,omitempty"`
-	WorkID    string     `json:"workId,omitempty"`
+	ID        string            `json:"id"`
+	Operation string            `json:"operation"`
+	Work      *rpc.WorkListItem `json:"work,omitempty"`
+	WorkID    string            `json:"workId,omitempty"`
 }
 
 type workListSyncParams struct {
-	ID        string      `json:"id"`
-	Operation string      `json:"operation"`
-	Works     []work.Work `json:"works"`
+	ID        string             `json:"id"`
+	Operation string             `json:"operation"`
+	Works     []rpc.WorkListItem `json:"works"`
 }
 
 // OnWorkChange implements work.OnChangeListener.

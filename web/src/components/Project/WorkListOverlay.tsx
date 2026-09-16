@@ -9,7 +9,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
-import type { Work, WorkStatus } from "../../types/work";
+import type { WorkListItem, WorkStatus } from "../../types/work";
 import BackToChatButton from "../ui/BackToChatButton";
 import { statusLabels } from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
@@ -33,7 +33,7 @@ export default function WorkListOverlay({
 	const roleNameMap = useRoleNameMap();
 
 	const tasksByParentId = useMemo(() => {
-		const map = new Map<string, Work[]>();
+		const map = new Map<string, WorkListItem[]>();
 		for (const w of works) {
 			if (w.type === "task" && w.parent_id) {
 				const list = map.get(w.parent_id);
@@ -48,7 +48,7 @@ export default function WorkListOverlay({
 	}, [works]);
 
 	const storyGroups = useMemo(() => {
-		const byStatus = new Map<WorkStatus, Work[]>();
+		const byStatus = new Map<WorkStatus, WorkListItem[]>();
 		for (const w of works) {
 			if (w.type !== "story") continue;
 			const list = byStatus.get(w.status);
@@ -64,10 +64,10 @@ export default function WorkListOverlay({
 				status,
 				stories:
 					status === "closed"
-						? [...(byStatus.get(status) as Work[])].sort((a, b) =>
+						? [...(byStatus.get(status) as WorkListItem[])].sort((a, b) =>
 								b.updated_at.localeCompare(a.updated_at),
 							)
-						: (byStatus.get(status) as Work[]),
+						: (byStatus.get(status) as WorkListItem[]),
 			}));
 	}, [works]);
 
@@ -131,8 +131,8 @@ const statusGroupOrder: WorkStatus[] = [
 
 interface StatusGroupProps {
 	status: WorkStatus;
-	stories: Work[];
-	tasksByParentId: Map<string, Work[]>;
+	stories: WorkListItem[];
+	tasksByParentId: Map<string, WorkListItem[]>;
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
@@ -195,8 +195,8 @@ function StoryRow({
 	onOpenWorkDetail,
 	onNavigateToSession,
 }: {
-	story: Work;
-	tasks: Work[] | undefined;
+	story: WorkListItem;
+	tasks: WorkListItem[] | undefined;
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
@@ -320,7 +320,7 @@ function TaskRow({
 	onOpenWorkDetail,
 	onNavigateToSession,
 }: {
-	task: Work;
+	task: WorkListItem;
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string, worktree: string) => void;

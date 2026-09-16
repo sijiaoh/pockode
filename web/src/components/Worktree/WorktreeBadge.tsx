@@ -4,11 +4,11 @@ import { useWorktreeDisplay } from "../../hooks/useWorktreeDisplay";
 import { buildNavigation } from "../../lib/navigation";
 import { isWorktreeBound, useWorkStore } from "../../lib/workStore";
 import { useIsGitRepo } from "../../lib/worktreeStore";
-import type { Work } from "../../types/work";
+import type { WorkListItem } from "../../types/work";
 
 interface Props {
 	/** The work whose worktree assignment is shown. */
-	work: Pick<Work, "id" | "parent_id" | "status" | "worktree">;
+	work: Pick<WorkListItem, "id" | "parent_id" | "status" | "worktree">;
 	/** Extra classes for layout, e.g. `max-w-*` in dense list rows. */
 	className?: string;
 }
