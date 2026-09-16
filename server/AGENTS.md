@@ -38,6 +38,7 @@ agent/                  # Agent 抽象（接口, 事件, 进程管理, 注册表
   codex/                # Codex CLI 实现
 agentrole/              # AgentRole 存储 + 类型定义
 apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代理共用）
+attachments/            # 按 session 存放事件里以 id 引用的内容（内容寻址）
 chat/                   # Chat 客户端
 command/                # 命令存储
 contents/               # 文件内容获取
@@ -80,6 +81,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `internal/proctree/proctree.go` | `tree_{unix,windows}.go` — 进程树终止：进程组 / Job Object，Windows 另加 `CREATE_NO_WINDOW` |
 | `git/command.go` | `terminate_{unix,windows}.go` — 超时的 git 怎么停：SIGTERM（git 自己清锁文件）/ 杀进程树（Windows 没有可发的停止请求）|
 | `agent/command.go` | `command_{unix,windows}.go` — AI CLI 的查找兜底目录 + `.cmd` 包装器的命令行构造 |
+| `agent/codex/view_image.go` | `fileuri_{unix,windows}.go` — `file://` URI 的 path 段转原生路径：Windows 上盘符是 URI 语法里的又一段，前导斜杠要去掉 |
 | `worktree/setup.go` | `hook_shell_{unix,windows}.go` — setup hook 的解释器（Windows 无 bash，探测 Git for Windows） |
 | `internal/pathutil/pathutil.go` | `equal_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
 | `internal/fsperm/fsperm.go` | `fsperm_{unix,windows}.go` — 0700/0600 mode 位 / 显式 DACL |
@@ -92,7 +94,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 |------|------|
 | `Equal(a, b)` | 原生路径相等判断（Windows 大小写不敏感）|
 | `ChildName(path, dir)` | path 是否在 dir 下，以及其下第一段的名字 |
-| `IsAnchored(path)` | 路径是否被 OS 锚定在别处——绝对路径，外加 `filepath.IsAbs` 判为相对的两种 Windows 形式：`\etc`（当前盘）和 `C:etc`（该盘的工作目录）。给「允许有意逃逸、但不能被锚在别处」的场景用（如 `../worktrees` 设置）|
+| `IsAnchored(path)` | 路径是否被 OS 锚定在别处——绝对路径，外加 `filepath.IsAbs` 判为相对的两种 Windows 形式：`\etc`（当前盘）和 `C:etc`（该盘的工作目录）。给「允许有意逃逸、但不能被锚在别处」的场景用（如 `../worktrees` 设置；codex 报的 `imageView` path 也用它判断要不要按 thread 的 cwd 解析）|
 | `TrimTildePrefix(path)` / `ExpandTilde(path)` | `~` 展开。`\` 只在 Windows 上算分隔符；Windows 上没有 shell 替我们展开 `~`，用户输入的 `~\projects` 是原样送达的 |
 
 参数一律是**原生路径**。外部来的值默认不是：git 的输出、手写的设置、我们自己 API 里的路径都用 `/`，进来时 `filepath.FromSlash`，出去时 `filepath.ToSlash`。

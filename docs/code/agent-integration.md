@@ -522,7 +522,12 @@ it, so a block naming a file still in the work directory is read through
 path of their own, but the call that produced one does, and its `file_path` is
 that file: the client fills it in for a lone file block, which is also what
 gives a Claude read the file name and the way over to the Files tab that a Codex
-read of the same file has.
+read of the same file has. Two conditions on that, both about not stating
+something untrue: only a `Read`, whose contract is that the result *is* what is
+in `file_path` — plenty of other tools take a path and answer with something
+else, and a chart drawn from a CSV is not the CSV — and only when the result
+holds exactly one file block, since one path cannot say which of several files
+it belongs to (`web/src/lib/contentBlocks.ts`).
 
 Width and height are read from the delivered bytes' own header rather than from
 the `tool_use_result` field Claude sends alongside: that field is one per frame
@@ -533,11 +538,26 @@ transcript re-lays-out under the reader as each one loads.
 
 ### Lifetime, and What a Fork Does
 
-Attachments live under the session's own directory, so `session.FileStore.Delete`
-removes them with it and there is no separate collector to get wrong.
+A store is the pair `(DataDir, SessionID)` resolved into a directory
+(`attachments.NewStore`, and `attachments.Dir` for the read side, which resolves
+the same directory without holding a store). Nothing else is state, and the rest
+of the lifetime falls out of that. The directory is created on the first write,
+so a session that is never handed content costs nothing. A session started
+without a data directory to keep anything in gets the zero value, which fails
+the write instead of returning an id that resolves to nothing, and the block
+then says `unavailable` like any other content that could not be kept.
 
-Forking needs one deliberate step to keep that true (`attachments.Clone`, called
-from `FileStore.CreateFork`). A fork copies the source's history records
+It also means the store is derived rather than carried, which is what makes a
+restart a non-event. The subprocess is restarted for a model change, an effort
+change and a resume ([Session Models](#session-models)), and every new process
+builds the store from the same session id, so it writes into the same directory:
+images from before the restart still resolve, and an image delivered a second
+time content-addresses onto the file already there.
+
+Deletion needs no step at all, for the same reason: the attachments are inside
+the session's directory, so `session.FileStore.Delete` takes them with it and
+there is no separate collector to get wrong. Forking needs one deliberate step
+to keep that true (`attachments.Clone`, called from `FileStore.CreateFork`). A fork copies the source's history records
 verbatim, and those records name content by id alone — so without cloning, every
 image in the fork would resolve into the *source's* directory and vanish the day
 that session was deleted. The clone hard-links rather than copies — the content
@@ -566,6 +586,48 @@ unknown one must not become one — and the attachment id goes through
 `contents.ValidatePath` inside a directory that holds nothing but
 content-addressed files. An attachment that no longer exists is an error reply,
 the same as a missing file is on `file.get`.
+
+### Why This Is Not the File Namespace
+
+The two routes look alike from the client — both answer with a
+`contents.FileContent`, and the same viewer draws either — and they are kept
+apart because of what each one lets a request name.
+
+The file namespace addresses a file by a path relative to the work directory,
+and `contents.ValidatePath` refuses absolute paths and `../`
+([file.md](../file.md#security)). Everything reachable through `file.get`, the
+download endpoint, the tree and search is therefore something the user could
+have browsed to. What an agent looks at is routinely not: Codex's `view_image`
+reads a screenshot out of `/tmp` as readily as out of the project, and Claude
+hands over content that was never a file on this machine at all. So the
+namespace cannot serve these, and the way to make it able to — letting a path
+be absolute — would turn every authenticated client into a reader of the whole
+filesystem for the sake of one image, in a validation shared by the writes and
+the deletes as well. Merging costs the containment of the file namespace and
+buys nothing, because the bytes have already been read by then.
+
+The bytes are secured on this side of the boundary instead. Codex's file is read
+once, at the moment the item reports it, by the server acting with the reach the
+agent already had; Claude's content was never on disk and arrives in hand. Both
+end up in the session's directory, and what a client is given afterwards is an
+id into that one directory. The path travels beside it as description — which
+file was looked at, and whether the Files tab can offer to open it — and is
+never a route to content ([One Route to the Bytes](#one-route-to-the-bytes)).
+
+The split holds on the other side too. A path names something that can change
+under the client, so a cache entry held under one is dropped when the Files tab
+writes, creates or deletes; an id names bytes that cannot change, so an
+attachment's entry is never invalidated by anything
+(`web/src/hooks/useAttachmentContent.ts` — which is also why a block that has
+only a path shares the Files tab's entry instead of getting one of its own).
+Saving an attachment does not reach the HTTP download route either, since there
+is no path to ask it with: the viewer saves the content it already fetched
+(`web/src/components/Chat/AttachmentPreview.tsx`).
+
+The one crossing is the `unavailable` fallback above, where a block naming a
+file that *is* in the work directory is read through `file.get`. That direction
+is fine precisely because it is the ordinary one — a work-directory-relative
+path, validated as every other file read is.
 
 ## Protocol Baselines
 
@@ -2560,7 +2622,8 @@ The following conditions send an `ErrorEvent` and end the session:
 | Subprocess lifecycle | `server/agent/process.go`, `server/internal/proctree/` |
 | Claude implementation | `server/agent/claude/claude.go` |
 | Claude background waits | `server/agent/claude/background_tasks.go`, `background_wait.go`, `background_loss.go` |
-| Codex implementation | `server/agent/codex/codex.go` (process, JSON-RPC, thread lifecycle), `events.go` (notification mapping), `approval.go` (server requests), `resume.go` (`codex_resume.json`) |
+| Codex implementation | `server/agent/codex/codex.go` (process, JSON-RPC, thread lifecycle), `events.go` (notification mapping), `approval.go` (server requests), `resume.go` (`codex_resume.json`), `view_image.go` (the image an `imageView` item names) |
+| Content blocks and attachments | `server/agent/content.go` (block shapes), `server/agent/claude/tool_result.go` (Claude's blocks), `server/attachments/attachments.go` (per-session store), `server/ws/rpc_attachment.go` (`attachment.get`), `web/src/lib/contentBlocks.ts`, `web/src/components/Chat/AttachmentStrip.tsx` |
 | Session forking | `server/agent/fork.go`, `claude/fork.go`, `codex/fork.go` |
 | Codex protocol drift check | `server/agent/codex/schema_integration_test.go` |
 | Fork capability over the wire | `server/ws/rpc_agent.go`, `web/src/lib/rpc/agent.ts`, `web/src/hooks/useForkSupport.ts` |

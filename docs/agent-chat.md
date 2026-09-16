@@ -285,6 +285,15 @@ do not have to be taken twice. Where the reservation cannot be exact — a diagr
 is whatever size it is — the restore window a page lands into absorbs the
 difference. It exists because this could not be made true of everything.
 
+An attachment in a tool result's strip needs no reservation of this kind,
+because its shape is known before its bytes are: the block carries the
+dimensions the server read out of the content's own header ([why they
+travel](code/agent-integration.md#what-is-kept-and-what-is-only-described)), and
+the placeholder and the loaded image are given the same box from them — a fixed
+height and that aspect ratio, with a default shape for content that reported
+none. So content fetched late, which it is (the read starts when the thumbnail
+scrolls into view), lands in space that was already the right size.
+
 ## Roads Not Taken
 
 **A virtual list.** `react-virtuoso` was introduced (`72f7236`) and taken out
