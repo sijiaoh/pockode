@@ -535,10 +535,10 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-60 controls render text, state no height of their own and carry no touch-target.
+57 controls render text, state no height of their own and carry no touch-target.
 
 32 state their own font size, so the height below is exact: 16–40px.
-28 inherit it, so the height below is an upper bound — the ancestor that
+25 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
 15 are under the 36px fine-pointer floor.
@@ -565,8 +565,8 @@ noticed. One representation with a test on it is the only thing that ends that.
   36px  exact  web/src/extensions/ExampleExtension/chatUI/CustomInputBar.tsx
   40px  bound  web/src/components/Chat/AskUserQuestionItem.tsx
   40px  bound  web/src/components/Chat/ForkOriginBanner.tsx
-  40px  bound  web/src/components/Chat/MessageItem.tsx ×6
-  40px  bound  web/src/components/Chat/TaskItem.tsx ×2
+  40px  bound  web/src/components/Chat/MessageItem.tsx ×4
+  40px  bound  web/src/components/Chat/TaskItem.tsx
   40px  bound  web/src/components/Project/WorkListOverlay.tsx
   40px  bound  web/src/components/Worktree/WorktreeSwitcher.tsx
   40px  bound  web/src/components/common/SidebarListItem.tsx
