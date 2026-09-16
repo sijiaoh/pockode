@@ -1,9 +1,9 @@
-import { useIsExpanded } from "@pockode/shared";
-import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll.ts";
+import { useIsExpanded } from "../hooks/useResponsive.ts";
 
-interface Props {
+export interface SheetProps {
 	title: string;
 	onClose: () => void;
 	/**
@@ -19,35 +19,6 @@ interface Props {
 	onSubmit?: (e: React.FormEvent) => void;
 	footer?: ReactNode;
 	children: ReactNode;
-}
-
-let openSheets = 0;
-let overflowBeforeFirstSheet = "";
-
-/**
- * Locks body scroll while any sheet is open.
- *
- * Counted rather than saved-and-restored per sheet because sheets replace one
- * another: the branch sheet swaps itself for the new-branch sheet in a single
- * commit. If the arriving sheet's effect ever ran before the leaving sheet's
- * cleanup, a per-sheet restore would record "hidden" as the value to go back
- * to and leave the page permanently unscrollable.
- */
-function useLockBodyScroll(): void {
-	useEffect(() => {
-		if (openSheets === 0) {
-			overflowBeforeFirstSheet = document.body.style.overflow;
-			document.body.style.overflow = "hidden";
-		}
-		openSheets += 1;
-
-		return () => {
-			openSheets -= 1;
-			if (openSheets === 0) {
-				document.body.style.overflow = overflowBeforeFirstSheet;
-			}
-		};
-	}, []);
 }
 
 /**
@@ -107,14 +78,14 @@ const FOCUSABLE_SELECTOR = [
  * to scroll and a long list (dozens of branches) runs off both edges of a
  * centered modal, taking the footer with it.
  */
-function Sheet({
+export function Sheet({
 	title,
 	onClose,
 	dismissible = true,
 	onSubmit,
 	footer,
 	children,
-}: Props) {
+}: SheetProps) {
 	const isExpanded = useIsExpanded();
 	const titleId = useId();
 	const asDrawer = !isExpanded;
@@ -145,9 +116,9 @@ function Sheet({
 		if (!sheet) return;
 		// A sheet can hold a dialog that portals out of its DOM yet stays a React
 		// child, so that dialog's keys bubble into this handler anyway; the
-		// force-push confirmation in `SyncSheet` does exactly that. The trap
-		// answers only for its own subtree — whatever is drawn on top of the sheet
-		// owns its own keys.
+		// force-push confirmation in `web`'s `SyncSheet` does exactly that. The
+		// trap answers only for its own subtree — whatever is drawn on top of
+		// the sheet owns its own keys.
 		if (e.target instanceof Node && !sheet.contains(e.target)) return;
 
 		const stops = Array.from(
@@ -226,7 +197,11 @@ function Sheet({
 				{/* Header. The close button is 36px of box with a 44px hit area laid
 				    over it (touch-target) and negative margins that let it eat into
 				    the header's padding, so a thumb gets its 44px without the header
-				    growing to fit a 44px box. */}
+				    growing to fit a 44px box. `touch-target` is a project `@utility`,
+				    so every stylesheet compiling this package has to declare it — an
+				    undeclared one keeps the class and emits nothing, leaving the
+				    button at 36px in that project only. Pinned by
+				    web/tests/responsiveTokens.test.ts. */}
 				<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
 					<h2
 						id={titleId}
@@ -241,7 +216,21 @@ function Sheet({
 						className="touch-target -my-1.5 -mr-1 flex size-9 shrink-0 items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary disabled:cursor-not-allowed disabled:opacity-50"
 						aria-label="Close"
 					>
-						<X className="h-5 w-5" />
+						{/* Inline rather than an icon component: shared's peer deps are
+						    React/ReactDOM/Zustand only, and an icon library pulled in here
+						    would land in both frontends' bundles. */}
+						<svg
+							className="h-5 w-5"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth={2}
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							viewBox="0 0 24 24"
+							aria-hidden="true"
+						>
+							<path d="M18 6 6 18M6 6l12 12" />
+						</svg>
 					</button>
 				</div>
 
@@ -257,5 +246,3 @@ function Sheet({
 		document.body,
 	);
 }
-
-export default Sheet;

@@ -1,9 +1,15 @@
+import { ConfirmDialog, Sheet } from "@pockode/shared";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import Sheet from "./Sheet";
+
+// `Sheet` itself lives in `packages/shared`, which has no vitest config of its
+// own and no other component with a test; adding a third test entry point is a
+// decision this move did not need to make. So the tests stay here, where the
+// eight call sites they are really about are, and import the component the way
+// those call sites do.
 
 /** The full-viewport flex container that parks the content box. */
 function overlay(): HTMLElement {
@@ -264,6 +270,82 @@ describe("Sheet", () => {
 
 			expect(screen.getByRole("heading", { name: "Confirm" })).toBeVisible();
 			expect(overlay()).toHaveFocus();
+		});
+	});
+
+	// Every overlay in `@pockode/shared` shares one counted lock, and these are
+	// the two ways a second overlay goes up while the first is still mounted.
+	// A per-overlay save-and-restore passes neither: the one that mounts second
+	// records "hidden" as the value to return to, and cleanups run child-first,
+	// so it writes that back last and the page stays unscrollable until a
+	// reload. Nothing on screen says so — the sheet is gone and the scroll is
+	// simply dead.
+	describe("body scroll lock", () => {
+		beforeEach(() => {
+			document.body.style.overflow = "";
+		});
+
+		it("restores the page when a dialog raised inside it closes with it", async () => {
+			const user = userEvent.setup();
+
+			function FormSheet() {
+				const [open, setOpen] = useState(true);
+				const [confirming, setConfirming] = useState(false);
+				if (!open) return null;
+				return (
+					<Sheet title="Add node" onClose={() => setOpen(false)}>
+						<button type="button" onClick={() => setConfirming(true)}>
+							Add
+						</button>
+						{confirming && (
+							<ConfirmDialog
+								title="Create directory?"
+								message="It does not exist yet."
+								onConfirm={() => {}}
+								onCancel={() => setConfirming(false)}
+							/>
+						)}
+					</Sheet>
+				);
+			}
+			render(<FormSheet />);
+
+			await user.click(screen.getByRole("button", { name: "Add" }));
+			expect(document.body.style.overflow).toBe("hidden");
+
+			// Escape reaches both: they listen on `document`, where stopping
+			// propagation does not stop a sibling listener on the same node.
+			await user.keyboard("{Escape}");
+
+			expect(document.body.style.overflow).toBe("");
+		});
+
+		it("keeps the page locked while one sheet replaces another", async () => {
+			const user = userEvent.setup();
+
+			function Replacing() {
+				const [step, setStep] = useState<"menu" | "confirm">("menu");
+				return (
+					<>
+						{step === "menu" && (
+							<Sheet title="Menu" onClose={() => {}}>
+								<button type="button" onClick={() => setStep("confirm")}>
+									Fork from here
+								</button>
+							</Sheet>
+						)}
+						{step === "confirm" && (
+							<Sheet title="Confirm" onClose={() => {}}>
+								<button type="button">Fork</button>
+							</Sheet>
+						)}
+					</>
+				);
+			}
+			render(<Replacing />);
+			await user.click(screen.getByRole("button", { name: "Fork from here" }));
+
+			expect(document.body.style.overflow).toBe("hidden");
 		});
 	});
 });

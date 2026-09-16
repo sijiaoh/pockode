@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useLockBodyScroll } from "../hooks/useLockBodyScroll.ts";
 
 export interface ConfirmDialogProps {
 	title: string;
@@ -30,6 +31,8 @@ export function ConfirmDialog({
 	const cancelButtonRef = useRef<HTMLButtonElement>(null);
 	const titleId = useId();
 
+	useLockBodyScroll();
+
 	useEffect(() => {
 		cancelButtonRef.current?.focus();
 
@@ -40,15 +43,8 @@ export function ConfirmDialog({
 			}
 		};
 
-		// Lock body scroll while dialog is open
-		const originalOverflow = document.body.style.overflow;
-		document.body.style.overflow = "hidden";
-
 		document.addEventListener("keydown", handleKeyDown);
-		return () => {
-			document.removeEventListener("keydown", handleKeyDown);
-			document.body.style.overflow = originalOverflow;
-		};
+		return () => document.removeEventListener("keydown", handleKeyDown);
 	}, [onCancel]);
 
 	const confirmButtonStyle =
