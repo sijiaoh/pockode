@@ -109,6 +109,19 @@ describe("AttachmentStrip", { timeout: 20_000 }, () => {
 		expect(screen.getAllByRole("img")).toHaveLength(2);
 	});
 
+	// The CLI's block type is what says a result is an image, so the server keeps
+	// one whose media type went missing. Refusing to draw it here would make that
+	// storing pointless — and the fetch names the content from its own bytes.
+	it("still draws an image the agent reported no type for", async () => {
+		getAttachment.mockResolvedValue(imageContent());
+
+		renderStrip([{ mime: "", size: 68, attachment_id: "abc" }]);
+
+		expect(
+			await screen.findByRole("img", {}, { timeout: 10_000 }),
+		).toHaveAttribute("src", `data:image/png;base64,${PNG_BASE64}`);
+	});
+
 	it("says why a file has nothing behind it instead of asking for it", async () => {
 		renderStrip([
 			{ mime: "application/pdf", size: 385, omitted: "binary" },

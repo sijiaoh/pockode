@@ -71,7 +71,14 @@ export function relativeToWorkDir(
 		return null;
 	}
 	if (!workDirParts.every((segment, i) => segment === parts[i])) return null;
-	return parts.slice(workDirParts.length).join("/");
+
+	const relativeParts = parts.slice(workDirParts.length);
+	// A `..` in the remainder walks back out, so the prefix match says nothing
+	// about where the path ends up. Every route into a file refuses those
+	// anyway; catching it here is what keeps the caller from offering a way
+	// over that the server will only reject.
+	if (relativeParts.includes("..")) return null;
+	return relativeParts.join("/");
 }
 
 /** Format a native file path as "filename (relative/dir)" for display */

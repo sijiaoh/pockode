@@ -147,6 +147,14 @@ describe("relativeToWorkDir", () => {
 		).toBeNull();
 	});
 
+	// The prefix matches, but the path leaves again — and an agent's path is
+	// whatever the agent wrote.
+	it("is null for a path that walks back out", () => {
+		expect(
+			relativeToWorkDir("/Users/me/project/../secrets/key.pem", posixWorkDir),
+		).toBeNull();
+	});
+
 	// Not a file the file namespace can serve, so there is nothing to open.
 	it("is null for the work directory itself, and with no work directory", () => {
 		expect(relativeToWorkDir(posixWorkDir, posixWorkDir)).toBeNull();

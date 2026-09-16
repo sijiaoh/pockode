@@ -813,6 +813,7 @@ describe("MessageList following the tail", () => {
 		const question = questionMessage("q1", "r1");
 		render(
 			<MessageList
+				sessionId="session-1"
 				messages={[...transcript, question]}
 				isProcessRunning={false}
 			/>,
@@ -891,6 +892,7 @@ describe("MessageList following the tail", () => {
 
 		rerender(
 			<MessageList
+				sessionId="session-1"
 				messages={[...transcript, userMessage("sent")]}
 				isProcessRunning={false}
 			/>,

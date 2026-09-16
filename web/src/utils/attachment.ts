@@ -9,6 +9,21 @@ export function isImageBlock(file: FileBlock): boolean {
 }
 
 /**
+ * Whether to try drawing the block as a picture.
+ *
+ * `isImageBlock` asks what the agent called the content; this asks what is
+ * worth attempting. A block reporting no type at all is included because the
+ * server stores an image whose media type went missing — the CLI's block type
+ * is what asserts it is one — and dropping it here would make that storing
+ * pointless. Nothing is risked by trying: the fetch types the content from its
+ * own bytes, so content that turns out not to be an image falls back to exactly
+ * the entry it would have been given without asking.
+ */
+export function previewsAsImage(file: FileBlock): boolean {
+	return file.mime === "" || isImageBlock(file);
+}
+
+/**
  * The file the block names, as a path the Files tab can open — null when it
  * names none, or one outside the work directory.
  *

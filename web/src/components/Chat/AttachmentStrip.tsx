@@ -8,6 +8,7 @@ import {
 	attachmentSource,
 	isImageBlock,
 	omittedLabel,
+	previewsAsImage,
 	workspacePath,
 } from "../../utils/attachment";
 import AttachmentChip from "./AttachmentChip";
@@ -50,7 +51,7 @@ function AttachmentStrip({ files, sessionId, onOpenFile }: Props) {
 					const key = `${file.attachment_id ?? file.path ?? file.mime}-${index}`;
 					const name = attachmentName(file);
 
-					if (source && isImageBlock(file)) {
+					if (source && previewsAsImage(file)) {
 						return (
 							<AttachmentThumb
 								key={key}

@@ -557,10 +557,10 @@ time content-addresses onto the file already there.
 Deletion needs no step at all, for the same reason: the attachments are inside
 the session's directory, so `session.FileStore.Delete` takes them with it and
 there is no separate collector to get wrong. Forking needs one deliberate step
-to keep that true (`attachments.Clone`, called from `FileStore.CreateFork`). A fork copies the source's history records
-verbatim, and those records name content by id alone — so without cloning, every
-image in the fork would resolve into the *source's* directory and vanish the day
-that session was deleted. The clone hard-links rather than copies — the content
+to keep that true (`attachments.Clone`, called from `FileStore.CreateFork`). A
+fork copies the source's history records verbatim, and those records name
+content by id alone — so without cloning, every image in the fork would resolve
+into the *source's* directory and vanish the day that session was deleted. The clone hard-links rather than copies — the content
 is immutable and addressed by its own hash, so the bytes outlive whichever
 session is deleted first and are freed when the last one naming them goes — and
 a clone that fails warns rather than aborting the fork, because a fork missing
