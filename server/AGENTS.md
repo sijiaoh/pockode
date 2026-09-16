@@ -122,10 +122,10 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
   | 来源 | 调用点 | 为什么 Windows 上做不到 |
   |---|---|---|
   | `internal/fifotest` | `agent/codex`×1、`contents`×1、`filetransfer`×2 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
-  | `internal/symlinktest` | `contents`×1、`filetransfer`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
+  | `internal/symlinktest` | `contents`×2、`filetransfer`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
   | `internal/unwritabletest` | `filestore`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
 
-  **合计 6~8 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 3+3，开了是 4+0。别按单行的数去对账，按合计。
+  **合计 6~9 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 3+4，开了是 4+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 

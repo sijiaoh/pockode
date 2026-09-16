@@ -1,17 +1,20 @@
 import { ConfirmDialog } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Download, Loader2, Pencil, Trash2 } from "lucide-react";
+import { Download, Loader2, Pencil, PencilLine, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFSWatch } from "../../hooks/useFSWatch";
 import { useCurrentWorktree, useRouteState } from "../../hooks/useRouteState";
+import { useTakenNames } from "../../hooks/useTakenNames";
 import { isAbortError } from "../../lib/api";
+import { applyEntryGone } from "../../lib/fileCache";
 import {
 	downloadFile,
 	LARGE_DOWNLOAD_WARNING_SIZE,
 } from "../../lib/fileDownload";
 import { overlayToNavigation } from "../../lib/navigation";
+import { isAlreadyExistsError } from "../../lib/rpc/file";
 import { useWSStore } from "../../lib/wsStore";
 import { isFileContent } from "../../types/contents";
 import { formatBytes } from "../../utils/bytes";
@@ -20,8 +23,9 @@ import {
 	getEditLabel,
 	getFileViewState,
 } from "../../utils/fileView";
-import { splitPath } from "../../utils/path";
+import { parentDir, splitPath } from "../../utils/path";
 import { BottomActionBar, ContentView, getActionIconButtonClass } from "../ui";
+import EntryNameDialog from "./EntryNameDialog";
 import FileBody from "./FileBody";
 
 interface Props {
@@ -36,8 +40,14 @@ function FileView({ path, onBack }: Props) {
 	const { sessionId } = useRouteState();
 	const { data, isLoading, error } = useContents(path);
 	const deleteFile = useWSStore((s) => s.actions.deleteFile);
+	const renameFile = useWSStore((s) => s.actions.renameFile);
 
 	const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+	// The only way to rename a file reached from search or from a chat link:
+	// neither has a tree row, and so neither has the row's `…` menu.
+	const [showRename, setShowRename] = useState(false);
+	const [isRenaming, setIsRenaming] = useState(false);
+	const [renameError, setRenameError] = useState<string | null>(null);
 	const [isDeleting, setIsDeleting] = useState(false);
 	const [showSizeConfirm, setShowSizeConfirm] = useState(false);
 	const [isDownloading, setIsDownloading] = useState(false);
@@ -45,6 +55,9 @@ function FileView({ path, onBack }: Props) {
 	// as two separate failures.
 	const [actionError, setActionError] = useState<string | null>(null);
 	const downloadAbort = useRef<AbortController | null>(null);
+	// Only fetched while the sheet is open: the folder around a file opened from
+	// search or a chat link has never been listed here.
+	const takenNames = useTakenNames(showRename ? parentDir(path) : null);
 
 	const file = data && isFileContent(data) ? data : null;
 	const state = useMemo(() => (file ? getFileViewState(file) : null), [file]);
@@ -59,6 +72,51 @@ function FileView({ path, onBack }: Props) {
 		);
 	}, [navigate, path, worktree, sessionId]);
 
+	const handleRename = useCallback(
+		async (name: string) => {
+			const dir = parentDir(path);
+			const newPath = dir ? `${dir}/${name}` : name;
+
+			setIsRenaming(true);
+			setRenameError(null);
+			try {
+				await renameFile(path, name);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				// A taken name is answerable by typing another one, so the sheet
+				// stays up holding it; anything else is about the request and leaves
+				// with the sheet for the banner.
+				if (isAlreadyExistsError(err)) {
+					setRenameError(message);
+				} else {
+					setShowRename(false);
+					setActionError(message);
+				}
+				return;
+			} finally {
+				setIsRenaming(false);
+			}
+
+			setShowRename(false);
+			applyEntryGone(queryClient, path);
+			// Followed to the new path rather than closed: the file is still there,
+			// and the user is still reading it. Replaced rather than pushed —
+			// nobody navigated, and the entry left behind would only send Back to
+			// a path that no longer resolves.
+			navigate(
+				overlayToNavigation(
+					{ type: "file", path: newPath },
+					worktree,
+					sessionId,
+					{
+						replace: true,
+					},
+				),
+			);
+		},
+		[renameFile, path, queryClient, navigate, worktree, sessionId],
+	);
+
 	const handleDeleteClick = useCallback(() => {
 		setActionError(null);
 		setShowDeleteConfirm(true);
@@ -70,7 +128,11 @@ function FileView({ path, onBack }: Props) {
 		setActionError(null);
 		try {
 			await deleteFile(path);
-			queryClient.invalidateQueries({ queryKey: contentsQueryKey("") });
+			// The same cache work the tree's delete does, through the same
+			// function: this used to invalidate the root listing instead of the
+			// one the file was actually in, which left the deleted row on screen
+			// in every folder but the root.
+			applyEntryGone(queryClient, path);
 			onBack();
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : "Failed to delete");
@@ -125,6 +187,8 @@ function FileView({ path, onBack }: Props) {
 		setActionError(null);
 		setShowSizeConfirm(false);
 		setShowDeleteConfirm(false);
+		setShowRename(false);
+		setRenameError(null);
 		setIsDownloading(false);
 		// Nor should a transfer keep running for a page nobody is looking at, or
 		// save the file the user has just navigated away from.
@@ -185,6 +249,23 @@ function FileView({ path, onBack }: Props) {
 						>
 							<Pencil className="h-4 w-4" aria-hidden="true" />
 						</button>
+						{/* A different pencil from Edit's on purpose: the two sit side by
+						    side, and one changes the contents while the other changes the
+						    name. */}
+						<button
+							type="button"
+							onClick={() => {
+								setActionError(null);
+								setRenameError(null);
+								setShowRename(true);
+							}}
+							disabled={isDeleting || isRenaming}
+							className={getActionIconButtonClass(!isDeleting && !isRenaming)}
+							aria-label="Rename"
+							title="Rename"
+						>
+							<PencilLine className="h-4 w-4" aria-hidden="true" />
+						</button>
 						<button
 							type="button"
 							onClick={handleDownloadClick}
@@ -216,6 +297,19 @@ function FileView({ path, onBack }: Props) {
 						</button>
 					</div>
 				</BottomActionBar>
+			)}
+			{showRename && (
+				<EntryNameDialog
+					mode="rename"
+					type="file"
+					dir={parentDir(path)}
+					currentName={fileName}
+					takenNames={takenNames}
+					submitting={isRenaming}
+					serverError={renameError}
+					onCancel={() => setShowRename(false)}
+					onSubmit={handleRename}
+				/>
 			)}
 			{showDeleteConfirm && (
 				<ConfirmDialog

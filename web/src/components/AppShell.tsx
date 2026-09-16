@@ -116,6 +116,10 @@ function AppShell() {
 			: null;
 
 	const activeFilePath = overlay?.type === "file" ? overlay.path : null;
+	// Coarse on purpose: whether the editor is on screen, not whether it has
+	// unsaved text. The dirty flag belongs to the editor, and lifting it here to
+	// gate one menu row would run a state line across the whole shell.
+	const activeFileEdit = overlay?.type === "file" && overlay.edit === true;
 	const activeCommitHash = overlay?.type === "commit" ? overlay.hash : null;
 
 	const {
@@ -339,6 +343,29 @@ function AppShell() {
 		[navigate, urlWorktree, currentSessionId],
 	);
 
+	/**
+	 * Follows the open file to a new path after it is renamed under the overlay.
+	 *
+	 * Apart from `replace`, this is `handleSelectFile` — but it must not be that
+	 * function, because the sidebar wraps its own copy in "and close the drawer",
+	 * which is the right answer to a tap on a row and the wrong one to a rename.
+	 * `replace` because the overlay is being corrected rather than opened: a
+	 * pushed entry would send Back to a path that no longer resolves.
+	 */
+	const handleRepointFile = useCallback(
+		(path: string) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "file", path },
+					urlWorktree,
+					currentSessionId,
+					{ replace: true },
+				),
+			);
+		},
+		[navigate, urlWorktree, currentSessionId],
+	);
+
 	const handleSelectCommit = useCallback(
 		(hash: string) => {
 			navigate(
@@ -552,6 +579,8 @@ function AppShell() {
 					activeCommitHash={activeCommitHash}
 					onSelectFile={handleSelectFile}
 					activeFilePath={activeFilePath}
+					activeFileEdit={activeFileEdit}
+					onRepointFile={handleRepointFile}
 					onCloseFile={handleCloseOverlay}
 					onOpenWorkList={handleOpenWorkList}
 					onOpenAgentRoleList={handleOpenAgentRoleList}

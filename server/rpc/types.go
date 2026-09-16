@@ -220,6 +220,14 @@ type FileDeleteParams struct {
 	Path string `json:"path"`
 }
 
+// FileRenameParams renames the entry at Path to NewName within the directory it
+// already sits in. NewName is a bare name rather than a destination path
+// because renaming is not moving; see contents.Rename.
+type FileRenameParams struct {
+	Path    string `json:"path"`
+	NewName string `json:"new_name"`
+}
+
 type FileSearchParams struct {
 	Query string `json:"query"`
 	// Mode is "name" (default) or "content".
