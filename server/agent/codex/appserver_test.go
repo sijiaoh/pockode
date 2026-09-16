@@ -562,7 +562,6 @@ func TestBookkeepingNotificationsAreDropped(t *testing.T) {
 		{"thread/started", `{"thread":{"id":"t"}}`},
 		{"thread/status/changed", `{"threadId":"t","status":{"type":"idle"}}`},
 		{"item/agentMessage/delta", `{"threadId":"t","turnId":"u","itemId":"m","delta":"par"}`},
-		{"item/commandExecution/outputDelta", `{"threadId":"t","turnId":"u","itemId":"e","chunk":"aGk="}`},
 		{"item/reasoning/textDelta", `{"threadId":"t","turnId":"u","itemId":"r","delta":"thinking"}`},
 		{"turn/diff/updated", `{"threadId":"t","turnId":"u","diff":""}`},
 		{"account/rateLimits/updated", `{"rateLimits":{"limitId":"codex"}}`},
@@ -1487,5 +1486,124 @@ func TestSendInterrupt_WaitingStopIsRetiredByANewPrompt(t *testing.T) {
 		if req.Method == "turn/interrupt" {
 			t.Fatalf("the new prompt's turn was killed by an earlier idle stop: %s", req.Params)
 		}
+	}
+}
+
+// --- Live progress on a call that has not returned ---
+
+// The delta is genuine stdout, not a copy of something rendered elsewhere: it is
+// the only account of a long command while it runs.
+func TestCommandOutputDelta_BecomesActivityOnTheCall(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/commandExecution/outputDelta", `{"threadId":"t","turnId":"u","itemId":"exec-1","delta":"building...\n"}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	activity, ok := events[0].(agent.ToolActivityEvent)
+	if !ok {
+		t.Fatalf("expected a ToolActivityEvent, got %T", events[0])
+	}
+	if activity.ToolUseID != "exec-1" || activity.OutputDelta != "building...\n" {
+		t.Errorf("unexpected activity: %+v", activity)
+	}
+	if activity.Activity != "" {
+		t.Errorf("a stdout chunk is not a status line, got %q", activity.Activity)
+	}
+}
+
+func TestMCPToolProgress_BecomesActivityOnTheCall(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/mcpToolCall/progress", `{"threadId":"t","turnId":"u","itemId":"mcp-1","message":"fetching page 2 of 9"}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	activity := events[0].(agent.ToolActivityEvent)
+	if activity.ToolUseID != "mcp-1" || activity.Activity != "fetching page 2 of 9" {
+		t.Errorf("unexpected activity: %+v", activity)
+	}
+}
+
+// Nothing to report is not something to report: an empty chunk or a progress
+// frame for no item would put a blank line under a running call.
+func TestLiveProgress_EmptyFramesProduceNothing(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/commandExecution/outputDelta", `{"threadId":"t","turnId":"u","itemId":"exec-1","delta":""}`)
+	sess.notify("item/commandExecution/outputDelta", `{"threadId":"t","turnId":"u","itemId":"","delta":"orphan"}`)
+	sess.notify("item/mcpToolCall/progress", `{"threadId":"t","turnId":"u","itemId":"mcp-1","message":""}`)
+	sess.notify("item/mcpToolCall/progress", `not json`)
+
+	if events := drainEvents(sess.events); len(events) != 0 {
+		t.Errorf("expected no events, got %v", events)
+	}
+}
+
+// Codex's own parse of the command travels as data, because it is a better
+// source for a row's title than re-guessing from the command string — and where
+// a title is drawn is not the server's decision.
+func TestItemStarted_CommandExecutionCarriesCommandActions(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/started", `{"threadId":"t","turnId":"u","startedAtMs":1,"item":{
+		"type":"commandExecution","id":"exec-1","command":"rg -n foo src","cwd":"/tmp/work","status":"inProgress",
+		"commandActions":[{"type":"search","command":"rg -n foo src","query":"foo","path":"src"}]}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	var input struct {
+		CommandActions []struct {
+			Type  string `json:"type"`
+			Query string `json:"query"`
+		} `json:"command_actions"`
+	}
+	if err := json.Unmarshal(events[0].(agent.ToolCallEvent).ToolInput, &input); err != nil {
+		t.Fatalf("tool input is not an object: %v", err)
+	}
+	if len(input.CommandActions) != 1 || input.CommandActions[0].Type != "search" || input.CommandActions[0].Query != "foo" {
+		t.Errorf("command actions did not survive: %+v", input.CommandActions)
+	}
+}
+
+// The exit code and the duration are figures Codex reports; folded into prose
+// they can only ever be printed, never rendered.
+func TestItemCompleted_CommandExecutionCarriesExitCodeAndDuration(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{
+		"type":"commandExecution","id":"e","status":"failed","exitCode":2,"durationMs":1234,"aggregatedOutput":"boom\n"}}`)
+
+	result := drainEvents(sess.events)[0].(agent.ToolResultEvent)
+	if result.ExitCode == nil || *result.ExitCode != 2 {
+		t.Errorf("ExitCode = %v, want 2", result.ExitCode)
+	}
+	if result.DurationMs != 1234 {
+		t.Errorf("DurationMs = %d, want 1234", result.DurationMs)
+	}
+}
+
+func TestItemCompleted_MCPToolCallCarriesDuration(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{
+		"type":"mcpToolCall","id":"m","server":"srv","tool":"go","status":"completed","durationMs":42,
+		"arguments":{},"result":{"content":[{"type":"text","text":"ok"}]}}}`)
+
+	result := drainEvents(sess.events)[0].(agent.ToolResultEvent)
+	if result.DurationMs != 42 {
+		t.Errorf("DurationMs = %d, want 42", result.DurationMs)
 	}
 }

@@ -1,9 +1,11 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	applyServerEvent,
+	applyToolActivitySnapshot,
 	closePreviousTurn,
 	isBackReference,
 	isTurnTerminal,
+	type NormalizedEvent,
 	normalizeEvent,
 	prependHistoryPage,
 	readHistorySeq,
@@ -115,6 +117,40 @@ const {
 	chatMessagesUnsubscribe,
 } = useWSStore.getState().actions;
 
+/** One call's progress since the last frame, in the records' own semantics. */
+interface PendingActivity {
+	/** The newest one: each report replaces the last. */
+	activity?: string;
+	/** Every chunk since the last frame, in order. */
+	outputDelta?: string;
+}
+
+/**
+ * The most a call's un-flushed output may carry, in characters.
+ *
+ * The reducer keeps only the last lines of the accumulation anyway, so an older
+ * chunk that has not reached it yet is already destined to be dropped — this is
+ * only the ceiling for a tab that has been hidden long enough for "since the
+ * last frame" to mean an hour of a build's stdout.
+ */
+const MAX_PENDING_OUTPUT = 64 * 1024;
+
+function mergeActivity(
+	pending: Map<string, PendingActivity>,
+	event: Extract<NormalizedEvent, { type: "tool_activity" }>,
+): void {
+	const current = pending.get(event.toolUseId) ?? {};
+	if (event.activity) current.activity = event.activity;
+	if (event.outputDelta) {
+		const combined = (current.outputDelta ?? "") + event.outputDelta;
+		current.outputDelta =
+			combined.length > MAX_PENDING_OUTPUT
+				? combined.slice(-MAX_PENDING_OUTPUT)
+				: combined;
+	}
+	pending.set(event.toolUseId, current);
+}
+
 /**
  * The record a page opens on, when all it does is end a turn. The turn it ended
  * is the one the page below trails off on, so this page cannot use it — only the
@@ -206,31 +242,82 @@ export function useChatMessages({
 	// is the only way out.
 	const isSessionActivated = sessionDetail?.activated ?? false;
 
-	const handleNotification = useCallback((notification: ServerNotification) => {
-		const seq = readHistorySeq(notification);
-		// Already on screen: this record came back in the history page too, and
-		// applying it again would put a second copy of the message in the
-		// transcript. Only a record the page actually reaches is skipped — seqs
-		// grow with the session, so anything newer is a record the page never had.
-		// A record with no seq is not addressable at all (never persisted, or a
-		// server too old to say), so it cannot be matched against the page and is
-		// applied — the duplicate the whole subscription has always tolerated.
-		if (
-			seq !== undefined &&
-			newestHistorySeqRef.current !== undefined &&
-			seq <= newestHistorySeqRef.current
-		) {
-			return;
-		}
+	// What the calls in flight have reported since the last animation frame. A
+	// chatty build's `output_delta` arrives faster than the screen refreshes, and
+	// applying each one would re-render the transcript per line of stdout.
+	//
+	// Held merged, one entry per call, rather than as a queue of records: it is
+	// the records' own semantics — the activity is a latest value, the deltas
+	// accumulate — and it is what bounds this while nothing is flushing it.
+	// `requestAnimationFrame` does not fire in a hidden tab, and a phone spends
+	// most of a long build with the browser in the background; a queue would
+	// grow with the output, a merge grows with the number of live calls.
+	const pendingActivityRef = useRef(new Map<string, PendingActivity>());
+	const activityFrameRef = useRef<number | undefined>(undefined);
 
-		setIsProcessRunning(notification.type !== "process_ended");
-
-		if (isBackReference(notification)) {
-			backReferencesRef.current.push(notification);
-		}
-		const event = normalizeEvent(notification);
-		setMessages((prev) => applyServerEvent(prev, event, seq));
+	const flushActivity = useCallback(() => {
+		activityFrameRef.current = undefined;
+		const pending = pendingActivityRef.current;
+		if (pending.size === 0) return;
+		pendingActivityRef.current = new Map();
+		setMessages((prev) =>
+			[...pending].reduce(
+				(acc, [toolUseId, merged]) =>
+					applyServerEvent(acc, {
+						type: "tool_activity",
+						toolUseId,
+						...merged,
+					}),
+				prev,
+			),
+		);
 	}, []);
+
+	useEffect(() => {
+		return () => {
+			if (activityFrameRef.current !== undefined) {
+				cancelAnimationFrame(activityFrameRef.current);
+			}
+		};
+	}, []);
+
+	const handleNotification = useCallback(
+		(notification: ServerNotification) => {
+			const seq = readHistorySeq(notification);
+			// Already on screen: this record came back in the history page too, and
+			// applying it again would put a second copy of the message in the
+			// transcript. Only a record the page actually reaches is skipped — seqs
+			// grow with the session, so anything newer is a record the page never had.
+			// A record with no seq is not addressable at all (never persisted, or a
+			// server too old to say), so it cannot be matched against the page and is
+			// applied — the duplicate the whole subscription has always tolerated.
+			if (
+				seq !== undefined &&
+				newestHistorySeqRef.current !== undefined &&
+				seq <= newestHistorySeqRef.current
+			) {
+				return;
+			}
+
+			setIsProcessRunning(notification.type !== "process_ended");
+
+			if (isBackReference(notification)) {
+				backReferencesRef.current.push(notification);
+			}
+			const event = normalizeEvent(notification);
+			if (event.type === "tool_activity") {
+				mergeActivity(pendingActivityRef.current, event);
+				if (activityFrameRef.current === undefined) {
+					activityFrameRef.current = requestAnimationFrame(flushActivity);
+				}
+				return;
+			}
+			// Live, so a call this client watched start may draw a stopwatch — a
+			// replayed one has no honest clock to draw from.
+			setMessages((prev) => applyServerEvent(prev, event, seq, { live: true }));
+		},
+		[flushActivity],
+	);
 
 	// Reset when the session changes. During render rather than in an effect: an
 	// effect runs after the render that already carries the new session id has
@@ -255,6 +342,8 @@ export function useChatMessages({
 		processGoneRef.current = false;
 		isLoadingMoreRef.current = false;
 		historyGenerationRef.current++;
+		// Progress held for the next frame belongs to the session being left.
+		pendingActivityRef.current.clear();
 	}
 
 	// The transcript's own subscription, opened through the common layer like
@@ -295,13 +384,24 @@ export function useChatMessages({
 			boundaryTerminalRef.current = leadingTurnTerminal(initial.history);
 			newestHistorySeqRef.current = newestSeq(initial.history);
 			processGoneRef.current = initial.state === "ended";
+			// Progress for the transcript being replaced.
+			pendingActivityRef.current.clear();
 			const replayed = replayHistory(initial.history);
 			// After server restart, history won't contain process_ended events
 			// for processes that were killed. Use the authoritative process
 			// state instead — older pages get the same treatment from
 			// `processGoneRef` as they are paged in.
+			const settled = processGoneRef.current
+				? settleAfterProcessGone(replayed)
+				: replayed;
+			// What the calls still in flight last reported. History carries none —
+			// a `tool_activity` is never recorded — so this is the whole of what a
+			// client subscribing mid-run knows about a background task that started
+			// half an hour ago.
 			setMessages(
-				processGoneRef.current ? settleAfterProcessGone(replayed) : replayed,
+				initial.tool_activity
+					? applyToolActivitySnapshot(settled, initial.tool_activity)
+					: settled,
 			);
 			setIsLoadingHistory(false);
 		},

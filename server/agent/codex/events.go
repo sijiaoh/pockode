@@ -38,9 +38,7 @@ var ignoredNotifications = map[string]bool{
 
 	// Incremental copies of content that also arrives whole, on the
 	// item/completed of the same item.
-	"item/agentMessage/delta":           true,
-	"item/commandExecution/outputDelta": true,
-	"item/mcpToolCall/progress":         true,
+	"item/agentMessage/delta": true,
 	// Dead on this version: the schema says outright that the server no longer
 	// emits it.
 	"item/fileChange/outputDelta": true,
@@ -84,6 +82,12 @@ func (s *appSession) handleNotification(msg rpcMessage) {
 
 	case "item/completed":
 		s.handleItemCompleted(msg.Params)
+
+	case "item/commandExecution/outputDelta":
+		s.handleCommandOutputDelta(msg.Params)
+
+	case "item/mcpToolCall/progress":
+		s.handleMCPToolProgress(msg.Params)
 
 	case "thread/tokenUsage/updated":
 		// Usage accounting, not a transcript entry: it updates the session's
@@ -256,15 +260,26 @@ func (s *appSession) toolCallOf(item threadItem) (toolName string, toolInput jso
 		var ev struct {
 			Command string `json:"command"`
 			Cwd     string `json:"cwd"`
+			// CommandActions is Codex's own parse of the command: what each
+			// piped part of it does (read, listFiles, search, unknown) and to
+			// which path or query. Carried through as data rather than rendered
+			// here — it is a better source for a row's title than guessing from
+			// the command string, and where the title is drawn is the
+			// frontend's business.
+			CommandActions json.RawMessage `json:"commandActions"`
 		}
 		if err := json.Unmarshal(item.Raw, &ev); err != nil {
 			return "", nil, false
 		}
-		input, _ := json.Marshal(map[string]interface{}{
+		input := map[string]interface{}{
 			"command": ev.Command,
 			"cwd":     ev.Cwd,
-		})
-		return "Bash", input, true
+		}
+		if len(ev.CommandActions) > 0 && string(ev.CommandActions) != "null" {
+			input["command_actions"] = ev.CommandActions
+		}
+		encoded, _ := json.Marshal(input)
+		return "Bash", encoded, true
 
 	case "fileChange":
 		var ev struct {
@@ -339,6 +354,7 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 		var ev struct {
 			AggregatedOutput string `json:"aggregatedOutput"`
 			ExitCode         *int   `json:"exitCode"`
+			DurationMs       int64  `json:"durationMs"`
 			Status           string `json:"status"`
 		}
 		if err := json.Unmarshal(item.Raw, &ev); err != nil {
@@ -357,9 +373,15 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 			// empty result and no hint that the command did not succeed.
 			result = describeFailedCommand(ev.Status, ev.ExitCode)
 		}
+		// The exit code and the duration travel as figures beside the result
+		// rather than only inside describeFailedCommand's sentence: Codex
+		// reports them as data, and a number folded into prose cannot be
+		// rendered as anything else later.
 		s.emitEvent(agent.ToolResultEvent{
 			ToolUseID:         item.ID,
 			ToolResult:        result,
+			ExitCode:          ev.ExitCode,
+			DurationMs:        ev.DurationMs,
 			IsError:           failed,
 			ProviderMessageID: item.TurnID,
 		})
@@ -395,6 +417,44 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 	}
 }
 
+// handleCommandOutputDelta forwards the next chunk of a running command's
+// output.
+//
+// Safe to drop under load, and deliberately so: the whole output arrives again
+// on item/completed, so a lost delta costs a moment of liveness and nothing
+// else. That is also why it is not persisted — see agent.ToolActivityEvent.
+func (s *appSession) handleCommandOutputDelta(params json.RawMessage) {
+	var notif struct {
+		ItemID string `json:"itemId"`
+		Delta  string `json:"delta"`
+	}
+	if err := json.Unmarshal(params, &notif); err != nil {
+		s.log.Warn("failed to parse a command output delta", "error", err)
+		return
+	}
+	if notif.ItemID == "" || notif.Delta == "" {
+		return
+	}
+	s.emitEvent(agent.ToolActivityEvent{ToolUseID: notif.ItemID, OutputDelta: notif.Delta})
+}
+
+// handleMCPToolProgress forwards an MCP tool's own one-line account of what it
+// is doing.
+func (s *appSession) handleMCPToolProgress(params json.RawMessage) {
+	var notif struct {
+		ItemID  string `json:"itemId"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(params, &notif); err != nil {
+		s.log.Warn("failed to parse an MCP tool progress message", "error", err)
+		return
+	}
+	if notif.ItemID == "" || notif.Message == "" {
+		return
+	}
+	s.emitEvent(agent.ToolActivityEvent{ToolUseID: notif.ItemID, Activity: notif.Message})
+}
+
 const (
 	itemStatusCompleted = "completed"
 	itemStatusDeclined  = "declined"
@@ -421,8 +481,9 @@ func describeFailedPatch(status string) string {
 // `error` and the content in `result`, which follows MCP's own shape.
 func mcpToolResult(item threadItem) agent.ToolResultEvent {
 	var ev struct {
-		Status string `json:"status"`
-		Error  *struct {
+		Status     string `json:"status"`
+		DurationMs int64  `json:"durationMs"`
+		Error      *struct {
 			Message string `json:"message"`
 		} `json:"error"`
 		Result *struct {
@@ -456,6 +517,7 @@ func mcpToolResult(item threadItem) agent.ToolResultEvent {
 	return agent.ToolResultEvent{
 		ToolUseID:         item.ID,
 		ToolResult:        result,
+		DurationMs:        ev.DurationMs,
 		IsError:           ev.Status != itemStatusCompleted,
 		ProviderMessageID: item.TurnID,
 	}

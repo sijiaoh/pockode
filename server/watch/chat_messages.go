@@ -54,6 +54,26 @@ func (w *ChatMessagesWatcher) OnChatMessage(msg process.ChatMessage) {
 		return
 	}
 
+	// A losable event gives way rather than crowding out one that is not.
+	//
+	// tool_activity is the first high-frequency event Pockode forwards — a
+	// chatty command produces one per chunk of stdout — and the only one whose
+	// loss costs nothing: the whole output arrives again with the result, and a
+	// client that subscribes is handed the newest line
+	// (agent.EventType.Persisted). Everything else in this buffer happens once,
+	// and a dropped `done` leaves a finished turn drawn as running until the
+	// client resubscribes. Without a reserve, a burst of progress could evict
+	// one.
+	//
+	// Half the buffer is a reserve, not a tuned figure: it only engages once the
+	// consumer has fallen far behind, which is exactly when the cheapest thing
+	// to drop should be dropped.
+	if !msg.Event.EventType().Persisted() && len(w.msgCh) > cap(w.msgCh)/2 {
+		slog.Debug("dropped a live progress update to keep room for events that cannot be lost",
+			"sessionId", msg.SessionID, "queued", len(w.msgCh))
+		return
+	}
+
 	select {
 	case w.msgCh <- msg:
 	default:

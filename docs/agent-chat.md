@@ -59,7 +59,7 @@ the rest costs transport, parsing and memory for records nobody looks at.
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `state` |
+| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `state`, `tool_activity?` |
 | `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?` |
 
 - `history` is the page, **oldest record first**, each record stamped with its
@@ -76,6 +76,16 @@ the rest costs transport, parsing and memory for records nobody looks at.
   `before_seq` naming no record are both refused with an invalid-params error —
   answering an unusable cursor with the newest page would silently restart the
   client's scrollback from the bottom.
+
+- `tool_activity` is what each tool call still in flight last reported doing,
+  keyed by `tool_use_id`. It is not part of the page, because that kind of event
+  is never recorded — it is the latest value of something still changing
+  ([tool-call-model.md](tool-call-model.md#tool_activity-is-not-persisted)) — so a
+  client subscribing mid-run would otherwise see a call that has been running for
+  half an hour with nothing to say for itself. Absent when no call is in flight.
+  The subscription is registered before this snapshot is taken, so an activity
+  arriving in between is delivered twice rather than lost, and a latest value
+  delivered twice is harmless.
 
 `chat.messages.history` needs no subscription and cannot collide with one. An
 older page is settled history: append-only, so it can never change, and every
@@ -127,9 +137,9 @@ rule streaming uses, so a sentence — or a fenced code block — cut in two com
 back as one part.
 
 A turn is the *only* thing a boundary can split. Nothing else in the transcript
-spans more than one record: a Claude Task is one part where its call landed
-([code/frontend-state.md](code/frontend-state.md#task-parts)) and a work event is
-one message where it happened
+spans more than one record: a subagent Task is one tool-call part where its call
+landed ([code/frontend-state.md](code/frontend-state.md#tool-runs)) and a work
+event is one message where it happened
 ([code/work-system.md](code/work-system.md#rendering-in-the-transcript)), so
 neither can arrive as two halves needing to be folded back together. That is not
 an accident of how they happen to be rendered, it is a reason for rendering them

@@ -848,6 +848,15 @@ func requireFields(t *testing.T, event AgentEvent) {
 		requireNonEmpty(t, "ToolUseID", e.ToolUseID)
 	case ToolResultEvent:
 		requireNonEmpty(t, "ToolUseID", e.ToolUseID)
+	case ToolActivityEvent:
+		// The join is the whole of what makes a progress line worth sending: one
+		// that names no call says something is happening without saying what
+		// asked for it, and the adapters are meant to drop those rather than
+		// forward them.
+		requireNonEmpty(t, "ToolUseID", e.ToolUseID)
+		if e.Activity == "" && e.OutputDelta == "" {
+			t.Error("tool activity carries neither a status nor output")
+		}
 	case PermissionRequestEvent:
 		requireNonEmpty(t, "RequestID", e.RequestID)
 		requireNonEmpty(t, "ToolName", e.ToolName)

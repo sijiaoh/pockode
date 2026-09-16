@@ -98,6 +98,13 @@ const (
 	// directory to write it to. Distinct from the other two because nothing
 	// about the content itself is wrong: a retry may well produce it.
 	OmitUnavailable OmitReason = "unavailable"
+	// OmitNotFetched means the content was never read: the agent named a file
+	// and Pockode deliberately did not deliver it. A background task's log is
+	// what this exists for — it can be arbitrarily large, and the user asked to
+	// see the outcome, not to have the log pushed at them. Distinct from
+	// OmitUnavailable, which is a failure; this is a choice, and the path beside
+	// it is how the content can still be reached.
+	OmitNotFetched OmitReason = "not_fetched"
 )
 
 type Entry struct {

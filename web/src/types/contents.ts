@@ -6,7 +6,7 @@ export type Encoding = "text" | "base64" | "none";
  * produces (`FileBlock.omitted`), which is the same statement about the same
  * kind of thing — one vocabulary rather than two that drift.
  */
-export type OmitReason = "too_large" | "binary" | "unavailable";
+export type OmitReason = "too_large" | "binary" | "unavailable" | "not_fetched";
 
 export interface Entry {
 	name: string;

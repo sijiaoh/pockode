@@ -7,12 +7,15 @@ import {
 	parseCodexChanges,
 } from "../../lib/codexChanges";
 import { groupContentBlocks } from "../../lib/contentBlocks";
+import { CodeHighlighter } from "../../lib/shikiUtils";
 import { parseReadResult } from "../../lib/toolResultParser";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentBlock } from "../../types/content";
 import { GIT_STATUS_INFO } from "../../types/git";
-import { formatFilePath } from "../../utils/path";
+import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
+import { formatFilePath, relativeToWorkDir } from "../../utils/path";
 import { DiffViewer, FileContentDisplay } from "../ui";
+import { MarkdownContent } from "./MarkdownContent";
 
 const ansiUp = new AnsiUp();
 ansiUp.use_classes = true;
@@ -21,6 +24,8 @@ interface ToolResultDisplayProps {
 	toolName: string;
 	toolInput: unknown;
 	result: string;
+	/** Absent when the host cannot navigate to a file. */
+	onOpenFile?: (path: string) => void;
 	/**
 	 * The result in blocks, when the agent returned something that is not prose.
 	 * It then describes the whole result and `result` is empty, so it decides how
@@ -186,6 +191,104 @@ function TodoWriteResultDisplay({ input }: { input: TodoWriteInput }) {
 	);
 }
 
+/**
+ * How many files a search result is drawn as rows before the rest is left as
+ * text. A `Glob` over a large repository answers with thousands, and a row each
+ * is thousands of DOM nodes in a body nobody has finished reading; the ones
+ * past this are the ones a person was going to refine the search for anyway.
+ */
+const FILE_LIST_LIMIT = 100;
+
+/**
+ * A search's result is a list of files, and reading one is scanning for a
+ * name. Drawn as rows shortened against the work directory, each offering the
+ * way over to the Files tab — before this it was one long unwrapped line.
+ */
+function FileListDisplay({
+	result,
+	onOpenFile,
+}: {
+	result: string;
+	onOpenFile?: (path: string) => void;
+}) {
+	const workDir = useWSStore((s) => s.workDir);
+	const paths = useMemo(
+		() =>
+			result
+				.split("\n")
+				.map((line) => line.trim())
+				.filter((line) => line.length > 0),
+		[result],
+	);
+
+	// Grep answers with counts and matches too, depending on its mode; only a
+	// list of paths is a list of paths.
+	if (paths.length === 0 || paths.some((path) => path.includes(" "))) {
+		return (
+			<pre className="whitespace-pre-wrap text-th-text-muted">{result}</pre>
+		);
+	}
+
+	const shown = paths.slice(0, FILE_LIST_LIMIT);
+
+	return (
+		<div className="space-y-0.5">
+			{shown.map((path) => {
+				const relative = relativeToWorkDir(path, workDir);
+				return (
+					<div key={path} className="flex items-center gap-2">
+						<span className="min-w-0 flex-1 truncate text-th-text-primary">
+							{formatFilePath(path, workDir)}
+						</span>
+						{relative && onOpenFile && (
+							<button
+								type="button"
+								onClick={() => onOpenFile(relative)}
+								className="min-h-[36px] shrink-0 rounded px-2 text-th-accent pointer-coarse:min-h-11 hover:bg-th-overlay-hover"
+							>
+								Open
+							</button>
+						)}
+					</div>
+				);
+			})}
+			{paths.length > shown.length && (
+				<p className="text-th-text-muted">
+					and {paths.length - shown.length} more
+				</p>
+			)}
+		</div>
+	);
+}
+
+/**
+ * Whatever a tool Pockode has no view for answered with.
+ *
+ * JSON is pretty-printed and highlighted — MCP tools answer with it, and one
+ * long line of it was a horizontal scroll on a phone. Everything else wraps,
+ * which the bare `<pre>` this replaces did not do either.
+ *
+ * Past `HIGHLIGHT_LIMIT` it is left alone: shiki tokenizes on the main thread,
+ * and a tool that answered with a megabyte would freeze the transcript for
+ * seconds — the same ceiling the file viewer uses, for the same reason.
+ */
+function UnknownResultDisplay({ result }: { result: string }) {
+	const pretty = useMemo(() => {
+		if (result.length > HIGHLIGHT_LIMIT) return null;
+		const trimmed = result.trim();
+		if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+		try {
+			return JSON.stringify(JSON.parse(trimmed), null, 2);
+		} catch {
+			return null;
+		}
+	}, [result]);
+
+	if (pretty)
+		return <CodeHighlighter language="json">{pretty}</CodeHighlighter>;
+	return <pre className="whitespace-pre-wrap text-th-text-muted">{result}</pre>;
+}
+
 function BashResultDisplay({ result }: { result: string }) {
 	const html = useMemo(() => ansiUp.ansi_to_html(result), [result]);
 
@@ -272,6 +375,7 @@ function ToolResultDisplay({
 	toolInput,
 	result,
 	contents,
+	onOpenFile,
 }: ToolResultDisplayProps) {
 	const input = toolInput as Record<string, unknown>;
 	const filePath =
@@ -285,6 +389,27 @@ function ToolResultDisplay({
 	}
 
 	switch (toolName) {
+		case "Grep":
+			// Only the mode that answers with paths. `content` and `count` put a
+			// `path:line:` prefix on every line, and a short match with no space
+			// in it would pass the shape check below and be drawn as a file that
+			// does not exist.
+			if (
+				input.output_mode !== undefined &&
+				input.output_mode !== "files_with_matches"
+			) {
+				return (
+					<pre className="whitespace-pre-wrap text-th-text-muted">{result}</pre>
+				);
+			}
+			return <FileListDisplay result={result} onOpenFile={onOpenFile} />;
+		case "Glob":
+			return <FileListDisplay result={result} onOpenFile={onOpenFile} />;
+
+		// The result is Markdown, and there is a renderer for that.
+		case "WebFetch":
+			return <MarkdownContent content={result} />;
+
 		case "Read":
 			return <ReadResultDisplay result={result} filePath={filePath} />;
 
@@ -295,19 +420,19 @@ function ToolResultDisplay({
 			if (codexChanges) {
 				return <CodexEditResultDisplay changes={codexChanges} />;
 			}
-			return <pre className="text-th-text-muted">{result}</pre>;
+			return <UnknownResultDisplay result={result} />;
 
 		case "MultiEdit":
 			if (isMultiEditInput(toolInput)) {
 				return <MultiEditResultDisplay input={toolInput} />;
 			}
-			return <pre className="text-th-text-muted">{result}</pre>;
+			return <UnknownResultDisplay result={result} />;
 
 		case "Write":
 			if (isWriteInput(toolInput)) {
 				return <WriteResultDisplay input={toolInput} />;
 			}
-			return <pre className="text-th-text-muted">{result}</pre>;
+			return <UnknownResultDisplay result={result} />;
 
 		case "Bash":
 			return <BashResultDisplay result={result} />;
@@ -319,7 +444,7 @@ function ToolResultDisplay({
 			return <pre className="text-th-text-muted">{result}</pre>;
 
 		default:
-			return <pre className="text-th-text-muted">{result}</pre>;
+			return <UnknownResultDisplay result={result} />;
 	}
 }
 

@@ -177,9 +177,9 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	// Background tasks the previous process took down with it. The agent is told
 	// on its next prompt; the user is told in the transcript, from the streaming
 	// goroutine below (the event channel has no consumer yet here).
-	lostBackgroundTasks := lossStore.peek(log)
-	if lostBackgroundTasks > 0 {
-		sess.queueNote(fmt.Sprintf(backgroundTasksLostNote, backgroundTaskCount(lostBackgroundTasks)))
+	lostBackground := lossStore.peek(log)
+	if lostBackground.LostTasks > 0 {
+		sess.queueNote(fmt.Sprintf(backgroundTasksLostNote, backgroundTaskCount(lostBackground.LostTasks)))
 	}
 
 	// Stream events from the process.
@@ -202,23 +202,13 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		stderrCh := agent.ReadStderr(proc.Stderr, "claude")
 
 		if warning, ok := resumeState.pendingWarning(); ok {
-			select {
-			case events <- warning:
-			case <-procCtx.Done():
-			}
+			emitEvent(procCtx, events, warning)
 		}
 
-		if lostBackgroundTasks > 0 {
-			select {
-			case events <- agent.WarningEvent{
-				Message: fmt.Sprintf(backgroundTasksLostWarning, backgroundTaskCount(lostBackgroundTasks)),
-				Code:    backgroundTasksLostCode,
-			}:
-				// Only now: a record dropped before the explanation was out would
-				// be a silent failure about a silent failure.
-				lossStore.clear(log)
-			case <-procCtx.Done():
-			}
+		if lostBackground.reportable() && deliverBackgroundLoss(procCtx, events, lostBackground) {
+			// Only once it is all out: a record dropped before the explanation
+			// was would be a silent failure about a silent failure.
+			lossStore.clear(log)
 		}
 
 		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, usage, sess.declineControlRequest, attachmentStore)
@@ -232,7 +222,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		// instead: this goroutine may never be scheduled again on the way out of
 		// a server shutdown.
 		if procCtx.Err() == nil {
-			lossStore.record(log, backgroundTasks.liveCount())
+			lossStore.record(log, backgroundTasks.loss())
 		}
 
 		agent.EmitProcessEnded(log, events)
@@ -506,7 +496,7 @@ func (s *cliSession) Close() {
 		// reaped: Close is the last point a server shutdown waits for, and the
 		// streaming goroutine that would otherwise record it may never run again
 		// before the process exits.
-		s.lossStore.record(s.log, s.backgroundTasks.liveCount())
+		s.lossStore.record(s.log, s.backgroundTasks.loss())
 		s.cancel()
 		s.stdinMu.Lock()
 		s.stdin.Close()
@@ -996,7 +986,7 @@ func parseLineEvents(log *slog.Logger, line []byte, event cliEvent, pendingReque
 	case "assistant":
 		return parseAssistantEvent(log, line, event)
 	case "user":
-		return parseUserEvent(log, event, store)
+		return parseUserEvent(log, event, backgroundTasks, store)
 	case "result":
 		if ev := parseResultEvent(log, line, backgroundTasks); ev != nil {
 			return []agent.AgentEvent{ev}
@@ -1033,6 +1023,8 @@ func parseLineEvents(log *slog.Logger, line []byte, event cliEvent, pendingReque
 // hook_*, session_state_changed, turn_duration, ...) and keeps adding more, so
 // forwarding unknown subtypes by default turns every tool call into transcript
 // noise — a plain `echo hi` alone emits task_started and task_notification.
+// Those two are read before this map is consulted, but as signals about the
+// call they belong to rather than as entries of their own; see parseTaskEvent.
 //
 // This mirrors the CLI's own SDK message adapter, which renders exactly this set
 // and ignores unknown subtypes. Two deliberate additions: the adapter drops
@@ -1079,6 +1071,13 @@ func parseSystemEvent(log *slog.Logger, line []byte, event cliEvent, backgroundT
 			return nil
 		}
 		return []agent.AgentEvent{agent.CommandOutputEvent{Content: payload.Content}}
+	}
+
+	// The task lifecycle. Read as signals about live state — which call is
+	// running, what it is doing, how backgrounded work ended — rather than as
+	// transcript entries; see parseTaskEvent.
+	if isTaskFrame(event.Subtype) {
+		return parseTaskEvent(log, line, event.Subtype, backgroundTasks)
 	}
 
 	if !userVisibleSystemSubtypes[event.Subtype] {
@@ -1362,7 +1361,7 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent) []agent.
 	return events
 }
 
-func parseUserEvent(log *slog.Logger, event cliEvent, store attachments.Store) []agent.AgentEvent {
+func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroundTaskTracker, store attachments.Store) []agent.AgentEvent {
 	if event.Message == nil {
 		return nil
 	}
@@ -1384,9 +1383,18 @@ func parseUserEvent(log *slog.Logger, event cliEvent, store attachments.Store) [
 		switch block.Type {
 		case "tool_result":
 			result := parseToolResult(log, store, block.Content)
+			// A call that started work outliving it hands back a placeholder,
+			// and that it did stays true forever — so it is recorded, not
+			// tracked live. Without it a replayed transcript shows a background
+			// task that is still running as one that succeeded.
+			subtype := ""
+			if backgroundTasks.callIsBackgrounded(block.ToolUseID) {
+				subtype = agent.ToolResultBackgroundStarted
+			}
 			events = append(events, agent.ToolResultEvent{
 				ToolUseID:         block.ToolUseID,
 				ToolResult:        result.text,
+				Subtype:           subtype,
 				Contents:          result.blocks,
 				IsError:           block.IsError,
 				ProviderMessageID: event.UUID,

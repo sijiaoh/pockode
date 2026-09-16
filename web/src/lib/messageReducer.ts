@@ -10,11 +10,11 @@ import type {
 	QuestionStatus,
 	ServerNotification,
 	SystemMessageMeta,
-	TaskRun,
+	ToolRun,
 	UserMessage,
 } from "../types/message";
 import { generateUUID } from "../utils/uuid";
-import { contentBlocksText, parseContentBlocks } from "./contentBlocks";
+import { parseContentBlocks } from "./contentBlocks";
 
 // Legacy history recorded system messages with origin "work" before the
 // concept was renamed to "system". Map the old value so old sessions still
@@ -53,6 +53,29 @@ export type NormalizedEvent =
 			 */
 			contents?: ContentBlock[];
 			isError: boolean;
+			/**
+			 * `background_started` for the placeholder a backgrounded call handed
+			 * back, `background_result` for the outcome that arrived after the
+			 * turn, `background_lost` for the one Pockode wrote itself when the
+			 * process died with the work still running. Empty for every ordinary
+			 * result.
+			 */
+			subtype?: string;
+			durationMs?: number;
+			exitCode?: number;
+	  }
+	| {
+			/**
+			 * What a call that has not returned is doing. Never persisted, so it
+			 * only ever reaches a client that was listening at the time — plus the
+			 * snapshot a mid-run subscription is handed.
+			 */
+			type: "tool_activity";
+			toolUseId: string;
+			/** A latest value: empty leaves the last one standing. */
+			activity?: string;
+			/** An increment: it accumulates into the run's output. */
+			outputDelta?: string;
 	  }
 	| { type: "warning"; message: string; code: string }
 	| { type: "error"; error: string }
@@ -143,6 +166,22 @@ export function normalizeEvent(
 				toolResult: (record.tool_result as string) ?? "",
 				contents: parseContentBlocks(record.contents),
 				isError: record.is_error === true,
+				subtype: record.subtype as string | undefined,
+				// Zero is what an engine that reports no duration sends, and it
+				// means the same as absent: nobody measured this call.
+				durationMs:
+					typeof record.duration_ms === "number" && record.duration_ms > 0
+						? record.duration_ms
+						: undefined,
+				exitCode:
+					typeof record.exit_code === "number" ? record.exit_code : undefined,
+			};
+		case "tool_activity":
+			return {
+				type: "tool_activity",
+				toolUseId: record.tool_use_id as string,
+				activity: record.activity as string | undefined,
+				outputDelta: record.output_delta as string | undefined,
 			};
 		case "warning":
 			return {
@@ -223,65 +262,89 @@ export function normalizeEvent(
 }
 
 /**
- * The subagent tool goes by two names: the CLI renamed `Task` to `Agent`
- * (2.1.x emits `Agent`), and stored history holds whichever name was current
- * when it was recorded. Both render as the same part.
+ * Options that describe how an event reached this client, rather than what it
+ * says. Only liveness so far: a record replayed from history is
+ * indistinguishable from a live one in its own right, and a run may only draw a
+ * stopwatch if this client watched it start.
  */
-function isTaskTool(toolName: string): boolean {
-	return toolName === "Task" || toolName === "Agent";
-}
-
-function parseTaskInput(input: unknown): Omit<TaskRun, "toolUseId" | "status"> {
-	const obj =
-		input && typeof input === "object"
-			? (input as Record<string, unknown>)
-			: {};
-	const subagentType =
-		typeof obj.subagent_type === "string" ? obj.subagent_type : undefined;
-	const description =
-		typeof obj.description === "string" && obj.description.length > 0
-			? obj.description
-			: (subagentType ?? "Task");
-	return {
-		description,
-		subagentType,
-		prompt: typeof obj.prompt === "string" ? obj.prompt : undefined,
-	};
+export interface ApplyOptions {
+	/** True for an event that arrived on the wire while the client was watching. */
+	live?: boolean;
 }
 
 /**
- * Appends a Task part where the call landed, so each Task reads in the order
- * the turn spawned it.
+ * Where this call already sits in the list, or -1.
  *
- * Claude Code resends a tool_call after permission approval, so the same
- * toolUseId can arrive twice: the second one refreshes the input it describes
- * and leaves the Task's own state alone.
+ * One part per `tool_use_id`, which is what keeps a call announced twice from
+ * drawing two rows. Claude 2.1.263 does not re-send a `tool_call` after
+ * approval (measured), but an older CLI did and a future one may again, and a
+ * second announcement describes the call already here.
  */
-function applyTaskCall(
+function findToolRunIndex(parts: ContentPart[], toolUseId: string): number {
+	return parts.findIndex(
+		(part) => part.type === "tool_call" && part.tool.id === toolUseId,
+	);
+}
+
+function applyToolCall(
 	parts: ContentPart[],
 	toolUseId: string,
+	toolName: string,
 	toolInput: unknown,
+	options: ApplyOptions,
 ): ContentPart[] {
-	const input = parseTaskInput(toolInput);
-	const isThisTask = (
-		part: ContentPart,
-	): part is Extract<ContentPart, { type: "task" }> =>
-		part.type === "task" && part.task.toolUseId === toolUseId;
-
-	if (!parts.some(isThisTask)) {
-		return [
-			...parts,
-			{ type: "task", task: { toolUseId, status: "running", ...input } },
-		];
+	const index = findToolRunIndex(parts, toolUseId);
+	if (index !== -1) {
+		const part = parts[index];
+		if (part.type !== "tool_call") return parts; // Type guard - never happens
+		// A resend refreshes what the call says it will do and leaves the run's
+		// own state alone: by now it may already have finished.
+		const updated = [...parts];
+		updated[index] = {
+			...part,
+			tool: { ...part.tool, name: toolName, input: toolInput },
+		};
+		return updated;
 	}
-	return parts.map((part) =>
-		isThisTask(part) ? { ...part, task: { ...part.task, ...input } } : part,
-	);
+
+	// A card the user has not answered *is* this call's row: nothing about the
+	// call is running while it waits for them, and a second row — above the card
+	// on Claude, below it on Codex, which may ask before it announces the item —
+	// would say the machine is busy. The row comes back when the engine reports
+	// (see `updateRunById`), rebuilt from what the card carries, which is the
+	// same input this call announced.
+	if (
+		parts.some(
+			(part) =>
+				part.type === "permission_request" &&
+				part.request.toolUseId === toolUseId &&
+				part.status === "pending",
+		)
+	) {
+		return parts;
+	}
+
+	// No row for this call yet — either it is new, or a card that has since been
+	// answered took the pending row's place and this resend is the call starting.
+	return [
+		...parts,
+		{
+			type: "tool_call",
+			tool: {
+				id: toolUseId,
+				name: toolName,
+				input: toolInput,
+				status: "running",
+				...(options.live ? { seenAt: new Date() } : {}),
+			},
+		},
+	];
 }
 
 export function applyEventToParts(
 	parts: ContentPart[],
 	event: NormalizedEvent,
+	options: ApplyOptions = {},
 ): ContentPart[] {
 	switch (event.type) {
 		case "text": {
@@ -295,35 +358,38 @@ export function applyEventToParts(
 			return [...parts, { type: "text", content: event.content }];
 		}
 		case "tool_call":
-			if (isTaskTool(event.toolName)) {
-				return applyTaskCall(parts, event.toolUseId, event.toolInput);
-			}
-			return [
-				...parts,
-				{
-					type: "tool_call",
-					tool: {
-						id: event.toolUseId,
-						name: event.toolName,
-						input: event.toolInput,
-					},
+			return applyToolCall(
+				parts,
+				event.toolUseId,
+				event.toolName,
+				event.toolInput,
+				options,
+			);
+		case "permission_request": {
+			const permissionPart: ContentPart = {
+				type: "permission_request",
+				request: {
+					requestId: event.requestId,
+					toolName: event.toolName,
+					toolInput: event.toolInput,
+					toolUseId: event.toolUseId,
+					permissionSuggestions: event.permissionSuggestions,
 				},
-			];
-		case "permission_request":
-			return [
-				...parts,
-				{
-					type: "permission_request",
-					request: {
-						requestId: event.requestId,
-						toolName: event.toolName,
-						toolInput: event.toolInput,
-						toolUseId: event.toolUseId,
-						permissionSuggestions: event.permissionSuggestions,
-					},
-					status: "pending",
-				},
-			];
+				status: "pending",
+			};
+			// The card takes the call's place rather than sitting beside it: while
+			// the user is deciding, the machine is waiting for *them*, and a row
+			// spinning above the card would say the opposite. Same join
+			// `ask_user_question` makes below — all of it describes one tool use.
+			const index = event.toolUseId
+				? findToolRunIndex(parts, event.toolUseId)
+				: -1;
+			if (index === -1) return [...parts, permissionPart];
+
+			const updated = [...parts];
+			updated[index] = permissionPart;
+			return updated;
+		}
 		case "ask_user_question": {
 			const questionPart: ContentPart = {
 				type: "ask_user_question",
@@ -342,10 +408,7 @@ export function applyEventToParts(
 			// it. The trailing tool_result then matches no tool_call and is
 			// dropped as an orphan.
 			const toolCallIndex = event.toolUseId
-				? parts.findIndex(
-						(part) =>
-							part.type === "tool_call" && part.tool.id === event.toolUseId,
-					)
+				? findToolRunIndex(parts, event.toolUseId)
 				: -1;
 			if (toolCallIndex === -1) return [...parts, questionPart];
 
@@ -447,6 +510,7 @@ export function applyServerEvent(
 	messages: Message[],
 	event: NormalizedEvent,
 	seq?: HistorySeq,
+	options: ApplyOptions = {},
 ): Message[] {
 	// User message or system-driven message (history replay or broadcast)
 	if (event.type === "message") {
@@ -461,10 +525,14 @@ export function applyServerEvent(
 		});
 	}
 
-	return stampAnchorSeq(messages, applyEvent(messages, event), seq);
+	return stampAnchorSeq(messages, applyEvent(messages, event, options), seq);
 }
 
-function applyEvent(messages: Message[], event: NormalizedEvent): Message[] {
+function applyEvent(
+	messages: Message[],
+	event: NormalizedEvent,
+	options: ApplyOptions,
+): Message[] {
 	// Permission response updates existing permission_request across all messages
 	if (event.type === "permission_response") {
 		const newStatus = event.choice === "deny" ? "denied" : "allowed";
@@ -493,13 +561,13 @@ function applyEvent(messages: Message[], event: NormalizedEvent): Message[] {
 
 	// Tool result updates existing tool_call across all messages (may arrive after interrupt)
 	if (event.type === "tool_result") {
-		return updateToolResult(
-			messages,
-			event.toolUseId,
-			event.toolResult,
-			event.contents,
-			event.isError,
-		);
+		return updateToolResult(messages, event);
+	}
+
+	// As does a progress line, which belongs to a call that may be several turns
+	// above — a backgrounded one reports while the conversation carries on.
+	if (event.type === "tool_activity") {
+		return updateToolActivity(messages, event);
 	}
 
 	// Terminal events only make sense for active (sending/streaming) messages
@@ -574,7 +642,7 @@ function applyEvent(messages: Message[], event: NormalizedEvent): Message[] {
 
 	const message: AssistantMessage = {
 		...current,
-		parts: applyEventToParts(current.parts, event),
+		parts: applyEventToParts(current.parts, event, options),
 	};
 
 	// An ended turn keeps the status it ended with: output trailing it cannot
@@ -594,20 +662,20 @@ function applyEvent(messages: Message[], event: NormalizedEvent): Message[] {
 		}
 	}
 
-	// A turn that ended this way has no Task left running: not the one it was
+	// A turn that ended this way has no call left running: not the one it was
 	// cut off in the middle of, and not one whose call trails in afterwards
 	// either. Keyed on the resulting status rather than on the event so that
 	// late content lands under the same rule.
 	//
-	// `complete` is deliberately absent: a background Task outlives the turn
-	// that started it and reports back later
+	// `complete` is deliberately absent: background work outlives the turn that
+	// started it and reports back later
 	// (agent-integration.md#background-waits).
 	if (
 		message.status === "interrupted" ||
 		message.status === "error" ||
 		message.status === "process_ended"
 	) {
-		message.parts = settleRunningTaskParts(message.parts);
+		message.parts = settleRunningToolParts(message.parts);
 	}
 
 	updated[index] = message;
@@ -747,98 +815,274 @@ export function updateQuestionStatus(
 }
 
 /**
- * Records a Task's outcome. An interrupted Task keeps that status even though
- * its result finally showed up: the interrupt is a fact the result cannot undo.
- * The content is still kept, flagged as having landed after the fact.
+ * Records a run's outcome.
+ *
+ * An interrupted run keeps that status even though its result finally showed
+ * up: the interrupt is a fact the result cannot undo. The content is still
+ * kept, and a renderer says where it came from.
+ *
+ * The two background subtypes are why the reducer cannot simply read
+ * `is_error`. A backgrounded call returns a placeholder immediately, so without
+ * `background_started` a replayed transcript would show work still running as
+ * successfully completed; `background_result` is the outcome that arrived after
+ * the agent had moved on, and it supersedes the placeholder without erasing it
+ * (docs/tool-call-model.md#background-lives-on-tool_result-twice).
+ * `background_lost` is the same shape with a different author — Pockode saw the
+ * process end — so it settles like `background_result` and differs only in the
+ * text it carries.
  */
-function settleTaskRun(
-	task: TaskRun,
-	toolResult: string,
-	isError: boolean,
-): TaskRun {
-	if (task.status === "interrupted") {
-		return { ...task, result: toolResult, resultAfterInterrupt: true };
+function settleToolRun(
+	run: ToolRun,
+	event: Extract<NormalizedEvent, { type: "tool_result" }>,
+): ToolRun {
+	const settled: ToolRun = {
+		...run,
+		...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+		...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+	};
+
+	if (event.subtype === "background_started") {
+		return {
+			...settled,
+			placeholderResult: event.toolResult,
+			fromBackground: true,
+			// Not a finished state: the work is still going, and only the badge
+			// says the conversation moved on without it.
+			status: run.status === "interrupted" ? "interrupted" : "background",
+		};
 	}
-	return { ...task, result: toolResult, status: isError ? "failed" : "done" };
+
+	const outcome: ToolRun = {
+		...settled,
+		result: event.toolResult,
+		contents: event.contents,
+		status:
+			run.status === "interrupted"
+				? "interrupted"
+				: event.isError
+					? "error"
+					: "success",
+	};
+
+	if (
+		event.subtype === "background_result" ||
+		event.subtype === "background_lost"
+	) {
+		return {
+			...outcome,
+			// Set here rather than inherited from the `background_started` that
+			// normally precedes it: `task_updated` may backdate a call into a
+			// background task *after* its placeholder was already parsed, and
+			// then nothing marked the run. Both subtypes only ever describe a
+			// backgrounded call, so they can say so themselves.
+			fromBackground: true,
+			// The row's second line hands over from the live activity to the
+			// outcome here, so the row settles without changing height.
+			activity: undefined,
+		};
+	}
+	return outcome;
+}
+
+/**
+ * Applies `update` to the run this record names, wherever in the transcript it
+ * is — a background outcome arrives turns later, and a result that outlived an
+ * interrupt lands back in the turn that started it.
+ *
+ * Two passes, and the order matters: an existing row anywhere wins over
+ * rebuilding one from a permission card, so a call whose card somehow sits in a
+ * later turn than its row cannot end up drawn twice.
+ *
+ * Rebuilding is what keeps an approved call visible at all. Measured against
+ * claude 2.1.263: the `tool_call` arrives before the approval request and is
+ * *not* re-sent afterwards, so once the card has taken the pending row's place
+ * — which it does because the machine is then waiting for the user, not working
+ * — the card is all that is left of the call. The row is rebuilt from what the
+ * card itself carries, directly under it, which is where it was. It gets no
+ * `seenAt`: the call started before this client could see it start, and a
+ * stopwatch begun here would be counting the wrong thing.
+ *
+ * Returns the list unchanged when the record names no call on screen — an
+ * orphan result, or progress for a call whose page is not loaded.
+ */
+function updateRunById(
+	messages: Message[],
+	toolUseId: string,
+	update: (run: ToolRun) => ToolRun,
+	/**
+	 * Whether a card still pending may be given a row. False for progress: while
+	 * the user is deciding, nothing about this call is running, and a spinner
+	 * above the card would say the machine is busy when it is waiting for them.
+	 * A result is the engine acting, so it gets its row either way — including
+	 * the refusal text a denial produces, which lands as an ordinary settled run
+	 * under the card that already said why.
+	 */
+	fromPendingCard = true,
+): Message[] {
+	// Nothing to join to. History is old enough to hold records written before
+	// every adapter carried the id, and an empty one would match the first part
+	// that also has none — rebuilding a row for a call that is not this one.
+	if (!toolUseId) return messages;
+
+	const write = (
+		message: AssistantMessage,
+		index: number,
+		parts: ContentPart[],
+		partIndex: number,
+	): Message[] => {
+		const part = parts[partIndex];
+		if (part.type !== "tool_call") return messages; // Type guard - never happens
+		const run = update(part.tool);
+		// Handing back the same run says the record changed nothing — progress on
+		// a call that has already settled. The list is returned untouched, so a
+		// transcript that did not change does not re-render.
+		if (run === part.tool && parts === message.parts) return messages;
+
+		const updatedParts = [...parts];
+		updatedParts[partIndex] = { ...part, tool: run };
+		const updated = [...messages];
+		updated[index] = { ...message, parts: updatedParts };
+		return updated;
+	};
+
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role !== "assistant") continue;
+		const partIndex = findToolRunIndex(msg.parts, toolUseId);
+		if (partIndex !== -1) return write(msg, i, msg.parts, partIndex);
+	}
+
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role !== "assistant") continue;
+		const cardIndex = msg.parts.findIndex(
+			(part) =>
+				part.type === "permission_request" &&
+				part.request.toolUseId === toolUseId &&
+				(fromPendingCard || part.status !== "pending"),
+		);
+		if (cardIndex === -1) continue;
+
+		const card = msg.parts[cardIndex];
+		if (card.type !== "permission_request") continue; // Type guard - never happens
+		const restored: ContentPart = {
+			type: "tool_call",
+			tool: {
+				id: toolUseId,
+				name: card.request.toolName,
+				input: card.request.toolInput,
+				status: "running",
+			},
+		};
+		const parts = [...msg.parts];
+		parts.splice(cardIndex + 1, 0, restored);
+		return write(msg, i, parts, cardIndex + 1);
+	}
+
+	return messages;
 }
 
 function updateToolResult(
 	messages: Message[],
-	toolUseId: string,
-	toolResult: string,
-	contents: ContentBlock[] | undefined,
-	isError: boolean,
+	event: Extract<NormalizedEvent, { type: "tool_result" }>,
 ): Message[] {
-	// A tool_result almost always targets a tool_call in the most recent
-	// assistant message, and tool IDs are unique — scan from the end and stop
-	// at the first match instead of re-walking the whole transcript per result.
-	// Scanning every message is also what lets a result arriving after an
-	// interrupt land back in the turn that started it.
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const msg = messages[i];
-		if (msg.role !== "assistant") continue;
-
-		const partIndex = msg.parts.findIndex(
-			(part) =>
-				(part.type === "tool_call" && part.tool.id === toolUseId) ||
-				(part.type === "task" && part.task.toolUseId === toolUseId),
-		);
-		if (partIndex === -1) continue;
-
-		const part = msg.parts[partIndex];
-		let settled: ContentPart;
-		if (part.type === "tool_call") {
-			settled = {
-				...part,
-				tool: { ...part.tool, result: toolResult, contents },
-			};
-		} else if (part.type === "task") {
-			// A Task reports back in prose, so it has no use for the blocks — but
-			// a result that arrived as blocks carries its prose in them, and
-			// reading only `toolResult` would leave the Task looking empty.
-			settled = {
-				...part,
-				task: settleTaskRun(
-					part.task,
-					contents ? contentBlocksText(contents) : toolResult,
-					isError,
-				),
-			};
-		} else {
-			continue; // Type guard - never happens
-		}
-
-		const updatedParts = [...msg.parts];
-		updatedParts[partIndex] = settled;
-		const updated = [...messages];
-		updated[i] = { ...msg, parts: updatedParts };
-		return updated;
-	}
-
-	// If no matching tool_call found, ignore the orphan result
-	return messages;
+	return updateRunById(messages, event.toolUseId, (run) =>
+		settleToolRun(run, event),
+	);
 }
 
 /**
- * Marks Tasks still running as interrupted, for use when nothing can report
+ * How much of a running call's output is kept.
+ *
+ * The row reads its last non-empty line and the body its last 50, so older
+ * lines are only ever read again by a `Bash` that prints a hundred thousand of
+ * them into a transcript that stays open for hours. The whole output arrives
+ * again with the result.
+ */
+const MAX_LIVE_OUTPUT_LINES = 200;
+
+function appendOutput(previous: string | undefined, delta: string): string {
+	const combined = (previous ?? "") + delta;
+	const lines = combined.split("\n");
+	return lines.length <= MAX_LIVE_OUTPUT_LINES
+		? combined
+		: lines.slice(-MAX_LIVE_OUTPUT_LINES).join("\n");
+}
+
+/**
+ * Applies what a call still in flight reports it is doing.
+ *
+ * Ignored for a run that has settled: updates are coalesced per animation
+ * frame, so one held back may be applied after the result, and a progress line
+ * under a finished row is worse than a moment of missing liveness.
+ */
+function updateToolActivity(
+	messages: Message[],
+	event: Extract<NormalizedEvent, { type: "tool_activity" }>,
+): Message[] {
+	return updateRunById(
+		messages,
+		event.toolUseId,
+		(run) => {
+			if (run.status !== "running" && run.status !== "background") return run;
+			return {
+				...run,
+				// An empty activity leaves the last one standing: a line that
+				// blinks in and out re-flows every row below it.
+				...(event.activity ? { activity: event.activity } : {}),
+				...(event.outputDelta
+					? { output: appendOutput(run.output, event.outputDelta) }
+					: {}),
+			};
+		},
+		false,
+	);
+}
+
+/**
+ * The newest activity of every call still in flight, as a mid-run subscription
+ * hands it back. Applied over a replayed transcript, which has none of its own:
+ * a `tool_activity` is never recorded.
+ */
+export function applyToolActivitySnapshot(
+	messages: Message[],
+	activity: Record<string, string>,
+): Message[] {
+	let updated = messages;
+	for (const [toolUseId, text] of Object.entries(activity)) {
+		updated = updateToolActivity(updated, {
+			type: "tool_activity",
+			toolUseId,
+			activity: text,
+		});
+	}
+	return updated;
+}
+
+/**
+ * Marks runs still running as interrupted, for use when nothing can report
  * back on them any more (the turn was cut short, or the process is gone).
  * Leaving them running would spin a Spinner that never stops.
+ *
+ * A `background` run is deliberately left alone: its work outlives the turn by
+ * definition, and its outcome is still coming.
  */
-function settleRunningTaskParts(parts: ContentPart[]): ContentPart[] {
+function settleRunningToolParts(parts: ContentPart[]): ContentPart[] {
 	let changed = false;
 	const updated = parts.map((part) => {
-		if (part.type !== "task" || part.task.status !== "running") return part;
+		if (part.type !== "tool_call" || part.tool.status !== "running")
+			return part;
 		changed = true;
-		return { ...part, task: { ...part.task, status: "interrupted" as const } };
+		return { ...part, tool: { ...part.tool, status: "interrupted" as const } };
 	});
 	return changed ? updated : parts;
 }
 
-export function settleRunningTasks(messages: Message[]): Message[] {
+export function settleRunningToolRuns(messages: Message[]): Message[] {
 	let anyChanged = false;
 	const updated = messages.map((msg) => {
 		if (msg.role !== "assistant") return msg;
-		const parts = settleRunningTaskParts(msg.parts);
+		const parts = settleRunningToolParts(msg.parts);
 		if (parts === msg.parts) return msg;
 		anyChanged = true;
 		return { ...msg, parts };
@@ -940,7 +1184,7 @@ const BACK_REFERENCE_TYPES = new Set([
  * killed by a restart writes no `process_ended` for replay to find.
  */
 export function settleAfterProcessGone(messages: Message[]): Message[] {
-	return settleRunningTasks(expirePendingDialogs(messages));
+	return settleRunningToolRuns(expirePendingDialogs(messages));
 }
 
 export function isBackReference(record: unknown): boolean {
@@ -1005,7 +1249,7 @@ interface HistoryPageCatchUp {
 	/**
 	 * The session's process is gone without history saying so — a restart killed
 	 * it, so no `process_ended` was ever recorded. Nothing can still report back
-	 * on a dialog or a Task this page left open.
+	 * on a dialog or a tool call this page left open.
 	 */
 	processEnded?: boolean;
 }
@@ -1049,8 +1293,8 @@ export function prependHistoryPage(
 	// Closing it *before* replaying the back-references is what keeps a later
 	// `process_ended` from stamping its own status onto a turn that was still
 	// running at this point in the transcript: with nothing left streaming it
-	// retires only the dialogs and Tasks this page left open, which is the part
-	// of it that is true here.
+	// retires only the dialogs and tool calls this page left open, which is the
+	// part of it that is true here.
 	closed = closePreviousTurn(closed);
 	for (const record of catchUp.backReferences ?? []) {
 		closed = applyServerEvent(
@@ -1085,7 +1329,7 @@ export function prependHistoryPage(
 		// the user had expanded inside it — and the scroll anchor is pinned to it.
 		...head,
 		...(endedAtBoundary ? { status: tail.status, error: tail.error } : {}),
-		parts: endedAtBoundary ? settleRunningTaskParts(joined) : joined,
+		parts: endedAtBoundary ? settleRunningToolParts(joined) : joined,
 		createdAt: tail.createdAt,
 		// The head's anchor wins when it has one: it names the later record, which
 		// is where a fork of this message has to cut.

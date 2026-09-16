@@ -196,29 +196,18 @@ func runPrompt(t *testing.T, workDir, dataDir, sessionID string, resume bool, pr
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage(prompt); err != nil {
-		t.Fatalf("SendMessage failed: %v", err)
-	}
+	return textOf(turnOn(t, ctx, sess, prompt))
+}
 
+// textOf is what the agent said in a turn.
+func textOf(events []agent.AgentEvent) string {
 	var said strings.Builder
-	for {
-		select {
-		case event, ok := <-sess.Events():
-			if !ok {
-				t.Fatal("channel closed before done event")
-			}
-			switch e := event.(type) {
-			case agent.TextEvent:
-				said.WriteString(e.Content)
-			case agent.ErrorEvent:
-				t.Fatalf("error event: %s", e.Error)
-			case agent.DoneEvent:
-				return said.String()
-			}
-		case <-ctx.Done():
-			t.Fatal("timeout waiting for done event")
+	for _, event := range events {
+		if text, ok := event.(agent.TextEvent); ok {
+			said.WriteString(text.Content)
 		}
 	}
+	return said.String()
 }
 
 // TestIntegration_ForkSessionCarriesContext is the check behind the whole
@@ -226,20 +215,46 @@ func runPrompt(t *testing.T, workDir, dataDir, sessionID string, resume bool, pr
 // really does give the new session the earlier conversation, and really does
 // leave the source's own transcript alone.
 func TestIntegration_ForkSessionCarriesContext(t *testing.T) {
+	// One real turn on the source plus one on the fork; measured at ~15s on an
+	// idle machine and ~75s on a loaded one.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
 	workDir := t.TempDir()
 	dataDir := t.TempDir()
 	sourceID := uuid.Must(uuid.NewV7()).String()
 
-	runPrompt(t, workDir, dataDir, sourceID, false,
-		"Remember this word: BANANA. Reply with exactly: ok")
-	sourceState := readIntegrationResumeState(t, dataDir, sourceID)
+	source, err := New().Start(ctx, agent.StartOptions{
+		WorkDir:    workDir,
+		DataDir:    dataDir,
+		SessionID:  sourceID,
+		Mode:       session.ModeYolo,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatalf("Start source failed: %v", err)
+	}
+	// Closed again below, before the fork; this one is for the assertions in
+	// between, which would otherwise leave a real CLI running.
+	defer source.Close()
 
+	kept := turnOn(t, ctx, source, "Remember this word: BANANA. Reply with exactly: ok")
+	sourceState := readIntegrationResumeState(t, dataDir, sourceID)
+	awaitProviderMessage(t, sourceState.SessionID, lastProviderMessageID(t, kept))
+	// Closed before the fork, so this is the case the test is named for: a whole
+	// conversation with nothing still running behind it.
+	source.Close()
+
+	// The history the fork gets, in the form chat.Client.Fork hands it over. A
+	// fork is a cut named by a message in it, so a fork given no history has
+	// nothing to reopen however complete the source is.
 	forkID := uuid.Must(uuid.NewV7()).String()
-	carried, err := New().ForkSession(context.Background(), agent.ForkOptions{
+	carried, err := New().ForkSession(ctx, agent.ForkOptions{
 		WorkDir:         workDir,
 		DataDir:         dataDir,
 		SourceSessionID: sourceID,
 		SessionID:       forkID,
+		History:         recordsOf(t, kept),
 	})
 	if err != nil {
 		t.Fatalf("ForkSession: %v", err)
@@ -417,6 +432,32 @@ func readIntegrationResumeState(t *testing.T, dataDir, sessionID string) claudeR
 		t.Fatalf("no provider session recorded for %s", sessionID)
 	}
 	return state
+}
+
+// awaitProviderMessage waits until the CLI's transcript contains the message a
+// fork would be cut at.
+//
+// The CLI writes a turn's assistant message to its own transcript a moment after
+// it streams the result frame: measured on 2.1.263, the message is absent when
+// the result arrives and present within two seconds. Pockode terminates a CLI by
+// killing its process group, so a source closed the instant its turn ended takes
+// that message with it, and a fork naming it then fails outright ("No message
+// found with message.uuid of ..."). That is worth knowing — it is a real, narrow
+// window in which forking a just-stopped session breaks — but it is a fact about
+// shutdown, not about forking, and it is not what this test is about.
+func awaitProviderMessage(t *testing.T, providerSessionID, messageID string) {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if strings.Contains(readProviderTranscript(t, providerSessionID), messageID) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the CLI never wrote message %s to the transcript of %s", messageID, providerSessionID)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // readProviderTranscript finds the CLI's own record of a provider session. It is
@@ -686,13 +727,37 @@ waitForKill:
 	}
 	defer resumed.Close()
 
+	var settled []agent.ToolResultEvent
 	for {
 		select {
 		case event, ok := <-resumed.Events():
 			if !ok {
 				t.Fatal("the resumed session never mentioned the lost background task")
 			}
-			if warning, isWarning := event.(agent.WarningEvent); isWarning && warning.Code == backgroundTasksLostCode {
+			switch e := event.(type) {
+			case agent.ToolResultEvent:
+				if e.Subtype == agent.ToolResultBackgroundLost {
+					settled = append(settled, e)
+				}
+			case agent.WarningEvent:
+				if e.Code != backgroundTasksLostCode {
+					continue
+				}
+				// The warning explains the loss, but only the per-call results
+				// settle the rows: without them the call that started the task
+				// goes on showing it as running, directly above the sentence
+				// saying it is not.
+				if len(settled) == 0 {
+					t.Fatal("the loss was explained but the call it happened to was left saying it is still running")
+				}
+				for _, result := range settled {
+					if result.ToolUseID == "" {
+						t.Errorf("a settled result names no call: %#v", result)
+					}
+					if !result.IsError {
+						t.Errorf("work killed before it finished is not a success: %#v", result)
+					}
+				}
 				return
 			}
 		case <-ctx.Done():

@@ -285,6 +285,110 @@ describe("useChatMessages", () => {
 		});
 	});
 
+	// A phone reconnects mid-run as a matter of course, and `tool_activity` is
+	// never recorded — so what a background call that started half an hour ago is
+	// doing reaches a fresh subscription only in the reply.
+	it("picks up what a call still in flight last reported", async () => {
+		mockState.chatMessagesSubscribe.mockImplementation(async () => ({
+			id: "sub-1",
+			initial: {
+				history: [
+					{ type: "message", content: "Build it" },
+					{
+						type: "tool_call",
+						tool_name: "Bash",
+						tool_input: { command: "npm run build" },
+						tool_use_id: "t1",
+					},
+					{
+						type: "tool_result",
+						tool_use_id: "t1",
+						tool_result: "Command running in background with ID: bash_1",
+						subtype: "background_started",
+					},
+				],
+				state: "running",
+				tool_activity: { t1: "Compiling 120 modules" },
+			},
+		}));
+
+		let messages: Message[] = [];
+		function Probe() {
+			messages = useChatMessages({ sessionId: "s1" }).messages;
+			return null;
+		}
+		render(<Probe />);
+
+		await waitFor(() => expect(messages.length).toBeGreaterThan(1));
+		const turn = messages.at(-1) as AssistantMessage;
+		expect(turn.parts[0]).toMatchObject({
+			type: "tool_call",
+			tool: { status: "background", activity: "Compiling 120 modules" },
+		});
+	});
+
+	// Progress can arrive faster than the screen refreshes, so it is held for
+	// one frame — and what the frame applies has to be all of it, in order.
+	it("applies progress that arrived within one frame in order", async () => {
+		let notify: (notification: ServerNotification) => void = () => {};
+		mockState.chatMessagesSubscribe.mockImplementation(
+			async (
+				_sessionId: string,
+				onNotification: (notification: ServerNotification) => void,
+			) => {
+				notify = onNotification;
+				return {
+					id: "sub-1",
+					initial: {
+						history: [
+							{ type: "message", content: "Build it" },
+							{
+								type: "tool_call",
+								tool_name: "Bash",
+								tool_input: { command: "npm run build" },
+								tool_use_id: "t1",
+							},
+						],
+						state: "running",
+					},
+				};
+			},
+		);
+
+		let messages: Message[] = [];
+		function Probe() {
+			messages = useChatMessages({ sessionId: "s1" }).messages;
+			return null;
+		}
+		render(<Probe />);
+		await waitFor(() => expect(messages.length).toBeGreaterThan(1));
+
+		act(() => {
+			notify({
+				type: "tool_activity",
+				tool_use_id: "t1",
+				output_delta: "one\n",
+				activity: "Compiling",
+			});
+			notify({
+				type: "tool_activity",
+				tool_use_id: "t1",
+				output_delta: "two\n",
+				activity: "Bundling",
+			});
+		});
+
+		await waitFor(() => {
+			const turn = messages.at(-1) as AssistantMessage;
+			// The deltas accumulate and the status is a latest value, which is
+			// what lets the frame hold them merged instead of queued.
+			expect(turn.parts[0]).toMatchObject({
+				type: "tool_call",
+				tool: { output: "one\ntwo\n", activity: "Bundling" },
+			});
+		});
+	});
+
 	// The same window seen from the other side: a record committed between the
 	// subscription being registered and the history being read comes back in the
 	// page *and* as a notification. Applied twice it would put a second copy of

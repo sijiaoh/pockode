@@ -9,7 +9,8 @@ AI CLI (stdout)
   → streamOutput (line-by-line JSON parsing)
     → AgentEvent channel (unbuffered)
       → Process.streamEvents
-          ├─ Persist: store.AppendToHistory (EventRecord)
+          ├─ Persist: store.AppendToHistory (EventRecord) — skipped for a
+          │           non-persisted type, which is broadcast only
           └─ ProcessManager.EmitMessage
                → ChatMessagesWatcher (implements ChatMessageListener)
                  → Broadcast: JSON-RPC notification ("chat.<type>")
@@ -36,7 +37,7 @@ UI (attachment strip scrolled into view)
 
 ### AgentEvent Interface
 
-`server/agent/event.go` — Sealed interface (unexported marker method) with 17 concrete implementations.
+`server/agent/event.go` — Sealed interface (unexported marker method) with 18 concrete implementations.
 
 ```go
 type AgentEvent interface {
@@ -51,6 +52,7 @@ type AgentEvent interface {
 | Category | Types | Terminal? |
 |----------|-------|-----------|
 | Content | `text`, `tool_call`, `tool_result`, `system`, `warning`, `raw`, `command_output` | No |
+| Progress | `tool_activity` (broadcast only, never recorded) | No |
 | Terminal | `done`, `interrupted`, `error`, `process_ended` | Yes |
 | Permission | `permission_request`, `permission_response`, `request_cancelled` | No |
 | Question | `ask_user_question`, `question_response` | No |
@@ -59,10 +61,11 @@ type AgentEvent interface {
 Terminal events end the current message response. Non-terminal events are appended to the active assistant message.
 
 "Terminal" above is about the message shown to the user. The state layer asks
-three different questions of the same types — `AwaitsUserInput`,
+four different questions of the same types — `Persisted`, `AwaitsUserInput`,
 `IndicatesAgentActivity` and `ActivatesSession` — and they are neither complements
-nor the same split as this table, so a new event type has to answer all three
-explicitly. See [What an Event Says About Process
+nor the same split as this table, so a new event type has to answer all four
+explicitly. Three are allowlists and `Persisted` is a denylist, which is
+deliberate: see [What an Event Says About Process
 State](code/agent-integration.md#what-an-event-says-about-process-state).
 
 #### What Is Not an Event
@@ -80,6 +83,17 @@ for notifications Pockode has no surface for yet. See
 
 The same test applies to anything new: if a later reader needs *the latest* value,
 it is state and needs an owner; if it needs *what happened*, it is an event.
+
+`tool_activity` is the one thing that answers both halves and so is the exception
+that shows where the line really is. What a running tool call is doing right now
+is a latest value — a snapshot of it in a transcript is wrong the moment the next
+one arrives — yet it has to reach every subscriber the instant it happens, which
+is the broadcast half of being an event. So it is an event that is **broadcast
+and never recorded** (`EventType.Persisted`), and the process keeps the newest one
+per call still in flight as the state it also is, to hand to a client that
+subscribes mid-run ([tool-call-model.md](tool-call-model.md#tool_activity-is-not-persisted)).
+An unpersisted event carries no `seq`, which is exactly what the broadcast rule
+below already said about a record that does not exist.
 
 #### Message Origin (user vs. system)
 
@@ -108,6 +122,13 @@ So the frontend parses the string back into selections (`web/src/utils/questionA
 `server/agent/history.go` — Flat struct used for both persistence and wire format. Each event type populates only its relevant fields; the rest are zero-valued and omitted from JSON.
 
 Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, `Answers`, and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
+
+A `tool_result` also uses `Subtype`, for the three kinds of result that are not
+simply "what the call produced", and carries `DurationMs` / `ExitCode` when the
+CLI reported them as figures. A `tool_activity` record — which exists on the wire
+only — carries `Activity` and `OutputDelta`. What each means is
+[tool-call-model.md](tool-call-model.md); the field-by-field notes are
+[code/agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format).
 
 `Contents` and `ToolResult` are one field in two shapes, and a `tool_result`
 record fills exactly one of them. A tool result that is nothing but prose fills
@@ -177,6 +198,14 @@ on `tool_use_id`:
   with it — so a returned image is shown against the call that produced it
   rather than floating loose in the transcript, which is what the warning it
   replaces used to do.
+- `permission_request` takes the place of its `tool_call` part too, and the
+  reducer gives the row back when the engine reports on the call — the two CLIs
+  do not agree on which of the call and the approval is announced first, and
+  neither order may draw a row spinning beside a card that is waiting for a
+  person ([code/frontend-state.md](code/frontend-state.md#tool-runs)).
+- `tool_activity` updates the run it names and is dropped when there is none on
+  screen. It never enters history, so replay has none of it, and a row is
+  readable without it.
 - `ask_user_question` takes the place of its `tool_call` part. Claude asks
   through a regular `AskUserQuestion` tool call, so one question arrives as
   `tool_call` → `ask_user_question` → `question_response` → `tool_result`. The

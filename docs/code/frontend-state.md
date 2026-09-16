@@ -307,33 +307,85 @@ a fork of the joined message has to cut. The older half's anchor stands in only
 when the newer one never got one, a message without an anchor being one the user
 cannot fork from at all.
 
-### Task Parts
+### Tool Runs
 
-The subagent tool (named `Agent` today, `Task` in older CLIs and in history
-recorded by them) gets a part of its own — `{ type: "task" }` — appended where
-its `tool_call` landed, so a Task reads at the point in the turn that spawned
-it, in among the text it was spawned between. Nothing groups them: a summary
-across several Tasks can only restate what the individual rows already say, and
-it costs the one thing a transcript is for, which is knowing when each thing
-happened.
+Every tool call in a turn — a `Bash`, a `Read`, a subagent — is one
+`{ type: "tool_call" }` part holding a `ToolRun`, appended where its `tool_call`
+landed, so a call reads at the point in the turn that made it. Nothing groups
+them: a summary across several calls can only restate what the individual rows
+already say, and it costs the one thing a transcript is for, which is knowing
+when each thing happened.
 
-The part holds the Task's **current state** — `running` / `done` / `failed` /
-`interrupted` — and the reducer is its only author; the UI renders that state
-and infers nothing of its own. Four rules keep it honest:
+A subagent call is not a second shape. It *is* a tool call — Claude even carries
+its `tool_use_id` on the task lifecycle frames — and keeping a `TaskRun` beside
+`ToolRun` meant two status machines and two settle-on-interrupt paths for one
+thing. `TaskItem` stays, as the renderer for that category, and its three extra
+fields (`description`, `subagent_type`, `prompt`) are derived from `input` the
+way every other row's title is ([tool-call-model.md](../tool-call-model.md)).
 
-- The same `toolUseId` can arrive twice (Claude Code resends a `tool_call` after
-  permission approval). The second call refreshes the input it describes and
-  leaves the Task's state alone.
+**One part per `tool_use_id`.** A `permission_request` *takes the place* of the
+`tool_call` part it names, rather than sitting beside it: while the user is
+deciding, the machine is waiting for *them*, and a row spinning above the card
+would say the opposite. The same join `ask_user_question` makes, for the same
+reason — all of it describes one tool use.
+
+**A card the user has not answered is that call's row**, whichever order the
+two arrive in: Claude announces the call and then asks (the card replaces the
+row), while Codex may ask before it announces the item at all (the call adds no
+row of its own). Either way nothing about the call is drawn as running while it
+is waiting for a person.
+
+Taking the row's place means the reducer has to be able to give it back, and
+that is the half worth reading before changing any of it. Measured against
+claude 2.1.263: the `tool_call` arrives **before** the approval request, and is
+**not** re-sent after approval. So once the card has replaced it, the card is
+all that is left of the call — and a `tool_result` matching no row would be
+dropped as an orphan, which is the command's entire output gone. So a record
+naming a call with no row rebuilds one from what the card itself carries — the
+same input the call announced, since that is where the server got it — and puts
+it directly under the card, which is where it was. Two rules keep that honest:
+
+- An existing row **anywhere** in the transcript wins over rebuilding one, so a
+  call can never end up drawn twice.
+- A result rebuilds from a card in any state — the engine has acted, and a
+  denial's refusal text lands as an ordinary settled run under the card that
+  already said why — but **progress only rebuilds from a card the user has
+  answered**. Nothing about a call may spin while the card is still pending.
+
+(Some CLIs do re-send the `tool_call` after approval. That path still draws one
+row: the resend finds no part left to update and appends the row itself, and
+everything after it behaves the same.)
+
+The part holds the run's **current status** — `running` / `background` /
+`success` / `error` / `interrupted` — and the reducer is its only author; the UI
+renders that status and infers nothing of its own. The rules that keep it
+honest:
+
+- **Status is derived, never sent.** A call with no result is `running`;
+  `success` / `error` come from the `is_error` already on the wire. No status
+  field was added to `EventRecord`, because every input to the derivation is a
+  record the client already has.
+- **A backgrounded call is not a finished one.** Its first result is the
+  placeholder the agent read, recorded with `subtype: "background_started"`, and
+  a run whose newest result carries that subtype is `background` — running, with
+  a badge. Without the subtype a replayed transcript would show work still going
+  as successfully completed. The `background_result` record supersedes it and
+  settles the run; both are kept, because the placeholder is what the *agent*
+  read and the outcome is what *happened*. A third subtype, `background_lost`,
+  is the outcome Pockode writes itself when the CLI process died with the work
+  still running: it settles the run as `error` like any failed outcome, and the
+  record says who authored it
+  ([tool-call-model.md](../tool-call-model.md#a-third-subtype-with-a-different-author)).
 - A turn that ended as `interrupted` / `error` / `process_ended` settles the
-  Tasks still running in it: nothing can report back on them, and a spinner
+  runs still `running` in it: nothing can report back on them, and a spinner
   that never stops is a lie. The rule keys on the turn's resulting **status**,
-  not on the event, so a Task whose call trails in after the ending is settled
-  too rather than born spinning forever. `complete` is deliberately excluded —
-  a background Task outlives the turn that started it
-  ([agent-integration.md](agent-integration.md#background-waits)) and reports
-  back later.
+  not on the event, so a call whose `tool_call` trails in after the ending is
+  settled too rather than born spinning forever. `complete` is deliberately
+  excluded — background work outlives the turn that started it
+  ([agent-integration.md](agent-integration.md#background-waits)) — and so is
+  `background`, for the same reason.
 - Replay adds no settling of its own — it feeds history through this same
-  reducer — so a Task still running at the end of a history stays running,
+  reducer — so a call still running at the end of a history stays running,
   which is right while the session is live. What history cannot show is a
   process killed while Pockode was down, since no `process_ended` was ever
   recorded for it: `useChatMessages` settles on the server's report that the
@@ -341,17 +393,55 @@ and infers nothing of its own. Four rules keep it honest:
   the same way — and applies that to every page of history it pulls in, not only
   the one it subscribed with
   ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)).
-- An interrupted Task whose result finally arrives keeps its `interrupted`
-  status and records `resultAfterInterrupt`. The content is kept and readable;
-  what it cannot do is make the UI claim the Task finished normally. This is the
-  "events are events, state is state" rule applied to a single part.
+- An interrupted run whose result finally arrives keeps its `interrupted`
+  status. The content is kept and readable; what it cannot do is make the UI
+  claim the call finished normally. No flag records that it came back late —
+  `interrupted` with a result *is* that case, and a second field saying so could
+  only fall out of step. This is the "events are events, state is state" rule
+  applied to a single part.
 
 Failure comes from the CLI's `is_error` flag
 ([agent-integration.md](agent-integration.md#eventrecord-unified-event-format)),
-never from the report text. So `failed` means the Task *call* failed — an
-unknown `subagent_type`, say. A subagent that ran fine and reported that it
-could not do the job is `done`, and the report says the rest; the UI does not
-get to grade it.
+never from the result text. So `error` means the *call* failed — an unknown
+`subagent_type`, a command that exited non-zero. A subagent that ran fine and
+reported that it could not do the job is `success`, and the report says the
+rest; the UI does not get to grade it.
+
+#### Live state on a run
+
+Two of a run's fields do not come from history and cannot: `activity` (the
+latest one-line status) and `output` (the deltas a streaming engine sends,
+accumulated client-side). They arrive as `tool_activity`, which is broadcast and
+never persisted — a progress line is a *latest value*, and a snapshot of one in
+the transcript becomes a lie the moment the next one arrives
+([agent-event.md](../agent-event.md#what-is-not-an-event)).
+
+Three consequences the reducer encodes:
+
+- **A replayed run has neither, and is still correct**, because `status` carries
+  "still going" on its own. This is the whole reason status is derived from
+  persisted records while progress is not.
+- **Progress is ignored on a settled run.** `useChatMessages` coalesces updates
+  to one animation frame — deltas can arrive faster than the screen refreshes —
+  so one held back may be applied after the result. A progress line under a
+  finished row is worse than a moment of missing liveness.
+- **An empty update leaves the last line standing**, and the accumulation is
+  capped at its last lines. A line that blinks in and out re-flows every row
+  below it, and a build that printed ten thousand lines is not ten thousand DOM
+  nodes.
+
+A client that subscribes mid-run has missed everything it was not listening for,
+and on a phone that is the normal case. `chat.messages.subscribe` therefore
+returns the newest activity per call still in flight, which is applied over the
+replayed transcript ([agent-chat.md](../agent-chat.md)).
+
+`seenAt` is the third live-only field and exists for the same reason in reverse:
+a history record carries no timestamp, so the only clock a client has is when it
+received something. That is right for a call it watched start and meaningless
+for one it replayed, so the reducer stamps it only for events that arrived live,
+and an elapsed counter is drawn only where it is set. A duration that *replays*
+is a different thing entirely: it is `durationMs`, reported as data by Codex and
+not at all by Claude, and it is never inferred from arrival times.
 
 ### Why Pure Function Instead of Store
 

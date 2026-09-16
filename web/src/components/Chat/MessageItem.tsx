@@ -8,8 +8,8 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useMemo, useState } from "react";
-import { contentBlockFiles, groupContentBlocks } from "../../lib/contentBlocks";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
+import { isTaskTool, toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type {
 	AskUserQuestionRequest,
@@ -21,11 +21,9 @@ import type {
 	PermissionUpdate,
 	PermissionUpdateDestination,
 	SystemMessageMeta,
-	ToolCall,
 } from "../../types/message";
 import { forkUnavailableReason } from "../../utils/forkAnchor";
 import { hasMessageActions } from "../../utils/messageActions";
-import { formatFilePath } from "../../utils/path";
 import { workEventWording } from "../../utils/systemMessage";
 import {
 	CollapsibleBody,
@@ -34,130 +32,11 @@ import {
 	useEverExpanded,
 } from "../ui";
 import AskUserQuestionItem from "./AskUserQuestionItem";
-import AttachmentStrip from "./AttachmentStrip";
 import { MarkdownContent } from "./MarkdownContent";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import TaskItem from "./TaskItem";
-import ToolResultDisplay from "./ToolResultDisplay";
-
-interface ToolCallItemProps {
-	tool: ToolCall;
-	/** The session whose attachment store holds this call's file blocks. */
-	sessionId: string;
-	onOpenFile?: (path: string) => void;
-}
-
-/** Extract a short summary from tool input for display */
-function getInputSummary(
-	toolName: string,
-	input: unknown,
-	workDir: string,
-): string {
-	if (!input || typeof input !== "object") return "";
-
-	const obj = input as Record<string, unknown>;
-
-	// Bash: show description or truncated command
-	if (toolName === "Bash") {
-		if (typeof obj.description === "string") return obj.description;
-		if (typeof obj.command === "string") {
-			const cmd = obj.command;
-			return cmd.length > 50 ? `${cmd.slice(0, 50)}...` : cmd;
-		}
-	}
-
-	// Read/Edit/Write: show file name with relative directory path
-	if (typeof obj.file_path === "string") {
-		return formatFilePath(obj.file_path, workDir);
-	}
-
-	// Grep/Glob: show pattern
-	if (typeof obj.pattern === "string") {
-		return toolName === "Grep" ? `"${obj.pattern}"` : obj.pattern;
-	}
-
-	// Fallback: first string value
-	for (const value of Object.values(obj)) {
-		if (typeof value === "string" && value.length > 0) {
-			return value.length > 50 ? `${value.slice(0, 50)}...` : value;
-		}
-	}
-
-	return "";
-}
-
-const ToolCallItem = memo(function ToolCallItem({
-	tool,
-	sessionId,
-	onOpenFile,
-}: ToolCallItemProps) {
-	const [expanded, setExpanded] = useState(false);
-	const workDir = useWSStore((state) => state.workDir);
-	const summary = getInputSummary(tool.name, tool.input, workDir);
-
-	const files = useMemo(
-		() =>
-			tool.contents
-				? contentBlockFiles(tool.contents, {
-						name: tool.name,
-						input: tool.input,
-					})
-				: [],
-		[tool.contents, tool.name, tool.input],
-	);
-	// What is left once the files are drawn above. A result that is nothing but
-	// an image has none, and then there is nothing to expand — the chevron is
-	// gated on a body rather than on a result, or a tool that answered with a
-	// screenshot would offer a strip that opens on emptiness.
-	const hasBody = useMemo(
-		() =>
-			tool.contents
-				? groupContentBlocks(tool.contents).length > 0
-				: Boolean(tool.result),
-		[tool.contents, tool.result],
-	);
-
-	return (
-		<div className="rounded bg-th-bg-secondary text-xs">
-			<button
-				type="button"
-				onClick={() => hasBody && setExpanded(!expanded)}
-				className={`flex w-full items-center gap-1.5 rounded p-2 text-left ${hasBody ? "hover:bg-th-overlay-hover" : ""}`}
-			>
-				{hasBody ? (
-					<ChevronRight
-						className={`size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
-					/>
-				) : (
-					<span className="size-3 shrink-0" />
-				)}
-				<span className="shrink-0 text-th-accent">{tool.name}</span>
-				{summary && (
-					<span className="truncate text-th-text-muted">{summary}</span>
-				)}
-			</button>
-			{files.length > 0 && (
-				<AttachmentStrip
-					files={files}
-					sessionId={sessionId}
-					onOpenFile={onOpenFile}
-				/>
-			)}
-			{hasBody && (
-				<CollapsibleBody expanded={expanded}>
-					<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
-						<ToolResultDisplay
-							toolName={tool.name}
-							toolInput={tool.input}
-							result={tool.result ?? ""}
-							contents={tool.contents}
-						/>
-					</ScrollableContent>
-				</CollapsibleBody>
-			)}
-		</div>
-	);
-});
+import ToolCallItem from "./ToolCallItem";
+import { ToolRow } from "./ToolRow";
 
 interface SystemItemProps {
 	content: string;
@@ -375,10 +254,23 @@ function extractPlanContent(toolInput: unknown): string | null {
 	return null;
 }
 
-/** Format tool input for display */
+/**
+ * The input the user is being asked to approve, pretty-printed.
+ *
+ * `command_actions` is left out: it is Codex's own parse of the command, it is
+ * already what the row above says, and dumping the array into an approval
+ * prompt asks the reader to parse the same command a second time.
+ */
 function formatInput(input: unknown): string {
 	if (typeof input === "string") return input;
 	try {
+		if (input && typeof input === "object" && !Array.isArray(input)) {
+			const { command_actions: _actions, ...rest } = input as Record<
+				string,
+				unknown
+			>;
+			return JSON.stringify(rest, null, 2);
+		}
 		return JSON.stringify(input, null, 2);
 	} catch {
 		return String(input);
@@ -431,7 +323,9 @@ function PermissionRequestItem({
 }: PermissionRequestItemProps) {
 	const isPending = status === "pending";
 	const workDir = useWSStore((state) => state.workDir);
-	const summary = getInputSummary(request.toolName, request.toolInput, workDir);
+	// The same derivation the tool row uses: a user who approved a command and
+	// then reads the row that ran it is looking at one string, cut one way.
+	const summary = toolSummary(request.toolName, request.toolInput, workDir);
 	const isExitPlanMode = request.toolName === "ExitPlanMode";
 	const planContent = isExitPlanMode
 		? extractPlanContent(request.toolInput)
@@ -470,24 +364,22 @@ function PermissionRequestItem({
 		<div
 			className={`rounded text-xs ${isPending ? "border border-th-warning bg-th-warning/10" : "bg-th-bg-secondary"}`}
 		>
-			<button
-				type="button"
-				onClick={() => hasExpandableContent && setExpanded(!expanded)}
-				className={`flex w-full items-center gap-1.5 rounded p-2 text-left ${hasExpandableContent ? "hover:bg-th-overlay-hover" : ""}`}
-			>
-				{hasExpandableContent ? (
-					<ChevronRight
-						className={`size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
+			<ToolRow
+				expanded={expanded}
+				toggleable={hasExpandableContent}
+				onToggle={() => hasExpandableContent && setExpanded(!expanded)}
+				glyph={
+					<Icon
+						className={`mt-0.5 size-3 shrink-0 ${color}`}
+						aria-label={status}
 					/>
-				) : (
-					<span className="size-3 shrink-0" />
-				)}
-				<Icon className={`size-3 shrink-0 ${color}`} />
-				<span className="shrink-0 text-th-accent">{request.toolName}</span>
-				{summary && (
-					<span className="truncate text-th-text-muted">{summary}</span>
-				)}
-			</button>
+				}
+				title={summary.title}
+				chip={summary.chip}
+				detail={summary.detail}
+				detailTail={summary.detailTail}
+				detailMono={summary.mono}
+			/>
 
 			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
@@ -609,12 +501,14 @@ function ContentPartItem({
 	if (part.type === "command_output") {
 		return <CommandOutputItem content={part.content} />;
 	}
-	if (part.type === "task") {
-		return <TaskItem task={part.task} />;
+	// A subagent call is a tool run like any other; only its body differs, so
+	// this is a renderer chosen by category rather than a second model.
+	if (isTaskTool(part.tool.name)) {
+		return <TaskItem run={part.tool} />;
 	}
 	return (
 		<ToolCallItem
-			tool={part.tool}
+			run={part.tool}
 			sessionId={sessionId}
 			onOpenFile={onOpenFile}
 		/>
@@ -757,17 +651,17 @@ const MessageItem = memo(function MessageItem({
 				{message.parts.length > 0 && (
 					<div className="space-y-2">
 						{message.parts.map((part, index) => {
+							// The tool use id alone: one part per call now, because a
+							// permission card takes its call's place and a resent
+							// tool_call updates the row it names rather than adding one.
 							const key =
 								part.type === "permission_request"
 									? part.request.requestId
 									: part.type === "ask_user_question"
 										? part.request.requestId
 										: part.type === "tool_call"
-											? // Index suffix: Claude Code resends tool_call after permission approval
-												`${part.tool.id}-${index}`
-											: part.type === "task"
-												? part.task.toolUseId
-												: `${part.type}-${index}`;
+											? part.tool.id
+											: `${part.type}-${index}`;
 							return (
 								<ContentPartItem
 									key={key}

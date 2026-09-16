@@ -110,22 +110,37 @@ type AgentEvent interface {
 
 ### What an Event Says About Process State
 
-Three predicates on `EventType` are the entire contract between an agent and the
-state layer. Every agent event answers all three, and nothing else in that layer
+Four predicates on `EventType` are the entire contract between an agent and the
+state layer. Every agent event answers all four, and nothing else in that layer
 inspects event types.
 
 ```go
 // agent/event.go
+func (e EventType) Persisted() bool            // everything except tool_activity
 func (e EventType) AwaitsUserInput() bool      // done, error, interrupted, permission_request, ask_user_question
 func (e EventType) IndicatesAgentActivity() bool
 func (e EventType) ActivatesSession() bool
 ```
 
+- `Persisted` — this belongs in session history. Decides whether
+  `streamEvents` writes a record before broadcasting.
 - `AwaitsUserInput` — the turn stopped: it finished, failed, was aborted, or is
   blocked on a permission or question. Moves the process to `idle`.
 - `IndicatesAgentActivity` — a turn is under way. Moves the process to `running`.
 - `ActivatesSession` — the agent has put something on its own side of the
   conversation. Sets `SessionMeta.Activated` (see [Activation](#activation)).
+
+**`Persisted` is the one denylist among the four**, and the asymmetry is the
+point rather than an inconsistency to tidy away. The other three are allowlists
+because being wrong is expensive and nothing downstream corrects it (below). Here
+the default is the safe one: an event says what was true at one moment and that
+stays true, so a type nobody thought about is recorded. Forgetting to exclude one
+costs a stored record nobody reads; forgetting to include one would leave a hole
+in history. The single exclusion is `tool_activity`, which reports the *latest*
+value of something still changing and would be a lie in a transcript the moment
+the next one arrived ([tool-call-model.md](../tool-call-model.md#tool_activity-is-not-persisted)).
+A non-persisted event reaches subscribers with no `seq`, because there is no
+record for one to name.
 
 `AwaitsUserInput` and `IndicatesAgentActivity` are not complements. `warning`,
 `request_cancelled` and `process_ended` are neither: they can reach the process
@@ -145,8 +160,8 @@ arrive between turns; the rest of that trade-off is at
 
 #### Why `ActivatesSession` Is Not `IndicatesAgentActivity`
 
-The two differ by exactly one event type — `system` — and that single difference
-is the whole reason the second predicate exists. A turn can be under way from
+The two differ by two event types — `system` and `tool_activity` — and that
+difference is the whole reason the second predicate exists. A turn can be under way from
 start to finish without the agent ever contributing to it: a first message sent
 through an expired login or a dead endpoint gets an `init`, a run of
 `system/api_retry`, the CLI's own account of why it gave up, and a `result`
@@ -164,9 +179,13 @@ session as `running`; over-including in `ActivatesSession` confiscates the escap
 hatch. So `command_output` and `raw` are in `ActivatesSession` despite being
 borderline — neither can come from a turn that never started — while `system`,
 borderline in the other direction, is not. `IndicatesAgentActivity` is written as
-the union (`system || ActivatesSession()`) rather than as a second literal list,
-so a future output event type added to one cannot silently go missing from the
-other.
+the union (`system || tool_activity || ActivatesSession()`) rather than as a
+second literal list, so a future output event type added to one cannot silently
+go missing from the other. The two named types are named rather than derived:
+each says a turn is under way without putting anything of the agent's into it.
+For `tool_activity` that is load-bearing in a second way — it is what lets a
+background task visibly reporting progress stop counting against the
+background-wait silence budget ([Background Waits](#background-waits)).
 
 The exclusion this section claims is not something the predicate can enforce on
 its own. The CLI's account of the failure arrives as an `assistant` message like
@@ -390,6 +409,10 @@ type EventRecord struct {
     Origin                MessageOrigin      `json:"origin,omitempty"`
     Subtype               string             `json:"subtype,omitempty"`
     Meta                  *MessageMeta       `json:"meta,omitempty"`
+    DurationMs            int64              `json:"duration_ms,omitempty"`
+    ExitCode              *int               `json:"exit_code,omitempty"`
+    Activity              string             `json:"activity,omitempty"`
+    OutputDelta           string             `json:"output_delta,omitempty"`
     ProviderMessageID     string             `json:"provider_message_id,omitempty"`
 }
 ```
@@ -426,6 +449,21 @@ successful.
 `Contents` holds a tool result that is not prose, cut into ordered blocks; it
 and `ToolResult` are the same field in two shapes and never both set. See
 [Content Blocks and Attachments](#content-blocks-and-attachments).
+
+`Subtype` serves the two event types that have kinds. On a system-origin
+`message` it says which prompt produced it; on a `tool_result` it says the result
+is not the whole story — `background_started` for the placeholder a backgrounded
+call handed back, `background_result` for the outcome the CLI reported afterwards,
+`background_lost` for the one Pockode wrote when the process died with the work
+still running. An ordinary result carries none
+([tool-call-model.md](../tool-call-model.md#background-lives-on-tool_result-twice)).
+
+`DurationMs` and `ExitCode` are what a CLI reported about a finished call as
+figures instead of as prose — Codex does, Claude does not — and are never
+inferred from arrival times, which would be wrong on replay. `Activity` and
+`OutputDelta` belong to `tool_activity` records, which are broadcast and never
+stored; they are fields here anyway because `EventRecord` is the whole of how an
+event is serialized, for the wire as much as for history.
 
 ## Content Blocks and Attachments
 
@@ -652,15 +690,16 @@ are the MCP channel's, transcribed field-for-field, because compaction cannot be
 reproduced cheaply and the behaviour under test is identical on both channels.
 
 Claude has a smaller exception. The mapping was read at 2.1.222, but the
-`tool_result` content shapes and the subagent tool's name were checked live
-against **2.1.263**: that is where the text-block array below was observed, and
-where the subagent tool answers to `Agent`, and where the truncating-resume
-behaviour behind [forking](#forking) was measured — note that `--resume-session-at`
+`tool_result` content shapes, the subagent tool's name and the whole of [The Task
+Lifecycle](#the-task-lifecycle) were checked live against **2.1.263**: that is
+where the text-block array below was observed, and where the subagent tool
+answers to `Agent`, and where the truncating-resume behaviour behind
+[forking](#forking) was measured — note that `--resume-session-at`
 and its companions are absent from `claude --help`, so their semantics come from
 running them, not from reading it. Which version renamed it from
 `Task` was not established and does not matter — history recorded by older CLIs
 still says `Task`, so both names have to keep working
-([frontend-state.md](frontend-state.md#task-parts)).
+([frontend-state.md](frontend-state.md#tool-runs)).
 
 The versions are written down because these findings expire. When a mapping stops
 working, the useful question is which version changed what, and the way to answer
@@ -972,7 +1011,10 @@ recording one is precisely what stops a session being unstarted.
 | `control_request` | anything else | `WarningEvent` + a `control_response` error (the CLI blocks until answered) |
 | `control_response` | — | `InterruptedEvent` (only for interrupts we sent) |
 | `control_cancel_request` | — | `RequestCancelledEvent` |
-| `system` | `background_tasks_changed` | (dropped — updates the live task set, see [Background Waits](#background-waits)) |
+| `system` | `background_tasks_changed` | (no event — updates the live task set, see [Background Waits](#background-waits)) |
+| `system` | `task_progress` | `ToolActivityEvent` (see [The Task Lifecycle](#the-task-lifecycle)) |
+| `system` | `task_notification` | `ToolResultEvent` for a backgrounded call, no event for any other |
+| `system` | `task_started`, `task_updated` | (no event — updates the task tracker) |
 | `system` | `local_command_output` | `CommandOutputEvent` |
 | `system` | allowlisted subtypes | `SystemEvent` |
 | `system` | other | (dropped — internal bookkeeping) |
@@ -991,12 +1033,18 @@ a wall of escaped JSON instead. An object, or content that does not decode at
 all, is forwarded as raw JSON — there is nothing there to cut.
 
 `system` subtypes are **allowlisted**, not denylisted: the CLI emits dozens of
-internal subtypes (`task_started`, `task_notification`, `session_state_changed`,
-`turn_duration`, `hook_*`, …) and keeps adding more, so a denylist guarantees
-future transcript noise — a plain `echo hi` alone emits `task_started` and
-`task_notification`. The allowlist (`userVisibleSystemSubtypes`) covers
+internal subtypes (`session_state_changed`, `turn_duration`, `hook_*`, …) and
+keeps adding more, so a denylist guarantees future transcript noise. The
+allowlist (`userVisibleSystemSubtypes`) covers
 `compact_boundary`, `informational`, `api_retry`, `permission_denied`, and the
 `model_*_fallback` family. Unknown subtypes are dropped with a debug log.
+
+The five task-lifecycle subtypes are taken out *before* the allowlist is
+consulted, not added to it: they are signals about live state rather than
+transcript entries, and what they produce — a progress line on a row, the outcome
+of work that outlived its call — is not a `SystemEvent` at all. A plain `echo hi`
+alone emits `task_started` and `task_notification`, which is what the allowlist
+would otherwise have to keep out.
 
 This mirrors the CLI's own SDK message adapter, which renders the same set and
 ignores unknown subtypes. `api_retry` and `permission_denied` are deliberate
@@ -1137,15 +1185,81 @@ Stopping during a wait needed no compensation: the CLI answers an `interrupt`
 control request within about a second even with no active turn (measured), which
 produces an `InterruptedEvent` through the normal path and disarms the fallback.
 
+#### The Task Lifecycle
+
+Beside that level signal, Claude runs a per-task edge stream on `system` frames,
+and it is what the transcript is built from — which call is running, what it is
+doing, and how backgrounded work ended. Measured on claude 2.1.263:
+
+| Subtype | Payload | Read as |
+|---|---|---|
+| `task_started` | `task_id`, `tool_use_id`, `description`, `subagent_type`, `is_backgrounded`, `spawn_depth`, `task_type`, `workflow_name`, `prompt`, `skip_transcript`, `ambient` | registers the task: the `task_id` → `tool_use_id` join, and whether this call's own result will be a placeholder |
+| `task_progress` | `task_id`, `tool_use_id`, `summary`, `description`, `last_tool_name`, `usage` | a `ToolActivityEvent` on that call |
+| `task_updated` | `task_id`, `patch{status, description, end_time, total_paused_ms, error, is_backgrounded}` | a field changed; only `is_backgrounded` is read — a status and an end time say the task is over, and the notification says that with the outcome attached and an id to hang it on |
+| `task_notification` | `task_id`, `tool_use_id`, `status` ∈ `completed`/`failed`/`stopped`, `output_file`, `summary`, `usage`, `resource_links` | the outcome, recorded only for a backgrounded call |
+| `background_tasks_changed` | `tasks[]` of `{task_id, task_type, description, ambient}` | the live set, above |
+
+Five things about that table are not guessable from it, and the first two were
+measured only after the design had assumed the opposite:
+
+- **`task_progress` carries no `summary` on 2.1.263**, though the schema
+  documents that field as the progress line. What arrives is `description`
+  ("Running <description>"), so the adapter reads `summary ?? description` — the
+  documented field first, so the better line wins the day the CLI starts filling
+  it — and emits nothing when both are empty.
+- **A non-backgrounded subagent `Task` also gets a `task_notification`, and it
+  arrives before that call's own `tool_result`.** So only a call `task_started`
+  flagged `is_backgrounded` may turn one into a record; every other call reports
+  its outcome through its ordinary result, and recording both would write one
+  ending into history twice.
+- **`task_started` arrives before the call's `tool_result`**, which is what lets
+  the placeholder be stamped as one while it is being parsed, with no retroactive
+  record. This one was measured because the code was about to depend on it, and
+  it held.
+- **`task_updated` carries no `tool_use_id`**, only `task_id` — the whole reason
+  the join map exists.
+- **`tool_use_id` is optional on the edges too.** A task with none is a task no
+  tool call asked for (scheduled and housekeeping work) and has no row to belong
+  to, so the frame is dropped rather than rendered loose: a progress line that
+  cannot say what asked for it is worse than silence. `ambient` and
+  `skip_transcript` tasks are filtered for the same reason, recorded at
+  `task_started` so the whole lifecycle is filtered with one decision.
+
+Tracker entries are removed on `task_notification` **whether or not the frame
+produced anything** — the cleanup is deferred at the top of the handler, so the
+resolve below still finds the task while a dropped one is forgotten just the
+same. Without that, an hours-long process starting ambient watchers leaks an
+entry per task.
+
+What the records mean once they reach the client, and why the placeholder is kept
+beside the outcome, is [tool-call-model.md](../tool-call-model.md#background-lives-on-tool_result-twice).
+
 **Tasks lost with the process** (`background_loss.go`) are reported at the *next*
 start of that session, not when they die. Background tasks live inside the CLI
 process, so an idle reap, a stop, or a server restart takes them along — and at
 that moment there is nowhere to say so: the event channel and the history writer
 are closing behind the process, and on shutdown the whole write path is going
-away. So the count is persisted to the session directory and turned into a
+away. So what was running is persisted to the session directory and turned into a
 `WarningEvent` plus a queued note when the session next starts, which is both the
 one delivery that works for every way a process can die and the moment it matters
-— when the conversation that was waiting continues. Two details carry that
+— when the conversation that was waiting continues. The record holds two fields:
+`lostTasks`, how many were running, and `lostCalls`, the `tool_use_id`s they
+belonged to. Each lost call is settled first, with a `tool_result` carrying
+`subtype: "background_lost"` and `is_error`, so that by the time the reader
+reaches the warning explaining it, the rows above it have stopped claiming to be
+running. The subtype is kept apart from `background_result` because the author
+differs — that one is what the CLI said, this one is what Pockode observed of a
+process it killed or watched die
+([tool-call-model.md](../tool-call-model.md#a-third-subtype-with-a-different-author)).
+
+**The two fields come from two unrelated streams on purpose.** `lostTasks` is
+counted off the `background_tasks_changed` level; `lostCalls` comes from the task
+lifecycle's own set of backgrounded calls that have not reported an outcome. The
+CLI's schema says the ordering between those streams is unspecified and that they
+must not be correlated, so neither is derived from the other, and each half
+stands alone: a count with no ids delivers the warning only, ids with no count
+settle the rows only, and a record written before `lostCalls` existed still reads
+as the summary-only behaviour it had then. Two details carry that
 guarantee: the record is written synchronously in `Close` (the last point a server
 shutdown waits for) with the streaming goroutine covering only deaths the process
 inflicted on itself, and reading is split into `peek` / `clear` so the record is
@@ -1580,6 +1694,8 @@ when one begins, `item/completed` when it ends — wrapped in a turn.
 | `item/started`, `imageView` | `ToolCallEvent {ToolName: "Read"}` |
 | `item/completed`, `agentMessage` | `TextEvent` |
 | `item/completed`, the four item types above | `ToolResultEvent` (`imageView`'s carries a file block, the rest text) |
+| `item/commandExecution/outputDelta` | `ToolActivityEvent {OutputDelta}` — real stdout/stderr as it is produced |
+| `item/mcpToolCall/progress` | `ToolActivityEvent {Activity}` — the tool's own one-line status |
 | `mcpServer/startupStatus/updated`, `status: "failed"` | `WarningEvent` per failed server |
 | `error` with `willRetry` | `WarningEvent` |
 | `warning`, `guardianWarning`, `configWarning` | `WarningEvent` |
@@ -1620,6 +1736,17 @@ sent, reasoning, plans and web searches all arrive as ordinary `item/*`
 notifications and fall through the type switch. They are dropped for the same
 reason — no surface to render them on — and would be picked up by adding a case
 rather than by removing a list entry.
+
+**A command item carries Codex's own parse of what it is doing.**
+`commandActions[]` — `read` / `listFiles` / `search` / `unknown`, each with its
+sub-command and path or query — is passed through in the tool input as
+`command_actions`, along with `exitCode` and `durationMs` on the result. All
+three used to be dropped by `toolCallOf`, which rebuilds a codex input field by
+field: anything it does not name is gone before any client sees it. They are
+forwarded as *data*, not as a rendered title — the frontend derives the row's
+title from them ([tool-call-model.md](../tool-call-model.md#toolrun)), and
+`formatInput` keeps them out of the approval prompt, which shows the user what
+was asked for rather than the CLI's analysis of it.
 
 **A patch's `changes` payload is forwarded as Codex sent it**, and its shape
 changed with the channel: the MCP channel sent a map of path to change
@@ -1664,7 +1791,16 @@ fills the transcript with noise on every CLI update. The list also keeps the
 default branch meaning "a method we have never seen", which is what its debug log
 is for. Only methods actually observed on 0.153.0, plus those whose names say
 plainly what they are, are listed; guessing at the rest would put entries there on
-no evidence. Reasoning, plans and the turn's accumulated diff are listed by choice
+no evidence.
+
+Two entries left the list when tool runs gained live progress:
+`item/commandExecution/outputDelta` and `item/mcpToolCall/progress` now become
+`ToolActivityEvent`s. They are still increments of content that also arrives
+whole, which is why they are the one event type Pockode never records — losing
+one costs a moment of liveness and nothing else
+([tool-call-model.md](../tool-call-model.md#tool_activity-is-not-persisted)).
+A schema integration test asserts both still carry the fields read here, so the
+day upstream renames one it fails loudly rather than going quiet. Reasoning, plans and the turn's accumulated diff are listed by choice
 rather than by accident — they carry real information Pockode has no surface for
 yet, and their whole form is dropped alongside their increments, so they are not
 increments of anything rendered.

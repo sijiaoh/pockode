@@ -23,7 +23,27 @@ const (
 	EventTypeQuestionResponse   EventType = "question_response"   // User question response
 	EventTypeRaw                EventType = "raw"                 // Unprocessed CLI output
 	EventTypeCommandOutput      EventType = "command_output"      // Local command output (e.g., /context)
+	// EventTypeToolActivity reports what a tool call that has not returned is
+	// doing right now. The only event Pockode broadcasts without recording;
+	// see Persisted.
+	EventTypeToolActivity EventType = "tool_activity"
 )
+
+// Persisted returns true for the events that belong in session history.
+//
+// A denylist, unlike the other three predicates, because the default is the
+// safe one here: an event says what was true at one moment, and that stays
+// true, so a new type left unnamed is recorded rather than lost.
+//
+// The exception is an event that reports the *latest value* of something still
+// changing. A snapshot of that in a transcript becomes a lie the moment the
+// next one arrives — the same argument that keeps token usage out of the event
+// stream (docs/agent-event.md). An unpersisted event reaches subscribers with
+// no sequence number (session.NoHistorySeq), because there is no record for one
+// to name.
+func (e EventType) Persisted() bool {
+	return e != EventTypeToolActivity
+}
 
 // AwaitsUserInput returns true for events where the AI pauses and waits for user input.
 // These events transition the process state from running to idle:
@@ -61,10 +81,14 @@ func (e EventType) AwaitsUserInput() bool {
 // answered, so the process is likely idle already; process_ended is an obituary.
 // The remaining types are only ever replayed from history, never streamed.
 //
-// System events belong here but not in ActivatesSession: they only appear once a
-// turn is running, yet they are not the agent contributing anything to it.
+// System and tool_activity events belong here but not in ActivatesSession: they
+// only appear once a turn is running, yet neither is the agent contributing
+// anything to it. Both are named explicitly rather than derived, which is the
+// point of a whitelist — tool_activity in particular is how a background task
+// that is visibly reporting progress stops counting against the background-wait
+// silence budget (see claude.parseLine).
 func (e EventType) IndicatesAgentActivity() bool {
-	return e == EventTypeSystem || e.ActivatesSession()
+	return e == EventTypeSystem || e == EventTypeToolActivity || e.ActivatesSession()
 }
 
 // ActivatesSession returns true for the events that put something on the agent's
@@ -227,9 +251,45 @@ func (e ToolCallEvent) ToRecord() EventRecord {
 	}
 }
 
+// Subtypes a tool_result event can carry. An absent subtype is the ordinary
+// case: the result is the whole of what the call produced, and it is what the
+// agent read.
+const (
+	// ToolResultBackgroundStarted marks a result that is only a placeholder —
+	// the call handed work to something that outlives it, and the real outcome
+	// arrives later as ToolResultBackgroundResult. Recorded rather than tracked
+	// live because "this call handed back a placeholder" stays true forever, and
+	// without it a replayed transcript shows unfinished background work as
+	// successfully completed.
+	ToolResultBackgroundStarted = "background_started"
+	// ToolResultBackgroundResult marks the real outcome of that work. The
+	// subtype is what keeps the record honest: the agent never read this, it
+	// read the placeholder.
+	ToolResultBackgroundResult = "background_result"
+	// ToolResultBackgroundLost marks an outcome Pockode wrote itself: the CLI
+	// process ended while the work was still running, so no outcome was ever
+	// reported and none is coming. Kept apart from ToolResultBackgroundResult
+	// because the two have different authors — that one is what the CLI said,
+	// this one is what Pockode observed of a process it killed or watched die.
+	// Wearing the same subtype would claim the agent's own tooling reported an
+	// ending it never did.
+	ToolResultBackgroundLost = "background_lost"
+)
+
 type ToolResultEvent struct {
 	ToolUseID  string
 	ToolResult string
+	// Subtype marks a result that is not simply "what the call produced"; see
+	// the ToolResultBackground* constants. Empty for every ordinary result.
+	Subtype string
+	// DurationMs is how long the call took, when the agent CLI reports it as a
+	// figure. Zero when it does not (Claude reports none), which is why it is
+	// not inferred from arrival times: a replayed record has no honest one.
+	DurationMs int64
+	// ExitCode is the process exit status of a command the agent ran, when the
+	// CLI reports it separately from the result text. Nil for every tool that is
+	// not a command, and for a command that never ran.
+	ExitCode *int
 	// Contents is the result cut into blocks, set only when the agent returned
 	// something that is not prose — an image, a file. A result that is all text
 	// leaves it nil and travels in ToolResult alone, which is every result
@@ -256,9 +316,44 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 		Type:              e.EventType(),
 		ToolUseID:         e.ToolUseID,
 		ToolResult:        e.ToolResult,
+		Subtype:           e.Subtype,
+		DurationMs:        e.DurationMs,
+		ExitCode:          e.ExitCode,
 		Contents:          e.Contents,
 		IsError:           e.IsError,
 		ProviderMessageID: e.ProviderMessageID,
+	}
+}
+
+// ToolActivityEvent reports what a tool call that has not returned yet is
+// doing. It is broadcast and never recorded (EventType.Persisted), so a client
+// that was not listening at the time has missed it — which is why a process
+// also keeps the newest Activity of every call still in flight, to hand to a
+// client that subscribes mid-run.
+type ToolActivityEvent struct {
+	// ToolUseID is the call this is about. An activity that cannot be joined to
+	// one is dropped by the adapter rather than sent: a progress line with no
+	// call behind it says something is happening without saying what asked for
+	// it, which is worse than silence.
+	ToolUseID string
+	// Activity is the CLI's own one-line description of what the call is doing
+	// now. A latest value, not an increment: each one replaces the last.
+	Activity string
+	// OutputDelta is the next chunk of output the call has produced, for the
+	// engines that stream one. Unlike Activity it accumulates, and it is safe to
+	// lose: the whole output arrives again with the result.
+	OutputDelta string
+}
+
+func (ToolActivityEvent) EventType() EventType { return EventTypeToolActivity }
+func (ToolActivityEvent) isAgentEvent()        {}
+
+func (e ToolActivityEvent) ToRecord() EventRecord {
+	return EventRecord{
+		Type:        e.EventType(),
+		ToolUseID:   e.ToolUseID,
+		Activity:    e.Activity,
+		OutputDelta: e.OutputDelta,
 	}
 }
 

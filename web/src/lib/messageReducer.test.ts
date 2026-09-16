@@ -3,19 +3,20 @@ import type {
 	AssistantMessage,
 	ContentPart,
 	Message,
-	TaskRun,
+	ToolRun,
 	UserMessage,
 } from "../types/message";
 import {
 	applyEventToParts,
 	applyServerEvent,
+	applyToolActivitySnapshot,
 	applyUserMessage,
 	expirePendingDialogs,
 	isBackReference,
 	normalizeEvent,
 	prependHistoryPage,
 	replayHistory,
-	settleRunningTasks,
+	settleRunningToolRuns,
 	stampMessageAnchorSeq,
 } from "./messageReducer";
 
@@ -313,7 +314,12 @@ describe("messageReducer", () => {
 				{ type: "text", content: "Text" },
 				{
 					type: "tool_call",
-					tool: { id: "tool-1", name: "Bash", input: { command: "ls" } },
+					tool: {
+						id: "tool-1",
+						name: "Bash",
+						input: { command: "ls" },
+						status: "running",
+					},
 				},
 			]);
 		});
@@ -392,7 +398,12 @@ describe("messageReducer", () => {
 				[
 					{
 						type: "tool_call",
-						tool: { id: "tool-1", name: "Bash", input: { command: "ls" } },
+						tool: {
+							id: "tool-1",
+							name: "Bash",
+							input: { command: "ls" },
+							status: "running",
+						},
 					},
 				],
 				{
@@ -996,7 +1007,12 @@ describe("messageReducer", () => {
 				parts: [
 					{
 						type: "tool_call",
-						tool: { id: "tool-1", name: "Bash", input: { command: "ls" } },
+						tool: {
+							id: "tool-1",
+							name: "Bash",
+							input: { command: "ls" },
+							status: "running",
+						},
 					},
 				],
 				status: "interrupted",
@@ -1023,7 +1039,12 @@ describe("messageReducer", () => {
 				parts: [
 					{
 						type: "tool_call",
-						tool: { id: "tool-1", name: "Read", input: { file_path: "a.png" } },
+						tool: {
+							id: "tool-1",
+							name: "Read",
+							input: { file_path: "a.png" },
+							status: "running",
+						},
 					},
 				],
 				status: "streaming",
@@ -1050,17 +1071,19 @@ describe("messageReducer", () => {
 		});
 
 		// A Task reports in prose, and a result delivered as blocks carries that
-		// prose inside them — reading only `toolResult` would leave it empty.
-		it("settles a Task from the prose in its blocks", () => {
+		// prose inside them: the blocks are kept whole and the renderer reads the
+		// prose out of them, so nothing about the result is decided twice.
+		it("settles a Task that answered in blocks", () => {
 			const streaming: AssistantMessage = {
 				id: "msg-1",
 				role: "assistant",
 				parts: [
 					{
-						type: "task",
-						task: {
-							toolUseId: "tool-1",
-							description: "Explore",
+						type: "tool_call",
+						tool: {
+							id: "tool-1",
+							name: "Agent",
+							input: { description: "Explore" },
 							status: "running",
 						},
 					},
@@ -1079,8 +1102,11 @@ describe("messageReducer", () => {
 				isError: false,
 			});
 			expect((messages[0] as AssistantMessage).parts[0]).toMatchObject({
-				type: "task",
-				task: { status: "done", result: "# Report" },
+				type: "tool_call",
+				tool: {
+					status: "success",
+					contents: [{ type: "text", text: "# Report" }, { type: "file" }],
+				},
 			});
 		});
 
@@ -1702,15 +1728,23 @@ describe("messageReducer", () => {
 			const messages = replayHistory(history);
 			expect(messages).toHaveLength(2);
 			const assistant = messages[1] as AssistantMessage;
-			expect(assistant.parts[0]).toEqual({
+			expect(assistant.parts[0]).toMatchObject({
 				type: "tool_call",
 				tool: {
 					id: "tool-1",
 					name: "Bash",
 					input: { command: "ls" },
 					result: "file.txt",
+					// Derived, not replayed: a call with a result that says nothing
+					// went wrong succeeded.
+					status: "success",
 				},
 			});
+			// Nothing this client watched start, so nothing to time.
+			expect(
+				(assistant.parts[0] as Extract<ContentPart, { type: "tool_call" }>).tool
+					.seenAt,
+			).toBeUndefined();
 		});
 
 		it("handles incomplete assistant without done event", () => {
@@ -2018,10 +2052,444 @@ describe("messageReducer", () => {
 		});
 	});
 
-	// The Task (subagent) tool is the one tool whose calls collapse into a
-	// single part: a turn can spawn a dozen, and one strip per call buries the
-	// conversation they belong to.
-	describe("Task grouping", () => {
+	// A tool run's status is derived from records the client already has, so a
+	// replayed transcript says the same thing a live one did.
+	describe("tool runs", () => {
+		const streamingRun = (parts: ContentPart[] = []): AssistantMessage => ({
+			id: "msg-1",
+			role: "assistant",
+			parts,
+			status: "streaming",
+			createdAt: new Date(),
+		});
+
+		const call = (toolUseId: string, toolName = "Bash") => ({
+			type: "tool_call" as const,
+			toolUseId,
+			toolName,
+			toolInput: { command: "npm run build" },
+		});
+
+		const runsOf = (message: Message): ToolRun[] =>
+			(message as AssistantMessage).parts
+				.filter((part) => part.type === "tool_call")
+				.map((part) => part.tool);
+
+		it("starts a call running and settles it from the flag on the wire", () => {
+			let messages: Message[] = [streamingRun()];
+			messages = applyServerEvent(messages, call("t1"));
+			expect(runsOf(messages[0])).toMatchObject([{ status: "running" }]);
+
+			messages = applyServerEvent(messages, {
+				type: "tool_result",
+				toolUseId: "t1",
+				toolResult: "boom",
+				isError: true,
+			});
+			expect(runsOf(messages[0])).toMatchObject([
+				{ status: "error", result: "boom" },
+			]);
+		});
+
+		it("carries the figures an engine reported about a finished call", () => {
+			let messages: Message[] = [streamingRun()];
+			messages = applyServerEvent(messages, call("t1"));
+			messages = applyServerEvent(messages, {
+				type: "tool_result",
+				toolUseId: "t1",
+				toolResult: "",
+				isError: false,
+				durationMs: 4200,
+				exitCode: 1,
+			});
+			expect(runsOf(messages[0])).toMatchObject([
+				{ durationMs: 4200, exitCode: 1 },
+			]);
+		});
+
+		// Claude reports no duration at all, and zero is how that arrives.
+		it("treats a reported duration of zero as no duration", () => {
+			expect(
+				normalizeEvent({
+					type: "tool_result",
+					tool_use_id: "t1",
+					tool_result: "ok",
+					duration_ms: 0,
+				}),
+			).toMatchObject({ durationMs: undefined });
+		});
+
+		// A backgrounded call returns a placeholder at once. Without the subtype
+		// that placeholder would replay as "this succeeded", which is the exact
+		// lie the old UI told.
+		it("keeps a backgrounded call running on its placeholder result", () => {
+			let messages: Message[] = [streamingRun()];
+			messages = applyServerEvent(messages, call("t1"));
+			messages = applyServerEvent(messages, {
+				type: "tool_result",
+				toolUseId: "t1",
+				toolResult: "Command running in background with ID: bash_1",
+				isError: false,
+				subtype: "background_started",
+			});
+
+			expect(runsOf(messages[0])).toMatchObject([
+				{
+					status: "background",
+					fromBackground: true,
+					placeholderResult: "Command running in background with ID: bash_1",
+				},
+			]);
+		});
+
+		// The placeholder is what the agent read; the outcome is what happened.
+		// A body showing only the second asserts the agent saw something it did
+		// not, so both are kept.
+		it("settles a background call on its outcome without losing the placeholder", () => {
+			let messages: Message[] = [streamingRun()];
+			messages = applyServerEvent(messages, call("t1"));
+			messages = applyServerEvent(messages, {
+				type: "tool_result",
+				toolUseId: "t1",
+				toolResult: "Command running in background with ID: bash_1",
+				isError: false,
+				subtype: "background_started",
+			});
+			// The conversation carried on above it.
+			messages = applyServerEvent(messages, { type: "done" });
+			messages = applyServerEvent(messages, {
+				type: "message",
+				content: "meanwhile",
+			});
+			messages = applyServerEvent(messages, {
+				type: "tool_result",
+				toolUseId: "t1",
+				toolResult: "Build succeeded",
+				isError: false,
+				subtype: "background_result",
+			});
+
+			expect(runsOf(messages[0])).toMatchObject([
+				{
+					status: "success",
+					fromBackground: true,
+					placeholderResult: "Command running in background with ID: bash_1",
+					result: "Build succeeded",
+				},
+			]);
+		});
+
+		// Pockode writes this one itself, after seeing the process that owned the
+		// task die. It cannot lean on an earlier `background_started` to mark the
+		// run: `task_updated` may turn a call into a background task after its
+		// own result was already parsed, and then nothing marked it — yet the
+		// row still has to say the outcome came after the turn, not from the
+		// agent's own read.
+		it("labels a lost background call as backgrounded even with no placeholder", () => {
+			let messages: Message[] = [streamingRun()];
+			messages = applyServerEvent(messages, call("t1"));
+			messages = applyServerEvent(messages, {
+				type: "tool_result",
+				toolUseId: "t1",
+				toolResult: "started",
+				isError: false,
+			});
+			// The process was killed; the next one settles the row.
+			messages = applyServerEvent(messages, {
+				type: "tool_result",
+				toolUseId: "t1",
+				toolResult: "This background task did not finish",
+				isError: true,
+				subtype: "background_lost",
+			});
+
+			expect(runsOf(messages[0])).toMatchObject([
+				{
+					status: "error",
+					fromBackground: true,
+					result: "This background task did not finish",
+				},
+			]);
+		});
+
+		// A record with no id names no call. Matching it against the parts that
+		// also have none would rebuild a row for some other call entirely.
+		it("drops a result that names no call rather than guessing", () => {
+			let messages: Message[] = [streamingRun()];
+			messages = applyServerEvent(messages, call("t1"));
+			const before = messages;
+			messages = applyServerEvent(messages, {
+				type: "tool_result",
+				toolUseId: "",
+				toolResult: "ok",
+				isError: false,
+			});
+
+			expect(messages).toBe(before);
+		});
+
+		// A turn cut short leaves nothing that can report back on a running call
+		// — but background work outlives the turn by definition.
+		it("interrupts a running call and leaves a background one alone", () => {
+			let messages: Message[] = [streamingRun()];
+			messages = applyServerEvent(messages, call("t1"));
+			messages = applyServerEvent(messages, call("t2"));
+			messages = applyServerEvent(messages, {
+				type: "tool_result",
+				toolUseId: "t2",
+				toolResult: "placeholder",
+				isError: false,
+				subtype: "background_started",
+			});
+			messages = applyServerEvent(messages, { type: "interrupted" });
+
+			expect(runsOf(messages[0])).toMatchObject([
+				{ id: "t1", status: "interrupted" },
+				{ id: "t2", status: "background" },
+			]);
+		});
+
+		describe("live progress", () => {
+			const activity = (
+				toolUseId: string,
+				fields: { activity?: string; outputDelta?: string },
+			) => ({ type: "tool_activity" as const, toolUseId, ...fields });
+
+			it("accumulates the deltas into the call's output", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(
+					messages,
+					activity("t1", { outputDelta: "one\n" }),
+				);
+				messages = applyServerEvent(
+					messages,
+					activity("t1", { outputDelta: "two\n" }),
+				);
+				expect(runsOf(messages[0])).toMatchObject([{ output: "one\ntwo\n" }]);
+			});
+
+			// A line that blinks in and out re-flows every row below it.
+			it("leaves the last status standing when an update carries none", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(
+					messages,
+					activity("t1", { activity: "Compiling" }),
+				);
+				messages = applyServerEvent(
+					messages,
+					activity("t1", { outputDelta: "x" }),
+				);
+				expect(runsOf(messages[0])).toMatchObject([{ activity: "Compiling" }]);
+			});
+
+			// Updates are coalesced per frame, so one held back may be applied
+			// after the result. A progress line under a finished row is worse than
+			// a moment of missing liveness.
+			it("ignores progress that arrives after the call has settled", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "t1",
+					toolResult: "done",
+					isError: false,
+				});
+				messages = applyServerEvent(
+					messages,
+					activity("t1", { activity: "late" }),
+				);
+				expect(runsOf(messages[0])[0].activity).toBeUndefined();
+			});
+
+			// It belongs to a call that may be several turns above: a background
+			// one reports while the conversation carries on.
+			it("still reaches a call the conversation has moved past", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "t1",
+					toolResult: "placeholder",
+					isError: false,
+					subtype: "background_started",
+				});
+				messages = applyServerEvent(messages, { type: "done" });
+				messages = applyServerEvent(messages, {
+					type: "message",
+					content: "meanwhile",
+				});
+				messages = applyToolActivitySnapshot(messages, {
+					t1: "Still building",
+				});
+				expect(runsOf(messages[0])).toMatchObject([
+					{ activity: "Still building" },
+				]);
+			});
+
+			it("drops progress that names no call on screen", () => {
+				const messages: Message[] = [streamingRun()];
+				expect(
+					applyServerEvent(messages, activity("nobody", { activity: "hi" })),
+				).toBe(messages);
+			});
+		});
+
+		// Only a call this client watched start has an honest clock; a replayed
+		// one would otherwise start its stopwatch at page load.
+		it("times only the calls this client saw start", () => {
+			const live = applyServerEvent([streamingRun()], call("t1"), undefined, {
+				live: true,
+			});
+			expect(runsOf(live[0])[0].seenAt).toBeInstanceOf(Date);
+
+			const replayed = applyServerEvent([streamingRun()], call("t1"));
+			expect(runsOf(replayed[0])[0].seenAt).toBeUndefined();
+		});
+
+		// An approved command used to draw two rows around its card, because the
+		// card was appended beside the pending row instead of taking its place —
+		// and with a spinner on that row, it claimed to be running while the user
+		// was still deciding. Both announcement orders are covered below: Claude
+		// sends the call first, Codex may ask first.
+		describe("a call that had to be approved", () => {
+			const permission = {
+				type: "permission_request" as const,
+				requestId: "r1",
+				toolName: "Bash",
+				toolInput: { command: "rm -rf build" },
+				toolUseId: "t1",
+			};
+
+			it("lets the card take the pending row's place", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, permission);
+
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{ type: "permission_request", status: "pending" },
+				]);
+			});
+
+			// Measured against claude 2.1.263: the call is announced before the
+			// approval request and is never re-sent, so the card is all that is
+			// left of it — and the row has to come back when the engine reports,
+			// or the command's output would appear nowhere at all.
+			it("gives the row back when the engine reports on an approved call", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, permission);
+				messages = applyServerEvent(messages, {
+					type: "permission_response",
+					requestId: "r1",
+					choice: "allow",
+				});
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "t1",
+					toolResult: "removed",
+					isError: false,
+				});
+
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{ type: "permission_request", status: "allowed" },
+					{
+						type: "tool_call",
+						tool: {
+							id: "t1",
+							name: "Bash",
+							input: { command: "rm -rf build" },
+							status: "success",
+							result: "removed",
+						},
+					},
+				]);
+			});
+
+			// Codex may ask for approval before it announces the item at all, so
+			// the call can arrive *after* its card. Either order draws one row,
+			// and not while the user is still deciding.
+			it("adds no row for a call whose card is still pending", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, permission);
+				messages = applyServerEvent(messages, call("t1"));
+
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{ type: "permission_request", status: "pending" },
+				]);
+			});
+
+			// The machine is waiting for the user, not working.
+			it("keeps progress from spinning a row above a card still pending", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, permission);
+				messages = applyServerEvent(messages, {
+					type: "tool_activity",
+					toolUseId: "t1",
+					outputDelta: "working\n",
+				});
+
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{ type: "permission_request", status: "pending" },
+				]);
+			});
+
+			// Once the user has answered, output belongs to a row again.
+			it("gives the row back for progress on an approved call", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, permission);
+				messages = applyServerEvent(messages, {
+					type: "permission_response",
+					requestId: "r1",
+					choice: "allow",
+				});
+				messages = applyServerEvent(messages, {
+					type: "tool_activity",
+					toolUseId: "t1",
+					outputDelta: "working\n",
+				});
+
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{ type: "permission_request", status: "allowed" },
+					{
+						type: "tool_call",
+						tool: { status: "running", output: "working\n" },
+					},
+				]);
+			});
+
+			// Some CLIs do re-send the call after approval. One row either way.
+			it("draws exactly one row when the call is re-sent after approval", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, permission);
+				messages = applyServerEvent(messages, {
+					type: "permission_response",
+					requestId: "r1",
+					choice: "allow",
+				});
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "t1",
+					toolResult: "removed",
+					isError: false,
+				});
+
+				expect((messages[0] as AssistantMessage).parts).toMatchObject([
+					{ type: "permission_request", status: "allowed" },
+					{ type: "tool_call", tool: { id: "t1", status: "success" } },
+				]);
+			});
+		});
+	});
+
+	// A subagent call is a tool run like any other; these cover it because it is
+	// the call most likely to outlive the turn that started it.
+	describe("subagent calls", () => {
 		const streaming = (parts: ContentPart[] = []): AssistantMessage => ({
 			id: "msg-1",
 			role: "assistant",
@@ -2048,10 +2516,10 @@ describe("messageReducer", () => {
 			isError = false,
 		) => ({ type: "tool_result" as const, toolUseId, toolResult, isError });
 
-		const tasksOf = (message: Message): TaskRun[] =>
+		const tasksOf = (message: Message): ToolRun[] =>
 			(message as AssistantMessage).parts
-				.filter((part) => part.type === "task")
-				.map((part) => part.task);
+				.filter((part) => part.type === "tool_call")
+				.map((part) => part.tool);
 
 		// Each Task is its own part, sitting where the turn spawned it, so the
 		// text written between two of them stays between them.
@@ -2062,9 +2530,9 @@ describe("messageReducer", () => {
 			messages = applyServerEvent(messages, taskCall("t2", "write plan"));
 
 			expect((messages[0] as AssistantMessage).parts).toMatchObject([
-				{ type: "task", task: { toolUseId: "t1", status: "running" } },
+				{ type: "tool_call", tool: { id: "t1", status: "running" } },
 				{ type: "text", content: "next" },
-				{ type: "task", task: { toolUseId: "t2", status: "running" } },
+				{ type: "tool_call", tool: { id: "t2", status: "running" } },
 			]);
 		});
 
@@ -2087,7 +2555,7 @@ describe("messageReducer", () => {
 			messages = applyServerEvent(messages, taskCall("t1", "find usages"));
 
 			expect(tasksOf(messages[0])).toMatchObject([
-				{ toolUseId: "t1", status: "done", result: "report" },
+				{ id: "t1", status: "success", result: "report" },
 			]);
 		});
 
@@ -2098,8 +2566,8 @@ describe("messageReducer", () => {
 			messages = applyServerEvent(messages, taskResult("t2", "second report"));
 
 			expect(tasksOf(messages[0])).toMatchObject([
-				{ toolUseId: "t1", status: "running" },
-				{ toolUseId: "t2", status: "done", result: "second report" },
+				{ id: "t1", status: "running" },
+				{ id: "t2", status: "success", result: "second report" },
 			]);
 		});
 
@@ -2112,7 +2580,7 @@ describe("messageReducer", () => {
 			);
 
 			expect(tasksOf(messages[0])).toMatchObject([
-				{ toolUseId: "t1", status: "failed", result: "Agent type not found" },
+				{ id: "t1", status: "error", result: "Agent type not found" },
 			]);
 		});
 
@@ -2125,12 +2593,11 @@ describe("messageReducer", () => {
 			expect(tasksOf(messages[0])).toMatchObject([{ status: "interrupted" }]);
 
 			messages = applyServerEvent(messages, taskResult("t1", "late report"));
+			// The content is kept and the status is not: a run that is interrupted
+			// and has a result is exactly the "it came back late" case, so no flag
+			// has to be kept in step with the two fields that already say it.
 			expect(tasksOf(messages[0])).toMatchObject([
-				{
-					status: "interrupted",
-					result: "late report",
-					resultAfterInterrupt: true,
-				},
+				{ status: "interrupted", result: "late report" },
 			]);
 		});
 
@@ -2153,7 +2620,7 @@ describe("messageReducer", () => {
 			const assistant = messages[0] as AssistantMessage;
 			expect(assistant.status).toBe("interrupted");
 			expect(tasksOf(messages[0])).toMatchObject([
-				{ toolUseId: "late", status: "interrupted" },
+				{ id: "late", status: "interrupted" },
 			]);
 		});
 
@@ -2168,7 +2635,7 @@ describe("messageReducer", () => {
 
 			messages = applyServerEvent(messages, taskResult("t1", "report"));
 			expect(tasksOf(messages[0])).toMatchObject([
-				{ status: "done", result: "report" },
+				{ status: "success", result: "report" },
 			]);
 		});
 
@@ -2190,12 +2657,10 @@ describe("messageReducer", () => {
 			);
 
 			expect(tasksOf(messages[0])).toMatchObject([
-				{ toolUseId: "bg", status: "done", result: "background report" },
+				{ id: "bg", status: "success", result: "background report" },
 			]);
 			const last = messages[messages.length - 1] as AssistantMessage;
-			expect(tasksOf(last)).toMatchObject([
-				{ toolUseId: "t2", status: "running" },
-			]);
+			expect(tasksOf(last)).toMatchObject([{ id: "t2", status: "running" }]);
 		});
 
 		it("settles Tasks still running in older turns when the process ends", () => {
@@ -2204,8 +2669,13 @@ describe("messageReducer", () => {
 				role: "assistant",
 				parts: [
 					{
-						type: "task",
-						task: { toolUseId: "old", description: "stale", status: "running" },
+						type: "tool_call",
+						tool: {
+							id: "old",
+							name: "Agent",
+							input: { description: "stale" },
+							status: "running",
+						},
 					},
 				],
 				status: "complete",
@@ -2230,8 +2700,8 @@ describe("messageReducer", () => {
 			messages = applyServerEvent(messages, taskCall("t2", "second"));
 
 			const last = messages[messages.length - 1] as AssistantMessage;
-			expect(tasksOf(last)).toMatchObject([{ toolUseId: "t2" }]);
-			expect(tasksOf(messages[0])).toMatchObject([{ toolUseId: "t1" }]);
+			expect(tasksOf(last)).toMatchObject([{ id: "t2" }]);
+			expect(tasksOf(messages[0])).toMatchObject([{ id: "t1" }]);
 		});
 
 		// Replay is the same path, so a history that ends mid-Task replays as a
@@ -2252,7 +2722,7 @@ describe("messageReducer", () => {
 				{ status: "running" },
 			]);
 
-			const settled = settleRunningTasks(replayed);
+			const settled = settleRunningToolRuns(replayed);
 			expect(tasksOf(settled[settled.length - 1])).toMatchObject([
 				{ status: "interrupted" },
 			]);
@@ -2272,7 +2742,7 @@ describe("messageReducer", () => {
 			];
 			const replayed = replayHistory(history);
 			expect(tasksOf(replayed[replayed.length - 1])).toMatchObject([
-				{ status: "done", result: "# Report" },
+				{ status: "success", result: "# Report" },
 			]);
 		});
 	});
@@ -2335,7 +2805,7 @@ describe("messageReducer", () => {
 					],
 				});
 				expect(partsOf(caught[caught.length - 1])).toMatchObject([
-					{ type: "task", task: { status: "done", result: "# Report" } },
+					{ type: "tool_call", tool: { status: "success" } },
 				]);
 			});
 
@@ -2516,8 +2986,8 @@ describe("messageReducer", () => {
 				const joined = prependHistoryPage(older, current);
 
 				expect(partsOf(joined[joined.length - 1])).toMatchObject([
-					{ type: "task", task: { description: "first" } },
-					{ type: "task", task: { description: "second" } },
+					{ type: "tool_call", tool: { id: "t1" } },
+					{ type: "tool_call", tool: { id: "t2" } },
 				]);
 			});
 
@@ -2566,7 +3036,7 @@ describe("messageReducer", () => {
 				// A turn that ended this way has no Task left running.
 				expect(partsOf(turn)).toMatchObject([
 					{ type: "text" },
-					{ type: "task", task: { status: "interrupted" } },
+					{ type: "tool_call", tool: { status: "interrupted" } },
 				]);
 			});
 

@@ -1,6 +1,12 @@
 import type { ContentPart, Message } from "../types/message";
+import { isTaskTool, taskDescription } from "./toolSummary";
 
 /**
+ * Beside the reducer rather than in `utils`, where this used to live: it reads
+ * a tool call the same way the rows do, and `utils` is the layer everything
+ * else is allowed to depend on — the one module there that reached back into
+ * `lib` was this one.
+ *
  * What one content part contributes to a preview of its message. Empty for the
  * parts that carry no words of their own.
  */
@@ -12,9 +18,11 @@ function partPreview(part: ContentPart): string {
 		case "warning":
 			return part.message;
 		case "tool_call":
-			return part.tool.name;
-		case "task":
-			return part.task.description;
+			// A subagent call is named by what it was asked to do; every other
+			// call by the tool, because its argument is rarely the shorter half.
+			return isTaskTool(part.tool.name)
+				? taskDescription(part.tool.input)
+				: part.tool.name;
 		case "permission_request":
 			return part.request.toolName;
 		case "ask_user_question":
