@@ -115,9 +115,12 @@ The records that ended it are in the page above, so left as it replayed it would
 keep a spinner running in the middle of the transcript — and with nothing left
 streaming, a later `process_ended` retires only the dialogs and Tasks this page
 left open instead of also stamping its status onto a turn that was still running
-at this point. A process killed by a restart writes no `process_ended` at all;
-that the process is gone is passed in separately, so every page is retired the
-same way the newest one already is.
+at this point. Whether the process is gone is passed in separately rather than
+looked for in the page, so every page is retired the same way the newest one
+already is — a `process_ended` is written for a session a restart cut short
+([agent-integration.md](code/agent-integration.md#restart-repair)), but it lands
+at the end of the transcript and says nothing to a page pulled in from further
+back.
 
 The mirror of this is one record the page above has to hand *down*. A record
 that only ends a turn — `done`, `error`, `interrupted`, `process_ended` — has

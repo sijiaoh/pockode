@@ -125,8 +125,12 @@ func (e EventType) ActivatesSession() bool
 - `Persisted` — this belongs in session history. Decides whether
   `streamEvents` writes a record before broadcasting.
 - `AwaitsUserInput` — the turn stopped: it finished, failed, was aborted, or is
-  blocked on a permission or question. Moves the process to `idle`.
-- `IndicatesAgentActivity` — a turn is under way. Moves the process to `running`.
+  blocked on a permission or question. Now only decides whether the session's
+  `UpdatedAt` is touched; what the turn *becomes* is `session.ReduceTurn`'s
+  answer ([Turn State](#turn-state)).
+- `IndicatesAgentActivity` — a turn is under way. Separates a `system` frame or a
+  progress line, which show the turn is alive, from an event that says nothing
+  about one at all.
 - `ActivatesSession` — the agent has put something on its own side of the
   conversation. Sets `SessionMeta.Activated` (see [Activation](#activation)).
 
@@ -151,8 +155,8 @@ and never corrects.
 
 That asymmetry is why `IndicatesAgentActivity` lists what counts as activity
 rather than what doesn't, and nothing downstream softens a wrong inclusion: the
-idle reaper will not collect the stranded session either, because a session
-marked `running` is a turn in progress and turns in progress are never reaped
+idle reaper will not collect the stranded session either, because a turn in
+progress is never reaped
 ([Idle Timeout Cleanup](#idle-timeout-cleanup)). A new event type is therefore
 inert by default, and adding it to the list is a deliberate claim that it cannot
 arrive between turns; the rest of that trade-off is at
@@ -1099,17 +1103,24 @@ every field (measured on claude 2.1.263: `subtype: success`, `is_error: false`,
 `terminal_reason: completed`), so nothing in the ending itself says whether it is
 the last one.
 
-Pockode treats that pause as one long thought rather than as a new state: the
-adapter swallows the pseudo-ending, no `AwaitsUserInput` event is produced, and
-everything downstream — process state, work status, the spinner and Stop button,
-unread marks — keeps behaving as it does mid-turn without knowing why. That is
-possible because the only thing that acts on a `DoneEvent` is the
-`AwaitsUserInput` branch of `Process.streamEvents`, and it is why no
-`ProcessState` or work state was added for waiting: the distinction is needed in
-exactly two places inside the server, the idle reaper and the fallback timer
-below. The `agent.Session` contract still holds — a turn ends
-with exactly one `AwaitsUserInput` event — it just says nothing about how long a
-turn may stay silent.
+Pockode says so outright: the adapter emits a `BackgroundWaitEvent` in place of
+the pseudo-ending, and `session.ReduceTurn` parks the turn on a `background`
+blocker ([Turn State](#turn-state)). The turn is neither over nor being worked
+on, and every surface can say which.
+
+**This replaces swallowing the ending**, which is what the adapter used to do so
+that the wait read as one long thought. It worked in the sense that nothing
+downstream had to know, and the cost was that nothing downstream *could* know: a
+spinner and a Stop button and an `in_progress` work item for up to two hours of a
+turn nobody was running, with the idle reaper needing a hole cut in it to avoid
+killing the tasks. The event is recorded like any other, so the wait is visible
+in the transcript where it happened.
+
+**Only content ends the wait.** `SignalOutput` — text, a tool call, a result —
+clears the blocker, because it is the only proof the CLI resumed. A `system`
+frame does not, and that exclusion is load-bearing rather than cautious: the
+background task list changing *is* a `system` frame, so counting it would make a
+task **finishing** look like the turn coming back.
 
 **Tracking what is live.** The only usable signal is `system` /
 `background_tasks_changed`, whose payload is every live task after the change.
@@ -1122,11 +1133,11 @@ excluded, because the CLI tells hosts to keep them out of activity indicators an
 they must not hold a turn open either. The set is live state and never enters an
 event record or the history: a snapshot of it becomes a lie the moment a task
 finishes. A payload the parser cannot read **empties** the set — an empty set only
-costs the swallowing (the turn ends the way it did before this existed, noisily
-but recoverably), while a stale non-empty one would hold the turn open with
-nothing left to clear it.
+costs the parking (the turn ends the way it did before this existed, noisily but
+recoverably), while a stale non-empty one would park the turn with nothing left
+to clear it.
 
-**What gets swallowed.** Only a normal ending. The abort and `is_error` branches
+**What gets parked.** Only a normal ending. The abort and `is_error` branches
 run first and still produce `InterruptedEvent` / `ErrorEvent`, because both are
 real endings. Narrowing further — to `terminal_reason == "completed"` — would be
 wrong: besides `completed`, the reasons that survive both branches are
@@ -1135,12 +1146,12 @@ and the CLI itself describes turns ending via the first three as ones that "may
 only be answered on continuation/resume" — to-be-continued by construction, the
 same class the fourth belongs to. The reasons that really are failures
 (`max_turns`, `budget_exhausted`, the API and model errors) are all built with
-`is_error: true` and never reach the swallow.
+`is_error: true` and never reach the parking branch.
 
-**The fallback timer** (`background_wait.go`) is what keeps swallowing from being
-open-ended: the ending is held, not discarded, and delivered anyway once a budget
-runs out. Two cases make an unbounded wait wrong — session-scoped monitors that
-never finish, and a model that started a task and is genuinely done. The budget
+**The fallback timer** (`background_wait.go`) is what keeps the parking from
+being open-ended: the ending is delivered anyway once a budget runs out. Two
+cases make an unbounded wait wrong — session-scoped monitors that never finish,
+and a model that started a task and is genuinely done. The budget
 is 30 minutes, doubling per extension to a cap of 120, mirroring the CLI's own
 background-task budget.
 
@@ -1172,14 +1183,16 @@ knowledge of it. The lost-task report below uses the same channel.
 **The idle reaper exemption.** A process waiting on background work looks exactly
 like an abandoned one, since the wait produces no events to refresh `lastActive`;
 reaping it would kill the very tasks being waited for, with no explanation
-anywhere. `agent.BackgroundWaiter` is the optional interface the reaper
-type-asserts for (Codex has no such concept and simply does not implement it).
-The predicate is **"is the fallback armed"**, not "is the live set non-empty": the
-live set only shrinks when the CLI sends another frame, so after a silent or dead
-process it would stay non-empty forever and the exemption would never expire.
-Armed means precisely "Pockode is holding an ending back", it clears itself when
-the budget runs out, and the `DoneEvent` delivered then refreshes `lastActive`,
-giving the process an ordinary new idle window.
+anywhere. The reaper asks the turn state — a `background` blocker is a hold — so
+there is no separate predicate, and no optional interface for it to type-assert
+for; an agent without the concept simply never emits the event.
+
+The exemption is not open-ended, and for the same reason the blocker is not keyed
+to the live task set: that set only shrinks when the CLI sends another frame, so
+after a silent or dead process it would stay non-empty forever. The blocker is
+cleared by the CLI resuming, or by the fallback below ending the turn — and the
+`DoneEvent` it delivers refreshes `lastActive`, giving the process an ordinary
+new idle window.
 
 Stopping during a wait needed no compensation: the CLI answers an `interrupt`
 control request within about a second even with no active turn (measured), which
@@ -1849,9 +1862,9 @@ These are choices, recorded so they do not become blanks nobody knows about.
   reason; app-server has no notification by either name, so there is nothing to
   add to `ignoredNotifications` — the item simply falls through the type switch
   like reasoning and plans.)
-- **`agent.BackgroundWaiter`** has no Codex counterpart to implement. Codex has no
-  concept of a task that outlives its turn, so the interface stays unimplemented
-  and the idle reaper's exemption simply never applies
+- **`BackgroundWaitEvent`** has no Codex counterpart to emit. Codex has no concept
+  of a task that outlives its turn, so a Codex session never parks one and the
+  `background` blocker simply never appears on it
   ([Background Waits](#background-waits)).
 
 ## Usage Reporting
@@ -2190,31 +2203,102 @@ the tree is terminated there too — that is what lets the caller's drain finish
 A backstop closes the pipes a few seconds later regardless, covering a descendant
 that escaped the tree entirely (e.g. by starting a new session).
 
-### State Machine
+### Turn State
 
+A process has no state of its own beyond existing. What a session is doing lives
+on the session, as one `session.TurnState`, and is written by one pure function.
+
+```go
+// session/turn.go
+type TurnState struct {
+    Phase       TurnPhase   // idle | running | blocked
+    Open        bool        // a turn is under way behind whatever is in its way
+    Blockers    []Blocker   // permission | question | background
+    Since       time.Time   // when this phase was entered
+    LastOutcome TurnOutcome // completed | failed | aborted, for the turn that ended
+}
+
+func ReduceTurn(state TurnState, in TurnInput) TurnTransition
 ```
-ProcessStateIdle ←→ ProcessStateRunning
-       ↓
-ProcessStateEnded
 
-Transition conditions:
-- Idle → Running: SendMessage / SendPermissionResponse / SendQuestionResponse,
-  or an IndicatesAgentActivity event (a turn that resumes on its own, such as a
-  message that stayed queued behind an interrupt)
-- Running → Idle: AwaitsUserInput events (done, error, interrupted, permission_request, ask_user_question)
-- Any → Ended: Process termination / Idle timeout
-```
+**The phase is derived, never assigned.** `phaseFor` reads the blockers first —
+anything in the way is `blocked`, whatever else is true, so nothing drawing this
+has to look past `phase` to find out — and `Open` separates the other two. That
+is why answering a prompt mid-turn simply resumes the turn: the blocker goes and
+the phase follows. The old model had to walk the process back through `idle` and
+then forward again, because it was writing the two facts by hand.
 
-An idle that ends a turn is reported once, but an idle that only pauses the turn
-(`permission_request`, `ask_user_question`) can still be followed by one. That
-asymmetry matters at both ends:
+**`Open` is the one thing a phase cannot say on its own**, and the case that
+needs it is real: a CLI can raise a prompt *after* the turn it belonged to has
+already reported its end. That session is blocked — somebody has to answer — with
+no turn behind the prompt, so withdrawing it leaves the session `idle` rather
+than inventing one. Reading a withdrawal as "the turn carries on" instead would
+leave a session running with nothing left to end it, and a process the reaper can
+never collect. The old model kept this as a second flag on the process for
+exactly the same reason; what has changed is that it is an input to one rule
+rather than a rule of its own.
 
-- A pending permission prompt disappears with its turn. The interrupt or error
-  that ends it has to be reported even though the process is already idle, or the
-  session waits forever for an answer to a prompt nobody can see.
-- Agents can announce the same end twice — Claude acknowledges an interrupt with
-  a `control_response` and then ends the same turn again with an aborted `result`
-  — and a second idle reads downstream as a second stop.
+Three blockers, because three things can stand in a turn's way and each is
+cleared by something different:
+
+| Blocker | Raised by | Cleared by |
+|---|---|---|
+| `permission` | `permission_request` | the user's answer, `request_cancelled`, or the death of the process that raised it |
+| `question` | `ask_user_question` | the same three |
+| `background` | `background_wait` | the agent producing **content** again ([Background Waits](#background-waits)) |
+
+A blocker belongs to the process incarnation that raised it and never outlives
+it ([A Prompt Belongs to the Process That Raised It](#a-prompt-belongs-to-the-process-that-raised-it)).
+`SignalProcessEnded` expires every one of them and marks a turn still open as
+`aborted`; the same reduction runs over the whole index at startup, which is what
+a restart-killed run leaves behind (see [Restart Repair](#restart-repair)).
+
+**Inputs are signals, not event types.** `process.turnInputFor` is the whole of
+the translation, and it exists because the mapping is not one-to-one in either
+direction: five event types all mean "the agent produced content", while a
+`system` frame means "the turn is alive" and must specifically *not* mean "the
+CLI resumed". Nothing else in the server reads event types to decide what a
+session is doing.
+
+The send path supplies the two signals no event carries: `SignalPrompt` when a
+prompt goes out, `SignalAnswered` with the request id when an answer goes back.
+
+**Ended is reported once.** Agents can announce the same ending twice — Claude
+acknowledges an interrupt with a `control_response` and then ends the same turn
+again with an aborted `result` — and a second ending reads downstream as a second
+stop. `TurnTransition.Ended` is true only for the input that actually closed an
+open turn.
+
+#### Settling
+
+`session.TurnSettler` holds "the turn is over" back for a moment
+(`DefaultSettleDelay`, 2s) and drops it if the session starts running again
+inside that window. This is the one heuristic in the lifecycle, and it lives here
+so that it exists exactly once: a turn reaching idle is a fact, "this session has
+stopped" is a guess, and an aborted turn is routinely followed by its replacement
+a moment later. Raw state changes are unaffected — a client's spinner should stop
+immediately; only decisions taken *because* a turn ended need the settled answer.
+
+Nothing reads it yet: `work.AutoResumer` still keeps a settle delay of its own,
+and replacing it is part of the work-layer step. A settler with no listener arms
+no timers, so until then this costs nothing and announces nothing.
+
+#### What the Wire Still Sees
+
+`StateChangeEvent` keeps the shape it has always had — a `ProcessState` and a
+`NeedsInput` flag — narrowed from the turn state by `process.viewTurn`:
+
+| Turn | State | NeedsInput |
+|---|---|---|
+| a `permission` or `question` blocker, whatever else is true | `idle` | true |
+| otherwise, a turn is open (running, or blocked on `background`) | `running` | false |
+| otherwise | `idle` | false |
+
+The second row is where the narrowing loses something real — a parked turn and a
+running one are the whole point of the new blocker, and here they are the same
+value — and it is deliberate: the wire keeps its old shape until the client is
+changed to read the turn state directly. Nothing above that function is written
+in terms of these two values.
 
 #### A Prompt Belongs to the Process That Raised It
 
@@ -2248,11 +2332,13 @@ opposite directions for the same reason:
   process can still take the answer. A CLI that dies on its own still ends the
   session, and the card with it — but that is the CLI's doing, not a card
   expired by a timer nobody asked for.
-- **Across a restart, the work is not kept waiting.** Startup stops
-  `needs_input` work instead of preserving it
-  ([work-system.md](work-system.md#triggers), Trigger C): the process is gone,
-  so the question is gone, and the status would be promising a resumption that
-  cannot arrive.
+- **Across a restart, the blocker expires and the transcript says so.** The
+  session store reduces every stored turn with `SignalProcessEnded` when it loads
+  the index, and appends the `process_ended` record the killed run never wrote
+  (see [Restart Repair](#restart-repair)). Startup also stops `needs_input` work
+  instead of preserving it ([work-system.md](work-system.md#triggers), Trigger
+  C): the process is gone, so the question is gone, and the status would be
+  promising a resumption that cannot arrive.
 
 **Both rules stand on this premise and have to be revisited if it changes.** The
 change to watch for is a CLI re-offering its outstanding prompts to a resumed
@@ -2263,6 +2349,35 @@ turns a `needs_input` work preserved across a restart from a lie into the correc
 answer. Neither rule has a second reason to fall back on, which is why the
 premise is written down once here instead of being re-derived at each of them.
 
+#### Restart Repair
+
+Nothing survives a restart, so every blocker a process raised is unanswerable and
+every turn it was carrying was aborted — but the stored state still says
+otherwise, because a run killed with `SIGKILL` had no chance to write anything on
+the way out.
+
+**The authoritative record is Pockode's own, not the CLI's.** Measured on claude
+2.1.263 and codex-cli 0.153.0, a CLI killed mid-prompt may leave a dangling
+`tool_use` with no result, a last line written half way, or — if the kill lands
+within a second of the prompt — no trace of the question at all. All three resume
+cleanly, and none of them can be asked what happened.
+
+So `session.FileStore` repairs it at load, in two parts:
+
+- **The state**, reduced with `SignalProcessEnded` — the same rule that handles a
+  process dying while the server runs, which is the point of there being one
+  rule.
+- **The transcript**, which gets the `process_ended` record the killed run never
+  wrote. That record is what a replaying client reads to mark a pending
+  permission card or question `expired`; without it a restarted server shows
+  prompts that look answerable and are not.
+
+Sessions that were idle are left completely alone, and so are sessions written by
+a build from before turn state existed: those read back with no turn, an absent
+phase means idle, and the repair is a no-op for them. That is the whole of the
+migration — there is no migration script, and the obsolete `needs_input` still on
+disk is simply never read.
+
 ### Event Stream Handling
 
 ```go
@@ -2271,27 +2386,37 @@ func (p *Process) streamEvents(ctx context.Context) {
     for event := range p.agentSession.Events() {
         p.touch()      // Update active time
 
-        if event.EventType().IndicatesAgentActivity() {
-            p.SetRunning()
-        }
         if event.EventType().ActivatesSession() {
             p.markActivated(ctx, log) // first transition only
         }
 
-        // 1. Persistence
+        // 1. Turn state, decided
+        in, reduce := turnInputFor(event)
+        if reduce { transition = p.applyTurn(ctx, in) }
+
+        // 2. Persistence
         store.AppendToHistory(ctx, sessionID, event.ToRecord())
 
-        // 2. State transition
-        if event.EventType().AwaitsUserInput() {
-            p.SetIdle(needsInput) // SetIdleInterrupted for interrupted
-            store.Touch(ctx, sessionID)
-        }
+        // 3. Turn state, announced
+        if reduce { p.manager.emitTurn(p.sessionID, transition) }
 
-        // 3. Broadcast
+        // 4. Broadcast
         manager.EmitMessage(sessionID, event)
     }
 }
 ```
+
+The turn is **decided** before the record and **announced** after it, which are
+two separate promises. Deciding first means anything that sees the record sees
+the state it caused, already settled. Announcing after means a listener woken by
+the change cannot go looking for a record that is not there yet.
+
+Events buffered behind a process that is already being closed are dropped rather
+than reduced (`acceptsTurnInput`): they were true when the agent produced them
+and are not any more. `process_ended` is the exception, because that is the one
+thing still true about it — and it is announced through `observeTurn` rather than
+`emitTurn`, because the goroutine that owns the stream reports the process's own
+ending once the channel closes.
 
 ### Idle Timeout Cleanup
 
@@ -2317,42 +2442,32 @@ collecting the process would destroy what it is waiting for. What the reaper
 actually asks is `Process.reapHold`: the name of the thing this process is still
 in the middle of, or `""` when it is in the middle of nothing.
 
-Three things hold a process, checked most specific first because the name is
-what gets logged:
+All three holds are read off the session's turn state, which is the point: they
+used to be three independently maintained flags, each with its own rule for when
+it cleared. They are the phases, in the order a reaper wants to name them:
 
-- **Paused on an unanswered prompt** (`permission_request`, `ask_user_question`).
-  Reaping one answers the agent's question by killing it, and no later process
-  can make up for that: the prompt belongs to the process that raised it
+- **Blocked on a `permission` or `question` blocker.** Reaping answers the
+  agent's question by killing it, and no later process can make up for that: the
+  prompt belongs to the process that raised it
   ([A Prompt Belongs to the Process That Raised It](#a-prompt-belongs-to-the-process-that-raised-it)).
-
-  The predicate is `Process.awaitingUserAnswer`, which tracks the outstanding
-  answer separately from the turn rather than reading it off `turnEnded`. The
-  two come apart in both directions — an agent can withdraw a prompt without
-  ending the turn, which the frontend shows as a card moving from `pending` to
-  `expired`, and a prompt raised after a turn has reported its end outlives that
-  turn. Which flag answers which question is worked out at
-  `Process.promptPending`.
-- **Waiting on background work** — a turn held open for background tasks, which
-  would be killed with the process; see [Background Waits](#background-waits).
-- **A turn in progress** — the state is not a reported idle (`state != idle` or
-  `!turnEnded`). This is the hold that does the most work, and the one that had
-  to be written: a turn can run for minutes without producing a single event —
-  one `Bash` call around a build or a test suite is enough — and to `lastActive`
-  that is indistinguishable from a session nobody came back to. Requiring the
-  turn's own report of having ended is what keeps "quiet" from passing for
+- **Blocked on `background`** — a turn parked on background tasks, which would be
+  killed with the process; see [Background Waits](#background-waits).
+- **A turn in progress** (`Phase != idle`). This is the hold that does the most
+  work: a turn can run for minutes without producing a single event — one `Bash`
+  call around a build or a test suite is enough — and to `lastActive` that is
+  indistinguishable from a session nobody came back to. A turn only reaches idle
+  by being ended, so requiring that ending is what keeps "quiet" from passing for
   "done".
 
-  It is also the widest, and it comes close enough to covering the other two
-  that the gaps are worth stating: a prompt raised after its turn already
-  reported an end has no turn behind it and is held by the prompt check alone.
-  So the earlier checks are not prettier labels for cases this one would catch
-  anyway — dropping one can cost a session rather than a log line. Which check
-  covers which case is worked out at `Process.reapHold`.
+The first two are narrower than the third and are read first only so that the log
+names the right thing — with one exception worth knowing: a prompt raised *after*
+its turn already ended has no turn behind it, so the blocker check is the only
+thing holding it.
 
-None of the three holds has a time budget, and none can: a build outruns any
-timeout worth setting and a person outruns it by more. Each ends when the session
-itself moves on — the turn reports its end, the agent gives up on its background
-tasks, the prompt is answered or withdrawn.
+None of the three holds has a time budget yet, and neither could the flags they
+replace: a build outruns any timeout worth setting and a person outruns it by
+more. Each ends when the session itself moves on — the turn reports its end, the
+CLI resumes from its background work, the prompt is answered or withdrawn.
 
 So a process outlives the timeout whenever the session never moves on: a session
 left on an unanswered question keeps its process for as long as the server runs,
@@ -2397,7 +2512,7 @@ type SessionMeta struct {
     Mode       Mode        // default, yolo
     Model      string      // agent-specific model id; empty = CLI decides
     Effort     string      // agent-specific reasoning effort; empty = CLI decides
-    NeedsInput bool        // Awaiting user permission/question response
+    Turn       TurnState   // what the session is doing; see Turn State
     Unread     bool        // Has unread changes
     ForkedFrom *ForkOrigin // Set on a fork, naming the session it came from
     Usage      Usage       // Tokens and cost, as the agent reported them

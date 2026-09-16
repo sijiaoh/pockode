@@ -31,8 +31,8 @@ type backgroundTaskTracker struct {
 	liveMu sync.Mutex
 	live   []string
 
-	// The swallowing cannot be open-ended, so every swallowed ending is held by
-	// this timer and delivered anyway once the budget runs out.
+	// Parking the turn cannot be open-ended, so every parked turn is held by this
+	// timer and ended anyway once the budget runs out.
 	wait backgroundWait
 
 	// tasksMu guards the join from Claude's task lifecycle back to the tool call
@@ -132,18 +132,6 @@ func (t *backgroundTaskTracker) backgroundedCallIDs() []string {
 // hasLive reports whether any non-ambient background task is still running.
 func (t *backgroundTaskTracker) hasLive() bool {
 	return t.liveCount() > 0
-}
-
-// waitingForBackgroundWork reports whether Pockode is currently holding a turn
-// open on behalf of background work.
-//
-// Deliberately not "is the live set non-empty": the set only shrinks when the
-// CLI sends another frame, so a silent or dead process would keep it non-empty
-// forever. The fallback timer is armed exactly while an ending is being held
-// back and clears itself when the budget runs out, so callers get an exemption
-// that expires on its own.
-func (t *backgroundTaskTracker) waitingForBackgroundWork() bool {
-	return t.wait.armed()
 }
 
 // --- The task lifecycle, and the join back to the tool call ---

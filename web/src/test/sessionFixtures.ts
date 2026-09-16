@@ -18,7 +18,7 @@ export function makeSessionDetail(
 		model: "",
 		effort: "",
 		activated: false,
-		needs_input: false,
+		turn: { phase: "idle", open: false, since: "2024-01-01T00:00:00Z" },
 		unread: false,
 		usage: {
 			input_tokens: 0,

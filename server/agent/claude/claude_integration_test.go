@@ -675,11 +675,9 @@ func TestIntegration_LostBackgroundTasksAreReportedOnRestart(t *testing.T) {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
-	// Kill the process while the task is still running, a few seconds after the
-	// turn's last text so the swallowed result frame has certainly arrived.
-	killAfter := time.NewTimer(time.Hour)
-	defer killAfter.Stop()
-
+	// Kill the process while the task is still running. The turn says when that
+	// is: a real CLI in a real wait reports the park outright, and that is the
+	// moment reaping it would destroy the task below.
 waitForKill:
 	for {
 		select {
@@ -688,23 +686,15 @@ waitForKill:
 				t.Fatal("the process ended on its own before it could be killed")
 			}
 			switch event.(type) {
-			case agent.TextEvent:
-				killAfter.Reset(5 * time.Second)
+			case agent.BackgroundWaitEvent:
+				sess.Close()
+				break waitForKill
 			case agent.DoneEvent:
 				// The model ignored the instructions and finished in one turn, so
 				// there was no background task left to lose.
 				sess.Close()
 				t.Skip("the turn ended without leaving a background task running")
 			}
-		case <-killAfter.C:
-			// The same predicate the idle reaper consults, on a real process in a
-			// real wait: it must be exempt at exactly this moment, because this is
-			// the moment reaping it would destroy the task below.
-			if waiter, ok := sess.(agent.BackgroundWaiter); !ok || !waiter.WaitingForBackgroundWork() {
-				t.Error("a session waiting on a background task must be exempt from the idle reaper")
-			}
-			sess.Close()
-			break waitForKill
 		case <-ctx.Done():
 			t.Fatal("timeout waiting for the turn to start a background task")
 		}

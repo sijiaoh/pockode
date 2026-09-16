@@ -271,14 +271,6 @@ func (s *cliSession) takeNote() string {
 	return note
 }
 
-// WaitingForBackgroundWork implements agent.BackgroundWaiter: it reports whether
-// this session is holding a turn open for background tasks, so the idle reaper
-// does not kill the process (and the tasks with it) during a wait that produces
-// no events by definition.
-func (s *cliSession) WaitingForBackgroundWork() bool {
-	return s.backgroundTasks.waitingForBackgroundWork()
-}
-
 // SendMessage sends a message to Claude.
 func (s *cliSession) SendMessage(prompt string) error {
 	if note := s.takeNote(); note != "" {
@@ -1493,8 +1485,9 @@ const abortTerminalReasonPrefix = "aborted"
 // legacyAbortError is how CLIs without terminal_reason reported an abort.
 const legacyAbortError = "Request was aborted"
 
-// parseResultEvent turns the CLI's end-of-turn frame into an event, or into
-// nothing at all while background work is still running (see below).
+// parseResultEvent turns the CLI's end-of-turn frame into an event: an ending,
+// or — while background work is still running — the turn being parked on it
+// (see below).
 func parseResultEvent(log *slog.Logger, line []byte, backgroundTasks *backgroundTaskTracker) agent.AgentEvent {
 	var result resultEvent
 	if err := json.Unmarshal(line, &result); err != nil {
@@ -1513,13 +1506,15 @@ func parseResultEvent(log *slog.Logger, line []byte, backgroundTasks *background
 
 	// A normal ending while background tasks are still live is not an ending:
 	// the CLI resumes output by itself once they finish, with no input from us.
-	// Swallowing the event keeps the whole turn — process state, work state,
-	// spinner, Stop button, unread — behaving as one long thought. Errors and
-	// aborts above are real endings and still go through.
+	// It is reported as what it is — the turn parked on that work — rather than
+	// passed on as an ending or swallowed. Swallowing it is what this replaces:
+	// the turn then read as one long thought, and every surface drew a running
+	// agent for a wait that can last hours. Errors and aborts above are real
+	// endings and still go through.
 	if backgroundTasks.hasLive() {
-		log.Info("swallowing end of turn, background tasks are still running")
+		log.Info("turn parked, background tasks are still running")
 		backgroundTasks.wait.extend()
-		return nil
+		return agent.BackgroundWaitEvent{}
 	}
 
 	return agent.DoneEvent{}

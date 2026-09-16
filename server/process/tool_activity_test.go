@@ -41,7 +41,7 @@ func TestProcess_ToolActivityIsBroadcastButNeverRecorded(t *testing.T) {
 	rec := &messageRecorder{}
 	m.SetMessageListener(rec)
 
-	m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", Activated: true, AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 
 	sess := mock.session(t, "sess-1")
 	sess.emit(t, agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "still going"})
@@ -82,7 +82,7 @@ func TestProcess_ToolActivityIsKeptForACallStillInFlight(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", Activated: true, AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
 	sess.emit(t, agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "first"})
@@ -135,7 +135,7 @@ func TestProcess_ToolActivityIsDroppedWhenTheRunSettles(t *testing.T) {
 			m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 			defer m.Shutdown()
 
-			m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", Activated: true, AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+			m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 			sess := mock.session(t, "sess-1")
 
 			sess.emit(t, agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "working"})
@@ -160,7 +160,7 @@ func TestProcess_ToolActivitySurvivesAPausedTurn(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", Activated: true, AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
 	sess.emit(t, agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "working"})

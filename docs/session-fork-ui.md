@@ -704,10 +704,12 @@ worktree, or answers on a different agent or model, is a different session, not 
 fork. It is born `activated: true` — it has a transcript — which by the existing
 rule locks the agent half of its engine selector, and that is the behaviour we
 want: the inherited transcript was produced by that agent. Model and effort stay
-changeable, as on any activated session. `unread` and `needs_input` start false,
-and the token usage starts at zero — the tokens behind the copied transcript were spent
-by the parent, and counting them on both sides would make every sum over sessions
-wrong ([usage-display-ui.md](usage-display-ui.md#a-fork-starts-at-zero)). So a
+changeable, as on any activated session. `unread` starts false, and so does the
+turn: it begins idle even when the source is mid-turn, because nothing is
+producing output for the fork and nothing can answer a prompt copied into it.
+The token usage starts at zero — the tokens behind the copied transcript were
+spent by the parent, and counting them on both sides would make every sum over
+sessions wrong ([usage-display-ui.md](usage-display-ui.md#a-fork-starts-at-zero)). So a
 fork can show a long conversation and a small total; the panel says why.
 
 A fork of a session that belongs to a work is **not** linked to that work. The

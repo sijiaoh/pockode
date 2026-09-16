@@ -284,7 +284,6 @@ Flags:
 	workAutoResumer := work.NewAutoResumer(workStore, 3)
 	workAutoResumer.StopOrphanedWork()
 	workAutoResumer.SetStepProvider(&agentRoleStepAdapter{store: agentRoleStore})
-	session.ClearOrphanedNeedsInput(dataDir)
 	workStore.AddOnChangeListener(workAutoResumer)
 
 	// Set PM as default agent role on first launch

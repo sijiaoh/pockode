@@ -356,8 +356,11 @@ type SessionListItem struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
 	// UpdatedAt is the row's subtitle, and what the list is ordered by.
-	UpdatedAt  time.Time           `json:"updated_at"`
-	State      string              `json:"state"` // "idle" | "running" | "ended"
+	UpdatedAt time.Time `json:"updated_at"`
+	State     string    `json:"state"` // "idle" | "running" | "ended"
+	// NeedsInput is derived from the session's turn state, not stored: it is
+	// true exactly while a permission request or a question is waiting for an
+	// answer (session.TurnState.AwaitingUserAnswer).
 	NeedsInput bool                `json:"needs_input"`
 	Unread     bool                `json:"unread"`
 	ForkedFrom *session.ForkOrigin `json:"forked_from,omitempty"`
@@ -372,7 +375,7 @@ func NewSessionListItem(meta session.SessionMeta, state string) SessionListItem 
 		Title:      meta.Title,
 		UpdatedAt:  meta.UpdatedAt,
 		State:      state,
-		NeedsInput: meta.NeedsInput,
+		NeedsInput: meta.Turn.AwaitingUserAnswer(),
 		Unread:     meta.Unread,
 		ForkedFrom: meta.ForkedFrom,
 	}

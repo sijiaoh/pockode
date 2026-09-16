@@ -483,7 +483,11 @@ export interface SessionDetail {
 	effort: string;
 	/** True once the agent has produced output in this session. */
 	activated: boolean;
-	needs_input: boolean;
+	/**
+	 * What the session is doing, and the only place it is recorded. The list's
+	 * `needs_input` is derived from this server-side; nothing here reads it yet.
+	 */
+	turn: SessionTurn;
 	unread: boolean;
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
@@ -496,6 +500,41 @@ export interface SessionDetail {
 
 export interface SessionDetailSubscribeResult {
 	session: SessionDetail;
+}
+
+/** What a turn is stuck on. Only one kind is ever the user's to clear twice
+ * over: `permission` and `question` need an answer, `background` needs the
+ * agent's own work to finish. */
+export type TurnBlockerKind = "permission" | "question" | "background";
+
+export interface TurnBlocker {
+	kind: TurnBlockerKind;
+	/** The agent's id for the prompt an answer names. Absent on `background`. */
+	request_id?: string;
+	raised_at: string;
+}
+
+/** `blocked` is exactly "there is at least one blocker": the server derives the
+ * phase rather than letting it drift from them, so nothing here has to look past
+ * `phase` to find out. */
+export type TurnPhase = "idle" | "running" | "blocked";
+
+export type TurnOutcome = "completed" | "failed" | "aborted";
+
+export interface SessionTurn {
+	phase: TurnPhase;
+	/**
+	 * Whether a turn is under way behind whatever is in its way. It differs from
+	 * `phase !== "idle"` in exactly one case: a CLI can raise a prompt after the
+	 * turn it belonged to already ended, which is `blocked` with nothing running.
+	 */
+	open: boolean;
+	blockers?: TurnBlocker[];
+	/** When the current phase was entered; it does not move while it holds. */
+	since: string;
+	/** How the previous turn ended. Cleared the moment a new one starts, so it
+	 * says nothing while `phase` is not `idle`. */
+	last_outcome?: TurnOutcome;
 }
 
 /** A deleted session reports no metadata; `deleted` is set exactly then. */
@@ -612,6 +651,7 @@ export type ServerMethod =
 	| "done"
 	| "interrupted"
 	| "process_ended"
+	| "background_wait"
 	| "permission_request"
 	| "ask_user_question"
 	| "request_cancelled"
@@ -676,6 +716,14 @@ export type ServerNotification =
 	| { type: "done" }
 	| { type: "interrupted" }
 	| { type: "process_ended" }
+	| {
+			/**
+			 * The turn parked on work that outlives the tool call that started it.
+			 * Neither an ending nor output: the CLI resumes by itself when the work
+			 * finishes (agent-integration.md#background-waits).
+			 */
+			type: "background_wait";
+	  }
 	| {
 			type: "permission_request";
 			request_id: string;

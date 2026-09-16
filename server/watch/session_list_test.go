@@ -80,8 +80,8 @@ func (m *mockSessionStore) SetEffort(ctx context.Context, sessionID string, effo
 	return nil
 }
 
-func (m *mockSessionStore) SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error {
-	return nil
+func (m *mockSessionStore) ApplyTurn(ctx context.Context, sessionID string, in session.TurnInput) (session.TurnTransition, error) {
+	return session.TurnTransition{}, nil
 }
 
 func (m *mockSessionStore) SetUnread(ctx context.Context, sessionID string, unread bool) error {
@@ -228,19 +228,18 @@ func TestSessionListWatcher_HandleProcessStateChange_NoSubscribers(t *testing.T)
 	})
 }
 
+// recordingSessionStore notices any metadata write the watcher makes. Whether a
+// session is waiting on the user is not one of them any more — it is derived
+// from the turn state the process wrote — so what this catches is the watcher
+// growing a write it should not have.
 type recordingSessionStore struct {
 	mockSessionStore
-	needsInputCalls []needsInputCall
+	turnInputs []session.TurnInput
 }
 
-type needsInputCall struct {
-	SessionID  string
-	NeedsInput bool
-}
-
-func (r *recordingSessionStore) SetNeedsInput(_ context.Context, sessionID string, needsInput bool) error {
-	r.needsInputCalls = append(r.needsInputCalls, needsInputCall{SessionID: sessionID, NeedsInput: needsInput})
-	return nil
+func (r *recordingSessionStore) ApplyTurn(_ context.Context, _ string, in session.TurnInput) (session.TurnTransition, error) {
+	r.turnInputs = append(r.turnInputs, in)
+	return session.TurnTransition{}, nil
 }
 
 type recordingSyncer struct {
@@ -297,7 +296,7 @@ func TestHandleProcessStateChange_IdleNoNeedsInput_NoSync(t *testing.T) {
 	}
 }
 
-func TestHandleProcessStateChange_Running_KeepsNeedsInput(t *testing.T) {
+func TestHandleProcessStateChange_Running_TouchesNothing(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
@@ -308,22 +307,21 @@ func TestHandleProcessStateChange_Running_KeepsNeedsInput(t *testing.T) {
 		State:     process.ProcessStateRunning,
 	})
 
-	// Running should NOT clear needs_input — that is done by user events via HandleUserAction.
-	if len(store.needsInputCalls) != 0 {
-		t.Errorf("expected no SetNeedsInput calls on Running, got %d", len(store.needsInputCalls))
+	if len(store.turnInputs) != 0 {
+		t.Errorf("the watcher must not write turn state; the process owns it, got %v", store.turnInputs)
 	}
 	if syncer.callCount() != 0 {
 		t.Errorf("expected no sync calls on Running, got %d", syncer.callCount())
 	}
 }
 
-// A dead process clears the session's own flag but must not touch the work item.
-// HandleUserAction moves needs_input and waiting back to in_progress, and the
-// AutoResumer's process-ended stop — which runs a moment later on the same
-// event — stops in_progress work. Calling the syncer here chains the two
-// together, so every paused work ends up stopped as soon as its process dies,
-// which the idle reaper guarantees it eventually will.
-func TestHandleProcessStateChange_Ended_ClearsSessionFlagButNotTheWork(t *testing.T) {
+// A dead process must not touch the work item. HandleUserAction moves
+// needs_input and waiting back to in_progress, and the AutoResumer's
+// process-ended stop — which runs a moment later on the same event — stops
+// in_progress work. Calling the syncer here chains the two together, so every
+// paused work ends up stopped as soon as its process dies, which the idle reaper
+// guarantees it eventually will.
+func TestHandleProcessStateChange_Ended_LeavesTheWorkAlone(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
@@ -334,16 +332,13 @@ func TestHandleProcessStateChange_Ended_ClearsSessionFlagButNotTheWork(t *testin
 		State:     process.ProcessStateEnded,
 	})
 
-	// NeedsInput must be cleared in the store
-	if len(store.needsInputCalls) != 1 {
-		t.Fatalf("expected 1 SetNeedsInput call, got %d", len(store.needsInputCalls))
-	}
-	if store.needsInputCalls[0].SessionID != "sess-1" || store.needsInputCalls[0].NeedsInput {
-		t.Errorf("expected SetNeedsInput(sess-1, false), got %+v", store.needsInputCalls[0])
-	}
-
 	if syncer.callCount() != 0 {
 		t.Errorf("a dead process must not touch its work item, got %d sync calls", syncer.callCount())
+	}
+	// The blockers a dead process was holding expire through the reducer, on the
+	// process's own way out — not from here.
+	if len(store.turnInputs) != 0 {
+		t.Errorf("the watcher must not write turn state, got %v", store.turnInputs)
 	}
 }
 
@@ -408,7 +403,7 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 	}
 }
 
-func TestHandleUserAction_ClearsStoreAndResumesWork(t *testing.T) {
+func TestHandleUserAction_ResumesWorkAndLeavesTheSessionAlone(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
 	syncer := &recordingSyncer{}
@@ -416,11 +411,10 @@ func TestHandleUserAction_ClearsStoreAndResumesWork(t *testing.T) {
 
 	w.HandleUserAction("sess-1")
 
-	if len(store.needsInputCalls) != 1 {
-		t.Fatalf("expected 1 SetNeedsInput call, got %d", len(store.needsInputCalls))
-	}
-	if store.needsInputCalls[0].SessionID != "sess-1" || store.needsInputCalls[0].NeedsInput {
-		t.Errorf("expected SetNeedsInput(sess-1, false), got %+v", store.needsInputCalls[0])
+	// The session's side of a user action is the answer clearing the blocker it
+	// names, which happens on the send path — not here, and not as a flag.
+	if len(store.turnInputs) != 0 {
+		t.Errorf("the watcher must not write turn state, got %v", store.turnInputs)
 	}
 
 	if len(syncer.userActions) != 1 || syncer.userActions[0] != "sess-1" {
@@ -437,8 +431,4 @@ func TestHandleUserAction_NoSyncer_NoPanic(t *testing.T) {
 
 	// No syncer set — should not panic
 	w.HandleUserAction("sess-1")
-
-	if len(store.needsInputCalls) != 1 {
-		t.Fatalf("expected 1 SetNeedsInput call, got %d", len(store.needsInputCalls))
-	}
 }

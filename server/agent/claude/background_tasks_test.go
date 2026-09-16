@@ -34,13 +34,17 @@ func TestParseLine_BackgroundWaitDoesNotEndTheTurn(t *testing.T) {
 		parseTestLineWithTracker(testLogger(), []byte(line), tracker)
 	}
 
-	if events := parseTestLineWithTracker(testLogger(), []byte(successResult), tracker); events != nil {
-		t.Fatalf("expected the turn end to be swallowed while a background task runs, got %#v", events)
+	events := parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
+	if len(events) != 1 {
+		t.Fatalf("expected exactly one event for a turn parked on background work, got %#v", events)
+	}
+	if _, ok := events[0].(agent.BackgroundWaitEvent); !ok {
+		t.Fatalf("expected the parked turn to be reported, got %#v", events[0])
 	}
 
 	// Task finished: the CLI resumes on its own and the real ending follows.
 	parseTestLineWithTracker(testLogger(), []byte(noLiveTasks), tracker)
-	events := parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
+	events = parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
 	if len(events) != 1 {
 		t.Fatalf("expected exactly one event for the real turn end, got %#v", events)
 	}
@@ -49,8 +53,8 @@ func TestParseLine_BackgroundWaitDoesNotEndTheTurn(t *testing.T) {
 	}
 }
 
-// Only a normal ending is swallowed: an error or an abort really did end the
-// turn, and hiding it would leave the user waiting on nothing.
+// Only a normal ending is parked: an error or an abort really did end the turn,
+// and reporting it as a wait would leave the user waiting on nothing.
 func TestParseLine_BackgroundWaitStillReportsErrorAndAbort(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -124,10 +128,10 @@ func TestParseLine_BackgroundTasksChangedIsNotTranscript(t *testing.T) {
 	}
 }
 
-// The swallowing cannot be open-ended: the CLI supports monitors that never
+// Parking the turn cannot be open-ended: the CLI supports monitors that never
 // finish, and a model may start a task and genuinely be done. Once the budget
-// runs out the held-back ending is delivered after all, with an explanation for
-// the user and one for the agent.
+// runs out the turn is ended after all, with an explanation for the user and one
+// for the agent.
 func TestBackgroundWait_DeliversTheEndingAfterTheBudget(t *testing.T) {
 	events := make(chan agent.AgentEvent, 4)
 	notes := make(chan string, 1)
@@ -137,8 +141,8 @@ func TestBackgroundWait_DeliversTheEndingAfterTheBudget(t *testing.T) {
 	defer tracker.wait.stopWaiting()
 
 	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
-	if got := parseTestLineWithTracker(testLogger(), []byte(successResult), tracker); got != nil {
-		t.Fatalf("expected the ending to be held back first, got %#v", got)
+	if got := parseTestLineWithTracker(testLogger(), []byte(successResult), tracker); len(got) != 1 {
+		t.Fatalf("expected the turn to be parked first, got %#v", got)
 	}
 
 	warning, ok := awaitEvent(t, events).(agent.WarningEvent)
@@ -149,7 +153,7 @@ func TestBackgroundWait_DeliversTheEndingAfterTheBudget(t *testing.T) {
 		t.Errorf("unexpected warning code %q", warning.Code)
 	}
 	if _, ok := awaitEvent(t, events).(agent.DoneEvent); !ok {
-		t.Error("expected the held-back DoneEvent to be delivered after the budget")
+		t.Error("expected the turn to be ended with a DoneEvent after the budget")
 	}
 
 	select {
@@ -397,35 +401,35 @@ func TestBackgroundWait_BudgetKeepsGrowingAcrossFallbacks(t *testing.T) {
 	}
 }
 
-// The idle reaper spares a process on this alone, so it has to end when the
-// wait does — a permanently exempt process could never be reclaimed.
-func TestBackgroundTaskTracker_ReapExemptionLastsExactlyAsLongAsTheWait(t *testing.T) {
+// The budget timer runs exactly while a turn is parked. An armed timer that
+// nothing disarms would end a turn that is already over; a parked turn with no
+// timer would wait forever.
+func TestBackgroundTaskTracker_BudgetRunsExactlyAsLongAsTheWait(t *testing.T) {
 	events := make(chan agent.AgentEvent, 4)
 
 	tracker := &backgroundTaskTracker{}
 	tracker.wait.start(testLogger(), events, func(string) {}, time.Hour)
 	defer tracker.wait.stopWaiting()
 
-	if tracker.waitingForBackgroundWork() {
+	if tracker.wait.armed() {
 		t.Fatal("a fresh process is not waiting on anything")
 	}
 
 	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
-	if tracker.waitingForBackgroundWork() {
-		t.Error("a running background task alone does not hold a turn open; the turn is still going")
+	if tracker.wait.armed() {
+		t.Error("a running background task alone does not park the turn; the turn is still going")
 	}
 
 	parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
-	if !tracker.waitingForBackgroundWork() {
-		t.Fatal("expected the swallowed ending to exempt the process from reaping")
+	if !tracker.wait.armed() {
+		t.Fatal("expected the parked turn to start its budget")
 	}
 
-	// The fallback ends the wait, and with it the exemption — even though the
-	// task list never emptied.
+	// The fallback ends the wait — even though the task list never emptied.
 	expireDeadline(&tracker.wait)
 	awaitEvent(t, events)
 	awaitEvent(t, events)
-	if tracker.waitingForBackgroundWork() {
-		t.Error("expected the exemption to lapse once the fallback gave up waiting")
+	if tracker.wait.armed() {
+		t.Error("expected the budget to stop once the fallback gave up waiting")
 	}
 }

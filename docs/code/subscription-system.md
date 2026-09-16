@@ -379,12 +379,16 @@ it to draw a branch icon on a row, the chat panel uses it to know the open
 session's own origin. A setting cannot pass that test; a birth fact cannot fail
 it.
 
-`title`, `unread` and `needs_input` also appear on both sides, and they are
-mutable — but detail's copies have no reader: the frontend takes all three from
-the list, where the row that displays them lives. Removing them would mean a
-second wire type for detail beside `SessionMeta`, which is a larger change than
-the duplication is a problem. Worth knowing before adding a reader for detail's
-copy, because that is the moment it becomes a second source.
+`title` and `unread` also appear on both sides, and they are mutable — but
+detail's copies have no reader: the frontend takes both from the list, where the
+row that displays them lives. Removing them would mean a second wire type for
+detail beside `SessionMeta`, which is a larger change than the duplication is a
+problem. Worth knowing before adding a reader for detail's copy, because that is
+the moment it becomes a second source.
+
+The list's `needs_input` is not a third copy of anything: it is derived on the
+way out from the session's `turn`, which detail carries whole. One value, drawn
+two ways.
 
 **A deletion has to be said out loud.** A subscriber whose session is removed is
 told `deleted: true`, rather than simply hearing nothing more — silence is

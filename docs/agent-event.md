@@ -37,7 +37,7 @@ UI (attachment strip scrolled into view)
 
 ### AgentEvent Interface
 
-`server/agent/event.go` — Sealed interface (unexported marker method) with 18 concrete implementations.
+`server/agent/event.go` — Sealed interface (unexported marker method) with 19 concrete implementations.
 
 ```go
 type AgentEvent interface {
@@ -53,6 +53,7 @@ type AgentEvent interface {
 |----------|-------|-----------|
 | Content | `text`, `tool_call`, `tool_result`, `system`, `warning`, `raw`, `command_output` | No |
 | Progress | `tool_activity` (broadcast only, never recorded) | No |
+| Wait | `background_wait` (the turn parked on work outliving its tool call) | No |
 | Terminal | `done`, `interrupted`, `error`, `process_ended` | Yes |
 | Permission | `permission_request`, `permission_response`, `request_cancelled` | No |
 | Question | `ask_user_question`, `question_response` | No |

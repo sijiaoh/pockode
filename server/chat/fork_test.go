@@ -463,7 +463,9 @@ func TestFork_WhileSourceIsRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOrCreateProcess: %v", err)
 	}
-	proc.SetRunning()
+	if err := proc.SendMessage("keep going"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
 
 	meta, err := f.client.Fork(context.Background(), "source", f.seqs[2], "")
 	if err != nil {

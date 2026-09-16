@@ -387,16 +387,18 @@ resident — instead of for how long a deliberately paused work has to survive.
 
 The same reasoning rules out the opposite shortcut on the way in. `needs_input`
 and `waiting` are *not* resumed when the process ends either, even though the
-session's own `needs_input` flag is cleared there (the process that raised the
-prompt is gone). Resuming would put the work in `in_progress` moments before this
-trigger's own stop ran — which is exactly how paused work used to end up stopped
-regardless of what it was paused on. Work leaves `needs_input`/`waiting` on a
-user action, through `SessionListWatcher.HandleUserAction` — the single entry
-point for "the user acted on this session". Both consequences the event has hang
-off that name — the session's `needs_input` flag drops, and a paused work
-resumes — rather than off either one of them, and the three RPCs that hand the
-session something to go on (message, permission response, question response) all
-call it.
+session stops waiting on the user there — its blockers expire with the process
+that raised them
+([agent-integration.md](agent-integration.md#turn-state)). Resuming would put the
+work in `in_progress` moments before this trigger's own stop ran — which is
+exactly how paused work used to end up stopped regardless of what it was paused
+on. Work leaves `needs_input`/`waiting` on a user action, through
+`SessionListWatcher.HandleUserAction` — the single entry point for "the user
+acted on this session", and now the only thing that call does. The session's own
+side of a user action is the answer clearing the blocker it names, which happens
+on the send path whether or not the send came through an RPC; the three RPCs that
+hand the session something to go on (message, permission response, question
+response) all call `HandleUserAction` for the work's sake.
 
 `stopped` is the one status the process *does* speak for: it means the process
 died, so a process running again is itself the evidence that the work is live. A
@@ -523,22 +525,25 @@ The reopen message instructs the agent to review its previous work and determine
 ### Background Waits and the Work Item
 
 A Claude turn that started a background task goes quiet for as long as the task
-runs, and the adapter swallows the ending the CLI emits meanwhile
+runs. The session records that as a `background` blocker and the turn stays open
 ([agent-integration.md](agent-integration.md#background-waits)). Nothing about
-that reaches the work layer, and nothing should: the work item stays
-`in_progress` because that is simply true — the turn is still under way and the
-job is not done.
+that reaches the work layer yet, and as far as the work *status* goes nothing
+should: it stays `in_progress` because that is simply true — the turn is still
+under way and the job is not done. What the work layer cannot do yet is tell the
+user *waiting on a background task* from *thinking*, which is what reading the
+blocker will buy; that is a later step of the lifecycle redesign.
 
 Auto-continuation is not exempted from the wait; it is never triggered in the
-first place. Trigger A fires on process state changes, and with no
-`AwaitsUserInput` event the session never leaves `running`, so
+first place. Trigger A fires on process state changes, and a parked turn is
+still reported as `running` on the wire
+([agent-integration.md](agent-integration.md#what-the-wire-still-sees)), so
 `handleAutoContinuation` does not run, no nudge is sent, and `retries` does not
 move. This is the same code path a long tool call already takes, which is why a
 wait of any length needs no work state of its own.
 
 The two ways a wait ends both land back on existing behaviour:
 
-- **The fallback budget runs out.** The adapter delivers the ending it held, the
+- **The fallback budget runs out.** The adapter ends the parked turn, the
   session goes idle, and the AutoResumer runs the ordinary auto-continuation it
   would have run when the wait began — except the agent also receives the
   explanation queued by the adapter, so the nudge does not read as an unexplained
@@ -555,7 +560,7 @@ The two ways a wait ends both land back on existing behaviour:
 During a wait the CLI has no active turn of its own, so any message Pockode sends
 opens a new one immediately.
 
-Only `handleAutoContinuation` is gated by the swallowing, because it is driven by
+Only `handleAutoContinuation` is gated by the parking, because it is driven by
 the session going idle. Every other send is message-driven and reaches the CLI
 regardless of process state; three of them can land on an agent's *own* waiting
 session: step advance, reopen, and child-closure reactivation. (The worktree
@@ -568,9 +573,9 @@ and rejected:
 
 - **It would not work for `step_done`, the most likely of the three.** The MCP
   handler calls `NotifyStepDone` from inside the tool call, i.e. while the turn
-  that invoked `step_done` is still running. The ending has not been swallowed
-  yet and the wait is not armed, so a gate on "is a wait in progress" never sees
-  it. The CLI simply queues the message and starts it the moment the turn ends.
+  that invoked `step_done` is still running. The turn has not been parked yet and
+  the wait is not armed, so a gate on "is a wait in progress" never sees it. The
+  CLI simply queues the message and starts it the moment the turn ends.
 - **The user is not gated either.** `chat.Client` has no state-based block, so a
   user can type during the wait and get a new turn the same way. A system-origin
   message travels the identical path; deferring only those would be an
@@ -580,7 +585,7 @@ and rejected:
   whatever turn is running, so the model can see it still has work pending and
   check it with `BashOutput`.
 - **Nothing downstream breaks.** The injected turn's events push the fallback
-  deadline out, its ending is swallowed again while the task set is still
+  deadline out, its ending parks the turn again while the task set is still
   non-empty, and it ends the wait exactly when the set has drained. The session
   stays `running`; no spurious idle, nudge, or retry accounting.
 - **Deferring costs more than it saves.** The queue would have to survive process

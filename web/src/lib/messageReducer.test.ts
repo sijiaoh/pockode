@@ -1603,6 +1603,49 @@ describe("messageReducer", () => {
 		});
 	});
 
+	// A turn parking on background work is recorded so the *session* can say the
+	// agent is waiting rather than thinking
+	// (docs/code/agent-integration.md#background-waits). Drawing it is not wired
+	// up, and until it is the record has to leave the transcript alone — an
+	// unhandled type falls back to `raw`, which would put the record's own JSON
+	// on screen as a message.
+	describe("background_wait", () => {
+		it("leaves the transcript exactly as it was", () => {
+			const before = replayHistory([
+				{ type: "message", content: "Run it in the background", seq: 1 },
+				{ type: "text", content: "Started.", seq: 2 },
+			]);
+
+			const after = applyServerEvent(
+				before,
+				normalizeEvent({ type: "background_wait" }),
+				3,
+			);
+
+			expect(after).toBe(before);
+		});
+
+		it("does not open a bubble of its own between turns", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "Run it", seq: 1 },
+				{ type: "text", content: "Started.", seq: 2 },
+				{ type: "background_wait", seq: 3 },
+				{ type: "text", content: "Finished.", seq: 4 },
+				{ type: "done", seq: 5 },
+			]);
+
+			expect(messages).toHaveLength(2);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.status).toBe("complete");
+			expect(assistant.parts).toEqual([
+				{ type: "text", content: "Started.Finished." },
+			]);
+			// The wait carries no address of its own: the message it did not touch
+			// keeps the seq of the record that did.
+			expect(assistant.anchorSeq).toBe(5);
+		});
+	});
+
 	// The address a fork cuts at. It has to come from the server, and it has to
 	// land on the message the user is looking at — a seq on the wrong message
 	// cuts the transcript in the wrong place, silently.
@@ -2859,9 +2902,10 @@ describe("messageReducer", () => {
 					{ type: "text" },
 				]);
 			});
-			it("retires what a killed process left open, which history never recorded", () => {
-				// A restart takes the process down without writing a process_ended, so
-				// nothing in any page says these are over.
+			it("retires what a killed process left open, which this page never recorded", () => {
+				// The process is gone and nothing in this page says so — the
+				// process_ended a restart repair writes lands at the end of the
+				// transcript, pages further back learn nothing from it.
 				const older = replayHistory([
 					{ type: "message", content: "Ask me" },
 					{

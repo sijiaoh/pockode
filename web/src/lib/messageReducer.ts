@@ -82,6 +82,8 @@ export type NormalizedEvent =
 	| { type: "done" }
 	| { type: "interrupted" }
 	| { type: "process_ended" }
+	/** The turn parked on background work; neither an ending nor output. */
+	| { type: "background_wait" }
 	| { type: "system"; content: string }
 	| {
 			// User message or system-driven message (history replay or broadcast)
@@ -197,6 +199,8 @@ export function normalizeEvent(
 			return { type: "interrupted" };
 		case "process_ended":
 			return { type: "process_ended" };
+		case "background_wait":
+			return { type: "background_wait" };
 		case "system":
 			return { type: "system", content: (record.content as string) ?? "" };
 		case "message":
@@ -557,6 +561,15 @@ function applyEvent(
 			newStatus,
 			event.answers,
 		);
+	}
+
+	// The turn parking on background work says nothing about the transcript: the
+	// server records it so the session's turn state can say the agent is waiting
+	// rather than thinking (agent-integration.md#background-waits), and drawing it
+	// is not wired up yet. Ignored outright rather than falling through, which
+	// would open an empty assistant bubble for it.
+	if (event.type === "background_wait") {
+		return messages;
 	}
 
 	// Tool result updates existing tool_call across all messages (may arrive after interrupt)
@@ -1180,8 +1193,10 @@ const BACK_REFERENCE_TYPES = new Set([
 
 /**
  * Retires everything that can no longer report back now that the session's
- * process is gone. Needed wherever history does not say so itself: a process
- * killed by a restart writes no `process_ended` for replay to find.
+ * process is gone. Needed wherever history does not say so itself: the server
+ * writes a `process_ended` for a session its restart cut short, but a session
+ * stored by a build from before that repair existed has none, so replay can
+ * still reach the end of a transcript with dialogs open.
  */
 export function settleAfterProcessGone(messages: Message[]): Message[] {
 	return settleRunningToolRuns(expirePendingDialogs(messages));
@@ -1247,9 +1262,8 @@ interface HistoryPageCatchUp {
 	 */
 	backReferences?: unknown[];
 	/**
-	 * The session's process is gone without history saying so — a restart killed
-	 * it, so no `process_ended` was ever recorded. Nothing can still report back
-	 * on a dialog or a tool call this page left open.
+	 * The session's process is gone and this page's history does not say so.
+	 * Nothing can still report back on a dialog or a tool call it left open.
 	 */
 	processEnded?: boolean;
 }

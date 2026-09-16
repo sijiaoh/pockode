@@ -162,9 +162,9 @@ func (h *rpcMethodHandler) handleInterrupt(ctx context.Context, conn *jsonrpc2.C
 	// forgotten?" — it was not. Interrupt takes the turn away instead of handing
 	// the session something to go on, and the interrupted state change it produces
 	// stops in_progress work, so resuming a paused work first would only walk it
-	// into stopped. The session's needs_input flag still drops: that state change
-	// is an idle one, and SessionListWatcher.HandleProcessStateChange clears the
-	// flag there.
+	// into stopped. The session's own side needs nothing: the InterruptedEvent
+	// ends the turn through the reducer, and every blocker it was holding expires
+	// with it.
 	if err := wt.ChatClient.Interrupt(ctx, params.SessionID); err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return

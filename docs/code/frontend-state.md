@@ -386,12 +386,15 @@ honest:
   `background`, for the same reason.
 - Replay adds no settling of its own — it feeds history through this same
   reducer — so a call still running at the end of a history stays running,
-  which is right while the session is live. What history cannot show is a
-  process killed while Pockode was down, since no `process_ended` was ever
-  recorded for it: `useChatMessages` settles on the server's report that the
-  session has already ended, next to the call that expires the dialogs orphaned
-  the same way — and applies that to every page of history it pulls in, not only
-  the one it subscribed with
+  which is right while the session is live. A process killed while Pockode was
+  down normally *is* in the history — the session store writes the
+  `process_ended` the killed run never got to
+  ([agent-integration.md](agent-integration.md#restart-repair)) — but the client
+  does not rely on that record being there, because a session stored by a build
+  from before that repair existed has none. `useChatMessages` settles on the
+  server's report that the session has already ended, next to the call that
+  expires the dialogs orphaned the same way — and applies that to every page of
+  history it pulls in, not only the one it subscribed with
   ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)).
 - An interrupted run whose result finally arrives keeps its `interrupted`
   status. The content is kept and readable; what it cannot do is make the UI

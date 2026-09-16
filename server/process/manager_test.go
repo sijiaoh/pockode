@@ -16,6 +16,34 @@ import (
 	"github.com/pockode/server/session"
 )
 
+// createSession registers a session the way the server does before it ever
+// starts a process for one. A process has to have one: turn state is the
+// session's own, so a process whose session is missing has nowhere to record
+// what it is doing.
+func createSession(t *testing.T, store session.Store, id string) session.SessionMeta {
+	t.Helper()
+	meta, err := store.Create(context.Background(), id, session.CreateSpec{
+		AgentType: session.AgentTypeClaude,
+		Mode:      session.ModeDefault,
+	})
+	if err != nil {
+		t.Fatalf("failed to create session %q: %v", id, err)
+	}
+	return meta
+}
+
+// createActivatedSession is createSession for a session that has already run,
+// which is what makes the manager resume it rather than start it fresh.
+func createActivatedSession(t *testing.T, store session.Store, id string) session.SessionMeta {
+	t.Helper()
+	meta := createSession(t, store, id)
+	if err := store.Activate(context.Background(), id); err != nil {
+		t.Fatalf("failed to activate session %q: %v", id, err)
+	}
+	meta.Activated = true
+	return meta
+}
+
 func mockRegistry(mock *mockAgent) *agent.Registry {
 	r := agent.NewRegistry()
 	r.Register(session.AgentTypeClaude, mock)
@@ -26,9 +54,6 @@ type mockAgent struct {
 	mu         sync.Mutex
 	startCalls []startCall
 	sessions   map[string]*mockSession
-	// startWaiting makes every session it creates start out waiting on
-	// background work, so a test never races the reaper to set the flag.
-	startWaiting bool
 }
 
 type startCall struct {
@@ -55,7 +80,6 @@ func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.S
 	sess := &mockSession{
 		events: make(chan agent.AgentEvent, 10),
 	}
-	sess.waitingForBackground.Store(m.startWaiting)
 	m.sessions[opts.SessionID] = sess
 	return sess, nil
 }
@@ -93,13 +117,7 @@ type mockSession struct {
 	events   chan agent.AgentEvent
 	closed   bool
 	closedMu sync.Mutex
-
-	// waitingForBackground makes the mock an agent.BackgroundWaiter that is
-	// currently holding a turn open.
-	waitingForBackground atomic.Bool
 }
-
-func (s *mockSession) WaitingForBackgroundWork() bool { return s.waitingForBackground.Load() }
 
 // emit delivers an event as the agent would. Holding closedMu keeps a test that
 // races the idle reaper from panicking on a closed channel, reporting the
@@ -224,7 +242,7 @@ func TestProcess_OutOfTurnEventsKeepProcessIdle(t *testing.T) {
 			rec := &stateRecorder{}
 			m.SetOnStateChange(rec.record)
 
-			proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", Activated: true, AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+			proc, _, _ := m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 			rec.waitForCount(t, 1) // initial idle
 			rec.reset()
 
@@ -289,6 +307,27 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 			want:   []StateChangeEvent{{State: ProcessStateIdle, Interrupted: true}},
 		},
 		{
+			// Parking a turn is not ending it: no idle reaches the wire until the
+			// CLI has resumed and really finished. What ends the wait is checked
+			// separately, because this wire cannot see it — parked and resumed are
+			// both "running" here (TestProcess_OnlyContentEndsABackgroundWait).
+			//
+			// The two running entries are that narrowing showing through, not a
+			// bug: emitTurn sends a real turn change even when the value it
+			// narrows to repeats.
+			name: "a parked turn is not an ended turn",
+			events: []agent.AgentEvent{
+				agent.BackgroundWaitEvent{},
+				agent.TextEvent{Content: "resumed"},
+				agent.DoneEvent{},
+			},
+			want: []StateChangeEvent{
+				{State: ProcessStateRunning},
+				{State: ProcessStateRunning},
+				{State: ProcessStateIdle},
+			},
+		},
+		{
 			// Claude reports which messages stay queued after an interrupt; their
 			// output arrives with nothing on the send path to mark a new turn.
 			name: "output queued behind an interrupt starts a new turn",
@@ -315,7 +354,7 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 			rec := &stateRecorder{}
 			m.SetOnStateChange(rec.record)
 
-			proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+			proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 			rec.waitForCount(t, 1) // initial idle
 			if err := proc.SendMessage("go"); err != nil {
 				t.Fatalf("SendMessage: %v", err)
@@ -344,6 +383,44 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 	}
 }
 
+// TestProcess_OnlyContentEndsABackgroundWait drives the rule through the real
+// event path, which is the only place it can be seen: the wire narrows parked
+// and resumed to the same value, so what the wait is doing shows up in the one
+// thing that reads the blockers — the reaper's hold.
+//
+// The `system` frame matters specifically. The background task list changing is
+// one, so counting it as the CLI resuming would make a task *finishing* look
+// like the turn coming back, and the process would lose the exemption that keeps
+// the remaining tasks alive.
+func TestProcess_OnlyContentEndsABackgroundWait(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
+	defer m.Shutdown()
+
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
+	sess := mock.session(t, "sess-1")
+
+	if err := proc.SendMessage("go"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	sess.emit(t, agent.BackgroundWaitEvent{})
+	waitUntil(t, "the turn to park", func() bool { return proc.reapHold() == holdBackgroundWork })
+
+	// Two frames that show the turn is alive without proving the CLI came back.
+	// The progress line goes first because it is never recorded: with the
+	// recorded frame behind it, history reaching 2 means both have been reduced.
+	sess.emit(t, agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "still building"})
+	sess.emit(t, agent.SystemEvent{Content: "background_tasks_changed"})
+	waitForHistory(t, store, "sess-1", 2) // the park and the system frame
+	if hold := proc.reapHold(); hold != holdBackgroundWork {
+		t.Fatalf("hold = %q, want the wait to still be on — neither frame is the CLI resuming", hold)
+	}
+
+	sess.emit(t, agent.TextEvent{Content: "resumed"})
+	waitUntil(t, "the wait to end", func() bool { return proc.reapHold() == holdTurnInProgress })
+}
+
 // TestProcess_ConsecutiveTurns covers what a single-turn test cannot: dropping
 // the duplicate end of one turn must not also drop the next turn's transitions.
 // Until this suite sent a second message no test could have caught that.
@@ -356,7 +433,7 @@ func TestProcess_ConsecutiveTurns(t *testing.T) {
 	rec := &stateRecorder{}
 	m.SetOnStateChange(rec.record)
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	rec.waitForCount(t, 1)
 	rec.reset()
 
@@ -403,7 +480,7 @@ func TestManager_GetOrCreateProcess_NewSession(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	proc, created, err := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, created, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -434,7 +511,7 @@ func TestManager_ForwardsSeparateDataAndMCPDirs(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "/data/worktrees/feature-x", "/data", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	if _, _, err := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
+	if _, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(mock.startCalls) != 1 {
@@ -454,8 +531,8 @@ func TestManager_GetOrCreateProcess_ExistingSession(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	proc1, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
-	proc2, created, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc1, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
+	proc2, created, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 
 	if created {
 		t.Error("expected created=false for existing session")
@@ -483,7 +560,7 @@ func TestManager_IdleReaper(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 
 	m.reapIdleAsOf(time.Now().Add(2 * testIdleTimeout))
 
@@ -506,7 +583,7 @@ func TestManager_IdleReaper_ZeroTimeoutTurnsReapingOff(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 0)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 
 	m.reapIdleAsOf(time.Now().Add(100 * testIdleTimeout))
 	if m.GetProcess("sess-1") == nil {
@@ -560,12 +637,18 @@ func (b *lockedBuffer) String() string {
 // would destroy the work being waited for.
 func TestManager_IdleReaper_SparesABackgroundWait(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
-	mock := &mockAgent{startWaiting: true}
+	mock := &mockAgent{}
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
+
+	_ = proc.SendMessage("go")
+	sess.emit(t, agent.BackgroundWaitEvent{})
+	waitUntil(t, "the turn to park on background work", func() bool {
+		return proc.reapHold() == holdBackgroundWork
+	})
 
 	overdue := time.Now().Add(2 * testIdleTimeout)
 	m.reapIdleAsOf(overdue)
@@ -573,12 +656,13 @@ func TestManager_IdleReaper_SparesABackgroundWait(t *testing.T) {
 		t.Fatal("process reaped while it was waiting on background work")
 	}
 
-	// The exemption is not open-ended: once the agent stops waiting, the process
-	// is reaped on the same stale timestamp it was spared on.
-	sess.waitingForBackground.Store(false)
+	// The exemption is not open-ended: once the turn ends, the process is reaped
+	// on the same stale timestamp it was spared on.
+	sess.emit(t, agent.DoneEvent{})
+	waitUntil(t, "the turn to end", func() bool { return proc.reapHold() == "" })
 	m.reapIdleAsOf(overdue)
 	if m.GetProcess("sess-1") != nil {
-		t.Error("expected process to be reaped once the agent stopped waiting")
+		t.Error("expected process to be reaped once the wait was over")
 	}
 }
 
@@ -595,7 +679,7 @@ func TestManager_IdleReaper_EmitsProcessStateEnded(t *testing.T) {
 		}
 	})
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 
 	m.reapIdleAsOf(time.Now().Add(2 * testIdleTimeout))
 
@@ -617,7 +701,7 @@ func TestManager_Touch_PreventsReaping(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 	defer m.Shutdown()
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 
 	// Start out already overdue, so Touch has to actually move the process out
 	// of reaping range. Touching a freshly created process proves nothing: it
@@ -646,8 +730,8 @@ func TestManager_Shutdown_ClosesAllProcesses(t *testing.T) {
 	mock := &mockAgent{}
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
-	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-2", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
+	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-2"))
 
 	m.Shutdown()
 
@@ -690,7 +774,7 @@ func TestManager_Shutdown_WaitsForStreamingToFinish(t *testing.T) {
 		handled.Store(true)
 	})
 
-	proc, _, err := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	if err != nil {
 		t.Fatalf("failed to create process: %v", err)
 	}
@@ -721,7 +805,7 @@ func TestManager_GetOrCreateProcess_AfterShutdown(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	m.Shutdown()
 
-	_, _, err := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	_, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	if !errors.Is(err, ErrManagerClosed) {
 		t.Errorf("expected ErrManagerClosed, got %v", err)
 	}
@@ -736,8 +820,8 @@ func TestManager_Close_SpecificProcess(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
-	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-2", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
+	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-2"))
 
 	m.Close("sess-1")
 
@@ -767,7 +851,7 @@ func TestManager_HasProcess(t *testing.T) {
 	}
 
 	// Create process
-	_, _, _ = m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	_, _, _ = m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 
 	if !m.HasProcess("sess-1") {
 		t.Error("expected HasProcess to return true after process creation")
@@ -786,7 +870,7 @@ func TestManager_StreamingEvents_PreventsReaping(t *testing.T) {
 	seen := make(chan struct{}, 8)
 	m.SetMessageListener(listenerFunc(func(ChatMessage) { seen <- struct{}{} }))
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 
 	// Same reason as in the Touch test: unless the process starts out overdue,
 	// it survives the check below whether or not the event counted as activity.
@@ -829,7 +913,7 @@ func TestProcess_ClosedFlagSuppressesStateChanges(t *testing.T) {
 	rec := &stateRecorder{}
 	m.SetOnStateChange(rec.record)
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 
 	// Close sets the closed flag, preventing further state changes.
 	m.Close("sess-1")
@@ -838,74 +922,94 @@ func TestProcess_ClosedFlagSuppressesStateChanges(t *testing.T) {
 	rec.waitForCount(t, 2) // initial idle + ended
 	rec.reset()
 
-	// After Close, SetRunning and SetIdle must be no-ops.
-	proc.SetRunning()
-	proc.SetIdle(false)
+	// After Close, nothing the send path reports may move the session.
+	proc.startTurn()
+	proc.answerPrompt("req-1")
 
 	if events := rec.snapshot(); len(events) != 0 {
 		t.Errorf("expected no state changes after Close, got %v", events)
 	}
 }
 
-func TestProcess_SetRunning_EmitsStateChange(t *testing.T) {
+// A state change is news, not a heartbeat: a listener that hears "still running"
+// once per event cannot tell a turn from a token.
+func TestProcess_EmitsOnlyRealTurnChanges(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	var events []StateChangeEvent
-	m.SetOnStateChange(func(e StateChangeEvent) {
-		events = append(events, e)
-	})
+	rec := &stateRecorder{}
+	m.SetOnStateChange(rec.record)
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
+	sess := mock.session(t, "sess-1")
 
-	// Initial state is idle, creation emits idle
-	if len(events) != 1 || events[0].State != ProcessStateIdle {
-		t.Fatalf("expected initial idle event, got %v", events)
+	rec.waitForCount(t, 1)
+	if events := rec.snapshot(); events[0].State != ProcessStateIdle {
+		t.Fatalf("expected the initial idle event, got %v", events)
 	}
+	rec.reset()
 
-	// SetRunning should emit running
-	proc.SetRunning()
-	if len(events) != 2 || events[1].State != ProcessStateRunning {
-		t.Errorf("expected running event, got %v", events)
+	proc.startTurn()
+	rec.waitForCount(t, 1)
+	if events := rec.snapshot(); events[0].State != ProcessStateRunning {
+		t.Fatalf("expected a running event, got %v", events)
 	}
+	rec.reset()
 
-	// Duplicate SetRunning should not emit
-	proc.SetRunning()
-	if len(events) != 2 {
-		t.Errorf("expected no duplicate event, got %d events", len(events))
+	// Output during a running turn says nothing the prompt did not. The ending
+	// behind it is what proves they were processed: events are reduced in order
+	// on one goroutine, so the idle below cannot arrive before they have been.
+	sess.emit(t, agent.TextEvent{Content: "working"})
+	sess.emit(t, agent.TextEvent{Content: "still working"})
+	sess.emit(t, agent.DoneEvent{})
+	rec.waitForCount(t, 1)
+	events := rec.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("expected the ending to be the only state change, got %v", events)
+	}
+	if events[0].State != ProcessStateIdle || events[0].Interrupted {
+		t.Errorf("expected a plain idle event for a completed turn, got %v", events)
+	}
+	rec.reset()
+
+	// Codex announces the same ending twice; the second says nothing new.
+	// Observed through history, which is written after the turn is reduced.
+	sess.emit(t, agent.DoneEvent{})
+	waitForHistory(t, store, "sess-1", 4)
+	if events := rec.snapshot(); len(events) != 0 {
+		t.Errorf("expected no state change for a repeated ending, got %v", events)
 	}
 }
 
-func TestProcess_SetIdle_EmitsStateChange(t *testing.T) {
+// An interrupt is reported as one all the way through, because a turn that was
+// taken away must not be carried on from.
+func TestProcess_InterruptEndsTheTurnAsAborted(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	var events []StateChangeEvent
-	m.SetOnStateChange(func(e StateChangeEvent) {
-		events = append(events, e)
-	})
+	rec := &stateRecorder{}
+	m.SetOnStateChange(rec.record)
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
-	proc.SetRunning()
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
+	sess := mock.session(t, "sess-1")
 
-	// SetIdle should emit idle
-	proc.SetIdle(false)
-	if len(events) != 3 || events[2].State != ProcessStateIdle {
-		t.Errorf("expected idle event, got %v", events)
-	}
+	proc.startTurn()
+	rec.waitForCount(t, 2)
+	rec.reset()
 
-	// Duplicate SetIdle should not emit
-	proc.SetIdle(false)
-	if len(events) != 3 {
-		t.Errorf("expected no duplicate event, got %d events", len(events))
+	sess.emit(t, agent.InterruptedEvent{})
+	rec.waitForCount(t, 1)
+	events := rec.snapshot()
+	if events[0].State != ProcessStateIdle || !events[0].Interrupted {
+		t.Errorf("expected an interrupted idle event, got %v", events)
 	}
 }
 
-func TestProcess_SendMessage_SetsRunning(t *testing.T) {
+func TestProcess_SendMessage_StartsTheTurn(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
@@ -916,7 +1020,7 @@ func TestProcess_SendMessage_SetsRunning(t *testing.T) {
 		events = append(events, e)
 	})
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 
 	if proc.State() != ProcessStateIdle {
 		t.Fatalf("expected initial state to be idle")
@@ -926,6 +1030,9 @@ func TestProcess_SendMessage_SetsRunning(t *testing.T) {
 
 	if proc.State() != ProcessStateRunning {
 		t.Errorf("expected state to be running after SendMessage")
+	}
+	if proc.reapHold() != holdTurnInProgress {
+		t.Errorf("a turn that has started is a turn the reaper must not interrupt, got %q", proc.reapHold())
 	}
 	if len(events) != 2 || events[1].State != ProcessStateRunning {
 		t.Errorf("expected running event after SendMessage, got %v", events)
@@ -960,7 +1067,7 @@ func TestProcess_ActivationFollowsAgentOutput(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
 	defer m.Shutdown()
 
-	if _, _, err := m.GetOrCreateProcess(ctx, session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault}); err != nil {
+	if _, _, err := m.GetOrCreateProcess(ctx, createSession(t, store, "sess-1")); err != nil {
 		t.Fatalf("failed to create process: %v", err)
 	}
 
@@ -1026,7 +1133,7 @@ func TestManager_IdleReaper_SparesATurnInProgress(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 	defer m.Shutdown()
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
 	if err := proc.SendMessage("run the build"); err != nil {
@@ -1070,7 +1177,7 @@ func TestManager_IdleReaper_SparesAnUnansweredPrompt(t *testing.T) {
 			m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 			defer m.Shutdown()
 
-			proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+			proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 			sess := mock.session(t, "sess-1")
 
 			// A prompt is something an agent raises mid-turn, so the turn has to
@@ -1162,7 +1269,7 @@ func TestManager_IdleReaper_DropsThePromptHoldWhenNobodyCanAnswer(t *testing.T) 
 			m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 			defer m.Shutdown()
 
-			proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+			proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 			sess := mock.session(t, "sess-1")
 
 			if err := proc.SendMessage("do something"); err != nil {
@@ -1191,7 +1298,7 @@ func TestManager_IdleReaper_SparesAPromptRaisedWhileAlreadyPaused(t *testing.T) 
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 	defer m.Shutdown()
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
 	if err := proc.SendMessage("do something"); err != nil {
@@ -1229,7 +1336,7 @@ func TestManager_IdleReaper_SparesAPromptRaisedAfterTheTurnEnded(t *testing.T) {
 	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, testIdleTimeout)
 	defer m.Shutdown()
 
-	proc, _, _ := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	proc, _, _ := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
 	if err := proc.SendMessage("do something"); err != nil {
@@ -1245,8 +1352,8 @@ func TestManager_IdleReaper_SparesAPromptRaisedAfterTheTurnEnded(t *testing.T) {
 	// assertion below is what reports a missing hold. Waiting for the hold's
 	// *name* would time out first and pin only the label, which is how the rest
 	// of these tests miss the one consequence that costs a session.
-	waitUntil(t, "the prompt to register", func() bool { return proc.awaitingUserAnswer() })
-	if proc.turnInProgress() {
+	waitUntil(t, "the prompt to register", func() bool { return proc.turnState().AwaitingUserAnswer() })
+	if proc.turnState().Phase == session.PhaseRunning {
 		t.Fatal("precondition: no turn may be in progress, or the turn hold would cover for the prompt hold")
 	}
 

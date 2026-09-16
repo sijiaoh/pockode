@@ -9,8 +9,8 @@ import (
 	"github.com/pockode/server/agent"
 )
 
-// backgroundWaitBase is how long a swallowed end of turn is held before it is
-// delivered anyway. Two cases make an unbounded wait wrong: the CLI supports
+// backgroundWaitBase is how long a parked turn is left parked before it is
+// ended anyway. Two cases make an unbounded wait wrong: the CLI supports
 // session-scoped monitors that never finish, and a model may start a background
 // task and genuinely be done. Both would otherwise spin forever.
 //
@@ -35,13 +35,12 @@ const (
 		"assuming its result, and say so if you were still waiting on it."
 )
 
-// backgroundWait delivers a swallowed end-of-turn event late.
+// backgroundWait ends a parked turn once waiting has gone on long enough.
 //
-// Swallowing the CLI's pseudo-ending is what keeps a background wait looking
-// like one long thought (see backgroundTaskTracker), but it cannot be
-// open-ended. When the budget runs out the ending is delivered after all and
-// everything downstream falls back to the behaviour it had before background
-// waits existed — idle, then the usual auto-continue.
+// Parking the turn instead of passing the CLI's pseudo-ending on (see
+// parseResultEvent) cannot be open-ended. When the budget runs out the ending is
+// delivered after all and everything downstream falls back to the behaviour it
+// had before background waits existed — idle, then the usual auto-continue.
 //
 // The fallback is never silent: the user gets a warning in the transcript and
 // the agent gets a note on the next prompt Pockode sends it.
@@ -196,7 +195,7 @@ func (w *backgroundWait) timedOut() {
 	w.deadline = time.Time{}
 	w.deadlineMu.Unlock()
 
-	w.log.Warn("background wait budget exhausted, delivering the end of turn", "waited", budget)
+	w.log.Warn("background wait budget exhausted, ending the parked turn", "waited", budget)
 
 	w.notify(fmt.Sprintf(backgroundWaitTimeoutNote, budget))
 	if !w.send(agent.WarningEvent{

@@ -183,17 +183,21 @@ type sessionListSyncParams struct {
 	Sessions  []rpc.SessionListItem `json:"sessions"`
 }
 
-// HandleProcessStateChange updates NeedsInput/Unread in the store and notifies subscribers.
+// HandleProcessStateChange updates Unread in the store and notifies subscribers.
 // Store updates trigger OnSessionChange → notifyChange automatically.
 // The manual notification at the end covers the volatile ProcessState change.
+//
+// Nothing here writes "is this session waiting for the user" any more. That is
+// read off the session's turn state, which the process wrote before this event
+// was sent (process.Manager.emitTurn) — so the three places that used to set and
+// clear a needs_input flag, each with its own rule for when, are gone along with
+// the flag. The work item is still driven from here, because a work is not a
+// session and has its own reason to move.
 func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent) {
 	ctx := context.Background()
 
 	switch e.State {
 	case process.ProcessStateIdle:
-		if err := w.store.SetNeedsInput(ctx, e.SessionID, e.NeedsInput); err != nil {
-			slog.Warn("failed to set needs input", "sessionId", e.SessionID, "error", err)
-		}
 		if w.viewingChecker == nil || !w.viewingChecker.IsViewing(e.SessionID) {
 			if err := w.store.SetUnread(ctx, e.SessionID, true); err != nil {
 				slog.Warn("failed to set unread", "sessionId", e.SessionID, "error", err)
@@ -203,19 +207,14 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 			w.workStatusSyncer.HandlePromptRaised(w.Context(), e.SessionID)
 		}
 	case process.ProcessStateRunning:
-		// needs_input is NOT cleared here — it is cleared by user events
-		// (message, permission response, question response) via HandleUserAction.
+		// Nothing: a session that has started producing output is not news to
+		// either the unread mark or the work item.
 	case process.ProcessStateEnded:
-		// The session's own flag is cleared: the process that raised the prompt
-		// is gone, so the session is no longer holding one open. The work item
-		// is deliberately left alone — a dead process is no evidence that the
-		// user answered, and waking the work here would hand the AutoResumer's
-		// process-ended stop an in_progress work to stop, which is how every
-		// paused work used to end up stopped. Work leaves needs_input/waiting
-		// on a user action instead (HandleUserAction).
-		if err := w.store.SetNeedsInput(ctx, e.SessionID, false); err != nil {
-			slog.Warn("failed to clear needs input on process end", "sessionId", e.SessionID, "error", err)
-		}
+		// The work item is deliberately left alone — a dead process is no
+		// evidence that the user answered, and waking the work here would hand
+		// the AutoResumer's process-ended stop an in_progress work to stop, which
+		// is how every paused work used to end up stopped. Work leaves
+		// needs_input/waiting on a user action instead (HandleUserAction).
 	}
 
 	// Notify ProcessState change (volatile, not covered by Store's OnSessionChange)
@@ -240,36 +239,31 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 	})
 }
 
-// HandleUserAction records that the user just acted on this session.
+// HandleUserAction records that the user just acted on this session: a work
+// paused on a prompt — or on child work — has the attention it was paused for,
+// so it resumes (work.StatusSyncer.HandleUserAction).
 //
-// Two things follow from that one event, at two different layers: the prompt the
-// session was holding up has been dealt with, so its needs_input flag drops; and
-// a work paused on that prompt — or on child work — has the attention it was
-// paused for, so it resumes (work.StatusSyncer.HandleUserAction).
+// Only the work layer is touched. The session's own side of this is the answer
+// clearing the blocker it names (process.Process.answerPrompt), which happens on
+// the send path whether the send came from here or from anywhere else.
 //
 // What counts is "the user handed this session something to go on": a message, a
 // permission answer, a question answer. Interrupt does not, even though a user
 // pressed it — it takes the turn away rather than handing something over, and
 // the interrupted state change it produces stops in_progress work, so resuming a
 // paused work here would only walk it into stopped (docs/code/work-system.md,
-// Trigger A). The session's flag still drops, because that state change is an
-// idle one and HandleProcessStateChange clears the flag there.
+// Trigger A).
 //
 // Two more paths are deliberately not this event. Deleting the session removes
 // the place an answer would go, so it stops the work instead of resuming it, and
 // lives where it happens (ws.rpcMethodHandler.stopWorkForDeletedSession). The
 // system-driven senders (restart, kickoff, step advance, reopen, child closure)
-// do put a message into a session, but the flag says a human has to look at this
-// session and they fire whether or not one is there — a work restarted through
-// the MCP API by another agent is the plain case. For them the flag comes down
-// where it always could: when the process reports the prompt is gone.
+// do put a message into a session, but this says a human has to look at the work
+// and they fire whether or not one is there — a work restarted through the MCP
+// API by another agent is the plain case.
 func (w *SessionListWatcher) HandleUserAction(sessionID string) {
-	ctx := context.Background()
-	if err := w.store.SetNeedsInput(ctx, sessionID, false); err != nil {
-		slog.Warn("failed to clear needs input", "sessionId", sessionID, "error", err)
-	}
 	if w.workStatusSyncer != nil {
-		w.workStatusSyncer.HandleUserAction(ctx, sessionID)
+		w.workStatusSyncer.HandleUserAction(context.Background(), sessionID)
 	}
 }
 
