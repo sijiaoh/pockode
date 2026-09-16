@@ -21,9 +21,10 @@ import FilesTab from "./FilesTab";
 const searchFiles = vi.fn();
 const createFile = vi.fn();
 const deleteFile = vi.fn();
+const renameFile = vi.fn();
 const getFile = vi.fn();
 const wsState = {
-	actions: { searchFiles, createFile, deleteFile, getFile },
+	actions: { searchFiles, createFile, deleteFile, renameFile, getFile },
 	maxUploadSize: 0,
 };
 
@@ -45,6 +46,17 @@ vi.mock("../../lib/fileUpload", async (importOriginal) => ({
  * rows a menu can be opened from, the `data-entry-*` rows a drop is resolved
  * against, and the drag props echoed as text so they can be asserted.
  */
+/**
+ * The rows the stand-in tree offers a menu for. Two are always there, since
+ * most cases are about one of them; a case that needs others pushes them on and
+ * `beforeEach` puts the list back.
+ */
+const DEFAULT_TREE_ENTRIES: Entry[] = [
+	{ name: "src", type: "dir", path: "src" },
+	{ name: "main.tsx", type: "file", path: "src/main.tsx" },
+];
+let treeEntries: Entry[] = [...DEFAULT_TREE_ENTRIES];
+
 vi.mock("./FileTree", () => ({
 	default: ({
 		onOpenMenu,
@@ -59,24 +71,15 @@ vi.mock("./FileTree", () => ({
 	}) => (
 		<div>
 			file tree
-			<button
-				type="button"
-				onClick={() => onOpenMenu({ name: "src", type: "dir", path: "src" })}
-			>
-				menu for src
-			</button>
-			<button
-				type="button"
-				onClick={() =>
-					onOpenMenu({
-						name: "main.tsx",
-						type: "file",
-						path: "src/main.tsx",
-					})
-				}
-			>
-				menu for src/main.tsx
-			</button>
+			{treeEntries.map((entry) => (
+				<button
+					key={entry.path}
+					type="button"
+					onClick={() => onOpenMenu(entry)}
+				>
+					{`menu for ${entry.path}`}
+				</button>
+			))}
 			<div>{`force open: ${forceOpenPath ?? "none"}`}</div>
 			<div data-entry-path="src" data-entry-type="dir">
 				src
@@ -104,11 +107,23 @@ function renderFilesTab(
 	listings: Record<string, Entry[]> = {},
 	{
 		activeFilePath = null,
+		activeFileEdit = false,
 		onCloseFile = vi.fn(),
-	}: { activeFilePath?: string | null; onCloseFile?: () => void } = {},
+		onRepointFile = vi.fn(),
+	}: {
+		activeFilePath?: string | null;
+		activeFileEdit?: boolean;
+		onCloseFile?: () => void;
+		onRepointFile?: (path: string) => void;
+	} = {},
 ) {
 	const queryClient = new QueryClient({
-		defaultOptions: { queries: { retry: false } },
+		// `retry: false` does not reach `useContents`, which passes a `retry`
+		// callback of its own and so keeps the real retry budget. Only the wait
+		// between attempts is taken away, so a listing that fails reaches its
+		// error state in this test at the same point it does in the app, without
+		// the seconds of backoff in between.
+		defaultOptions: { queries: { retry: false, retryDelay: 0 } },
 	});
 	for (const [path, entries] of Object.entries(listings)) {
 		queryClient.setQueryData(contentsQueryKey(path), entries);
@@ -125,6 +140,8 @@ function renderFilesTab(
 		<FilesTab
 			onSelectFile={vi.fn()}
 			activeFilePath={activeFilePath}
+			activeFileEdit={activeFileEdit}
+			onRepointFile={onRepointFile}
 			onCloseFile={onCloseFile}
 		/>,
 		{ wrapper },
@@ -820,6 +837,7 @@ describe("FilesTab drag and drop", () => {
 
 describe("FilesTab entry menu", () => {
 	beforeEach(() => {
+		treeEntries = [...DEFAULT_TREE_ENTRIES];
 		searchFiles.mockResolvedValue(result([]));
 		uploadActions.reset();
 		wsState.maxUploadSize = 0;
@@ -864,9 +882,14 @@ describe("FilesTab entry menu", () => {
 			screen.getByRole("button", { name: "Project root actions" }),
 		);
 
-		// Deleting the workspace itself is not one of the choices.
+		// Neither deleting nor renaming the workspace itself is one of the
+		// choices: the root is the work directory, not an entry of the file
+		// namespace, so these are not disabled here — they never apply.
 		expect(
 			screen.queryByRole("button", { name: "Delete" }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: /Rename/ }),
 		).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "New file" }));
@@ -1042,5 +1065,250 @@ describe("FilesTab entry menu", () => {
 		await user.click(screen.getByRole("button", { name: "Delete" }));
 
 		expect(await screen.findByText("permission denied")).toBeInTheDocument();
+	});
+});
+
+describe("FilesTab renaming", () => {
+	beforeEach(() => {
+		treeEntries = [...DEFAULT_TREE_ENTRIES];
+		searchFiles.mockResolvedValue(result([]));
+		uploadActions.reset();
+		wsState.maxUploadSize = 0;
+		renameFile.mockReset();
+		getFile.mockReset();
+		renameFile.mockResolvedValue(undefined);
+		vi.mocked(uploadFile).mockReset();
+		vi.mocked(uploadFile).mockImplementation(() => new Promise(() => {}));
+	});
+
+	it("asks for a name, not a path, and keeps the entry in its own folder", async () => {
+		const user = userEvent.setup();
+		renderFilesTab({ src: [entry("main.tsx", "file", "src")] });
+
+		await user.click(
+			screen.getByRole("button", { name: "menu for src/main.tsx" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+
+		// The name to be changed is already in the field, so the common case is
+		// an edit rather than a retype.
+		expect(screen.getByLabelText("Name")).toHaveValue("main.tsx");
+		expect(screen.getByText("in src")).toBeInTheDocument();
+
+		await user.clear(screen.getByLabelText("Name"));
+		await user.type(screen.getByLabelText("Name"), "app.tsx");
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+
+		// A name, not "src/app.tsx": the directory is the server's business here.
+		expect(renameFile).toHaveBeenCalledWith("src/main.tsx", "app.tsx");
+	});
+
+	it("pre-selects the name without its extension, and folders whole", async () => {
+		const user = userEvent.setup();
+		treeEntries = [
+			entry("report.final.md", "file", "src"),
+			entry(".gitignore", "file", "src"),
+			entry("utils", "dir", "src"),
+		];
+		renderFilesTab({
+			src: [
+				entry("report.final.md", "file", "src"),
+				entry(".gitignore", "file", "src"),
+				entry("utils", "dir", "src"),
+			],
+			"": [entry("src", "dir")],
+		});
+
+		const selectionAfterOpening = async (menu: string) => {
+			await user.click(screen.getByRole("button", { name: menu }));
+			await user.click(screen.getByRole("button", { name: "Rename" }));
+			const input = screen.getByLabelText("Name") as HTMLInputElement;
+			const selected = input.value.slice(
+				input.selectionStart ?? 0,
+				input.selectionEnd ?? 0,
+			);
+			await user.click(screen.getByRole("button", { name: "Cancel" }));
+			return selected;
+		};
+
+		// Renaming is nearly always about the name and not the type, so typing
+		// over the selection keeps the extension.
+		expect(await selectionAfterOpening("menu for src/report.final.md")).toBe(
+			"report.final",
+		);
+		// A dotfile's leading dot is part of its name, not a suffix on one.
+		expect(await selectionAfterOpening("menu for src/.gitignore")).toBe(
+			".gitignore",
+		);
+		expect(await selectionAfterOpening("menu for src/utils")).toBe("utils");
+	});
+
+	it("holds the button on the name the entry already has, without scolding", async () => {
+		const user = userEvent.setup();
+		renderFilesTab({ src: [entry("main.tsx", "file", "src")] });
+
+		await user.click(
+			screen.getByRole("button", { name: "menu for src/main.tsx" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+
+		// Its own name is in its own folder's listing; answered as "unchanged"
+		// rather than as a clash, and nothing is said about it.
+		expect(screen.getByRole("button", { name: "Rename" })).toBeDisabled();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+		await user.clear(screen.getByLabelText("Name"));
+		await user.type(screen.getByLabelText("Name"), "other.tsx");
+		expect(screen.getByRole("button", { name: "Rename" })).toBeEnabled();
+	});
+
+	it("refuses a name a sibling already holds without asking the server", async () => {
+		const user = userEvent.setup();
+		renderFilesTab({
+			src: [entry("main.tsx", "file", "src"), entry("app.tsx", "file", "src")],
+		});
+
+		await user.click(
+			screen.getByRole("button", { name: "menu for src/main.tsx" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+		await user.clear(screen.getByLabelText("Name"));
+		await user.type(screen.getByLabelText("Name"), "app.tsx");
+
+		expect(screen.getByRole("alert")).toHaveTextContent("already exists here");
+		expect(screen.getByRole("button", { name: "Rename" })).toBeDisabled();
+		expect(renameFile).not.toHaveBeenCalled();
+	});
+
+	it("follows the file being read to its new path instead of closing it", async () => {
+		const user = userEvent.setup();
+		const onRepointFile = vi.fn();
+		const onCloseFile = vi.fn();
+		renderFilesTab(
+			{ "": [entry("src", "dir")] },
+			{ activeFilePath: "src/main.tsx", onRepointFile, onCloseFile },
+		);
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+		await user.clear(screen.getByLabelText("Name"));
+		await user.type(screen.getByLabelText("Name"), "lib");
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+
+		// Nothing was lost, so closing the viewer would be telling the user
+		// something untrue; the file it shows just sits one name over.
+		// `onRepointFile`, not `onSelectFile`: the sidebar answers the latter by
+		// closing its drawer on a phone, which is right for a tap on a row and
+		// wrong for a rename nobody asked to navigate.
+		await waitFor(() =>
+			expect(onRepointFile).toHaveBeenCalledWith("lib/main.tsx"),
+		);
+		expect(onCloseFile).not.toHaveBeenCalled();
+		// A renamed folder is a new key in the tree, so its row remounts collapsed.
+		expect(screen.getByText("force open: lib")).toBeInTheDocument();
+	});
+
+	it("keeps the sheet up when the server is the one that finds the clash", async () => {
+		const user = userEvent.setup();
+		renameFile.mockRejectedValue(new Error("src/app.tsx already exists"));
+		renderFilesTab({ src: [entry("main.tsx", "file", "src")] });
+
+		await user.click(
+			screen.getByRole("button", { name: "menu for src/main.tsx" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+		await user.clear(screen.getByLabelText("Name"));
+		await user.type(screen.getByLabelText("Name"), "app.tsx");
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+
+		// A case-insensitive filesystem lands here for a name the client let
+		// through, and the typed name has to survive for the user to correct it.
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"src/app.tsx already exists",
+		);
+		expect(screen.getByLabelText("Name")).toHaveValue("app.tsx");
+	});
+
+	it("reports any other failure in the tab's error bar", async () => {
+		const user = userEvent.setup();
+		renameFile.mockRejectedValue(new Error("permission denied"));
+		renderFilesTab({ src: [entry("main.tsx", "file", "src")] });
+
+		await user.click(
+			screen.getByRole("button", { name: "menu for src/main.tsx" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+		await user.clear(screen.getByLabelText("Name"));
+		await user.type(screen.getByLabelText("Name"), "app.tsx");
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+
+		// About the request rather than the name, so it leaves with the sheet.
+		expect(await screen.findByText("permission denied")).toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.queryByLabelText("Name")).not.toBeInTheDocument(),
+		);
+	});
+
+	it("says why a folder above the file being edited cannot be renamed", async () => {
+		const user = userEvent.setup();
+		renderFilesTab(
+			{},
+			{ activeFilePath: "src/main.tsx", activeFileEdit: true },
+		);
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+
+		// Left in place with the reason rather than hidden: a control that is not
+		// there teaches the user nothing.
+		const row = screen.getByRole("button", { name: /Rename/ });
+		expect(row).toHaveAttribute("aria-disabled", "true");
+		expect(row).toHaveTextContent("Close the editor first.");
+
+		await user.click(row);
+		expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+	});
+
+	it("stops waiting for a listing that failed and lets the server decide", async () => {
+		const user = userEvent.setup();
+		// No listing seeded and the fetch refused: the answer to "is this name
+		// taken" is never coming.
+		getFile.mockRejectedValue(new Error("connection lost"));
+		renderFilesTab();
+
+		await user.click(
+			screen.getByRole("button", { name: "menu for src/main.tsx" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+		await user.clear(screen.getByLabelText("Name"));
+		await user.type(screen.getByLabelText("Name"), "app.tsx");
+
+		// Held behind a spinner forever, renaming anything in a folder that
+		// cannot be listed would be impossible. The local check is given up and
+		// `file.rename` — the only authority either way — answers instead.
+		// Not at the first failure: `useContents` keeps the default retry budget
+		// for anything but a timeout, so the sheet holds the spinner through
+		// those attempts and gives up only once they are spent.
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Rename" })).toBeEnabled(),
+		);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+		expect(renameFile).toHaveBeenCalledWith("src/main.tsx", "app.tsx");
+	});
+
+	it("leaves renaming available while the file is only being read", async () => {
+		const user = userEvent.setup();
+		renderFilesTab(
+			{ src: [entry("main.tsx", "file", "src")] },
+			{ activeFilePath: "src/main.tsx", activeFileEdit: false },
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "menu for src/main.tsx" }),
+		);
+		await user.click(screen.getByRole("button", { name: "Rename" }));
+
+		expect(screen.getByLabelText("Name")).toBeInTheDocument();
 	});
 });

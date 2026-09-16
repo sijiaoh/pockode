@@ -8,16 +8,19 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { contentsQueryKey, useContents } from "../../hooks/useContents";
+import { contentsQueryKey } from "../../hooks/useContents";
 import {
 	FILE_SEARCH_QUERY_KEY,
 	useFileSearch,
 } from "../../hooks/useFileSearch";
+import { useTakenNames, useTakenNamesIn } from "../../hooks/useTakenNames";
+import { applyEntryGone } from "../../lib/fileCache";
 import {
 	type NameCollision,
 	nameCollision,
 	nextAvailableName,
 } from "../../lib/fileUpload";
+import { isAlreadyExistsError } from "../../lib/rpc/file";
 import {
 	MAX_FILES_PER_UPLOAD,
 	type NewUpload,
@@ -32,11 +35,11 @@ import type { ContentsResponse, Entry, EntryType } from "../../types/contents";
 import { isAtOrUnder, parentDir } from "../../utils/path";
 import { useSidebarRefresh } from "../Layout";
 import { PullToRefresh } from "../ui";
+import EntryNameDialog from "./EntryNameDialog";
 import FileEntryMenu, { ROOT_ENTRY } from "./FileEntryMenu";
 import FileSearchBar from "./FileSearchBar";
 import FileSearchResults from "./FileSearchResults";
 import FileTree from "./FileTree";
-import NewEntryDialog from "./NewEntryDialog";
 import UploadConflictDialog from "./UploadConflictDialog";
 import UploadQueue from "./UploadQueue";
 import { FOLDER_DROP_REFUSED, useFileDrop } from "./useFileDrop";
@@ -44,6 +47,14 @@ import { FOLDER_DROP_REFUSED, useFileDrop } from "./useFileDrop";
 interface Props {
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
+	/** Whether that file is open in the editor rather than the viewer. */
+	activeFileEdit: boolean;
+	/**
+	 * Follows that file to its new path when it is renamed from here. Apart from
+	 * `onSelectFile`, which the sidebar uses to close its drawer on a phone: a
+	 * rename is not a request to open anything.
+	 */
+	onRepointFile: (path: string) => void;
 	/** Closes the content area when the file it shows is deleted from here. */
 	onCloseFile: () => void;
 }
@@ -124,10 +135,17 @@ function DropTargetBar({
 	);
 }
 
-function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
+function FilesTab({
+	onSelectFile,
+	activeFilePath,
+	activeFileEdit,
+	onRepointFile,
+	onCloseFile,
+}: Props) {
 	const queryClient = useQueryClient();
 	const createFile = useWSStore((state) => state.actions.createFile);
 	const deleteFile = useWSStore((state) => state.actions.deleteFile);
+	const renameFile = useWSStore((state) => state.actions.renameFile);
 	// The same value the queue pins each upload to, rather than the router's copy
 	// of it, so the tab and the store cannot disagree about which tree is current.
 	const worktree = useWorktreeStore((state) => state.current);
@@ -139,6 +157,9 @@ function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
 	const [naming, setNaming] = useState<Naming | null>(null);
 	const [creating, setCreating] = useState(false);
 	const [createError, setCreateError] = useState<string | null>(null);
+	const [renameTarget, setRenameTarget] = useState<Entry | null>(null);
+	const [renaming, setRenaming] = useState(false);
+	const [renameError, setRenameError] = useState<string | null>(null);
 	const [deleteTarget, setDeleteTarget] = useState<Entry | null>(null);
 	// A folder the tree has to open to show what was just created in it.
 	const [forceOpenPath, setForceOpenPath] = useState<string | null>(null);
@@ -185,6 +206,8 @@ function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
 		setMenuTarget(null);
 		setNaming(null);
 		setCreateError(null);
+		setRenameTarget(null);
+		setRenameError(null);
 		setDeleteTarget(null);
 		setForceOpenPath(null);
 	}, [worktree]);
@@ -210,21 +233,7 @@ function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
 		[queryClient],
 	);
 
-	/** Names already spoken for in a directory, on disk or by the queue. */
-	const takenNames = useCallback(
-		(dir: string): Set<string> => {
-			const taken = new Set<string>();
-			for (const entry of cachedEntries(dir) ?? []) taken.add(entry.name);
-			for (const item of uploads) {
-				if (item.destPath !== dir) continue;
-				// A cancelled or failed upload gave its name back.
-				if (item.status === "cancelled" || item.status === "failed") continue;
-				taken.add(item.name);
-			}
-			return taken;
-		},
-		[cachedEntries, uploads],
-	);
+	const takenNames = useTakenNamesIn();
 
 	const queueBatch = useCallback(
 		(batch: PendingUpload, choice: "skip" | "replace" | "keep-both") => {
@@ -353,9 +362,9 @@ function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
 
 	// Only for the immediate answer: a folder that has never been expanded has no
 	// listing to check against, which is why the server is the one that decides.
-	const namingContents = useContents(naming?.dir ?? "", naming !== null);
-	const namingTaken =
-		naming && !namingContents.isPending ? takenNames(naming.dir) : null;
+	const namingTaken = useTakenNames(naming?.dir ?? null);
+	const renameDir = renameTarget ? parentDir(renameTarget.path) : null;
+	const renameTaken = useTakenNames(renameDir);
 
 	const handleCreate = useCallback(
 		async (name: string) => {
@@ -372,7 +381,7 @@ function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
 				// A name already taken is answerable right here, by typing another
 				// one, so the dialog stays up holding it. Anything else is about the
 				// request rather than the name and leaves with the dialog.
-				if (message.includes("already exists")) {
+				if (isAlreadyExistsError(error)) {
 					setCreateError(message);
 				} else {
 					setNaming(null);
@@ -392,6 +401,68 @@ function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
 		[naming, creating, createFile, queryClient],
 	);
 
+	const openRename = useCallback(() => {
+		if (!menuTarget) return;
+		setMenuTarget(null);
+		setRenameError(null);
+		// Same reason as `openNaming`: a path assigned twice does not re-run the
+		// tree's effect, so a folder collapsed since would stay shut.
+		setForceOpenPath(null);
+		setRenameTarget(menuTarget);
+	}, [menuTarget]);
+
+	const handleRename = useCallback(
+		async (name: string) => {
+			if (!renameTarget || renaming) return;
+			const { path, type } = renameTarget;
+			const dir = parentDir(path);
+			const newPath = dir ? `${dir}/${name}` : name;
+
+			setRenaming(true);
+			setRenameError(null);
+			try {
+				await renameFile(path, name);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				// As in `handleCreate`: a name already taken is answerable by typing
+				// another one, so the sheet stays up holding it. A case-insensitive
+				// filesystem reaches here for a name the client let through, and the
+				// server's own words are the only honest thing to show.
+				if (isAlreadyExistsError(error)) {
+					setRenameError(message);
+				} else {
+					setRenameTarget(null);
+					setActionError(message);
+				}
+				return;
+			} finally {
+				setRenaming(false);
+			}
+
+			setRenameTarget(null);
+			applyEntryGone(queryClient, path);
+			// A renamed folder is a new `key` in the tree, so its row is a fresh
+			// component with its own collapsed state. Forcing it open puts back what
+			// the remount took; the expansion of its own children is not recoverable
+			// this way and is let go.
+			if (type === "dir") setForceOpenPath(newPath);
+			// Pointed at the new path rather than closed. Closing is right for a
+			// delete, where the content is gone; here nothing was lost, and closing
+			// the viewer would say otherwise.
+			if (activeFilePath && isAtOrUnder(activeFilePath, path)) {
+				onRepointFile(newPath + activeFilePath.slice(path.length));
+			}
+		},
+		[
+			renameTarget,
+			renaming,
+			renameFile,
+			queryClient,
+			activeFilePath,
+			onRepointFile,
+		],
+	);
+
 	const handleDelete = useCallback(async () => {
 		if (!deleteTarget) return;
 		const { path } = deleteTarget;
@@ -404,20 +475,7 @@ function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
 			return;
 		}
 
-		queryClient.invalidateQueries({
-			queryKey: contentsQueryKey(parentDir(path)),
-		});
-		// Dropped rather than invalidated: every listing at or under this path is
-		// about something that is gone, so refetching them would only collect one
-		// "not found" per folder. A file is its own one-entry subtree here, and
-		// dropping its cache keeps a reopened path from showing what was deleted.
-		queryClient.removeQueries({
-			predicate: ({ queryKey }) => {
-				const [scope, key] = queryKey;
-				if (scope !== "contents" || typeof key !== "string") return false;
-				return isAtOrUnder(key, path);
-			},
-		});
+		applyEntryGone(queryClient, path);
 		// The overlay reads the file's own path, which invalidating the folder
 		// around it does not touch; left open it would go on showing the contents
 		// of a file that no longer exists.
@@ -611,6 +669,12 @@ function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
 					onUpload={handleMenuUpload}
 					onNewFile={() => openNaming("file")}
 					onNewFolder={() => openNaming("dir")}
+					onRename={openRename}
+					renameBlockedByEditor={
+						activeFileEdit &&
+						activeFilePath !== null &&
+						isAtOrUnder(activeFilePath, menuTarget.path)
+					}
 					onDelete={() => {
 						setDeleteTarget(menuTarget);
 						setMenuTarget(null);
@@ -619,7 +683,8 @@ function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
 			)}
 
 			{naming && (
-				<NewEntryDialog
+				<EntryNameDialog
+					mode="create"
 					type={naming.type}
 					dir={naming.dir}
 					takenNames={namingTaken}
@@ -627,6 +692,20 @@ function FilesTab({ onSelectFile, activeFilePath, onCloseFile }: Props) {
 					serverError={createError}
 					onCancel={() => setNaming(null)}
 					onSubmit={handleCreate}
+				/>
+			)}
+
+			{renameTarget && (
+				<EntryNameDialog
+					mode="rename"
+					type={renameTarget.type}
+					dir={parentDir(renameTarget.path)}
+					currentName={renameTarget.name}
+					takenNames={renameTaken}
+					submitting={renaming}
+					serverError={renameError}
+					onCancel={() => setRenameTarget(null)}
+					onSubmit={handleRename}
 				/>
 			)}
 

@@ -38,10 +38,21 @@ vi.mock("../../hooks/useSession", () => ({
 // The tabs are not what is under test; the one call the Files tab makes back
 // into the sidebar is.
 vi.mock("../Files", () => ({
-	FilesTab: ({ onSelectFile }: { onSelectFile: (path: string) => void }) => (
-		<button type="button" onClick={() => onSelectFile("src/main.tsx")}>
-			open src/main.tsx
-		</button>
+	FilesTab: ({
+		onSelectFile,
+		onRepointFile,
+	}: {
+		onSelectFile: (path: string) => void;
+		onRepointFile: (path: string) => void;
+	}) => (
+		<>
+			<button type="button" onClick={() => onSelectFile("src/main.tsx")}>
+				open src/main.tsx
+			</button>
+			<button type="button" onClick={() => onRepointFile("lib/main.tsx")}>
+				repoint to lib/main.tsx
+			</button>
+		</>
 	),
 }));
 vi.mock("../Git", () => ({ DiffTab: () => null }));
@@ -65,6 +76,8 @@ function renderSidebar(onClose: () => void) {
 				activeCommitHash={null}
 				onSelectFile={vi.fn()}
 				activeFilePath={null}
+				activeFileEdit={false}
+				onRepointFile={vi.fn()}
 				onCloseFile={vi.fn()}
 				onOpenWorkList={vi.fn()}
 				onOpenAgentRoleList={vi.fn()}
@@ -107,6 +120,22 @@ describe("SessionSidebar on a phone", () => {
 
 		// Closing takes the queue and the tab bar that badges it off screen
 		// together, leaving the upload with nothing to report to.
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it("stays open when a rename only re-points the file already on screen", async () => {
+		const user = userEvent.setup();
+		const onClose = vi.fn();
+		renderSidebar(onClose);
+
+		await user.click(
+			screen.getByRole("button", { name: "repoint to lib/main.tsx" }),
+		);
+
+		// Closing is the answer to a tap on a row, which says "show me this".
+		// A rename says nothing of the kind — the user is still in the tree, and
+		// taking it out from under them would be a reply to something they did
+		// not ask.
 		expect(onClose).not.toHaveBeenCalled();
 	});
 

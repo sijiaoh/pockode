@@ -39,6 +39,14 @@ interface Props {
 	activeCommitHash: string | null;
 	onSelectFile: (path: string) => void;
 	activeFilePath: string | null;
+	/** Whether that file is open in the editor rather than the viewer. */
+	activeFileEdit: boolean;
+	/**
+	 * Re-points the content area when the file it shows is renamed from the
+	 * tree. Deliberately not routed through `handleSelectFile` below: a rename
+	 * is not a tap on a row, and must not close the drawer.
+	 */
+	onRepointFile: (path: string) => void;
 	/** Closes the content area when the file it shows is deleted from the tree. */
 	onCloseFile: () => void;
 	onOpenWorkList: () => void;
@@ -65,6 +73,8 @@ function SessionSidebar({
 	activeCommitHash,
 	onSelectFile,
 	activeFilePath,
+	activeFileEdit,
+	onRepointFile,
 	onCloseFile,
 	onOpenWorkList,
 	onOpenAgentRoleList,
@@ -212,6 +222,8 @@ function SessionSidebar({
 			<FilesTab
 				onSelectFile={handleSelectFile}
 				activeFilePath={activeFilePath}
+				activeFileEdit={activeFileEdit}
+				onRepointFile={onRepointFile}
 				onCloseFile={onCloseFile}
 			/>
 			<DiffTab

@@ -572,7 +572,7 @@ noticed. One representation with a test on it is the only thing that ends that.
   40px  bound  web/src/components/common/SidebarListItem.tsx
   40px  bound  web/src/extensions/ExampleExtension/settings/AboutSection.tsx
   40px  exact  web/src/components/Chat/ForkSessionSheet.tsx ×2
-  40px  exact  web/src/components/Files/NewEntryDialog.tsx ×2
+  40px  exact  web/src/components/Files/EntryNameDialog.tsx ×2
   40px  exact  web/src/components/Git/CommitSheet.tsx ×2
   40px  exact  web/src/components/Git/NewBranchSheet.tsx ×2
   40px  exact  web/src/components/Project/ProjectTab.tsx ×2

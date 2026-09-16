@@ -532,6 +532,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleFileCreate(ctx, conn, req, wt)
 	case "file.delete":
 		h.handleFileDelete(ctx, conn, req, wt)
+	case "file.rename":
+		h.handleFileRename(ctx, conn, req, wt)
 	case "file.search":
 		h.handleFileSearch(ctx, conn, req, wt)
 	// git namespace

@@ -1,4 +1,4 @@
-import { FilePlus, FolderPlus, Trash2, Upload } from "lucide-react";
+import { FilePlus, FolderPlus, PencilLine, Trash2, Upload } from "lucide-react";
 import type { Entry } from "../../types/contents";
 import MenuRow from "../common/MenuRow";
 import { Sheet } from "../ui";
@@ -18,6 +18,14 @@ interface Props {
 	onUpload: () => void;
 	onNewFile: () => void;
 	onNewFolder: () => void;
+	onRename: () => void;
+	/**
+	 * Set when this entry is the file open in the editor, or a folder above it.
+	 * Renaming it would pull the path out from under a buffer being written to;
+	 * deleting is allowed there because the file really is gone, while here it
+	 * is not (docs/file.md).
+	 */
+	renameBlockedByEditor?: boolean;
 	onDelete: () => void;
 }
 
@@ -39,6 +47,8 @@ function FileEntryMenu({
 	onUpload,
 	onNewFile,
 	onNewFolder,
+	onRename,
+	renameBlockedByEditor,
 	onDelete,
 }: Props) {
 	const isRoot = entry.path === "";
@@ -58,10 +68,23 @@ function FileEntryMenu({
 						/>
 					</>
 				)}
+				{/* The root is the work directory itself rather than an entry of
+				    the file namespace, so neither of these is ever about it. */}
 				{!isRoot && (
 					<>
-						{/* Kept apart and last: the rest of the list is reversible. */}
-						{isDirectory && <div className="my-1 border-t border-th-border" />}
+						<MenuRow
+							icon={PencilLine}
+							label="Rename"
+							disabled={renameBlockedByEditor}
+							description={
+								renameBlockedByEditor ? "Close the editor first." : undefined
+							}
+							onClick={onRename}
+						/>
+						{/* Kept apart and last: everything above it adds to the entry
+						    or leaves it where it is, and this is the one row that
+						    takes the entry away. */}
+						<div className="my-1 border-t border-th-border" />
 						<MenuRow icon={Trash2} label="Delete" danger onClick={onDelete} />
 					</>
 				)}

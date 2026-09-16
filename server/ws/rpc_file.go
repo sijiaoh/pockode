@@ -134,6 +134,30 @@ func (h *rpcMethodHandler) handleFileDelete(ctx context.Context, conn *jsonrpc2.
 	}
 }
 
+func (h *rpcMethodHandler) handleFileRename(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.FileRenameParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	if err := contents.Rename(wt.WorkDir, params.Path, params.NewName); err != nil {
+		switch {
+		case errors.Is(err, contents.ErrInvalidPath):
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid path")
+		case errors.Is(err, contents.ErrNotFound), errors.Is(err, contents.ErrExists):
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+		default:
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		}
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, nil); err != nil {
+		h.log.Error("failed to send file rename response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleFileSearch(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
 	var params rpc.FileSearchParams
 	if err := unmarshalParams(req, &params); err != nil {

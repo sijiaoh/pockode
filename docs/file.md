@@ -26,13 +26,14 @@ served through it; it is addressed by id in the session's own attachment store
 
 | Layer | Path | Role |
 |-------|------|------|
-| RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.create`, `file.delete`, `file.search` |
-| File operations | `server/contents/contents.go` | Path validation, read, write (upsert), create, delete |
+| RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.create`, `file.delete`, `file.rename`, `file.search` |
+| File operations | `server/contents/contents.go` | Path validation, read, write (upsert), create, delete, rename |
 | HTTP transfer | `server/filetransfer/filetransfer.go` | Upload / download of whole files (see [Transfer](#transfer)) |
 | Search | `server/search/` | Candidate listing (`list.go`), content grep (`scan.go`) |
-| Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode, FileSearchBar, FileSearchResults, FileEntryMenu, NewEntryDialog, UploadQueue, UploadConflictDialog |
+| Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode, FileSearchBar, FileSearchResults, FileEntryMenu, EntryNameDialog, UploadQueue, UploadConflictDialog |
+| Entry-action helpers | `web/src/hooks/useTakenNames.ts`, `web/src/lib/fileCache.ts` | Which names a directory has spoken for; the cache work a rename or a delete implies |
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
-| RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `searchFiles` |
+| RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `searchFiles`, `isAlreadyExistsError` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/fileUpload.ts` | Authenticated download / upload (see [Downloading](#downloading), [Uploading](#uploading)) |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
 | Drag and drop | `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | Drop target resolution and drag state, window-level drop backstop |
@@ -130,6 +131,61 @@ also decides how it treats a symlink on the name; see [Security](#security).
 **`file.delete`** — Remove a file or directory from disk.
 - Directories are deleted recursively (all contents removed)
 - Returns error if path doesn't exist
+
+**`file.rename`** — Change an entry's name, leaving it where it is.
+- `new_name` is a **name, not a path**: a separator is rejected, and so are
+  `""`, `.`, `..` and the reserved device names `ValidatePath` rejects — all of
+  them as `InvalidParams` and `"invalid path"`, the one message the other file
+  methods also flatten a bad path to
+- Rejects a name already taken in that directory with `InvalidParams` and
+  `"<path> already exists"` — the same sentence `file.create` sends, so a
+  client has one thing to match on
+- A missing source is `InvalidParams` and `"not found: <path>"`
+- Renaming an entry to the name it already has succeeds and does nothing
+- Changing only a name's capitalisation works on every platform, including the
+  case-insensitive filesystems where the new name looks taken by the entry
+  itself
+
+Renaming is not moving, and the missing separator is the whole reason. Allowing
+one would fold "move this" and "create the parents on the way" into the same
+text field the UI names things in, and its failures — target directory missing,
+target is a file, a directory moved into its own subtree, a cross-directory
+overwrite — are ones the user cannot see coming while typing a name. Moving
+belongs to a gesture that shows the destination. The naming sheet in the UI
+rejects a separator for the same reason, so both halves say one thing about
+what a name may be.
+
+It is one `os.Rename`, never a write followed by a delete: that imitation
+changes the inode, drops the mode, breaks hard links, costs a full copy of a
+large file, and cannot be done to a directory at all. That choice also decides
+how it treats a symlink, on the old name and on the new; see
+[Security](#security).
+
+Unlike `file.create`, "already exists" here is a check before the syscall rather
+than the syscall's own verdict: POSIX `rename(2)` *replaces* an existing
+destination silently, and there is no portable way to ask it not to
+(`RENAME_NOREPLACE` is Linux-only). So there is a window between the check and
+the rename in which another writer could take the name. Losing that race means
+an overwrite, which is bad — but the alternative is overwriting every time.
+
+That check cannot be a bare "does anything have this name", because on a
+case-insensitive filesystem — APFS and NTFS, so macOS and Windows as shipped —
+looking up `readme.md` finds `README.md`, and an entry would be refused as its
+own obstacle. Fixing a file's capitalisation would then be impossible anywhere
+but Linux, by any route but delete-and-recreate. `os.Rename` performs that
+rename correctly on both platforms; only the guard in front of it had to learn
+the difference. `os.SameFile` is most of what tells it: if the destination is
+not the source, the name is taken and that is the end of it.
+
+Sameness alone is not enough, though, because two directory entries can name
+one inode with no case folding involved — `a.txt` and `A.txt` as hard links on a
+case-sensitive filesystem. Those are two real names and taking one of them is
+refused. The directory listing is what separates the cases: under case folding
+the new name is not literally in it, while a hard link sibling is. So the
+listing is read, and only in the narrow case where it decides anything. Leaving
+it out would not lose data — POSIX makes `rename(2)` a no-op when both names
+resolve to the same file — but it would report success for a rename that did
+nothing, which is worse than refusing.
 
 **`file.search`** — Find files by name or content.
 
@@ -640,16 +696,19 @@ current, rather than a portal per row. The project has no popover to build a
 dropdown on, and one anchored to a row of a scrolling tree would mean
 positioning, flipping and scroll tracking for a menu opened a few times a day; a
 sheet is anchored to the viewport instead, so none of that arises. A folder
-offers upload, new file, new folder and delete, a file offers only delete, and
-the root offers everything but delete. Delete is last, `text-th-error`, and
-separated by a rule.
+offers upload, new file, new folder, rename and delete, a file offers rename and
+delete, and the root offers everything but those last two — it is the work
+directory itself rather than an entry of the file namespace, so neither renaming
+nor deleting is ever about it. Delete is last, `text-th-error`, and separated by
+a rule: everything above it adds to the entry or leaves it where it is, and it
+is the one item that takes the entry away.
 
 Focus comes with the sheet. `Sheet` takes focus on open — onto the dialog box
 itself, so the title is read before anything else and the close button is not
 what a stray Enter presses — cycles Tab within itself, and hands focus back to
 the `…` when it closes. None of that is written here: it belongs to every sheet
 in the app, so one menu patching it in would be a second implementation to
-disagree with the first. `NewEntryDialog` still focuses its own field, which
+disagree with the first. `EntryNameDialog` still focuses its own field, which
 takes precedence over the box.
 
 The upload item opens the tab's own hidden `<input type="file">`, not one inside
@@ -659,7 +718,7 @@ iOS Safari refuses to open the picker.
 
 ### Creating
 
-`NewEntryDialog` names the entry in a sheet rather than inline in the tree. An
+`EntryNameDialog` names the entry in a sheet rather than inline in the tree. An
 inline row means a ghost entry threaded through the recursive tree, its own
 indentation and scroll-into-view handling, and on a phone the keyboard tends to
 come up over exactly the row being typed into.
@@ -673,8 +732,8 @@ spinner until it arrives — and even then the listing can be stale. `file.creat
 refuses an existing path outright, which is what makes the guarantee.
 
 The server's refusal is shown **inside the dialog, under the field**, with the
-typed name still in it, so the user renames and retries; dropped into the tab's
-error bar it would arrive with the dialog and the name gone. Only
+typed name still in it, so the user types another and retries; dropped into
+the tab's error bar it would arrive with the dialog and the name gone. Only
 already-exists is handled that way — any other failure is about the request
 rather than the name, and leaves with the dialog for the error bar. Empty
 names, `/`, `.` and `..` are refused client-side.
@@ -688,6 +747,109 @@ user collapsed between two creations would otherwise stay shut over the second.
 A new file is **not** opened automatically: on a phone that would replace the
 sidebar the user is still working in.
 
+### Renaming
+
+The same `EntryNameDialog`, in `mode="rename"`: create and rename ask for one
+name under one set of rules, and two components would eventually give two
+answers to "is this name legal here" — with the one the user meets second being
+the wrong one. What differs is the title, the button, and that the field starts
+on the current name with the **stem pre-selected**: `report.final.md` opens with
+`report.final` selected, so the common edit costs no aim. A folder, a name with
+no extension, and a dotfile (`.gitignore` is a name, not a suffix) are selected
+whole. A name left unchanged disables the button and says **nothing** — there is
+no error to report in a sheet the user has only just opened.
+
+**Renaming is not moving**: a name with a separator in it is turned down here
+exactly as it is for a new entry, by the one rule the shared sheet applies. Why
+a name and not a path is the server's reason, written once under
+[`file.rename`](#operations).
+
+**Two entry points, deliberately.** The tree row's `…`, and the file viewer's
+bottom bar (`Edit → Rename → Download → Delete`, four 44px targets and their
+gaps fitting the narrowest phone). The viewer's is not a convenience: a search
+result row has no `…`, and a file opened from a chat link has no row at all, so
+without it those files could be deleted but not renamed. Search rows are left
+without a `…` on purpose — in content mode that slot already holds the match
+count, and every result carries a path the rename is about to invalidate
+anyway. There is no double-click-to-rename and no F2: the tree has no inline
+editing to build on and the app has no shortcut system, so either would be a
+second behaviour to maintain that only a mouse could reach.
+
+**A file open in the editor cannot be renamed, nor can any folder above it.**
+The row stays in the menu, `aria-disabled` with `Close the editor first.` under
+it, because a control that is simply absent teaches nothing. The test is
+`isAtOrUnder(activeFilePath, entry.path)` with `activeFileEdit`, threaded from
+`AppShell` — deliberately coarse: whether the editor is *on screen*, not whether
+it has unsaved text. The dirty flag belongs to the editor, and lifting it
+through the shell to gate one menu row would run a state line across the app for
+an edge case. **This is knowingly inconsistent with delete**, which closes the
+editor instead: there the file really is gone, so closing is the only option,
+while a rename takes nothing away and pulling the path out from under a buffer
+being written to is a choice we decline to make. It is not an oversight to fix.
+
+On success `applyEntryGone` does the cache work, which is described under
+[Deleting](#deleting) because it is the very same work: the cache cannot tell a
+rename from a delete, since either way the old name is not there any more.
+Nothing is prefetched under the new path, and a renamed file is not opened.
+
+A renamed **folder collapses**: `FileTreeNode` keeps `isExpanded` in component
+state and the list is keyed by `entry.path`, so the new name is a new component.
+`FilesTab` answers with `forceOpenPath(newPath)`. Its children's expansion is
+still lost, and that is accepted — carrying it across would mean lifting
+expansion into a path-keyed store, which is a rework of the tree's state
+ownership for an occasional action. A renamed *file* needs nothing: the folder
+it is in is open by definition, since the row the rename started from was
+visible. None of this reaches the viewer's entry point, which renames a file and
+only a file — a folder has no viewer — and leaves the tree's expansion alone,
+the user being in an overlay in front of it.
+
+**The viewer is redirected, not closed.** If the file on screen is the one
+renamed, or sits under a renamed folder, `FilesTab` calls `onRepointFile` with
+the path's prefix replaced, and `FileView` navigates to the new path after its
+own rename. Closing is right for a delete and wrong here: nothing was lost, and
+closing would say otherwise.
+
+`onRepointFile` is a separate prop from `onSelectFile`, threaded from `AppShell`
+alongside `onCloseFile`, and the difference is load-bearing twice over.
+`SessionSidebar` wraps its own `onSelectFile` in "and close the drawer", which
+is the right answer to a tap on a row — the user asked to read that file — and
+the wrong one to a rename, which would take the tree out from under someone who
+only asked to change a name. And the navigation **replaces** rather than pushes:
+nobody navigated, so a pushed entry would do nothing but point Back at a path
+that no longer resolves.
+
+Two consequences are left alone. A download in flight starts failing on its next
+range request — the rename does not change mtime, so `If-Unmodified-Since`
+cannot catch it — and says so in its banner; the download can simply be retried.
+Uploads still queued for a renamed folder get `not_found` on their own rows and
+can be retried from there, exactly as they would if the folder had been deleted.
+
+Failures split as they do for [a creation](#creating), with one thing added:
+the bar the rest of them land in is the one belonging to where the rename
+started — `FilesTab`'s or `FileView`'s, never a third one.
+`isAlreadyExistsError` is the one place that sentence is matched;
+`file.create` sends the same one, so without it a creation and two rename entry
+points would each hold their own copy of the phrase to drift apart. It matches
+the message as a **suffix**, because "already exists", "not found" and "invalid
+path" all arrive as `InvalidParams` and there is nothing but the sentence to
+tell them apart.
+
+The client lets `README.md` → `readme.md` through — the new name is not in the
+taken set, being a spelling of the entry's own — and the server accepts it, so
+nothing is refused for a case change any more. What the client still cannot
+answer for itself is a *different* name that only a case-insensitive filesystem
+considers taken (`notes.md` while `Notes.md` exists): it does not know which
+kind of filesystem it is talking to, and it never learns, so the server's words
+in the sheet stay the only honest answer there.
+
+One more thing the client gives up on rather than guesses: a listing that
+**fails** to load leaves the taken set empty instead of holding the button
+behind its spinner. Null means "still coming", and waiting forever for an answer
+that will not arrive would make naming anything in a folder that cannot be
+listed impossible. The local check is the immediate answer only; `file.create`
+and `file.rename` were the real defence all along, and their refusal lands in
+this same sheet under this same field.
+
 ### Deleting
 
 `ConfirmDialog` (`variant="danger"`) asks first, naming the full path. A
@@ -695,18 +857,30 @@ folder's message says "and everything inside it" — `file.delete` is
 `os.RemoveAll`, and recursion has to be in the words rather than only in the
 handler.
 
-Afterwards the parent's listing is invalidated so the row disappears, and every
-`contents` query at or under the deleted path is **removed** rather than
-invalidated: those listings are about something that is gone, and refetching
-them would collect one "not found" per folder. If the file being read was the
-one deleted — or sat inside the deleted folder — `FilesTab` calls `onCloseFile`,
-threaded down from `AppShell` through `SessionSidebar`. `FileView` reads the
-cache under the file's *own* path, which invalidating the folder around it does
-not touch, and the overlay belongs to `AppShell`; without that call the viewer
-would go on showing a file that no longer exists.
+Afterwards `applyEntryGone` invalidates the parent's listing so the row
+disappears, **removes** every `contents` query at or under the deleted path
+rather than invalidating it — those listings are about something that is gone,
+and refetching them would collect one "not found" per folder — and invalidates
+the whole file search cache, because every result carries the path it was found
+at and a stale list is one that opens nothing.
 
-Apart from the already-exists case above, failures from either action land in
-the Files tab's single error bar (`actionError`, shared with uploads).
+All three of them go through that one function: the tree's delete, the viewer's
+delete and [a rename](#renaming). Splitting the work per action is what let a
+rename invalidate the search cache while a delete did not, and what let the
+viewer's delete invalidate the *root* listing instead of the folder the file was
+actually in — which left the deleted row on screen in every folder but the root.
+The cache has no notion of why a path is vacant, so it is asked one question.
+
+If the file being read was the one deleted — or sat inside the deleted folder —
+`FilesTab` calls `onCloseFile`, threaded down from `AppShell` through
+`SessionSidebar`. `FileView` reads the cache under the file's *own* path, which
+invalidating the folder around it does not touch, and the overlay belongs to
+`AppShell`; without that call the viewer would go on showing a file that no
+longer exists.
+
+A failed delete has no sheet to stay in and no name to be answered by, so all
+of them land straight in the Files tab's single error bar (`actionError`,
+shared with uploads) — the same bar a creation's other failures leave for.
 
 ## Uploading
 
@@ -983,6 +1157,18 @@ of the workspace. Nothing stats first; adding a check would not strengthen this,
 only add a window. The parents it creates along the way are `MkdirAll`, so a
 symlinked *directory* on the path is followed exactly as it is for `file.write`
 and for an upload.
+
+`file.rename` treats a symlink as an entry, never as a door: it looks for both
+the source and the destination with `Lstat` and hands both names to `os.Rename`,
+which renames links rather than following them. So a link inside the workspace
+is renamed like any other entry, and one sitting on the destination name blocks
+the rename instead of being followed out of the workspace — either way whether
+or not it still points anywhere. `Stat` would get both wrong: on the destination
+it would call a dangling link's name free and let the rename unlink it, and on
+the source it would report a link the tree is plainly showing as not found. The
+parent directory is a different matter — it comes from the source path, which is
+validated lexically, so a symlinked directory on the way there is followed
+exactly as it is for `file.write`.
 
 `file.get` does follow them: it stats with `Stat`, so a symlink pointing outside
 the workspace reads the target. This is long-standing behavior, not a property

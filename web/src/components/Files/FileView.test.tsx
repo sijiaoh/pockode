@@ -4,12 +4,14 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LARGE_DOWNLOAD_WARNING_SIZE } from "../../lib/fileDownload";
-import type { FileContent } from "../../types/contents";
+import type { Entry, FileContent } from "../../types/contents";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import FileView from "./FileView";
 
 const getFile = vi.fn();
 const downloadFile = vi.fn();
+const renameFile = vi.fn();
+const navigate = vi.fn();
 
 // Only the transfer itself is replaced; the size threshold and the abort check
 // are the real ones, so the view is tested against the rules it ships with.
@@ -20,12 +22,12 @@ vi.mock("../../lib/fileDownload", async (importOriginal) => ({
 
 vi.mock("../../lib/wsStore", () => ({
 	useWSStore: (selector: (state: unknown) => unknown) =>
-		selector({ actions: { getFile, deleteFile: vi.fn() } }),
+		selector({ actions: { getFile, deleteFile: vi.fn(), renameFile } }),
 	isRPCTimeout: () => false,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
-	useNavigate: () => vi.fn(),
+	useNavigate: () => navigate,
 }));
 
 vi.mock("../../hooks/useFSWatch", () => ({
@@ -60,8 +62,17 @@ function fileContent(overrides: Partial<FileContent>): FileContent {
 	};
 }
 
-async function renderFileView(file: FileContent) {
-	getFile.mockResolvedValue({ type: "file", file });
+/**
+ * `siblings` is what the file's own folder holds, which is what the rename
+ * sheet checks a new name against. A file reached from search or a chat link
+ * has no listing cached for that folder, so the sheet fetches one.
+ */
+async function renderFileView(file: FileContent, siblings: Entry[] = []) {
+	getFile.mockImplementation(async (path: string) =>
+		path === file.path
+			? { type: "file", file }
+			: { type: "directory", entries: siblings },
+	);
 
 	const queryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
@@ -92,6 +103,9 @@ describe("FileView", { timeout: 20_000 }, () => {
 		getFile.mockReset();
 		downloadFile.mockReset();
 		downloadFile.mockResolvedValue(undefined);
+		renameFile.mockReset();
+		renameFile.mockResolvedValue(undefined);
+		navigate.mockReset();
 	});
 
 	it("shows text content and allows editing", async () => {
@@ -339,6 +353,79 @@ describe("FileView", { timeout: 20_000 }, () => {
 			expect(downloadFile).toHaveBeenCalledWith(
 				expect.objectContaining({ path: "dump.log" }),
 			);
+		});
+	});
+
+	describe("renaming", () => {
+		// The only way to rename a file opened from search or from a chat link:
+		// neither has a tree row, so neither has the row's `…` menu.
+		it("renames in place and follows the file to its new path", async () => {
+			const user = userEvent.setup();
+			await renderFileView(fileContent({ content: "const a = 1;" }));
+
+			await user.click(screen.getByRole("button", { name: "Rename" }));
+			const sheet = screen.getByRole("dialog", { name: "Rename file" });
+			await user.clear(screen.getByLabelText("Name"));
+			await user.type(screen.getByLabelText("Name"), "main.ts");
+			await user.click(within(sheet).getByRole("button", { name: "Rename" }));
+
+			expect(renameFile).toHaveBeenCalledWith("src/app.ts", "main.ts");
+			// Followed rather than closed: nothing was lost, and the user is still
+			// reading the same file.
+			await waitFor(() =>
+				expect(navigate).toHaveBeenCalledWith(
+					expect.objectContaining({ params: { _splat: "src/main.ts" } }),
+				),
+			);
+		});
+
+		it("stays available for a file the viewer cannot render", async () => {
+			const user = userEvent.setup();
+			await renderFileView(
+				fileContent({
+					path: "src/dump.bin",
+					mime: "application/octet-stream",
+					encoding: "none",
+					omitted: "binary",
+					content: "",
+					size: 9,
+				}),
+			);
+
+			// Not being able to preview a file is no reason to be unable to name it.
+			await user.click(screen.getByRole("button", { name: "Rename" }));
+			expect(screen.getByLabelText("Name")).toHaveValue("dump.bin");
+		});
+
+		it("refuses a name the folder already holds, without asking the server", async () => {
+			const user = userEvent.setup();
+			await renderFileView(fileContent({}), [
+				{ name: "main.ts", type: "file", path: "src/main.ts" },
+			]);
+
+			await user.click(screen.getByRole("button", { name: "Rename" }));
+			await user.clear(screen.getByLabelText("Name"));
+			await user.type(screen.getByLabelText("Name"), "main.ts");
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"already exists here",
+			);
+			expect(renameFile).not.toHaveBeenCalled();
+		});
+
+		it("reports a failed rename instead of leaving it looking done", async () => {
+			const user = userEvent.setup();
+			renameFile.mockRejectedValue(new Error("permission denied"));
+			await renderFileView(fileContent({}));
+
+			await user.click(screen.getByRole("button", { name: "Rename" }));
+			const sheet = screen.getByRole("dialog", { name: "Rename file" });
+			await user.clear(screen.getByLabelText("Name"));
+			await user.type(screen.getByLabelText("Name"), "main.ts");
+			await user.click(within(sheet).getByRole("button", { name: "Rename" }));
+
+			expect(await screen.findByText("permission denied")).toBeInTheDocument();
+			expect(navigate).not.toHaveBeenCalled();
 		});
 	});
 });

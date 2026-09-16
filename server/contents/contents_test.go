@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -719,6 +720,309 @@ func TestCreate(t *testing.T) {
 
 		for _, path := range []string{"", "../escape.txt", "/etc/passwd"} {
 			if err := Create(workDir, path, false); !errors.Is(err, ErrInvalidPath) {
+				t.Errorf("path %q: got error %v, want ErrInvalidPath", path, err)
+			}
+		}
+	})
+}
+
+func TestRename(t *testing.T) {
+	t.Run("renames a file in place", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(workDir, "draft.md"), []byte("hello"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+
+		if err := Rename(workDir, "draft.md", "final.md"); err != nil {
+			t.Fatalf("Rename failed: %v", err)
+		}
+
+		data, err := os.ReadFile(filepath.Join(workDir, "final.md"))
+		if err != nil {
+			t.Fatalf("failed to read renamed file: %v", err)
+		}
+		if string(data) != "hello" {
+			t.Errorf("got content %q, want %q", string(data), "hello")
+		}
+		if _, err := os.Lstat(filepath.Join(workDir, "draft.md")); !os.IsNotExist(err) {
+			t.Error("the old name still exists")
+		}
+	})
+
+	// The file must stay the same file: a write-then-delete imitation would
+	// reset the mode, break hard links and swap the inode out from under
+	// anything holding the file open.
+	t.Run("keeps the file's identity", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(workDir, "run.sh"), []byte("#!/bin/sh\n"), 0755); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+		before, err := os.Stat(filepath.Join(workDir, "run.sh"))
+		if err != nil {
+			t.Fatalf("failed to stat file: %v", err)
+		}
+
+		if err := Rename(workDir, "run.sh", "start.sh"); err != nil {
+			t.Fatalf("Rename failed: %v", err)
+		}
+
+		after, err := os.Stat(filepath.Join(workDir, "start.sh"))
+		if err != nil {
+			t.Fatalf("failed to stat renamed file: %v", err)
+		}
+		if !os.SameFile(before, after) {
+			t.Error("renamed file is a different file")
+		}
+		if runtime.GOOS != "windows" && after.Mode() != before.Mode() {
+			t.Errorf("got mode %v, want %v", after.Mode(), before.Mode())
+		}
+	})
+
+	t.Run("renames a directory with its contents", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(workDir, "old/nested"), 0755); err != nil {
+			t.Fatalf("failed to create directory: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(workDir, "old/nested/file.txt"), []byte("kept"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+
+		if err := Rename(workDir, "old", "new"); err != nil {
+			t.Fatalf("Rename failed: %v", err)
+		}
+
+		data, err := os.ReadFile(filepath.Join(workDir, "new/nested/file.txt"))
+		if err != nil {
+			t.Fatalf("failed to read moved file: %v", err)
+		}
+		if string(data) != "kept" {
+			t.Errorf("got content %q, want %q", string(data), "kept")
+		}
+	})
+
+	t.Run("stays in the entry's own directory", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(workDir, "docs/api"), 0755); err != nil {
+			t.Fatalf("failed to create directory: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(workDir, "docs/api/v1.md"), []byte("spec"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+
+		if err := Rename(workDir, "docs/api/v1.md", "v2.md"); err != nil {
+			t.Fatalf("Rename failed: %v", err)
+		}
+
+		if _, err := os.Stat(filepath.Join(workDir, "docs/api/v2.md")); err != nil {
+			t.Fatalf("failed to stat renamed file: %v", err)
+		}
+	})
+
+	// The destination is derived from the source's parent on disk, not from
+	// rebuilding the relative path, so no spelling of the path can turn a
+	// rename into a move. On Windows the backslash form is a real one a client
+	// could send; elsewhere these are just the shapes filepath.Join accepts.
+	t.Run("stays put however the path is spelled", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(workDir, "docs/api"), 0755); err != nil {
+			t.Fatalf("failed to create directory: %v", err)
+		}
+
+		spellings := []string{"docs/./api", "docs/api/"}
+		if runtime.GOOS == "windows" {
+			spellings = append(spellings, `docs\api`)
+		}
+
+		for i, spelling := range spellings {
+			name := fmt.Sprintf("v%d", i)
+			if err := Rename(workDir, spelling, name); err != nil {
+				t.Fatalf("path %q: Rename failed: %v", spelling, err)
+			}
+			if _, err := os.Stat(filepath.Join(workDir, "docs", name)); err != nil {
+				t.Errorf("path %q: entry left its directory: %v", spelling, err)
+			}
+			// Rename it back, so each spelling starts from the same state.
+			if err := Rename(workDir, "docs/"+name, "api"); err != nil {
+				t.Fatalf("path %q: failed to restore: %v", spelling, err)
+			}
+		}
+	})
+
+	// POSIX rename(2) would silently replace the destination, so this is the
+	// method's own guard rather than something the syscall does for it.
+	t.Run("refuses a taken name without touching either entry", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(workDir, "docs"), 0755); err != nil {
+			t.Fatalf("failed to create directory: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(workDir, "docs/a.md"), []byte("source"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(workDir, "docs/b.md"), []byte("keep me"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+
+		err := Rename(workDir, "docs/a.md", "b.md")
+		if !errors.Is(err, ErrExists) {
+			t.Fatalf("got error %v, want ErrExists", err)
+		}
+		// The web UI keys its "the name is taken" handling off this wording,
+		// and off file.create producing the same sentence.
+		if err.Error() != "docs/b.md already exists" {
+			t.Errorf("got message %q, want %q", err.Error(), "docs/b.md already exists")
+		}
+
+		data, err := os.ReadFile(filepath.Join(workDir, "docs/b.md"))
+		if err != nil {
+			t.Fatalf("failed to read destination: %v", err)
+		}
+		if string(data) != "keep me" {
+			t.Errorf("destination was overwritten: got %q", string(data))
+		}
+		if _, err := os.Stat(filepath.Join(workDir, "docs/a.md")); err != nil {
+			t.Errorf("source was moved away: %v", err)
+		}
+	})
+
+	t.Run("renames a symlink rather than its target, and will not replace one", func(t *testing.T) {
+		workDir := t.TempDir()
+		outside := filepath.Join(t.TempDir(), "target.txt")
+		if err := os.WriteFile(outside, []byte("outside"), 0644); err != nil {
+			t.Fatalf("failed to create target: %v", err)
+		}
+		symlinktest.Make(t, outside, filepath.Join(workDir, "link.txt"))
+		// Dangling on purpose: a Stat-based existence check would call this
+		// name free and let rename(2) unlink the user's symlink.
+		symlinktest.Make(t, filepath.Join(workDir, "gone.txt"), filepath.Join(workDir, "dangling.txt"))
+
+		if err := Rename(workDir, "link.txt", "dangling.txt"); !errors.Is(err, ErrExists) {
+			t.Fatalf("got error %v, want ErrExists", err)
+		}
+
+		if err := Rename(workDir, "link.txt", "renamed.txt"); err != nil {
+			t.Fatalf("Rename failed: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(workDir, "renamed.txt")); err != nil {
+			t.Fatalf("failed to lstat renamed symlink: %v", err)
+		}
+		if _, err := os.Stat(outside); err != nil {
+			t.Errorf("the symlink's target was touched: %v", err)
+		}
+	})
+
+	// A rename that only changes capitalisation is the one case where the
+	// destination can be the source seen through a case-insensitive
+	// filesystem's folding. It must go through: deleting and recreating a file
+	// is otherwise the only way to fix its capitalisation on macOS or Windows.
+	//
+	// On a case-sensitive filesystem the new name is simply free, so this
+	// asserts the outcome both kinds must produce rather than which branch
+	// produced it. The folding branch itself cannot be exercised here; see
+	// "refuses a hard link's name" for the discrimination it rests on.
+	t.Run("changes only the capitalisation of a name", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(workDir, "readme.md"), []byte("body"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+
+		if err := Rename(workDir, "readme.md", "README.md"); err != nil {
+			t.Fatalf("Rename failed: %v", err)
+		}
+
+		entries, err := os.ReadDir(workDir)
+		if err != nil {
+			t.Fatalf("failed to read directory: %v", err)
+		}
+		if len(entries) != 1 || entries[0].Name() != "README.md" {
+			var names []string
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			t.Errorf("got directory %v, want just README.md", names)
+		}
+	})
+
+	// os.SameFile is true here too, but for the other reason: two directory
+	// entries naming one inode. That name really is taken, and the check in
+	// front of os.Rename must not wave it through on sameness alone — which is
+	// what keeps the case-folding allowance above from becoming a hole.
+	t.Run("refuses a hard link's name", func(t *testing.T) {
+		workDir := t.TempDir()
+		original := filepath.Join(workDir, "a.txt")
+		if err := os.WriteFile(original, []byte("body"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+		if err := os.Link(original, filepath.Join(workDir, "A.txt")); err != nil {
+			t.Skipf("filesystem cannot hold both names as hard links: %v", err)
+		}
+
+		if err := Rename(workDir, "a.txt", "A.txt"); !errors.Is(err, ErrExists) {
+			t.Fatalf("got error %v, want ErrExists", err)
+		}
+
+		// Both names still there: refusing is what leaves them alone.
+		for _, name := range []string{"a.txt", "A.txt"} {
+			if _, err := os.Lstat(filepath.Join(workDir, name)); err != nil {
+				t.Errorf("%s is gone: %v", name, err)
+			}
+		}
+	})
+
+	// The requested end state already holds, so there is nothing to report.
+	t.Run("accepts the name the entry already has", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(workDir, "same.md"), []byte("body"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+
+		if err := Rename(workDir, "same.md", "same.md"); err != nil {
+			t.Fatalf("Rename failed: %v", err)
+		}
+
+		data, err := os.ReadFile(filepath.Join(workDir, "same.md"))
+		if err != nil {
+			t.Fatalf("failed to read file: %v", err)
+		}
+		if string(data) != "body" {
+			t.Errorf("got content %q, want %q", string(data), "body")
+		}
+	})
+
+	t.Run("reports a missing source", func(t *testing.T) {
+		workDir := t.TempDir()
+
+		if err := Rename(workDir, "ghost.md", "real.md"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("got error %v, want ErrNotFound", err)
+		}
+	})
+
+	// A name is a name, not a path: accepting a separator would turn this into
+	// a move, which is deliberately out of scope.
+	t.Run("rejects names that are not a single entry name", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(workDir, "file.md"), []byte("body"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+		if err := os.Mkdir(filepath.Join(workDir, "sub"), 0755); err != nil {
+			t.Fatalf("failed to create directory: %v", err)
+		}
+
+		for _, name := range []string{"", ".", "..", "sub/file.md", "../escape.md", "/etc/passwd"} {
+			if err := Rename(workDir, "file.md", name); !errors.Is(err, ErrInvalidPath) {
+				t.Errorf("name %q: got error %v, want ErrInvalidPath", name, err)
+			}
+		}
+
+		if _, err := os.Stat(filepath.Join(workDir, "file.md")); err != nil {
+			t.Errorf("source was moved away: %v", err)
+		}
+	})
+
+	t.Run("rejects invalid paths", func(t *testing.T) {
+		workDir := t.TempDir()
+
+		for _, path := range []string{"", "../escape.txt", "/etc/passwd"} {
+			if err := Rename(workDir, path, "renamed.txt"); !errors.Is(err, ErrInvalidPath) {
 				t.Errorf("path %q: got error %v, want ErrInvalidPath", path, err)
 			}
 		}

@@ -105,11 +105,16 @@ interface NavigationResult {
 
 /**
  * Convert OverlayState to navigation result.
+ *
+ * `options.replace` is for the cases where the overlay is being *corrected*
+ * rather than opened — a file renamed under it, say. Pushing there would leave
+ * a history entry pointing at a path that no longer resolves.
  */
 export function overlayToNavigation(
 	overlay: NonNullable<OverlayState>,
 	worktree: string,
 	sessionId: string | null,
+	options?: { replace?: boolean },
 ): NavigationResult {
 	const target: NavToOverlay = (() => {
 		switch (overlay.type) {
@@ -197,7 +202,7 @@ export function overlayToNavigation(
 				};
 		}
 	})();
-	return buildNavigation(target);
+	return buildNavigation(target, options);
 }
 
 /**

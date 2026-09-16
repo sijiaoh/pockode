@@ -1,9 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { DEFAULT_RETRY_COUNT } from "../lib/queryClient";
 import { isRPCTimeout, useWSStore } from "../lib/wsStore";
-import type { Entry, FileContent } from "../types/contents";
-
-type ContentsResponse = Entry[] | FileContent;
+import type { ContentsResponse, FileContent } from "../types/contents";
 
 export const contentsQueryKey = (path: string) => ["contents", path] as const;
 

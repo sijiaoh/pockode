@@ -1792,6 +1792,92 @@ func TestHandler_FileDelete_Directory(t *testing.T) {
 	}
 }
 
+func TestHandler_FileRename(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	if err := os.MkdirAll(filepath.Join(workDir, "docs"), 0755); err != nil {
+		t.Fatalf("failed to create directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "docs/draft.md"), []byte("content"), 0644); err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+
+	resp := env.call("file.rename", rpc.FileRenameParams{Path: "docs/draft.md", NewName: "final.md"})
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "docs/final.md")); err != nil {
+		t.Fatalf("failed to stat renamed file: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(workDir, "docs/draft.md")); !os.IsNotExist(err) {
+		t.Error("the old name still exists")
+	}
+}
+
+func TestHandler_FileRename_Exists(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	os.WriteFile(filepath.Join(workDir, "a.md"), []byte("source"), 0644)
+	os.WriteFile(filepath.Join(workDir, "b.md"), []byte("keep me"), 0644)
+
+	resp := env.call("file.rename", rpc.FileRenameParams{Path: "a.md", NewName: "b.md"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	// Same sentence file.create sends, so the client has one thing to match on.
+	if !strings.Contains(resp.Error.Message, "already exists") {
+		t.Errorf("expected 'already exists' error, got %q", resp.Error.Message)
+	}
+}
+
+func TestHandler_FileRename_NotFound(t *testing.T) {
+	env := newWorkDirTestEnv(t, t.TempDir())
+
+	resp := env.call("file.rename", rpc.FileRenameParams{Path: "ghost.md", NewName: "real.md"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "not found") {
+		t.Errorf("expected 'not found' error, got %q", resp.Error.Message)
+	}
+}
+
+func TestHandler_FileRename_InvalidName(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	os.Mkdir(filepath.Join(workDir, "sub"), 0755)
+	os.WriteFile(filepath.Join(workDir, "file.md"), []byte("content"), 0644)
+
+	// A separator would make this a move, which file.rename does not do.
+	resp := env.call("file.rename", rpc.FileRenameParams{Path: "file.md", NewName: "sub/file.md"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "invalid path") {
+		t.Errorf("expected 'invalid path' error, got %q", resp.Error.Message)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "file.md")); err != nil {
+		t.Errorf("source was moved away: %v", err)
+	}
+}
+
+func TestHandler_FileRename_InvalidPath(t *testing.T) {
+	env := newWorkDirTestEnv(t, t.TempDir())
+
+	resp := env.call("file.rename", rpc.FileRenameParams{Path: "../etc/passwd", NewName: "mine"})
+
+	if resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(resp.Error.Message, "invalid path") {
+		t.Errorf("expected 'invalid path' error, got %q", resp.Error.Message)
+	}
+}
+
 // Git RPC tests
 
 func setupGitRepo(t *testing.T) string {

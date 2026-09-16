@@ -482,7 +482,7 @@ func Create(workDir, path string, isDir bool) error {
 	}
 	if err != nil {
 		if errors.Is(err, os.ErrExist) || taken(fullPath) {
-			return fmt.Errorf("%s %w", path, ErrExists)
+			return existsError(path)
 		}
 		return fmt.Errorf("failed to create %s: %w", path, err)
 	}
@@ -490,18 +490,75 @@ func Create(workDir, path string, isDir bool) error {
 	return nil
 }
 
-// taken reports whether something already sits at fullPath, classifying a
-// failed creation after the fact.
+// taken reports whether something already sits at fullPath. Lstat, so a symlink
+// holds the name whether or not it points anywhere.
 //
-// It is needed because the error for "a name is taken by the other kind of
-// entry" is not ErrExist everywhere: opening a directory as a file comes back
-// as EISDIR on Windows, where unix reports EEXIST for the same O_EXCL call.
-// Leaving that unclassified would hand the UI's "new file" action a raw
-// syscall error where every other taken name gets ErrExists. The creating
-// syscall still owns the race — this only reads the state it just refused.
+// Create asks after the fact, to classify a creation the OS already refused:
+// the error for "a name is taken by the other kind of entry" is not ErrExist
+// everywhere — opening a directory as a file comes back as EISDIR on Windows,
+// where unix reports EEXIST for the same O_EXCL call. Leaving that unclassified
+// would hand the UI's "new file" action a raw syscall error where every other
+// taken name gets ErrExists. The creating syscall still owns the race — this
+// only reads the state it just refused.
+//
+// Rename has to ask *before* instead, because rename(2) refuses nothing, and it
+// also has to allow for a name that only *looks* taken; see blocks.
 func taken(fullPath string) bool {
 	_, err := os.Lstat(fullPath)
 	return err == nil
+}
+
+// blocks reports whether the entry Lstat found on a rename's destination is a
+// real obstacle, given the source it would replace and the directory both sit
+// in.
+//
+// It usually is, and then this is simply "the name is taken". The exception is
+// the whole reason this is not a bare existence check: on a case-insensitive
+// filesystem — APFS and NTFS, so macOS and Windows by default — looking up
+// `readme.md` finds `README.md`, and refusing on that would make changing a
+// name's capitalisation impossible anywhere but Linux. That is not a nicety.
+// `os.Rename` performs exactly that rename correctly on both; it is only the
+// guard in front of it that has to stop mistaking the entry for its own
+// obstacle.
+//
+// os.SameFile is most of the answer but not all of it, because two directory
+// entries can name one inode without any case folding: `a.txt` and `A.txt` as
+// hard links on a case-sensitive filesystem. Those are two real names, and
+// taking one of them is refused. What separates the cases is the directory
+// listing — case folding means the new name is not literally in it, while a
+// hard link sibling is — so that is the question asked, and only in the narrow
+// case where it decides anything.
+func blocks(srcInfo, dstInfo os.FileInfo, dir, newName string) bool {
+	if !os.SameFile(srcInfo, dstInfo) {
+		return true
+	}
+	return nameInDir(dir, newName)
+}
+
+// nameInDir reports whether dir holds an entry spelled exactly name.
+//
+// A read error answers "yes", which is the safe way to be wrong here: the only
+// caller is deciding whether to let os.Rename onto that name, and os.Rename
+// replaces whatever it finds there.
+func nameInDir(dir, name string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return true
+	}
+	for _, entry := range entries {
+		if entry.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+// existsError reports a name that is already taken, in the one sentence the web
+// UI matches on to keep its naming sheet open. Create and Rename must not
+// phrase it differently — the client cannot tell which one it called from the
+// message alone, and should not have to.
+func existsError(relPath string) error {
+	return fmt.Errorf("%s %w", relPath, ErrExists)
 }
 
 func createEmptyFile(fullPath string) error {
@@ -541,4 +598,131 @@ func Delete(workDir, path string) error {
 // Deprecated: Use Delete instead, which handles both files and directories.
 func DeleteFile(workDir, path string) error {
 	return Delete(workDir, path)
+}
+
+// Rename changes the name of the entry at path, leaving it in the directory it
+// is already in. newName is a name, not a path: it may not contain a separator,
+// so this cannot move an entry, only rename it in place.
+//
+// Moving is deliberately out of scope rather than an omission. Accepting a
+// separator here would fold "move" and "create the parents along the way" into
+// the same text field the UI uses for naming, with a failure surface — target
+// directory missing, target is a file, a directory moved into its own subtree,
+// a cross-directory overwrite — that the user cannot see coming while typing a
+// name. The rule matches file.create's: see docs/file.md.
+//
+// Changing only the capitalisation of a name works, including on the
+// case-insensitive filesystems where looking the new name up finds the entry
+// itself; see blocks for how that is told apart from a name genuinely taken.
+//
+// Returns ErrNotFound if path doesn't exist, ErrExists if newName is already
+// taken in that directory, and ErrInvalidPath for a path that escapes workDir
+// or for a name that is empty, reserved, or contains a separator.
+func Rename(workDir, path, newName string) error {
+	if path == "" {
+		return fmt.Errorf("%w: empty path", ErrInvalidPath)
+	}
+
+	if err := ValidatePath(workDir, path); err != nil {
+		return err
+	}
+
+	if err := validateName(newName); err != nil {
+		return err
+	}
+
+	fullPath := filepath.Join(workDir, path)
+
+	// The destination comes from the source's own parent directory, not from
+	// rebuilding the relative path: "the same directory" then holds however the
+	// client spelled the path — a Windows separator, a trailing slash, a "."
+	// segment — where reconstruction would silently relocate the entry.
+	// newName has no separator and is neither "." nor "..", so this stays one
+	// component below a directory already known to be inside workDir.
+	newFullPath := filepath.Join(filepath.Dir(fullPath), newName)
+
+	// Only ever reported, never used to reach the file: it is the relative path
+	// the client speaks, so the client can match the name it asked about.
+	newPath := siblingPath(path, newName)
+
+	// Lstat, not Stat: a symlink is an entry with a name like any other, and
+	// os.Rename renames the link rather than what it points at. Stat would call
+	// a dangling link missing and refuse to rename something that is plainly
+	// there in the listing.
+	srcInfo, err := os.Lstat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%w: %s", ErrNotFound, path)
+		}
+		return fmt.Errorf("failed to stat path: %w", err)
+	}
+
+	// Renaming an entry onto its own name is the state the caller asked for, so
+	// it is not an error — and it must be answered before the check below,
+	// which would otherwise report the entry as blocking itself.
+	if newFullPath == fullPath {
+		return nil
+	}
+
+	// Unlike Create, this cannot leave "already exists" to the syscall: POSIX
+	// rename(2) silently replaces an existing destination, so without this the
+	// method would delete a file the user never named. There is no portable
+	// atomic alternative (RENAME_NOREPLACE is Linux-only), so a check with a
+	// race is the honest trade — losing the race means overwriting, which is
+	// bad, but the window is between two adjacent syscalls and the alternative
+	// is overwriting every time. Lstat for the same reason as above: a symlink
+	// takes the name whether or not it points anywhere.
+	dstInfo, err := os.Lstat(newFullPath)
+	if err == nil && blocks(srcInfo, dstInfo, filepath.Dir(fullPath), newName) {
+		return existsError(newPath)
+	}
+
+	// No retry loop here, unlike filestore's atomic writes: those retry because
+	// Windows fails a rename that *replaces* a destination someone else has
+	// open, and that case is refused above. What is left — a source held open
+	// elsewhere — is a real failure to report, not a transient one to wait out.
+	if err := os.Rename(fullPath, newFullPath); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return existsError(newPath)
+		}
+		return fmt.Errorf("failed to rename %s: %w", path, err)
+	}
+
+	return nil
+}
+
+// validateName checks that name can stand as a single entry in a directory.
+//
+// The separator test is what keeps Rename from moving anything; IsLocal is the
+// same gate ValidatePath applies to whole paths, so a name this accepts is a
+// path component ValidatePath would accept too — one rule about what a name may
+// be, not two that can drift apart.
+func validateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: empty name", ErrInvalidPath)
+	}
+	if strings.ContainsRune(name, '/') || strings.ContainsRune(name, filepath.Separator) {
+		return fmt.Errorf("%w: name must not contain a separator: %s", ErrInvalidPath, name)
+	}
+	// IsLocal rejects ".." and the Windows device names but accepts ".", which
+	// names the directory the entry is in rather than an entry in it.
+	if name == "." || !filepath.IsLocal(name) {
+		return fmt.Errorf("%w: %s", ErrInvalidPath, name)
+	}
+	return nil
+}
+
+// siblingPath rebuilds relPath with its last component replaced by name.
+//
+// Uses path, not filepath: these are the slash-separated relative paths the RPC
+// layer speaks and listings hand out, and they stay that way on every platform.
+// Cleaning first is what makes "docs/" and "docs/." name the same parent that
+// filepath.Dir gives the destination, so the path in an error message is the
+// one the operation would have used.
+func siblingPath(relPath, name string) string {
+	dir := path.Dir(path.Clean(filepath.ToSlash(relPath)))
+	if dir == "." {
+		return name
+	}
+	return dir + "/" + name
 }
