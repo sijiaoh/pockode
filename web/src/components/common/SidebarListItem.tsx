@@ -1,12 +1,20 @@
 import type { ReactNode } from "react";
+import { ACTIVITY_VIEW, type Activity } from "../../lib/activity";
+import { ActivityIcon } from "../ui";
 
 interface Props {
 	title: ReactNode;
 	subtitle?: ReactNode;
 	isActive: boolean;
-	hasChanges?: boolean;
-	needsInput?: boolean;
-	isRunning?: boolean;
+	/**
+	 * What the row is doing. One indicator per row, and the precedence is two
+	 * lines because the layers it is derived from are exclusive: anything but
+	 * `idle` shows the activity, and `idle` falls through to the unread dot
+	 * (docs/lifecycle-ui.md §1.5).
+	 */
+	activity?: Activity;
+	/** Whether anything has arrived since the row was last read. */
+	unread?: boolean;
 	leftSlot?: ReactNode;
 	actions?: ReactNode;
 	onSelect: () => void;
@@ -17,9 +25,8 @@ function SidebarListItem({
 	title,
 	subtitle,
 	isActive,
-	hasChanges,
-	needsInput,
-	isRunning,
+	activity,
+	unread,
 	leftSlot,
 	actions,
 	onSelect,
@@ -48,18 +55,19 @@ function SidebarListItem({
 						</div>
 					)}
 				</div>
-				{isRunning ? (
+				{/* The one animating surface in the app. A spinner asserts "output is
+				    arriving right now", and this is the one place where liveness is
+				    the question being asked — everywhere else uses the static glyph
+				    (docs/lifecycle-ui.md §1.5). */}
+				{activity === "running" ? (
 					<output
 						className="h-3 w-3 shrink-0 rounded-full border-2 border-th-accent border-t-transparent animate-spin"
-						aria-label="AI responding"
+						aria-label={ACTIVITY_VIEW.running.ariaLabel}
 					/>
-				) : needsInput ? (
-					<span
-						className="h-2 w-2 shrink-0 rounded-full bg-th-warning"
-						aria-hidden="true"
-					/>
+				) : activity && activity !== "idle" ? (
+					<ActivityIcon activity={activity} size="sm" />
 				) : (
-					hasChanges && (
+					unread && (
 						<span
 							className="h-2 w-2 shrink-0 rounded-full bg-th-accent"
 							aria-hidden="true"

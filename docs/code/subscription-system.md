@@ -363,13 +363,22 @@ So the split follows what each answer is *about*: rows for the list, the session
 itself for the detail. What is worth writing down is where the line falls when a
 fact could plausibly go in either.
 
-**One mutable fact, one source.** Whether the agent is running is volatile,
-owned by `process.Manager`, and already in the list as `SessionListItem.State`.
-Putting it in detail as well would not be redundancy, it would be ambiguity:
-two notifications carrying the same fact arrive in an order nobody guarantees —
-different watchers, different channels — and nothing on the wire tells the client
-which of the two it is holding is the current one. Run state therefore stays in
-the list and is never in detail.
+**One mutable fact, one source.** What the session is doing used to be volatile
+state owned by `process.Manager`, and the rule then was that it stayed in the
+list and never appeared in detail: two notifications carrying the same fact
+arrive in an order nobody guarantees — different watchers, different channels —
+and nothing on the wire tells the client which of the two it is holding is the
+current one.
+
+The fact stopped being volatile. `session.TurnState` is stored with the session,
+so both watchers read it from the same record and both send the same value; the
+rule is satisfied at its source rather than by keeping the field on one side.
+That is why `turn` may be on both when a setting may not — and why the chat panel
+reads the turn from the *detail* subscription, which is the live one for the
+session it has open. The chat subscription's own copy is not a second live copy:
+it is a snapshot used to settle the page it arrived with, and held for the older
+pages that page is scrolled back into
+([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)).
 
 **The test is "can the copies disagree", not "does the field appear twice".**
 `forked_from` is in both, and that is fine: it is fixed when the session is born
@@ -385,10 +394,6 @@ row that displays them lives. Removing them would mean a second wire type for
 detail beside `SessionMeta`, which is a larger change than the duplication is a
 problem. Worth knowing before adding a reader for detail's copy, because that is
 the moment it becomes a second source.
-
-The list's `needs_input` is not a third copy of anything: it is derived on the
-way out from the session's `turn`, which detail carries whole. One value, drawn
-two ways.
 
 **A deletion has to be said out loud.** A subscriber whose session is removed is
 told `deleted: true`, rather than simply hearing nothing more — silence is

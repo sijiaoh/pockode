@@ -2287,10 +2287,14 @@ Nothing reads it yet: `work.AutoResumer` still keeps a settle delay of its own,
 and replacing it is part of the work-layer step. A settler with no listener arms
 no timers, so until then this costs nothing and announces nothing.
 
-#### What the Wire Still Sees
+#### What the Work Layer Still Sees
 
-`StateChangeEvent` keeps the shape it has always had — a `ProcessState` and a
-`NeedsInput` flag — narrowed from the turn state by `process.viewTurn`:
+The client is no longer one of the readers of this narrowing. `SessionListItem`
+and the chat subscription both carry the whole `TurnState`, and the frontend
+derives everything it draws from it in one pure function
+([lifecycle-ui.md](../lifecycle-ui.md)). What remains narrowed is the *work*
+layer: `StateChangeEvent` keeps the shape it has always had — a `ProcessState`
+and a `NeedsInput` flag — produced by `process.viewTurn`:
 
 | Turn | State | NeedsInput |
 |---|---|---|
@@ -2300,9 +2304,15 @@ no timers, so until then this costs nothing and announces nothing.
 
 The second row is where the narrowing loses something real — a parked turn and a
 running one are the whole point of the new blocker, and here they are the same
-value — and it is deliberate: the wire keeps its old shape until the client is
-changed to read the turn state directly. Nothing above that function is written
-in terms of these two values.
+value — and it is deliberate: `AutoResumer` and `StatusSyncer` keep their old
+input until the work layer is rebuilt on the turn state directly. Nothing above
+that function is written in terms of these two values.
+
+The session list no longer needs a notification of its own when this fires,
+either. A row's whole state is the session's turn, and the process writes that
+into the store before announcing anything — so the store's own change
+notification has already carried it, and `SessionListWatcher.HandleProcessStateChange`
+now only marks the session unread and drives the work item.
 
 #### A Prompt Belongs to the Process That Raised It
 

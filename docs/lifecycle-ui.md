@@ -146,19 +146,40 @@ Wire shape the surfaces below assume:
 
 ```ts
 type TurnPhase = "idle" | "running" | "blocked";
-type Blocker = "permission" | "question" | "background";
+type BlockerKind = "permission" | "question" | "background";
+
+interface Blocker {
+  kind: BlockerKind;
+  /** The card to jump to. Absent on `background`, which nobody answers. */
+  request_id?: string;
+  raised_at: string;
+}
 
 interface TurnState {
   phase: TurnPhase;
-  blockers: Blocker[];
+  /** Whether a turn is under way behind whatever is in its way. */
+  open: boolean;
+  blockers?: Blocker[];
   /** When the session entered this phase. ISO 8601. Drives "since HH:MM". */
   since: string;
-  /** Only while blocked. The card to jump to, or the tasks to name. */
-  blocker_detail?:
-    | { kind: "question" | "permission"; request_id: string }
-    | { kind: "background"; tasks: { name: string }[] };
+  /** How the previous turn ended; says nothing while the phase is not idle. */
+  last_outcome?: "completed" | "failed" | "aborted";
 }
 ```
+
+This is `session.TurnState` serialized as it stands, rather than the separate
+`blocker_detail` an earlier cut of this document specified. The reason is that
+the detail the strip needs is already the blocker's own: `request_id` belongs to
+the prompt that raised it, and a second field carrying "the request id of
+whichever blocker leads" would be a second place where the precedence in §1.2 is
+decided, free to disagree with the first.
+
+**Background task names are not sent, and no count is either.** The CLI's own
+schema says the background task level and the task lifecycle frames have no
+defined order against each other and must not be joined, so the live set holds
+task ids and nothing that could be shown to a user
+([agent-integration.md](code/agent-integration.md#background-waits)). The strip's
+copy below is written to need neither.
 
 `SessionListItem` / `SessionDetail`: `state: ProcessState` and
 `needs_input: boolean` are replaced by `turn: TurnState`. `unread` stays exactly
@@ -175,6 +196,11 @@ the agent supplied, shown on the detail page only).
 `ACTIVITY_VIEW` replaces all three things `StatusBadge.tsx` and `StatusIcon.tsx`
 hold today — `statusLabels`, the badge palette and the glyph switch — and both
 files go away with it.
+
+`ActivityBadge` and the `label` half of `ACTIVITY_VIEW` land with the work
+surfaces that have room for words: `StatusBadge` is where the badge palette's
+whole justification lives, so the two are one edit. Session surfaces need only
+the glyph and the dot.
 
 | Component | Shape | Used by |
 |---|---|---|
@@ -246,8 +272,11 @@ needs no hit area).
 | `background` | `Hourglass` secondary | "Waiting on a background task" |
 | `idle` | unread dot, or nothing | — |
 
-The last two arrive only for a session that belongs to an `active` work, by the
-rule in §1.2; `open`, `stopped` and `closed` never reach a session row at all.
+`needs_message` and `waiting_children` are the two a session row can only get
+from a work, and only from an `active` one, by the rule in §1.2; `open`,
+`stopped` and `closed` never reach a session row at all. Everything else in the
+table is read from the session's own turn, so it reaches a row whether or not
+any work is behind it.
 
 ### 2.2 Chat: the blocker strip
 
@@ -263,17 +292,19 @@ transcript's *end*.
 | `question` | "Waiting for your answer." | "Jump to question" |
 | `permission` | "Waiting for your permission." | "Jump to request" |
 | `background` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
-| `background`, several | "Waiting on {n} background tasks — nothing to answer." | "Details" |
 
 "Jump to question" reuses `PendingQuestionPill`'s jump (scroll, ring, focus the
-header row) via `blocker_detail.request_id`; the strip does not re-implement it,
+header row) via the leading blocker's `request_id`; the strip does not
+re-implement it — `MessageList` exposes the jump it already owns, because the
+scroll container is there and a second implementation of a scroll-and-highlight
+is a second set of edge cases,
 and the pill continues to own the *scrolled-away* case. The two can be on screen
 together and that is correct: the pill counts questions you cannot see, the strip
 states why the agent is quiet.
 
-"Details" expands to the live task names from `blocker_detail.tasks`, plus
-"Waiting since {HH:MM}" from `turn.since`. Two things are stated in the copy
-because a user who has waited an hour will otherwise assume a hang:
+"Details" expands to "Waiting since {HH:MM}", from `turn.since`. Two things are
+stated in the copy because a user who has waited an hour will otherwise assume a
+hang:
 
 - **Nothing is stuck.** The agent resumes on its own when the task finishes.
 - **The only lever is Stop.** There is no per-task kill: a blocker is not a task
@@ -416,6 +447,13 @@ next to its status, as
 `reason: "process_ended" | "timeout" | "work_closed"` — one field for both the
 `expired` and the `cancelled` status, because "why did this stop waiting for me"
 is one question.
+
+**That field is not on the record yet**; it lands with the question-timeout work
+that gives it its third value. Until it does, both cards state what is true of
+all three reasons rather than guessing which one happened, and the *behaviour*
+below — an expired question answerable as a message, an expired permission
+read-only — is in place, because it does not depend on the reason. The three
+banners are the copy for the field's three values when it arrives.
 
 ### 5.1 An expired question is still answerable
 

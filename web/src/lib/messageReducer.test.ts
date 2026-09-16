@@ -3,6 +3,7 @@ import type {
 	AssistantMessage,
 	ContentPart,
 	Message,
+	SessionTurn,
 	ToolRun,
 	UserMessage,
 } from "../types/message";
@@ -16,6 +17,7 @@ import {
 	normalizeEvent,
 	prependHistoryPage,
 	replayHistory,
+	settleAgainstTurn,
 	settleRunningToolRuns,
 	stampMessageAnchorSeq,
 } from "./messageReducer";
@@ -40,6 +42,94 @@ const sampleQuestions = [
 		multiSelect: false,
 	},
 ];
+
+const partsOf = (message: Message) =>
+	message.role === "assistant" ? message.parts : [];
+
+function turnState(
+	phase: SessionTurn["phase"],
+	extra: Partial<SessionTurn> = {},
+): SessionTurn {
+	return { phase, open: phase !== "idle", since: "", ...extra };
+}
+
+describe("settleAgainstTurn", () => {
+	// The whole of what §2.4 is for: a server that died mid-stream wrote no
+	// ending, so the transcript ends on a bubble that would otherwise spin
+	// forever.
+	const streaming = () =>
+		replayHistory([
+			{ type: "message", content: "Do it" },
+			{ type: "text", content: "Working" },
+		]);
+
+	it("finishes a streaming bubble the way the turn ended", () => {
+		expect(
+			settleAgainstTurn(streaming(), turnState("idle")).at(-1),
+		).toMatchObject({ status: "complete" });
+		expect(
+			settleAgainstTurn(
+				streaming(),
+				turnState("idle", { last_outcome: "aborted" }),
+			).at(-1),
+		).toMatchObject({ status: "interrupted" });
+	});
+
+	it("leaves a running turn's bubble streaming", () => {
+		expect(
+			settleAgainstTurn(streaming(), turnState("running")).at(-1),
+		).toMatchObject({ status: "streaming" });
+	});
+
+	// A parked turn is producing nothing, which is the whole point of saying so.
+	it("finishes a bubble the turn parked on background work", () => {
+		expect(
+			settleAgainstTurn(
+				streaming(),
+				turnState("blocked", {
+					blockers: [{ kind: "background", raised_at: "" }],
+				}),
+			).at(-1),
+		).toMatchObject({ status: "complete" });
+	});
+
+	const asked = () =>
+		replayHistory([
+			{ type: "message", content: "Ask me" },
+			{
+				type: "ask_user_question",
+				request_id: "q1",
+				tool_use_id: "t1",
+				questions: sampleQuestions,
+			},
+		]);
+
+	it("keeps a card the turn still lists as a blocker answerable", () => {
+		const settled = settleAgainstTurn(
+			asked(),
+			turnState("blocked", {
+				blockers: [{ kind: "question", request_id: "q1", raised_at: "" }],
+			}),
+		);
+		expect(partsOf(settled.at(-1) as Message)).toMatchObject([
+			{ type: "ask_user_question", status: "pending" },
+		]);
+	});
+
+	// The same transcript, a session that is blocked on something else: this
+	// card's process is gone whatever else is going on.
+	it("retires a card the turn does not list", () => {
+		const settled = settleAgainstTurn(
+			asked(),
+			turnState("blocked", {
+				blockers: [{ kind: "background", raised_at: "" }],
+			}),
+		);
+		expect(partsOf(settled.at(-1) as Message)).toMatchObject([
+			{ type: "ask_user_question", status: "expired" },
+		]);
+	});
+});
 
 describe("messageReducer", () => {
 	describe("normalizeEvent", () => {
@@ -2791,9 +2881,6 @@ describe("messageReducer", () => {
 	});
 
 	describe("paging backwards through history", () => {
-		const partsOf = (message: Message) =>
-			message.role === "assistant" ? message.parts : [];
-
 		describe("isBackReference", () => {
 			it("picks out the records that settle something recorded earlier", () => {
 				expect(isBackReference({ type: "tool_result" })).toBe(true);
@@ -2916,7 +3003,9 @@ describe("messageReducer", () => {
 					},
 				]);
 
-				const caught = prependHistoryPage(older, [], { processEnded: true });
+				const caught = prependHistoryPage(older, [], {
+					turn: { phase: "idle", open: false, since: "" },
+				});
 
 				expect(partsOf(caught[caught.length - 1])).toMatchObject([
 					{ type: "ask_user_question", status: "expired" },

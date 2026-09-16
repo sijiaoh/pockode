@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
@@ -114,12 +115,6 @@ func (m *mockSessionStoreWithError) List() ([]session.SessionMeta, error) {
 	return nil, m.err
 }
 
-type mockProcessStateGetter struct{}
-
-func (m *mockProcessStateGetter) GetProcessState(sessionID string) string {
-	return "ended"
-}
-
 func TestSessionListWatcher_Subscribe(t *testing.T) {
 	store := &mockSessionStore{
 		sessions: []session.SessionMeta{
@@ -128,7 +123,6 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 		},
 	}
 	w := NewSessionListWatcher(store)
-	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	sessions, err := w.Subscribe("client-1", nil)
 	if err != nil {
@@ -139,10 +133,11 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 		t.Errorf("expected 2 sessions, got %d", len(sessions))
 	}
 
-	// Verify sessions are enriched with state
+	// A row carries the session's own turn, which a session nothing has run in
+	// is the zero value of.
 	for _, s := range sessions {
-		if s.State != "ended" {
-			t.Errorf("expected state 'ended', got %q", s.State)
+		if s.Turn.Phase != "" || s.Turn.Open {
+			t.Errorf("expected an untouched turn, got %+v", s.Turn)
 		}
 	}
 
@@ -154,7 +149,6 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 func TestSessionListWatcher_Unsubscribe(t *testing.T) {
 	store := &mockSessionStore{}
 	w := NewSessionListWatcher(store)
-	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	w.Subscribe("client-1", nil)
 
@@ -205,7 +199,6 @@ func TestSessionListWatcher_OnSessionChange_AfterStop(t *testing.T) {
 func TestSessionListWatcher_Subscribe_ListError(t *testing.T) {
 	store := &mockSessionStoreWithError{err: errors.New("list failed")}
 	w := NewSessionListWatcher(store)
-	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	_, err := w.Subscribe("client-1", nil)
 	if err == nil {
@@ -367,7 +360,6 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 		eventCh:     make(chan session.SessionChangeEvent, 1),
 	}
 	store.AddOnChangeListener(w)
-	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	notifier := &captureNotifier{}
 	w.Subscribe("client-1", notifier)
@@ -400,6 +392,75 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 
 	if w.dirty.Load() {
 		t.Error("dirty flag should be cleared after sync")
+	}
+}
+
+// The row's whole state is the session's turn, and the process writes that to
+// the store before it sends this event — so the store's own change notification
+// is what carries it. The push that used to sit at the end of this handler was
+// for the volatile process state a row no longer has, and a second push of the
+// same row is a second answer to "what is this session doing" arriving in an
+// order nobody controls.
+func TestHandleProcessStateChange_PushesNoRowOfItsOwn(t *testing.T) {
+	store := &mockSessionStore{
+		sessions: []session.SessionMeta{{ID: "sess-1", Title: "Session 1"}},
+	}
+	w := NewSessionListWatcher(store)
+	notifier := &captureNotifier{}
+	if _, err := w.Subscribe("client-1", notifier); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID: "sess-1",
+		State:     process.ProcessStateRunning,
+	})
+
+	if notifier.count() != 0 {
+		t.Errorf("expected no notification, got %d: %s", notifier.count(), notifier.last())
+	}
+}
+
+// The other half of the same rule: the store's notification is what reaches the
+// client, and the row it carries holds the turn the process just wrote.
+func TestSessionListWatcher_RowCarriesTheStoredTurn(t *testing.T) {
+	raised := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	blocked := session.SessionMeta{
+		ID:    "sess-1",
+		Title: "Session 1",
+		Turn: session.TurnState{
+			Phase:    session.PhaseBlocked,
+			Open:     true,
+			Blockers: []session.Blocker{{Kind: session.BlockerQuestion, RequestID: "req-1", RaisedAt: raised}},
+			Since:    raised,
+		},
+	}
+	store := &mockSessionStore{sessions: []session.SessionMeta{blocked}}
+	w := NewSessionListWatcher(store)
+	notifier := &captureNotifier{}
+	if _, err := w.Subscribe("client-1", notifier); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	w.Start()
+	defer w.Stop()
+
+	w.OnSessionChange(session.SessionChangeEvent{Op: session.OperationUpdate, Session: blocked})
+
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+
+	var params sessionListChangedParams
+	if err := json.Unmarshal(notifier.last(), &params); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if params.Session == nil {
+		t.Fatal("expected a row on an update notification")
+	}
+	if params.Session.Turn.Phase != session.PhaseBlocked {
+		t.Errorf("row turn phase = %q, want blocked", params.Session.Turn.Phase)
+	}
+	if len(params.Session.Turn.Blockers) != 1 ||
+		params.Session.Turn.Blockers[0].RequestID != "req-1" {
+		t.Errorf("row lost the blocker the card is answered through: %+v", params.Session.Turn)
 	}
 }
 

@@ -22,9 +22,9 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	// Verify the session exists. Its settings are not read here: they belong to
-	// session.detail.subscribe, which the client runs alongside this one.
-	_, found, err := wt.SessionStore.Get(params.SessionID)
+	// The session's turn is read here; its settings are not, because those belong
+	// to session.detail.subscribe, which the client runs alongside this one.
+	meta, found, err := wt.SessionStore.Get(params.SessionID)
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
 		return
@@ -58,8 +58,11 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		History:       page.Records,
 		HasMore:       page.HasMore,
 		NextBeforeSeq: page.NextBeforeSeq,
-		State:         wt.ProcessManager.GetProcessState(params.SessionID),
-		ToolActivity:  wt.ProcessManager.GetToolActivity(params.SessionID),
+		// From the store, not from the process manager: the turn is what the
+		// session is doing, and it is recorded whether or not a process is still
+		// there to be asked.
+		Turn:         meta.Turn,
+		ToolActivity: wt.ProcessManager.GetToolActivity(params.SessionID),
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)
@@ -67,7 +70,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	}
 
 	log.Info("subscribed to chat messages",
-		"subscriptionId", params.ID, "state", result.State,
+		"subscriptionId", params.ID, "phase", result.Turn.Phase,
 		"records", len(page.Records), "hasMore", page.HasMore)
 }
 

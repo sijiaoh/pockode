@@ -10,7 +10,12 @@ export interface InputBarProps {
 	onSend: (content: string) => void;
 	canSend?: boolean;
 	disabled?: boolean;
-	isStreaming?: boolean;
+	/**
+	 * Whether a turn is open — running, or blocked on something only the user or
+	 * the agent's own background work can clear. Sending is refused while it is,
+	 * typing is not (docs/lifecycle-ui.md §2.3).
+	 */
+	turnOpen?: boolean;
 	onStop?: () => void;
 }
 

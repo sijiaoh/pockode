@@ -159,12 +159,12 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		// sending always shows spinner, regardless of isProcessRunning
+		// A bubble waiting for the server to take it always spins, wherever it sits.
 		render(<MessageItem sessionId="session-1" message={message} />);
 		expect(screen.getByRole("status")).toBeInTheDocument();
 	});
 
-	it("shows spinner for streaming status when process is running", () => {
+	it("shows spinner for the last streaming message", () => {
 		const message: Message = {
 			id: "3",
 			role: "assistant",
@@ -173,14 +173,7 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(
-			<MessageItem
-				sessionId="session-1"
-				message={message}
-				isLast
-				isProcessRunning
-			/>,
-		);
+		render(<MessageItem sessionId="session-1" message={message} isLast />);
 		expect(screen.getByRole("status")).toBeInTheDocument();
 	});
 
@@ -196,12 +189,7 @@ describe("MessageItem", () => {
 		// When a new message is added, the previous streaming message becomes !isLast
 		// In this case, no indicator is shown - the message content stands on its own
 		render(
-			<MessageItem
-				sessionId="session-1"
-				message={message}
-				isLast={false}
-				isProcessRunning={true}
-			/>,
+			<MessageItem sessionId="session-1" message={message} isLast={false} />,
 		);
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 		expect(screen.queryByText("Process ended")).not.toBeInTheDocument();

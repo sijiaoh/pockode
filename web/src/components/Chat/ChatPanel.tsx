@@ -1,5 +1,5 @@
 import { AlertTriangle, Square, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import { useForkSession } from "../../hooks/useForkSession";
@@ -31,11 +31,13 @@ import {
 	WorkListOverlay,
 } from "../Project";
 import { SettingsPage } from "../Settings";
+import BlockerStrip from "./BlockerStrip";
 import ChatSkeleton from "./ChatSkeleton";
 import EngineSelector from "./EngineSelector";
 import ForkSessionSheet from "./ForkSessionSheet";
 import DefaultInputBar from "./InputBar";
-import MessageList from "./MessageList";
+import type { PromptError } from "./MessageItem";
+import MessageList, { type MessageListHandle } from "./MessageList";
 import ModeSelector from "./ModeSelector";
 import SessionInfoButton from "./SessionInfoButton";
 
@@ -164,8 +166,8 @@ function ChatPanel({
 		historyError,
 		loadedHistoryPages,
 		loadMoreHistory,
-		isStreaming,
-		isProcessRunning,
+		turnOpen,
+		turn,
 		mode,
 		agentType,
 		model,
@@ -185,6 +187,7 @@ function ChatPanel({
 		setEffort,
 		updatePermissionStatus,
 		updateQuestionStatus,
+		resetPrompt,
 	} = useChatMessages({
 		sessionId,
 		enabled: isSessionResolved,
@@ -228,8 +231,43 @@ function ChatPanel({
 		[sessionTitle, onUpdateTitle, sendUserMessage],
 	);
 
+	// An answer only reaches the process that raised the prompt, so a card whose
+	// process has gone is refused by the server with its own reason. The optimistic
+	// outcome is undone and the reason is shown on the card, which is where the
+	// user was looking (docs/lifecycle-ui.md §8).
+	const [promptError, setPromptError] = useState<PromptError | null>(null);
+
+	// Read only when an answer is refused, never during render. The handlers
+	// below reach a memoized `MessageItem`, so taking `turn` as a dependency
+	// would re-render the whole transcript every time the session's phase moved.
+	const turnRef = useRef(turn);
+	turnRef.current = turn;
+
+	const reportPromptFailure = useCallback(
+		(requestId: string, error: unknown) => {
+			// Which unanswered state the card goes back to is the session's to say,
+			// not the failure's: a refusal is equally what a dead process and a
+			// dropped socket look like from here, and only one of them means the
+			// prompt can never be answered. The turn is the authority — it lists
+			// exactly the prompts still waiting on someone.
+			const stillWaiting = (turnRef.current.blockers ?? []).some(
+				(blocker) => blocker.request_id === requestId,
+			);
+			resetPrompt(requestId, stillWaiting ? "pending" : "expired");
+			setPromptError({
+				requestId,
+				message:
+					error instanceof Error && error.message
+						? error.message
+						: "The answer could not be delivered.",
+			});
+		},
+		[resetPrompt],
+	);
+
 	const handlePermissionRespond = useCallback(
 		(request: PermissionRequest, choice: "deny" | "allow" | "always_allow") => {
+			setPromptError(null);
 			permissionResponse({
 				session_id: sessionId,
 				request_id: request.requestId,
@@ -237,13 +275,18 @@ function ChatPanel({
 				tool_input: request.toolInput,
 				permission_suggestions: request.permissionSuggestions,
 				choice,
-			});
+			}).catch((error) => reportPromptFailure(request.requestId, error));
 
 			// Update message state to reflect the response
 			const newStatus = choice === "deny" ? "denied" : "allowed";
 			updatePermissionStatus(request.requestId, newStatus);
 		},
-		[permissionResponse, sessionId, updatePermissionStatus],
+		[
+			permissionResponse,
+			sessionId,
+			updatePermissionStatus,
+			reportPromptFailure,
+		],
 	);
 
 	const handleQuestionRespond = useCallback(
@@ -251,18 +294,28 @@ function ChatPanel({
 			request: AskUserQuestionRequest,
 			answers: Record<string, string> | null,
 		) => {
+			setPromptError(null);
 			questionResponse({
 				session_id: sessionId,
 				request_id: request.requestId,
 				tool_use_id: request.toolUseId,
 				answers,
-			});
+			}).catch((error) => reportPromptFailure(request.requestId, error));
 
 			// Update message state to reflect the response
 			const newStatus = answers === null ? "cancelled" : "answered";
 			updateQuestionStatus(request.requestId, newStatus, answers ?? undefined);
 		},
-		[questionResponse, sessionId, updateQuestionStatus],
+		[questionResponse, sessionId, updateQuestionStatus, reportPromptFailure],
+	);
+
+	// Sending clears the card's error: the message it produces is the answer now.
+	const handleSendAsMessage = useCallback(
+		(content: string) => {
+			setPromptError(null);
+			sendUserMessage(content);
+		},
+		[sendUserMessage],
 	);
 
 	const handleInterrupt = useCallback(() => {
@@ -333,6 +386,13 @@ function ChatPanel({
 		[forkSession, sessionId, onSelectSession],
 	);
 
+	// The jump lives with the scroll container; the strip below the list asks for
+	// it rather than reimplementing it.
+	const messageListRef = useRef<MessageListHandle>(null);
+	const handleJumpToRequest = useCallback((requestId: string) => {
+		messageListRef.current?.jumpToRequest(requestId);
+	}, []);
+
 	const forkAnchor = forkTarget
 		? resolveForkAnchor(messages, forkTarget.messageId, hasMoreHistory)
 		: null;
@@ -346,14 +406,14 @@ function ChatPanel({
 			// A sheet takes Escape for dismissing itself; interrupting the agent as
 			// well would make one key do two unrelated things.
 			if (isSheetOpen) return;
-			if (e.key === "Escape" && isStreaming) {
+			if (e.key === "Escape" && turnOpen) {
 				handleInterrupt();
 			}
 		};
 
 		document.addEventListener("keydown", handleKeyDown);
 		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, [isStreaming, handleInterrupt, overlay, isSheetOpen]);
+	}, [turnOpen, handleInterrupt, overlay, isSheetOpen]);
 
 	const renderContent = () => {
 		if (!overlay) {
@@ -366,9 +426,9 @@ function ChatPanel({
 			return (
 				<MessageList
 					key={sessionId}
+					ref={messageListRef}
 					sessionId={sessionId}
 					messages={messages}
-					isProcessRunning={isProcessRunning}
 					hasMoreHistory={hasMoreHistory}
 					isLoadingMoreHistory={isLoadingMoreHistory}
 					historyError={historyError}
@@ -378,6 +438,8 @@ function ChatPanel({
 					onPermissionRespond={handlePermissionRespond}
 					onQuestionRespond={handleQuestionRespond}
 					onHintClick={handleSend}
+					onSendAsMessage={handleSendAsMessage}
+					promptError={promptError ?? undefined}
 					onOpenWorkDetail={onOpenWorkDetail}
 					onOpenFile={onOpenFile}
 					forkedFromSessionId={forkedFromSessionId}
@@ -465,6 +527,11 @@ function ChatPanel({
 		>
 			{!overlay && ChatTopContent && <ChatTopContent sessionId={sessionId} />}
 			{renderContent()}
+			{/* Why the agent is quiet, stated where the transcript ends
+			    (docs/lifecycle-ui.md §2.2). */}
+			{!overlay && !isChatPending && (
+				<BlockerStrip turn={turn} onJumpToRequest={handleJumpToRequest} />
+			)}
 			{/* Session action bar */}
 			{!overlay && settingError && (
 				<SettingErrorBar message={settingError} onDismiss={clearSettingError} />
@@ -484,7 +551,7 @@ function ChatPanel({
 								onEffortChange={setEffort}
 								hasSessionSettings={hasSessionSettings}
 								isSessionActivated={isSessionActivated}
-								disabled={!hasSessionSettings || isStreaming}
+								disabled={!hasSessionSettings || turnOpen}
 							/>
 						)}
 						{CustomModeSelector === null ? null : CustomModeSelector ? (
@@ -493,7 +560,7 @@ function ChatPanel({
 								agentType={agentType}
 								onModeChange={setMode}
 								hasSessionSettings={hasSessionSettings}
-								disabled={!hasSessionSettings || isStreaming}
+								disabled={!hasSessionSettings || turnOpen}
 							/>
 						) : (
 							<ModeSelector
@@ -501,7 +568,7 @@ function ChatPanel({
 								agentType={agentType}
 								onModeChange={setMode}
 								hasSessionSettings={hasSessionSettings}
-								disabled={!hasSessionSettings || isStreaming}
+								disabled={!hasSessionSettings || turnOpen}
 							/>
 						)}
 						{/* Gated on the route naming a session at all, not on its data:
@@ -515,7 +582,10 @@ function ChatPanel({
 							/>
 						)}
 					</div>
-					{isStreaming ? (
+					{/* Stop exists for every open turn, blocked ones included: the
+					    process is alive, and Stop is one of the user's two exits from
+					    a blocked turn — the card being the other. */}
+					{turnOpen ? (
 						CustomStopButton === null ? null : CustomStopButton ? (
 							<CustomStopButton onStop={handleInterrupt} />
 						) : (
@@ -555,7 +625,7 @@ function ChatPanel({
 					onSend={handleSend}
 					canSend={status === "connected" && !isChatPending}
 					disabled={!isSessionResolved}
-					isStreaming={isStreaming}
+					turnOpen={turnOpen}
 					onStop={handleInterrupt}
 				/>
 			)}

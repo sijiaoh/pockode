@@ -275,10 +275,11 @@ ending unambiguous: it belongs to the turn that just ended.
 That matters because the CLI keeps talking for a moment after a turn is cut
 short — a Task subagent's last output is the usual source. Such content is
 appended to the ended message and leaves its status alone; without that it
-would open a fresh `streaming` bubble, and `isStreaming` — read off the last
-message's status, gated on the process still being alive — would report the
-stopped turn as running and keep the input blocked. An interrupt is exactly
-the case that gate does not catch: it ends the turn, not the process.
+would open a fresh `streaming` bubble under a turn the user has already stopped.
+The composer no longer infers liveness from it — `turnOpen` reads the session's
+own turn ([lifecycle-ui.md](../lifecycle-ui.md#23-chat-composer-and-stop)) — but
+the transcript still shows what it is given, and two bubbles for one turn is a
+transcript that disagrees with itself about when the turn ended.
 
 The same lateness decides where a fork can cut. A message carries the `anchorSeq`
 of the last history record folded into it, and the reducer stamps it on the
@@ -391,11 +392,16 @@ honest:
   `process_ended` the killed run never got to
   ([agent-integration.md](agent-integration.md#restart-repair)) — but the client
   does not rely on that record being there, because a session stored by a build
-  from before that repair existed has none. `useChatMessages` settles on the
-  server's report that the session has already ended, next to the call that
-  expires the dialogs orphaned the same way — and applies that to every page of
-  history it pulls in, not only the one it subscribed with
-  ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)).
+  from before that repair existed has none. The session's `turn` is the
+  authority those records are missing: `settleAgainstTurn` runs over the page a
+  subscription returns, and `retireAgainstTurn` — the half of it that claims
+  nothing about *when* the turn ended — over every older page pulled in after
+  ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client),
+  [lifecycle-ui.md](../lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
+  It settles three things at once and each on its own condition: a bubble still
+  `streaming` while the turn is not running, a pending card the turn does not
+  list as a blocker — a card it *does* list is still answerable and is left
+  alone — and a call still running once the turn is idle.
 - An interrupted run whose result finally arrives keeps its `interrupted`
   status. The content is kept and readable; what it cannot do is make the UI
   claim the call finished normally. No flag records that it came back late —

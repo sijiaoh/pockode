@@ -1,6 +1,8 @@
 import { GitBranch } from "lucide-react";
 import { memo } from "react";
+import { isWorkActive, sessionActivity } from "../../lib/activity";
 import { useSessionStore } from "../../lib/sessionStore";
+import { useWorkStore } from "../../lib/workStore";
 import type { SessionListItem } from "../../types/message";
 import DeleteButton from "../common/DeleteButton";
 import SidebarListItem from "../common/SidebarListItem";
@@ -44,6 +46,17 @@ const SessionItem = memo(function SessionItem({
 		forkedFrom ? s.sessions.find((x) => x.id === forkedFrom)?.title : undefined,
 	);
 
+	// The work list is global and survives worktree switches while the session
+	// list is scoped to one worktree, so this lookup always resolves — never the
+	// other way round.
+	const work = useWorkStore((s) =>
+		s.works.find((w) => w.session_id === session.id),
+	);
+	const activity = sessionActivity(session.turn, work);
+	// Only a work the engine is still driving has anything to lose by this.
+	const stoppedWorkTitle =
+		work && isWorkActive(work.status) ? work.title : undefined;
+
 	return (
 		<SidebarListItem
 			// A glyph, not a tree: the list is sorted by recency and scanned
@@ -56,7 +69,7 @@ const SessionItem = memo(function SessionItem({
 						{session.title}
 						{/* Said in words for a screen reader, next to the title rather
 						    than as the row's aria-label, which would replace the whole
-						    name and take "AI responding" down with it. */}
+						    name and take the row's own state indicator down with it. */}
 						<span className="sr-only">
 							, forked from {parentTitle ?? "a deleted session"}
 						</span>
@@ -75,16 +88,23 @@ const SessionItem = memo(function SessionItem({
 			}
 			subtitle={formatDate(session.updated_at)}
 			isActive={isActive}
-			hasChanges={session.unread}
-			needsInput={session.needs_input}
-			isRunning={session.state === "running"}
+			unread={session.unread}
+			activity={activity}
 			onSelect={() => onSelect(session.id)}
 			actions={
 				<DeleteButton
 					itemName={session.title}
 					itemType="session"
 					onDelete={() => onDelete(session.id)}
-					confirmMessage={`Are you sure you want to delete "${session.title}"? This action cannot be undone.`}
+					// A session delete stops the work bound to it — the place an
+					// answer would have gone is the thing being removed. Saying so
+					// is the difference between a destructive action and a silent
+					// one (docs/lifecycle-ui.md §8).
+					confirmMessage={
+						stoppedWorkTitle
+							? `Are you sure you want to delete "${session.title}"? The work "${stoppedWorkTitle}" will stop. This action cannot be undone.`
+							: `Are you sure you want to delete "${session.title}"? This action cannot be undone.`
+					}
 				/>
 			}
 		/>

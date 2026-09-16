@@ -59,7 +59,7 @@ the rest costs transport, parsing and memory for records nobody looks at.
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `state`, `tool_activity?` |
+| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `turn`, `tool_activity?` |
 | `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?` |
 
 - `history` is the page, **oldest record first**, each record stamped with its
@@ -115,12 +115,15 @@ The records that ended it are in the page above, so left as it replayed it would
 keep a spinner running in the middle of the transcript — and with nothing left
 streaming, a later `process_ended` retires only the dialogs and Tasks this page
 left open instead of also stamping its status onto a turn that was still running
-at this point. Whether the process is gone is passed in separately rather than
+at this point. What the session is doing is passed in separately rather than
 looked for in the page, so every page is retired the same way the newest one
 already is — a `process_ended` is written for a session a restart cut short
 ([agent-integration.md](code/agent-integration.md#restart-repair)), but it lands
 at the end of the transcript and says nothing to a page pulled in from further
-back.
+back. An older page is given `retireAgainstTurn`, not the whole of
+`settleAgainstTurn`: how the *last* turn ended is no business of a turn five
+pages up, which this page already closed without needing to know
+([lifecycle-ui.md](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
 
 The mirror of this is one record the page above has to hand *down*. A record
 that only ends a turn — `done`, `error`, `interrupted`, `process_ended` — has

@@ -22,6 +22,14 @@ interface Props {
 		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
+	/**
+	 * Sends the selection as an ordinary message. The way out of an expired
+	 * question: the request can no longer be answered, but what the user wanted
+	 * to say can still be said (docs/lifecycle-ui.md §5.1).
+	 */
+	onSendAsMessage?: (content: string) => void;
+	/** Why the last attempt to answer failed, shown under the buttons. */
+	error?: string;
 }
 
 interface QuestionFormProps {
@@ -160,7 +168,10 @@ const statusConfig = {
 		chip: "bg-th-error/15 text-th-error",
 	},
 	expired: {
-		Icon: X,
+		// Still a question — the card keeps a live form and a button
+		// (docs/lifecycle-ui.md §5.1). The expired *permission* is the one that
+		// wears an X: it states an outcome and offers nothing to press.
+		Icon: CircleHelp,
 		color: "text-th-text-muted",
 		label: "Expired",
 		// An opaque surface rather than the `/15` self-tint its siblings use:
@@ -183,20 +194,32 @@ function AskUserQuestionItem({
 	status,
 	savedAnswers,
 	onRespond,
+	onSendAsMessage,
+	error,
 }: Props) {
 	const isPending = status === "pending";
-	// Without onRespond there is no way to submit, so an editable form would be
-	// a dead end.
-	const readOnly = !isPending || !onRespond;
+	// An expired question is still worth answering. The request itself is gone —
+	// only the process that raised it could have taken the answer — but what the
+	// user was going to say is not, and it reaches the agent as an ordinary
+	// message instead (docs/lifecycle-ui.md §5.1).
+	const isExpired = status === "expired";
+	const canAnswer =
+		(isPending && !!onRespond) || (isExpired && !!onSendAsMessage);
+	// Without a way to submit there is no point in an editable form.
+	const readOnly = !canAnswer;
 
+	// Open while the question is live. An expired one replayed from history opens
+	// on request like any other settled card; the one that expires while on
+	// screen stays open, because the user is looking at it.
 	const [expanded, setExpanded] = useState(isPending);
 	// The card keeps its identity across pending -> answered, so it never
 	// remounts; collapse explicitly on that one transition (and only that one,
-	// otherwise the user could never reopen it).
+	// otherwise the user could never reopen it). Expiring is excluded: the card
+	// is still answerable, and it is where the reason it expired is written.
 	const [prevStatus, setPrevStatus] = useState(status);
 	if (prevStatus !== status) {
 		setPrevStatus(status);
-		if (prevStatus === "pending") setExpanded(false);
+		if (prevStatus === "pending" && status !== "expired") setExpanded(false);
 	}
 
 	const [selectedLabels, setSelectedLabels] = useState<
@@ -280,12 +303,36 @@ function AskUserQuestionItem({
 	};
 
 	const handleSubmit = () => {
+		if (isExpired) {
+			// The card records nothing afterwards: it stays Expired with no answer
+			// summary, and the answer is visible as the message directly below it.
+			// That is the truth — the request was never answered, a message was
+			// sent — and writing a late answer onto an immutable record would then
+			// have to explain an "Answered" chip on a tool call that never got a
+			// result.
+			onSendAsMessage?.(
+				entries.length === 1
+					? summarize(entries[0].selection)
+					: entries
+							.map(
+								({ question, selection }) =>
+									`${question.header}: ${summarize(selection)}`,
+							)
+							.join("\n"),
+			);
+			return;
+		}
 		const finalAnswers: Record<string, string> = {};
 		for (const { question, selection } of entries) {
 			finalAnswers[question.question] = formatAnswer(selection);
 		}
 		onRespond?.(request, finalAnswers);
 	};
+
+	// An expired card's form is inside the collapsed body, so its button waits
+	// there too: on its own it would be a disabled control with nothing on screen
+	// explaining what would enable it. A pending card is open to begin with.
+	const showFooter = canAnswer && (isPending || expanded);
 
 	const canSubmit = entries.every(
 		({ selection }) =>
@@ -336,9 +383,16 @@ function AskUserQuestionItem({
 							You cancelled this question — no answer was sent.
 						</div>
 					)}
-					{status === "expired" && (
+					{/* Reason-neutral on purpose: a process that ended, a request that
+					    timed out and a work that was closed all end this wait, and the
+					    structured reason that tells them apart is not on the record yet
+					    (docs/lifecycle-ui.md §5). What is true of all three is said
+					    here; what the user can still do is said next to the button. */}
+					{isExpired && (
 						<div className="mb-3 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
-							This question expired before it was answered.
+							{onSendAsMessage
+								? "The agent is no longer waiting for this answer. You can still answer — it will be sent as a new message and the agent will pick up from there."
+								: "The agent is no longer waiting for this answer."}
 						</div>
 					)}
 
@@ -376,22 +430,38 @@ function AskUserQuestionItem({
 				</ScrollableContent>
 			</CollapsibleBody>
 
-			{isPending && onRespond && (
+			{/* Outside the footer on purpose: a refusal can take the footer away
+			    with it, and an error that disappears with the control it belongs to
+			    is a silent failure (docs/lifecycle-ui.md §8). */}
+			{error && (
+				<p
+					role="alert"
+					className="border-th-border border-t px-2 py-1.5 text-th-error"
+				>
+					{error}
+				</p>
+			)}
+
+			{showFooter && (
 				<div className="flex justify-end gap-2 border-t border-th-border p-2">
-					<button
-						type="button"
-						onClick={() => onRespond(request, null)}
-						className="rounded bg-th-bg-secondary px-2 py-1 text-th-text-muted hover:bg-th-overlay-hover"
-					>
-						Cancel
-					</button>
+					{isPending && onRespond && (
+						<button
+							type="button"
+							onClick={() => onRespond(request, null)}
+							className="rounded bg-th-bg-secondary px-2 py-1 text-th-text-muted hover:bg-th-overlay-hover"
+						>
+							Cancel
+						</button>
+					)}
 					<button
 						type="button"
 						onClick={handleSubmit}
 						disabled={!canSubmit}
 						className="rounded bg-th-accent px-2 py-1 text-th-bg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
 					>
-						Submit
+						{/* The button says what will happen, because what happens is not
+						    what the card originally promised. */}
+						{isExpired ? "Send as message" : "Submit"}
 					</button>
 				</div>
 			)}

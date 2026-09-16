@@ -30,7 +30,7 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 
 	h.log.Info("session created", "sessionId", sessionID)
 
-	result := rpc.NewSessionListItem(sess, wt.ProcessManager.GetProcessState(sessionID))
+	result := rpc.NewSessionListItem(sess)
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session create response", "error", err)
@@ -51,7 +51,7 @@ func (h *rpcMethodHandler) handleSessionFork(ctx context.Context, conn *jsonrpc2
 	}
 
 	// Not logged here: chat.Client already logged the fork with what it did.
-	result := rpc.NewSessionListItem(meta, wt.ProcessManager.GetProcessState(meta.ID))
+	result := rpc.NewSessionListItem(meta)
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session fork response", "error", err)

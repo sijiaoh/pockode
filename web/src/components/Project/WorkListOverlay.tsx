@@ -7,9 +7,11 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
+import { deriveActivity, needsUser } from "../../lib/activity";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { WorkListItem, WorkStatus } from "../../types/work";
+import { ActivityDot } from "../ui";
 import BackToChatButton from "../ui/BackToChatButton";
 import { statusLabels } from "../ui/StatusBadge";
 import StatusIcon from "../ui/StatusIcon";
@@ -256,12 +258,11 @@ function StoryRow({
 				>
 					{story.title}
 				</button>
-				{(story.status === "needs_input" ||
-					tasks?.some((t) => t.status === "needs_input")) && (
-					<span
-						className="mr-2 h-2 w-2 shrink-0 rounded-full bg-th-warning"
-						aria-hidden="true"
-					/>
+				{/* The rollup: the story itself, or any of its tasks
+				    (docs/lifecycle-ui.md §4). The rows keep their own precise leaf. */}
+				{(needsUser(deriveActivity(story, undefined)) ||
+					tasks?.some((t) => needsUser(deriveActivity(t, undefined)))) && (
+					<ActivityDot className="mr-2" />
 				)}
 			</div>
 

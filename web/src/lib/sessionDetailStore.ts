@@ -28,8 +28,8 @@ export type SessionDetailStore = SessionDetailState & SessionDetailActions;
  *
  * One session at a time, because one session is open at a time: this is the
  * conversation on screen, not a cache of every session the app has visited.
- * Whether its agent is running is not here — that is the session list's to
- * report, through `SessionListItem.state`.
+ * What the session is doing is here, on `turn`: it is the live source the chat
+ * panel reads, and the same value the session's row carries.
  */
 export const useSessionDetailStore = create<SessionDetailStore>((set) => ({
 	sessionId: null,

@@ -153,10 +153,15 @@ func (s *FileStore) abortTurnsTheLastRunLeftOpen() {
 
 	for i := range s.sessions {
 		transition := NormalizeTurn(s.sessions[i].Turn, now)
+		// Assigned before the Changed check, not after it: an entry written by a
+		// build from before turn state existed reads back with an empty phase,
+		// which the reducer treats as idle without calling that a change. The
+		// phase is on the wire now, so the in-memory session has to carry the
+		// value the reducer read, rather than the blank the file held.
+		s.sessions[i].Turn = transition.State
 		if !transition.Changed {
 			continue
 		}
-		s.sessions[i].Turn = transition.State
 		repaired++
 
 		// Only for a turn that was actually interrupted. A session merely holding
@@ -335,6 +340,7 @@ func (s *FileStore) Create(ctx context.Context, sessionID string, spec CreateSpe
 		Mode:      mode,
 		Model:     spec.Model,
 		Effort:    spec.Effort,
+		Turn:      NewTurnState(now),
 	}
 
 	if err := s.insertLocked(session); err != nil {
@@ -387,13 +393,14 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 		Model:      fork.Source.Model,
 		Effort:     fork.Source.Effort,
 		ForkedFrom: &ForkOrigin{SessionID: fork.Source.ID},
-		// Turn is left at its zero value — idle — on purpose, and the source's is
-		// not consulted. A fork can be cut from a session that is mid-turn, and
-		// what the source is in the middle of belongs to the source's process:
-		// nothing is producing output for the fork, and nothing can answer a
-		// prompt copied into it, because only the process that raised one takes
-		// its answer. A fork that inherited a running phase would sit there
-		// waiting for an ending no process owes it.
+		// The fork starts idle, and the source's turn is not consulted. A fork
+		// can be cut from a session that is mid-turn, and what the source is in
+		// the middle of belongs to the source's process: nothing is producing
+		// output for the fork, and nothing can answer a prompt copied into it,
+		// because only the process that raised one takes its answer. A fork that
+		// inherited a running phase would sit there waiting for an ending no
+		// process owes it.
+		Turn: NewTurnState(now),
 	}
 
 	if err := s.insertLocked(session); err != nil {

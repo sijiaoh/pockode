@@ -30,6 +30,14 @@ interface Props {
 	 * bar entirely: there is no session to type at yet.
 	 */
 	disabled?: boolean;
+	/**
+	 * A turn is under way, so the agent's stdin belongs to it. Sending is refused
+	 * — a message would either be dropped or arrive in an order nobody chose —
+	 * but typing is not, so a draft written during the wait survives it
+	 * (docs/lifecycle-ui.md §2.3). The user's exits are the card on screen and
+	 * Stop, and both are visible while this holds.
+	 */
+	turnOpen?: boolean;
 }
 
 // Slash command pattern per Claude Code naming conventions.
@@ -41,6 +49,7 @@ function InputBar({
 	onSend,
 	canSend = true,
 	disabled = false,
+	turnOpen = false,
 }: Props) {
 	const input = useInputStore((state) => state.inputs[sessionId] ?? "");
 	const isPrimaryPointerCoarse = useHasCoarsePointer();
@@ -137,9 +146,14 @@ function InputBar({
 		[setInput],
 	);
 
+	// One gate for both ways to send. The button's `disabled` is the affordance,
+	// not the guard: Enter reaches `handleSend` without going near it, so a rule
+	// written only on the button is a rule the keyboard does not have.
+	const canSubmit = canSend && !turnOpen;
+
 	const handleSend = useCallback(() => {
 		const trimmed = input.trim();
-		if (trimmed && canSend) {
+		if (trimmed && canSubmit) {
 			saveToHistory(trimmed);
 			resetNavigation();
 			onSend(trimmed);
@@ -152,7 +166,7 @@ function InputBar({
 	}, [
 		input,
 		onSend,
-		canSend,
+		canSubmit,
 		sessionId,
 		saveToHistory,
 		resetNavigation,
@@ -341,7 +355,7 @@ function InputBar({
 				<button
 					type="button"
 					onClick={handleSend}
-					disabled={disabled || !canSend || !input.trim()}
+					disabled={disabled || !canSubmit || !input.trim()}
 					className="h-9 rounded-lg bg-th-accent px-3 pointer-coarse:h-11 text-th-accent-text hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
 				>
 					Send

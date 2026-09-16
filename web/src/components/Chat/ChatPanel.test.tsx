@@ -198,7 +198,7 @@ describe("ChatPanel", () => {
 				id: "sub-1",
 				initial: {
 					history: mockState.mockHistory,
-					state: "ended",
+					turn: { phase: "idle", open: false, since: "" },
 				},
 			}),
 		);
@@ -578,6 +578,88 @@ describe("ChatPanel", () => {
 				choice: "deny",
 			});
 		});
+
+		// An answer only ever reaches the process that raised the prompt, so the
+		// server refuses one aimed at a process that is gone. What that refusal
+		// means for the card is not the failure's to say — a dropped socket looks
+		// exactly the same from here — so the session's turn decides, and it is
+		// the thing that lists the prompts still waiting on someone
+		// (docs/lifecycle-ui.md §8).
+		describe("an answer the server refuses", () => {
+			const raisePermission = () =>
+				act(() => {
+					mockState.onNotification?.({
+						type: "permission_request",
+						request_id: "req-9",
+						tool_name: "Edit",
+						tool_input: { file_path: "/etc/hosts" },
+						tool_use_id: "tool-9",
+					});
+				});
+
+			const blockedOn = (requestId: string) =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: requestId,
+								raised_at: "2024-01-01T00:00:00Z",
+							},
+						],
+					},
+				});
+
+			it("leaves the card answerable when the prompt is still waiting", async () => {
+				const user = userEvent.setup();
+				mockState.permissionResponse.mockRejectedValueOnce(
+					new Error("connection lost"),
+				);
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				raisePermission();
+				act(() => blockedOn("req-9"));
+
+				await user.click(screen.getByRole("button", { name: "Allow" }));
+
+				expect(await screen.findByRole("alert")).toHaveTextContent(
+					"connection lost",
+				);
+				// Still pending, so the user can simply press it again.
+				expect(
+					screen.getByRole("button", { name: "Allow" }),
+				).toBeInTheDocument();
+			});
+
+			it("retires the card once the turn no longer lists the prompt", async () => {
+				const user = userEvent.setup();
+				mockState.permissionResponse.mockRejectedValueOnce(
+					new Error("session is no longer running"),
+				);
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				raisePermission();
+				act(() =>
+					acceptSetting({
+						turn: { phase: "idle", open: false, since: "2024-01-01T00:00:00Z" },
+					}),
+				);
+
+				await user.click(screen.getByRole("button", { name: "Allow" }));
+
+				// The reason survives the buttons going away: an error that
+				// disappears with the control it belongs to is a silent failure.
+				expect(await screen.findByRole("alert")).toHaveTextContent(
+					"session is no longer running",
+				);
+				expect(
+					screen.queryByRole("button", { name: "Allow" }),
+				).not.toBeInTheDocument();
+			});
+		});
 	});
 
 	describe("interrupt", () => {
@@ -590,11 +672,11 @@ describe("ChatPanel", () => {
 			await user.type(textarea, "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
-			// Simulate receiving text to set isProcessRunning=true (which enables isStreaming)
+			// Stop follows the session's turn, not the transcript: the server
+			// reporting a running turn is what puts the button on screen.
 			act(() => {
-				mockState.onNotification?.({
-					type: "text",
-					content: "Hello",
+				acceptSetting({
+					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
 				});
 			});
 			mockState.interrupt.mockClear();
@@ -613,16 +695,14 @@ describe("ChatPanel", () => {
 			await user.type(textarea, "Hi");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
-			// Simulate receiving text to set isProcessRunning=true (which enables isStreaming)
 			act(() => {
-				mockState.onNotification?.({
-					type: "text",
-					content: "Hello",
+				acceptSetting({
+					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
 				});
 			});
 			mockState.interrupt.mockClear();
 
-			// Press Escape while streaming
+			// Press Escape while the turn is open
 			await user.keyboard("{Escape}");
 
 			expect(mockState.interrupt).toHaveBeenCalledWith("test-session");
@@ -1342,7 +1422,6 @@ describe("ChatPanel", () => {
 		const forkedSession = makeSessionListItem({
 			id: "forked-session",
 			title: "Test Chat (fork)",
-			state: "idle",
 			forked_from: { session_id: "test-session" },
 		});
 
@@ -1583,7 +1662,7 @@ describe("ChatPanel", () => {
 					id: "sub-1",
 					initial: {
 						history: mockState.mockHistory,
-						state: "ended",
+						turn: { phase: "idle", open: false, since: "" },
 						next_before_seq: 1,
 					},
 				}),

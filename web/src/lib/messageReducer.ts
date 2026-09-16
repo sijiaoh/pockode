@@ -9,6 +9,7 @@ import type {
 	PermissionUpdate,
 	QuestionStatus,
 	ServerNotification,
+	SessionTurn,
 	SystemMessageMeta,
 	ToolRun,
 	UserMessage,
@@ -711,18 +712,37 @@ function applyEvent(
 	return updated;
 }
 
-export function expirePendingDialogs(messages: Message[]): Message[] {
+/**
+ * Retires the dialogs nothing can answer any more.
+ *
+ * `stillLive` names the requests the session still lists as blockers, and a card
+ * not in it has lost the process that would take its answer. Omitting it retires
+ * every pending card, which is what a `process_ended` record means.
+ */
+export function expirePendingDialogs(
+	messages: Message[],
+	stillLive?: ReadonlySet<string>,
+): Message[] {
+	const isLive = (requestId: string) => stillLive?.has(requestId) ?? false;
 	let anyChanged = false;
 	const updated = messages.map((msg) => {
 		if (msg.role !== "assistant") return msg;
 
 		let changed = false;
 		const updatedParts = msg.parts.map((part) => {
-			if (part.type === "permission_request" && part.status === "pending") {
+			if (
+				part.type === "permission_request" &&
+				part.status === "pending" &&
+				!isLive(part.request.requestId)
+			) {
 				changed = true;
 				return { ...part, status: "expired" as const };
 			}
-			if (part.type === "ask_user_question" && part.status === "pending") {
+			if (
+				part.type === "ask_user_question" &&
+				part.status === "pending" &&
+				!isLive(part.request.requestId)
+			) {
 				changed = true;
 				return { ...part, status: "expired" as const };
 			}
@@ -755,6 +775,50 @@ function expirePermissionRequest(
 				return { ...part, status: "expired" as const };
 			}
 			return part;
+		});
+
+		if (!changed) return msg;
+		anyChanged = true;
+		return { ...msg, parts: updatedParts };
+	});
+	return anyChanged ? updated : messages;
+}
+
+/**
+ * Puts a prompt card back to unanswered, whatever it currently says.
+ *
+ * The one caller is an answer the server refused: this client had already
+ * written the optimistic outcome, and the refusal means it never happened.
+ * Unlike every other transition here this one does not guard on `pending`,
+ * because the status it is correcting is one this client wrote a moment ago and
+ * no longer believes. Any answer is cleared with it — an answer nothing received
+ * is not one.
+ *
+ * **Which** unanswered status is the caller's to decide, and it is not a detail:
+ * a refusal because the process is gone leaves a card nothing can ever answer,
+ * while a refusal because the socket dropped leaves one that is still waiting.
+ * Guessing `expired` for both would retire a live prompt on a blip.
+ */
+export function resetPromptRequest(
+	messages: Message[],
+	requestId: string,
+	status: "pending" | "expired",
+): Message[] {
+	let anyChanged = false;
+	const updated = messages.map((msg) => {
+		if (msg.role !== "assistant") return msg;
+
+		let changed = false;
+		const updatedParts = msg.parts.map((part) => {
+			const isTarget =
+				(part.type === "permission_request" ||
+					part.type === "ask_user_question") &&
+				part.request.requestId === requestId;
+			if (!isTarget || part.status === status) return part;
+			changed = true;
+			return part.type === "permission_request"
+				? { ...part, status }
+				: { ...part, status, answers: undefined };
 		});
 
 		if (!changed) return msg;
@@ -1202,6 +1266,80 @@ export function settleAfterProcessGone(messages: Message[]): Message[] {
 	return settleRunningToolRuns(expirePendingDialogs(messages));
 }
 
+/**
+ * Retires what the session's turn says can no longer report back: a pending card
+ * it does not list as a blocker has lost the process that would have taken its
+ * answer, and a tool call still running has nothing left to report once the turn
+ * is idle. A card the turn *does* list is still answerable and is left alone,
+ * which is why this reads the blockers rather than a boolean.
+ *
+ * While the turn is blocked or running the process is alive, so a call in flight
+ * may yet come back and is not settled.
+ *
+ * Safe on any page of a transcript: neither settlement claims anything about
+ * *when* the turn ended, only that it is over now.
+ */
+export function retireAgainstTurn(
+	messages: Message[],
+	turn: SessionTurn,
+): Message[] {
+	const liveRequests = new Set(
+		(turn.blockers ?? [])
+			.map((blocker) => blocker.request_id)
+			.filter((id): id is string => id !== undefined),
+	);
+
+	const retired = expirePendingDialogs(messages, liveRequests);
+	return turn.phase === "idle" ? settleRunningToolRuns(retired) : retired;
+}
+
+/**
+ * Closes the newest page of a transcript out against what the session says it is
+ * doing (docs/lifecycle-ui.md §2.4).
+ *
+ * This is the only thing that finishes a transcript whose server died
+ * mid-stream. History cannot do it on its own: the run that was killed had no
+ * chance to write anything, and a session stored by a build from before the
+ * restart repair existed has no `process_ended` record at all — so replay can
+ * reach the end of a transcript with a bubble still streaming and dialogs still
+ * open. The turn is the authority those records are missing.
+ *
+ * On top of the retirements above: a bubble still `streaming` while the turn is
+ * not running has stopped, and it stopped the way the turn ended. A turn parked
+ * on a background task counts — nothing is arriving, and saying so is the whole
+ * point of that blocker.
+ *
+ * Only the newest page, because `last_outcome` is how the *last* turn ended and
+ * an older page's unfinished turn is not that one. Older pages are closed by
+ * `prependHistoryPage`, which knows a page's last turn is over without knowing
+ * how.
+ */
+export function settleAgainstTurn(
+	messages: Message[],
+	turn: SessionTurn,
+): Message[] {
+	const retired = retireAgainstTurn(messages, turn);
+	if (turn.phase === "running") return retired;
+	return finalizeStreamingMessages(
+		retired,
+		turn.last_outcome === "aborted" ? "interrupted" : "complete",
+	);
+}
+
+/** Gives every bubble still `streaming` the status the turn ended with. */
+function finalizeStreamingMessages(
+	messages: Message[],
+	status: "interrupted" | "complete",
+): Message[] {
+	let anyChanged = false;
+	const updated = messages.map((msg) => {
+		if (msg.role !== "assistant" || msg.status !== "streaming") return msg;
+		anyChanged = true;
+		return { ...msg, status };
+	});
+	return anyChanged ? updated : messages;
+}
+
 export function isBackReference(record: unknown): boolean {
 	const type = (record as Record<string, unknown> | null)?.type;
 	return typeof type === "string" && BACK_REFERENCE_TYPES.has(type);
@@ -1262,10 +1400,11 @@ interface HistoryPageCatchUp {
 	 */
 	backReferences?: unknown[];
 	/**
-	 * The session's process is gone and this page's history does not say so.
-	 * Nothing can still report back on a dialog or a tool call it left open.
+	 * What the session is doing now. This page's history does not say, and the
+	 * dialogs and tool calls it left open may be ones nothing can still report
+	 * back on — see {@link retireAgainstTurn}.
 	 */
-	processEnded?: boolean;
+	turn?: SessionTurn;
 }
 
 /**
@@ -1316,8 +1455,8 @@ export function prependHistoryPage(
 			normalizeEvent(record as Record<string, unknown>),
 		);
 	}
-	if (catchUp.processEnded) {
-		closed = settleAfterProcessGone(closed);
+	if (catchUp.turn) {
+		closed = retireAgainstTurn(closed, catchUp.turn);
 	}
 	if (closed.length === 0) return current;
 

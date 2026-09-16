@@ -442,6 +442,18 @@ func (t TurnState) equal(other TurnState) bool {
 	return true
 }
 
+// NewTurnState is the state a session is born in: idle, with nothing behind it,
+// as of now.
+//
+// Spelled out rather than left to the zero value, which withPhaseDefaulted also
+// reads as idle. The phase goes on the wire now, and an empty string is not one
+// of the three values a client knows — so a session gets a real one the moment
+// it exists, and the default below is left to cover only what it was written
+// for: index entries from builds before this field.
+func NewTurnState(now time.Time) TurnState {
+	return TurnState{Phase: PhaseIdle, Since: now}
+}
+
 // withPhaseDefaulted reads an absent phase as idle, which is what it means: a
 // session that has never had a turn, and every session stored by a build from
 // before this field.

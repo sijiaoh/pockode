@@ -1,6 +1,8 @@
 import { ListChecks, UserCog } from "lucide-react";
+import { deriveActivity, needsUser } from "../../lib/activity";
 import { useWorkStore } from "../../lib/workStore";
 import { useSidebarRefresh } from "../Layout";
+import { ActivityDot } from "../ui";
 
 interface Props {
 	onOpenWorkList: () => void;
@@ -12,8 +14,12 @@ export default function ProjectTab({
 	onOpenAgentRoleList,
 }: Props) {
 	const { isActive } = useSidebarRefresh("project");
-	const hasNeedsInput = useWorkStore((s) =>
-		s.works.some((w) => w.status === "needs_input"),
+	// One dot, one meaning: someone below this is waiting on the user
+	// (docs/lifecycle-ui.md §4). The turn is not passed — a work in a worktree
+	// this client has not loaded has none, and a dot that appeared only for the
+	// open worktree would be a dot that means two different things.
+	const hasNeedsUser = useWorkStore((s) =>
+		s.works.some((w) => needsUser(deriveActivity(w, undefined))),
 	);
 
 	return (
@@ -25,12 +31,7 @@ export default function ProjectTab({
 			>
 				<ListChecks className="size-4 text-th-text-muted" />
 				Project
-				{hasNeedsInput && (
-					<span
-						className="ml-auto h-2 w-2 shrink-0 rounded-full bg-th-warning"
-						aria-hidden="true"
-					/>
-				)}
+				{hasNeedsUser && <ActivityDot className="ml-auto" />}
 			</button>
 			<button
 				type="button"

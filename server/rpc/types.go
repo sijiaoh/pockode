@@ -348,34 +348,34 @@ type FSSubscribeParams struct {
 // every change, and a model chosen in one session is not news to a client
 // reading another.
 //
-// Two fields appear on both sides, and neither can drift: State is volatile
-// process state that the list owns outright and detail never carries
-// (server/watch/session_detail.go), and ForkedFrom is fixed at the session's
-// birth and never written again.
+// Two fields appear on both sides, and neither can drift: Turn and ForkedFrom
+// are both read straight off the stored SessionMeta, so the list and the detail
+// are two narrowings of one record rather than two accounts of it.
 type SessionListItem struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
 	// UpdatedAt is the row's subtitle, and what the list is ordered by.
 	UpdatedAt time.Time `json:"updated_at"`
-	State     string    `json:"state"` // "idle" | "running" | "ended"
-	// NeedsInput is derived from the session's turn state, not stored: it is
-	// true exactly while a permission request or a question is waiting for an
-	// answer (session.TurnState.AwaitingUserAnswer).
-	NeedsInput bool                `json:"needs_input"`
+	// Turn is what the session is doing, whole: the client derives everything a
+	// row draws from it (web/src/lib/activity.ts). It replaced a process state
+	// and a needs_input flag, which were two lossy views of this one value —
+	// and, being volatile process state, arrived on their own schedule. This one
+	// is persisted with the session, so a row is drawn the same whether or not a
+	// process exists.
+	Turn       session.TurnState   `json:"turn"`
 	Unread     bool                `json:"unread"`
 	ForkedFrom *session.ForkOrigin `json:"forked_from,omitempty"`
 }
 
-// NewSessionListItem builds the row for a session in a given process state.
-// Every producer of a row goes through here so that narrowing SessionMeta down
-// to a row is decided in one place.
-func NewSessionListItem(meta session.SessionMeta, state string) SessionListItem {
+// NewSessionListItem builds the row for a session. Every producer of a row goes
+// through here so that narrowing SessionMeta down to a row is decided in one
+// place.
+func NewSessionListItem(meta session.SessionMeta) SessionListItem {
 	return SessionListItem{
 		ID:         meta.ID,
 		Title:      meta.Title,
 		UpdatedAt:  meta.UpdatedAt,
-		State:      state,
-		NeedsInput: meta.Turn.AwaitingUserAnswer(),
+		Turn:       meta.Turn,
 		Unread:     meta.Unread,
 		ForkedFrom: meta.ForkedFrom,
 	}
@@ -418,7 +418,12 @@ type ChatMessagesSubscribeResult struct {
 	// NextBeforeSeq is the cursor for the page before this one; absent when
 	// HasMore is false. See ChatMessagesHistoryParams.BeforeSeq.
 	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
-	State         string             `json:"state"` // "idle" | "running" | "ended"
+	// Turn is what the session is doing at the moment of subscribing. The
+	// transcript's own subscription reports it because the transcript is what it
+	// governs: a turn that is not running is what tells the client that every
+	// message still streaming has stopped, which is the only thing that closes
+	// out a transcript whose server died mid-stream (docs/lifecycle-ui.md §2.4).
+	Turn session.TurnState `json:"turn"`
 	// ToolActivity is what each tool call still in flight last reported doing,
 	// by tool_use_id. It is here rather than in History because a tool_activity
 	// event is the latest value of something still changing and is never

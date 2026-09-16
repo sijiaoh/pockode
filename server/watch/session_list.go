@@ -10,10 +10,6 @@ import (
 	"github.com/pockode/server/session"
 )
 
-type ProcessStateGetter interface {
-	GetProcessState(sessionID string) string
-}
-
 // ViewingChecker checks whether any client has an active subscription to a session.
 type ViewingChecker interface {
 	IsViewing(sessionID string) bool
@@ -30,12 +26,11 @@ type WorkStatusSyncer interface {
 // store's mutex during network I/O.
 type SessionListWatcher struct {
 	*BaseWatcher
-	store              session.Store
-	processStateGetter ProcessStateGetter
-	viewingChecker     ViewingChecker
-	workStatusSyncer   WorkStatusSyncer
-	eventCh            chan session.SessionChangeEvent
-	dirty              atomic.Bool // set when an event is dropped; triggers full sync
+	store            session.Store
+	viewingChecker   ViewingChecker
+	workStatusSyncer WorkStatusSyncer
+	eventCh          chan session.SessionChangeEvent
+	dirty            atomic.Bool // set when an event is dropped; triggers full sync
 }
 
 func NewSessionListWatcher(store session.Store) *SessionListWatcher {
@@ -46,10 +41,6 @@ func NewSessionListWatcher(store session.Store) *SessionListWatcher {
 	}
 	store.AddOnChangeListener(w)
 	return w
-}
-
-func (w *SessionListWatcher) SetProcessStateGetter(psg ProcessStateGetter) {
-	w.processStateGetter = psg
 }
 
 func (w *SessionListWatcher) SetViewingChecker(vc ViewingChecker) {
@@ -87,10 +78,6 @@ func (w *SessionListWatcher) eventLoop() {
 	}
 }
 
-func (w *SessionListWatcher) buildItem(meta session.SessionMeta) rpc.SessionListItem {
-	return rpc.NewSessionListItem(meta, w.processStateGetter.GetProcessState(meta.ID))
-}
-
 // notifyChange sends notifications to all subscribers.
 func (w *SessionListWatcher) notifyChange(event session.SessionChangeEvent) {
 	if !w.HasSubscriptions() {
@@ -105,7 +92,7 @@ func (w *SessionListWatcher) notifyChange(event session.SessionChangeEvent) {
 		if event.Op == session.OperationDelete {
 			params.SessionID = event.Session.ID
 		} else {
-			item := w.buildItem(event.Session)
+			item := rpc.NewSessionListItem(event.Session)
 			params.Session = &item
 		}
 		return params
@@ -128,7 +115,7 @@ func (w *SessionListWatcher) notifySync() {
 
 	items := make([]rpc.SessionListItem, len(sessions))
 	for i, sess := range sessions {
-		items[i] = w.buildItem(sess)
+		items[i] = rpc.NewSessionListItem(sess)
 	}
 
 	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
@@ -164,7 +151,7 @@ func (w *SessionListWatcher) Subscribe(id string, notifier Notifier) ([]rpc.Sess
 
 	items := make([]rpc.SessionListItem, len(sessions))
 	for i, sess := range sessions {
-		items[i] = w.buildItem(sess)
+		items[i] = rpc.NewSessionListItem(sess)
 	}
 
 	return items, nil
@@ -183,16 +170,19 @@ type sessionListSyncParams struct {
 	Sessions  []rpc.SessionListItem `json:"sessions"`
 }
 
-// HandleProcessStateChange updates Unread in the store and notifies subscribers.
-// Store updates trigger OnSessionChange → notifyChange automatically.
-// The manual notification at the end covers the volatile ProcessState change.
+// HandleProcessStateChange marks a session unread and lets the work layer know a
+// prompt was raised. Those two things and nothing else.
 //
-// Nothing here writes "is this session waiting for the user" any more. That is
-// read off the session's turn state, which the process wrote before this event
-// was sent (process.Manager.emitTurn) — so the three places that used to set and
-// clear a needs_input flag, each with its own rule for when, are gone along with
-// the flag. The work item is still driven from here, because a work is not a
-// session and has its own reason to move.
+// It notifies no subscriber. The process writes the session's turn before it
+// sends this event (process.Manager.emitTurn), so the store's own change
+// notification is already on its way — and the turn is the whole of what a row
+// draws. The manual push that used to sit at the end of this function was there
+// for the volatile process state the row no longer carries, and the three places
+// that used to set and clear a needs_input flag, each with its own rule for
+// when, are gone along with that flag.
+//
+// The work item is still driven from here, because a work is not a session and
+// has its own reason to move.
 func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent) {
 	ctx := context.Background()
 
@@ -216,27 +206,6 @@ func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent
 		// is how every paused work used to end up stopped. Work leaves
 		// needs_input/waiting on a user action instead (HandleUserAction).
 	}
-
-	// Notify ProcessState change (volatile, not covered by Store's OnSessionChange)
-	if !w.HasSubscriptions() {
-		return
-	}
-
-	meta, found, err := w.store.Get(e.SessionID)
-	if err != nil || !found {
-		return
-	}
-
-	// Use e.State directly — the event already carries the authoritative state,
-	// so re-querying via GetProcessState would be redundant.
-	item := rpc.NewSessionListItem(meta, string(e.State))
-	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
-		return sessionListChangedParams{
-			ID:        sub.ID,
-			Operation: "update",
-			Session:   &item,
-		}
-	})
 }
 
 // HandleUserAction records that the user just acted on this session: a work

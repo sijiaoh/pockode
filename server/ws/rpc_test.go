@@ -19,7 +19,6 @@ import (
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/internal/unwritabletest"
-	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -553,12 +552,12 @@ func TestHandler_ChatMessagesSubscribe(t *testing.T) {
 
 	result := env.subscribeChatMessages("sess")
 
-	if result.State != "ended" {
-		t.Errorf("expected state=ended before message, got %s", result.State)
+	if result.Turn.Phase != session.PhaseIdle {
+		t.Errorf("expected an idle turn before any message, got %q", result.Turn.Phase)
 	}
 }
 
-func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
+func TestHandler_ChatMessagesSubscribe_TurnState(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
 			agent.TextEvent{Content: "Response"},
@@ -579,10 +578,15 @@ func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
 		t.Fatal("expected process to be running")
 	}
 
-	// New subscribe should show state=idle (process alive, done with response)
+	// The turn the process just finished is over, so the transcript's own
+	// subscription reports idle — which is what tells the client that the last
+	// streaming bubble has stopped.
 	result := env.subscribeChatMessages("sess")
-	if result.State != "idle" {
-		t.Errorf("expected state=idle after message, got %s", result.State)
+	if result.Turn.Phase != session.PhaseIdle {
+		t.Errorf("expected an idle turn after the response, got %q", result.Turn.Phase)
+	}
+	if result.Turn.LastOutcome != session.OutcomeCompleted {
+		t.Errorf("last outcome = %q, want completed", result.Turn.LastOutcome)
 	}
 }
 
@@ -1042,8 +1046,8 @@ func TestHandler_SessionCreate(t *testing.T) {
 	if row.Title != "New Chat" {
 		t.Errorf("expected title 'New Chat', got %q", row.Title)
 	}
-	if row.State != string(process.ProcessStateEnded) {
-		t.Errorf("state = %q, want %q for a session with no process yet", row.State, process.ProcessStateEnded)
+	if row.Turn.Phase != session.PhaseIdle {
+		t.Errorf("turn phase = %q, want idle for a session with no process yet", row.Turn.Phase)
 	}
 	// Asserted on the stored session: a row carries no activated flag, so the
 	// same check against the reply would read false for a session that had been
