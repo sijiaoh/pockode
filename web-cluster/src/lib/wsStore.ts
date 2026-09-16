@@ -47,12 +47,21 @@ interface AuthResult {
 interface RPCActions extends NodeActions {
 	connect: (token: string) => void;
 	disconnect: () => void;
+	retryNow: () => void;
 }
 
 interface WSState {
 	status: ConnectionStatus;
 	version: string | null;
 	errorMessage: string | null;
+	/**
+	 * Attempts since the last connection that succeeded.
+	 *
+	 * In the store rather than beside the socket in `internal` because the
+	 * reconnect banner escalates on it, and only state a component can subscribe
+	 * to can drive that.
+	 */
+	reconnectAttempts: number;
 	actions: RPCActions;
 }
 
@@ -60,7 +69,6 @@ interface InternalState {
 	socket: WebSocket | null;
 	client: JSONRPCClient | null;
 	token: string | null;
-	reconnectAttempts: number;
 	reconnectTimeout: ReturnType<typeof setTimeout> | null;
 }
 
@@ -68,7 +76,6 @@ const internal: InternalState = {
 	socket: null,
 	client: null,
 	token: null,
-	reconnectAttempts: 0,
 	reconnectTimeout: null,
 };
 
@@ -104,9 +111,9 @@ export const useWSStore = create<WSState>()((set, get) => {
 			return;
 		}
 
-		const delay = reconnectDelay(internal.reconnectAttempts);
-		internal.reconnectAttempts++;
-		set({ status: "reconnecting" });
+		const attempts = get().reconnectAttempts;
+		set({ status: "reconnecting", reconnectAttempts: attempts + 1 });
+		const delay = reconnectDelay(attempts);
 
 		internal.reconnectTimeout = setTimeout(() => {
 			if (internal.token) {
@@ -154,9 +161,9 @@ export const useWSStore = create<WSState>()((set, get) => {
 					.timeout(RPC_TIMEOUT_MS)
 					.request("auth", { token });
 
-				internal.reconnectAttempts = 0;
 				set({
 					status: "connected",
+					reconnectAttempts: 0,
 					version: result.version,
 					errorMessage: null,
 				});
@@ -228,6 +235,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 		status: "disconnected",
 		version: null,
 		errorMessage: null,
+		reconnectAttempts: 0,
 		actions: {
 			...nodeActions,
 			connect: (token: string) => {
@@ -242,8 +250,16 @@ export const useWSStore = create<WSState>()((set, get) => {
 				if (status === "connecting" || status === "connected") {
 					return;
 				}
-				internal.reconnectAttempts = 0;
+				set({ reconnectAttempts: 0 });
 				connectInternal(token);
+			},
+			// Deliberately not connect(): that resets the attempt counter, and a
+			// hand-pressed retry that also fails should resume the backoff where it
+			// was rather than restart it from one second. connectInternal disarms
+			// the pending timer itself.
+			retryNow: () => {
+				if (!internal.token) return;
+				connectInternal(internal.token);
 			},
 			disconnect: () => {
 				clearReconnectTimeout();
@@ -251,11 +267,16 @@ export const useWSStore = create<WSState>()((set, get) => {
 				// Auto-reconnect is already off: token is cleared and onclose bails on
 				// "disconnected". Reset so a later connect() starts at the short end of
 				// the backoff. Mirrors the web client.
-				internal.reconnectAttempts = 0;
+				//
 				// Set status BEFORE closing so onclose sees "disconnected" and skips
 				// scheduleReconnect(); otherwise closing a connected socket would flip
 				// through "reconnecting" and leave a stray no-op timer.
-				set({ status: "disconnected", version: null, errorMessage: null });
+				set({
+					status: "disconnected",
+					version: null,
+					errorMessage: null,
+					reconnectAttempts: 0,
+				});
 				if (internal.socket) {
 					internal.socket.close();
 					internal.socket = null;

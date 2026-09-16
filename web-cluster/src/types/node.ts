@@ -42,3 +42,7 @@ export interface NodeStartParams {
 export interface NodeStopParams {
 	id: string;
 }
+
+export interface NodeCleanupParams {
+	id: string;
+}

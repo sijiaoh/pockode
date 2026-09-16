@@ -129,9 +129,12 @@ reasoning live in the `BREAKPOINTS` jsdoc.
 ### The ladder is shared with web-cluster
 
 `BREAKPOINTS` lives in `packages/shared`, and `web-cluster` compiles against it
-too: its `ResponsivePanel` picks a dropdown or a bottom drawer at the same 1024.
-That was a decision, not a side effect — the same reasoning applies, a portrait
-tablet wants the bottom drawer.
+too: both projects' overlays are the shared `Sheet`, which reads `useIsExpanded`
+once and picks a centred modal or a bottom drawer at 1024. That was a decision,
+not a side effect — the same reasoning applies, a portrait tablet wants the
+bottom drawer. `web-cluster` used to make the same choice at the same width in a
+fork of its own; the fork is gone, and with it the desktop form it had dropped
+the anchoring from.
 
 The **pointer gates are declared in both stylesheets**, and that is not optional
 duplication: the two names shadow Tailwind built-ins
@@ -710,7 +713,7 @@ Nine controls in five files, all now `min-h-9 pointer-coarse:min-h-11`:
 | `Files/UploadQueue` | Replace, Keep both, Retry on a failed row | R0 (a) |
 | `Files/UploadQueue` | Retry failed, in the queue header | R0 (a) |
 | `Git/ErrorBanner` | Details | R0 (a) |
-| `ui/ReconnectBanner` | Retry now | R0 (a) |
+| `ReconnectBanner` (since promoted to `@pockode/shared`) | Retry now | R0 (a) |
 | `ui/SettingsLoadError` | Retry | R0 (a) |
 | `AppShell` | Retry in the session-error banner | R0 (a) |
 | `AppShell` | Dismiss beside it | R1, in by the row rule |
@@ -760,7 +763,7 @@ the honesty note below.
 | `UploadQueue` failed row | 50px | 66 / 74px (single-line message) | same; the panel itself is capped by `max-h-[12rem]`, so the file tree does not move |
 | `UploadQueue` header | 36 / 44px | unchanged | the row already held two `size-9 pointer-coarse:size-11` icon buttons |
 | `Git/ErrorBanner` | 52 / 60px (short summary) | unchanged with a short summary; +20 / +28px once the summary wraps | the dismiss `X` was already 36 / 44, so Details lands inside the same `max()` — but only while it shares a line with the summary |
-| `ui/ReconnectBanner` | 28px | 44 / 52px (unwrapped) | only once the retry has escalated to an outage (`OUTAGE_AFTER_ATTEMPTS`); the ordinary "Reconnecting..." form carries no button and stays 28px |
+| `ReconnectBanner` (since promoted to `@pockode/shared`) | 28px | 44 / 52px (unwrapped) | only once the retry has escalated to an outage (`OUTAGE_AFTER_ATTEMPTS`); the ordinary "Reconnecting..." form carries no button and stays 28px |
 | `AppShell` session-error banner | 28px | 44 / 52px (unwrapped) | only while a session-creation error is unacknowledged |
 | `ui/SettingsLoadError` | 16px | 56 / 64px | only when a settings snapshot fails to load; with no error the component renders `null` |
 
@@ -846,7 +849,7 @@ of the source — and it has to hold for components nobody has written yet.
 
 | Test | What it guards |
 |---|---|
-| `web/tests/responsiveTokens.test.ts` | Both stylesheets' `@theme` values **and** both their `@custom-variant` queries still match `packages/shared`; `md:` / `xl:` / `2xl:` stay retired in both; every scanned source root is mapped to a stylesheet that redeclares the two gates (the mapping is a written claim about the build, not read out of it — a line naming the wrong stylesheet would still pass); and `touch-target` really declares the two floors the scans credit it with. Tailwind's font-size scale is untouched in both `@theme` blocks as well: the heights in [Outside the floor today](#outside-the-floor-today) are computed against a written copy of those defaults, so overriding a step — or adding one, which the scan would read as a colour — moves every height while the register goes on agreeing with itself |
+| `web/tests/responsiveTokens.test.ts` | Both stylesheets' `@theme` values **and** both their `@custom-variant` queries still match `packages/shared`; `md:` / `xl:` / `2xl:` stay retired in both; every scanned source root is mapped to a stylesheet that redeclares the two gates (the mapping is a written claim about the build, not read out of it — a line naming the wrong stylesheet would still pass); and `touch-target` really declares the two floors the scans credit it with — in **both** stylesheets, since the `Sheet` that reaches its floor through that overlay is compiled into both. Tailwind's font-size scale is untouched in both `@theme` blocks as well: the heights in [Outside the floor today](#outside-the-floor-today) are computed against a written copy of those defaults, so overriding a step — or adding one, which the scan would read as a colour — moves every height while the register goes on agreeing with itself |
 | `web/tests/widthLadder.test.ts` | No retired rung (`md:` / `xl:` / `2xl:`, stacked or interpolated) appears in source. A retired rung compiles to nothing, which is silent; this makes it loud |
 | `web/tests/hoverReveal.test.ts` | Hover-revealed visibility carries no width prefix; both halves share one gate; every reveal pair has a `group-focus-within` twin and does not hide with `display` |
 | `web/tests/pointerEvents.test.ts` | Nothing tracks a gesture with mouse events (a bare `onMouseDown` prop is allowed — see the exception above) |
@@ -856,7 +859,7 @@ of the source — and it has to hold for components nobody has written yet.
 | `web/src/components/ui/Sheet.test.tsx` | Drawer sits at the bottom, modal is centred, and both follow the one hook |
 | `web/src/test/outsideClick.test.tsx` | A click outside dismisses and one inside does not; touch scrolling does not; the click that opened the overlay does not; the listener survives a host re-render |
 | `web/src/test/responsive.test.tsx` | The ladder's absolute numbers; all three pointer gates read together on a touchscreen laptop; and that a gate is subscribed rather than sampled once, so a resize or a mouse plugged in mid-session re-renders |
-| `web/tests/sourceScan.test.ts` | Each scanned root still resolves to files, so an absent-violation assertion cannot pass by reading nothing |
+| `web/tests/sourceScan.test.ts` | Each scanned root still resolves to files, so an absent-violation assertion cannot pass by reading nothing; and every root outside a project's own directory — `packages/shared`, reached through a workspace link that Tailwind's automatic source detection does not enter — is named by an `@source` in each stylesheet that claims to compile it |
 
 Known blind spots, recorded as they are rather than as they should be:
 

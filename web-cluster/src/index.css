@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Tailwind's automatic source detection stops at the project directory and
+ * never enters node_modules, where the `@pockode/shared` workspace link lives —
+ * so a class that only a shared component writes (`Sheet`'s `max-h-[90dvh]`)
+ * compiles to nothing without this line. Its absence is silent in both
+ * directions: the component renders, unstyled in the one dimension nothing else
+ * happens to use. web/tests/sourceScan.ts records which stylesheets this root
+ * is compiled into; this is the half of that claim the build can see. */
+@source "../../packages/shared/src";
+
 /* Enable class-based dark mode */
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -45,6 +54,38 @@
  * stylesheet that defines both. */
 @custom-variant pointer-fine (@media (hover: hover) and (pointer: fine));
 @custom-variant pointer-coarse (@media (any-pointer: coarse));
+
+/* Hit area follows the pointer, visual size follows the weight rung: this lays
+ * a floor over a control without resizing it. Restated from web/src/index.css
+ * for the same reason the gates above are — each project compiles its own
+ * stylesheet, and `packages/shared` compiles into both. `Sheet`'s close button
+ * is a 36px box carrying this class, so without the utility here it would keep
+ * the class, compile to nothing, and hand a thumb 36px in this project while
+ * being correct in web. Both floors and the query are pinned to
+ * packages/shared by web/tests/responsiveTokens.test.ts; the reasoning behind
+ * the numbers is in web/src/index.css and docs/responsive-ui.md. */
+@utility touch-target {
+	position: relative;
+
+	&::after {
+		content: "";
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		translate: -50% -50%;
+		width: 100%;
+		min-width: 36px;
+		height: 100%;
+		min-height: 36px;
+	}
+
+	@media (any-pointer: coarse) {
+		&::after {
+			min-width: 44px;
+			min-height: 44px;
+		}
+	}
+}
 
 /* =============================================================================
  * BASE RESETS

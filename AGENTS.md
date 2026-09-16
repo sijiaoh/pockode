@@ -64,11 +64,26 @@ The `packages/shared` package contains UI components, hooks, stores, and utiliti
 - Code is **experimental** or likely to diverge
 
 **Available exports**:
-- Components: `Spinner`, `ConfirmDialog`
+- Components: `Spinner`, `ConfirmDialog`, `Sheet`, `ReconnectBanner`
 - Hooks: `useMediaQuery`, `useOutsideClick`, `useIsExpanded`, `useHasCoarsePointer`, `useHasFinePointer`
 - Stores: `createAuthStore` (factory function for auth store with configurable token key)
 - Utils: `getWebSocketUrl`, `BREAKPOINTS`, `MEDIA_QUERIES`, `hasCoarsePointer`
 - `@pockode/shared/vitest`: `vitestRuntimeOptions` — the worker and timeout settings both `vitest.config.ts` files spread in. A separate subpath because it needs Node types, which the browser entry must not pull in; it lives outside `src` for the same reason. It is the one plain-JavaScript file here: vite leaves a config's bare imports external, so Node loads this one itself, and the Node that `.node-version` pins cannot read `.ts`.
+
+These components carry Tailwind classes, which puts two obligations on the
+projects rather than on this package: each stylesheet has to name
+`packages/shared/src` in an `@source` (automatic source detection stops at the
+project directory and never enters the workspace link), and each has to declare
+every project `@utility` a shared component uses — today `touch-target`. Both
+failures are silent: the class stays on the element and compiles to nothing, in
+one project while the other is fine. `web/tests/sourceScan.test.ts` and
+`web/tests/responsiveTokens.test.ts` hold both.
+
+`useLockBodyScroll` is deliberately *not* exported: it is one counter shared by
+`Sheet` and `ConfirmDialog` so that two overlays unmounting together cannot
+restore each other's `overflow` and leave the page permanently unscrollable.
+Anything in this package that covers the page uses it; exporting it would invite
+a third, separate counter, which is the bug itself.
 
 The responsive exports are the single source for the width ladder and the two
 pointer gates; both stylesheets are checked against them. Width decides where

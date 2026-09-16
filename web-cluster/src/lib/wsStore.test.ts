@@ -278,3 +278,47 @@ describe("wsStore reconnect", () => {
 		expect(useWSStore.getState().status).toBe("disconnected");
 	});
 });
+
+// The banner escalates from "Reconnecting…" to "can't reach it, here is a
+// Retry" on this number, so it has to be a piece of state a component can
+// subscribe to rather than a counter kept beside the socket.
+describe("wsStore reconnect attempts", () => {
+	it("counts the failures since the last connection that worked", async () => {
+		const useWSStore = await connectAndAuth();
+		expect(useWSStore.getState().reconnectAttempts).toBe(0);
+
+		currentMockWs?.simulateClose();
+		expect(useWSStore.getState().reconnectAttempts).toBe(1);
+
+		await vi.advanceTimersByTimeAsync(3000);
+		currentMockWs?.simulateClose();
+		expect(useWSStore.getState().reconnectAttempts).toBe(2);
+
+		await vi.advanceTimersByTimeAsync(5000);
+		currentMockWs?.simulateOpen();
+		await vi.runAllTimersAsync();
+		expect(useWSStore.getState().status).toBe("connected");
+		expect(useWSStore.getState().reconnectAttempts).toBe(0);
+	});
+
+	// Pressing Retry skips the wait, not the backoff: an immediate attempt that
+	// also fails resumes where the series was, or a user tapping the button
+	// during a real outage would hammer the cluster at one second forever.
+	it("does not restart the backoff when the user retries by hand", async () => {
+		const useWSStore = await connectAndAuth();
+		currentMockWs?.simulateClose();
+		await vi.advanceTimersByTimeAsync(3000);
+		currentMockWs?.simulateClose();
+		expect(useWSStore.getState().reconnectAttempts).toBe(2);
+
+		useWSStore.getState().actions.retryNow();
+		const socketsBefore = mockWsInstances.length;
+		currentMockWs?.simulateClose();
+
+		expect(useWSStore.getState().reconnectAttempts).toBe(3);
+		// And the pending timer was disarmed rather than left to open a second
+		// socket on top of the one retryNow just made.
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(mockWsInstances.length).toBe(socketsBefore + 1);
+	});
+});

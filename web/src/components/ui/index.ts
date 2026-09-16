@@ -1,4 +1,4 @@
-export { Spinner } from "@pockode/shared";
+export { Sheet, Spinner } from "@pockode/shared";
 export { default as BackToChatButton } from "./BackToChatButton";
 export { default as BadgeCount, formatBadgeCount } from "./BadgeCount";
 export { default as BadgeDot } from "./BadgeDot";
@@ -18,6 +18,5 @@ export { default as PanelSection } from "./PanelSection";
 export { default as PullToRefresh } from "./PullToRefresh";
 export { default as ReconnectBanner } from "./ReconnectBanner";
 export { default as ScrollableContent } from "./ScrollableContent";
-export { default as Sheet } from "./Sheet";
 export { default as StatusIcon } from "./StatusIcon";
 export { default as ToggleIconButton } from "./ToggleIconButton";

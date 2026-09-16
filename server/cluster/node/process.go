@@ -18,6 +18,7 @@ import (
 var (
 	ErrNodeAlreadyRunning = errors.New("node already running")
 	ErrNodeNotRunning     = errors.New("node not running")
+	ErrNodeStillRunning   = errors.New("node is still running")
 	ErrProcessNotFound    = errors.New("process not found")
 )
 
@@ -49,6 +50,17 @@ func (pm *ProcessManager) Start(n Node, token string) error {
 	// Check if already running
 	if pm.IsRunning(n) {
 		return ErrNodeAlreadyRunning
+	}
+
+	// A node that was killed or crashed leaves its server.json behind, and the
+	// node is not running, so the check above lets us through with that file
+	// still on disk. waitForServerInfo would read it on its first attempt and
+	// report the node started before the process we are about to spawn has
+	// written anything — while every later status read still sees the dead PID
+	// and reports the node stale. Removing it first is what makes the wait below
+	// wait for *this* process.
+	if err := serverinfo.Delete(dataDir); err != nil {
+		return fmt.Errorf("failed to remove stale server.json: %w", err)
 	}
 
 	// Get executable path
@@ -152,6 +164,31 @@ func (pm *ProcessManager) Stop(n Node) error {
 	// node as stale even though the cluster is what stopped it.
 	if err := serverinfo.Delete(dataDir); err != nil {
 		return fmt.Errorf("failed to clean up server.json: %w", err)
+	}
+
+	return nil
+}
+
+// Cleanup removes a node's leftover server.json: the file a node that was
+// killed or crashed could not remove itself, and which is the only reason the
+// node is reported stale. Nothing else is touched — the project directory and
+// its data are not this operation's business.
+//
+// It is idempotent. A node with no server.json is already in the state Cleanup
+// is asked for, so it succeeds rather than reporting a problem the caller
+// cannot act on.
+//
+// A node whose process is alive is refused: that file is how the rest of the
+// system reaches the running server, and deleting it would leave a node nobody
+// can find or stop.
+func (pm *ProcessManager) Cleanup(n Node) error {
+	if pm.IsRunning(n) {
+		return ErrNodeStillRunning
+	}
+
+	dataDir := filepath.Join(n.Path, ".pockode")
+	if err := serverinfo.Delete(dataDir); err != nil {
+		return fmt.Errorf("failed to remove server.json: %w", err)
 	}
 
 	return nil

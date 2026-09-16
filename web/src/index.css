@@ -1,6 +1,15 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Tailwind's automatic source detection stops at the project directory and
+ * never enters node_modules, where the `@pockode/shared` workspace link lives —
+ * so a class that only a shared component writes (`Sheet`'s `max-h-[90dvh]`)
+ * compiles to nothing without this line. Its absence is silent in both
+ * directions: the component renders, unstyled in the one dimension nothing else
+ * happens to use. web/tests/sourceScan.ts records which stylesheets this root
+ * is compiled into; this is the half of that claim the build can see. */
+@source "../../packages/shared/src";
+
 /* Enable class-based dark mode */
 @custom-variant dark (&:where(.dark, .dark *));
 

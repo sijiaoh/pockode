@@ -118,8 +118,12 @@ describe.each(Object.entries(STYLESHEETS))("%s type scale", (_name, path) => {
 // hit area quietly shrinks to the box. That is how the code block's copy button
 // lost its expanded target — its own unconditional `::after` was replaced by an
 // overlay that only existed on a coarse pointer, leaving 26px under a mouse.
-describe("web/src/index.css touch-target", () => {
-	const css = read(STYLESHEETS["web/src/index.css"]);
+//
+// Both stylesheets, because `packages/shared` compiles into both and `Sheet`'s
+// close button reaches its coarse floor through this overlay: a stylesheet
+// missing the utility does not drop the class, it emits nothing for it.
+describe.each(Object.entries(STYLESHEETS))("%s touch-target", (_name, path) => {
+	const css = read(path);
 
 	/** The `@utility touch-target { ... }` body, brace-matched. */
 	const body = (() => {
