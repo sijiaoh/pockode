@@ -1,6 +1,7 @@
 import type { JSONRPCClient } from "json-rpc-2.0";
 import type {
 	Node,
+	NodeCleanupParams,
 	NodeCreateParams,
 	NodeStartParams,
 	NodeStatusInfo,
@@ -18,6 +19,7 @@ export interface NodeActions {
 	getNodeStatus: (id: string) => Promise<NodeStatusInfo>;
 	startNode: (params: NodeStartParams) => Promise<NodeStatusInfo>;
 	stopNode: (params: NodeStopParams) => Promise<NodeStatusInfo>;
+	cleanupNode: (params: NodeCleanupParams) => Promise<NodeStatusInfo>;
 }
 
 export function createNodeActions(
@@ -62,6 +64,14 @@ export function createNodeActions(
 
 		stopNode: async (params: NodeStopParams): Promise<NodeStatusInfo> => {
 			return requireClient().request("node.stop", params);
+		},
+
+		// Deletes a stale `server.json` and answers with the fresh status. It is
+		// idempotent, and refuses (`node is still running`) rather than orphaning a
+		// live server — so unlike the `node.stop` call this replaces, a success here
+		// means what the button said.
+		cleanupNode: async (params: NodeCleanupParams): Promise<NodeStatusInfo> => {
+			return requireClient().request("node.cleanup", params);
 		},
 	};
 }

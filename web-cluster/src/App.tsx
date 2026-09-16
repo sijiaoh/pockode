@@ -1,8 +1,16 @@
+import { Spinner } from "@pockode/shared";
 import { useEffect, useState } from "react";
 import { NodeList } from "./components";
-import { Spinner } from "./components/ui";
 import { authActions, useAuthStore } from "./lib/authStore";
 import { useWSStore } from "./lib/wsStore";
+
+/**
+ * How long a connect may take before it is worth saying anything about.
+ *
+ * A local cluster answers well inside this, and a spinner that appears and
+ * disappears inside a few frames reads as a glitch rather than as progress.
+ */
+const CONNECTING_SPINNER_DELAY_MS = 300;
 
 function getTokenFromUrl(): string | null {
 	const params = new URLSearchParams(window.location.search);
@@ -13,7 +21,21 @@ export default function App() {
 	const { status, errorMessage, actions, version } = useWSStore();
 	const token = useAuthStore((state) => state.token);
 	const [tokenInput, setTokenInput] = useState("");
+	const [tokenVisible, setTokenVisible] = useState(false);
 	const [inputError, setInputError] = useState<string | null>(null);
+	const [connectingVisible, setConnectingVisible] = useState(false);
+
+	useEffect(() => {
+		if (status !== "connecting") {
+			setConnectingVisible(false);
+			return;
+		}
+		const timer = setTimeout(
+			() => setConnectingVisible(true),
+			CONNECTING_SPINNER_DELAY_MS,
+		);
+		return () => clearTimeout(timer);
+	}, [status]);
 
 	useEffect(() => {
 		const urlToken = getTokenFromUrl();
@@ -59,15 +81,39 @@ export default function App() {
 						>
 							Auth Token
 						</label>
-						<input
-							id="token"
-							type="password"
-							value={tokenInput}
-							onChange={(e) => setTokenInput(e.target.value)}
-							placeholder="Enter your token"
-							className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-secondary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none"
-							autoFocus
-						/>
+						{/* A token is long, random and usually typed on a phone
+						    keyboard; typing it blind is the worst moment in the
+						    product, so it can be read back. */}
+						<div className="relative">
+							<input
+								id="token"
+								type={tokenVisible ? "text" : "password"}
+								value={tokenInput}
+								onChange={(e) => setTokenInput(e.target.value)}
+								placeholder="Enter your token"
+								className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-secondary py-2 pl-3 pr-16 font-mono text-sm text-th-text-primary placeholder:font-sans placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none"
+								aria-describedby="token-help"
+								autoCapitalize="off"
+								autoCorrect="off"
+								spellCheck={false}
+								autoFocus
+							/>
+							<button
+								type="button"
+								onClick={() => setTokenVisible((visible) => !visible)}
+								className="touch-target absolute inset-y-0 right-0 flex items-center px-3 text-xs font-medium text-th-text-secondary hover:text-th-text-primary"
+							>
+								{tokenVisible ? "Hide" : "Show"}
+							</button>
+						</div>
+						{/* Described by the field rather than merely placed under it:
+						    where the token comes from is the answer to the question the
+						    field raises, and a reader who never sees the layout would
+						    otherwise never be given it. */}
+						<p id="token-help" className="mt-1 text-xs text-th-text-muted">
+							The <code className="font-mono">--auth-token</code> you started
+							the cluster with.
+						</p>
 						{inputError && (
 							<p className="mt-2 text-sm text-th-error">{inputError}</p>
 						)}
@@ -86,10 +132,14 @@ export default function App() {
 	if (status === "connecting") {
 		return (
 			<div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary">
-				<Spinner size="h-8 w-8" />
-				<p className="text-sm text-th-text-secondary">
-					Connecting to cluster...
-				</p>
+				{connectingVisible && (
+					<>
+						<Spinner size="h-8 w-8" />
+						<p className="text-sm text-th-text-secondary">
+							Connecting to cluster...
+						</p>
+					</>
+				)}
 			</div>
 		);
 	}
@@ -175,11 +225,6 @@ export default function App() {
 
 	return (
 		<div className="flex min-h-dvh flex-col bg-th-bg-primary">
-			{version && (
-				<div className="fixed bottom-2 right-2 text-xs text-th-text-muted">
-					v{version}
-				</div>
-			)}
 			<NodeList />
 		</div>
 	);
