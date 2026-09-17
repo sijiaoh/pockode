@@ -552,7 +552,8 @@ noticed. One representation with a test on it is the only thing that ends that.
   16px  exact  web/src/components/Project/WorkListOverlay.tsx
   20px  exact  web/src/components/Project/AgentRoleListOverlay.tsx
   20px  exact  web/src/components/Project/WorkDetailOverlay.tsx
-  20px  exact  web/src/components/Project/WorkListOverlay.tsx ×2
+  20px  exact  web/src/components/Project/WorkListOverlay.tsx
+  20px  exact  web/src/components/Project/WorkPrimaryAction.tsx
   20px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx
   24px  bound  web/src/components/Settings/sections/AppearanceSections.tsx
   28px  bound  web/src/components/Chat/MessageItem.tsx

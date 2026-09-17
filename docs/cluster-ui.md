@@ -104,7 +104,7 @@ rest diverge.
 | `Spinner`, `createAuthStore`, `getWebSocketUrl`, `useIsExpanded`, `BREAKPOINTS` | **Already shared, and used here** — some directly, the width ladder through `Sheet`. |
 | `ConfirmDialog` | **Shared, but unused here.** Both of its cluster call sites became in-sheet confirmations (above); `web` is unaffected. |
 | `ResponsivePanel` (anchored dropdown) | **Stays in `web`.** No cluster use case; do not promote it here later either. |
-| `StatusBadge` | **Not reused.** Typed to `WorkStatus`. Cluster keeps its own three-state dot/pill. Its *contrast* reasoning — hue on the border, not on the letters — is worth copying; the component is not. |
+| `ActivityBadge` | **Not reused.** Typed to `Activity`, which is derived from a work and a session's turn — neither of which the cluster panel has. Cluster keeps its own three-state dot/pill. Its *contrast* reasoning — hue on the border, not on the letters — is worth copying; the component is not. |
 | `PullToRefresh`, `BottomActionBar`, `PanelSection` | **Not reused.** They would drag `web`'s complexity, and one of them a dependency, into a panel whose whole argument is that it is small. |
 
 Two obligations follow from anything living in `@pockode/shared` and are easy to

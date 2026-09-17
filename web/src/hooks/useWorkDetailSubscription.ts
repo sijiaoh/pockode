@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type Activity, normalizeActivity } from "../lib/activity";
 import { useWSStore } from "../lib/wsStore";
 import type {
 	Comment,
@@ -16,6 +17,11 @@ export function useWorkDetailSubscription(workId: string) {
 	);
 
 	const [work, setWork] = useState<Work | null>(null);
+	// Beside the work rather than on it, because it is not the record's: it is
+	// derived from the turn of the work's session, which the stored item knows
+	// nothing about (docs/lifecycle-ui.md §1.3). Normalised here because this
+	// hook is the wire boundary for the detail, the way the store is for rows.
+	const [activity, setActivity] = useState<Activity>("idle");
 	const [comments, setComments] = useState<Comment[]>([]);
 	// Null only before the first snapshot: the server always sends a usage, so a
 	// work item that spent nothing carries an empty aggregate rather than none.
@@ -29,6 +35,7 @@ export function useWorkDetailSubscription(workId: string) {
 		if (prevWorkIdRef.current !== workId) {
 			prevWorkIdRef.current = workId;
 			setWork(null);
+			setActivity("idle");
 			setComments([]);
 			setUsage(null);
 			setLoading(true);
@@ -45,6 +52,7 @@ export function useWorkDetailSubscription(workId: string) {
 	const handleNotification = useCallback(
 		(params: WorkDetailChangedNotification) => {
 			setWork(params.work);
+			setActivity(normalizeActivity(params.activity));
 			setComments(params.comments);
 			setUsage(params.usage);
 		},
@@ -53,6 +61,7 @@ export function useWorkDetailSubscription(workId: string) {
 
 	const handleSubscribed = useCallback((initial: WorkDetailSubscribeResult) => {
 		setWork(initial.work);
+		setActivity(normalizeActivity(initial.activity));
 		setComments(initial.comments);
 		setUsage(initial.usage);
 		setLoading(false);
@@ -61,6 +70,7 @@ export function useWorkDetailSubscription(workId: string) {
 
 	const handleReset = useCallback(() => {
 		setWork(null);
+		setActivity("idle");
 		setComments([]);
 		setUsage(null);
 		setLoading(true);
@@ -86,7 +96,7 @@ export function useWorkDetailSubscription(workId: string) {
 	);
 
 	return useMemo(
-		() => ({ work, comments, usage, loading, error }),
-		[work, comments, usage, loading, error],
+		() => ({ work, activity, comments, usage, loading, error }),
+		[work, activity, comments, usage, loading, error],
 	);
 }

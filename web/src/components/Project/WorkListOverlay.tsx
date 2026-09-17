@@ -1,22 +1,14 @@
-import {
-	AlertCircle,
-	ChevronDown,
-	ChevronRight,
-	Loader2,
-	Play,
-} from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { AlertCircle, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
-import { needsUser } from "../../lib/activity";
+import { ACTIVITY_VIEW, type Activity, needsUser } from "../../lib/activity";
 import { useWorkStore } from "../../lib/workStore";
-import { useWSStore } from "../../lib/wsStore";
-import type { WorkListItem, WorkStatus } from "../../types/work";
-import { ActivityDot } from "../ui";
+import type { WorkListItem } from "../../types/work";
+import { ActivityDot, ActivityIcon } from "../ui";
 import BackToChatButton from "../ui/BackToChatButton";
-import { statusLabels } from "../ui/StatusBadge";
-import StatusIcon from "../ui/StatusIcon";
 import { WorktreeBadge } from "../Worktree";
 import CreateWorkForm from "./CreateWorkForm";
+import WorkPrimaryAction, { countActiveChildren } from "./WorkPrimaryAction";
 
 interface Props {
 	onBack: () => void;
@@ -50,27 +42,26 @@ export default function WorkListOverlay({
 	}, [works]);
 
 	const storyGroups = useMemo(() => {
-		const byStatus = new Map<WorkStatus, WorkListItem[]>();
+		const byGroup = new Map<WorkGroup, WorkListItem[]>();
 		for (const w of works) {
 			if (w.type !== "story") continue;
-			const list = byStatus.get(w.status);
+			const group = workGroup(w);
+			const list = byGroup.get(group);
 			if (list) {
 				list.push(w);
 			} else {
-				byStatus.set(w.status, [w]);
+				byGroup.set(group, [w]);
 			}
 		}
-		return statusGroupOrder
-			.filter((s) => byStatus.has(s))
-			.map((status) => ({
-				status,
-				stories:
-					status === "closed"
-						? [...(byStatus.get(status) as WorkListItem[])].sort((a, b) =>
-								b.updated_at.localeCompare(a.updated_at),
-							)
-						: (byStatus.get(status) as WorkListItem[]),
-			}));
+		return GROUP_ORDER.filter((g) => byGroup.has(g)).map((group) => ({
+			group,
+			stories:
+				group === "closed"
+					? [...(byGroup.get(group) as WorkListItem[])].sort((a, b) =>
+							b.updated_at.localeCompare(a.updated_at),
+						)
+					: (byGroup.get(group) as WorkListItem[]),
+		}));
 	}, [works]);
 
 	const hasStories = storyGroups.length > 0;
@@ -104,10 +95,10 @@ export default function WorkListOverlay({
 					</div>
 				) : (
 					<div className="space-y-2">
-						{storyGroups.map(({ status, stories }) => (
-							<StatusGroup
-								key={status}
-								status={status}
+						{storyGroups.map(({ group, stories }) => (
+							<WorkGroupSection
+								key={group}
+								group={group}
 								stories={stories}
 								tasksByParentId={tasksByParentId}
 								roleNameMap={roleNameMap}
@@ -122,10 +113,62 @@ export default function WorkListOverlay({
 	);
 }
 
-const statusGroupOrder: WorkStatus[] = ["active", "stopped", "open", "closed"];
+/**
+ * The five groups of the work list (docs/lifecycle-ui.md §6.1).
+ *
+ * Membership is `status` plus the single `needsUser` predicate, never the full
+ * activity: a list that regrouped on every phase change would reorder itself
+ * while being read. A work moving between *Needs you* and *Active* is the one
+ * movement worth that disruption, since it is the one the user is waiting for.
+ */
+type WorkGroup = "needs_you" | "active" | "stopped" | "open" | "closed";
 
-interface StatusGroupProps {
-	status: WorkStatus;
+/**
+ * "Needs you" first, where the status order used to put the running work: a
+ * list of work is a list of things to do, and the things needing a person come
+ * before the things running by themselves. `stopped` above `open` because a
+ * stopped work is something the user already started.
+ */
+const GROUP_ORDER: WorkGroup[] = [
+	"needs_you",
+	"active",
+	"stopped",
+	"open",
+	"closed",
+];
+
+const GROUP_LABEL: Record<WorkGroup, string> = {
+	needs_you: "Needs you",
+	active: "Active",
+	stopped: "Stopped",
+	open: "Open",
+	closed: "Closed",
+};
+
+/**
+ * The leaf each header borrows its glyph and tone from.
+ *
+ * A header glyph is fixed per group and never taken from the rows inside it:
+ * *Needs you* holds three different leaves, and a header wearing one of them
+ * would mislabel the other two. The rows keep their own precise leaf, which is
+ * where the distinction belongs — so these glyphs are drawn `decorative`, with
+ * the group's written label as the only thing announced.
+ */
+const GROUP_GLYPH: Record<WorkGroup, Activity> = {
+	needs_you: "needs_message",
+	active: "running",
+	stopped: "stopped",
+	open: "open",
+	closed: "closed",
+};
+
+function workGroup(work: WorkListItem): WorkGroup {
+	if (work.status !== "active") return work.status;
+	return needsUser(work.activity) ? "needs_you" : "active";
+}
+
+interface WorkGroupSectionProps {
+	group: WorkGroup;
 	stories: WorkListItem[];
 	tasksByParentId: Map<string, WorkListItem[]>;
 	roleNameMap: Map<string, string>;
@@ -133,15 +176,15 @@ interface StatusGroupProps {
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }
 
-function StatusGroup({
-	status,
+function WorkGroupSection({
+	group,
 	stories,
 	tasksByParentId,
 	roleNameMap,
 	onOpenWorkDetail,
 	onNavigateToSession,
-}: StatusGroupProps) {
-	const [collapsed, setCollapsed] = useState(status === "closed");
+}: WorkGroupSectionProps) {
+	const [collapsed, setCollapsed] = useState(group === "closed");
 
 	return (
 		<div>
@@ -156,8 +199,8 @@ function StatusGroup({
 				) : (
 					<ChevronDown className="size-3.5 shrink-0" />
 				)}
-				<StatusIcon status={status} />
-				<span className="flex-1 text-left">{statusLabels[status]}</span>
+				<ActivityIcon activity={GROUP_GLYPH[group]} decorative />
+				<span className="flex-1 text-left">{GROUP_LABEL[group]}</span>
 				<span className="rounded-full bg-th-bg-tertiary px-1.5 py-0.5 text-xs tabular-nums text-th-text-muted">
 					{stories.length}
 				</span>
@@ -180,9 +223,6 @@ function StatusGroup({
 	);
 }
 
-const TASK_LIST_COLLAPSIBLE_STATUS: WorkStatus = "closed";
-const COMPLETED_TASK_STATUSES: ReadonlySet<WorkStatus> = new Set(["closed"]);
-
 function StoryRow({
 	story,
 	tasks,
@@ -198,13 +238,12 @@ function StoryRow({
 }) {
 	const storySessionId = story.session_id;
 	const totalTasks = tasks?.length ?? 0;
-	const closedTasks =
-		tasks?.filter((t) => COMPLETED_TASK_STATUSES.has(t.status)).length ?? 0;
+	const closedTasks = tasks?.filter((t) => t.status === "closed").length ?? 0;
 	const roleName = story.agent_role_id
 		? (roleNameMap.get(story.agent_role_id) ?? null)
 		: null;
 	const hasTasks = totalTasks > 0;
-	const isTaskListCollapsible = story.status === TASK_LIST_COLLAPSIBLE_STATUS;
+	const isTaskListCollapsible = story.status === "closed";
 	const [tasksExpanded, setTasksExpanded] = useState(
 		() => !isTaskListCollapsible,
 	);
@@ -242,12 +281,14 @@ function StoryRow({
 				) : (
 					<div className="min-h-[44px] min-w-[44px] shrink-0" />
 				)}
-				<StatusIcon status={story.status} />
+				{/* Decorative: the title button below names the leaf in the same
+				    breath, and a glyph repeating it announces the row twice. */}
+				<ActivityIcon activity={story.activity} decorative />
 				<button
 					type="button"
 					onClick={() => onOpenWorkDetail(story.id)}
 					className="ml-2 min-w-0 flex-1 truncate text-left text-sm text-th-text-primary hover:text-th-accent"
-					aria-label={`${story.title} — ${statusLabels[story.status]}`}
+					aria-label={`${story.title} — ${ACTIVITY_VIEW[story.activity].label}`}
 				>
 					{story.title}
 				</button>
@@ -285,9 +326,10 @@ function StoryRow({
 						</button>
 					</>
 				)}
-				{(story.status === "open" || story.status === "stopped") && (
-					<StartButton workId={story.id} />
-				)}
+				<WorkPrimaryAction
+					work={story}
+					activeChildCount={countActiveChildren(tasks ?? [])}
+				/>
 			</div>
 
 			{/* Task list — collapsible */}
@@ -324,14 +366,17 @@ function TaskRow({
 		? (roleNameMap.get(task.agent_role_id) ?? null)
 		: null;
 
-	const isNeedsInput = task.wait === "user";
+	// The bar keys off the leaves, not off one of the fields behind them: warning
+	// for any of the three ways a task can be waiting on the user, error for a
+	// task the engine has let go of (docs/lifecycle-ui.md §6.1).
+	const isNeedsUser = needsUser(task.activity);
 	const isStopped = task.status === "stopped";
 
 	return (
 		<div
-			className={`flex min-h-[36px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsInput ? "border-l-2 border-th-warning bg-th-warning/5" : isStopped ? "border-l-2 border-th-error bg-th-error/5" : ""}`}
+			className={`flex min-h-[36px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsUser ? "border-l-2 border-th-warning bg-th-warning/5" : isStopped ? "border-l-2 border-th-error bg-th-error/5" : ""}`}
 		>
-			<StatusIcon status={task.status} size="sm" />
+			<ActivityIcon activity={task.activity} size="sm" />
 			<button
 				type="button"
 				onClick={() => onOpenWorkDetail(task.id)}
@@ -353,75 +398,7 @@ function TaskRow({
 					Chat
 				</button>
 			)}
-			{((task.status === "open" && !taskSessionId) ||
-				task.status === "stopped") && <StartButton workId={task.id} iconOnly />}
+			<WorkPrimaryAction work={task} iconOnly />
 		</div>
-	);
-}
-
-export function StartButton({
-	workId,
-	iconOnly,
-}: {
-	workId: string;
-	iconOnly?: boolean;
-}) {
-	const startWork = useWSStore((s) => s.actions.startWork);
-	const [isStarting, setIsStarting] = useState(false);
-	const startingRef = useRef(false);
-	const [error, setError] = useState<string | null>(null);
-
-	const handleStart = useCallback(
-		async (e: React.MouseEvent) => {
-			e.stopPropagation();
-			if (startingRef.current) return;
-			startingRef.current = true;
-			setError(null);
-			setIsStarting(true);
-			try {
-				await startWork(workId);
-			} catch (err) {
-				setError(err instanceof Error ? err.message : "Failed to start");
-			} finally {
-				startingRef.current = false;
-				setIsStarting(false);
-			}
-		},
-		[startWork, workId],
-	);
-
-	if (iconOnly) {
-		return (
-			<button
-				type="button"
-				onClick={handleStart}
-				disabled={isStarting}
-				className={`flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center disabled:opacity-50 ${error ? "text-th-error" : "text-th-accent"}`}
-				aria-label={error ?? "Start"}
-			>
-				{isStarting ? (
-					<Loader2 className="size-3.5 animate-spin" />
-				) : (
-					<Play className="size-3.5" />
-				)}
-			</button>
-		);
-	}
-
-	return (
-		<button
-			type="button"
-			onClick={handleStart}
-			disabled={isStarting}
-			className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs disabled:opacity-50 ${error ? "border border-th-error bg-th-error/10" : "border border-th-accent bg-th-accent/10"} text-th-text-primary`}
-			aria-label={error ?? undefined}
-		>
-			{isStarting ? (
-				<Loader2 className="size-3 animate-spin" />
-			) : (
-				<Play className="size-3" />
-			)}
-			{error ? "Error" : "Start"}
-		</button>
 	);
 }

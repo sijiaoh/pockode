@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Activity } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import type { AgentRole } from "../../types/agentRole";
@@ -22,10 +23,6 @@ vi.mock("./CreateWorkForm", () => ({
 	default: () => <div data-testid="create-work-form" />,
 }));
 
-vi.mock("./WorkListOverlay", () => ({
-	StartButton: () => <button type="button">Start</button>,
-}));
-
 vi.mock("../Worktree", () => ({
 	WorktreeBadge: () => null,
 }));
@@ -36,7 +33,6 @@ const createWork = (overrides: Partial<Work> = {}): Work => ({
 	title: "Story",
 	body: "Work description",
 	status: "active",
-	activity: "idle",
 	agent_role_id: "role-1",
 	current_step: 0,
 	created_at: "2026-03-04T00:00:00Z",
@@ -60,9 +56,10 @@ function expectToAppearBefore(first: Node, second: Node) {
 	).toBeTruthy();
 }
 
-const renderWithWork = (work: Work) => {
+const renderWithWork = (work: Work, activity: Activity = "idle") => {
 	mockUseWorkDetailSubscription.mockReturnValue({
 		work,
+		activity,
 		comments: [],
 		loading: false,
 		error: null,
@@ -125,6 +122,7 @@ describe("WorkDetailOverlay", () => {
 	it("renders sections in the expected order", () => {
 		mockUseWorkDetailSubscription.mockReturnValue({
 			work: createWork(),
+			activity: "idle",
 			comments: [],
 			loading: false,
 			error: null,
@@ -177,6 +175,7 @@ describe("WorkDetailOverlay", () => {
 		});
 		mockUseWorkDetailSubscription.mockReturnValue({
 			work: createWork(),
+			activity: "idle",
 			comments: [],
 			loading: false,
 			error: null,
@@ -204,6 +203,7 @@ describe("WorkDetailOverlay", () => {
 	it("puts the usage the subscription carries between steps and tasks", () => {
 		mockUseWorkDetailSubscription.mockReturnValue({
 			work: createWork(),
+			activity: "idle",
 			comments: [],
 			usage: {
 				own: {
@@ -245,6 +245,7 @@ describe("WorkDetailOverlay", () => {
 	it("keeps steps below the empty description placeholder", () => {
 		mockUseWorkDetailSubscription.mockReturnValue({
 			work: createWork({ body: undefined }),
+			activity: "idle",
 			comments: [],
 			loading: false,
 			error: null,
@@ -271,6 +272,7 @@ describe("WorkDetailOverlay", () => {
 		const user = userEvent.setup();
 		mockUseWorkDetailSubscription.mockReturnValue({
 			work: createWork(),
+			activity: "idle",
 			comments: [],
 			loading: false,
 			error: null,

@@ -61,8 +61,13 @@ export interface WorkListItem {
  * `work.create` / `work.start` answer, the two calls that speak for the single
  * item they acted on. Extending the row is what keeps the two in step: a field
  * added here stays out of the list until someone puts it there deliberately.
+ *
+ * `activity` is the one field of the row this is *not*: it is derived from the
+ * turn of the work's session, which the stored record knows nothing about, so
+ * it rides beside the item on the detail result the way usage does — and the
+ * three calls answering with a bare item do not carry it at all.
  */
-export interface Work extends WorkListItem {
+export interface Work extends Omit<WorkListItem, "activity"> {
 	body?: string;
 	current_step?: number;
 	/**

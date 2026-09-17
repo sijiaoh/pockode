@@ -286,8 +286,8 @@ full-strength accent still holds WCAG's non-text 3:1 against its own composite,
 and at `/30` it does not. The border is doing the work the fill cannot — a tint
 this light is barely a shade away from the page, so "the background carries the
 emphasis" was never true in the light variants. `common/ToggleChip.tsx` and
-`Project/StepList.tsx` are the shape to copy. `ui/StatusBadge.tsx` writes it
-for every status rather than for the accent ones alone, so one row of badges
+`Project/StepList.tsx` are the shape to copy. `ui/ActivityBadge.tsx` writes it
+for every tone rather than for the accent ones alone, so one row of badges
 keeps one shape — though the warning tone still reads faint wherever it is used:
 `th-warning` is too pale in the light variants to clear even the non-text floor
 as a border, a token-layer fault it carries in every role it takes, and not one

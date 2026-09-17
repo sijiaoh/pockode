@@ -46,10 +46,16 @@ interface ActivityView {
 	Icon: LucideIcon;
 	tone: ActivityTone;
 	/**
-	 * What the glyph says when it stands alone, which is every surface that
-	 * paints an activity today. The written label the design pairs with these —
-	 * "Running", "Needs answer" — arrives with the badge that has room for it,
-	 * which is a work surface.
+	 * The state in words, for a surface with room to write it: the badge on the
+	 * work detail, and the `aria-label` of a row that names its work in the same
+	 * breath ("Fix the parser — Needs answer").
+	 */
+	label: string;
+	/**
+	 * What the glyph says when it stands alone, which is every surface that has
+	 * no room for the label. It is a sentence rather than the label because a
+	 * glyph on its own has to say who is waiting for whom — "Waiting for your
+	 * answer", not "Needs answer".
 	 */
 	ariaLabel: string;
 }
@@ -69,46 +75,54 @@ interface ActivityView {
  * state read on purpose.
  */
 export const ACTIVITY_VIEW: Record<Activity, ActivityView> = {
-	open: { Icon: Circle, tone: "muted", ariaLabel: "Open" },
+	open: { Icon: Circle, tone: "muted", label: "Open", ariaLabel: "Open" },
 	running: {
 		Icon: CircleDot,
 		tone: "accent",
+		label: "Running",
 		ariaLabel: "Agent is running",
 	},
 	needs_answer: {
 		Icon: CircleHelp,
 		tone: "warning",
+		label: "Needs answer",
 		ariaLabel: "Waiting for your answer",
 	},
 	needs_permission: {
 		Icon: Lock,
 		tone: "warning",
+		label: "Needs permission",
 		ariaLabel: "Waiting for your permission",
 	},
 	needs_message: {
 		Icon: CirclePause,
 		tone: "warning",
+		label: "Needs input",
 		ariaLabel: "Waiting for your message",
 	},
 	background: {
 		Icon: Hourglass,
 		tone: "secondary",
+		label: "Background task",
 		ariaLabel: "Waiting on a background task",
 	},
 	waiting_children: {
 		Icon: Clock,
 		tone: "accent",
+		label: "Waiting on subtasks",
 		ariaLabel: "Waiting on subtasks",
 	},
-	idle: { Icon: CircleDot, tone: "muted", ariaLabel: "Idle" },
+	idle: { Icon: CircleDot, tone: "muted", label: "Idle", ariaLabel: "Idle" },
 	stopped: {
 		Icon: CircleStop,
 		tone: "error",
+		label: "Stopped",
 		ariaLabel: "Stopped",
 	},
 	closed: {
 		Icon: CircleCheck,
 		tone: "muted",
+		label: "Closed",
 		ariaLabel: "Closed",
 	},
 };

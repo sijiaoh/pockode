@@ -162,6 +162,111 @@ describe("WorkListOverlay", () => {
 		).toBeTruthy();
 	});
 
+	// Five groups, and the one with something for the user to do comes first
+	// (docs/lifecycle-ui.md §6.1).
+	it("puts a story waiting on the user in its own group, above the rest", () => {
+		useWorkStore.setState({
+			works: [
+				createWork({
+					id: "running",
+					title: "Running Story",
+					status: "active",
+					activity: "running",
+				}),
+				createWork({
+					id: "asking",
+					title: "Asking Story",
+					status: "active",
+					activity: "needs_answer",
+				}),
+			],
+			isLoading: false,
+			error: null,
+		});
+
+		render(
+			<WorkListOverlay
+				onBack={vi.fn()}
+				onOpenWorkDetail={vi.fn()}
+				onNavigateToSession={vi.fn()}
+			/>,
+		);
+
+		const needsYou = screen.getByRole("button", { name: /Needs you/ });
+		const active = screen.getByRole("button", { name: /^Active/ });
+		expect(
+			needsYou.compareDocumentPosition(active) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /Asking Story/ }),
+		).toBeInTheDocument();
+	});
+
+	// Grouping reads `status` plus the single needsUser predicate, never the full
+	// activity: a list that regrouped on every phase change would reorder itself
+	// while being read.
+	it("keeps an active work in one group whatever its turn is doing", () => {
+		useWorkStore.setState({
+			works: [
+				createWork({
+					id: "waiting-on-a-machine",
+					title: "Background Story",
+					status: "active",
+					activity: "background",
+				}),
+				createWork({
+					id: "waiting-on-tasks",
+					title: "Coordinating Story",
+					status: "active",
+					activity: "waiting_children",
+				}),
+			],
+			isLoading: false,
+			error: null,
+		});
+
+		render(
+			<WorkListOverlay
+				onBack={vi.fn()}
+				onOpenWorkDetail={vi.fn()}
+				onNavigateToSession={vi.fn()}
+			/>,
+		);
+
+		expect(
+			screen.queryByRole("button", { name: /Needs you/ }),
+		).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /^Active/ })).toBeInTheDocument();
+	});
+
+	it("names the leaf a row is on, not the status behind it", () => {
+		useWorkStore.setState({
+			works: [
+				createWork({
+					id: "asking",
+					title: "Asking Story",
+					status: "active",
+					activity: "needs_permission",
+				}),
+			],
+			isLoading: false,
+			error: null,
+		});
+
+		render(
+			<WorkListOverlay
+				onBack={vi.fn()}
+				onOpenWorkDetail={vi.fn()}
+				onNavigateToSession={vi.fn()}
+			/>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "Asking Story — Needs permission" }),
+		).toBeInTheDocument();
+	});
+
 	it("keeps tasks collapsed by default for closed stories and allows expanding", async () => {
 		const user = userEvent.setup();
 

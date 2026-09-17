@@ -682,29 +682,29 @@ controls are what they will land on:
 | `web/src/hooks/useChatMessages.ts` | `isProcessRunning` bookkeeping replaced by §2.4 |
 | `web/src/components/Project/WorkListOverlay.tsx` | five groups, `ActivityIcon`, Restart in the row |
 | `web/src/components/Project/WorkDetailOverlay.tsx` | `ActivityBadge`, wait line, four-status button table |
+| `web/src/components/Project/WorkPrimaryAction.tsx` | new — the four-status table and the Stop confirmation, shared by the row and the action bar |
 | `web/src/components/Project/StepList.tsx` | §6.3 |
 | `web/src/components/Project/ProjectTab.tsx` | dot from `needsUser` |
 | `web/src/types/{message,work}.ts` | `turn`; `status` / `activity` / `wait` / `wait_reason` |
 
-### What has landed, and what the work-layer step left for the next one
+### What has landed
 
-The work layer now sends everything this document asks for: the row and the
-detail carry `activity` and `wait`, the detail carries `wait_reason`, and
-`status` is the four-value enum §3's button table is written against. `StepList`
-(§6.3) and the Stop rule ("shown for every `active` work") are in.
+The work surfaces are on this vocabulary now. Rows, group headers and the detail
+heading all read an `Activity` and nothing else; `StatusIcon.tsx` and
+`StatusBadge.tsx` are gone, the list has the five groups of §6.1, and
+`ACTIVITY_VIEW` carries the `label` the badge and the rows' `aria-label` write.
+Which buttons exist is `primaryAction(status)` in
+`web/src/components/Project/WorkPrimaryAction.tsx` — one table, one
+implementation, used by the icon-only button on a row and by the detail page's
+action bar alike — while the Stop confirmation reads the activity, which is the
+one place §3 allows it to.
 
-§6.2's wait line is in as well — the agent's own `wait_reason`, verbatim, under
-the badges — because it is the one thing in this document the user could not read
-*anywhere* before, and it needed no new component to show.
+The detail's activity rides beside the item rather than on it
+(`useWorkDetailSubscription`), because it is derived from the turn of the work's
+session and the stored record knows nothing about it. That is also why `Work` is
+`Omit<WorkListItem, "activity">`: the three calls that answer with a bare item —
+`work.create`, `work.start`, `work.detail` — do not carry one.
 
-Three things are deliberately still on the old vocabulary, because they are the
-*drawing* half and belong to the front-end step:
-
-- `StatusIcon` / `StatusBadge` still key off `status`, so a work waiting on the
-  user is drawn exactly like one simply running. §1.4's `ActivityIcon` /
-  `ActivityBadge` / `ActivityDot` — and deleting those two files — is what closes
-  that.
-- The work list has **four** status groups, not §6.1's five: *Needs you* needs
-  `needsUser(activity)`, which is the same step.
-- `ACTIVITY_VIEW` still has no `label`, for the reason recorded in §1.4: nothing
-  renders one yet, and a written label with no reader is dead code.
+What is still on the old vocabulary is the chat half of this document: the
+blocker strip (§2.2), the expired cards (§5) and the `reason` field they read
+are the question-timeout work, and §5 already says which of them wait on it.
