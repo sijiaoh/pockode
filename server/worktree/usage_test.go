@@ -83,7 +83,7 @@ func (l *recordingSessionListener) count() int {
 	return len(l.changed)
 }
 
-// Worktrees are built lazily by whoever needs one first, and AutoResumer resolves
+// Worktrees are built lazily by whoever needs one first, and the work engine resolves
 // senders for the work it restarts while the server is still wiring itself up —
 // so a worktree can already exist when the listener is registered. Missing it
 // would freeze that worktree's work usage for the whole process, silently.
@@ -98,7 +98,7 @@ func TestManagerSetSessionChangeListenerReachesExistingWorktrees(t *testing.T) {
 	m.worktrees[""] = &Worktree{Name: "", SessionStore: store}
 
 	listener := &recordingSessionListener{}
-	m.SetSessionChangeListener(listener)
+	m.AddSessionChangeListener(listener)
 
 	if _, err := store.Create(ctx, "sess-1", session.CreateSpec{}); err != nil {
 		t.Fatalf("Create: %v", err)

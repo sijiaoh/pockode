@@ -79,7 +79,7 @@ func TestHandler_WorktreeDelete_AllowedWhenWorkClosed(t *testing.T) {
 
 	w := createWorktreeWork(t, env, "feature", "Finished work")
 
-	// Drive the work to closed: open → in_progress → closed (no steps).
+	// Drive the work to closed: open → active → closed (no steps).
 	if _, err := env.workStore.Start(bgCtx, w.ID, "sess-1"); err != nil {
 		t.Fatalf("start work: %v", err)
 	}

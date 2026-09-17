@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
@@ -80,8 +81,8 @@ func (m *mockSessionStore) SetEffort(ctx context.Context, sessionID string, effo
 	return nil
 }
 
-func (m *mockSessionStore) SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error {
-	return nil
+func (m *mockSessionStore) ApplyTurn(ctx context.Context, sessionID string, in session.TurnInput) (session.TurnTransition, error) {
+	return session.TurnTransition{}, nil
 }
 
 func (m *mockSessionStore) SetUnread(ctx context.Context, sessionID string, unread bool) error {
@@ -114,12 +115,6 @@ func (m *mockSessionStoreWithError) List() ([]session.SessionMeta, error) {
 	return nil, m.err
 }
 
-type mockProcessStateGetter struct{}
-
-func (m *mockProcessStateGetter) GetProcessState(sessionID string) string {
-	return "ended"
-}
-
 func TestSessionListWatcher_Subscribe(t *testing.T) {
 	store := &mockSessionStore{
 		sessions: []session.SessionMeta{
@@ -128,7 +123,6 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 		},
 	}
 	w := NewSessionListWatcher(store)
-	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	sessions, err := w.Subscribe("client-1", nil)
 	if err != nil {
@@ -139,10 +133,11 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 		t.Errorf("expected 2 sessions, got %d", len(sessions))
 	}
 
-	// Verify sessions are enriched with state
+	// A row carries the session's own turn, which a session nothing has run in
+	// is the zero value of.
 	for _, s := range sessions {
-		if s.State != "ended" {
-			t.Errorf("expected state 'ended', got %q", s.State)
+		if s.Turn.Phase != "" || s.Turn.Open {
+			t.Errorf("expected an untouched turn, got %+v", s.Turn)
 		}
 	}
 
@@ -154,7 +149,6 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 func TestSessionListWatcher_Unsubscribe(t *testing.T) {
 	store := &mockSessionStore{}
 	w := NewSessionListWatcher(store)
-	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	w.Subscribe("client-1", nil)
 
@@ -205,7 +199,6 @@ func TestSessionListWatcher_OnSessionChange_AfterStop(t *testing.T) {
 func TestSessionListWatcher_Subscribe_ListError(t *testing.T) {
 	store := &mockSessionStoreWithError{err: errors.New("list failed")}
 	w := NewSessionListWatcher(store)
-	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	_, err := w.Subscribe("client-1", nil)
 	if err == nil {
@@ -228,135 +221,62 @@ func TestSessionListWatcher_HandleProcessStateChange_NoSubscribers(t *testing.T)
 	})
 }
 
+// recordingSessionStore notices any metadata write the watcher makes. Whether a
+// session is waiting on the user is not one of them any more — it is derived
+// from the turn state the process wrote — so what this catches is the watcher
+// growing a write it should not have.
 type recordingSessionStore struct {
 	mockSessionStore
-	needsInputCalls []needsInputCall
+	turnInputs  []session.TurnInput
+	unreadCalls int
 }
 
-type needsInputCall struct {
-	SessionID  string
-	NeedsInput bool
-}
-
-func (r *recordingSessionStore) SetNeedsInput(_ context.Context, sessionID string, needsInput bool) error {
-	r.needsInputCalls = append(r.needsInputCalls, needsInputCall{SessionID: sessionID, NeedsInput: needsInput})
+func (r *recordingSessionStore) SetUnread(context.Context, string, bool) error {
+	r.unreadCalls++
 	return nil
 }
 
-type recordingSyncer struct {
-	promptsRaised []string
-	userActions   []string
+func (r *recordingSessionStore) ApplyTurn(_ context.Context, _ string, in session.TurnInput) (session.TurnTransition, error) {
+	r.turnInputs = append(r.turnInputs, in)
+	return session.TurnTransition{}, nil
 }
 
-func (r *recordingSyncer) HandlePromptRaised(_ context.Context, sessionID string) {
-	r.promptsRaised = append(r.promptsRaised, sessionID)
-}
-
-func (r *recordingSyncer) HandleUserAction(_ context.Context, sessionID string) {
-	r.userActions = append(r.userActions, sessionID)
-}
-
-func (r *recordingSyncer) callCount() int {
-	return len(r.promptsRaised) + len(r.userActions)
-}
-
-func TestHandleProcessStateChange_IdleNeedsInput_SyncsWork(t *testing.T) {
-	store := &mockSessionStore{}
-	w := NewSessionListWatcher(store)
-	syncer := &recordingSyncer{}
-	w.SetWorkStatusSyncer(syncer)
-
-	w.HandleProcessStateChange(process.StateChangeEvent{
-		SessionID:  "sess-1",
-		State:      process.ProcessStateIdle,
-		NeedsInput: true,
-	})
-
-	if len(syncer.promptsRaised) != 1 || syncer.promptsRaised[0] != "sess-1" {
-		t.Fatalf("expected one prompt-raised call for sess-1, got %v", syncer.promptsRaised)
-	}
-	if len(syncer.userActions) != 0 {
-		t.Errorf("expected no user-action calls, got %v", syncer.userActions)
-	}
-}
-
-func TestHandleProcessStateChange_IdleNoNeedsInput_NoSync(t *testing.T) {
-	store := &mockSessionStore{}
-	w := NewSessionListWatcher(store)
-	syncer := &recordingSyncer{}
-	w.SetWorkStatusSyncer(syncer)
-
-	w.HandleProcessStateChange(process.StateChangeEvent{
-		SessionID:  "sess-1",
-		State:      process.ProcessStateIdle,
-		NeedsInput: false,
-	})
-
-	if syncer.callCount() != 0 {
-		t.Errorf("expected no sync calls for idle without needsInput, got %d", syncer.callCount())
-	}
-}
-
-func TestHandleProcessStateChange_Running_KeepsNeedsInput(t *testing.T) {
+// The work layer is not touched from here at all any more: the engine hears a
+// settled turn ending, which is the only thing about a session it acts on.
+// These two lock that down from the two sides it used to be wrong on.
+func TestHandleProcessStateChange_MarksUnreadAndNothingElse(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
-	syncer := &recordingSyncer{}
-	w.SetWorkStatusSyncer(syncer)
 
 	w.HandleProcessStateChange(process.StateChangeEvent{
 		SessionID: "sess-1",
-		State:     process.ProcessStateRunning,
+		State:     process.ProcessStateIdle,
 	})
 
-	// Running should NOT clear needs_input — that is done by user events via HandleUserAction.
-	if len(store.needsInputCalls) != 0 {
-		t.Errorf("expected no SetNeedsInput calls on Running, got %d", len(store.needsInputCalls))
+	if store.unreadCalls != 1 {
+		t.Errorf("marked unread %d times, want once", store.unreadCalls)
 	}
-	if syncer.callCount() != 0 {
-		t.Errorf("expected no sync calls on Running, got %d", syncer.callCount())
+	if len(store.turnInputs) != 0 {
+		t.Errorf("the watcher must not write turn state; the process owns it, got %v", store.turnInputs)
 	}
 }
 
-// A dead process clears the session's own flag but must not touch the work item.
-// HandleUserAction moves needs_input and waiting back to in_progress, and the
-// AutoResumer's process-ended stop — which runs a moment later on the same
-// event — stops in_progress work. Calling the syncer here chains the two
-// together, so every paused work ends up stopped as soon as its process dies,
-// which the idle reaper guarantees it eventually will.
-func TestHandleProcessStateChange_Ended_ClearsSessionFlagButNotTheWork(t *testing.T) {
-	store := &recordingSessionStore{}
-	w := NewSessionListWatcher(store)
-	syncer := &recordingSyncer{}
-	w.SetWorkStatusSyncer(syncer)
+func TestHandleProcessStateChange_RunningAndEndedTouchNothing(t *testing.T) {
+	for _, state := range []process.ProcessState{process.ProcessStateRunning, process.ProcessStateEnded} {
+		t.Run(string(state), func(t *testing.T) {
+			store := &recordingSessionStore{}
+			w := NewSessionListWatcher(store)
 
-	w.HandleProcessStateChange(process.StateChangeEvent{
-		SessionID: "sess-1",
-		State:     process.ProcessStateEnded,
-	})
+			w.HandleProcessStateChange(process.StateChangeEvent{SessionID: "sess-1", State: state})
 
-	// NeedsInput must be cleared in the store
-	if len(store.needsInputCalls) != 1 {
-		t.Fatalf("expected 1 SetNeedsInput call, got %d", len(store.needsInputCalls))
+			if len(store.turnInputs) != 0 {
+				t.Errorf("the watcher must not write turn state, got %v", store.turnInputs)
+			}
+			if store.unreadCalls != 0 {
+				t.Errorf("only an idle process marks a session unread, got %d calls", store.unreadCalls)
+			}
+		})
 	}
-	if store.needsInputCalls[0].SessionID != "sess-1" || store.needsInputCalls[0].NeedsInput {
-		t.Errorf("expected SetNeedsInput(sess-1, false), got %+v", store.needsInputCalls[0])
-	}
-
-	if syncer.callCount() != 0 {
-		t.Errorf("a dead process must not touch its work item, got %d sync calls", syncer.callCount())
-	}
-}
-
-func TestHandleProcessStateChange_NoSyncer_NoPanic(t *testing.T) {
-	store := &mockSessionStore{}
-	w := NewSessionListWatcher(store)
-
-	// No syncer set — should not panic
-	w.HandleProcessStateChange(process.StateChangeEvent{
-		SessionID:  "sess-1",
-		State:      process.ProcessStateIdle,
-		NeedsInput: true,
-	})
 }
 
 func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
@@ -372,7 +292,6 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 		eventCh:     make(chan session.SessionChangeEvent, 1),
 	}
 	store.AddOnChangeListener(w)
-	w.SetProcessStateGetter(&mockProcessStateGetter{})
 
 	notifier := &captureNotifier{}
 	w.Subscribe("client-1", notifier)
@@ -408,37 +327,71 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 	}
 }
 
-func TestHandleUserAction_ClearsStoreAndResumesWork(t *testing.T) {
-	store := &recordingSessionStore{}
+// The row's whole state is the session's turn, and the process writes that to
+// the store before it sends this event — so the store's own change notification
+// is what carries it. The push that used to sit at the end of this handler was
+// for the volatile process state a row no longer has, and a second push of the
+// same row is a second answer to "what is this session doing" arriving in an
+// order nobody controls.
+func TestHandleProcessStateChange_PushesNoRowOfItsOwn(t *testing.T) {
+	store := &mockSessionStore{
+		sessions: []session.SessionMeta{{ID: "sess-1", Title: "Session 1"}},
+	}
 	w := NewSessionListWatcher(store)
-	syncer := &recordingSyncer{}
-	w.SetWorkStatusSyncer(syncer)
-
-	w.HandleUserAction("sess-1")
-
-	if len(store.needsInputCalls) != 1 {
-		t.Fatalf("expected 1 SetNeedsInput call, got %d", len(store.needsInputCalls))
-	}
-	if store.needsInputCalls[0].SessionID != "sess-1" || store.needsInputCalls[0].NeedsInput {
-		t.Errorf("expected SetNeedsInput(sess-1, false), got %+v", store.needsInputCalls[0])
+	notifier := &captureNotifier{}
+	if _, err := w.Subscribe("client-1", notifier); err != nil {
+		t.Fatalf("subscribe: %v", err)
 	}
 
-	if len(syncer.userActions) != 1 || syncer.userActions[0] != "sess-1" {
-		t.Fatalf("expected one user-action call for sess-1, got %v", syncer.userActions)
-	}
-	if len(syncer.promptsRaised) != 0 {
-		t.Errorf("expected no prompt-raised calls, got %v", syncer.promptsRaised)
+	w.HandleProcessStateChange(process.StateChangeEvent{
+		SessionID: "sess-1",
+		State:     process.ProcessStateRunning,
+	})
+
+	if notifier.count() != 0 {
+		t.Errorf("expected no notification, got %d: %s", notifier.count(), notifier.last())
 	}
 }
 
-func TestHandleUserAction_NoSyncer_NoPanic(t *testing.T) {
-	store := &recordingSessionStore{}
+// The other half of the same rule: the store's notification is what reaches the
+// client, and the row it carries holds the turn the process just wrote.
+func TestSessionListWatcher_RowCarriesTheStoredTurn(t *testing.T) {
+	raised := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	blocked := session.SessionMeta{
+		ID:    "sess-1",
+		Title: "Session 1",
+		Turn: session.TurnState{
+			Phase:    session.PhaseBlocked,
+			Open:     true,
+			Blockers: []session.Blocker{{Kind: session.BlockerQuestion, RequestID: "req-1", RaisedAt: raised}},
+			Since:    raised,
+		},
+	}
+	store := &mockSessionStore{sessions: []session.SessionMeta{blocked}}
 	w := NewSessionListWatcher(store)
+	notifier := &captureNotifier{}
+	if _, err := w.Subscribe("client-1", notifier); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	w.Start()
+	defer w.Stop()
 
-	// No syncer set — should not panic
-	w.HandleUserAction("sess-1")
+	w.OnSessionChange(session.SessionChangeEvent{Op: session.OperationUpdate, Session: blocked})
 
-	if len(store.needsInputCalls) != 1 {
-		t.Fatalf("expected 1 SetNeedsInput call, got %d", len(store.needsInputCalls))
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+
+	var params sessionListChangedParams
+	if err := json.Unmarshal(notifier.last(), &params); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if params.Session == nil {
+		t.Fatal("expected a row on an update notification")
+	}
+	if params.Session.Turn.Phase != session.PhaseBlocked {
+		t.Errorf("row turn phase = %q, want blocked", params.Session.Turn.Phase)
+	}
+	if len(params.Session.Turn.Blockers) != 1 ||
+		params.Session.Turn.Blockers[0].RequestID != "req-1" {
+		t.Errorf("row lost the blocker the card is answered through: %+v", params.Session.Turn)
 	}
 }

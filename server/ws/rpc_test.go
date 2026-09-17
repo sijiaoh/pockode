@@ -19,7 +19,6 @@ import (
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/internal/unwritabletest"
-	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -139,17 +138,21 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	}
 
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, mockRegistry(ag), dataDir, 10*time.Minute)
+	worktreeManager := worktree.NewManager(registry, mockRegistry(ag), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
 	// Wired as main.go wires it, so that the env shows the real consequence of a
 	// user action on a session — and of the entry points that deliberately are
-	// not one. Without it the syncer is nil and any such assertion passes for the
-	// wrong reason.
-	worktreeManager.SetWorkStatusSyncer(work.NewStatusSyncer(workStore))
+	// not one. Without the engine any such assertion passes for the wrong reason.
+	workEngine := work.NewEngine(workStore, work.DefaultMaxNudges)
+	workEngine.SetSessionTerminator(worktreeManager)
+	workStore.AddOnChangeListener(workEngine)
+	worktreeManager.SetWorkEngine(workEngine)
+	worktreeManager.AddSessionChangeListener(workEngine)
+	t.Cleanup(workEngine.Stop)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
-	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
-	workOps := work.NewOperations(workStore, workStarter, nil)
+	workOps := work.NewOperations(workStore, workStarter, workEngine, agentrole.Steps{Store: agentRoleStore})
+	workOps.SetSessionDeleter(worktreeManager)
 
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -389,11 +392,9 @@ func (e *testEnv) skipN(n int) {
 	}
 }
 
-// startWorkWithStatus starts a story, leaves its work in status and returns the
-// session the work is bound to. Callers read the work's status right after the
-// RPC under test replies: every transition it can cause runs inline in the
-// handler, so nothing has to settle for the assertion to be decisive.
-func startWorkWithStatus(t *testing.T, env *testEnv, status work.WorkStatus) (workID, sessionID string) {
+// startWorkWaiting starts a story, parks its work on the given wait and returns
+// the session the work is bound to. WaitNone leaves it simply active.
+func startWorkWaiting(t *testing.T, env *testEnv, wait work.WorkWait) (workID, sessionID string) {
 	t.Helper()
 
 	storyResp := env.call("work.create", rpc.WorkCreateParams{
@@ -415,19 +416,10 @@ func startWorkWithStatus(t *testing.T, env *testEnv, status work.WorkStatus) (wo
 		t.Fatal("expected a session after start")
 	}
 
-	var err error
-	switch status {
-	case work.StatusNeedsInput:
-		err = env.workStore.MarkNeedsInput(bgCtx, story.ID)
-	case work.StatusWaiting:
-		err = env.workStore.MarkWaiting(bgCtx, story.ID)
-	case work.StatusInProgress:
-		// work.start already left it there.
-	default:
-		t.Fatalf("unsupported status %q", status)
-	}
-	if err != nil {
-		t.Fatal(err)
+	if wait != work.WaitNone {
+		if err := env.workStore.SetWait(bgCtx, story.ID, wait, "because"); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	return story.ID, started.SessionID
@@ -436,13 +428,75 @@ func startWorkWithStatus(t *testing.T, env *testEnv, status work.WorkStatus) (wo
 func requireWorkStatus(t *testing.T, env *testEnv, workID string, want work.WorkStatus, why string) {
 	t.Helper()
 
+	w := getWorkOrFail(t, env, workID)
+	if w.Status != want {
+		t.Errorf("status = %q, want %q — %s", w.Status, want, why)
+	}
+}
+
+func requireWorkWait(t *testing.T, env *testEnv, workID string, want work.WorkWait, why string) {
+	t.Helper()
+
+	w := getWorkOrFail(t, env, workID)
+	if w.Wait != want {
+		t.Errorf("wait = %q, want %q — %s", w.Wait, want, why)
+	}
+}
+
+// raisePrompt makes a session genuinely blocked on requestID and waits until the
+// turn says so, which is what an answer is checked against. Returns once the
+// blocker is listed, so the answer that follows cannot race the event that
+// raised it.
+func raisePrompt(t *testing.T, env *testEnv, sessionID, requestID string, event agent.AgentEvent) {
+	t.Helper()
+
+	sess := env.mock.sessionFor(sessionID)
+	if sess == nil {
+		t.Fatalf("no mock session for %s", sessionID)
+	}
+	sess.emit(event)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		meta, found, err := env.getMainWorktree().SessionStore.Get(sessionID)
+		if err == nil && found && meta.Turn.AwaitingAnswerTo(requestID) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("session %s never blocked on %s", sessionID, requestID)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitForWorkStatus is requireWorkStatus for the transitions the engine makes
+// off the RPC's own goroutine — a work stopped because its session was deleted,
+// say. Polls rather than sleeps: the transition is usually there on the first
+// read, and the deadline is only there so a failure reports rather than hangs.
+func waitForWorkStatus(t *testing.T, env *testEnv, workID string, want work.WorkStatus, why string) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if getWorkOrFail(t, env, workID).Status == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			requireWorkStatus(t, env, workID, want, why)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func getWorkOrFail(t *testing.T, env *testEnv, workID string) work.Work {
+	t.Helper()
+
 	w, found, err := env.workStore.Get(workID)
 	if err != nil || !found {
 		t.Fatalf("get work: %v, found=%v", err, found)
 	}
-	if w.Status != want {
-		t.Errorf("status = %q, want %q — %s", w.Status, want, why)
-	}
+	return w
 }
 
 func TestHandler_Auth_InvalidToken(t *testing.T) {
@@ -452,14 +506,13 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	settingsStore, _ := settings.NewStore(dataDir)
 	workStore, _ := work.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, 10*time.Minute)
+	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
 	defer worktreeManager.Shutdown()
 
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
-	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
-	workOps := work.NewOperations(workStore, workStarter, nil)
-	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
+	workOps := work.NewOperations(workStore, workStarter, nil, nil)
+	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -503,14 +556,13 @@ func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
 	settingsStore, _ := settings.NewStore(dataDir)
 	workStore, _ := work.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, 10*time.Minute)
+	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
 	defer worktreeManager.Shutdown()
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
-	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
-	workOps := work.NewOperations(workStore, workStarter, nil)
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
+	workOps := work.NewOperations(workStore, workStarter, nil, nil)
+	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore)
 	server := httptest.NewServer(h)
 	defer server.Close()
 
@@ -553,12 +605,12 @@ func TestHandler_ChatMessagesSubscribe(t *testing.T) {
 
 	result := env.subscribeChatMessages("sess")
 
-	if result.State != "ended" {
-		t.Errorf("expected state=ended before message, got %s", result.State)
+	if result.Turn.Phase != session.PhaseIdle {
+		t.Errorf("expected an idle turn before any message, got %q", result.Turn.Phase)
 	}
 }
 
-func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
+func TestHandler_ChatMessagesSubscribe_TurnState(t *testing.T) {
 	mock := &mockAgent{
 		events: []agent.AgentEvent{
 			agent.TextEvent{Content: "Response"},
@@ -579,10 +631,15 @@ func TestHandler_ChatMessagesSubscribe_ProcessState(t *testing.T) {
 		t.Fatal("expected process to be running")
 	}
 
-	// New subscribe should show state=idle (process alive, done with response)
+	// The turn the process just finished is over, so the transcript's own
+	// subscription reports idle — which is what tells the client that the last
+	// streaming bubble has stopped.
 	result := env.subscribeChatMessages("sess")
-	if result.State != "idle" {
-		t.Errorf("expected state=idle after message, got %s", result.State)
+	if result.Turn.Phase != session.PhaseIdle {
+		t.Errorf("expected an idle turn after the response, got %q", result.Turn.Phase)
+	}
+	if result.Turn.LastOutcome != session.OutcomeCompleted {
+		t.Errorf("last outcome = %q, want completed", result.Turn.LastOutcome)
 	}
 }
 
@@ -1042,8 +1099,8 @@ func TestHandler_SessionCreate(t *testing.T) {
 	if row.Title != "New Chat" {
 		t.Errorf("expected title 'New Chat', got %q", row.Title)
 	}
-	if row.State != string(process.ProcessStateEnded) {
-		t.Errorf("state = %q, want %q for a session with no process yet", row.State, process.ProcessStateEnded)
+	if row.Turn.Phase != session.PhaseIdle {
+		t.Errorf("turn phase = %q, want idle for a session with no process yet", row.Turn.Phase)
 	}
 	// Asserted on the stored session: a row carries no activated flag, so the
 	// same check against the reply would read false for a session that had been

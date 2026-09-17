@@ -856,3 +856,34 @@ func TestUpdateKeepsStaleEngine(t *testing.T) {
 		t.Error("expected an engine edit to be judged against the stale model")
 	}
 }
+
+// A role that does not exist has an unknown number of steps, not zero: the work
+// layer closes a work on its first step_done when a role is stepless, so the two
+// answers are opposite outcomes and must not share a value.
+func TestSteps_MissingRoleIsAnError(t *testing.T) {
+	store := newTestStore(t)
+
+	if _, err := (Steps{Store: store}).GetSteps("no-such-role"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSteps_ReturnsTheRolesSteps(t *testing.T) {
+	store := newTestStore(t)
+	role, err := store.Create(context.Background(), AgentRole{
+		Name:       "Engineer",
+		RolePrompt: "You are an engineer.",
+		Steps:      []string{"plan", "build"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	steps, err := (Steps{Store: store}).GetSteps(role.ID)
+	if err != nil {
+		t.Fatalf("GetSteps: %v", err)
+	}
+	if len(steps) != 2 {
+		t.Errorf("steps = %v, want the role's two", steps)
+	}
+}

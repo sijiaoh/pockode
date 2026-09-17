@@ -14,6 +14,12 @@ Index of Pockode code explanation documents. These documents focus on "why it's 
 | [Frontend State Management](frontend-state.md) | Zustand stores and extension system | `web/src/lib/` |
 | [Relay NAT Traversal](relay-system.md) | Mobile access to local PC | `server/relay/` |
 
+Two of these — [Agent Integration](agent-integration.md) and
+[Work](work-system.md) — build one half each of the same model: how long a
+process, a session and a work item live, and which of them owns what. The model
+itself is [lifecycle.md](../lifecycle.md), one level up. Read it first when the
+question is about state rather than about a CLI.
+
 ## Reading Guide
 
 ### Beginner's Path

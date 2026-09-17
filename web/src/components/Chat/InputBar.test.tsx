@@ -96,6 +96,38 @@ describe("InputBar", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
+	// The agent's stdin belongs to the turn under way, so a message sent into one
+	// would either be dropped or arrive in an order nobody chose
+	// (docs/lifecycle-ui.md §2.3). Enter is the path that matters: it never goes
+	// near the button, so a rule written only on `disabled` is a rule the
+	// keyboard does not have.
+	describe("while a turn is open", () => {
+		it("refuses to send, by button and by Enter alike", () => {
+			const onSend = vi.fn();
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={onSend} turnOpen />);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, { target: { value: "queued?" } });
+
+			expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+			fireEvent.keyDown(textarea, { key: "Enter" });
+			expect(onSend).not.toHaveBeenCalled();
+		});
+
+		// Typing is never blocked, only sending — a draft written during the wait
+		// has to survive it.
+		it("keeps the draft typeable", () => {
+			render(
+				<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} turnOpen />,
+			);
+
+			const textarea = screen.getByRole("textbox");
+			expect(textarea).not.toBeDisabled();
+			fireEvent.change(textarea, { target: { value: "written while busy" } });
+			expect(textarea).toHaveValue("written while busy");
+		});
+	});
+
 	it("calls onSend with trimmed input when button clicked", async () => {
 		const user = userEvent.setup();
 		const onSend = vi.fn();

@@ -2,11 +2,8 @@ package claude
 
 import (
 	"bytes"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/pockode/server/agent"
 )
@@ -34,13 +31,17 @@ func TestParseLine_BackgroundWaitDoesNotEndTheTurn(t *testing.T) {
 		parseTestLineWithTracker(testLogger(), []byte(line), tracker)
 	}
 
-	if events := parseTestLineWithTracker(testLogger(), []byte(successResult), tracker); events != nil {
-		t.Fatalf("expected the turn end to be swallowed while a background task runs, got %#v", events)
+	events := parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
+	if len(events) != 1 {
+		t.Fatalf("expected exactly one event for a turn parked on background work, got %#v", events)
+	}
+	if _, ok := events[0].(agent.BackgroundWaitEvent); !ok {
+		t.Fatalf("expected the parked turn to be reported, got %#v", events[0])
 	}
 
 	// Task finished: the CLI resumes on its own and the real ending follows.
 	parseTestLineWithTracker(testLogger(), []byte(noLiveTasks), tracker)
-	events := parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
+	events = parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
 	if len(events) != 1 {
 		t.Fatalf("expected exactly one event for the real turn end, got %#v", events)
 	}
@@ -49,8 +50,8 @@ func TestParseLine_BackgroundWaitDoesNotEndTheTurn(t *testing.T) {
 	}
 }
 
-// Only a normal ending is swallowed: an error or an abort really did end the
-// turn, and hiding it would leave the user waiting on nothing.
+// Only a normal ending is parked: an error or an abort really did end the turn,
+// and reporting it as a wait would leave the user waiting on nothing.
 func TestParseLine_BackgroundWaitStillReportsErrorAndAbort(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -124,161 +125,13 @@ func TestParseLine_BackgroundTasksChangedIsNotTranscript(t *testing.T) {
 	}
 }
 
-// The swallowing cannot be open-ended: the CLI supports monitors that never
-// finish, and a model may start a task and genuinely be done. Once the budget
-// runs out the held-back ending is delivered after all, with an explanation for
-// the user and one for the agent.
-func TestBackgroundWait_DeliversTheEndingAfterTheBudget(t *testing.T) {
-	events := make(chan agent.AgentEvent, 4)
-	notes := make(chan string, 1)
-
-	tracker := &backgroundTaskTracker{}
-	tracker.wait.start(testLogger(), events, func(note string) { notes <- note }, 20*time.Millisecond)
-	defer tracker.wait.stopWaiting()
-
-	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
-	if got := parseTestLineWithTracker(testLogger(), []byte(successResult), tracker); got != nil {
-		t.Fatalf("expected the ending to be held back first, got %#v", got)
-	}
-
-	warning, ok := awaitEvent(t, events).(agent.WarningEvent)
-	if !ok {
-		t.Fatalf("expected the fallback to explain itself to the user first")
-	}
-	if warning.Code != backgroundWaitTimeoutCode {
-		t.Errorf("unexpected warning code %q", warning.Code)
-	}
-	if _, ok := awaitEvent(t, events).(agent.DoneEvent); !ok {
-		t.Error("expected the held-back DoneEvent to be delivered after the budget")
-	}
-
-	select {
-	case note := <-notes:
-		if note == "" {
-			t.Error("the agent must be told why Pockode stopped waiting")
-		}
-	default:
-		t.Error("expected a note for the agent, so the fallback is not silent on its side")
-	}
-}
-
-// The tasks going away is not the end of the wait: the CLI is supposed to
-// resume output on its own afterwards, and if it never does, the fallback is
-// the only thing left to end the turn.
-func TestBackgroundWait_SurvivesAnEmptyTaskList(t *testing.T) {
-	events := make(chan agent.AgentEvent, 4)
-
-	tracker := &backgroundTaskTracker{}
-	tracker.wait.start(testLogger(), events, func(string) {}, time.Hour)
-	defer tracker.wait.stopWaiting()
-
-	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
-	parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
-	parseTestLineWithTracker(testLogger(), []byte(noLiveTasks), tracker)
-
-	if waitDeadline(&tracker.wait).IsZero() {
-		t.Fatal("the task list emptying ended the wait, leaving nothing to end the turn")
-	}
-
-	expireDeadline(&tracker.wait)
-	if _, ok := awaitEvent(t, events).(agent.WarningEvent); !ok {
-		t.Fatal("expected the fallback to still fire after the task list emptied")
-	}
-}
-
-// An ending the user actually saw cancels the fallback, so it cannot arrive a
-// second time on top of it.
-func TestBackgroundWait_CancelledByARealEnding(t *testing.T) {
-	tests := []struct {
-		name  string
-		lines []string
-	}{
-		{"resumed and finished", []string{noLiveTasks, successResult}},
-		{"user stopped it", []string{interruptResponse}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			events := make(chan agent.AgentEvent, 4)
-
-			tracker := &backgroundTaskTracker{}
-			// A budget that cannot elapse during the test, so what is asserted
-			// below is that the ending disarmed the fallback — not that the
-			// machine got there before a short timer did. With a real budget the
-			// wait would have to lose a race to fail, which it does under load.
-			tracker.wait.start(testLogger(), events, func(string) {}, time.Hour)
-			defer tracker.wait.stopWaiting()
-
-			pending := &sync.Map{}
-			pending.Store(interruptRequestID, interruptMarker{})
-
-			parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
-			parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
-			// Checked before the ending, or a wait that never armed would make
-			// the rest of this pass without testing anything.
-			if waitDeadline(&tracker.wait).IsZero() {
-				t.Fatal("the end of turn was not held back in the first place")
-			}
-
-			for _, line := range tt.lines {
-				parseTestLineFull(testLogger(), []byte(line), pending, tracker, func(string, string) {})
-			}
-
-			// end() clears the deadline under the lock while the line is being
-			// parsed, so there is nothing to wait for here.
-			if deadline := waitDeadline(&tracker.wait); !deadline.IsZero() {
-				t.Errorf("the fallback is still armed at %s after the turn already ended", deadline)
-			}
-			select {
-			case event := <-events:
-				t.Errorf("expected no fallback after the turn already ended, got %#v", event)
-			default:
-			}
-		})
-	}
-}
-
-// Each extension buys more time, capped at four times the base — the CLI's own
-// background task budget.
-func TestBackgroundWait_BudgetGrowsAndCaps(t *testing.T) {
-	wait := &backgroundWait{base: 30 * time.Minute}
-
-	var got []time.Duration
-	for range 5 {
-		wait.extend()
-		got = append(got, wait.budget)
-	}
-
-	expected := []time.Duration{30 * time.Minute, time.Hour, 2 * time.Hour, 2 * time.Hour, 2 * time.Hour}
-	if !slices.Equal(got, expected) {
-		t.Errorf("expected budgets %v, got %v", expected, got)
-	}
-}
-
-func waitBudget(wait *backgroundWait) time.Duration {
-	wait.deadlineMu.Lock()
-	defer wait.deadlineMu.Unlock()
-	return wait.budget
-}
-
-func awaitEvent(t *testing.T, events <-chan agent.AgentEvent) agent.AgentEvent {
-	t.Helper()
-	select {
-	case event := <-events:
-		return event
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for the background wait fallback")
-		return nil
-	}
-}
-
 // The agent's copy of the explanation rides on the next prompt Pockode sends,
 // and only that one: it describes a moment, not a standing condition.
 func TestSession_QueuedNoteRidesOnTheNextPromptOnly(t *testing.T) {
 	var buf bytes.Buffer
 	sess := &cliSession{log: testLogger(), stdin: nopWriteCloser{&buf}}
 
-	sess.queueNote("Pockode stopped waiting")
+	sess.QueueNote("Pockode stopped waiting")
 	if err := sess.SendMessage("continue"); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
@@ -292,140 +145,5 @@ func TestSession_QueuedNoteRidesOnTheNextPromptOnly(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "Pockode stopped waiting") {
 		t.Errorf("expected the note to be delivered once, got %s", buf.String())
-	}
-}
-
-// The budget bounds a silent wait, not a turn. Once the task finishes the CLI
-// resumes output by itself and may work for a long time before the next result
-// frame; ending the turn in the middle of that would idle a session that is
-// visibly streaming.
-func TestBackgroundWait_OutputPushesTheDeadlineOut(t *testing.T) {
-	events := make(chan agent.AgentEvent, 4)
-
-	tracker := &backgroundTaskTracker{}
-	tracker.wait.start(testLogger(), events, func(string) {}, time.Hour)
-	defer tracker.wait.stopWaiting()
-
-	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
-	parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
-	armed := rewindDeadline(t, &tracker.wait)
-
-	// The task finished and the CLI resumed output on its own.
-	parseTestLineWithTracker(testLogger(), []byte(noLiveTasks), tracker)
-	parseTestLineWithTracker(testLogger(), []byte(assistantOutput), tracker)
-
-	if resumed := waitDeadline(&tracker.wait); !resumed.After(armed) {
-		t.Error("expected output from the agent to push the deadline out, so the fallback cannot fire mid-turn")
-	}
-}
-
-func waitDeadline(wait *backgroundWait) time.Time {
-	wait.deadlineMu.Lock()
-	defer wait.deadlineMu.Unlock()
-	return wait.deadline
-}
-
-// expireDeadline makes the armed budget run out now instead of waiting for it.
-//
-// A test that needs the fallback to fire could arm a budget of a few
-// milliseconds instead, but then every assertion about the state *before* it
-// fires races the machine: under load the budget runs out first, and the test
-// either fails or — worse — passes having observed only the aftermath. Moving
-// the deadline to now and waking the runner is what the expiring timer does
-// anyway, so the wait ends for exactly the same reason, on the test's schedule.
-//
-// TestBackgroundWait_DeliversTheEndingAfterTheBudget keeps a real short budget
-// so the timer path itself stays covered; it asserts nothing about the state
-// beforehand, so it has no race to lose.
-func expireDeadline(wait *backgroundWait) {
-	wait.deadlineMu.Lock()
-	wait.deadline = time.Now()
-	wait.deadlineMu.Unlock()
-
-	wait.wakeRunner()
-}
-
-// rewindDeadline pulls the armed deadline back and returns the new value, so
-// that "output pushed the deadline out" can be asserted independently of the
-// wall clock's resolution: on Windows two consecutive time.Now() calls
-// routinely return the same instant, which makes a strict After() against the
-// deadline armed a moment earlier fail even though refresh did its job.
-//
-// The rewind has to leave the deadline in the future, which is why it is a
-// minute — far beyond any clock's resolution, far short of the budget the
-// caller arms with — and why that is checked rather than left to the next
-// person who edits the budget. An expired deadline is a state the
-// implementation never produces (extend and refresh both arm from time.Now()),
-// and the runner re-reads the deadline whenever it is woken, so it would see
-// the expired one, correctly fire the fallback and clear the deadline before
-// refresh ever ran.
-func rewindDeadline(t *testing.T, wait *backgroundWait) time.Time {
-	t.Helper()
-
-	const rewind = time.Minute
-
-	wait.deadlineMu.Lock()
-	defer wait.deadlineMu.Unlock()
-
-	wait.deadline = wait.deadline.Add(-rewind)
-	if !wait.deadline.After(time.Now()) {
-		t.Fatalf("rewinding by %v expired the deadline; arm this wait with a budget well above it", rewind)
-	}
-	return wait.deadline
-}
-
-// A fallback resolves nothing, so the patience it was granted must not reset:
-// an agent that goes back to waiting after the nudge waits longer next time
-// instead of repeating the same cycle.
-func TestBackgroundWait_BudgetKeepsGrowingAcrossFallbacks(t *testing.T) {
-	events := make(chan agent.AgentEvent, 8)
-
-	tracker := &backgroundTaskTracker{}
-	tracker.wait.start(testLogger(), events, func(string) {}, 20*time.Millisecond)
-	defer tracker.wait.stopWaiting()
-
-	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
-	parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
-	awaitEvent(t, events) // warning
-	awaitEvent(t, events) // done
-
-	// The nudge the fallback triggers gets the agent as far as another wait.
-	parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
-
-	if budget := waitBudget(&tracker.wait); budget != 40*time.Millisecond {
-		t.Errorf("expected the second wait to get a doubled budget, got %v", budget)
-	}
-}
-
-// The idle reaper spares a process on this alone, so it has to end when the
-// wait does — a permanently exempt process could never be reclaimed.
-func TestBackgroundTaskTracker_ReapExemptionLastsExactlyAsLongAsTheWait(t *testing.T) {
-	events := make(chan agent.AgentEvent, 4)
-
-	tracker := &backgroundTaskTracker{}
-	tracker.wait.start(testLogger(), events, func(string) {}, time.Hour)
-	defer tracker.wait.stopWaiting()
-
-	if tracker.waitingForBackgroundWork() {
-		t.Fatal("a fresh process is not waiting on anything")
-	}
-
-	parseTestLineWithTracker(testLogger(), []byte(oneLiveTask), tracker)
-	if tracker.waitingForBackgroundWork() {
-		t.Error("a running background task alone does not hold a turn open; the turn is still going")
-	}
-
-	parseTestLineWithTracker(testLogger(), []byte(successResult), tracker)
-	if !tracker.waitingForBackgroundWork() {
-		t.Fatal("expected the swallowed ending to exempt the process from reaping")
-	}
-
-	// The fallback ends the wait, and with it the exemption — even though the
-	// task list never emptied.
-	expireDeadline(&tracker.wait)
-	awaitEvent(t, events)
-	awaitEvent(t, events)
-	if tracker.waitingForBackgroundWork() {
-		t.Error("expected the exemption to lapse once the fallback gave up waiting")
 	}
 }

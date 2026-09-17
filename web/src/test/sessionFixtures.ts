@@ -1,3 +1,4 @@
+import { IDLE_TURN } from "../lib/activity";
 import type { SessionDetail, SessionListItem } from "../types/message";
 
 /**
@@ -18,7 +19,7 @@ export function makeSessionDetail(
 		model: "",
 		effort: "",
 		activated: false,
-		needs_input: false,
+		turn: { phase: "idle", open: false, since: "2024-01-01T00:00:00Z" },
 		unread: false,
 		usage: {
 			input_tokens: 0,
@@ -42,8 +43,7 @@ export function makeSessionListItem(
 		id: "s1",
 		title: "Test",
 		updated_at: "2024-01-01T00:00:00Z",
-		state: "ended",
-		needs_input: false,
+		turn: IDLE_TURN,
 		unread: false,
 		...overrides,
 	};

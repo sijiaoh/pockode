@@ -177,7 +177,7 @@ type ForkSpec struct {
 // SessionMeta holds metadata for a chat session.
 // These fields represent the conversation's state, not the process's state.
 // A process may be created, reaped, and recreated many times within a single
-// session, but NeedsInput and Unread persist across those process lifecycles.
+// session, but Turn and Unread persist across those process lifecycles.
 type SessionMeta struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
@@ -193,9 +193,18 @@ type SessionMeta struct {
 	// Effort is agent-specific (see effort.go). Empty — the value every session
 	// created before this field existed carries — means the CLI is passed no
 	// effort level and keeps its own default.
-	Effort     string `json:"effort"`
-	NeedsInput bool   `json:"needs_input"` // true when waiting for user input (permission/question)
-	Unread     bool   `json:"unread"`      // true when session has unread changes
+	Effort string `json:"effort"`
+	// Turn is what this session is doing, and the only place that is recorded.
+	// It is written by nothing but the reducer (see turn.go), and everything that
+	// used to be a flag of its own — the session's needs_input, the process's
+	// "a prompt is pending" and "the turn has ended" — is now read off it.
+	//
+	// Persisted because the question it answers outlives any process: a session
+	// whose CLI was killed with the server still has to be able to say that the
+	// turn it was in the middle of was aborted, and the CLI's own transcript
+	// cannot be asked (it may not even hold the message that raised the question).
+	Turn   TurnState `json:"turn"`
+	Unread bool      `json:"unread"` // true when session has unread changes
 	// ForkedFrom is set on a session created by forking another, and never
 	// changes afterwards: where a conversation came from is a fact about its
 	// birth, not a live relationship.

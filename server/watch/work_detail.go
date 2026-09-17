@@ -16,15 +16,26 @@ type WorkDetailWatcher struct {
 	*BaseWatcher
 	store       work.Store
 	usageSource work.SessionUsageSource
+	turnSource  work.TurnSource
 	eventCh     chan detailEvent
 	dirty       atomic.Bool
 
-	// sentUsageMu guards sentUsage: the usage last sent to each subscription,
-	// which is what makes a session change that moved no number cost nothing.
-	// Keyed by subscription id and dropped on unsubscribe, so it is bounded by
-	// what clients are watching right now.
+	// sentUsageMu guards sentUsage: what was last sent to each subscription of
+	// the two things a session change can move, which is what makes a session
+	// change that moved neither cost nothing. Keyed by subscription id and
+	// dropped on unsubscribe, so it is bounded by what clients are watching
+	// right now.
 	sentUsageMu sync.Mutex
-	sentUsage   map[string]work.Usage
+	sentUsage   map[string]sentDetail
+}
+
+// sentDetail is what a subscription has already been told about the two derived
+// parts of a detail. Judged per subscription, not per work item: two clients can
+// be on the same work item at different states, and telling one must not leave
+// the other stale.
+type sentDetail struct {
+	sentUsage    work.Usage
+	sentActivity work.Activity
 }
 
 // detailEvent is a union of the three changes that alter a work item's detail:
@@ -37,23 +48,27 @@ type detailEvent struct {
 }
 
 // WorkDetail is everything a work.detail subscriber is sent: the work item, its
-// comments, and what its subtree consumed.
+// comments, what its subtree consumed, and what it is doing.
 type WorkDetail struct {
 	Work     work.Work
 	Comments []work.Comment
 	Usage    work.Usage
+	Activity work.Activity
 }
 
 // NewWorkDetailWatcher builds the watcher. usageSource is where the subtree's
 // consumption is read from (worktree.Manager in the server); it is required, and
 // a work detail without it would silently report that nothing was ever spent.
-func NewWorkDetailWatcher(store work.Store, usageSource work.SessionUsageSource) *WorkDetailWatcher {
+// turnSource is where the work's own activity is derived from; nil reads it as
+// idle, which is what a narrow test wants and nothing else.
+func NewWorkDetailWatcher(store work.Store, usageSource work.SessionUsageSource, turnSource work.TurnSource) *WorkDetailWatcher {
 	w := &WorkDetailWatcher{
 		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		usageSource: usageSource,
+		turnSource:  turnSource,
 		eventCh:     make(chan detailEvent, 64),
-		sentUsage:   make(map[string]work.Usage),
+		sentUsage:   make(map[string]sentDetail),
 	}
 	store.AddOnChangeListener(w)
 	store.AddOnCommentChangeListener(w)
@@ -130,10 +145,10 @@ func (w *WorkDetailWatcher) notifyForWorkID(workID string, fromSession bool) {
 		// Judged per subscription, not per work_id: two clients can be on the same
 		// work item at different aggregations, and telling one of them must not
 		// leave the other stale.
-		if fromSession && w.usageAlreadySent(sub.ID, detail.Usage) {
+		if fromSession && w.usageAlreadySent(sub.ID, detail.Usage) && !w.activityMoved(sub.ID, detail.Activity) {
 			continue
 		}
-		w.rememberSentUsage(sub.ID, detail.Usage)
+		w.rememberSent(sub.ID, detail.Usage, detail.Activity)
 		w.notifyDetail(sub, detail)
 	}
 }
@@ -144,6 +159,7 @@ func (w *WorkDetailWatcher) notifyDetail(sub *Subscription, detail WorkDetail) {
 		Work:     detail.Work,
 		Comments: detail.Comments,
 		Usage:    detail.Usage,
+		Activity: detail.Activity,
 	}}
 	if err := sub.Notifier.Notify(w.Context(), n); err != nil {
 		slog.Debug("failed to notify detail subscriber", "id", sub.ID, "error", err)
@@ -218,7 +234,12 @@ func (w *WorkDetailWatcher) buildDetail(workID string) (WorkDetail, bool) {
 		return WorkDetail{}, false
 	}
 
-	return WorkDetail{Work: item, Comments: comments, Usage: usage}, true
+	return WorkDetail{
+		Work:     item,
+		Comments: comments,
+		Usage:    usage,
+		Activity: work.NewActivityResolver(w.turnSource).Activity(item),
+	}, true
 }
 
 // usageAlreadySent reports whether this subscription has the aggregation
@@ -227,13 +248,23 @@ func (w *WorkDetailWatcher) usageAlreadySent(subID string, usage work.Usage) boo
 	w.sentUsageMu.Lock()
 	defer w.sentUsageMu.Unlock()
 	sent, found := w.sentUsage[subID]
-	return found && sent.Equal(usage)
+	return found && sent.sentUsage.Equal(usage)
 }
 
-func (w *WorkDetailWatcher) rememberSentUsage(subID string, usage work.Usage) {
+// activityMoved is the other half of the same question, and the reason a session
+// change is not judged on money alone: a turn starting spends nothing and is the
+// most visible thing that can happen to an open work item.
+func (w *WorkDetailWatcher) activityMoved(subID string, activity work.Activity) bool {
 	w.sentUsageMu.Lock()
 	defer w.sentUsageMu.Unlock()
-	w.sentUsage[subID] = usage
+	sent, found := w.sentUsage[subID]
+	return found && sent.sentActivity != activity
+}
+
+func (w *WorkDetailWatcher) rememberSent(subID string, usage work.Usage, activity work.Activity) {
+	w.sentUsageMu.Lock()
+	defer w.sentUsageMu.Unlock()
+	w.sentUsage[subID] = sentDetail{sentUsage: usage, sentActivity: activity}
 }
 
 // Unsubscribe also forgets what that subscription was sent — otherwise the map
@@ -273,7 +304,7 @@ func (w *WorkDetailWatcher) notifySyncAll() {
 		if !ok {
 			continue
 		}
-		w.rememberSentUsage(sub.ID, d.Usage)
+		w.rememberSent(sub.ID, d.Usage, d.Activity)
 		w.notifyDetail(sub, d)
 	}
 
@@ -317,11 +348,13 @@ func (w *WorkDetailWatcher) Subscribe(id, workID string, notifier Notifier) (Wor
 		return WorkDetail{}, err
 	}
 
-	// The reply carries the aggregation, so the subscriber already has it: a
-	// session change that moves nothing is then not worth a notification either.
-	w.rememberSentUsage(id, usage)
+	activity := work.NewActivityResolver(w.turnSource).Activity(item)
 
-	return WorkDetail{Work: item, Comments: comments, Usage: usage}, nil
+	// The reply carries both derived parts, so the subscriber already has them:
+	// a session change that moves neither is then not worth a notification.
+	w.rememberSent(id, usage, activity)
+
+	return WorkDetail{Work: item, Comments: comments, Usage: usage, Activity: activity}, nil
 }
 
 type workDetailChangedParams struct {
@@ -329,8 +362,10 @@ type workDetailChangedParams struct {
 	Work     work.Work      `json:"work"`
 	Comments []work.Comment `json:"comments"`
 	// Usage rides on the notification rather than on Work, for the reason
-	// work.Usage documents.
-	Usage work.Usage `json:"usage"`
+	// work.Usage documents. Activity is derived too, and for the same reason
+	// is not a field of the work item.
+	Usage    work.Usage    `json:"usage"`
+	Activity work.Activity `json:"activity"`
 }
 
 // OnWorkChange implements work.OnChangeListener.

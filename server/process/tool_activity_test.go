@@ -35,13 +35,13 @@ func (r *messageRecorder) snapshot() []ChatMessage {
 func TestProcess_ToolActivityIsBroadcastButNeverRecorded(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	rec := &messageRecorder{}
 	m.SetMessageListener(rec)
 
-	m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", Activated: true, AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 
 	sess := mock.session(t, "sess-1")
 	sess.emit(t, agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "still going"})
@@ -79,10 +79,10 @@ func TestProcess_ToolActivityIsBroadcastButNeverRecorded(t *testing.T) {
 func TestProcess_ToolActivityIsKeptForACallStillInFlight(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
-	m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", Activated: true, AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
 	sess.emit(t, agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "first"})
@@ -132,10 +132,10 @@ func TestProcess_ToolActivityIsDroppedWhenTheRunSettles(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store, _ := session.NewFileStore(t.TempDir())
 			mock := &mockAgent{}
-			m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
+			m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleOnly(10*time.Minute))
 			defer m.Shutdown()
 
-			m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", Activated: true, AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+			m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 			sess := mock.session(t, "sess-1")
 
 			sess.emit(t, agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "working"})
@@ -157,10 +157,10 @@ func TestProcess_ToolActivityIsDroppedWhenTheRunSettles(t *testing.T) {
 func TestProcess_ToolActivitySurvivesAPausedTurn(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
-	m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", Activated: true, AgentType: session.AgentTypeClaude, Mode: session.ModeDefault})
+	m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
 	sess := mock.session(t, "sess-1")
 
 	sess.emit(t, agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "working"})
@@ -182,7 +182,7 @@ func TestProcess_ToolActivitySurvivesAPausedTurn(t *testing.T) {
 // it, and asking must not create one.
 func TestManager_ToolActivityOfAnEndedSessionIsEmpty(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
-	m := NewManager(mockRegistry(&mockAgent{}), "/tmp", "", "", store, 10*time.Minute)
+	m := NewManager(mockRegistry(&mockAgent{}), "/tmp", "", "", store, idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	if activity := m.GetToolActivity("never-started"); activity != nil {

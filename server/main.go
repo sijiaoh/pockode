@@ -142,7 +142,18 @@ func main() {
 	workDirFlag := flag.String("work", ".", "working directory")
 	dataDirFlag := flag.String("data", "", "data directory (default: <work>/.pockode)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
-	idleTimeoutFlag := flag.Duration("idle-timeout", 5*time.Minute, "idle timeout before stopping a session (0 disables reaping)")
+	// The four process lease budgets. Every value defaults to the one place they
+	// are written down (session.DefaultLeaseBudgets), and 0 means "no budget" for
+	// each of them — see session.Lease for what each wait costs while it is held.
+	leaseDefaults := session.DefaultLeaseBudgets()
+	idleTimeoutFlag := flag.Duration("idle-timeout", leaseDefaults.Idle,
+		"how long an idle session's process is kept alive for the next message (0 disables collecting it)")
+	turnTimeoutFlag := flag.Duration("turn-timeout", leaseDefaults.Turn,
+		"how long a turn may run before it is interrupted (0 for no limit)")
+	answerTimeoutFlag := flag.Duration("answer-timeout", leaseDefaults.Answer,
+		"how long a question or permission request waits for an answer before it is withdrawn (0 for no limit)")
+	backgroundTimeoutFlag := flag.Duration("background-timeout", leaseDefaults.Background,
+		"how long a turn parked on background work waits for the CLI to resume before it is ended (0 for no limit)")
 	relayFlag := flag.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
 	relayFrontendPortFlag := flag.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
 	cloudURLFlag := flag.String("cloud-url", "https://cloud.pockode.com", "cloud server URL")
@@ -251,7 +262,12 @@ Flags:
 		os.Exit(1)
 	}
 
-	idleTimeout := *idleTimeoutFlag
+	leaseBudgets := session.LeaseBudgets{
+		Turn:       *turnTimeoutFlag,
+		Answer:     *answerTimeoutFlag,
+		Background: *backgroundTimeoutFlag,
+		Idle:       *idleTimeoutFlag,
+	}
 
 	// Initialize settings store
 	settingsStore, err := settings.NewStore(dataDir)
@@ -281,11 +297,20 @@ Flags:
 		slog.Warn("failed to start agent role store file watcher", "error", err)
 	}
 
-	workAutoResumer := work.NewAutoResumer(workStore, 3)
-	workAutoResumer.StopOrphanedWork()
-	workAutoResumer.SetStepProvider(&agentRoleStepAdapter{store: agentRoleStore})
-	session.ClearOrphanedNeedsInput(dataDir)
-	workStore.AddOnChangeListener(workAutoResumer)
+	steps := agentrole.Steps{Store: agentRoleStore}
+	workEngine := work.NewEngine(workStore, work.DefaultMaxNudges)
+	workEngine.SetStepProvider(steps)
+	// Before anything can create a session: work the last run left active is
+	// dealt with by what it was waiting for, not by what its dead process was
+	// doing.
+	//
+	// It runs before the engine is a listener on the work store, and that order
+	// is deliberate — nothing here should be reacting to its own recovery, and
+	// the worktree manager that its follow-ups would need does not exist yet.
+	// The price is that the stops it makes are heard by nobody, so RecoverStartup
+	// re-examines the waits those stops emptied out itself rather than trusting
+	// an event to arrive.
+	workEngine.RecoverStartup()
 
 	// Set PM as default agent role on first launch
 	if pmID := agentRoleStore.SeededPMRoleID(); pmID != "" {
@@ -307,16 +332,25 @@ Flags:
 	registry.SetBaseDirProvider(func() string {
 		return settingsStore.Get().WorktreeBaseDir
 	})
-	worktreeManager := worktree.NewManager(registry, agents, dataDir, idleTimeout)
-	worktreeManager.SetWorkAutoResumer(workAutoResumer)
-	// Route AutoResumer follow-up messages to each work's own worktree.
-	workAutoResumer.SetSenderResolver(worktreeManager)
-	worktreeManager.SetWorkStatusSyncer(work.NewStatusSyncer(workStore))
+	worktreeManager := worktree.NewManager(registry, agents, dataDir, leaseBudgets)
+	worktreeManager.SetWorkEngine(workEngine)
+	// Route the engine's follow-up messages to each work's own worktree, and its
+	// terminations to the process manager of that worktree.
+	workEngine.SetSenderResolver(worktreeManager)
+	workEngine.SetSessionTerminator(worktreeManager)
+	// Listening starts only now, once the engine can act on what it hears. The
+	// other order would drop every change that arrived in between, and a dropped
+	// change is a wait nothing comes back to.
+	workStore.AddOnChangeListener(workEngine)
+	// A deleted session takes away the place every answer would have gone, which
+	// is one of the engine's five inputs.
+	worktreeManager.AddSessionChangeListener(workEngine)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
-	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
-	// Single implementation of the start/reopen transitions, shared by both the
-	// WebSocket handler (user actions) and the MCP Executor (AI actions).
-	workOps := work.NewOperations(workStore, workStarter, workAutoResumer)
+	// Single implementation of every work command, shared by the WebSocket
+	// handler (user actions) and the MCP Executor (AI actions).
+	workOps := work.NewOperations(workStore, workStarter, workEngine, steps)
+	// Deleting a work deletes the sessions under it, on both entry points.
+	workOps.SetSessionDeleter(worktreeManager)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
@@ -329,9 +363,9 @@ Flags:
 		slog.Error("failed to generate MCP token", "error", err)
 		os.Exit(1)
 	}
-	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, workAutoResumer, settingsStore), mcpToken)
+	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore), mcpToken)
 
-	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
+	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 	handler := newHandler(token, devMode, wsHandler, mcpHandler, transferHandler)
 
@@ -405,7 +439,7 @@ Flags:
 			slog.Error("server shutdown error", "error", err)
 		}
 		wsHandler.Stop()
-		workAutoResumer.Stop()
+		workEngine.Stop()
 		worktreeManager.Shutdown()
 		settingsStore.StopWatching()
 		agentRoleStore.StopWatching()
@@ -435,7 +469,7 @@ Flags:
 
 	startup.PrintFooter()
 
-	slog.Info("server starting", "port", port, "workDir", workDir, "dataDir", dataDir, "devMode", devMode, "idleTimeout", idleTimeout)
+	slog.Info("server starting", "port", port, "workDir", workDir, "dataDir", dataDir, "devMode", devMode, "leaseBudgets", leaseBudgets)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
@@ -463,22 +497,6 @@ func initStores(dataDir string) (*stores, error) {
 	}
 
 	return &stores{work: workStore, agentRole: agentRoleStore}, nil
-}
-
-// agentRoleStepAdapter adapts agentrole.Store to work.StepProvider.
-type agentRoleStepAdapter struct {
-	store agentrole.Store
-}
-
-func (a *agentRoleStepAdapter) GetSteps(agentRoleID string) ([]string, error) {
-	role, found, err := a.store.Get(agentRoleID)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, nil
-	}
-	return role.Steps, nil
 }
 
 func runMCP() {

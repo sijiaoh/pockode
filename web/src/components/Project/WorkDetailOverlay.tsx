@@ -5,9 +5,6 @@ import {
 	Loader2,
 	MessageSquare,
 	Pencil,
-	Play,
-	RotateCcw,
-	Square,
 	Trash2,
 	X,
 } from "lucide-react";
@@ -16,6 +13,7 @@ import TextareaAutosize from "react-textarea-autosize";
 import { useInlineEdit } from "../../hooks/useInlineEdit";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
 import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription";
+import { type Activity, needsUser } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -23,14 +21,19 @@ import type { AgentRole } from "../../types/agentRole";
 import type { Comment, Work, WorkListItem, WorkType } from "../../types/work";
 import { formatStepCount, getStepProgress } from "../../utils/workSteps";
 import { MarkdownContent } from "../Chat/MarkdownContent";
+import { ActivityBadge, ActivityIcon } from "../ui";
 import BackButton from "../ui/BackButton";
 import BottomActionBar from "../ui/BottomActionBar";
-import StatusBadge from "../ui/StatusBadge";
-import StatusIcon from "../ui/StatusIcon";
 import { WorktreeBadge } from "../Worktree";
 import CreateWorkForm from "./CreateWorkForm";
 import StepList from "./StepList";
-import { StartButton } from "./WorkListOverlay";
+import WorkPrimaryAction, {
+	ACTION_ICON,
+	ACTION_LABEL,
+	countActiveChildren,
+	StopConfirm,
+	useWorkCommand,
+} from "./WorkPrimaryAction";
 import WorkUsageSection from "./WorkUsageSection";
 
 interface Props {
@@ -46,7 +49,7 @@ export default function WorkDetailOverlay({
 	onNavigateToSession,
 	onOpenWorkDetail,
 }: Props) {
-	const { work, comments, usage, loading, error } =
+	const { work, activity, comments, usage, loading, error } =
 		useWorkDetailSubscription(workId);
 
 	const works = useWorkStore((s) => s.works);
@@ -113,9 +116,10 @@ export default function WorkDetailOverlay({
 						)}
 						<InlineEditableTitle work={work} />
 						<div className="mt-2 flex flex-wrap items-center gap-2">
-							<StatusBadge status={work.status} />
+							<ActivityBadge activity={activity} />
 							<WorktreeBadge work={work} className="max-w-[16rem]" />
 						</div>
+						<WaitLine work={work} />
 					</div>
 
 					<RoleSection work={work} />
@@ -142,7 +146,8 @@ export default function WorkDetailOverlay({
 
 			<ActionBar
 				work={work}
-				childCount={children.length}
+				activity={activity}
+				tasks={children}
 				onNavigateToSession={onNavigateToSession}
 				onBack={onBack}
 			/>
@@ -176,94 +181,83 @@ function DetailHeader({
 
 function ActionBar({
 	work,
-	childCount,
+	activity,
+	tasks,
 	onNavigateToSession,
 	onBack,
 }: {
 	work: Work;
-	childCount: number;
+	activity: Activity;
+	/** This work's children, which decide what stopping it would cost. */
+	tasks: WorkListItem[];
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
 	onBack: () => void;
 }) {
-	const startWork = useWSStore((s) => s.actions.startWork);
-	const stopWork = useWSStore((s) => s.actions.stopWork);
 	const deleteWork = useWSStore((s) => s.actions.deleteWork);
-	const reopenWork = useWSStore((s) => s.actions.reopenWork);
-	const [isStarting, setIsStarting] = useState(false);
-	const [isStopping, setIsStopping] = useState(false);
-	const [isReopening, setIsReopening] = useState(false);
+	// Which button exists is the status's business and no one else's
+	// (docs/lifecycle-ui.md §3): a control that appeared and vanished as turns
+	// settled is one the user cannot aim at. The list row's icon-only button is
+	// the same command, from the same hook — this page only has room for a label.
+	const {
+		action,
+		busy,
+		error: actionError,
+		clearError,
+		activate,
+		confirm: stopConfirm,
+		confirmed,
+		cancel,
+	} = useWorkCommand(
+		{ id: work.id, status: work.status, activity },
+		countActiveChildren(tasks),
+	);
 	const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-	const [error, setError] = useState<string | null>(null);
+	const [deleteError, setDeleteError] = useState<string | null>(null);
 
-	const handleStart = useCallback(async () => {
-		setError(null);
-		setIsStarting(true);
-		try {
-			await startWork(work.id);
-		} catch (err) {
-			setError(
-				`Failed to start: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		} finally {
-			setIsStarting(false);
-		}
-	}, [startWork, work.id]);
-
-	const handleStop = useCallback(async () => {
-		setError(null);
-		setIsStopping(true);
-		try {
-			await stopWork(work.id);
-		} catch (err) {
-			setError(
-				`Failed to stop: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		} finally {
-			setIsStopping(false);
-		}
-	}, [stopWork, work.id]);
-
-	const handleReopen = useCallback(async () => {
-		setError(null);
-		setIsReopening(true);
-		try {
-			await reopenWork(work.id);
-		} catch (err) {
-			setError(
-				`Failed to reopen: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		} finally {
-			setIsReopening(false);
-		}
-	}, [reopenWork, work.id]);
+	// The bar has one line for failures and the newest one owns it, in both
+	// directions: a Start that failed earlier must not be what the user reads
+	// after a delete fails, and a delete that failed must not outlive the next
+	// command.
+	const handleAction = useCallback(() => {
+		setDeleteError(null);
+		activate();
+	}, [activate]);
 
 	const handleDelete = useCallback(async () => {
+		clearError();
 		try {
 			await deleteWork(work.id);
 			setShowDeleteConfirm(false);
 			onBack();
 		} catch (err) {
-			setError(
+			setDeleteError(
 				`Failed to delete: ${err instanceof Error ? err.message : String(err)}`,
 			);
 			setShowDeleteConfirm(false);
 		}
-	}, [deleteWork, work.id, onBack]);
+	}, [deleteWork, work.id, onBack, clearError]);
 
-	const showStart = work.status === "open" || work.status === "stopped";
-	const showStop =
-		work.status === "in_progress" ||
-		work.status === "waiting" ||
-		work.status === "needs_input";
-	const showReopen = work.status === "closed";
 	const showChat = !!work.session_id;
 	const canDelete = work.status !== "closed";
+	const ActionIcon = ACTION_ICON[action];
+	const isStop = action === "stop";
 
 	const typeLabel = work.type === "story" ? "Story" : "Task";
-	const confirmMessage =
+	const childCount = tasks.length;
+	// Deleting an active work is the one destructive action here that also kills
+	// a process, and the dialog has to say the whole of what it does.
+	const confirmMessage = [
 		childCount > 0
 			? `Delete "${work.title}" and its ${childCount} child task${childCount > 1 ? "s" : ""}? This cannot be undone.`
-			: `Delete "${work.title}"? This cannot be undone.`;
+			: `Delete "${work.title}"? This cannot be undone.`,
+		work.status === "active"
+			? "Its session and its running agent will be deleted too."
+			: null,
+	]
+		.filter(Boolean)
+		.join(" ");
+
+	const error = actionError ?? deleteError;
 
 	return (
 		<BottomActionBar>
@@ -275,51 +269,19 @@ function ActionBar({
 			<div className="flex items-center gap-2">
 				{/* Primary actions - left side */}
 				<div className="flex flex-1 gap-2">
-					{showStart && (
-						<button
-							type="button"
-							onClick={handleStart}
-							disabled={isStarting}
-							className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent text-sm font-medium text-th-accent-text disabled:opacity-50"
-						>
-							{isStarting ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : (
-								<Play className="size-4" />
-							)}
-							{work.status === "stopped" ? "Restart" : "Start"}
-						</button>
-					)}
-					{showStop && (
-						<button
-							type="button"
-							onClick={handleStop}
-							disabled={isStopping}
-							className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-error/10 text-sm font-medium text-th-error disabled:opacity-50"
-						>
-							{isStopping ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : (
-								<Square className="size-4" />
-							)}
-							Stop
-						</button>
-					)}
-					{showReopen && (
-						<button
-							type="button"
-							onClick={handleReopen}
-							disabled={isReopening}
-							className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent text-sm font-medium text-th-accent-text disabled:opacity-50"
-						>
-							{isReopening ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : (
-								<RotateCcw className="size-4" />
-							)}
-							Reopen
-						</button>
-					)}
+					<button
+						type="button"
+						onClick={handleAction}
+						disabled={busy}
+						className={`flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg text-sm font-medium disabled:opacity-50 ${isStop ? "bg-th-error/10 text-th-error" : "bg-th-accent text-th-accent-text"}`}
+					>
+						{busy ? (
+							<Loader2 className="size-4 animate-spin" />
+						) : (
+							<ActionIcon className="size-4" />
+						)}
+						{ACTION_LABEL[action]}
+					</button>
 					{showChat && (
 						<button
 							type="button"
@@ -347,6 +309,14 @@ function ActionBar({
 				)}
 			</div>
 
+			{stopConfirm && (
+				<StopConfirm
+					message={stopConfirm}
+					onConfirm={confirmed}
+					onCancel={cancel}
+				/>
+			)}
+
 			{showDeleteConfirm && (
 				<ConfirmDialog
 					title={`Delete ${typeLabel}`}
@@ -359,6 +329,25 @@ function ActionBar({
 			)}
 		</BottomActionBar>
 	);
+}
+
+/**
+ * What the work is waiting for, under the badges.
+ *
+ * For a wait on the user this is the agent's own words (`wait_reason`), shown
+ * verbatim: it is the only place in the app where the user can read what the
+ * agent actually wants, and no fixed vocabulary could carry it. Absent
+ * otherwise — an empty row would say "waiting" about a work that is not.
+ */
+function WaitLine({ work }: { work: Work }) {
+	if (work.status !== "active" || !work.wait) return null;
+
+	const text =
+		work.wait === "user"
+			? work.wait_reason || "Waiting for your message."
+			: "Waiting for its subtasks to finish.";
+
+	return <p className="mt-2 text-xs text-th-text-secondary">{text}</p>;
 }
 
 function InlineEditableTitle({ work }: { work: Work }) {
@@ -645,6 +634,10 @@ function ChildrenSection({
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }) {
 	const closedTasks = tasks.filter((t) => t.status === "closed").length;
+	// The active count is what makes a rejected `step_done` legible without a
+	// second explanation: a story that will not finish says here how many
+	// subtasks it is still waiting on (docs/lifecycle-ui.md §6.2).
+	const activeTasks = countActiveChildren(tasks);
 
 	return (
 		<div>
@@ -653,6 +646,12 @@ function ChildrenSection({
 				{tasks.length > 0 && (
 					<span>
 						({closedTasks}/{tasks.length})
+						{activeTasks > 0 && (
+							<>
+								{" "}
+								<span aria-hidden="true">&middot;</span> {activeTasks} active
+							</>
+						)}
 					</span>
 				)}
 			</h3>
@@ -692,14 +691,16 @@ function ChildRow({
 	const roleName = work.agent_role_id
 		? (roleNameMap.get(work.agent_role_id) ?? null)
 		: null;
-	const isNeedsInput = work.status === "needs_input";
+	// Warning for any of the three ways a task can be waiting on the user, error
+	// for one the engine has let go of (docs/lifecycle-ui.md §6.1).
+	const isNeedsUser = needsUser(work.activity);
 	const isStopped = work.status === "stopped";
 
 	return (
 		<div
-			className={`group flex min-h-[44px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsInput ? "border-l-2 border-th-warning bg-th-warning/5" : isStopped ? "border-l-2 border-th-error bg-th-error/5" : ""}`}
+			className={`group flex min-h-[44px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsUser ? "border-l-2 border-th-warning bg-th-warning/5" : isStopped ? "border-l-2 border-th-error bg-th-error/5" : ""}`}
 		>
-			<StatusIcon status={work.status} />
+			<ActivityIcon activity={work.activity} />
 			<button
 				type="button"
 				onClick={() => onOpenWorkDetail(work.id)}
@@ -721,8 +722,7 @@ function ChildRow({
 					Chat
 				</button>
 			)}
-			{((work.status === "open" && !work.session_id) ||
-				work.status === "stopped") && <StartButton workId={work.id} iconOnly />}
+			<WorkPrimaryAction work={work} iconOnly />
 		</div>
 	);
 }

@@ -23,9 +23,9 @@ const work = (status: WorkStatus, current_step?: number) => ({
 
 describe("getStepProgress", () => {
 	it("returns null when the role defines no steps", () => {
-		expect(getStepProgress(work("in_progress", 1), role())).toBeNull();
-		expect(getStepProgress(work("in_progress", 1), role([]))).toBeNull();
-		expect(getStepProgress(work("in_progress", 1), undefined)).toBeNull();
+		expect(getStepProgress(work("active", 1), role())).toBeNull();
+		expect(getStepProgress(work("active", 1), role([]))).toBeNull();
+		expect(getStepProgress(work("active", 1), undefined)).toBeNull();
 	});
 
 	// An open work sits on no step yet, so "Step 1/3" would overstate progress.
@@ -34,9 +34,11 @@ describe("getStepProgress", () => {
 	});
 
 	it("reports the current step for active work", () => {
-		expect(
-			getStepProgress(work("in_progress", 1), role(["a", "b", "c"])),
-		).toEqual({ currentStep: 1, totalSteps: 3, isComplete: false });
+		expect(getStepProgress(work("active", 1), role(["a", "b", "c"]))).toEqual({
+			currentStep: 1,
+			totalSteps: 3,
+			isComplete: false,
+		});
 	});
 
 	it("reports every step done once the work is closed", () => {

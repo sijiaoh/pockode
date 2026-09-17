@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { IDLE_TURN } from "../lib/activity";
 import {
 	applyServerEvent,
 	applyToolActivitySnapshot,
@@ -10,7 +11,8 @@ import {
 	prependHistoryPage,
 	readHistorySeq,
 	replayHistory,
-	settleAfterProcessGone,
+	resetPromptRequest,
+	settleAgainstTurn,
 	stampMessageAnchorSeq,
 	updatePermissionRequestStatus,
 	updateQuestionStatus as updateQuestionStatusReducer,
@@ -30,6 +32,7 @@ import type {
 	QuestionStatus,
 	ServerNotification,
 	SessionMode,
+	SessionTurn,
 	UserMessage,
 } from "../types/message";
 import type { AgentType } from "../types/settings";
@@ -63,8 +66,13 @@ interface UseChatMessagesReturn {
 	 */
 	loadedHistoryPages: number;
 	loadMoreHistory: () => Promise<void>;
-	isStreaming: boolean;
-	isProcessRunning: boolean;
+	/**
+	 * Whether a turn is open: the composer is blocked and Stop is on screen for
+	 * exactly this (docs/lifecycle-ui.md §2.3).
+	 */
+	turnOpen: boolean;
+	/** What the session is doing, for the surfaces that need more than a boolean. */
+	turn: SessionTurn;
 	/**
 	 * The session's own settings, from `session.detail`. Until its first snapshot
 	 * arrives they read as the placeholders below — no session has been described
@@ -102,6 +110,11 @@ interface UseChatMessagesReturn {
 		requestId: string,
 		status: "allowed" | "denied",
 	) => void;
+	/**
+	 * Undoes the optimistic outcome on a card the server refused an answer for.
+	 * Both kinds of prompt, because the refusal is the same fact about both.
+	 */
+	resetPrompt: (requestId: string, status: "pending" | "expired") => void;
 	updateQuestionStatus: (
 		requestId: string,
 		status: QuestionStatus,
@@ -185,7 +198,6 @@ export function useChatMessages({
 }: UseChatMessagesOptions): UseChatMessagesReturn {
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [isLoadingHistory, setIsLoadingHistory] = useState(true);
-	const [isProcessRunning, setIsProcessRunning] = useState(false);
 	const [settingError, setSettingError] = useState<string | null>(null);
 	const [hasMoreHistory, setHasMoreHistory] = useState(false);
 	const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
@@ -202,11 +214,12 @@ export function useChatMessages({
 	// its own page dropped it — the turn it ended is below the page, not in it —
 	// so it is held for the page that turn is on. See `prependHistoryPage`.
 	const boundaryTerminalRef = useRef<unknown>(undefined);
-	// Set when the process was already gone at subscribe time. A process killed
-	// by a restart leaves no `process_ended` in history, so that fact reaches an
-	// older page from here rather than through the back-references; one that ends
-	// while connected broadcasts the record and travels with them.
-	const processGoneRef = useRef(false);
+	// What the session was doing at subscribe time, for the older pages. A
+	// transcript cut short by a restart says nothing about its own end, so that
+	// fact reaches an older page from here rather than through the
+	// back-references; a process that ends while connected broadcasts the record
+	// and travels with them.
+	const subscribedTurnRef = useRef<SessionTurn>(IDLE_TURN);
 	// The newest record the loaded page holds. A live notification for a record
 	// the page already carries is the one thing the subscription can deliver
 	// twice: the server registers the subscription before it reads the history,
@@ -227,6 +240,15 @@ export function useChatMessages({
 	// from more than one of them is how a rejected model change came back as two
 	// answers that disagreed.
 	const sessionDetail = useSessionDetailStore(selectSessionDetail(sessionId));
+
+	// One source for what the session is doing, and it is the live one: the
+	// detail subscription reports every turn change as it happens. The chat
+	// subscription's own copy is used once, to settle the page it came with — a
+	// second live copy of one fact would arrive in an order neither side controls.
+	//
+	// Idle until that first snapshot: a client that has not been told anything is
+	// running is not entitled to draw a Stop button.
+	const turn = sessionDetail?.turn ?? IDLE_TURN;
 
 	// Placeholders for the round trip before the first snapshot: never another
 	// session's values, because the selector above hands back nothing until the
@@ -299,8 +321,6 @@ export function useChatMessages({
 				return;
 			}
 
-			setIsProcessRunning(notification.type !== "process_ended");
-
 			if (isBackReference(notification)) {
 				backReferencesRef.current.push(notification);
 			}
@@ -329,7 +349,6 @@ export function useChatMessages({
 		setRenderedSessionId(sessionId);
 		setMessages([]);
 		setIsLoadingHistory(true);
-		setIsProcessRunning(false);
 		setSettingError(null);
 		setHasMoreHistory(false);
 		setIsLoadingMoreHistory(false);
@@ -339,7 +358,7 @@ export function useChatMessages({
 		backReferencesRef.current = [];
 		boundaryTerminalRef.current = undefined;
 		newestHistorySeqRef.current = undefined;
-		processGoneRef.current = false;
+		subscribedTurnRef.current = IDLE_TURN;
 		isLoadingMoreRef.current = false;
 		historyGenerationRef.current++;
 		// Progress held for the next frame belongs to the session being left.
@@ -367,7 +386,6 @@ export function useChatMessages({
 
 	const handleSubscribed = useCallback(
 		(initial: ChatMessagesSubscribeResult) => {
-			setIsProcessRunning(initial.state !== "ended");
 			// Subscribing hands back the newest page only, and a re-subscribe
 			// hands it back again: pages paged in before a reconnect are gone, so
 			// the paging state starts over with them.
@@ -383,17 +401,15 @@ export function useChatMessages({
 			backReferencesRef.current = initial.history.filter(isBackReference);
 			boundaryTerminalRef.current = leadingTurnTerminal(initial.history);
 			newestHistorySeqRef.current = newestSeq(initial.history);
-			processGoneRef.current = initial.state === "ended";
+			subscribedTurnRef.current = initial.turn;
 			// Progress for the transcript being replaced.
 			pendingActivityRef.current.clear();
 			const replayed = replayHistory(initial.history);
-			// After server restart, history won't contain process_ended events
-			// for processes that were killed. Use the authoritative process
-			// state instead — older pages get the same treatment from
-			// `processGoneRef` as they are paged in.
-			const settled = processGoneRef.current
-				? settleAfterProcessGone(replayed)
-				: replayed;
+			// The turn is the authority the records are missing: a transcript the
+			// server died in the middle of ends with a bubble still streaming and
+			// nothing in history that says otherwise. Older pages get the part of
+			// this that is true of them as they are paged in.
+			const settled = settleAgainstTurn(replayed, initial.turn);
 			// What the calls still in flight last reported. History carries none —
 			// a `tool_activity` is never recorded — so this is the whole of what a
 			// client subscribing mid-run knows about a background task that started
@@ -451,7 +467,7 @@ export function useChatMessages({
 			const catchUp = {
 				boundaryTerminal: boundaryTerminalRef.current,
 				backReferences: backReferencesRef.current,
-				processEnded: processGoneRef.current,
+				turn: subscribedTurnRef.current,
 			};
 			setMessages((prev) => prependHistoryPage(older, prev, catchUp));
 			boundaryTerminalRef.current = leadingTurnTerminal(page.history);
@@ -548,6 +564,13 @@ export function useChatMessages({
 		[sessionId],
 	);
 
+	const resetPrompt = useCallback(
+		(requestId: string, status: "pending" | "expired") => {
+			setMessages((prev) => resetPromptRequest(prev, requestId, status));
+		},
+		[],
+	);
+
 	const updatePermissionStatus = useCallback(
 		(requestId: string, newStatus: "allowed" | "denied") => {
 			setMessages((prev) =>
@@ -575,14 +598,15 @@ export function useChatMessages({
 		[],
 	);
 
-	// isStreaming controls input blocking
-	// - sending: always block (waiting for server response)
-	// - streaming: only block when process is running
+	// Whether a turn is open, and the optimistic half is load-bearing: between the
+	// user pressing send and the server reporting `running` there is a round trip,
+	// and a composer watching only the turn would leave them a live send button
+	// and no Stop for the length of it. What the turn removes is the half that was
+	// never reliable — inferring liveness from the last bubble's status and a
+	// `process_ended` that a restart never wrote (docs/lifecycle-ui.md §2.3).
 	const last = messages[messages.length - 1];
 	const lastIsSending = last?.role === "assistant" && last.status === "sending";
-	const lastIsStreaming =
-		last?.role === "assistant" && last.status === "streaming";
-	const isStreaming = lastIsSending || (lastIsStreaming && isProcessRunning);
+	const turnOpen = lastIsSending || turn.phase !== "idle";
 
 	// One path for every session setting. Nothing is applied here: the new value
 	// reaches the screen through the session detail subscription, so a rejected
@@ -643,8 +667,8 @@ export function useChatMessages({
 		historyError,
 		loadedHistoryPages,
 		loadMoreHistory,
-		isStreaming,
-		isProcessRunning,
+		turnOpen,
+		turn,
 		mode,
 		agentType,
 		model,
@@ -667,5 +691,6 @@ export function useChatMessages({
 		setEffort,
 		updatePermissionStatus,
 		updateQuestionStatus,
+		resetPrompt,
 	};
 }

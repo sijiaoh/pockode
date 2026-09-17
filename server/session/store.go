@@ -33,7 +33,10 @@ type Store interface {
 	SetMode(ctx context.Context, sessionID string, mode Mode) error
 	SetModel(ctx context.Context, sessionID string, model string) error
 	SetEffort(ctx context.Context, sessionID string, effort string) error
-	SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error
+	// ApplyTurn folds one thing that happened into the session's TurnState and
+	// returns what changed. It is the only way turn state is ever written; see
+	// ReduceTurn.
+	ApplyTurn(ctx context.Context, sessionID string, in TurnInput) (TurnTransition, error)
 	SetUnread(ctx context.Context, sessionID string, unread bool) error
 	// AddUsage folds one agent report into the session's running consumption.
 	// A report that says nothing (UsageReport.IsEmpty) is a no-op; any other
@@ -108,8 +111,82 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 		return nil, err
 	}
 	store.sessions = idx.Sessions
+	store.abortTurnsTheLastRunLeftOpen()
 
 	return store, nil
+}
+
+// HistoryTypeProcessEnded is the record that says a session's agent process is
+// gone. Spelled out here rather than imported: the agent package owns the event
+// vocabulary but is built on top of this one, so the dependency cannot go that
+// way. It is exported so that agent's own test can assert the two spellings are
+// the same — see agent.TestProcessEndedRecordTypeMatchesTheSessionStores.
+const HistoryTypeProcessEnded = "process_ended"
+
+// abortTurnsTheLastRunLeftOpen repairs the sessions that were mid-turn when the
+// server stopped, and is why there is no migration script for the session index.
+//
+// Nothing survives a restart: every process is gone, so every blocker one of
+// them raised is unanswerable and every turn one of them was carrying was
+// aborted. The stored state still says otherwise, because the server had no
+// chance to write anything on the way out — and after a crash or a kill there is
+// nothing else to learn it from either. The CLI's own transcript cannot be
+// asked: it is killed with SIGKILL, so it may hold a question's tool_use with no
+// answer, a half-written last line, or no trace of the question at all.
+//
+// So the repair is Pockode's own record, in two parts. The state is reduced with
+// SignalProcessEnded — the same rule that handles a process dying while the
+// server runs, which is the point of there being one rule — and the history gets
+// the process_ended record that the killed run never wrote. That record is what
+// a client replaying the transcript reads to mark a pending permission card or
+// question expired; without it a restarted server shows prompts that look
+// answerable and are not.
+//
+// Sessions that were idle are left completely alone, which is nearly all of
+// them, and the ones written before turn state existed are idle by definition.
+//
+// Runs during construction and takes no lock: nothing else can reach the store
+// yet, and there are no listeners to notify.
+func (s *FileStore) abortTurnsTheLastRunLeftOpen() {
+	now := time.Now()
+	repaired := 0
+
+	for i := range s.sessions {
+		transition := NormalizeTurn(s.sessions[i].Turn, now)
+		// Assigned before the Changed check, not after it: an entry written by a
+		// build from before turn state existed reads back with an empty phase,
+		// which the reducer treats as idle without calling that a change. The
+		// phase is on the wire now, so the in-memory session has to carry the
+		// value the reducer read, rather than the blank the file held.
+		s.sessions[i].Turn = transition.State
+		if !transition.Changed {
+			continue
+		}
+		repaired++
+
+		// Only for a turn that was actually interrupted. A session merely holding
+		// a stale phase — nothing was streaming — has nothing to tell the
+		// transcript about.
+		if !transition.Ended && len(transition.Expired) == 0 {
+			continue
+		}
+		if _, err := s.AppendToHistory(context.Background(), s.sessions[i].ID,
+			map[string]any{"type": HistoryTypeProcessEnded}); err != nil {
+			slog.Warn("failed to record the end of a session interrupted by a restart",
+				"sessionId", s.sessions[i].ID, "error", err)
+		}
+	}
+
+	if repaired == 0 {
+		return
+	}
+	// Persisted now rather than left to the next write: a session that is never
+	// touched again would otherwise be repaired from scratch on every start, and
+	// append another process_ended record each time.
+	if err := s.persistIndex(); err != nil {
+		slog.Warn("failed to persist repaired session turn state", "error", err)
+	}
+	slog.Info("aborted turns left open by the previous run", "sessions", repaired)
 }
 
 func (s *FileStore) indexPath() string {
@@ -263,6 +340,7 @@ func (s *FileStore) Create(ctx context.Context, sessionID string, spec CreateSpe
 		Mode:      mode,
 		Model:     spec.Model,
 		Effort:    spec.Effort,
+		Turn:      NewTurnState(now),
 	}
 
 	if err := s.insertLocked(session); err != nil {
@@ -315,6 +393,14 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 		Model:      fork.Source.Model,
 		Effort:     fork.Source.Effort,
 		ForkedFrom: &ForkOrigin{SessionID: fork.Source.ID},
+		// The fork starts idle, and the source's turn is not consulted. A fork
+		// can be cut from a session that is mid-turn, and what the source is in
+		// the middle of belongs to the source's process: nothing is producing
+		// output for the fork, and nothing can answer a prompt copied into it,
+		// because only the process that raised one takes its answer. A fork that
+		// inherited a running phase would sit there waiting for an ending no
+		// process owes it.
+		Turn: NewTurnState(now),
 	}
 
 	if err := s.insertLocked(session); err != nil {
@@ -476,14 +562,21 @@ func (s *FileStore) SetEffort(ctx context.Context, sessionID string, effort stri
 	})
 }
 
-func (s *FileStore) SetNeedsInput(ctx context.Context, sessionID string, needsInput bool) error {
-	return s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
-		if meta.NeedsInput == needsInput {
-			return false, nil
-		}
-		meta.NeedsInput = needsInput
-		return true, nil
+// ApplyTurn runs the reducer against the stored state and writes the result.
+// The index is only rewritten when the state actually moved, which is what keeps
+// a turn's worth of output — dozens of events that all say "still running" —
+// from costing a file write each.
+func (s *FileStore) ApplyTurn(ctx context.Context, sessionID string, in TurnInput) (TurnTransition, error) {
+	var transition TurnTransition
+	err := s.updateMeta(ctx, sessionID, func(meta *SessionMeta) (bool, error) {
+		transition = ReduceTurn(meta.Turn, in)
+		meta.Turn = transition.State
+		return transition.Changed, nil
 	})
+	if err != nil {
+		return TurnTransition{}, err
+	}
+	return transition, nil
 }
 
 // AddUsage records consumption without touching UpdatedAt: spending tokens is

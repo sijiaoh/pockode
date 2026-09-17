@@ -5,7 +5,7 @@ import type { InputBarProps } from "../../../lib/registries/chatUIRegistry";
 export default function CustomInputBar({
 	onSend,
 	canSend = true,
-	isStreaming,
+	turnOpen,
 	onStop,
 }: InputBarProps) {
 	const [input, setInput] = useState("");
@@ -35,7 +35,7 @@ export default function CustomInputBar({
 				disabled={!canSend}
 				className="flex-1 rounded-full border border-th-border bg-th-bg-primary px-4 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:outline-none focus:ring-2 focus:ring-th-accent"
 			/>
-			{isStreaming && onStop ? (
+			{turnOpen && onStop ? (
 				<button
 					type="button"
 					onClick={onStop}

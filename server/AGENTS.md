@@ -57,8 +57,8 @@ settings/               # 设置存储
 startup/                # 启动横幅
 static/                 # 静态文件（构建后的前端资源）
 watch/                  # 实时订阅（WebSocket 通知的分发引擎）
-work/                   # Work 存储, 状态机, AutoResumer, 提示词构建器
-worktree/               # Worktree 管理, WorkStarter, WorkStopper
+work/                   # Work 存储, 状态机, 驱动引擎 (engine.go), 命令 (operations.go), activity 派生, 提示词构建器
+worktree/               # Worktree 管理, WorkStarter, session 终结与 turn 来源 (manager.go)
 ws/                     # WebSocket RPC 处理（rpc_*.go 按领域分割）
 ```
 
@@ -175,7 +175,10 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `--work` | | `.` | 工作目录 |
 | `--data` | | `<work>/.pockode` | 数据目录 |
 | `--dev` | | `false` | 开发模式（启用时不 serve 静态文件） |
-| `--idle-timeout` | | `5m` | 空闲超时时间（`0` 表示关闭回收） |
+| `--idle-timeout` | | `5m` | 空闲进程保留多久后回收（`0` 表示不设预算）|
+| `--turn-timeout` | | `0` | 一个 turn 最长可以跑多久，超时发 interrupt（`0` 表示不设预算）|
+| `--answer-timeout` | | `1h` | 提问 / 权限请求等多久后替用户撤回（`0` 表示不设预算）|
+| `--background-timeout` | | `24h` | turn 停在后台任务上等多久后结束（`0` 表示不设预算）|
 | `--relay` | | `true` | 启用 relay 远程访问（`-relay=false` 禁用） |
 | `--relay-frontend-port` | | 同 server port | Relay 转发前端请求的目标端口 |
 | `--cloud-url` | | `https://cloud.pockode.com` | 云服务器 URL |
@@ -188,6 +191,8 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `--git-user-name` | git时 | — | commit 用户名 |
 | `--git-user-email` | git时 | — | commit 邮箱 |
 | `--version` | | — | 输出版本号并退出 |
+
+四个 `*-timeout` 是同一张租约表的四行，不是四个独立开关：进程活多久完全由它所属 session 的 turn 状态决定，所以 `--idle-timeout=0` 只是关掉 idle 那一行，另外三行照常回收（要什么都不收得四个都设 0）。每个默认值为什么是这个数，见 [docs/lifecycle.md](../docs/lifecycle.md#process-a-lease-table)。
 
 上表为默认（server）模式。此外还有两个子命令（`flag.Parse()` 前分发，见 `main.go`）：
 

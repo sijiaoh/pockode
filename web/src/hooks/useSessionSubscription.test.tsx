@@ -181,24 +181,31 @@ describe("useSessionSubscription", () => {
 			expect(useSessionStore.getState().sessions[0].id).toBe("2");
 		});
 
-		it("handles update notification with state change", async () => {
+		it("handles update notification with a turn change", async () => {
 			mockSessions = [mockSessionItem("1")];
 
 			renderHook(() => useSessionSubscription(true));
 
 			await waitFor(() => {
-				expect(useSessionStore.getState().sessions[0].state).toBe("ended");
+				expect(useSessionStore.getState().sessions[0].turn.phase).toBe("idle");
 			});
 
 			act(() => {
 				notificationCallback?.({
 					id: "watch-1",
 					operation: "update",
-					session: { ...mockSessionItem("1"), state: "running" },
+					session: {
+						...mockSessionItem("1"),
+						turn: {
+							phase: "running",
+							open: true,
+							since: "2024-01-01T00:00:00Z",
+						},
+					},
 				});
 			});
 
-			expect(useSessionStore.getState().sessions[0].state).toBe("running");
+			expect(useSessionStore.getState().sessions[0].turn.phase).toBe("running");
 		});
 	});
 

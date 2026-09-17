@@ -353,8 +353,8 @@ func TestHandler_WorkStart(t *testing.T) {
 	var result work.Work
 	json.Unmarshal(resp.Result, &result)
 
-	if result.Status != work.StatusInProgress {
-		t.Errorf("expected status in_progress, got %s", result.Status)
+	if result.Status != work.StatusActive {
+		t.Errorf("expected status %s, got %s", work.StatusActive, result.Status)
 	}
 	if result.SessionID == "" {
 		t.Error("expected non-empty session_id after start")
@@ -381,7 +381,7 @@ func TestHandler_WorkStart_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandler_WorkStart_AlreadyInProgress(t *testing.T) {
+func TestHandler_WorkStart_AlreadyActive(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
 	// Create and start a story
@@ -399,10 +399,10 @@ func TestHandler_WorkStart_AlreadyInProgress(t *testing.T) {
 		t.Fatalf("first start failed: %s", resp.Error.Message)
 	}
 
-	// Second start should fail (already in_progress)
+	// Second start should fail (already active)
 	resp = env.call("work.start", rpc.WorkStartParams{ID: story.ID})
 	if resp.Error == nil {
-		t.Fatal("expected error for starting already in_progress work")
+		t.Fatal("expected error for starting a work that is already active")
 	}
 }
 
@@ -477,8 +477,8 @@ func TestHandler_WorkStart_RollbackAllowsRetry(t *testing.T) {
 
 	var result work.Work
 	json.Unmarshal(resp.Result, &result)
-	if result.Status != work.StatusInProgress {
-		t.Errorf("expected status in_progress after retry, got %s", result.Status)
+	if result.Status != work.StatusActive {
+		t.Errorf("expected status %s after retry, got %s", work.StatusActive, result.Status)
 	}
 }
 
@@ -646,5 +646,89 @@ func TestHandler_WorkListSubscribe_WithItems(t *testing.T) {
 
 	if len(result.Items) != 2 {
 		t.Errorf("expected 2 items, got %d", len(result.Items))
+	}
+}
+
+// The detail's activity is derived, like its usage, so it rides on the result
+// rather than on the work item — and the reply is where a client gets its first
+// value. Sending the zero value here would leave the page reading Idle until the
+// first notification moved it.
+func TestHandler_WorkDetailSubscribe_CarriesTheActivity(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	workID, _ := startWorkWaiting(t, env, work.WaitUser)
+
+	resp := env.call("work.detail.subscribe", rpc.WorkDetailSubscribeParams{
+		ID:     "watch-1",
+		WorkID: workID,
+	})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result rpc.WorkDetailSubscribeResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if result.Activity != work.ActivityNeedsMessage {
+		t.Errorf("activity = %q, want %q", result.Activity, work.ActivityNeedsMessage)
+	}
+}
+
+// The same value on the row, which is the one a client cannot compute itself:
+// the list spans worktrees and it holds the turn state of at most one.
+func TestHandler_WorkListSubscribe_CarriesTheActivity(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	workID, _ := startWorkWaiting(t, env, work.WaitChild)
+
+	resp := env.call("work.list.subscribe", rpc.SubscribeParams{ID: "watch-2"})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result rpc.WorkListSubscribeResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var row *rpc.WorkListItem
+	for i := range result.Items {
+		if result.Items[i].ID == workID {
+			row = &result.Items[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("work %s is not in the list", workID)
+	}
+	if row.Activity != work.ActivityWaitingChildren || row.Wait != work.WaitChild {
+		t.Errorf("row activity/wait = %q/%q, want %q/%q",
+			row.Activity, row.Wait, work.ActivityWaitingChildren, work.WaitChild)
+	}
+}
+
+// A work that has left active has no lease on its session's process. The rule
+// is hung on the transition rather than on the command, and these two are the
+// user-visible halves of it: Stop ends the process now, and the session stays
+// behind for the restart.
+func TestHandler_WorkStop_EndsTheProcessAndKeepsTheSession(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	workID, sessionID := startWorkWaiting(t, env, work.WaitNone)
+
+	wt := env.getMainWorktree()
+	defer env.worktreeManager.Release(wt)
+	if !wt.ProcessManager.HasProcess(sessionID) {
+		t.Fatal("expected a process after start")
+	}
+
+	if resp := env.call("work.stop", rpc.WorkStopParams{ID: workID}); resp.Error != nil {
+		t.Fatalf("stop failed: %s", resp.Error.Message)
+	}
+
+	waitForCleanup(func() bool { return !wt.ProcessManager.HasProcess(sessionID) })
+	if wt.ProcessManager.HasProcess(sessionID) {
+		t.Error("the process outlived the work that was holding it")
+	}
+	// The session and its transcript stay: that is what makes Restart resume
+	// rather than start over.
+	if _, found, _ := wt.SessionStore.Get(sessionID); !found {
+		t.Error("stopping a work deleted its session; only its process should end")
 	}
 }

@@ -3,6 +3,7 @@ import { useState } from "react";
 import type {
 	AskUserQuestion,
 	AskUserQuestionRequest,
+	ExpiryReason,
 	QuestionStatus,
 } from "../../types/message";
 import {
@@ -17,11 +18,21 @@ import { CollapsibleBody, ScrollableContent } from "../ui";
 interface Props {
 	request: AskUserQuestionRequest;
 	status: QuestionStatus;
+	/** Why it expired, when the server could say; see ExpiryReason. */
+	reason?: ExpiryReason;
 	savedAnswers?: Record<string, string>;
 	onRespond?: (
 		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
+	/**
+	 * Sends the selection as an ordinary message. The way out of an expired
+	 * question: the request can no longer be answered, but what the user wanted
+	 * to say can still be said (docs/lifecycle-ui.md §5.1).
+	 */
+	onSendAsMessage?: (content: string) => void;
+	/** Why the last attempt to answer failed, shown under the buttons. */
+	error?: string;
 }
 
 interface QuestionFormProps {
@@ -160,7 +171,10 @@ const statusConfig = {
 		chip: "bg-th-error/15 text-th-error",
 	},
 	expired: {
-		Icon: X,
+		// Still a question — the card keeps a live form and a button
+		// (docs/lifecycle-ui.md §5.1). The expired *permission* is the one that
+		// wears an X: it states an outcome and offers nothing to press.
+		Icon: CircleHelp,
 		color: "text-th-text-muted",
 		label: "Expired",
 		// An opaque surface rather than the `/15` self-tint its siblings use:
@@ -172,6 +186,58 @@ const statusConfig = {
 	},
 };
 
+// The banner an expired question shows, in two halves: what happened, and what
+// can still be done about it (docs/lifecycle-ui.md §5.1).
+//
+// Two halves rather than one sentence per reason, because the two do not vary
+// together: what happened is known whenever the server could name it, while
+// what can be done depends on this card's host. A card with no way to send a
+// message should still say *why* it expired.
+const QUESTION_EXPIRY_CAUSE: Record<ExpiryReason, string> = {
+	process_ended: "The agent's process ended before this was answered.",
+	timeout:
+		"This question was not answered in time, so Pockode stopped waiting.",
+	work_closed: "This question was cancelled because the work was closed.",
+};
+
+// Said when the reason is unknown, and true of every one of them.
+const QUESTION_EXPIRY_CAUSE_FALLBACK =
+	"The agent is no longer waiting for this answer.";
+
+const STILL_ANSWERABLE =
+	"You can still answer — it will be sent as a new message and the agent will pick up from there.";
+
+// A closed work is the one ending that offers a different way on. Answering its
+// question is not refused because the message could not be delivered — typing
+// into a closed work's chat is an ordinary thing to do — but because carrying a
+// finished work on is a decision the user makes deliberately, by reopening it,
+// rather than a side effect of answering a question that was cancelled with it.
+const REOPEN_TO_CARRY_ON = "Reopen the work to carry on with it.";
+
+/**
+ * The message an expired question's answer is sent as.
+ *
+ * It carries the question with it, and that is not politeness: the request the
+ * agent made is gone from its side of the conversation — a CLI resuming after
+ * its process died drops the dangling tool call when it rebuilds the API
+ * request — so a bare option label arrives as an answer to nothing and is
+ * answered as such. Measured, not assumed (docs/lifecycle.md, "What was measured
+ * rather than assumed").
+ */
+function degradedAnswer(
+	entries: { question: AskUserQuestion; selection: QuestionSelection }[],
+): string {
+	const lead =
+		"Answering a question you asked earlier. The request itself is no longer live, so this comes as an ordinary message:";
+	const body = entries
+		.map(({ question, selection }) => {
+			const answer = summarize(selection);
+			return `Q: ${question.question}\nA: ${answer}`;
+		})
+		.join("\n\n");
+	return `${lead}\n\n${body}`;
+}
+
 function summarize(selection: QuestionSelection): string {
 	const parts = [...selection.labels];
 	if (selection.otherText) parts.push(selection.otherText);
@@ -181,22 +247,37 @@ function summarize(selection: QuestionSelection): string {
 function AskUserQuestionItem({
 	request,
 	status,
+	reason,
 	savedAnswers,
 	onRespond,
+	onSendAsMessage,
+	error,
 }: Props) {
 	const isPending = status === "pending";
-	// Without onRespond there is no way to submit, so an editable form would be
-	// a dead end.
-	const readOnly = !isPending || !onRespond;
+	// An expired question is still worth answering. The request itself is gone —
+	// only the process that raised it could have taken the answer — but what the
+	// user was going to say is not, and it reaches the agent as an ordinary
+	// message instead (docs/lifecycle-ui.md §5.1).
+	const isExpired = status === "expired";
+	// Except when the work above it closed; see REOPEN_TO_CARRY_ON.
+	const canSendAsMessage = isExpired && reason !== "work_closed";
+	const canAnswer =
+		(isPending && !!onRespond) || (canSendAsMessage && !!onSendAsMessage);
+	// Without a way to submit there is no point in an editable form.
+	const readOnly = !canAnswer;
 
+	// Open while the question is live. An expired one replayed from history opens
+	// on request like any other settled card; the one that expires while on
+	// screen stays open, because the user is looking at it.
 	const [expanded, setExpanded] = useState(isPending);
 	// The card keeps its identity across pending -> answered, so it never
 	// remounts; collapse explicitly on that one transition (and only that one,
-	// otherwise the user could never reopen it).
+	// otherwise the user could never reopen it). Expiring is excluded: the card
+	// is still answerable, and it is where the reason it expired is written.
 	const [prevStatus, setPrevStatus] = useState(status);
 	if (prevStatus !== status) {
 		setPrevStatus(status);
-		if (prevStatus === "pending") setExpanded(false);
+		if (prevStatus === "pending" && status !== "expired") setExpanded(false);
 	}
 
 	const [selectedLabels, setSelectedLabels] = useState<
@@ -280,12 +361,27 @@ function AskUserQuestionItem({
 	};
 
 	const handleSubmit = () => {
+		if (isExpired) {
+			// The card records nothing afterwards: it stays Expired with no answer
+			// summary, and the answer is visible as the message directly below it.
+			// That is the truth — the request was never answered, a message was
+			// sent — and writing a late answer onto an immutable record would then
+			// have to explain an "Answered" chip on a tool call that never got a
+			// result.
+			onSendAsMessage?.(degradedAnswer(entries));
+			return;
+		}
 		const finalAnswers: Record<string, string> = {};
 		for (const { question, selection } of entries) {
 			finalAnswers[question.question] = formatAnswer(selection);
 		}
 		onRespond?.(request, finalAnswers);
 	};
+
+	// An expired card's form is inside the collapsed body, so its button waits
+	// there too: on its own it would be a disabled control with nothing on screen
+	// explaining what would enable it. A pending card is open to begin with.
+	const showFooter = canAnswer && (isPending || expanded);
 
 	const canSubmit = entries.every(
 		({ selection }) =>
@@ -336,9 +432,23 @@ function AskUserQuestionItem({
 							You cancelled this question — no answer was sent.
 						</div>
 					)}
-					{status === "expired" && (
+					{/* What happened, then what can still be done about it. The offer
+					    is only made where there is one to make — without a host that
+					    can send, the card states the fact and stops there. */}
+					{isExpired && (
 						<div className="mb-3 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
-							This question expired before it was answered.
+							{[
+								reason
+									? QUESTION_EXPIRY_CAUSE[reason]
+									: QUESTION_EXPIRY_CAUSE_FALLBACK,
+								canAnswer
+									? STILL_ANSWERABLE
+									: reason === "work_closed"
+										? REOPEN_TO_CARRY_ON
+										: "",
+							]
+								.filter(Boolean)
+								.join(" ")}
 						</div>
 					)}
 
@@ -376,22 +486,38 @@ function AskUserQuestionItem({
 				</ScrollableContent>
 			</CollapsibleBody>
 
-			{isPending && onRespond && (
+			{/* Outside the footer on purpose: a refusal can take the footer away
+			    with it, and an error that disappears with the control it belongs to
+			    is a silent failure (docs/lifecycle-ui.md §8). */}
+			{error && (
+				<p
+					role="alert"
+					className="border-th-border border-t px-2 py-1.5 text-th-error"
+				>
+					{error}
+				</p>
+			)}
+
+			{showFooter && (
 				<div className="flex justify-end gap-2 border-t border-th-border p-2">
-					<button
-						type="button"
-						onClick={() => onRespond(request, null)}
-						className="rounded bg-th-bg-secondary px-2 py-1 text-th-text-muted hover:bg-th-overlay-hover"
-					>
-						Cancel
-					</button>
+					{isPending && onRespond && (
+						<button
+							type="button"
+							onClick={() => onRespond(request, null)}
+							className="rounded bg-th-bg-secondary px-2 py-1 text-th-text-muted hover:bg-th-overlay-hover"
+						>
+							Cancel
+						</button>
+					)}
 					<button
 						type="button"
 						onClick={handleSubmit}
 						disabled={!canSubmit}
 						className="rounded bg-th-accent px-2 py-1 text-th-bg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
 					>
-						Submit
+						{/* The button says what will happen, because what happens is not
+						    what the card originally promised. */}
+						{isExpired ? "Send as message" : "Submit"}
 					</button>
 				</div>
 			)}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chat"
+	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/worktree"
@@ -22,9 +23,9 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	// Verify the session exists. Its settings are not read here: they belong to
-	// session.detail.subscribe, which the client runs alongside this one.
-	_, found, err := wt.SessionStore.Get(params.SessionID)
+	// The session's turn is read here; its settings are not, because those belong
+	// to session.detail.subscribe, which the client runs alongside this one.
+	meta, found, err := wt.SessionStore.Get(params.SessionID)
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
 		return
@@ -58,8 +59,11 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		History:       page.Records,
 		HasMore:       page.HasMore,
 		NextBeforeSeq: page.NextBeforeSeq,
-		State:         wt.ProcessManager.GetProcessState(params.SessionID),
-		ToolActivity:  wt.ProcessManager.GetToolActivity(params.SessionID),
+		// From the store, not from the process manager: the turn is what the
+		// session is doing, and it is recorded whether or not a process is still
+		// there to be asked.
+		Turn:         meta.Turn,
+		ToolActivity: wt.ProcessManager.GetToolActivity(params.SessionID),
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send subscribe response", "error", err)
@@ -67,7 +71,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 	}
 
 	log.Info("subscribed to chat messages",
-		"subscriptionId", params.ID, "state", result.State,
+		"subscriptionId", params.ID, "phase", result.Turn.Phase,
 		"records", len(page.Records), "hasMore", page.HasMore)
 }
 
@@ -134,13 +138,18 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	log.Info("received prompt", "length", len(params.Content))
 
-	wt.SessionListWatcher.HandleUserAction(params.SessionID)
-
 	seq, err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier())
 	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
+
+	// After the send, and so in all three of these handlers: what resumes a work
+	// is the agent having been handed something to go on. A send that failed —
+	// no session, a CLI that would not start, an answer to a prompt nobody is
+	// waiting on any more — handed it nothing, and a work resumed for it would
+	// be left active with no turn coming to end it.
+	h.workEngine.HandleUserMessage(params.SessionID)
 
 	// This connection is the one excluded from the broadcast, so the reply is
 	// where it learns its own message's seq (see rpc.MessageResult).
@@ -158,13 +167,12 @@ func (h *rpcMethodHandler) handleInterrupt(ctx context.Context, conn *jsonrpc2.C
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	// No HandleUserAction here, and that is the answer to "was interrupt
+	// No HandleUserMessage here, and that is the answer to "was interrupt
 	// forgotten?" — it was not. Interrupt takes the turn away instead of handing
-	// the session something to go on, and the interrupted state change it produces
-	// stops in_progress work, so resuming a paused work first would only walk it
-	// into stopped. The session's needs_input flag still drops: that state change
-	// is an idle one, and SessionListWatcher.HandleProcessStateChange clears the
-	// flag there.
+	// the session something to go on, and the aborted turn it produces stops the
+	// work, so resuming a waiting work first would only walk it into stopped. The
+	// session's own side needs nothing: the InterruptedEvent ends the turn
+	// through the reducer, and every blocker it was holding expires with it.
 	if err := wt.ChatClient.Interrupt(ctx, params.SessionID); err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
@@ -194,12 +202,13 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 	}
 	choice := parsePermissionChoice(params.Choice)
 
-	wt.SessionListWatcher.HandleUserAction(params.SessionID)
-
 	if err := wt.ChatClient.SendPermissionResponse(ctx, params.SessionID, data, choice); err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
+
+	// After the send; see handleMessage.
+	h.workEngine.HandleUserMessage(params.SessionID)
 
 	log.Info("sent permission response", "choice", params.Choice)
 
@@ -222,12 +231,13 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 		ToolUseID: params.ToolUseID,
 	}
 
-	wt.SessionListWatcher.HandleUserAction(params.SessionID)
-
 	if err := wt.ChatClient.SendQuestionResponse(ctx, params.SessionID, data, params.Answers); err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
+
+	// After the send; see handleMessage.
+	h.workEngine.HandleUserMessage(params.SessionID)
 
 	log.Info("sent question response", "cancelled", params.Answers == nil)
 
@@ -242,12 +252,14 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 	if errors.Is(err, chat.ErrSessionNotFound) {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
 	} else if errors.Is(err, chat.ErrSessionNotRunning) ||
+		errors.Is(err, process.ErrRequestNotPending) ||
 		errors.Is(err, chat.ErrForkAnchorOutOfRange) ||
 		errors.Is(err, chat.ErrForkAnchorNoHistory) ||
 		errors.Is(err, chat.ErrForkUnsupported) {
 		// The request does not fit the session's history, state or agent — a prompt
-		// whose process is gone, a fork anchored past the end of the history or at
-		// the very first message, a fork of a session whose agent cannot be forked.
+		// whose process is gone or which is no longer being waited on, a fork
+		// anchored past the end of the history or at the very first message, a
+		// fork of a session whose agent cannot be forked.
 		// The message names what was wrong, and none of them is a server fault.
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {

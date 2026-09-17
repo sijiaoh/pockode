@@ -3,6 +3,7 @@ import type {
 	AssistantMessage,
 	ContentPart,
 	Message,
+	SessionTurn,
 	ToolRun,
 	UserMessage,
 } from "../types/message";
@@ -16,6 +17,7 @@ import {
 	normalizeEvent,
 	prependHistoryPage,
 	replayHistory,
+	settleAgainstTurn,
 	settleRunningToolRuns,
 	stampMessageAnchorSeq,
 } from "./messageReducer";
@@ -40,6 +42,94 @@ const sampleQuestions = [
 		multiSelect: false,
 	},
 ];
+
+const partsOf = (message: Message) =>
+	message.role === "assistant" ? message.parts : [];
+
+function turnState(
+	phase: SessionTurn["phase"],
+	extra: Partial<SessionTurn> = {},
+): SessionTurn {
+	return { phase, open: phase !== "idle", since: "", ...extra };
+}
+
+describe("settleAgainstTurn", () => {
+	// The whole of what §2.4 is for: a server that died mid-stream wrote no
+	// ending, so the transcript ends on a bubble that would otherwise spin
+	// forever.
+	const streaming = () =>
+		replayHistory([
+			{ type: "message", content: "Do it" },
+			{ type: "text", content: "Working" },
+		]);
+
+	it("finishes a streaming bubble the way the turn ended", () => {
+		expect(
+			settleAgainstTurn(streaming(), turnState("idle")).at(-1),
+		).toMatchObject({ status: "complete" });
+		expect(
+			settleAgainstTurn(
+				streaming(),
+				turnState("idle", { last_outcome: "aborted" }),
+			).at(-1),
+		).toMatchObject({ status: "interrupted" });
+	});
+
+	it("leaves a running turn's bubble streaming", () => {
+		expect(
+			settleAgainstTurn(streaming(), turnState("running")).at(-1),
+		).toMatchObject({ status: "streaming" });
+	});
+
+	// A parked turn is producing nothing, which is the whole point of saying so.
+	it("finishes a bubble the turn parked on background work", () => {
+		expect(
+			settleAgainstTurn(
+				streaming(),
+				turnState("blocked", {
+					blockers: [{ kind: "background", raised_at: "" }],
+				}),
+			).at(-1),
+		).toMatchObject({ status: "complete" });
+	});
+
+	const asked = () =>
+		replayHistory([
+			{ type: "message", content: "Ask me" },
+			{
+				type: "ask_user_question",
+				request_id: "q1",
+				tool_use_id: "t1",
+				questions: sampleQuestions,
+			},
+		]);
+
+	it("keeps a card the turn still lists as a blocker answerable", () => {
+		const settled = settleAgainstTurn(
+			asked(),
+			turnState("blocked", {
+				blockers: [{ kind: "question", request_id: "q1", raised_at: "" }],
+			}),
+		);
+		expect(partsOf(settled.at(-1) as Message)).toMatchObject([
+			{ type: "ask_user_question", status: "pending" },
+		]);
+	});
+
+	// The same transcript, a session that is blocked on something else: this
+	// card's process is gone whatever else is going on.
+	it("retires a card the turn does not list", () => {
+		const settled = settleAgainstTurn(
+			asked(),
+			turnState("blocked", {
+				blockers: [{ kind: "background", raised_at: "" }],
+			}),
+		);
+		expect(partsOf(settled.at(-1) as Message)).toMatchObject([
+			{ type: "ask_user_question", status: "expired" },
+		]);
+	});
+});
 
 describe("messageReducer", () => {
 	describe("normalizeEvent", () => {
@@ -284,7 +374,34 @@ describe("messageReducer", () => {
 			expect(event).toEqual({
 				type: "request_cancelled",
 				requestId: "req-1",
+				reason: undefined,
 			});
+		});
+
+		// The reason decides which banner the card shows and, for work_closed,
+		// whether it can be answered at all — so it has to survive the wire.
+		it("carries the cancellation reason", () => {
+			expect(
+				normalizeEvent({
+					type: "request_cancelled",
+					request_id: "req-1",
+					reason: "timeout",
+				}),
+			).toMatchObject({ reason: "timeout" });
+		});
+
+		// A value this build does not know is no reason at all: the banner then
+		// says what is true of all of them, rather than a card rendering nothing.
+		it("drops a reason it does not know", () => {
+			expect(
+				// Typed as a bare record on purpose: the wire can carry a value the
+				// types here do not admit, which is the case under test.
+				normalizeEvent({
+					type: "request_cancelled",
+					request_id: "req-1",
+					reason: "abducted",
+				} as Record<string, unknown>),
+			).toMatchObject({ reason: undefined });
 		});
 	});
 
@@ -655,11 +772,77 @@ describe("messageReducer", () => {
 			const messages = applyServerEvent([initial], {
 				type: "request_cancelled",
 				requestId: "q-1",
+				reason: "work_closed",
 			});
 			const assistant = messages[0] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
 				type: "ask_user_question",
 				status: "expired",
+				// Why it expired travels with it: the card says which of the three
+				// things happened, and only this one makes it unanswerable.
+				reason: "work_closed",
+			});
+		});
+
+		// The same expiry reaches the client over two channels — the turn stops
+		// listing the blocker, and the record says why — in either order. The
+		// card that lost that race must not be stuck on the neutral banner.
+		it("fills in the reason on a card that already expired", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "ask_user_question",
+						request: {
+							requestId: "q-1",
+							toolUseId: "toolu_q_1",
+							questions: sampleQuestions,
+						},
+						status: "expired",
+					},
+				],
+				status: "complete",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], {
+				type: "request_cancelled",
+				requestId: "q-1",
+				reason: "timeout",
+			});
+			expect((messages[0] as AssistantMessage).parts[0]).toMatchObject({
+				status: "expired",
+				reason: "timeout",
+			});
+		});
+
+		// The first record to name one is the one that settled it.
+		it("does not overwrite a reason the card already has", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "ask_user_question",
+						request: {
+							requestId: "q-1",
+							toolUseId: "toolu_q_1",
+							questions: sampleQuestions,
+						},
+						status: "expired",
+						reason: "work_closed",
+					},
+				],
+				status: "complete",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], {
+				type: "request_cancelled",
+				requestId: "q-1",
+				reason: "process_ended",
+			});
+			expect((messages[0] as AssistantMessage).parts[0]).toMatchObject({
+				reason: "work_closed",
 			});
 		});
 
@@ -891,6 +1074,9 @@ describe("messageReducer", () => {
 			expect(assistant.parts[0]).toMatchObject({
 				type: "ask_user_question",
 				status: "expired",
+				// The record is the reason: every card still open when a process
+				// ends lost the only thing that could have taken its answer.
+				reason: "process_ended",
 			});
 		});
 
@@ -1600,6 +1786,49 @@ describe("messageReducer", () => {
 			expect((messages[0] as AssistantMessage).status).toBe("complete");
 			expect(messages[1].role).toBe("user");
 			expect(messages[2].role).toBe("assistant");
+		});
+	});
+
+	// A turn parking on background work is recorded so the *session* can say the
+	// agent is waiting rather than thinking
+	// (docs/code/agent-integration.md#background-waits). Drawing it is not wired
+	// up, and until it is the record has to leave the transcript alone — an
+	// unhandled type falls back to `raw`, which would put the record's own JSON
+	// on screen as a message.
+	describe("background_wait", () => {
+		it("leaves the transcript exactly as it was", () => {
+			const before = replayHistory([
+				{ type: "message", content: "Run it in the background", seq: 1 },
+				{ type: "text", content: "Started.", seq: 2 },
+			]);
+
+			const after = applyServerEvent(
+				before,
+				normalizeEvent({ type: "background_wait" }),
+				3,
+			);
+
+			expect(after).toBe(before);
+		});
+
+		it("does not open a bubble of its own between turns", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "Run it", seq: 1 },
+				{ type: "text", content: "Started.", seq: 2 },
+				{ type: "background_wait", seq: 3 },
+				{ type: "text", content: "Finished.", seq: 4 },
+				{ type: "done", seq: 5 },
+			]);
+
+			expect(messages).toHaveLength(2);
+			const assistant = messages[1] as AssistantMessage;
+			expect(assistant.status).toBe("complete");
+			expect(assistant.parts).toEqual([
+				{ type: "text", content: "Started.Finished." },
+			]);
+			// The wait carries no address of its own: the message it did not touch
+			// keeps the seq of the record that did.
+			expect(assistant.anchorSeq).toBe(5);
 		});
 	});
 
@@ -2748,9 +2977,6 @@ describe("messageReducer", () => {
 	});
 
 	describe("paging backwards through history", () => {
-		const partsOf = (message: Message) =>
-			message.role === "assistant" ? message.parts : [];
-
 		describe("isBackReference", () => {
 			it("picks out the records that settle something recorded earlier", () => {
 				expect(isBackReference({ type: "tool_result" })).toBe(true);
@@ -2859,9 +3085,10 @@ describe("messageReducer", () => {
 					{ type: "text" },
 				]);
 			});
-			it("retires what a killed process left open, which history never recorded", () => {
-				// A restart takes the process down without writing a process_ended, so
-				// nothing in any page says these are over.
+			it("retires what a killed process left open, which this page never recorded", () => {
+				// The process is gone and nothing in this page says so — the
+				// process_ended a restart repair writes lands at the end of the
+				// transcript, pages further back learn nothing from it.
 				const older = replayHistory([
 					{ type: "message", content: "Ask me" },
 					{
@@ -2872,7 +3099,9 @@ describe("messageReducer", () => {
 					},
 				]);
 
-				const caught = prependHistoryPage(older, [], { processEnded: true });
+				const caught = prependHistoryPage(older, [], {
+					turn: { phase: "idle", open: false, since: "" },
+				});
 
 				expect(partsOf(caught[caught.length - 1])).toMatchObject([
 					{ type: "ask_user_question", status: "expired" },

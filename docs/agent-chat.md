@@ -13,7 +13,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 ```
 
 - **ChatClient** (`server/chat/`) — Coordinates session/process management, persists messages to history, broadcasts events to all WebSocket subscribers.
-- **ProcessManager** (`server/process/`) — Manages agent process lifecycle. Tracks state (`idle` / `running` / `ended`), runs idle timeout reaper.
+- **ProcessManager** (`server/process/`) — Manages agent process lifecycle. Streams agent events into history and turn state, and runs the lease reaper that decides how long a process may be held ([the lease table](code/agent-integration.md#the-lease-table)).
 - **Agent Session** (`server/agent/`) — Common `Session` interface implemented by each backend (`agent/claude/`, `agent/codex/`). Handles subprocess spawning, stream-json parsing, stdin messaging.
 
 ## Key Files
@@ -26,7 +26,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessageExcluding` (user) and `SendSystemMessage` (system automation) share one persist+broadcast path |
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
-| Process manager | `server/process/manager.go` | Process lifecycle, state machine, idle reaper |
+| Process manager | `server/process/manager.go` | Process lifecycle, event stream, lease reaper |
 | Frontend panel | `web/src/components/Chat/ChatPanel.tsx` | Message list, input bar, engine (agent + model + effort) and mode selectors, and the session info button — the action bar's third control, whose panel holds what this session has spent ([usage-display-ui.md](usage-display-ui.md)) |
 | Transcript | `web/src/components/Chat/MessageList.tsx` | Rendering the loaded messages, and every scroll decision made over them: [following the tail](#following-the-tail), the sentinel and anchor behind [history paging](#history-paging), and the jump to an unanswered question ([pending-question-entry.md](pending-question-entry.md)) |
 | Chat hook | `web/src/hooks/useChatMessages.ts` | Message state, streaming, permission/question handling |
@@ -59,7 +59,7 @@ the rest costs transport, parsing and memory for records nobody looks at.
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `state`, `tool_activity?` |
+| `chat.messages.subscribe` | `id`, `session_id`, `limit?` | `history`, `has_more`, `next_before_seq?`, `turn`, `tool_activity?` |
 | `chat.messages.history` | `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?` |
 
 - `history` is the page, **oldest record first**, each record stamped with its
@@ -115,9 +115,15 @@ The records that ended it are in the page above, so left as it replayed it would
 keep a spinner running in the middle of the transcript — and with nothing left
 streaming, a later `process_ended` retires only the dialogs and Tasks this page
 left open instead of also stamping its status onto a turn that was still running
-at this point. A process killed by a restart writes no `process_ended` at all;
-that the process is gone is passed in separately, so every page is retired the
-same way the newest one already is.
+at this point. What the session is doing is passed in separately rather than
+looked for in the page, so every page is retired the same way the newest one
+already is — a `process_ended` is written for a session a restart cut short
+([agent-integration.md](code/agent-integration.md#restart-repair)), but it lands
+at the end of the transcript and says nothing to a page pulled in from further
+back. An older page is given `retireAgainstTurn`, not the whole of
+`settleAgainstTurn`: how the *last* turn ended is no business of a turn five
+pages up, which this page already closed without needing to know
+([lifecycle-ui.md](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
 
 The mirror of this is one record the page above has to hand *down*. A record
 that only ends a turn — `done`, `error`, `interrupted`, `process_ended` — has

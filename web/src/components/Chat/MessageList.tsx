@@ -1,7 +1,9 @@
 import { ArrowDown } from "lucide-react";
 import {
+	type Ref,
 	useCallback,
 	useEffect,
+	useImperativeHandle,
 	useLayoutEffect,
 	useMemo,
 	useRef,
@@ -16,7 +18,10 @@ import type {
 import { findPendingQuestions } from "../../utils/pendingQuestions";
 import { Spinner } from "../ui";
 import ForkOriginBanner from "./ForkOriginBanner";
-import MessageItem, { type PermissionChoice } from "./MessageItem";
+import MessageItem, {
+	type PermissionChoice,
+	type PromptError,
+} from "./MessageItem";
 import PendingQuestionPill from "./PendingQuestionPill";
 
 const AT_BOTTOM_THRESHOLD = 50;
@@ -47,14 +52,20 @@ interface QuestionVisibility {
 
 // Attribute lookup rather than a `[data-...="id"]` selector so request ids never
 // need CSS escaping.
-function findQuestionCard(
+//
+// Both kinds of prompt answer to the same jump: they are the two things a
+// session can be blocked on that a user can clear, and the blocker strip names
+// whichever one is live by its request id alone.
+function findRequestCard(
 	root: HTMLElement,
 	requestId: string,
 ): HTMLElement | null {
 	for (const card of root.querySelectorAll<HTMLElement>(
-		"[data-question-request-id]",
+		"[data-question-request-id], [data-permission-request-id]",
 	)) {
-		if (card.dataset.questionRequestId === requestId) return card;
+		const id =
+			card.dataset.questionRequestId ?? card.dataset.permissionRequestId;
+		if (id === requestId) return card;
 	}
 	return null;
 }
@@ -117,11 +128,22 @@ function prefersReducedMotion(): boolean {
 	return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/**
+ * What the transcript can be asked to do from outside it.
+ *
+ * Jumping to a card is scroll work, and the scroll container lives here — so the
+ * blocker strip, which sits below the list, asks rather than reimplements. It is
+ * the same jump the pending-question pill makes from inside.
+ */
+export interface MessageListHandle {
+	jumpToRequest: (requestId: string) => void;
+}
+
 interface Props {
+	ref?: Ref<MessageListHandle>;
 	messages: Message[];
 	/** The session this transcript belongs to; see `MessageItem`. */
 	sessionId: string;
-	isProcessRunning: boolean;
 	/** Whether the server still holds records older than `messages[0]`. */
 	hasMoreHistory?: boolean;
 	isLoadingMoreHistory?: boolean;
@@ -138,7 +160,11 @@ interface Props {
 		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
+	/** Sends a message; used by the empty state's hints and by an expired question. */
 	onHintClick?: (hint: string) => void;
+	/** Must be stable: it reaches the memoized `MessageItem`. */
+	onSendAsMessage?: (content: string) => void;
+	promptError?: PromptError;
 	onOpenWorkDetail?: (workId: string) => void;
 	/** Opens a work-directory file in the Files viewer. Must be stable. */
 	onOpenFile?: (path: string) => void;
@@ -150,9 +176,9 @@ interface Props {
 }
 
 function MessageList({
+	ref,
 	messages,
 	sessionId,
-	isProcessRunning,
 	hasMoreHistory = false,
 	isLoadingMoreHistory = false,
 	historyError = null,
@@ -162,6 +188,8 @@ function MessageList({
 	onPermissionRespond,
 	onQuestionRespond,
 	onHintClick,
+	onSendAsMessage,
+	promptError,
 	onOpenWorkDetail,
 	onOpenFile,
 	forkedFromSessionId,
@@ -614,11 +642,11 @@ function MessageList({
 
 	useEffect(() => clearHighlight, [clearHighlight]);
 
-	const scrollToQuestion = useCallback(
+	const scrollToRequest = useCallback(
 		(requestId: string) => {
 			const scrollEl = scrollRef.current;
 			if (!scrollEl) return;
-			const card = findQuestionCard(scrollEl, requestId);
+			const card = findRequestCard(scrollEl, requestId);
 			if (!card) return;
 
 			// Jumping is a deliberate move away from the tail, and following stays
@@ -653,18 +681,29 @@ function MessageList({
 
 			// preventScroll: the browser's own focus scroll would fight the smooth
 			// scroll started above.
-			card
-				.querySelector<HTMLElement>("[data-question-header]")
-				?.focus({ preventScroll: true });
+			//
+			// A permission card has no header row of its own — its first button is
+			// the row that opens it, which is the same thing one step less
+			// explicitly. Without the fallback, jumping to a permission request
+			// would move the view and not the focus, which is a jump a keyboard
+			// user cannot perceive.
+			const focusTarget =
+				card.querySelector<HTMLElement>("[data-question-header]") ??
+				card.querySelector<HTMLElement>("button");
+			focusTarget?.focus({ preventScroll: true });
 		},
 		[clearHighlight, abandonRestoreWindow],
 	);
 
+	useImperativeHandle(ref, () => ({ jumpToRequest: scrollToRequest }), [
+		scrollToRequest,
+	]);
+
 	// Every loaded message is rendered, and a question the server has not sent yet
 	// is not among `pendingQuestions` at all, so the target always has a node.
 	const handlePillClick = useCallback(() => {
-		if (target) scrollToQuestion(target.requestId);
-	}, [target, scrollToQuestion]);
+		if (target) scrollToRequest(target.requestId);
+	}, [target, scrollToRequest]);
 
 	const handleScrollToBottom = useCallback(() => {
 		const el = scrollRef.current;
@@ -777,10 +816,11 @@ function MessageList({
 									// only once there are no older pages left above it.
 									isFirst={index === 0 && !hasMoreHistory}
 									isLast={isLast}
-									isProcessRunning={isLast && isProcessRunning}
 									isCodex={isCodex}
 									onPermissionRespond={onPermissionRespond}
 									onQuestionRespond={onQuestionRespond}
+									onSendAsMessage={onSendAsMessage}
+									promptError={promptError}
 									onOpenWorkDetail={onOpenWorkDetail}
 									onOpenFile={onOpenFile}
 									onForkMessage={onForkMessage}

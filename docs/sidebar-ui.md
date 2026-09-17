@@ -286,12 +286,12 @@ full-strength accent still holds WCAG's non-text 3:1 against its own composite,
 and at `/30` it does not. The border is doing the work the fill cannot — a tint
 this light is barely a shade away from the page, so "the background carries the
 emphasis" was never true in the light variants. `common/ToggleChip.tsx` and
-`Project/StepList.tsx` are the shape to copy. `ui/StatusBadge.tsx` writes it
-for every status rather than for the accent ones alone, so one row of badges
-keeps one shape — though `needs_input` still reads faint: `th-warning` is too
-pale in the light variants to clear even the non-text floor as a border, a
-token-layer fault it carries in every role it takes, and not one a badge can
-fix. Its label is legible regardless, which it was not before. `open` and
+`Project/StepList.tsx` are the shape to copy. `ui/ActivityBadge.tsx` writes it
+for every tone rather than for the accent ones alone, so one row of badges
+keeps one shape — though the warning tone still reads faint wherever it is used:
+`th-warning` is too pale in the light variants to clear even the non-text floor
+as a border, a token-layer fault it carries in every role it takes, and not one
+a badge can fix. Its label is legible regardless, which it was not before. `open` and
 `closed` are the two with no hue to move: their fill is `th-bg-tertiary` rather
 than a tint, and `th-border` on it is under 1.3:1, so the only weight they have
 is the label. It is `th-text-secondary` and not the body colour — a status is

@@ -3,7 +3,6 @@ import type { AgentType } from "./settings";
 import type { WorkType } from "./work";
 
 export type SessionMode = "default" | "yolo";
-export type ProcessState = "idle" | "running" | "ended";
 
 /**
  * Where a forked session came from. Only the parent's id: the client resolves
@@ -51,17 +50,21 @@ export interface SessionUsage extends TokenUsage {
  * open; the list goes to every client on every change, and a model chosen in one
  * session is not news to a client reading another.
  *
- * Two fields are also on `SessionDetail`, and neither can drift: `state` is
- * volatile process state the list owns outright and detail never carries, and
- * `forked_from` is fixed when the session is born and never written again.
+ * Two fields are also on `SessionDetail`, and neither can drift: both are read
+ * straight off the session the server stores, so the row and the detail are two
+ * narrowings of one record rather than two accounts of it.
  */
 export interface SessionListItem {
 	id: string;
 	title: string;
 	/** The row's subtitle, and what the list is ordered by. */
 	updated_at: string;
-	state: ProcessState;
-	needs_input: boolean;
+	/**
+	 * What the session is doing, whole. Everything the row draws is derived from
+	 * it by `sessionActivity` (web/src/lib/activity.ts) — nothing here is read
+	 * field by field, which is the rule this shape exists to make possible.
+	 */
+	turn: SessionTurn;
 	unread: boolean;
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
@@ -153,6 +156,18 @@ export interface ToolRun {
 	seenAt?: Date;
 }
 
+/**
+ * Why a prompt stopped waiting for its answer, for the cards that can no longer
+ * be answered as one (docs/lifecycle-ui.md §5). One type for both prompt kinds,
+ * because "why did this stop waiting for me" is one question.
+ *
+ * Absent is a real answer and the common one: a turn that simply ended, or a
+ * user who sent a message instead of answering, leaves a card nothing can
+ * answer for a reason the server cannot name. The banner then says what is true
+ * of all of them rather than guessing.
+ */
+export type ExpiryReason = "process_ended" | "timeout" | "work_closed";
+
 export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
 
 export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired";
@@ -166,12 +181,16 @@ export type ContentPart =
 			type: "permission_request";
 			request: PermissionRequest;
 			status: PermissionStatus;
+			/** Only ever set alongside `expired`; see ExpiryReason. */
+			reason?: ExpiryReason;
 	  }
 	| {
 			type: "ask_user_question";
 			request: AskUserQuestionRequest;
 			status: QuestionStatus;
 			answers?: Record<string, string>;
+			/** Only ever set alongside `expired`; see ExpiryReason. */
+			reason?: ExpiryReason;
 	  }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
@@ -483,7 +502,8 @@ export interface SessionDetail {
 	effort: string;
 	/** True once the agent has produced output in this session. */
 	activated: boolean;
-	needs_input: boolean;
+	/** What the session is doing. The same value the session's row carries. */
+	turn: SessionTurn;
 	unread: boolean;
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
@@ -496,6 +516,41 @@ export interface SessionDetail {
 
 export interface SessionDetailSubscribeResult {
 	session: SessionDetail;
+}
+
+/** What a turn is stuck on. Only one kind is ever the user's to clear twice
+ * over: `permission` and `question` need an answer, `background` needs the
+ * agent's own work to finish. */
+export type TurnBlockerKind = "permission" | "question" | "background";
+
+export interface TurnBlocker {
+	kind: TurnBlockerKind;
+	/** The agent's id for the prompt an answer names. Absent on `background`. */
+	request_id?: string;
+	raised_at: string;
+}
+
+/** `blocked` is exactly "there is at least one blocker": the server derives the
+ * phase rather than letting it drift from them, so nothing here has to look past
+ * `phase` to find out. */
+export type TurnPhase = "idle" | "running" | "blocked";
+
+export type TurnOutcome = "completed" | "failed" | "aborted";
+
+export interface SessionTurn {
+	phase: TurnPhase;
+	/**
+	 * Whether a turn is under way behind whatever is in its way. It differs from
+	 * `phase !== "idle"` in exactly one case: a CLI can raise a prompt after the
+	 * turn it belonged to already ended, which is `blocked` with nothing running.
+	 */
+	open: boolean;
+	blockers?: TurnBlocker[];
+	/** When the current phase was entered; it does not move while it holds. */
+	since: string;
+	/** How the previous turn ended. Cleared the moment a new one starts, so it
+	 * says nothing while `phase` is not `idle`. */
+	last_outcome?: TurnOutcome;
 }
 
 /** A deleted session reports no metadata; `deleted` is set exactly then. */
@@ -526,11 +581,15 @@ export interface ChatMessagesHistoryPage {
 
 export interface ChatMessagesSubscribeResult extends ChatMessagesHistoryPage {
 	/**
-	 * Whether a process is running for this session. The transcript's own
-	 * subscription reports it because the transcript is what it governs — the
+	 * What the session is doing at the moment of subscribing. The transcript's
+	 * own subscription reports it because the transcript is what it governs — the
 	 * session's settings come from `session.detail.subscribe` instead.
+	 *
+	 * It is what closes out a transcript whose server died mid-stream: a turn
+	 * that is not running says every bubble still `streaming` has stopped, which
+	 * history cannot say on its own (docs/lifecycle-ui.md §2.4).
 	 */
-	state: ProcessState;
+	turn: SessionTurn;
 	/**
 	 * What each call still in flight last reported doing, by `tool_use_id`. Not
 	 * in `history`: a `tool_activity` is never recorded, and this is how a client
@@ -612,6 +671,7 @@ export type ServerMethod =
 	| "done"
 	| "interrupted"
 	| "process_ended"
+	| "background_wait"
 	| "permission_request"
 	| "ask_user_question"
 	| "request_cancelled"
@@ -677,6 +737,14 @@ export type ServerNotification =
 	| { type: "interrupted" }
 	| { type: "process_ended" }
 	| {
+			/**
+			 * The turn parked on work that outlives the tool call that started it.
+			 * Neither an ending nor output: the CLI resumes by itself when the work
+			 * finishes (agent-integration.md#background-waits).
+			 */
+			type: "background_wait";
+	  }
+	| {
 			type: "permission_request";
 			request_id: string;
 			tool_name: string;
@@ -693,6 +761,11 @@ export type ServerNotification =
 	| {
 			type: "request_cancelled";
 			request_id: string;
+			/**
+			 * Absent when the agent withdrew the request itself: the CLI said it no
+			 * longer needs an answer and did not say why.
+			 */
+			reason?: ExpiryReason;
 	  }
 	| { type: "system"; content: string }
 	| { type: "command_output"; content: string };

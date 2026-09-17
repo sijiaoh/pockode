@@ -58,7 +58,11 @@ class MockWebSocket {
 				if (parsed.method === "auth") {
 					result = { version: "test" };
 				} else if (parsed.method === "chat.messages.subscribe") {
-					result = { id: "sub-1", history: [], state: "ended" };
+					result = {
+						id: "sub-1",
+						history: [],
+						turn: { phase: "idle", open: false, since: "" },
+					};
 				} else if (parsed.method === "chat.message") {
 					result = chatMessageResult;
 				}

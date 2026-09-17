@@ -166,7 +166,7 @@ func (s *appSession) handleTurnCompleted(params json.RawMessage) {
 	switch notif.Turn.Status {
 	case "interrupted":
 		// A stop somebody asked for, which is what InterruptedEvent means:
-		// work.AutoResumer stops the work item instead of continuing it.
+		// the work engine stops the work item instead of continuing it.
 		s.emitEvent(agent.InterruptedEvent{})
 	case "failed":
 		message := "codex reported an error without a message"

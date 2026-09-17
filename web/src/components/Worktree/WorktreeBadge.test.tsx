@@ -42,6 +42,7 @@ function makeWork(
 		id: "work-1",
 		type: "story",
 		title: "Work",
+		activity: "idle",
 		updated_at: "2026-01-01T00:00:00Z",
 		...overrides,
 	};
@@ -60,7 +61,7 @@ function renderBadge(work: WorkListItem, others: WorkListItem[] = []) {
 }
 
 function renderStartedBadge(worktree: string | undefined) {
-	return renderBadge(makeWork({ status: "in_progress", worktree }));
+	return renderBadge(makeWork({ status: "active", worktree }));
 }
 
 afterEach(() => {
@@ -110,7 +111,7 @@ describe("WorktreeBadge", () => {
 	it("shows the worktree of an open task under a started story", () => {
 		const story = makeWork({
 			id: "story-1",
-			status: "in_progress",
+			status: "active",
 			worktree: "feat-login",
 		});
 		renderBadge(
@@ -135,7 +136,7 @@ describe("WorktreeBadge", () => {
 				id: "task-1",
 				type: "task",
 				parent_id: story.id,
-				status: "in_progress",
+				status: "active",
 				worktree: "feat-login",
 			}),
 			[story],

@@ -78,7 +78,7 @@ func newStoresWithRole(t *testing.T, role agentrole.AgentRole) (work.Store, agen
 func newExecWithRole(t *testing.T, role agentrole.AgentRole) (*Executor, work.Store, string) {
 	t.Helper()
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, role)
-	return NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}), stubNotifier{}, settingsStore), store, roleID
+	return NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore), store, roleID
 }
 
 func newTestExec(t *testing.T) testExec {
@@ -271,7 +271,7 @@ func TestWorkList_CarriesOnlySummaryFields(t *testing.T) {
 		"type": "task", "parent_id": storyID, "title": "Child Task",
 		"body": "More prose", "agent_role_id": ts.roleID,
 	})
-	// Starting the story gives it a session_id and moves it to in_progress, so
+	// Starting the story gives it a session_id and moves it to active, so
 	// the assertion covers a running work item and not only a freshly created
 	// one — session_id is exactly the kind of field that could leak into a summary.
 	callTool(t, ts.exec, "work_start", map[string]string{"id": storyID})
@@ -424,8 +424,8 @@ func TestWorkStart(t *testing.T) {
 	if err != nil || !found {
 		t.Fatal("work not found after start")
 	}
-	if w.Status != work.StatusInProgress {
-		t.Errorf("status = %q, want in_progress", w.Status)
+	if w.Status != work.StatusActive {
+		t.Errorf("status = %q, want %q", w.Status, work.StatusActive)
 	}
 	if w.SessionID == "" {
 		t.Error("session_id should be set after start")
@@ -441,7 +441,7 @@ func TestWorkStart_NotFound(t *testing.T) {
 	}
 }
 
-func TestWorkStart_AlreadyInProgress(t *testing.T) {
+func TestWorkStart_AlreadyActive(t *testing.T) {
 	ts := newTestExec(t)
 
 	createResult := callTool(t, ts.exec, "work_create", map[string]string{
@@ -453,7 +453,7 @@ func TestWorkStart_AlreadyInProgress(t *testing.T) {
 
 	result := callTool(t, ts.exec, "work_start", map[string]string{"id": id})
 	if !result.IsError {
-		t.Error("expected error for already in_progress work")
+		t.Error("expected error for a work that is already active")
 	}
 }
 
@@ -502,14 +502,19 @@ func TestWorkNeedsInput(t *testing.T) {
 
 	w, found, err := ts.store.Get(id)
 	if err != nil || !found {
-		t.Fatal("work not found after needs_input")
+		t.Fatal("work not found after work_needs_input")
 	}
-	if w.Status != work.StatusNeedsInput {
-		t.Errorf("status = %q, want needs_input", w.Status)
+	if w.Status != work.StatusActive || w.Wait != work.WaitUser {
+		t.Errorf("status/wait = %q/%q, want active/user", w.Status, w.Wait)
+	}
+	// The agent's own words reach the work record, which is the only place the
+	// user can read what it actually wants.
+	if w.WaitReason != "Need clarification on requirements" {
+		t.Errorf("wait_reason = %q, want the reason the tool was given", w.WaitReason)
 	}
 }
 
-func TestWorkNeedsInput_NotInProgress(t *testing.T) {
+func TestWorkNeedsInput_NotActive(t *testing.T) {
 	ts := newTestExec(t)
 
 	createResult := callTool(t, ts.exec, "work_create", map[string]string{
@@ -521,7 +526,7 @@ func TestWorkNeedsInput_NotInProgress(t *testing.T) {
 		"id": id, "reason": "some reason",
 	})
 	if !result.IsError {
-		t.Error("expected error for needs_input from open status")
+		t.Error("expected error for work_needs_input from open status")
 	}
 }
 
@@ -743,8 +748,8 @@ func TestStepDone_AdvancesStep(t *testing.T) {
 	if w.CurrentStep != 1 {
 		t.Errorf("CurrentStep = %d, want 1", w.CurrentStep)
 	}
-	if w.Status != work.StatusInProgress {
-		t.Errorf("Status = %s, want in_progress", w.Status)
+	if w.Status != work.StatusActive {
+		t.Errorf("Status = %s, want %s", w.Status, work.StatusActive)
 	}
 }
 
@@ -842,12 +847,49 @@ func TestWorkWait_StoryWithPendingChildWaits(t *testing.T) {
 	}
 
 	w, _, _ := ts.store.Get(storyID)
-	if w.Status != work.StatusWaiting {
-		t.Errorf("Status = %s, want waiting", w.Status)
+	if w.Status != work.StatusActive || w.Wait != work.WaitChild {
+		t.Errorf("status/wait = %q/%q, want active/child", w.Status, w.Wait)
 	}
 }
 
-func TestStepDone_StoryWithPendingChildCloses(t *testing.T) {
+// A story does not finish while its subtasks are still running, and the refusal
+// has to be usable: it names the blockers, because an agent told only that some
+// exist will guess which (docs/lifecycle-ui.md §7).
+func TestStepDone_RefusesToCloseAStoryWithActiveSubtasks(t *testing.T) {
+	ts := newTestExec(t)
+
+	result := callTool(t, ts.exec, "work_create", map[string]string{
+		"type": "story", "title": "Test Story", "agent_role_id": ts.roleID,
+	})
+	storyID := extractID(t, toolText(result))
+
+	result = callTool(t, ts.exec, "work_create", map[string]string{
+		"type": "task", "title": "Reducer", "agent_role_id": ts.roleID, "parent_id": storyID,
+	})
+	taskID := extractID(t, toolText(result))
+
+	callTool(t, ts.exec, "work_start", map[string]string{"id": storyID})
+	callTool(t, ts.exec, "work_start", map[string]string{"id": taskID})
+
+	result = callTool(t, ts.exec, "step_done", map[string]string{"id": storyID})
+	if !result.IsError {
+		t.Fatalf("expected a refusal, got %q", toolText(result))
+	}
+	for _, want := range []string{`"Reducer"`, "work_wait", "The step was not completed"} {
+		if !strings.Contains(toolText(result), want) {
+			t.Errorf("refusal %q does not mention %q", toolText(result), want)
+		}
+	}
+
+	w, _, _ := ts.store.Get(storyID)
+	if w.Status != work.StatusActive {
+		t.Errorf("Status = %s, want active — a refused step_done moves nothing", w.Status)
+	}
+}
+
+// The other side of the same rule: a subtask that is no longer active is not a
+// blocker, so the story closes.
+func TestStepDone_ClosesAStoryWhoseSubtasksAreDone(t *testing.T) {
 	ts := newTestExec(t)
 
 	result := callTool(t, ts.exec, "work_create", map[string]string{
@@ -862,6 +904,7 @@ func TestStepDone_StoryWithPendingChildCloses(t *testing.T) {
 
 	callTool(t, ts.exec, "work_start", map[string]string{"id": storyID})
 	callTool(t, ts.exec, "work_start", map[string]string{"id": taskID})
+	callTool(t, ts.exec, "step_done", map[string]string{"id": taskID})
 
 	result = callTool(t, ts.exec, "step_done", map[string]string{"id": storyID})
 	if result.IsError {
@@ -891,10 +934,10 @@ func TestExecute_UnknownTool(t *testing.T) {
 // --- New API-path behavior ---
 
 // When the start handler fails, the claim must be rolled back so the work does
-// not get stuck in_progress with a dangling session.
+// not get stuck active with a dangling session.
 func TestWorkStart_RollbackOnHandlerFailure(t *testing.T) {
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
-	exec := NewExecutor(store, arStore, work.NewOperations(store, failingWorkStarter{err: errStartFailed}, stubNotifier{}), stubNotifier{}, settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, failingWorkStarter{err: errStartFailed}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore)
 
 	created := callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "Story", "agent_role_id": roleID,
@@ -922,7 +965,7 @@ func TestStepDone_NotifiesNextStep(t *testing.T) {
 		Name: "Eng", RolePrompt: "x", Steps: []string{"Plan", "Build"},
 	})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy), spy, settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore)
 
 	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -949,7 +992,7 @@ func TestStepDone_NoNotifyOnClose(t *testing.T) {
 		Name: "Eng", RolePrompt: "x", Steps: []string{"Only"},
 	})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy), spy, settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore)
 
 	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -969,7 +1012,7 @@ func TestStepDone_NoNotifyOnClose(t *testing.T) {
 func TestWorkReopen_NotifiesReopen(t *testing.T) {
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy), spy, settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore)
 
 	id := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -995,7 +1038,7 @@ func TestAgentRoleResetDefaults_UpdatesDefaultRole(t *testing.T) {
 	if err := settingsStore.Update(settings.Settings{DefaultAgentRoleID: "stale-role-id"}); err != nil {
 		t.Fatal(err)
 	}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}), stubNotifier{}, settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore)
 
 	if res := callTool(t, exec, "agent_role_reset_defaults", map[string]string{}); res.IsError {
 		t.Fatalf("unexpected error: %s", toolText(res))
@@ -1086,4 +1129,81 @@ func extractCommentID(t *testing.T, s string) string {
 		t.Fatalf("no closing paren in %q", s)
 	}
 	return s[start : start+end]
+}
+
+// A role with exactly one step: the agent finished a step, and saying "work
+// closed" would drop the only step report it was going to get. The reply is
+// written from the step count the call actually used, not from where the work
+// happened to be sitting.
+func TestStepDone_SingleStepRoleReportsTheStep(t *testing.T) {
+	exec, _, roleID := newExecWithRole(t, agentrole.AgentRole{
+		Name:       "One-Step Engineer",
+		RolePrompt: "You are an engineer.",
+		Steps:      []string{"Do the thing"},
+	})
+
+	result := callTool(t, exec, "work_create", map[string]string{
+		"type": "story", "title": "Test Story", "agent_role_id": roleID,
+	})
+	id := extractID(t, toolText(result))
+	callTool(t, exec, "work_start", map[string]string{"id": id})
+
+	text := toolText(callTool(t, exec, "step_done", map[string]string{"id": id}))
+
+	if !strings.Contains(text, "Step 1 (final step)") {
+		t.Errorf("result = %q, want it to name the step that was completed", text)
+	}
+}
+
+// A role with no steps has none to report — the work simply closed.
+func TestStepDone_SteplessRoleReportsOnlyTheClose(t *testing.T) {
+	ts := newTestExec(t)
+
+	result := callTool(t, ts.exec, "work_create", map[string]string{
+		"type": "story", "title": "Test Story", "agent_role_id": ts.roleID,
+	})
+	id := extractID(t, toolText(result))
+	callTool(t, ts.exec, "work_start", map[string]string{"id": id})
+
+	text := toolText(callTool(t, ts.exec, "step_done", map[string]string{"id": id}))
+
+	if !strings.Contains(text, "closed") || strings.Contains(text, "Step") {
+		t.Errorf("result = %q, want it to report a close and no step", text)
+	}
+}
+
+// countingDeleter stands in for the worktree manager: what a delete cascades to.
+type countingDeleter struct{ sessionIDs []string }
+
+func (c *countingDeleter) DeleteSessions(_ context.Context, _ string, sessionIDs []string) {
+	c.sessionIDs = append(c.sessionIDs, sessionIDs...)
+}
+
+// The AI's work_delete deletes as much as the user's does. The cascade used to
+// live in the WebSocket handler, so the two entry points left different amounts
+// behind — a session with no work is unreachable, its work being the only way in.
+func TestWorkDelete_CascadesToSessionsLikeTheUsersDelete(t *testing.T) {
+	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{
+		Name: "Test Engineer", RolePrompt: "You are a test engineer.",
+	})
+	ops := work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore})
+	deleter := &countingDeleter{}
+	ops.SetSessionDeleter(deleter)
+	exec := NewExecutor(store, arStore, ops, settingsStore)
+
+	result := callTool(t, exec, "work_create", map[string]string{
+		"type": "story", "title": "Test Story", "agent_role_id": roleID,
+	})
+	storyID := extractID(t, toolText(result))
+	if _, err := store.Start(context.Background(), storyID, "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if result := callTool(t, exec, "work_delete", map[string]string{"id": storyID}); result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+
+	if len(deleter.sessionIDs) != 1 || deleter.sessionIDs[0] != "sess-1" {
+		t.Errorf("cascaded to %v, want [sess-1]", deleter.sessionIDs)
+	}
 }

@@ -26,50 +26,87 @@ type Store interface {
 	// These are the preferred way to change work status. Each method
 	// encapsulates validation, sessionID management, and side effects.
 
-	// Start transitions a work item to in_progress and assigns an explicit
-	// sessionID. Allowed from any status ValidateStartable admits — everything
-	// but in_progress and closed. Use MarkRunning when the session is already
-	// live and only the status is stale. To start an agent session use Claim,
-	// which decides the sessionID atomically; Start is the lower-level primitive.
+	// Start transitions a work item to active and assigns an explicit sessionID.
+	// Allowed from any status ValidateStartable admits — everything but active
+	// and closed. Use Activate when the session is already live and only the
+	// status is stale. To start an agent session use Claim, which decides the
+	// sessionID atomically; Start is the lower-level primitive.
 	Start(ctx context.Context, id string, sessionID string) (Work, error)
 
-	// Claim atomically transitions a work item to in_progress for starting an
-	// agent session. The restart decision and sessionID assignment happen under
-	// the store lock so concurrent claims cannot race: on restart (the work
-	// already has a session) that sessionID is reused to preserve chat history;
+	// Claim atomically transitions a work item to active for starting an agent
+	// session. The restart decision and sessionID assignment happen under the
+	// store lock so concurrent claims cannot race: on restart (the work already
+	// has a session) that sessionID is reused to preserve chat history;
 	// otherwise a fresh sessionID is generated. The returned restart
 	// flag tells the caller how to RollbackStart if the kickoff later fails.
 	Claim(ctx context.Context, id string) (w Work, restart bool, err error)
 
-	// Stop records that the work's agent session ended. Allowed from any live
-	// status.
+	// Stop hands the work back to a person: the engine stops driving it and its
+	// session loses its lease. Allowed from any live status.
 	Stop(ctx context.Context, id string) error
 
-	// MarkNeedsInput records that the agent is waiting for user confirmation.
-	MarkNeedsInput(ctx context.Context, id string) error
+	// SetWait records what an active work is waiting for, in the agent's own
+	// words. WaitNone clears it. The work stays active either way — a wait says
+	// "do not nudge me", not "stop driving me".
+	SetWait(ctx context.Context, id string, wait WorkWait, reason string) error
 
-	// MarkWaiting records that the agent is waiting for child work to complete.
-	MarkWaiting(ctx context.Context, id string) error
+	// Activate says a person or a child just handed this work something to go on:
+	// it becomes active, its wait is cleared and its nudge allowance starts over.
+	// SessionID is left untouched. Rejected only for open (never started; use
+	// Start) and closed (use Reopen).
+	Activate(ctx context.Context, id string) error
 
-	// MarkRunning records that the work's agent session is live again, from any
-	// live status (needs_input after user input, waiting after a child closed,
-	// stopped after process-running detection). SessionID is left untouched.
-	// Rejected only for open (never started; use Start) and closed (use Reopen).
-	MarkRunning(ctx context.Context, id string) error
+	// SetChildWait records a wait on child work, and refuses when no child of
+	// the work is active — reporting whether it set one rather than returning an
+	// error, because the caller is the one that can say why in the agent's
+	// terms. Errors are the ordinary ones: a missing work, or a status that
+	// admits no progress at all.
+	//
+	// Separate from SetWait, and taken under the store lock, for the reason
+	// ClearChildWaitIfStranded is: checking first and setting afterwards leaves
+	// a window in which the last active child stops, the engine looks at a
+	// parent that is not waiting yet and rightly does nothing, and the wait then
+	// lands with nothing left that could ever end it. That is the exact failure
+	// both methods exist to prevent, so neither may be assembled from a read and
+	// a write.
+	SetChildWait(ctx context.Context, id string, reason string) (set bool, err error)
+
+	// ClearChildWaitIfStranded ends a wait on child work when no child of the
+	// work is active, and reports whether this call was the one that ended it.
+	// The work is left active with its nudge allowance reset, exactly as
+	// Activate leaves it; a work that is not waiting on children, or still has
+	// one running, is left alone and the answer is false.
+	//
+	// The whole method exists to take one decision under one lock. The engine
+	// clears such a wait and tells the agent so in the same breath, and both
+	// halves of the condition can move underneath it: another subtask can be
+	// started while the check runs, and several subtasks leaving active at once
+	// each ask the same question. Split into a read and a write, the first
+	// produces a message claiming nothing is running when something is, and the
+	// second produces the same message twice.
+	ClearChildWaitIfStranded(ctx context.Context, id string) (cleared bool, err error)
+
+	// RecordNudge counts one nudge against the work and returns the new count.
+	// The engine compares it against its own limit; the store only keeps score,
+	// so that "how many is too many" is decided in one place and not two.
+	RecordNudge(ctx context.Context, id string) (int, error)
 
 	// StepDone marks current work progress as complete.
 	// Work advances CurrentStep while more steps remain; otherwise it closes.
 	// Returns hasMoreSteps=true if there are remaining steps after advancement.
 	// Allowed from any live status: the calling agent is proof its session runs,
-	// so an advance also clears a stale needs_input/waiting/stopped back to
-	// in_progress.
+	// so an advance also clears a stale wait or a stale stopped back to active.
 	StepDone(ctx context.Context, id string, totalSteps int) (hasMoreSteps bool, err error)
 
 	// RollbackStart reverts a failed Start. Fresh starts roll back to open
 	// (clearing sessionID); restarts roll back to stopped (preserving sessionID).
-	RollbackStart(ctx context.Context, id string, wasRestart bool) error
+	//
+	// sessionID is the one the failed start claimed, and it is what identifies
+	// the start being undone: a work that has since moved on to another session
+	// is not the one this caller acted on.
+	RollbackStart(ctx context.Context, id string, sessionID string, wasRestart bool) error
 
-	// Reopen transitions a closed work item back to in_progress.
+	// Reopen transitions a closed work item back to active.
 	// This allows users to add more child work items or continue working.
 	Reopen(ctx context.Context, id string) error
 
@@ -129,7 +166,14 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	store.works = idx.Works
+	// Old values are brought up to the current model as they are read, which is
+	// the whole of the migration: see Work.Normalize. Nothing is written back —
+	// a normalised record persists the next time something changes it, and a
+	// work nobody touches again costs nothing to normalise on every start.
+	store.works = make([]Work, len(idx.Works))
+	for i, w := range idx.Works {
+		store.works[i] = w.Normalize()
+	}
 	store.comments = idx.Comments
 
 	return store, nil
@@ -333,8 +377,9 @@ func (s *FileStore) Start(_ context.Context, id string, sessionID string) (Work,
 	prev := s.snapshotWorks()
 
 	now := time.Now()
-	w.Status = StatusInProgress
+	w.Status = StatusActive
 	w.SessionID = sessionID
+	w.clearDrive()
 	w.UpdatedAt = now
 
 	result := *w // copy before persistAndNotifyUpdates releases the lock
@@ -374,8 +419,9 @@ func (s *FileStore) Claim(_ context.Context, id string) (Work, bool, error) {
 
 	prev := s.snapshotWorks()
 
-	w.Status = StatusInProgress
+	w.Status = StatusActive
 	w.SessionID = sessionID
+	w.clearDrive()
 	w.UpdatedAt = time.Now()
 
 	result := *w // copy before persistAndNotifyUpdates releases the lock
@@ -390,9 +436,10 @@ func (s *FileStore) Claim(_ context.Context, id string) (Work, bool, error) {
 
 // setLiveStatus moves a work between the live statuses. Every live status is a
 // valid source (see ValidateProgress); action names the intent for the error
-// message. Re-setting the status a work already has is a no-op, so a repeated
-// liveness signal does not fire a redundant change event.
-func (s *FileStore) setLiveStatus(id string, target WorkStatus, action string) error {
+// message. mutate is handed a copy and reports whether anything moved, so a
+// repeated liveness signal — and those repeat constantly — neither writes the
+// index nor wakes a subscriber with a change event that carries no news.
+func (s *FileStore) setLiveStatus(id string, action string, mutate func(*Work) bool) error {
 	s.worksMu.Lock()
 
 	idx := s.findIndex(id)
@@ -401,39 +448,185 @@ func (s *FileStore) setLiveStatus(id string, target WorkStatus, action string) e
 		return ErrWorkNotFound
 	}
 
-	w := &s.works[idx]
-	if err := ValidateProgress(w.Status); err != nil {
+	if err := ValidateProgress(s.works[idx].Status); err != nil {
 		s.worksMu.Unlock()
 		return fmt.Errorf("cannot %s work %s: %w", action, id, err)
 	}
-	if w.Status == target {
+
+	// On a copy, so that a mutate which decides nothing moved leaves the record
+	// it was deciding about untouched.
+	next := s.works[idx]
+	if !mutate(&next) {
 		s.worksMu.Unlock()
 		return nil
 	}
+	next.UpdatedAt = time.Now()
 
 	prev := s.snapshotWorks()
-
-	w.Status = target
-	w.UpdatedAt = time.Now()
+	s.works[idx] = next
 
 	modified := map[string]bool{id: true}
 	return s.persistAndNotifyUpdates(prev, modified)
 }
 
+// clearDrive drops everything that only means something while the engine is
+// driving this work: what it was waiting for, and how many nudges it has had.
+//
+// Every transition into or out of active goes through it, with two deliberate
+// exceptions — SetWait and SetChildWait, whose whole purpose is to *state* a
+// wait and which therefore assign it instead. So no path leaves a stale wait
+// behind for the next one to trip over: each one either clears the wait or says
+// what it is.
+//
+// Those two leave the nudge count where it is, and nothing can spend it there: a
+// work with a wait is never nudged (Engine.HandleTurnEnded returns on it), and
+// every other way a wait ends comes back through clearDrive, which zeroes the
+// count in the same breath.
+func (w *Work) clearDrive() {
+	w.Wait, w.WaitReason, w.NudgeCount = WaitNone, "", 0
+}
+
 func (s *FileStore) Stop(_ context.Context, id string) error {
-	return s.setLiveStatus(id, StatusStopped, "stop")
+	return s.setLiveStatus(id, "stop", func(w *Work) bool {
+		if w.Status == StatusStopped {
+			return false
+		}
+		w.Status = StatusStopped
+		// A stopped work waits for a person, and that is the whole of what
+		// stopped means — keeping a wait here would be a second way to say it,
+		// disagreeing with the first as soon as the reason went stale.
+		w.clearDrive()
+		return true
+	})
 }
 
-func (s *FileStore) MarkNeedsInput(_ context.Context, id string) error {
-	return s.setLiveStatus(id, StatusNeedsInput, "mark as needing input")
+func (s *FileStore) SetWait(_ context.Context, id string, wait WorkWait, reason string) error {
+	return s.setLiveStatus(id, "set the wait of", func(w *Work) bool {
+		// Declaring a wait is the agent reporting on a work it is running, so it
+		// also says the work is active — the same reason StepDone does.
+		if w.Status == StatusActive && w.Wait == wait && w.WaitReason == reason {
+			return false
+		}
+		w.Status = StatusActive
+		w.Wait, w.WaitReason = wait, reason
+		if wait == WaitNone {
+			w.WaitReason = ""
+		}
+		return true
+	})
 }
 
-func (s *FileStore) MarkWaiting(_ context.Context, id string) error {
-	return s.setLiveStatus(id, StatusWaiting, "mark as waiting for child work")
+func (s *FileStore) Activate(_ context.Context, id string) error {
+	return s.setLiveStatus(id, "activate", func(w *Work) bool {
+		if w.Status == StatusActive && w.Wait == WaitNone && w.NudgeCount == 0 {
+			return false
+		}
+		w.Status = StatusActive
+		w.clearDrive()
+		return true
+	})
 }
 
-func (s *FileStore) MarkRunning(_ context.Context, id string) error {
-	return s.setLiveStatus(id, StatusInProgress, "mark as running")
+// SetChildWait and ClearChildWaitIfStranded are the two transitions here not
+// written through setLiveStatus: their condition spans the work *and its
+// children*, and setLiveStatus hands a mutate func the one record it is
+// changing. Reading the siblings outside the lock is the bug they exist to
+// remove, so each takes the lock itself.
+//
+// HasActiveChild is the condition, and it is written once for both. "Is there
+// still something that could close" is one question; a wait set on one answer
+// and cleared on another would be a wait that argues with itself.
+func (s *FileStore) SetChildWait(_ context.Context, id string, reason string) (bool, error) {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return false, ErrWorkNotFound
+	}
+	if err := ValidateProgress(s.works[idx].Status); err != nil {
+		s.worksMu.Unlock()
+		return false, fmt.Errorf("cannot set the wait of work %s: %w", id, err)
+	}
+	if !HasActiveChild(s.works, id) {
+		s.worksMu.Unlock()
+		return false, nil
+	}
+
+	// Already exactly this wait: a repeat is not news, and re-announcing an
+	// unchanged record would wake every subscriber with a change event that
+	// carries none. Same no-op rule as SetWait.
+	if w := s.works[idx]; w.Status == StatusActive && w.Wait == WaitChild && w.WaitReason == reason {
+		s.worksMu.Unlock()
+		return true, nil
+	}
+
+	next := s.works[idx]
+	// Declaring a wait is the agent reporting on a work it is running, so it
+	// also says the work is active — the same reason SetWait does it.
+	next.Status = StatusActive
+	next.Wait, next.WaitReason = WaitChild, reason
+	next.UpdatedAt = time.Now()
+
+	prev := s.snapshotWorks()
+	s.works[idx] = next
+
+	if err := s.persistAndNotifyUpdates(prev, map[string]bool{id: true}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *FileStore) ClearChildWaitIfStranded(_ context.Context, id string) (bool, error) {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return false, ErrWorkNotFound
+	}
+	if w := s.works[idx]; w.Status != StatusActive || w.Wait != WaitChild || HasActiveChild(s.works, id) {
+		s.worksMu.Unlock()
+		return false, nil
+	}
+
+	next := s.works[idx]
+	next.clearDrive()
+	next.UpdatedAt = time.Now()
+
+	prev := s.snapshotWorks()
+	s.works[idx] = next
+
+	if err := s.persistAndNotifyUpdates(prev, map[string]bool{id: true}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// HasActiveChild reports whether any direct child of parentID is active. It is
+// the one condition a wait on children depends on, so it is written once and
+// read both by the store (under its lock) and by whoever is holding a listing
+// already.
+func HasActiveChild(works []Work, parentID string) bool {
+	for _, w := range works {
+		if w.ParentID == parentID && w.Status == StatusActive {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *FileStore) RecordNudge(_ context.Context, id string) (int, error) {
+	count := 0
+	err := s.setLiveStatus(id, "nudge", func(w *Work) bool {
+		w.NudgeCount++
+		count = w.NudgeCount
+		return true
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (s *FileStore) StepDone(_ context.Context, id string, totalSteps int) (bool, error) {
@@ -456,9 +649,10 @@ func (s *FileStore) StepDone(_ context.Context, id string, totalSteps int) (bool
 	if totalSteps > 0 && w.CurrentStep < totalSteps-1 {
 		w.CurrentStep++
 		// The agent just reported progress, so it is running whatever a stale
-		// needs_input/waiting/stopped says — and the next-step prompt is only
-		// delivered to in_progress work.
-		w.Status = StatusInProgress
+		// wait or a stale stopped says — and a new step is a new context, which
+		// is why the nudge allowance starts over with it.
+		w.Status = StatusActive
+		w.clearDrive()
 		w.UpdatedAt = time.Now()
 
 		modified := map[string]bool{id: true}
@@ -469,6 +663,7 @@ func (s *FileStore) StepDone(_ context.Context, id string, totalSteps int) (bool
 	}
 
 	w.Status = StatusClosed
+	w.clearDrive()
 	w.UpdatedAt = time.Now()
 
 	modified := map[string]bool{id: true}
@@ -478,7 +673,7 @@ func (s *FileStore) StepDone(_ context.Context, id string, totalSteps int) (bool
 	return false, nil
 }
 
-func (s *FileStore) RollbackStart(_ context.Context, id string, wasRestart bool) error {
+func (s *FileStore) RollbackStart(_ context.Context, id string, sessionID string, wasRestart bool) error {
 	s.worksMu.Lock()
 
 	idx := s.findIndex(id)
@@ -488,12 +683,20 @@ func (s *FileStore) RollbackStart(_ context.Context, id string, wasRestart bool)
 	}
 
 	w := &s.works[idx]
-	// Only the in_progress a failed start left behind may be rolled back. If the
-	// agent has meanwhile moved the work on, the kickoff was not a clean failure
-	// and undoing it would clobber live state.
-	if w.Status != StatusInProgress {
+	// The session is what identifies the start being undone, and the status is
+	// what says nobody has taken the work somewhere a rollback would clobber.
+	//
+	// `stopped` is admitted beside `active` for one reason, and it is not
+	// hypothetical: a kickoff that fails deletes the session it created, and the
+	// engine stops the work of a deleted session — so the stop and this rollback
+	// race, in either order. Both orders now converge on the same answer,
+	// because the session id still names this start. What is refused is a work
+	// the agent has moved on (closed), or one already started again on a
+	// different session.
+	if w.SessionID != sessionID || (w.Status != StatusActive && w.Status != StatusStopped) {
 		s.worksMu.Unlock()
-		return fmt.Errorf("%w: cannot roll back start of work %s: it is %s, not in_progress", ErrInvalidWork, id, w.Status)
+		return fmt.Errorf("%w: cannot roll back start of work %s: it is %s on session %q, not the start that failed",
+			ErrInvalidWork, id, w.Status, w.SessionID)
 	}
 
 	prev := s.snapshotWorks()
@@ -505,6 +708,11 @@ func (s *FileStore) RollbackStart(_ context.Context, id string, wasRestart bool)
 		w.Status = StatusOpen
 		w.SessionID = ""
 	}
+	// Leaving active goes through clearDrive here as everywhere else. Claim has
+	// already cleared it, so today this undoes nothing; keeping the rule without
+	// exceptions is what stops the next status written here from being the one
+	// that leaves a wait behind.
+	w.clearDrive()
 	w.UpdatedAt = time.Now()
 
 	modified := map[string]bool{id: true}
@@ -528,7 +736,8 @@ func (s *FileStore) Reopen(_ context.Context, id string) error {
 
 	prev := s.snapshotWorks()
 
-	w.Status = StatusInProgress
+	w.Status = StatusActive
+	w.clearDrive()
 	w.UpdatedAt = time.Now()
 
 	modified := map[string]bool{id: true}

@@ -43,6 +43,12 @@ vi.mock("../lib/wsStore", () => {
 	return { useWSStore: store };
 });
 
+function setDetailTurn(sessionId: string, turn: SessionDetail["turn"]) {
+	useSessionDetailStore
+		.getState()
+		.setDetail(sessionId, makeSessionDetail({ id: sessionId, turn }));
+}
+
 const history = (text: string): ServerNotification[] => [
 	{ type: "text", content: text } as ServerNotification,
 ];
@@ -97,7 +103,7 @@ describe("useChatMessages", () => {
 				id: `sub-${sessionId}`,
 				initial: {
 					history: history(`message of ${sessionId}`),
-					state: "ended",
+					turn: { phase: "idle", open: false, since: "" },
 				},
 			}),
 		);
@@ -139,7 +145,7 @@ describe("useChatMessages", () => {
 			id: "sub-1",
 			initial: {
 				history: [{ type: "message", content: "Anyone there?" }],
-				state: "ended",
+				turn: { phase: "idle", open: false, since: "" },
 			},
 		}));
 
@@ -199,9 +205,12 @@ describe("useChatMessages", () => {
 	});
 
 	// A Task subagent keeps talking for a moment after the user stops the turn.
-	// isStreaming is what blocks the composer and shows the Stop button, so a
-	// late message reviving it makes a stopped session look like a running one.
-	it("stays out of streaming when a late message follows an interrupt", async () => {
+	// `turnOpen` is what blocks the composer and shows the Stop button, and it
+	// reads the session's turn rather than the last bubble's status — so a late
+	// message cannot revive it, and a stopped session cannot look like a running
+	// one. The old bookkeeping inferred liveness from the transcript, which is
+	// exactly what this case broke.
+	it("follows the session's turn, not the last message", async () => {
 		let notify: ((notification: ServerNotification) => void) | undefined;
 		mockState.chatMessagesSubscribe.mockImplementation(
 			async (
@@ -216,24 +225,26 @@ describe("useChatMessages", () => {
 							{ type: "message", content: "Do the thing" },
 							{ type: "text", content: "Working" },
 						],
-						state: "running",
+						turn: { phase: "running", open: true, since: "" },
 					},
 				};
 			},
 		);
 
-		let streaming = false;
+		let open = false;
 		function StreamProbe() {
-			const { isStreaming } = useChatMessages({ sessionId: "s1" });
-			streaming = isStreaming;
+			const { turnOpen } = useChatMessages({ sessionId: "s1" });
+			open = turnOpen;
 			return null;
 		}
 
+		setDetailTurn("s1", { phase: "running", open: true, since: "" });
 		render(<StreamProbe />);
-		await waitFor(() => expect(streaming).toBe(true));
+		await waitFor(() => expect(open).toBe(true));
 
-		act(() => notify?.({ type: "interrupted" } as ServerNotification));
-		expect(streaming).toBe(false);
+		// The turn ends where it really ends: in the session's state.
+		act(() => setDetailTurn("s1", { phase: "idle", open: false, since: "" }));
+		expect(open).toBe(false);
 
 		act(() =>
 			notify?.({
@@ -241,7 +252,7 @@ describe("useChatMessages", () => {
 				content: "Task finished",
 			} as ServerNotification),
 		);
-		expect(streaming).toBe(false);
+		expect(open).toBe(false);
 	});
 
 	// The window this subscription cannot afford to have: the server registers
@@ -261,7 +272,7 @@ describe("useChatMessages", () => {
 					id: "sub-1",
 					initial: {
 						history: [{ type: "message", content: "Do the thing" }],
-						state: "running",
+						turn: { phase: "running", open: true, since: "" },
 					},
 				};
 			},
@@ -307,7 +318,7 @@ describe("useChatMessages", () => {
 						subtype: "background_started",
 					},
 				],
-				state: "running",
+				turn: { phase: "running", open: true, since: "" },
 				tool_activity: { t1: "Compiling 120 modules" },
 			},
 		}));
@@ -349,7 +360,7 @@ describe("useChatMessages", () => {
 								tool_use_id: "t1",
 							},
 						],
-						state: "running",
+						turn: { phase: "running", open: true, since: "" },
 					},
 				};
 			},
@@ -414,7 +425,7 @@ describe("useChatMessages", () => {
 					id: "sub-1",
 					initial: {
 						history: [{ type: "message", content: "Do the thing", seq: 5 }],
-						state: "running",
+						turn: { phase: "running", open: true, since: "" },
 					},
 				};
 			},
@@ -476,7 +487,7 @@ describe("useChatMessages", () => {
 					history,
 					has_more: true,
 					next_before_seq: 7,
-					state: "ended",
+					turn: { phase: "idle", open: false, since: "" },
 					...rest,
 				},
 			}));

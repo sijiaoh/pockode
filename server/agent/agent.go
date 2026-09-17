@@ -105,7 +105,8 @@ type Session interface {
 	// Nothing is promised about how long a turn takes or how often it produces
 	// events. A turn can span a wait for background work, over which no event
 	// arrives at all for as long as that work runs — so silence must never be
-	// read as an ending (see BackgroundWaiter).
+	// read as an ending. A session that parks a turn that way says so with a
+	// BackgroundWaitEvent first, and resumes by producing content again.
 	//
 	// A consumer keeps receiving until the channel closes. That is what the
 	// session's last event counts on (see EmitProcessEnded), and the goroutine
@@ -145,20 +146,22 @@ type Session interface {
 	Close()
 }
 
-// BackgroundWaiter is implemented by sessions whose turn can be held open while
-// no events flow at all.
+// SessionNotifier is implemented by agent sessions that can carry a message from
+// Pockode to the agent, delivered with the next prompt it is sent.
 //
-// A Claude turn that started a background task ends with a result frame the CLI
-// later continues from on its own; Pockode swallows that ending so the turn
-// reads as one long thought. Nothing is emitted for the length of the wait, so
-// anything that measures liveness by events alone — the idle reaper — would
-// conclude the process is abandoned and kill it, taking the background tasks
-// with it.
+// It exists for the one thing Pockode does that the agent cannot see: ending a
+// turn the agent did not end. When a background wait's lease runs out the user
+// gets a warning in the transcript, and this is the agent's copy of the same
+// news — without it the agent is auto-continued with no idea that Pockode
+// stopped waiting for the background task it is still expecting a result from.
 //
-// Optional: agents without the concept simply do not implement it.
-type BackgroundWaiter interface {
-	// WaitingForBackgroundWork reports whether the session is currently holding
-	// a turn open for background work. It is always eventually false: the wait
-	// has a budget, after which the turn ends the ordinary way.
-	WaitingForBackgroundWork() bool
+// Optional, because there is nowhere to put a note in a protocol that has no
+// room for one. An agent that does not implement it loses nothing it had: the
+// note is an explanation, never a correction, and the transcript carries the
+// fact regardless.
+type SessionNotifier interface {
+	// QueueNote replaces any note not yet delivered. Notes are explanations of
+	// something that has just happened, and the newer one is the one that is
+	// still true.
+	QueueNote(note string)
 }

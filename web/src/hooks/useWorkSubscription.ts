@@ -19,22 +19,23 @@ export function useWorkSubscription(enabled: boolean) {
 				setWorks(params.works);
 				return;
 			}
+			if (params.operation === "delete") {
+				updateWorks((old) => old.filter((w) => w.id !== params.workId));
+				return;
+			}
+			const row = params.work;
 			updateWorks((old) => {
 				switch (params.operation) {
 					case "create":
 						// Deduplicate: subscription is registered before the initial
 						// list is fetched, so a create event may arrive for an item
 						// already included in the snapshot.
-						if (old.some((w) => w.id === params.work.id)) {
-							return old.map((w) =>
-								w.id === params.work.id ? params.work : w,
-							);
+						if (old.some((w) => w.id === row.id)) {
+							return old.map((w) => (w.id === row.id ? row : w));
 						}
-						return [...old, params.work];
+						return [...old, row];
 					case "update":
-						return old.map((w) => (w.id === params.work.id ? params.work : w));
-					case "delete":
-						return old.filter((w) => w.id !== params.workId);
+						return old.map((w) => (w.id === row.id ? row : w));
 				}
 			});
 		},

@@ -321,7 +321,7 @@ const processEndedDeliveryTimeout = 10 * time.Second
 // The send waits for the consumer instead of racing the session's context, which
 // every other send on this channel does. That context is already cancelled in
 // exactly the case this event matters most — a process closed on purpose, by the
-// idle reaper or by a session being deleted — so a select over it and the send
+// lease reaper or by a session being deleted — so a select over it and the send
 // has both cases ready and Go picks one at random: half the time the client is
 // never told, and its view of the session stays "running" until it refetches
 // history.

@@ -1,14 +1,24 @@
+import type { Activity } from "../lib/activity";
 import type { TokenUsage } from "./message";
 
 export type WorkType = "story" | "task";
 
-export type WorkStatus =
-	| "open"
-	| "in_progress"
-	| "waiting"
-	| "needs_input"
-	| "stopped"
-	| "closed";
+/**
+ * What the engine is allowed to do with a work item, and nothing else:
+ * `open` was never started, `active` is being driven, `stopped` waits for a
+ * person, `closed` is finished.
+ *
+ * What the agent is *doing* is `Activity`, derived from this, the wait below and
+ * the session's turn — see src/lib/activity.ts.
+ */
+export type WorkStatus = "open" | "active" | "stopped" | "closed";
+
+/**
+ * What an active work is waiting for, as its agent declared it. Absent means it
+ * is waiting for nothing. Orthogonal to the status: a waiting work is still
+ * being driven, it simply must not be nudged.
+ */
+export type WorkWait = "user" | "child";
 
 /**
  * One row of the work list, as `work.list.subscribe` sends it: what drawing a
@@ -30,6 +40,16 @@ export interface WorkListItem {
 	agent_role_id?: string;
 	title: string;
 	status: WorkStatus;
+	/**
+	 * What the work is doing, computed by the server. The one thing on a row the
+	 * client cannot derive itself: the list spans worktrees, and a client holds
+	 * the turn state only of the worktree it has open
+	 * (docs/lifecycle-ui.md §1.3). An unrecognised value normalises to `idle` at
+	 * the wire boundary — an unknown state must not blank a row.
+	 */
+	activity: Activity;
+	/** What an active work is waiting for; the agent's reason is on the detail. */
+	wait?: WorkWait;
 	session_id?: string;
 	/** Worktree the work runs in (empty/undefined = main). Read-only, captured by backend. */
 	worktree?: string;
@@ -41,10 +61,21 @@ export interface WorkListItem {
  * `work.create` / `work.start` answer, the two calls that speak for the single
  * item they acted on. Extending the row is what keeps the two in step: a field
  * added here stays out of the list until someone puts it there deliberately.
+ *
+ * `activity` is the one field of the row this is *not*: it is derived from the
+ * turn of the work's session, which the stored record knows nothing about, so
+ * it rides beside the item on the detail result the way usage does — and the
+ * three calls answering with a bare item do not carry it at all.
  */
-export interface Work extends WorkListItem {
+export interface Work extends Omit<WorkListItem, "activity"> {
 	body?: string;
 	current_step?: number;
+	/**
+	 * Why the agent is waiting, in its own words. Free text, shown verbatim on
+	 * the detail page — it is the only place the user can read what the agent
+	 * actually wants.
+	 */
+	wait_reason?: string;
 	created_at: string;
 }
 
@@ -117,6 +148,8 @@ export interface WorkDetailSubscribeResult {
 	work: Work;
 	comments: Comment[];
 	usage: WorkUsage;
+	/** Derived like the row's, and on the detail for the same reason usage is. */
+	activity: Activity;
 }
 
 export interface WorkDetailChangedNotification {
@@ -124,4 +157,5 @@ export interface WorkDetailChangedNotification {
 	work: Work;
 	comments: Comment[];
 	usage: WorkUsage;
+	activity: Activity;
 }

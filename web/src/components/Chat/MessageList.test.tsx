@@ -6,9 +6,10 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message, QuestionStatus } from "../../types/message";
-import MessageList from "./MessageList";
+import MessageList, { type MessageListHandle } from "./MessageList";
 
 vi.mock("../../lib/wsStore", () => ({
 	useWSStore: (selector: (state: { workDir: string }) => string) =>
@@ -297,13 +298,28 @@ function textMessage(id: string): Message {
 }
 
 function renderList(messages: Message[]) {
-	return render(
-		<MessageList
-			sessionId="session-1"
-			messages={messages}
-			isProcessRunning={false}
-		/>,
-	);
+	return render(<MessageList sessionId="session-1" messages={messages} />);
+}
+
+function permissionMessage(id: string, requestId: string): Message {
+	return {
+		id,
+		role: "assistant",
+		status: "complete",
+		createdAt: new Date(),
+		parts: [
+			{
+				type: "permission_request",
+				status: "pending",
+				request: {
+					requestId,
+					toolUseId: `tool-${requestId}`,
+					toolName: "Edit",
+					toolInput: { file_path: "/etc/hosts" },
+				},
+			},
+		],
+	};
 }
 
 const pill = () =>
@@ -399,7 +415,6 @@ describe("MessageList pending question pill", () => {
 			<MessageList
 				sessionId="session-1"
 				messages={[questionMessage("m1", "r1", "answered")]}
-				isProcessRunning={false}
 			/>,
 		);
 		await waitFor(() => expect(pill()).not.toBeInTheDocument());
@@ -419,6 +434,53 @@ describe("MessageList pending question pill", () => {
 		expect(
 			questionCard("r1")?.querySelector("[data-question-header]"),
 		).toHaveFocus();
+	});
+
+	// The blocker strip reaches both kinds of prompt through the same jump, and
+	// it lives below the list, so the list exposes the one it already owns rather
+	// than a second scroll-and-highlight being written beside it
+	// (docs/lifecycle-ui.md §2.2).
+	describe("the jump the blocker strip borrows", () => {
+		it("reaches a permission request, focus included", () => {
+			const ref = createRef<MessageListHandle>();
+			render(
+				<MessageList
+					ref={ref}
+					sessionId="session-1"
+					messages={[permissionMessage("m1", "p1")]}
+				/>,
+			);
+
+			act(() => ref.current?.jumpToRequest("p1"));
+
+			const card = document.querySelector<HTMLElement>(
+				"[data-permission-request-id]",
+			);
+			expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+			expect(card).toHaveClass("question-highlight");
+			// A permission card has no header row of its own; the row that opens it
+			// is the same thing one step less explicitly. Without a focus move the
+			// jump is one a keyboard user cannot perceive.
+			expect(card?.querySelector("button")).toHaveFocus();
+		});
+
+		it("reaches a question, and is the same jump the pill makes", () => {
+			const ref = createRef<MessageListHandle>();
+			render(
+				<MessageList
+					ref={ref}
+					sessionId="session-1"
+					messages={[questionMessage("m1", "r1")]}
+				/>,
+			);
+
+			act(() => ref.current?.jumpToRequest("r1"));
+
+			expect(questionCard("r1")).toHaveClass("question-highlight");
+			expect(
+				questionCard("r1")?.querySelector("[data-question-header]"),
+			).toHaveFocus();
+		});
 	});
 
 	it("moves the highlight rather than leaving it on the previous target", async () => {
@@ -469,7 +531,6 @@ describe("MessageList history paging", () => {
 		const onLoadMoreHistory = vi.fn();
 		const props = {
 			sessionId: "session-1",
-			isProcessRunning: false,
 			hasMoreHistory: true,
 			onLoadMoreHistory,
 		};
@@ -697,7 +758,6 @@ describe("MessageList history paging", () => {
 			<MessageList
 				sessionId="session-1"
 				messages={[textMessage("m1")]}
-				isProcessRunning={false}
 				hasMoreHistory
 				historyError="Failed to load earlier messages: connection lost"
 				onLoadMoreHistory={onLoadMoreHistory}
@@ -716,11 +776,7 @@ describe("MessageList history paging", () => {
 
 	it("says where the conversation starts, but only once the user has paged back", () => {
 		const { rerender } = render(
-			<MessageList
-				sessionId="session-1"
-				messages={[textMessage("m1")]}
-				isProcessRunning={false}
-			/>,
+			<MessageList sessionId="session-1" messages={[textMessage("m1")]} />,
 		);
 		expect(screen.queryByText("Beginning of conversation")).toBeNull();
 
@@ -728,7 +784,6 @@ describe("MessageList history paging", () => {
 			<MessageList
 				sessionId="session-1"
 				messages={[textMessage("m1")]}
-				isProcessRunning={false}
 				loadedHistoryPages={1}
 			/>,
 		);
@@ -815,7 +870,6 @@ describe("MessageList following the tail", () => {
 			<MessageList
 				sessionId="session-1"
 				messages={[...transcript, question]}
-				isProcessRunning={false}
 			/>,
 		);
 		const scroller = scrollContainer();
@@ -844,7 +898,6 @@ describe("MessageList following the tail", () => {
 	it("leaves a freshly paged-in view where the restore put it", () => {
 		const props = {
 			sessionId: "session-1",
-			isProcessRunning: false,
 			hasMoreHistory: true,
 			onLoadMoreHistory: vi.fn(),
 		};
@@ -894,7 +947,6 @@ describe("MessageList following the tail", () => {
 			<MessageList
 				sessionId="session-1"
 				messages={[...transcript, userMessage("sent")]}
-				isProcessRunning={false}
 			/>,
 		);
 

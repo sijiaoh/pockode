@@ -33,6 +33,17 @@ describe("workEventWording", () => {
 		).toEqual({ label: "Subtask done", summary: "Sub task" });
 	});
 
+	// Same rule as child_done, and for the same reason: the message went to the
+	// parent but reports on a subtask.
+	it("names the child for a stranded wait too", () => {
+		expect(
+			workEventWording("wait_stranded", {
+				title: "Parent story",
+				child: { id: "c1", title: "Sub task" },
+			}),
+		).toEqual({ label: "Wait cleared", summary: "Sub task" });
+	});
+
 	it("leaves an auto-continue's summary blank", () => {
 		expect(workEventWording("auto_continue", { title: "Ship it" })).toEqual({
 			label: "Continued",

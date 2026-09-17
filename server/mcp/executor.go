@@ -44,14 +44,6 @@ func isUserError(err error) bool {
 		errors.Is(err, work.ErrCommentNotFound)
 }
 
-// WorkNotifier delivers the next-step prompt that follows an in-process
-// step_done. The AutoResumer sends it only on request, so the Executor calls it
-// after advancing the step in-process. (The reopen nudge lives in
-// work.Operations, which owns the reopen transition for both transports.)
-type WorkNotifier interface {
-	NotifyStepDone(w work.Work)
-}
-
 // SettingsStore is the slice of the settings store the executor needs to keep
 // the default agent role in sync on agent_role_reset_defaults (parity with the
 // WebSocket handler).
@@ -69,19 +61,18 @@ type Executor struct {
 	workStore      work.Store
 	agentRoleStore agentrole.Store
 	workOps        *work.Operations
-	workNotifier   WorkNotifier
 	settingsStore  SettingsStore
 }
 
-// NewExecutor creates an Executor. workOps performs the start/reopen transitions
-// and their side effects (the same operations the WebSocket layer calls); it is
-// required whenever work_start or work_reopen is reachable. workNotifier delivers
-// the step-advance message on step_done; a nil workNotifier skips that follow-up.
-// settingsStore keeps the default agent role in sync on reset; a nil
-// settingsStore skips that update. Nils are tolerated only where the
-// corresponding tools are unreachable (e.g. narrow tests).
-func NewExecutor(workStore work.Store, agentRoleStore agentrole.Store, workOps *work.Operations, workNotifier WorkNotifier, settingsStore SettingsStore) *Executor {
-	return &Executor{workStore: workStore, agentRoleStore: agentRoleStore, workOps: workOps, workNotifier: workNotifier, settingsStore: settingsStore}
+// NewExecutor creates an Executor. workOps performs every work transition and
+// its side effects — the same operations the WebSocket layer calls, which is
+// what keeps a tool call and a tap on a button the same act; it is required
+// whenever any work_* tool is reachable. settingsStore keeps the default agent
+// role in sync on reset; a nil settingsStore skips that update. Nils are
+// tolerated only where the corresponding tools are unreachable (e.g. narrow
+// tests).
+func NewExecutor(workStore work.Store, agentRoleStore agentrole.Store, workOps *work.Operations, settingsStore SettingsStore) *Executor {
+	return &Executor{workStore: workStore, agentRoleStore: agentRoleStore, workOps: workOps, settingsStore: settingsStore}
 }
 
 // Execute runs the named tool and returns its text result. It returns a
@@ -327,7 +318,7 @@ func (e *Executor) workDelete(ctx context.Context, args json.RawMessage) (string
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	if err := e.workStore.Delete(ctx, params.ID); err != nil {
+	if err := e.workOps.DeleteWork(ctx, params.ID); err != nil {
 		return "", err
 	}
 
@@ -359,7 +350,7 @@ func (e *Executor) workNeedsInput(ctx context.Context, args json.RawMessage) (st
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	if err := e.workStore.MarkNeedsInput(ctx, params.ID); err != nil {
+	if err := e.workOps.NeedsInput(ctx, params.ID, params.Reason); err != nil {
 		return "", err
 	}
 
@@ -384,12 +375,16 @@ func (e *Executor) workReopen(ctx context.Context, args json.RawMessage) (string
 func (e *Executor) workWait(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		ID string `json:"id"`
+		// Reason is optional and free text, shown to the user on the work's
+		// detail page — the same field work_needs_input fills in, because the
+		// two are one wait with two people clearing it.
+		Reason string `json:"reason"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	if err := e.workStore.MarkWaiting(ctx, params.ID); err != nil {
+	if err := e.workOps.Wait(ctx, params.ID, params.Reason); err != nil {
 		return "", err
 	}
 
@@ -404,7 +399,8 @@ func (e *Executor) stepDone(ctx context.Context, args json.RawMessage) (string, 
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	// Get the work item to find its agent role
+	// Read before the advance: what the agent just finished is the step the work
+	// is on now, and the reply is written from the agent's point of view.
 	w, found, err := e.workStore.Get(params.ID)
 	if err != nil {
 		return "", err
@@ -413,36 +409,22 @@ func (e *Executor) stepDone(ctx context.Context, args json.RawMessage) (string, 
 		return "", work.ErrWorkNotFound
 	}
 
-	// Get step count from agent role
-	role, found, err := e.agentRoleStore.Get(w.AgentRoleID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get agent role: %w", err)
-	}
-	if !found {
-		return "", userErrorf("agent role %s not found", w.AgentRoleID)
-	}
-
-	totalSteps := len(role.Steps)
-
-	hasMoreSteps, err := e.workStore.StepDone(ctx, params.ID, totalSteps)
+	hasMoreSteps, totalSteps, err := e.workOps.StepDone(ctx, params.ID)
 	if err != nil {
 		return "", err
 	}
 
 	if hasMoreSteps {
-		// Deliver the next-step prompt to the agent session. Re-read to get the
-		// advanced CurrentStep.
-		if e.workNotifier != nil {
-			if advanced, found, getErr := e.workStore.Get(params.ID); getErr == nil && found {
-				e.workNotifier.NotifyStepDone(advanced)
-			}
-		}
-		return fmt.Sprintf("Step %d completed for work %s, advancing to step %d of %d", w.CurrentStep+1, params.ID, w.CurrentStep+2, totalSteps), nil
+		return fmt.Sprintf("Step %d completed for work %s, advancing to step %d of %d",
+			w.CurrentStep+1, params.ID, w.CurrentStep+2, totalSteps), nil
 	}
+	// A role with no steps at all: there was no step to report, only a work that
+	// is now finished.
 	if totalSteps == 0 {
 		return fmt.Sprintf("Work %s closed", params.ID), nil
 	}
-	return fmt.Sprintf("Step %d (final step) completed for work %s. Work is now closed.", w.CurrentStep+1, params.ID), nil
+	return fmt.Sprintf("Step %d (final step) completed for work %s. Work is now closed.",
+		w.CurrentStep+1, params.ID), nil
 }
 
 func (e *Executor) workCommentAdd(ctx context.Context, args json.RawMessage) (string, error) {

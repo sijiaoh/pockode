@@ -42,7 +42,7 @@ const work = (id: string): Work => ({
 	id,
 	type: "story",
 	title: id,
-	status: "in_progress",
+	status: "active",
 	created_at: "2026-03-04T00:00:00Z",
 	updated_at: "2026-03-04T00:00:00Z",
 });
@@ -62,8 +62,18 @@ describe("useWorkDetailSubscription", () => {
 		vi.clearAllMocks();
 		notificationCallback = null;
 		mockDetails = {
-			"work-1": { work: work("work-1"), comments: [], usage: usageOf(1_000) },
-			"work-2": { work: work("work-2"), comments: [], usage: usageOf(50) },
+			"work-1": {
+				work: work("work-1"),
+				comments: [],
+				usage: usageOf(1_000),
+				activity: "idle",
+			},
+			"work-2": {
+				work: work("work-2"),
+				comments: [],
+				usage: usageOf(50),
+				activity: "idle",
+			},
 		};
 	});
 
@@ -88,10 +98,36 @@ describe("useWorkDetailSubscription", () => {
 				work: work("work-1"),
 				comments: [],
 				usage: usageOf(1_500),
+				activity: "idle",
 			});
 		});
 
 		expect(result.current.usage).toEqual(usageOf(1_500));
+	});
+
+	// The detail carries its own activity, and this hook is its wire boundary:
+	// a client talking to a newer server must not paint a leaf it has never
+	// heard of, and `idle` is the leaf that claims the least.
+	it("folds an activity it does not know to idle", async () => {
+		mockDetails["work-1"] = {
+			...mockDetails["work-1"],
+			activity: "dreaming" as never,
+		};
+
+		const { result } = renderHook(() => useWorkDetailSubscription("work-1"));
+		await waitFor(() => expect(result.current.loading).toBe(false));
+		expect(result.current.activity).toBe("idle");
+
+		act(() => {
+			notificationCallback?.({
+				id: "watch-work-1",
+				work: work("work-1"),
+				comments: [],
+				usage: usageOf(1_000),
+				activity: "needs_message",
+			});
+		});
+		expect(result.current.activity).toBe("needs_message");
 	});
 
 	// The switch is a render apart from the new item's snapshot; what is held in

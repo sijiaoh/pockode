@@ -20,8 +20,10 @@ type EventRecord struct {
 	PermissionSuggestions []PermissionUpdate `json:"permission_suggestions,omitempty"`
 	Questions             []AskUserQuestion  `json:"questions,omitempty"`
 	Choice                string             `json:"choice,omitempty"`
-	Answers               map[string]string  `json:"answers,omitempty"`
-	Origin                MessageOrigin      `json:"origin,omitempty"`
+	// Reason says why a request stopped waiting for an answer; see CancelReason.
+	Reason  CancelReason      `json:"reason,omitempty"`
+	Answers map[string]string `json:"answers,omitempty"`
+	Origin  MessageOrigin     `json:"origin,omitempty"`
 	// Subtype says what kind of record this is within its type, for the two
 	// types that have kinds: a system-origin message (see MessageEvent), and a
 	// tool result that is not the whole story (see ToolResultBackgroundStarted).

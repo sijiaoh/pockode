@@ -27,6 +27,9 @@ const (
 	// doing right now. The only event Pockode broadcasts without recording;
 	// see Persisted.
 	EventTypeToolActivity EventType = "tool_activity"
+	// EventTypeBackgroundWait says the turn has been parked on work that
+	// outlives the tool call that started it. See BackgroundWaitEvent.
+	EventTypeBackgroundWait EventType = "background_wait"
 )
 
 // Persisted returns true for the events that belong in session history.
@@ -45,13 +48,21 @@ func (e EventType) Persisted() bool {
 	return e != EventTypeToolActivity
 }
 
-// AwaitsUserInput returns true for events where the AI pauses and waits for user input.
-// These events transition the process state from running to idle:
+// AwaitsUserInput returns true for the events after which the agent produces
+// nothing until someone acts: the three that end a turn and the two that block
+// it on a person.
+//
 // - done: AI completed its response
 // - error: fatal error occurred (e.g., CLI crash)
-// - interrupted: user interrupted the AI (updates session timestamp)
+// - interrupted: user interrupted the AI
 // - permission_request: AI is asking for permission (user action required)
 // - ask_user_question: AI is asking a question (user action required)
+//
+// It no longer decides what the turn becomes — session.ReduceTurn does, and it
+// tells these five apart because they do not all mean the same thing there. What
+// is left of this predicate is the question they do share: the two callers ask
+// it to refresh the session's timestamp, and to disarm a background wait that
+// an ending has overtaken.
 func (e EventType) AwaitsUserInput() bool {
 	switch e {
 	case EventTypeDone, EventTypeError, EventTypeInterrupted,
@@ -63,30 +74,34 @@ func (e EventType) AwaitsUserInput() bool {
 }
 
 // IndicatesAgentActivity returns true for the events that only arrive while a
-// turn is under way. These move the process state to running.
+// turn is under way. They say the turn is alive; they do not say the agent has
+// contributed anything to it.
 //
-// It is a whitelist because being wrong is not symmetric. An event wrongly
-// counted as activity marks a session running with nothing running, and nothing
-// corrects that — not even the idle reaper, which spares a turn in progress
-// precisely because it cannot tell a busy one from a stuck one (see
-// Process.reapHold). The startup warning Codex emits for a session it cannot
-// resume did exactly that.
-// An event wrongly left out costs at most one missed transition, because the
-// send that started the turn has already set running.
+// It is a whitelist for what it keeps *out*, not for what it lets in. A type
+// wrongly listed here is inert: it becomes session.SignalNoise, which moves no
+// turn at all, so the claim "this only arrives mid-turn" is one the reducer no
+// longer has to take on trust. That was not always so — noise used to open a
+// turn, and the startup warning Codex emits for a session it cannot resume
+// stranded one as `running` with nothing running — and the fix was to stop the
+// signal from being able to do that rather than to keep this list perfect.
 //
-// Excluded, and why they are not oversights: AwaitsUserInput events end or pause
-// the turn, so they drive idle instead (the two predicates never overlap);
-// warning is how a session-level problem is reported, which can happen before the
-// first message; request_cancelled withdraws a prompt the user may never have
-// answered, so the process is likely idle already; process_ended is an obituary.
-// The remaining types are only ever replayed from history, never streamed.
+// What the list still decides is the boundary with ActivatesSession below, where
+// being wrong is expensive in both directions, and that is where the care
+// belongs.
 //
-// System and tool_activity events belong here but not in ActivatesSession: they
-// only appear once a turn is running, yet neither is the agent contributing
-// anything to it. Both are named explicitly rather than derived, which is the
-// point of a whitelist — tool_activity in particular is how a background task
-// that is visibly reporting progress stops counting against the background-wait
-// silence budget (see claude.parseLine).
+// Excluded, and why they are not oversights: AwaitsUserInput events end or block
+// the turn, so they drive those transitions instead (the two predicates never
+// overlap); request_cancelled and process_ended likewise have signals of their
+// own, named in process.turnInputFor before this predicate is ever asked; and a
+// warning is how a session-level problem is reported, which can happen before
+// the first message ever goes out. The remaining types are only ever replayed
+// from history, never streamed.
+//
+// System and tool_activity events belong here but not in ActivatesSession, and
+// the gap between the two predicates is exactly the set that must *not* end a
+// background wait: the background task list changing is a `system` frame, so
+// counting it would make a task finishing look like the turn coming back (see
+// process.turnInputFor). That gap is this predicate's whole remaining job.
 func (e EventType) IndicatesAgentActivity() bool {
 	return e == EventTypeSystem || e == EventTypeToolActivity || e.ActivatesSession()
 }
@@ -426,15 +441,42 @@ func (e PermissionRequestEvent) ToRecord() EventRecord {
 	}
 }
 
+// CancelReason says why a prompt stopped waiting for its answer, for the two
+// records that can report it — a request cancelled, and a request that expired
+// with the process that raised it. One field for both, because "why did this
+// stop waiting for me" is one question.
+//
+// Only ReasonWorkClosed is produced today; the other two are the shapes the
+// session layer already has cases for, and the client's copy for them lands
+// with the code that fills them in.
+type CancelReason string
+
+const (
+	// ReasonProcessEnded is the process that raised the prompt going away —
+	// reaped, crashed, or killed with the server.
+	ReasonProcessEnded CancelReason = "process_ended"
+	// ReasonTimeout is the answer lease running out (see session.LeaseAnswer).
+	ReasonTimeout CancelReason = "timeout"
+	// ReasonWorkClosed is the work above the session having been closed. Nobody
+	// is coming back to answer, so the prompt is withdrawn rather than left
+	// pending forever — and unlike the other two this one is a fact about the
+	// work layer, which is why the work engine is what produces it.
+	ReasonWorkClosed CancelReason = "work_closed"
+)
+
 type RequestCancelledEvent struct {
 	RequestID string
+	// Reason is empty when the agent itself withdrew the request: the CLI said
+	// it no longer needs an answer and did not say why, and inventing one would
+	// be worse than saying nothing.
+	Reason CancelReason
 }
 
 func (RequestCancelledEvent) EventType() EventType { return EventTypeRequestCancelled }
 func (RequestCancelledEvent) isAgentEvent()        {}
 
 func (e RequestCancelledEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), RequestID: e.RequestID}
+	return EventRecord{Type: e.EventType(), RequestID: e.RequestID, Reason: e.Reason}
 }
 
 type AskUserQuestionEvent struct {
@@ -466,6 +508,30 @@ func (e SystemEvent) ToRecord() EventRecord {
 	return EventRecord{Type: e.EventType(), Content: e.Content}
 }
 
+// BackgroundWaitEvent says the turn is parked: the CLI ended it with an
+// ordinary result frame, but work it started outlives that frame and it will
+// resume output by itself when that work finishes.
+//
+// It exists because the alternative was tried. The adapter used to swallow the
+// CLI's pseudo-ending so the wait read as one long thought, and the cost was
+// that every surface drew a running turn — spinner, Stop button, a work item
+// reported as in progress — for up to two hours of nothing. Saying it outright
+// is what lets session.ReduceTurn park the turn on a blocker instead, and what
+// lets the transcript show the wait where it happened.
+//
+// Recorded, like any other event: that the turn was parked at this point stays
+// true afterwards. Nothing about the tasks themselves is carried, because that
+// is live state — see backgroundTaskTracker, which is deliberately never
+// written into a record.
+type BackgroundWaitEvent struct{}
+
+func (BackgroundWaitEvent) EventType() EventType { return EventTypeBackgroundWait }
+func (BackgroundWaitEvent) isAgentEvent()        {}
+
+func (e BackgroundWaitEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType()}
+}
+
 type ProcessEndedEvent struct{}
 
 func (ProcessEndedEvent) EventType() EventType { return EventTypeProcessEnded }
@@ -494,8 +560,9 @@ type StepInfo struct {
 	Total   int `json:"total"`
 }
 
-// ChildInfo identifies the child work whose completion triggered a child_done
-// system message.
+// ChildInfo identifies the child work a system message reports on: the one that
+// closed (child_done), or the one whose leaving left its parent's wait with
+// nothing that could end it (wait_stranded).
 type ChildInfo struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -505,8 +572,8 @@ type ChildInfo struct {
 // can render it without parsing the prompt body.
 type MessageMeta struct {
 	// WorkID is the work that owns the session this message was delivered to —
-	// the receiver, never the subject. A child_done message is delivered to the
-	// parent's session, so its WorkID is the parent's. The frontend opens this
+	// the receiver, never the subject. A message about a child is delivered to
+	// the parent's session, so its WorkID is the parent's. The frontend opens this
 	// work from the message; a subject id here would send the reader somewhere
 	// the message was never delivered.
 	WorkID string `json:"work_id,omitempty"`

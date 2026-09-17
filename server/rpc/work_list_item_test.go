@@ -27,13 +27,15 @@ func TestWorkListRowCarriesExactlyItsFields(t *testing.T) {
 		AgentRoleID: "role-1",
 		Title:       "Some task",
 		Body:        "the instructions",
-		Status:      work.StatusInProgress,
+		Status:      work.StatusActive,
+		Wait:        work.WaitUser,
+		WaitReason:  "which database?",
 		SessionID:   "sess-1",
 		Worktree:    "wt",
 		CurrentStep: 2,
 		CreatedAt:   time.Unix(1, 0),
 		UpdatedAt:   time.Unix(2, 0),
-	}))
+	}, work.ActivityNeedsMessage))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -43,13 +45,15 @@ func TestWorkListRowCarriesExactlyItsFields(t *testing.T) {
 		t.Fatalf("unmarshal row: %v", err)
 	}
 
-	// id/type/title/status draw the row; parent_id builds the story-task tree and
-	// walks a work up to its root; agent_role_id names the role; session_id is the
-	// Chat shortcut and the session list's work lookup; worktree is the badge the
-	// global list needs; updated_at orders the closed group.
+	// id/type/title/activity draw the row; status decides which buttons exist and
+	// which group the row is in; wait puts it in "Needs you"; parent_id builds
+	// the story-task tree and walks a work up to its root; agent_role_id names
+	// the role; session_id is the Chat shortcut and the session list's work
+	// lookup; worktree is the badge the global list needs; updated_at orders the
+	// closed group.
 	want := []string{
-		"agent_role_id", "id", "parent_id", "session_id", "status",
-		"title", "type", "updated_at", "worktree",
+		"activity", "agent_role_id", "id", "parent_id", "session_id", "status",
+		"title", "type", "updated_at", "wait", "worktree",
 	}
 	if got := slices.Sorted(maps.Keys(fields)); !slices.Equal(got, want) {
 		t.Errorf("row fields = %v, want %v", got, want)
@@ -61,6 +65,11 @@ func TestWorkListRowCarriesExactlyItsFields(t *testing.T) {
 	if strings.Contains(string(row), "the instructions") {
 		t.Errorf("list row carries the work body: %s", row)
 	}
+	// The wait's reason is the detail's, for the same reason the body is: a row
+	// has nowhere to show free text the agent wrote.
+	if strings.Contains(string(row), "which database?") {
+		t.Errorf("list row carries the wait reason: %s", row)
+	}
 }
 
 // The other side of the same boundary: everything the list stopped carrying has
@@ -71,13 +80,14 @@ func TestWorkDetailCarriesTheFieldsTheListDropped(t *testing.T) {
 		Title:       "Some story",
 		Body:        "the instructions",
 		CurrentStep: 2,
+		WaitReason:  "which database?",
 		CreatedAt:   time.Unix(1, 0),
 	}})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	for _, want := range []string{`"body":"the instructions"`, `"current_step":2`, `"created_at"`} {
+	for _, want := range []string{`"body":"the instructions"`, `"current_step":2`, `"created_at"`, `"wait_reason":"which database?"`} {
 		if !strings.Contains(string(result), want) {
 			t.Errorf("detail result is missing %s: %s", want, result)
 		}

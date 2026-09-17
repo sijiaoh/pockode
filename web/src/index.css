@@ -976,8 +976,13 @@ samp {
 /* The transition belongs on the card, not on .question-highlight: a transition
  * declared by the class itself is already gone at the moment the class is
  * removed (transitions read the after-change style), so the ring would snap out
- * instead of fading. */
-[data-question-request-id] {
+ * instead of fading.
+ *
+ * Both prompt cards, because both are jump targets: the pending-question pill
+ * reaches a question, the blocker strip reaches whichever of the two is holding
+ * the turn up (docs/lifecycle-ui.md §2.2). */
+[data-question-request-id],
+[data-permission-request-id] {
 	transition: box-shadow 300ms ease-out;
 }
 
@@ -990,7 +995,8 @@ samp {
 		animation: none;
 	}
 
-	[data-question-request-id] {
+	[data-question-request-id],
+	[data-permission-request-id] {
 		transition: none;
 	}
 }

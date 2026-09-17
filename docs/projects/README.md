@@ -13,10 +13,10 @@ Zustand stores ◄─── WebSocket ───► RPC handlers ──┐       
                                    MCP HTTP API ───┘    file lock)        │
                                         ▲                                 │
                                         └──────────── /api/mcp ───────────┘
-                                   AutoResumer
-                                   (process lifecycle sync,
+                                   Work engine
+                                   (settled turn endings, nudges,
                                     parent reactivation,
-                                    step/reopen follow-ups)
+                                    startup recovery)
 ```
 
 ## Documents
@@ -24,6 +24,6 @@ Zustand stores ◄─── WebSocket ───► RPC handlers ──┐       
 | Document | Contents |
 |----------|----------|
 | [Data Model](data-model.md) | Entities (Work, Comment, AgentRole), hierarchy rules, persistence (JSON files, atomic writes, cross-process safety), store interfaces |
-| [Workflow Engine](workflow-engine.md) | Status machine and transitions, auto-close, AutoResumer (process sync + triggers), WorkStarter sequence, prompt builders |
+| [Workflow Engine](workflow-engine.md) | Status machine and transitions, the work engine's five inputs, the command surface, WorkStarter sequence, prompt builders |
 | [API](api.md) | MCP tools (agent-facing), WebSocket RPC (client-facing), real-time subscription system with backpressure |
 | [Frontend](frontend.md) | Zustand stores, RPC actions, subscription hooks, UI overlay components |

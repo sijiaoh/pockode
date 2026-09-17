@@ -14,6 +14,7 @@ import { useWSStore } from "../../lib/wsStore";
 import type {
 	AskUserQuestionRequest,
 	ContentPart,
+	ExpiryReason,
 	Message,
 	PermissionRequest,
 	PermissionRuleValue,
@@ -238,8 +239,12 @@ type PermissionChoice = "deny" | "allow" | "always_allow";
 interface PermissionRequestItemProps {
 	request: PermissionRequest;
 	status: PermissionStatus;
+	/** Why it expired, when the server could say; see ExpiryReason. */
+	reason?: ExpiryReason;
 	isCodex?: boolean;
 	onRespond?: (request: PermissionRequest, choice: PermissionChoice) => void;
+	/** Why the last attempt to answer failed. */
+	error?: string;
 }
 
 /** Extract plan content from ExitPlanMode input */
@@ -315,11 +320,30 @@ function hasRules(
 	return "rules" in update;
 }
 
+// What an expired permission request says, per reason. Every one of them states
+// the same outcome — the tool did not run — because a permission that is not
+// granted is a denial whichever way the waiting ended; what differs is why
+// nobody was asked again (docs/lifecycle-ui.md §5.2).
+const PERMISSION_EXPIRY_COPY: Record<ExpiryReason, string> = {
+	process_ended:
+		"The agent's process ended before this was answered, so it counted as a denial and the tool did not run.",
+	timeout:
+		"This request was not answered in time, so it counted as a denial and the tool did not run.",
+	work_closed:
+		"This request was cancelled because the work was closed. The tool did not run.",
+};
+
+// Said when the reason is unknown, and true of all three.
+const PERMISSION_EXPIRY_FALLBACK =
+	"The agent stopped waiting for this request, so it counted as a denial and the tool did not run.";
+
 function PermissionRequestItem({
 	request,
 	status,
+	reason,
 	isCodex,
 	onRespond,
+	error,
 }: PermissionRequestItemProps) {
 	const isPending = status === "pending";
 	const workDir = useWSStore((state) => state.workDir);
@@ -338,8 +362,11 @@ function PermissionRequestItem({
 		hasRules(request.permissionSuggestions[0])
 			? request.permissionSuggestions[0]
 			: null;
+	// The expired banner lives in the body, so a request with nothing else to
+	// show still has to be openable — otherwise the one thing the card has left
+	// to say is unreachable.
 	const hasExpandableContent = Boolean(
-		planContent || hasToolInput || permissionSuggestion,
+		planContent || hasToolInput || permissionSuggestion || status === "expired",
 	);
 	const [expanded, setExpanded] = useState(isPending && hasExpandableContent);
 	const everExpanded = useEverExpanded(expanded);
@@ -361,8 +388,12 @@ function PermissionRequestItem({
 	const { Icon, color } = statusConfig[status];
 
 	return (
+		// The data attribute is how MessageList finds this card when the blocker
+		// strip jumps to it; scroll-mt-14 clears the pending-question pill, which
+		// floats at the top of the list and can outlive the jump.
 		<div
-			className={`rounded text-xs ${isPending ? "border border-th-warning bg-th-warning/10" : "bg-th-bg-secondary"}`}
+			data-permission-request-id={request.requestId}
+			className={`scroll-mt-14 rounded text-xs ${isPending ? "border border-th-warning bg-th-warning/10" : "bg-th-bg-secondary"}`}
 		>
 			<ToolRow
 				expanded={expanded}
@@ -383,6 +414,17 @@ function PermissionRequestItem({
 
 			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+					{/* An expired permission can only have been a denial, and the card
+					    states that outcome rather than offering anything to press: the
+					    two expired cards are told apart by their affordances, not their
+					    chrome (docs/lifecycle-ui.md §5.2). */}
+					{status === "expired" && (
+						<div className="mb-2 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
+							{reason
+								? PERMISSION_EXPIRY_COPY[reason]
+								: PERMISSION_EXPIRY_FALLBACK}
+						</div>
+					)}
 					{planContent && <MarkdownContent content={planContent} />}
 					{toolInputContent && (
 						<pre className="overflow-x-auto rounded bg-th-code-bg p-2 text-th-code-text">
@@ -409,6 +451,18 @@ function PermissionRequestItem({
 					)}
 				</ScrollableContent>
 			</CollapsibleBody>
+
+			{/* Outside the button row on purpose. A refusal often takes the buttons
+			    away with it — the card is no longer pending — and an error that
+			    disappears with the control it belongs to is a silent failure. */}
+			{error && (
+				<p
+					role="alert"
+					className="border-th-border border-t px-2 py-1.5 text-th-error"
+				>
+					{error}
+				</p>
+			)}
 
 			{isPending && onRespond && (
 				<div className="flex justify-end gap-2 border-t border-th-border p-2">
@@ -456,6 +510,18 @@ interface ContentPartItemProps {
 		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
+	onSendAsMessage?: (content: string) => void;
+	/** The failed answer, by request id; see `PromptError`. */
+	promptError?: PromptError;
+}
+
+/**
+ * The request whose last answer the server refused, and what it said. One at a
+ * time: the user answers one card at a time, and the next attempt replaces it.
+ */
+export interface PromptError {
+	requestId: string;
+	message: string;
 }
 
 function ContentPartItem({
@@ -465,6 +531,8 @@ function ContentPartItem({
 	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
+	onSendAsMessage,
+	promptError,
 }: ContentPartItemProps) {
 	if (part.type === "text") {
 		return <MarkdownContent content={part.content} />;
@@ -477,8 +545,14 @@ function ContentPartItem({
 			<PermissionRequestItem
 				request={part.request}
 				status={part.status}
+				reason={part.reason}
 				isCodex={isCodex}
 				onRespond={onPermissionRespond}
+				error={
+					promptError?.requestId === part.request.requestId
+						? promptError.message
+						: undefined
+				}
 			/>
 		);
 	}
@@ -487,8 +561,15 @@ function ContentPartItem({
 			<AskUserQuestionItem
 				request={part.request}
 				status={part.status}
+				reason={part.reason}
 				savedAnswers={part.answers}
 				onRespond={onQuestionRespond}
+				onSendAsMessage={onSendAsMessage}
+				error={
+					promptError?.requestId === part.request.requestId
+						? promptError.message
+						: undefined
+				}
 			/>
 		);
 	}
@@ -531,7 +612,6 @@ interface Props {
 	 */
 	isFirst?: boolean;
 	isLast?: boolean;
-	isProcessRunning?: boolean;
 	isCodex?: boolean;
 	onPermissionRespond?: (
 		request: PermissionRequest,
@@ -541,6 +621,9 @@ interface Props {
 		request: AskUserQuestionRequest,
 		answers: Record<string, string> | null,
 	) => void;
+	/** Must be stable: this component is memoized. */
+	onSendAsMessage?: (content: string) => void;
+	promptError?: PromptError;
 	onOpenWorkDetail?: (workId: string) => void;
 	/**
 	 * Absent when forking is out of reach for the whole session — the agent
@@ -579,10 +662,11 @@ const MessageItem = memo(function MessageItem({
 	onOpenFile,
 	isFirst,
 	isLast,
-	isProcessRunning,
 	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
+	onSendAsMessage,
+	promptError,
 	onOpenWorkDetail,
 	onForkMessage,
 }: Props) {
@@ -671,6 +755,8 @@ const MessageItem = memo(function MessageItem({
 									isCodex={isCodex}
 									onPermissionRespond={onPermissionRespond}
 									onQuestionRespond={onQuestionRespond}
+									onSendAsMessage={onSendAsMessage}
+									promptError={promptError}
 								/>
 							);
 						})}
@@ -681,7 +767,7 @@ const MessageItem = memo(function MessageItem({
 				{message.status === "sending" && (
 					<Spinner variant="current" className="mt-2" />
 				)}
-				{message.status === "streaming" && isLast && isProcessRunning && (
+				{message.status === "streaming" && isLast && (
 					<Spinner variant="current" className="mt-2" />
 				)}
 				{message.status === "error" && (
