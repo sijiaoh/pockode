@@ -402,7 +402,14 @@ func (e *Engine) OnWorkChange(event ChangeEvent) {
 	if event.Op == OperationUpdate {
 		e.enforceSessionLease(child)
 	}
-	if child.ParentID == "" || e.getResolver() == nil {
+	// A missing resolver is deliberately *not* checked here. It used to be, and
+	// it silently dropped every event that arrived before the resolver was
+	// installed — which is to say it turned "I cannot reach this parent" into
+	// "this parent was never owed anything". Each follow-up below now answers
+	// that for itself, and none of them may leave a `child` wait standing (see
+	// failedToReach). A `user` wait is untouched either way — a person is
+	// reachable whether or not this process can find a worktree.
+	if child.ParentID == "" {
 		return
 	}
 
@@ -489,6 +496,7 @@ func (e *Engine) notifyParentOfChild(child Work) {
 	// children share it, but the parent is authoritative for its session.
 	sender, release, ok := e.resolveSender(parent.Worktree)
 	if !ok {
+		e.failedToReach(parent.ID, "could not deliver a closing child's report", childReportUndelivered)
 		return
 	}
 	defer release()
@@ -520,6 +528,11 @@ func (e *Engine) notifyParentOfChild(child Work) {
 			return
 		}
 		slog.Warn("failed to send child completion message to parent", "parentId", parent.ID, "childId", child.ID, "error", err)
+		if waitCleared {
+			// The wait is already gone, so this parent is no longer waiting for
+			// anything — but nothing told it so, and nothing else will.
+			e.stop(parent.ID, "could not deliver a closing child's report", childReportUndelivered)
+		}
 		return
 	}
 	slog.Info("child completion message sent to parent", "parentId", parent.ID, "childId", child.ID, "parentStatus", parent.Status)
@@ -545,9 +558,13 @@ func (e *Engine) notifyParentOfChild(child Work) {
 // send this news twice when two subtasks leave at once, and would send it at all
 // when a person starts another subtask in between.
 //
-// Waking is deliberately *not* stopping the parent. Stopping would take away the
-// one recovery that costs nobody anything — the agent restarting the subtask
-// itself — and would make a user who stopped one subtask restart two things.
+// Waking is deliberately *not* stopping the parent — *while the server is
+// running*. Stopping would take away the one recovery that costs nobody
+// anything — the agent restarting the subtask itself — and would make a user who
+// stopped one subtask restart two things. That reasoning holds exactly as long
+// as there is an agent to wake: at startup there is not, and RecoverStartup
+// stops the same shape of parent for that reason, not because this one is wrong.
+// The same fork appears below, where the news cannot be delivered.
 func (e *Engine) notifyParentOfStrandedWait(child Work, exit childExit) {
 	parent, found, err := e.store.Get(child.ParentID)
 	if err != nil {
@@ -565,9 +582,12 @@ func (e *Engine) notifyParentOfStrandedWait(child Work, exit childExit) {
 
 	// Resolved before the transition for the reason notifyParentOfChild gives:
 	// a resolve failure must not leave the parent resumed but un-nudged — and
-	// here it would be resumed with nothing having told it why.
+	// here it would be resumed with nothing having told it why. failedToReach
+	// then asks the same question this function was about to, and hands the
+	// parent to the user if the answer is still "nothing is left".
 	sender, release, ok := e.resolveSender(parent.Worktree)
 	if !ok {
+		e.failedToReach(parent.ID, "could not tell a parent its wait had nothing left to end it", strandedNewsUndelivered)
 		return
 	}
 	defer release()
@@ -597,9 +617,57 @@ func (e *Engine) notifyParentOfStrandedWait(child Work, exit childExit) {
 		}
 		slog.Warn("failed to tell a parent its wait had nothing left to end it",
 			"parentId", parent.ID, "childId", child.ID, "error", err)
+		// The wait is gone but the news never landed, so nobody in this process
+		// knows the parent has something to decide. Hand it to the user.
+		e.stop(parent.ID, "could not tell a parent its wait had nothing left to end it", strandedNewsUndelivered)
 		return
 	}
 	slog.Info("cleared a wait nothing could end", "parentId", parent.ID, "childId", child.ID, "exit", exit)
+}
+
+// The two comments below explain a stop that no user asked for and no agent
+// reported: the engine had news a waiting work needed and could not get it into
+// the session. Stopping is what keeps the failure findable: `stopped` has a list
+// group of its own, ordered above `open`, and a Restart in the row. A work left
+// waiting on a subtask that is gone sits in *Active* among the works that are
+// genuinely running, which is where it is never looked at again. Neither state
+// carries the attention dot (docs/lifecycle-ui.md §4) — a stopped work needs a
+// person whenever they get to it, not now.
+//
+// They are two and not one because they describe opposite news. Telling an agent
+// its subtask finished, in words that say its subtasks went wrong, would send the
+// user looking for a problem that is not there.
+const (
+	strandedNewsUndelivered = "Stopped automatically: this work was waiting on its subtasks, none of them is " +
+		"running any more, and Pockode could not reach its agent session to say so. Check its subtasks and " +
+		"restart the work to continue."
+
+	childReportUndelivered = "Stopped automatically: a subtask of this work finished, but Pockode could not reach " +
+		"this work's agent session to deliver the report, and no other subtask was left running. The subtask's " +
+		"own report is on the subtask itself. Restart the work to continue."
+)
+
+// failedToReach is what the engine does with a parent it owes news to and cannot
+// reach. The news is lost either way; the parent must not be.
+//
+// If the wait still has a running subtask behind it, that subtask's own exit
+// brings the engine back here, so there is a later chance and nothing to do now.
+// If nothing is left, the wait is ended and the work is stopped — the same
+// answer RecoverStartup gives, and for the same reason: waking presumes an agent
+// to wake, and an unreachable session is not one.
+func (e *Engine) failedToReach(parentID, reason, comment string) {
+	cleared, err := e.store.ClearChildWaitIfStranded(e.ctx, parentID)
+	if err != nil {
+		if e.ctx.Err() == nil {
+			slog.Warn("failed to clear the wait of a parent that could not be reached",
+				"parentId", parentID, "error", err)
+		}
+		return
+	}
+	if !cleared {
+		return
+	}
+	e.stop(parentID, reason, comment)
 }
 
 // --- Input 4: the session was deleted ---
@@ -640,6 +708,12 @@ const orphanedWorkComment = "Stopped automatically: the Pockode server restarted
 	"No agent process survives a restart, so anything that was running for this work — including background tasks — " +
 	"is gone and no result is coming from it. Restart the work to continue it."
 
+// strandedWaitComment explains the second half of startup recovery: a work that
+// declared a wait, whose wait the first half emptied out from under it.
+const strandedWaitComment = "Stopped automatically: this work was waiting for its subtasks to finish, and none " +
+	"of them is running any more — no agent process survives a server restart. Nothing is left that could end " +
+	"the wait, so the work would have sat here forever. Check its subtasks and restart the work to continue."
+
 // RecoverStartup deals with the work a previous run left active. Call it at
 // startup, before any session can be created.
 //
@@ -649,6 +723,14 @@ const orphanedWorkComment = "Stopped automatically: the Pockode server restarted
 // for outlives the process, because both a person and a closing child reach it
 // from outside the session. That is the difference the old code could not
 // express, and why every paused work used to come back from a restart stopped.
+//
+// The catch is that the first half invalidates the second: stopping a subtask is
+// exactly what empties a parent's `child` wait. So the waits are re-examined
+// afterwards, as a *condition* — "is anything left that could end this" — rather
+// than as a reaction to the stops just made. A reaction would have to be ordered
+// against them, and ordering is what produced the bug this exists to close: the
+// engine is not yet a listener on the work store when RecoverStartup runs (see
+// main.go, where that order is deliberate), so its own stops reach nobody.
 func (e *Engine) RecoverStartup() {
 	works, err := e.store.List()
 	if err != nil {
@@ -661,6 +743,44 @@ func (e *Engine) RecoverStartup() {
 			continue
 		}
 		e.stop(w.ID, "server restarted while the work was active", orphanedWorkComment)
+	}
+
+	e.recoverStrandedWaits()
+}
+
+// recoverStrandedWaits stops every work left waiting on subtasks that no longer
+// run. It is the startup counterpart of notifyParentOfStrandedWait, and it takes
+// the opposite action on purpose: that one wakes an agent and lets it decide,
+// which presumes an agent. Here every process died with the last run, so there
+// is nobody to decide and nothing to tell. Stopping is also the only way this
+// stays findable: `stopped` is its own list group with a Restart in the row,
+// while a work waiting on children sits in *Active* alongside the ones that are
+// really running (docs/lifecycle-ui.md §6.1).
+//
+// A `user` wait is untouched: a person is not something a restart takes away.
+//
+// One pass is enough, and that rests on a fact this package enforces rather than
+// on luck: a `child` wait is only ever set by Store.SetChildWait, which requires
+// an active child, so only a work type that can have children can hold one — and
+// today that is exactly the top-level type (validParents). Nothing sits above a
+// work stopped here, so no stop in this pass can strand another wait.
+// TestOnlyTopLevelWorkCanHaveChildren fails if the hierarchy grows a level,
+// which is when this would have to become a loop to a fixed point.
+func (e *Engine) recoverStrandedWaits() {
+	works, err := e.store.List()
+	if err != nil {
+		slog.Warn("failed to list works while re-examining stranded waits", "error", err)
+		return
+	}
+
+	for _, w := range works {
+		if w.Status != StatusActive || w.Wait != WaitChild {
+			continue
+		}
+		if HasActiveChild(works, w.ID) {
+			continue
+		}
+		e.stop(w.ID, "server restarted and nothing was left to end the work's wait", strandedWaitComment)
 	}
 }
 

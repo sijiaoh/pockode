@@ -254,6 +254,18 @@ Two of them decide more than the rest:
   distinction the old model had no way to draw, which is why every paused work
   used to come back from a restart stopped.
 
+  Those stops are also what can empty a `child` wait, since the subtask they
+  stop may be the last one running — so **startup re-examines the waits as a
+  condition once its own stops are done**, and stops the parents nothing is left
+  to wake. Written as a reaction to the stops it would depend on the order they
+  happened in, which is how the failure got in: the engine is not yet listening
+  to the work store while recovery runs, so recovery's own stops reach nobody.
+  A running server *wakes* such a parent instead and lets the agent decide; that
+  presumes an agent, and at startup there is none. The same fallback covers the
+  running server's own dead end — a parent whose session cannot be reached at
+  all is stopped rather than left waiting, because a wait nobody was told about
+  is the failure, not the cure.
+
 **A work that has left `active` has no lease on its session's process.** The rule
 hangs on the transition rather than on each command, so it holds for the
 engine's own stops as much as for a user's Stop: `stopped` ends the process now,

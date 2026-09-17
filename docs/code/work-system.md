@@ -569,9 +569,11 @@ So the engine clears the wait and tells the agent — it does not decide what
 should happen instead. Only the agent knows whether the subtask should be
 restarted, replaced, or was never needed, and once the wait is gone the ordinary
 nudge allowance applies again, which is the backstop if the agent does nothing
-with the news. **Stopping the parent instead would be worse than the bug**: it
-takes away the recovery that costs nobody anything — the agent restarting the
-subtask itself — and makes a user who stopped one subtask restart two things.
+with the news. **Stopping a parent whose agent is reachable would be worse than
+the bug**: it takes away the recovery that costs nobody anything — the agent
+restarting the subtask itself — and makes a user who stopped one subtask restart
+two things. That holds exactly as long as there *is* an agent to wake, which is
+why the two cases below, and [input 5](#input-5-startup), stop instead.
 
 Three ways a child can leave without closing, and the message names which,
 because the way back differs:
@@ -596,6 +598,23 @@ and send the same news twice; and a person can start another subtask while the
 check runs, so the message would go out claiming nothing is running when
 something is. The engine's own status and wait checks before the call are only a
 cheap way to avoid reaching for a sender it will not use.
+
+**A parent the engine cannot reach is stopped, not left waiting.** Resolving the
+sender can fail — a worktree that will not load — and the news is lost either
+way; what must not be lost is the parent. So a failure to deliver falls back to
+the same question: is anything left that could end this wait? If a subtask is
+still running, nothing is done and that subtask's own exit brings the engine back
+here. If nothing is left, the wait ends and the work stops, with a comment saying
+the agent could not be reached. This is the startup rule arriving early: waking
+presumes an agent to wake, and an unreachable session is not one. The same
+fallback covers a *closing* child whose report cannot be delivered, since that
+too leaves a parent's wait with nothing behind it.
+
+For the same reason `Engine.OnWorkChange` does **not** skip these follow-ups when
+no sender resolver is installed. It used to, and that silently turned "I cannot
+reach this parent" into "this parent was never owed anything" for every event
+arriving before the resolver was wired. `main.go` now also installs the change
+listener only after the resolver, so the window is closed from both ends.
 
 The refusal in [`Operations.Wait`](#commands) closes the same gap from the other
 end: this input covers a wait that *became* unendable, the refusal covers one
@@ -624,7 +643,8 @@ its status.
 |---|---|---|
 | `active`, no wait | → `stopped` + comment | Its process is gone and nothing will end the turn it was carrying |
 | `active`, waiting on the user | preserved | The answer comes from outside the session and still reaches it |
-| `active`, waiting on children | preserved | Its children are on disk and still wake it when they close |
+| `active`, waiting on children, a child still `active` | preserved | That child still wakes it when it closes |
+| `active`, waiting on children, none left `active` | → `stopped` + comment | Nothing is left that could end the wait — usually because the first row just stopped its last subtask |
 
 This is the difference the old model could not express, and why every paused work
 used to come back from a restart stopped. What a wait is waiting for outlives the
@@ -633,6 +653,34 @@ process by construction; a work with no wait has nothing left to wake it.
 The stop gets a comment, since nobody asked for it and the background tasks the
 work may have been waiting on died with the server. A preserved work gets none —
 nothing happened to it.
+
+**The last row is a condition, re-examined after the stops, not a reaction to
+them.** Recovery runs before the engine is a listener on the work store, which
+is deliberate — nothing should be reacting to its own recovery, and the worktree
+manager its follow-ups would need does not exist yet. The price is that the stops
+it makes reach nobody, so it asks *"is anything left that could end this wait"*
+itself rather than waiting for an event. Written as a reaction it would have to
+be ordered against the stops, and ordering is exactly what produced the failure:
+a story left waiting on a subtask that startup had already stopped sat `active`
+forever, with no nudge, no process, and nothing on screen to distinguish it from
+the stories that were really running.
+
+One pass is enough, and that rests on a fact the package enforces rather than on
+luck: a `child` wait only ever comes from `SetChildWait`, which requires an
+active child, so only a type that can *have* children can hold one — and today
+that is exactly the top-level type. Nothing sits above a work stopped in this
+pass, so no stop in it can strand another wait.
+`TestOnlyTopLevelWorkCanHaveChildren` fails the day the hierarchy grows a
+level, which is when this has to become a loop to a fixed point.
+
+**Startup stops where [input 3](#a-wait-nothing-could-end) wakes, and the two
+agree rather than contradict.** Waking hands the decision to the agent, which
+presumes there is an agent: at startup every process died with the last run, so
+there is nobody to decide and nothing to tell. Stopping is also what keeps it
+findable: `stopped` is a list group of its own with a Restart in the row, while a
+work waiting on children sits in *Active* among the ones that are really running
+(lifecycle-ui.md §6.1). Neither carries the attention dot — that is reserved for
+work needing a person *now* (§4).
 
 The prompts a restart destroys are the session layer's business, not the work
 layer's: a killed process's blockers expire through the reducer and a

@@ -47,7 +47,7 @@ func startWork(t *testing.T, s *FileStore, id string) {
 	}
 }
 
-// startWorkWithSession transitions to in_progress with a known sessionID, for
+// startWorkWithSession transitions to active with a known sessionID, for
 // tests that need a deterministic session to assert against.
 func startWorkWithSession(t *testing.T, s *FileStore, id, sessionID string) {
 	t.Helper()
@@ -246,10 +246,10 @@ func TestClaim_FreshStartGeneratesSession(t *testing.T) {
 		t.Fatalf("Claim: %v", err)
 	}
 	if restart {
-		t.Error("restart = true, want false for open → in_progress")
+		t.Error("restart = true, want false for open → active")
 	}
 	if w.Status != StatusActive {
-		t.Errorf("status = %q, want in_progress", w.Status)
+		t.Errorf("status = %q, want %q", w.Status, StatusActive)
 	}
 	if w.SessionID == "" {
 		t.Error("want a fresh sessionID")
@@ -454,7 +454,7 @@ func TestTransition_InProgressToClosed(t *testing.T) {
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	// Story with no children: in_progress → closed directly
+	// Story with no children: active → closed directly
 	doneWork(t, s, story.ID)
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusClosed {
@@ -530,10 +530,10 @@ func TestStart_InvalidFromInProgress(t *testing.T) {
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	// Start from in_progress should fail
+	// Start from active should fail
 	_, err := s.Start(context.Background(), story.ID, "new-session")
 	if err == nil {
-		t.Fatal("expected error for Start from in_progress")
+		t.Fatal("expected error for Start from active")
 	}
 }
 
@@ -584,7 +584,7 @@ func TestMarkRunning_FromAnyLiveStatus(t *testing.T) {
 			return s.SetWait(context.Background(), id, WaitUser, "waiting on the user")
 		}},
 		{"waiting", func(s *FileStore, id string) error { return s.SetWait(context.Background(), id, WaitChild, "") }},
-		{"in_progress", func(*FileStore, string) error { return nil }},
+		{"active", func(*FileStore, string) error { return nil }},
 	}
 
 	for _, tt := range tests {
@@ -597,7 +597,7 @@ func TestMarkRunning_FromAnyLiveStatus(t *testing.T) {
 			}
 
 			if err := s.Activate(context.Background(), story.ID); err != nil {
-				t.Fatalf("%s → in_progress: %v", tt.name, err)
+				t.Fatalf("%s → active: %v", tt.name, err)
 			}
 			if got := getWork(t, s, story.ID); got.Status != StatusActive {
 				t.Errorf("status = %q, want %q", got.Status, StatusActive)
@@ -617,7 +617,7 @@ func TestReopen_ClosedToInProgress(t *testing.T) {
 		t.Fatalf("precondition: story should be closed, got %q", got.Status)
 	}
 
-	// Reopen allows closed → in_progress
+	// Reopen allows closed → active
 	if err := s.Reopen(context.Background(), story.ID); err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -642,7 +642,7 @@ func TestReopen_RejectsNonClosedStatus(t *testing.T) {
 			status: StatusOpen,
 		},
 		{
-			name:   "in_progress",
+			name:   "active",
 			setup:  func(id string) { startWork(t, s, id) },
 			status: StatusActive,
 		},
@@ -691,7 +691,7 @@ func TestTransition_InProgressToNeedsInput(t *testing.T) {
 	startWork(t, s, story.ID)
 
 	if err := s.SetWait(context.Background(), story.ID, WaitUser, "waiting on the user"); err != nil {
-		t.Fatalf("in_progress → needs_input: %v", err)
+		t.Fatalf("active → waiting on the user: %v", err)
 	}
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusActive || got.Wait != WaitUser {
@@ -730,7 +730,7 @@ func TestTransition_InProgressToWaiting(t *testing.T) {
 	startWork(t, s, story.ID)
 
 	if err := s.SetWait(context.Background(), story.ID, WaitChild, ""); err != nil {
-		t.Fatalf("in_progress → waiting: %v", err)
+		t.Fatalf("active → waiting on children: %v", err)
 	}
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusActive || got.Wait != WaitChild {
@@ -1203,7 +1203,7 @@ func TestConcurrent_StartSameWork(t *testing.T) {
 		}
 	}
 
-	// Exactly one should succeed (open → in_progress), rest fail (in_progress → in_progress is invalid)
+	// Exactly one should succeed (open → active), rest fail (a work that is already active cannot be started)
 	if successes != 1 {
 		t.Errorf("expected exactly 1 success, got %d successes and %d failures", successes, failures)
 	}

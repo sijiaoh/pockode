@@ -354,7 +354,7 @@ func TestHandler_WorkStart(t *testing.T) {
 	json.Unmarshal(resp.Result, &result)
 
 	if result.Status != work.StatusActive {
-		t.Errorf("expected status in_progress, got %s", result.Status)
+		t.Errorf("expected status %s, got %s", work.StatusActive, result.Status)
 	}
 	if result.SessionID == "" {
 		t.Error("expected non-empty session_id after start")
@@ -399,10 +399,10 @@ func TestHandler_WorkStart_AlreadyInProgress(t *testing.T) {
 		t.Fatalf("first start failed: %s", resp.Error.Message)
 	}
 
-	// Second start should fail (already in_progress)
+	// Second start should fail (already active)
 	resp = env.call("work.start", rpc.WorkStartParams{ID: story.ID})
 	if resp.Error == nil {
-		t.Fatal("expected error for starting already in_progress work")
+		t.Fatal("expected error for starting a work that is already active")
 	}
 }
 
@@ -478,7 +478,7 @@ func TestHandler_WorkStart_RollbackAllowsRetry(t *testing.T) {
 	var result work.Work
 	json.Unmarshal(resp.Result, &result)
 	if result.Status != work.StatusActive {
-		t.Errorf("expected status in_progress after retry, got %s", result.Status)
+		t.Errorf("expected status %s after retry, got %s", work.StatusActive, result.Status)
 	}
 }
 

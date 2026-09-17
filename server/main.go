@@ -303,8 +303,14 @@ Flags:
 	// Before anything can create a session: work the last run left active is
 	// dealt with by what it was waiting for, not by what its dead process was
 	// doing.
+	//
+	// It runs before the engine is a listener on the work store, and that order
+	// is deliberate — nothing here should be reacting to its own recovery, and
+	// the worktree manager that its follow-ups would need does not exist yet.
+	// The price is that the stops it makes are heard by nobody, so RecoverStartup
+	// re-examines the waits those stops emptied out itself rather than trusting
+	// an event to arrive.
 	workEngine.RecoverStartup()
-	workStore.AddOnChangeListener(workEngine)
 
 	// Set PM as default agent role on first launch
 	if pmID := agentRoleStore.SeededPMRoleID(); pmID != "" {
@@ -332,6 +338,10 @@ Flags:
 	// terminations to the process manager of that worktree.
 	workEngine.SetSenderResolver(worktreeManager)
 	workEngine.SetSessionTerminator(worktreeManager)
+	// Listening starts only now, once the engine can act on what it hears. The
+	// other order would drop every change that arrived in between, and a dropped
+	// change is a wait nothing comes back to.
+	workStore.AddOnChangeListener(workEngine)
 	// A deleted session takes away the place every answer would have gone, which
 	// is one of the engine's five inputs.
 	worktreeManager.AddSessionChangeListener(workEngine)

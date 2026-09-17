@@ -2,6 +2,7 @@ package work
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -104,13 +105,25 @@ type engineFixture struct {
 func newEngineFixture(t *testing.T) *engineFixture {
 	t.Helper()
 
+	f := newRecoveryFixture(t)
+	f.store.AddOnChangeListener(f.engine)
+	return f
+}
+
+// newRecoveryFixture is the fixture without the change listener, which is the
+// state production is in while RecoverStartup runs (see main.go). A startup test
+// that listened would be testing the running server's rules instead: the stops
+// recovery makes would come back as events and *wake* the parents that recovery
+// is supposed to stop.
+func newRecoveryFixture(t *testing.T) *engineFixture {
+	t.Helper()
+
 	store := newTestStore(t)
 	engine := NewEngine(store, DefaultMaxNudges)
 	sender := &recordingSender{}
 	terminator := &recordingTerminator{}
 	engine.SetSender(sender)
 	engine.SetSessionTerminator(terminator)
-	store.AddOnChangeListener(engine)
 	t.Cleanup(engine.Stop)
 
 	return &engineFixture{store: store, engine: engine, sender: sender, terminator: terminator}
@@ -567,6 +580,101 @@ func TestEngine_DeletingAWholeStoryStrandsNobody(t *testing.T) {
 	}
 }
 
+// --- a parent the engine cannot reach ---
+
+// failingResolver is a worktree whose sender cannot be had — the shape of a
+// worktree that will not load, or of an engine asked for one before the resolver
+// is installed.
+type failingResolver struct{}
+
+func (failingResolver) ResolveSender(string) (MessageSender, func(), error) {
+	return nil, nil, errors.New("worktree unavailable")
+}
+
+// The news is lost either way; what must not be lost is the parent. A wait left
+// standing here would be waiting for a subtask that is already gone, and nothing
+// would ever come back to it.
+func TestEngine_StopsAWaitingParentItCannotReach(t *testing.T) {
+	// The comment differs with the news, and that is the point of asserting on
+	// it: telling an agent its subtask *finished* in words that say its subtasks
+	// went wrong sends the user hunting for a problem that is not there.
+	tests := []struct {
+		name  string
+		leave func(*testing.T, *engineFixture, string)
+		says  string
+	}{
+		{"the last subtask stopped", func(t *testing.T, f *engineFixture, id string) {
+			if err := f.store.Stop(context.Background(), id); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+		}, "none of them is running any more"},
+		{"the last subtask closed", func(t *testing.T, f *engineFixture, id string) {
+			if _, err := f.store.StepDone(context.Background(), id, 0); err != nil {
+				t.Fatalf("StepDone: %v", err)
+			}
+		}, "a subtask of this work finished"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newEngineFixture(t)
+			f.engine.SetSenderResolver(failingResolver{})
+			story := f.startedStory(t, "sess-parent")
+			task := createTask(t, f.store, story.ID, "T")
+			startWorkWithSession(t, f.store, task.ID, "sess-child")
+			if _, err := f.store.SetChildWait(context.Background(), story.ID, "waiting on T"); err != nil {
+				t.Fatalf("SetChildWait: %v", err)
+			}
+
+			tt.leave(t, f, task.ID)
+
+			waitFor(t, func() bool { return len(f.commentBodies(t, story.ID)) > 0 })
+			got := getWork(t, f.store, story.ID)
+			if got.Status != StatusStopped || got.Wait != WaitNone {
+				t.Errorf("parent = %q + wait %q, want %q with no wait", got.Status, got.Wait, StatusStopped)
+			}
+			bodies := f.commentBodies(t, story.ID)
+			if len(bodies) != 1 || !strings.Contains(bodies[0], "could not reach") {
+				t.Fatalf("comments = %v, want one saying the agent could not be reached", bodies)
+			}
+			if !strings.Contains(bodies[0], tt.says) {
+				t.Errorf("comment = %q, want it to say %q — it describes the wrong news otherwise",
+					bodies[0], tt.says)
+			}
+		})
+	}
+}
+
+// The other half of the same rule: an unreachable parent that still has a
+// subtask running is left waiting. Its wait is not stranded, and that subtask's
+// own exit brings the engine back here — stopping now would take a recovery
+// away rather than offer one.
+func TestEngine_LeavesAnUnreachableParentThatStillHasASubtask(t *testing.T) {
+	f := newEngineFixture(t)
+	f.engine.SetSenderResolver(failingResolver{})
+	story := f.startedStory(t, "sess-parent")
+	stopping := createTask(t, f.store, story.ID, "T1")
+	startWorkWithSession(t, f.store, stopping.ID, "sess-1")
+	running := createTask(t, f.store, story.ID, "T2")
+	startWorkWithSession(t, f.store, running.ID, "sess-2")
+	if _, err := f.store.SetChildWait(context.Background(), story.ID, "waiting on both"); err != nil {
+		t.Fatalf("SetChildWait: %v", err)
+	}
+
+	if err := f.store.Stop(context.Background(), stopping.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	f.engine.Stop() // Waits for the follow-up the stop spawned.
+	got := getWork(t, f.store, story.ID)
+	if got.Status != StatusActive || got.Wait != WaitChild {
+		t.Errorf("parent = %q + wait %q, want it still waiting on %q", got.Status, got.Wait, running.Title)
+	}
+	if bodies := f.commentBodies(t, story.ID); len(bodies) != 0 {
+		t.Errorf("comments = %v, want none — nothing has happened to this parent yet", bodies)
+	}
+}
+
 // --- input 4: the session was deleted ---
 
 func TestEngine_StopsAWorkWhoseSessionWasDeleted(t *testing.T) {
@@ -604,7 +712,7 @@ func TestEngine_StopsAWorkWhoseSessionWasDeleted(t *testing.T) {
 // --- input 5: startup ---
 
 func TestEngine_RecoverStartup(t *testing.T) {
-	f := newEngineFixture(t)
+	f := newRecoveryFixture(t)
 
 	driven := f.startedStory(t, "sess-driven")
 
@@ -614,10 +722,17 @@ func TestEngine_RecoverStartup(t *testing.T) {
 		t.Fatalf("SetWait: %v", err)
 	}
 
+	// A `child` wait only survives a restart if a child does, and the only child
+	// that survives one is a child that is itself waiting.
 	waitingOnChild := createStory(t, f.store, "waiting on its children")
 	startWorkWithSession(t, f.store, waitingOnChild.ID, "sess-child")
-	if err := f.store.SetWait(context.Background(), waitingOnChild.ID, WaitChild, ""); err != nil {
+	survivingChild := createTask(t, f.store, waitingOnChild.ID, "asking the user something")
+	startWorkWithSession(t, f.store, survivingChild.ID, "sess-grandchild")
+	if err := f.store.SetWait(context.Background(), survivingChild.ID, WaitUser, "which database?"); err != nil {
 		t.Fatalf("SetWait: %v", err)
+	}
+	if _, err := f.store.SetChildWait(context.Background(), waitingOnChild.ID, ""); err != nil {
+		t.Fatalf("SetChildWait: %v", err)
 	}
 
 	f.engine.RecoverStartup()
@@ -634,13 +749,69 @@ func TestEngine_RecoverStartup(t *testing.T) {
 
 	// The two whose wake-up call comes from outside the session, and therefore
 	// survives the restart along with them.
-	for _, kept := range []Work{waitingOnUser, waitingOnChild} {
+	for _, kept := range []Work{waitingOnUser, waitingOnChild, survivingChild} {
 		if got := getWork(t, f.store, kept.ID); got.Status != StatusActive {
 			t.Errorf("%q = %q, want it left active — what it waits for outlives the process",
 				kept.Title, got.Status)
 		}
 		if bodies := f.commentBodies(t, kept.ID); len(bodies) != 0 {
 			t.Errorf("%q got comments %v, want none — nothing happened to it", kept.Title, bodies)
+		}
+	}
+}
+
+// The failure this whole second pass exists for. Startup stops the last running
+// subtask, which empties its parent's wait — and the stop reaches no listener,
+// because the engine is not one yet. Without a re-examination the parent sits
+// active, waiting on children, with no child that could ever close: no nudge
+// (it declares a wait), no process (it died with the last run), and no attention
+// dot (`waiting_children` is outside it). It is invisible and permanent.
+func TestEngine_RecoverStartupStopsAWaitItsOwnStopsStranded(t *testing.T) {
+	f := newRecoveryFixture(t)
+
+	story := f.startedStory(t, "sess-story")
+	task := createTask(t, f.store, story.ID, "the last subtask")
+	startWorkWithSession(t, f.store, task.ID, "sess-task")
+	if _, err := f.store.SetChildWait(context.Background(), story.ID, ""); err != nil {
+		t.Fatalf("SetChildWait: %v", err)
+	}
+
+	f.engine.RecoverStartup()
+
+	if got := getWork(t, f.store, task.ID); got.Status != StatusStopped {
+		t.Fatalf("the subtask = %q, want %q", got.Status, StatusStopped)
+	}
+	got := getWork(t, f.store, story.ID)
+	if got.Status != StatusStopped {
+		t.Errorf("the story = %q + wait %q, want %q — nothing was left that could end its wait",
+			got.Status, got.Wait, StatusStopped)
+	}
+	if got.Wait != WaitNone {
+		t.Errorf("the story kept wait %q, want it cleared by the stop", got.Wait)
+	}
+	bodies := f.commentBodies(t, story.ID)
+	if len(bodies) != 1 || !strings.Contains(bodies[0], "no agent process survives a server restart") {
+		t.Errorf("comments = %v, want one saying its subtasks did not survive the restart", bodies)
+	}
+}
+
+// No work type is both a child and a parent — the hierarchy is exactly two
+// levels — and that is what lets recoverStrandedWaits make a single pass.
+//
+// A `child` wait only comes from SetChildWait, which requires an active child,
+// so only a type that can have children can hold one; if that type can never
+// itself be a child, nothing sits above a work the pass stops, and no stop in
+// the pass can strand another wait. Give the hierarchy a third level and this
+// fails — which is the moment that pass has to become a loop to a fixed point,
+// because stopping a middle work would strand the one above it with no listener
+// attached to notice.
+func TestOnlyTopLevelWorkCanHaveChildren(t *testing.T) {
+	for childType, parents := range validParents {
+		for _, parentType := range parents {
+			if len(validParents[parentType]) > 0 {
+				t.Errorf("%s may be a child of %s, which may itself be a child: "+
+					"recoverStrandedWaits needs to loop to a fixed point now", childType, parentType)
+			}
 		}
 	}
 }

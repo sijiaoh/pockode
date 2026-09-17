@@ -271,7 +271,7 @@ func TestWorkList_CarriesOnlySummaryFields(t *testing.T) {
 		"type": "task", "parent_id": storyID, "title": "Child Task",
 		"body": "More prose", "agent_role_id": ts.roleID,
 	})
-	// Starting the story gives it a session_id and moves it to in_progress, so
+	// Starting the story gives it a session_id and moves it to active, so
 	// the assertion covers a running work item and not only a freshly created
 	// one — session_id is exactly the kind of field that could leak into a summary.
 	callTool(t, ts.exec, "work_start", map[string]string{"id": storyID})
@@ -425,7 +425,7 @@ func TestWorkStart(t *testing.T) {
 		t.Fatal("work not found after start")
 	}
 	if w.Status != work.StatusActive {
-		t.Errorf("status = %q, want in_progress", w.Status)
+		t.Errorf("status = %q, want %q", w.Status, work.StatusActive)
 	}
 	if w.SessionID == "" {
 		t.Error("session_id should be set after start")
@@ -453,7 +453,7 @@ func TestWorkStart_AlreadyInProgress(t *testing.T) {
 
 	result := callTool(t, ts.exec, "work_start", map[string]string{"id": id})
 	if !result.IsError {
-		t.Error("expected error for already in_progress work")
+		t.Error("expected error for a work that is already active")
 	}
 }
 
@@ -749,7 +749,7 @@ func TestStepDone_AdvancesStep(t *testing.T) {
 		t.Errorf("CurrentStep = %d, want 1", w.CurrentStep)
 	}
 	if w.Status != work.StatusActive {
-		t.Errorf("Status = %s, want in_progress", w.Status)
+		t.Errorf("Status = %s, want %s", w.Status, work.StatusActive)
 	}
 }
 
@@ -934,7 +934,7 @@ func TestExecute_UnknownTool(t *testing.T) {
 // --- New API-path behavior ---
 
 // When the start handler fails, the claim must be rolled back so the work does
-// not get stuck in_progress with a dangling session.
+// not get stuck active with a dangling session.
 func TestWorkStart_RollbackOnHandlerFailure(t *testing.T) {
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
 	exec := NewExecutor(store, arStore, work.NewOperations(store, failingWorkStarter{err: errStartFailed}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore)
