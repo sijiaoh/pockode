@@ -3,6 +3,7 @@ package work
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -177,4 +178,140 @@ type failingSteps struct{}
 
 func (failingSteps) GetSteps(string) ([]string, error) {
 	return nil, errors.New("agent role not found")
+}
+
+// A story does not finish while its subtasks are still running: they would be
+// left with a parent nobody is going to report to, and closing the story retires
+// the session they report through. The refusal names them, because an agent told
+// only that some exist has to guess which (docs/lifecycle-ui.md §7).
+func TestOperations_StepDone_RefusesToCloseWhileChildrenAreActive(t *testing.T) {
+	store := newTestStore(t)
+	story := createStory(t, store, "Build")
+	startWork(t, store, story.ID)
+	child := createTask(t, store, story.ID, "Reducer")
+	startWork(t, store, child.ID)
+	ops := NewOperations(store, nil, nil, fixedSteps{"only"})
+
+	_, _, err := ops.StepDone(context.Background(), story.ID)
+	if !errors.Is(err, ErrInvalidWork) {
+		t.Fatalf("err = %v, want an ErrInvalidWork refusal", err)
+	}
+	for _, want := range []string{`"Reducer"`, "work_wait", "The step was not completed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not mention %q", err, want)
+		}
+	}
+	if got := getWork(t, store, story.ID); got.Status != StatusActive || got.CurrentStep != 0 {
+		t.Errorf("status/step = %q/%d; a refused step_done moves nothing", got.Status, got.CurrentStep)
+	}
+	if got := getWork(t, store, child.ID); got.Status != StatusActive {
+		t.Errorf("child status = %q; the refusal must not stop anyone's work for them", got.Status)
+	}
+}
+
+// Only the closing one is refused. A story's steps are its own workflow, and
+// walking through them while subtasks run is what a story with subtasks does.
+func TestOperations_StepDone_AdvancesAStepWhileChildrenAreActive(t *testing.T) {
+	store := newTestStore(t)
+	story := createStory(t, store, "Build")
+	startWork(t, store, story.ID)
+	child := createTask(t, store, story.ID, "Reducer")
+	startWork(t, store, child.ID)
+	ops := NewOperations(store, nil, nil, fixedSteps{"first", "second"})
+
+	hasMore, _, err := ops.StepDone(context.Background(), story.ID)
+	if err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	if !hasMore {
+		t.Error("hasMoreSteps = false on the first of two steps")
+	}
+	if got := getWork(t, store, story.ID); got.CurrentStep != 1 {
+		t.Errorf("current step = %d, want 1", got.CurrentStep)
+	}
+}
+
+// A child that is not active is not a blocker: the story closes.
+func TestOperations_StepDone_ClosesWhenNoChildIsActive(t *testing.T) {
+	store := newTestStore(t)
+	story := createStory(t, store, "Build")
+	startWork(t, store, story.ID)
+	child := createTask(t, store, story.ID, "Reducer")
+	doneWork(t, store, child.ID)
+	ops := NewOperations(store, nil, nil, fixedSteps{"only"})
+
+	if _, _, err := ops.StepDone(context.Background(), story.ID); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	if got := getWork(t, store, story.ID); got.Status != StatusClosed {
+		t.Errorf("status = %q, want closed", got.Status)
+	}
+}
+
+// recordingDeleter is what a delete cascades to.
+type recordingDeleter struct {
+	worktree   string
+	sessionIDs []string
+	calls      int
+}
+
+func (r *recordingDeleter) DeleteSessions(_ context.Context, worktree string, sessionIDs []string) {
+	r.calls++
+	r.worktree = worktree
+	r.sessionIDs = sessionIDs
+}
+
+// Deleting a work deletes the sessions under it — the whole subtree's, since a
+// session whose work is gone cannot be reached from anywhere. It is part of the
+// command rather than of one transport, because work_delete over MCP has to
+// leave exactly the same nothing behind as the delete button does.
+func TestOperations_DeleteWork_CascadesToTheSubtreesSessions(t *testing.T) {
+	store := newTestStore(t)
+	story := createStory(t, store, "Build")
+	startWorkWithSession(t, store, story.ID, "sess-story")
+	child := createTask(t, store, story.ID, "Reducer")
+	startWorkWithSession(t, store, child.ID, "sess-child")
+	other := createStory(t, store, "Unrelated")
+	startWorkWithSession(t, store, other.ID, "sess-other")
+
+	deleter := &recordingDeleter{}
+	ops := NewOperations(store, nil, nil, nil)
+	ops.SetSessionDeleter(deleter)
+
+	if err := ops.DeleteWork(context.Background(), story.ID); err != nil {
+		t.Fatalf("DeleteWork: %v", err)
+	}
+
+	if deleter.calls != 1 {
+		t.Fatalf("DeleteSessions called %d times, want 1", deleter.calls)
+	}
+	got := map[string]bool{}
+	for _, id := range deleter.sessionIDs {
+		got[id] = true
+	}
+	if !got["sess-story"] || !got["sess-child"] {
+		t.Errorf("deleted sessions = %v, want the story's and its child's", deleter.sessionIDs)
+	}
+	if got["sess-other"] {
+		t.Error("the delete reached a session outside the subtree")
+	}
+	if _, found, _ := store.Get(child.ID); found {
+		t.Error("the child work outlived its story")
+	}
+}
+
+// A delete that the store refuses cascades to nothing: the sessions are still
+// the live work's.
+func TestOperations_DeleteWork_LeavesSessionsAloneWhenTheDeleteFails(t *testing.T) {
+	store := newTestStore(t)
+	deleter := &recordingDeleter{}
+	ops := NewOperations(store, nil, nil, nil)
+	ops.SetSessionDeleter(deleter)
+
+	if err := ops.DeleteWork(context.Background(), "no-such-work"); !errors.Is(err, ErrWorkNotFound) {
+		t.Fatalf("err = %v, want %v", err, ErrWorkNotFound)
+	}
+	if deleter.calls != 0 {
+		t.Errorf("DeleteSessions called %d times for a delete that did not happen", deleter.calls)
+	}
 }

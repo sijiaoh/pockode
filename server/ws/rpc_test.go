@@ -150,6 +150,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	t.Cleanup(workEngine.Stop)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, workEngine, agentrole.Steps{Store: agentRoleStore})
+	workOps.SetSessionDeleter(worktreeManager)
 
 	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
 	server := httptest.NewServer(h)
@@ -439,6 +440,32 @@ func requireWorkWait(t *testing.T, env *testEnv, workID string, want work.WorkWa
 	w := getWorkOrFail(t, env, workID)
 	if w.Wait != want {
 		t.Errorf("wait = %q, want %q — %s", w.Wait, want, why)
+	}
+}
+
+// raisePrompt makes a session genuinely blocked on requestID and waits until the
+// turn says so, which is what an answer is checked against. Returns once the
+// blocker is listed, so the answer that follows cannot race the event that
+// raised it.
+func raisePrompt(t *testing.T, env *testEnv, sessionID, requestID string, event agent.AgentEvent) {
+	t.Helper()
+
+	sess := env.mock.sessionFor(sessionID)
+	if sess == nil {
+		t.Fatalf("no mock session for %s", sessionID)
+	}
+	sess.emit(event)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		meta, found, err := env.getMainWorktree().SessionStore.Get(sessionID)
+		if err == nil && found && meta.Turn.AwaitingAnswerTo(requestID) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("session %s never blocked on %s", sessionID, requestID)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

@@ -156,6 +156,18 @@ export interface ToolRun {
 	seenAt?: Date;
 }
 
+/**
+ * Why a prompt stopped waiting for its answer, for the cards that can no longer
+ * be answered as one (docs/lifecycle-ui.md §5). One type for both prompt kinds,
+ * because "why did this stop waiting for me" is one question.
+ *
+ * Absent is a real answer and the common one: a turn that simply ended, or a
+ * user who sent a message instead of answering, leaves a card nothing can
+ * answer for a reason the server cannot name. The banner then says what is true
+ * of all of them rather than guessing.
+ */
+export type ExpiryReason = "process_ended" | "timeout" | "work_closed";
+
 export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
 
 export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired";
@@ -169,12 +181,16 @@ export type ContentPart =
 			type: "permission_request";
 			request: PermissionRequest;
 			status: PermissionStatus;
+			/** Only ever set alongside `expired`; see ExpiryReason. */
+			reason?: ExpiryReason;
 	  }
 	| {
 			type: "ask_user_question";
 			request: AskUserQuestionRequest;
 			status: QuestionStatus;
 			answers?: Record<string, string>;
+			/** Only ever set alongside `expired`; see ExpiryReason. */
+			reason?: ExpiryReason;
 	  }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
@@ -745,6 +761,11 @@ export type ServerNotification =
 	| {
 			type: "request_cancelled";
 			request_id: string;
+			/**
+			 * Absent when the agent withdrew the request itself: the CLI said it no
+			 * longer needs an answer and did not say why.
+			 */
+			reason?: ExpiryReason;
 	  }
 	| { type: "system"; content: string }
 	| { type: "command_output"; content: string };

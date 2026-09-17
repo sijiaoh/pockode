@@ -3,6 +3,7 @@ import type {
 	AskUserQuestion,
 	AssistantMessage,
 	ContentPart,
+	ExpiryReason,
 	HistorySeq,
 	Message,
 	MessageOrigin,
@@ -24,6 +25,22 @@ function normalizeOrigin(raw: unknown): MessageOrigin | undefined {
 	if (raw === "system" || raw === "work") return "system";
 	if (raw === "user") return "user";
 	return undefined;
+}
+
+// The three reasons a prompt can stop waiting for an answer, checked at the wire
+// boundary like every other closed set: a value this build does not know reads
+// as no reason at all, which is a banner that is true of all of them — never a
+// card that renders nothing.
+const EXPIRY_REASONS: readonly string[] = [
+	"process_ended",
+	"timeout",
+	"work_closed",
+];
+
+function normalizeExpiryReason(raw: unknown): ExpiryReason | undefined {
+	return typeof raw === "string" && EXPIRY_REASONS.includes(raw)
+		? (raw as ExpiryReason)
+		: undefined;
 }
 
 // A cancelled question is stored with a nil answers map, and `omitempty` on the
@@ -110,6 +127,7 @@ export type NormalizedEvent =
 	| {
 			type: "request_cancelled";
 			requestId: string;
+			reason?: ExpiryReason;
 	  }
 	| {
 			type: "ask_user_question";
@@ -233,6 +251,7 @@ export function normalizeEvent(
 			return {
 				type: "request_cancelled",
 				requestId: record.request_id as string,
+				reason: normalizeExpiryReason(record.reason),
 			};
 		case "ask_user_question":
 			return {
@@ -544,12 +563,10 @@ function applyEvent(
 		return updatePermissionRequestStatus(messages, event.requestId, newStatus);
 	}
 
-	// Request cancelled (CLI cancelled either permission or question request)
+	// Request cancelled (the CLI withdrew it, or Pockode recorded what became of
+	// a prompt nobody answered)
 	if (event.type === "request_cancelled") {
-		let updated = expirePermissionRequest(messages, event.requestId);
-		if (updated !== messages) return updated;
-		updated = updateQuestionStatus(messages, event.requestId, "expired", null);
-		return updated;
+		return applyCancellation(messages, event.requestId, event.reason);
 	}
 
 	// Question response updates existing ask_user_question across all messages
@@ -722,6 +739,7 @@ function applyEvent(
 export function expirePendingDialogs(
 	messages: Message[],
 	stillLive?: ReadonlySet<string>,
+	reason?: ExpiryReason,
 ): Message[] {
 	const isLive = (requestId: string) => stillLive?.has(requestId) ?? false;
 	let anyChanged = false;
@@ -736,7 +754,7 @@ export function expirePendingDialogs(
 				!isLive(part.request.requestId)
 			) {
 				changed = true;
-				return { ...part, status: "expired" as const };
+				return { ...part, status: "expired" as const, reason };
 			}
 			if (
 				part.type === "ask_user_question" &&
@@ -744,7 +762,7 @@ export function expirePendingDialogs(
 				!isLive(part.request.requestId)
 			) {
 				changed = true;
-				return { ...part, status: "expired" as const };
+				return { ...part, status: "expired" as const, reason };
 			}
 			return part;
 		});
@@ -756,9 +774,26 @@ export function expirePendingDialogs(
 	return anyChanged ? updated : messages;
 }
 
-function expirePermissionRequest(
+/**
+ * Retires the prompt this cancellation names, and records why.
+ *
+ * Both prompt kinds in one pass: a request id belongs to exactly one card.
+ *
+ * **A card that is already expired still takes the reason**, and that is the
+ * case this is written for rather than an afterthought. The same expiry reaches
+ * the client twice over two channels — the session's turn stops listing the
+ * blocker (`retireAgainstTurn`, which knows *that* it ended but not *why*), and
+ * this record says why — and they can arrive in either order. Guarding on
+ * `pending` alone would leave whichever card lost that race stuck on the
+ * reason-neutral banner.
+ *
+ * A reason already on the card wins: the first record to name one is the one
+ * that settled it, and nothing that follows can know better.
+ */
+function applyCancellation(
 	messages: Message[],
 	requestId: string,
+	reason?: ExpiryReason,
 ): Message[] {
 	let anyChanged = false;
 	const updated = messages.map((msg) => {
@@ -767,12 +802,27 @@ function expirePermissionRequest(
 		let changed = false;
 		const updatedParts = msg.parts.map((part) => {
 			if (
-				part.type === "permission_request" &&
-				part.request.requestId === requestId &&
-				part.status === "pending"
+				part.type !== "permission_request" &&
+				part.type !== "ask_user_question"
 			) {
+				return part;
+			}
+			if (part.request.requestId !== requestId) return part;
+
+			if (part.status === "pending") {
 				changed = true;
-				return { ...part, status: "expired" as const };
+				return part.type === "permission_request"
+					? { ...part, status: "expired" as const, reason }
+					: {
+							...part,
+							status: "expired" as const,
+							answers: undefined,
+							reason,
+						};
+			}
+			if (part.status === "expired" && reason && part.reason === undefined) {
+				changed = true;
+				return { ...part, reason };
 			}
 			return part;
 		});
@@ -1263,7 +1313,11 @@ const BACK_REFERENCE_TYPES = new Set([
  * still reach the end of a transcript with dialogs open.
  */
 export function settleAfterProcessGone(messages: Message[]): Message[] {
-	return settleRunningToolRuns(expirePendingDialogs(messages));
+	// The reason is the record itself: every card still open when a process ends
+	// lost the only thing that could have taken its answer.
+	return settleRunningToolRuns(
+		expirePendingDialogs(messages, undefined, "process_ended"),
+	);
 }
 
 /**
@@ -1289,6 +1343,8 @@ export function retireAgainstTurn(
 			.filter((id): id is string => id !== undefined),
 	);
 
+	// No reason: the turn says which prompts are still live, not why the others
+	// stopped being so. The records that do know say it themselves.
 	const retired = expirePendingDialogs(messages, liveRequests);
 	return turn.phase === "idle" ? settleRunningToolRuns(retired) : retired;
 }

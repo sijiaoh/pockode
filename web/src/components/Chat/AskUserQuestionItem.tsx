@@ -3,6 +3,7 @@ import { useState } from "react";
 import type {
 	AskUserQuestion,
 	AskUserQuestionRequest,
+	ExpiryReason,
 	QuestionStatus,
 } from "../../types/message";
 import {
@@ -17,6 +18,8 @@ import { CollapsibleBody, ScrollableContent } from "../ui";
 interface Props {
 	request: AskUserQuestionRequest;
 	status: QuestionStatus;
+	/** Why it expired, when the server could say; see ExpiryReason. */
+	reason?: ExpiryReason;
 	savedAnswers?: Record<string, string>;
 	onRespond?: (
 		request: AskUserQuestionRequest,
@@ -183,6 +186,58 @@ const statusConfig = {
 	},
 };
 
+// The banner an expired question shows, in two halves: what happened, and what
+// can still be done about it (docs/lifecycle-ui.md §5.1).
+//
+// Two halves rather than one sentence per reason, because the two do not vary
+// together: what happened is known whenever the server could name it, while
+// what can be done depends on this card's host. A card with no way to send a
+// message should still say *why* it expired.
+const QUESTION_EXPIRY_CAUSE: Record<ExpiryReason, string> = {
+	process_ended: "The agent's process ended before this was answered.",
+	timeout:
+		"This question was not answered in time, so Pockode stopped waiting.",
+	work_closed: "This question was cancelled because the work was closed.",
+};
+
+// Said when the reason is unknown, and true of every one of them.
+const QUESTION_EXPIRY_CAUSE_FALLBACK =
+	"The agent is no longer waiting for this answer.";
+
+const STILL_ANSWERABLE =
+	"You can still answer — it will be sent as a new message and the agent will pick up from there.";
+
+// A closed work is the one ending that offers a different way on. Answering its
+// question is not refused because the message could not be delivered — typing
+// into a closed work's chat is an ordinary thing to do — but because carrying a
+// finished work on is a decision the user makes deliberately, by reopening it,
+// rather than a side effect of answering a question that was cancelled with it.
+const REOPEN_TO_CARRY_ON = "Reopen the work to carry on with it.";
+
+/**
+ * The message an expired question's answer is sent as.
+ *
+ * It carries the question with it, and that is not politeness: the request the
+ * agent made is gone from its side of the conversation — a CLI resuming after
+ * its process died drops the dangling tool call when it rebuilds the API
+ * request — so a bare option label arrives as an answer to nothing and is
+ * answered as such. Measured, not assumed; see the story's resume-prerequisite
+ * findings.
+ */
+function degradedAnswer(
+	entries: { question: AskUserQuestion; selection: QuestionSelection }[],
+): string {
+	const lead =
+		"Answering a question you asked earlier. The request itself is no longer live, so this comes as an ordinary message:";
+	const body = entries
+		.map(({ question, selection }) => {
+			const answer = summarize(selection);
+			return `Q: ${question.question}\nA: ${answer}`;
+		})
+		.join("\n\n");
+	return `${lead}\n\n${body}`;
+}
+
 function summarize(selection: QuestionSelection): string {
 	const parts = [...selection.labels];
 	if (selection.otherText) parts.push(selection.otherText);
@@ -192,6 +247,7 @@ function summarize(selection: QuestionSelection): string {
 function AskUserQuestionItem({
 	request,
 	status,
+	reason,
 	savedAnswers,
 	onRespond,
 	onSendAsMessage,
@@ -203,8 +259,10 @@ function AskUserQuestionItem({
 	// user was going to say is not, and it reaches the agent as an ordinary
 	// message instead (docs/lifecycle-ui.md §5.1).
 	const isExpired = status === "expired";
+	// Except when the work above it closed; see REOPEN_TO_CARRY_ON.
+	const canSendAsMessage = isExpired && reason !== "work_closed";
 	const canAnswer =
-		(isPending && !!onRespond) || (isExpired && !!onSendAsMessage);
+		(isPending && !!onRespond) || (canSendAsMessage && !!onSendAsMessage);
 	// Without a way to submit there is no point in an editable form.
 	const readOnly = !canAnswer;
 
@@ -310,16 +368,7 @@ function AskUserQuestionItem({
 			// sent — and writing a late answer onto an immutable record would then
 			// have to explain an "Answered" chip on a tool call that never got a
 			// result.
-			onSendAsMessage?.(
-				entries.length === 1
-					? summarize(entries[0].selection)
-					: entries
-							.map(
-								({ question, selection }) =>
-									`${question.header}: ${summarize(selection)}`,
-							)
-							.join("\n"),
-			);
+			onSendAsMessage?.(degradedAnswer(entries));
 			return;
 		}
 		const finalAnswers: Record<string, string> = {};
@@ -383,16 +432,23 @@ function AskUserQuestionItem({
 							You cancelled this question — no answer was sent.
 						</div>
 					)}
-					{/* Reason-neutral on purpose: a process that ended, a request that
-					    timed out and a work that was closed all end this wait, and the
-					    structured reason that tells them apart is not on the record yet
-					    (docs/lifecycle-ui.md §5). What is true of all three is said
-					    here; what the user can still do is said next to the button. */}
+					{/* What happened, then what can still be done about it. The offer
+					    is only made where there is one to make — without a host that
+					    can send, the card states the fact and stops there. */}
 					{isExpired && (
 						<div className="mb-3 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
-							{onSendAsMessage
-								? "The agent is no longer waiting for this answer. You can still answer — it will be sent as a new message and the agent will pick up from there."
-								: "The agent is no longer waiting for this answer."}
+							{[
+								reason
+									? QUESTION_EXPIRY_CAUSE[reason]
+									: QUESTION_EXPIRY_CAUSE_FALLBACK,
+								canAnswer
+									? STILL_ANSWERABLE
+									: reason === "work_closed"
+										? REOPEN_TO_CARRY_ON
+										: "",
+							]
+								.filter(Boolean)
+								.join(" ")}
 						</div>
 					)}
 

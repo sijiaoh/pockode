@@ -121,8 +121,11 @@ type mockSession struct {
 	// interrupts and notes are what the lease reaper does to a CLI when a budget
 	// runs out: it asks the turn to stop, and leaves the agent an explanation.
 	interrupts atomic.Int32
-	notesMu    sync.Mutex
-	notes      []string
+	// answers counts the answers that actually reached the CLI, which is what a
+	// refusal is measured against.
+	answers atomic.Int32
+	notesMu sync.Mutex
+	notes   []string
 }
 
 // emit delivers an event as the agent would. Holding closedMu keeps a test that
@@ -141,9 +144,11 @@ func (s *mockSession) emit(t *testing.T, event agent.AgentEvent) {
 func (s *mockSession) Events() <-chan agent.AgentEvent { return s.events }
 func (s *mockSession) SendMessage(prompt string) error { return nil }
 func (s *mockSession) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
+	s.answers.Add(1)
 	return nil
 }
 func (s *mockSession) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
+	s.answers.Add(1)
 	return nil
 }
 func (s *mockSession) SendInterrupt() error {

@@ -2491,6 +2491,28 @@ now sets all four. A table with nothing budgeted at all turns the reaper off
 entirely rather than waking it up to decide nothing, which is also what keeps
 `time.NewTicker` from being handed a non-positive interval.
 
+#### Why There Is No Cap on How Many Processes Exist
+
+The table budgets how long a process may live and says nothing about how many
+there may be, and that is a decision rather than an omission.
+
+A cap needs a rule for what to do when it is reached, and both available rules
+are worse than the problem. *Refuse the start* turns a user's own action — start
+this work, send this message — into a failure they cannot act on, in a product
+whose users are the ones deciding how much to run at once. *Kill something to
+make room* is the idle lease's job already, five minutes earlier and with a
+reason: the processes a cap would evict are the idle ones, and the ones it would
+have to evict instead — a turn in progress, a prompt waiting on a person — are
+exactly the ones nothing here is willing to take away.
+
+What is left is the case where every process is genuinely busy at once, and a cap
+there is a way of telling the user they asked for too much *after* they asked.
+The honest version of that is a number they choose in advance (how many works
+they start), which they already have. If a real machine is ever brought down by
+this, the missing piece will be evidence about what it ran out of — memory, file
+descriptors, CLI subprocesses — and a cap written against that evidence will be a
+different thing from a round number picked now.
+
 #### What an expiry does
 
 Three of the four end with the session idle, and the idle row is then what
@@ -2510,6 +2532,13 @@ failure this table exists to remove — so an expiry that has been asked once an
 is still there `leaseGrace` later ends the process instead. One expiry produces
 one interrupt however many times the reaper looks at it; the ask is keyed on the
 lease's start, so a new turn gets its own.
+
+**An expired prompt says why it expired.** The cards the withdrawal leaves
+behind are written a `request_cancelled` record carrying
+`reason: "timeout"` — the same field and the same record shape the work layer
+uses for `work_closed` — so the client can say "you did not answer in time"
+rather than "the agent stopped waiting", which reads as a fault that was not
+there. See [What Becomes of an Expired Prompt](#what-becomes-of-an-expired-prompt).
 
 **Withdrawing an unanswered prompt is what an interrupt already is**, and it is
 the only withdrawal available: the data a proper answer needs
@@ -2587,6 +2616,71 @@ untouched by collection, which is the whole reason the idle budget can be short.
 
 The reaper's own tick is a quarter of the shortest budget in the table, so the
 entry that matters soonest is not overshot by the entries measured in hours.
+
+### What Becomes of an Expired Prompt
+
+A blocker belongs to the process that raised it, so a prompt can stop waiting
+for its answer without anybody answering it. Whenever that happens,
+`Process.recordExpiries` appends a `request_cancelled` record naming the request
+and, where Pockode can say it, why:
+
+| Cause | `reason` |
+|---|---|
+| the process ended — reaped, crashed, killed with the server | `process_ended` |
+| the answer lease ran out | `timeout` |
+| the work above the session closed | `work_closed` (written by the retirement, not here) |
+| the turn simply ended, or the user sent a message instead of answering | absent |
+
+**The record is Pockode's own, and it has to be.** The CLI is killed with
+SIGKILL, so its transcript may not hold even the assistant message that raised
+the question; and without a record, a client paging back through history would
+replay the card as still pending long after nothing could answer it. The turn
+state alone cannot cover it either — it says which prompts are still live, not
+what became of the others.
+
+Two things about how it is written. It is **not injected**: the blocker is
+already gone from the turn state, so there is nothing left to reduce, and this is
+a record of something that happened rather than a signal that it should — which
+also lets it be written by a process on its way out, which `inject` deliberately
+refuses to do. And it is written and announced **after the event that caused
+it**, in both history and the broadcast: the ending, then what that ending did
+to the prompts on screen. Announcing it first would hand a subscriber a higher
+sequence number before the one below it, and those numbers are what a client
+pages and anchors forks with.
+
+The `timeout` mark is kept **per request id** rather than as a flag on the
+process. The two are not the same claim: a CLI can answer the interrupt by
+withdrawing the prompt itself — Codex does exactly that — in which case nothing
+expires, and a flag would still be set when some later, unrelated prompt did.
+
+An absent reason is a real answer and not a gap: the client then states what is
+true of all of them ([lifecycle-ui.md §5](../lifecycle-ui.md#5-expiry)).
+
+#### An Answer Nobody Is Waiting For
+
+The other side of the same fact: `Process.SendPermissionResponse` and
+`SendQuestionResponse` refuse a request the session's turn does not list as a
+blocker (`process.ErrRequestNotPending`). It covers the card that expired a
+moment ago, the process that was replaced by a successor which never saw the
+request, and the answer that lost a race to another client.
+
+Refused rather than forwarded, because forwarding is worse than it looks: a live
+CLI handed an answer to a request it has forgotten does nothing with it, while
+Pockode would have recorded a turn as started — a session claiming to be running
+with nothing coming to end it. The refusal carries its own reason to the client,
+which is what puts the card back to Expired; a question there can still be sent
+as an ordinary message, a permission cannot.
+
+It is a check, not a lock: two clients answering at the same instant can both
+pass it, and the second answer is then the CLI's business as it was before. What
+it removes is the answer that arrives *after* the prompt stopped being one,
+which is the case that left a turn open with nothing to close it.
+
+The same fact governs the work layer's side of these three handlers: the
+WebSocket message, permission and question methods all call
+`Engine.HandleUserMessage` **after** the send, because what resumes a work is
+the agent having been handed something to go on. A send that failed handed it
+nothing.
 
 ### Retiring a Closed Work's Session
 

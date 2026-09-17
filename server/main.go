@@ -339,6 +339,8 @@ Flags:
 	// Single implementation of every work command, shared by the WebSocket
 	// handler (user actions) and the MCP Executor (AI actions).
 	workOps := work.NewOperations(workStore, workStarter, workEngine, steps)
+	// Deleting a work deletes the sessions under it, on both entry points.
+	workOps.SetSessionDeleter(worktreeManager)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}

@@ -432,6 +432,40 @@ describe("MessageItem", () => {
 		);
 	});
 
+	// An expired permission is a denial whichever way the waiting ended; what the
+	// banner adds is why nobody was asked again (docs/lifecycle-ui.md §5.2).
+	it("says why an expired permission was never answered", async () => {
+		const user = userEvent.setup();
+		const message: Message = {
+			id: "8b",
+			role: "assistant",
+			parts: [
+				{
+					type: "permission_request",
+					request: {
+						requestId: "req-1",
+						toolName: "Bash",
+						toolInput: { command: "ls" },
+						toolUseId: "tool-1",
+					},
+					status: "expired",
+					reason: "work_closed",
+				},
+			],
+			status: "complete",
+			createdAt: new Date(),
+		};
+
+		render(<MessageItem sessionId="session-1" message={message} />);
+		await user.click(screen.getByRole("button", { name: /Bash/ }));
+
+		expect(screen.getByText(/the work was closed/)).toBeInTheDocument();
+		expect(screen.getByText(/did not run/)).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Allow" }),
+		).not.toBeInTheDocument();
+	});
+
 	it("renders allowed permission_request without buttons", () => {
 		const message: Message = {
 			id: "9",

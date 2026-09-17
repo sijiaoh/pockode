@@ -457,12 +457,25 @@ next to its status, as
 `expired` and the `cancelled` status, because "why did this stop waiting for me"
 is one question.
 
-**That field is not on the record yet**; it lands with the question-timeout work
-that gives it its third value. Until it does, both cards state what is true of
-all three reasons rather than guessing which one happened, and the *behaviour*
-below — an expired question answerable as a message, an expired permission
-read-only — is in place, because it does not depend on the reason. The three
-banners are the copy for the field's three values when it arrives.
+Each value has exactly one producer: `work_closed` is the work engine
+withdrawing the prompts of a session it has let go, `timeout` is the answer
+lease running out, and `process_ended` is the process going away. All three
+arrive the same way, as a `request_cancelled` record naming the request and
+carrying the reason, which is also what makes an expiry survive a reload — a
+client paging back through history would otherwise replay a card as still
+waiting.
+
+The `process_ended` record retires whatever is still open on top of that, and
+the overlap is deliberate: a session repaired at startup has one of those and no
+per-prompt record, because the run that died wrote nothing. Either way the card
+ends up expired; the per-prompt record is what adds the reason, and a card that
+already expired takes a reason that arrives afterwards.
+
+**The reason can be absent, and that is a fourth answer rather than a missing
+one.** A turn that simply ended, a user who sent a message instead of answering,
+a session restored from an index written before any of this existed — the server
+cannot name which of the three happened, so it says nothing and the card states
+what is true of all of them. Every table below therefore has a fallback row.
 
 ### 5.1 An expired question is still answerable
 
@@ -474,15 +487,40 @@ and the submit button relabels.
 | `reason` | Banner | Form | Submit |
 |---|---|---|---|
 | `process_ended` | "The agent's process ended before this was answered. You can still answer — it will be sent as a new message and the agent will pick up from there." | enabled | "Send as message" |
-| `timeout` | "This question timed out after 24 hours without an answer. You can still answer — it will be sent as a new message and the agent will pick up from there." | enabled | "Send as message" |
-| `work_closed` | recorded as `cancelled`, not expired: "This question was cancelled because the work was closed." | read-only | none |
+| `timeout` | "This question was not answered in time, so Pockode stopped waiting. *(same offer)*" | enabled | "Send as message" |
+| `work_closed` | "This question was cancelled because the work was closed. Reopen the work to carry on with it." | read-only | none |
+| absent | "The agent is no longer waiting for this answer. *(same offer)*" | enabled | "Send as message" |
+
+The timeout banner does not name the budget, because the budget is a flag
+(`--answer-timeout`, an hour by default): copy that says "after 24 hours" is
+wrong on any machine whose operator disagreed with it.
+
+`work_closed` is the one ending that cannot make the offer. The work is
+finished, and a message answering its question would start a turn on a session
+nobody is coming back to — which is precisely what closing it decided.
 
 "Send as message" rather than "Send": the button says what will happen, because
 what happens is not what the card originally promised. Pressing it produces an
-ordinary user message in the transcript (the selection, formatted the way the
-card's collapsed answer summary formats it); a work behind that session returns
-to `active`, and a session with no work simply starts a turn, as any message
-does.
+ordinary user message in the transcript; a work behind that session returns to
+`active`, and a session with no work simply starts a turn, as any message does.
+
+**The message carries the question with it**, not just the selection:
+
+```
+Answering a question you asked earlier. The request itself is no longer live, so
+this comes as an ordinary message:
+
+Q: Which framework?
+A: React
+```
+
+That is not politeness. The agent's own record of having asked is gone — a CLI
+resuming after its process died drops the dangling tool call when it rebuilds
+the API request, which was measured rather than assumed — so a bare "React"
+arrives as an answer to nothing and is answered as such. The question text comes
+from Pockode's own history, because the CLI's transcript cannot be relied on to
+hold it: a SIGKILL can land before even the message that raised the question is
+written.
 
 The card itself records **nothing** afterwards. It stays `Expired` with no answer
 summary, and the answer is visible as the message directly below it. That is the
@@ -510,8 +548,13 @@ only change is the banner. Glyph stays `X` muted, against the expired question's
 | `reason` | Banner |
 |---|---|
 | `process_ended` | "The agent's process ended before this was answered, so it counted as a denial and the tool did not run." |
-| `timeout` | "This request timed out after 24 hours, so it counted as a denial and the tool did not run." |
+| `timeout` | "This request was not answered in time, so it counted as a denial and the tool did not run." |
 | `work_closed` | "This request was cancelled because the work was closed. The tool did not run." |
+| absent | "The agent stopped waiting for this request, so it counted as a denial and the tool did not run." |
+
+Every row ends in the same outcome, and that is the point: a permission that was
+not granted is a denial whichever way the waiting ended. Only the first clause
+differs.
 
 The two cards are told apart by their **affordances**, not by their chrome: an
 expired question has a live form and a button, an expired permission has neither
@@ -583,6 +626,14 @@ step's position does not change because a turn started.
 
 ## 7. `step_done` with active subtasks
 
+**The step_done that would *close* the work is the one that is refused**, not
+every step_done. A story's steps are its own workflow, and walking through them
+while subtasks run is what a story with subtasks does; what is not ordinary is
+finishing, because the children would be left with a parent nobody is going to
+report to, and closing the story retires the session they report through. The
+MCP tool description says exactly this, and is the only place an agent reads the
+rule before hitting it.
+
 The rejection is an agent-facing error, and the user sees it in two places that
 already exist. Nothing new is drawn.
 
@@ -621,7 +672,7 @@ machine noise.
 | Server restart with a blocked turn | blockers expire on process death and are written to history, so on reconnect the cards read Expired and the composer is live |
 | `activity` the client does not know | normalised to `idle` at the wire boundary; an unknown state must not blank a row |
 | Story with children in several activities | the story shows its *own* activity; the rollup dot is the only thing children contribute to a story row |
-| Answer pressed on a card that expired a moment ago | the RPC fails with the server's own reason ("the process that raised this request has ended"); the card flips to Expired with §5's banner and the error is shown inline under the buttons. A question card is then answerable again as a message, a permission card is not — the same two outcomes, reached a second later |
+| Answer pressed on a card that expired a moment ago | the RPC fails with the server's own reason ("this request is no longer waiting for an answer"); the card flips to Expired with §5's banner and the error is shown inline under the buttons. A question card is then answerable again as a message, a permission card is not — the same two outcomes, reached a second later. The refusal is the session's turn speaking: a prompt it no longer lists as a blocker cannot be answered, which also covers an answer that arrives after another client's |
 | Session deleted while its work is `active` | the work moves to `stopped`. The delete confirmation says so: "Delete "{title}"? The work "{work}" will stop." — a session delete that silently stops work is the kind of silent failure this project forbids |
 | Work closed while its turn is still finishing (grace: 2 minutes) | the work row reads `Closed` immediately while its session row may still read `Running` for the length of the grace period. That is two layers telling the truth about themselves, not a contradiction: the engine has let go, the process has not finished speaking. Nothing waits for the other before it updates |
 | Work reopened during the close grace | the reopen's restart message cancels the retirement outright — the premise of it was that nobody was coming back. The session keeps its process and its transcript, and the work is `active` again with no trace of the two minutes it spent closed |
@@ -705,6 +756,18 @@ session and the stored record knows nothing about it. That is also why `Work` is
 `Omit<WorkListItem, "activity">`: the three calls that answer with a bare item —
 `work.create`, `work.start`, `work.detail` — do not carry one.
 
-What is still on the old vocabulary is the chat half of this document: the
-blocker strip (§2.2), the expired cards (§5) and the `reason` field they read
-are the question-timeout work, and §5 already says which of them wait on it.
+The chat half has landed with it. The blocker strip is mounted (§2.2), and the
+expired cards read the structured `reason` (§5): the three banners per card are
+in `AskUserQuestionItem` and `MessageItem`, `work_closed` is the one that leaves
+a question read-only, and the degraded answer carries its question with it.
+
+Two smaller things in this document are worth knowing where they live. An answer
+to a prompt the session is no longer waiting on is refused by the *server*
+(`process.ErrRequestNotPending`), which is what makes the §8 row about pressing
+Answer a moment too late true rather than hopeful — before it, a stale answer was
+handed to a CLI that had forgotten the request, and Pockode recorded a turn as
+started that nothing would ever end. The client's own rule for which unanswered
+state to fall back to reads the same thing the server refused on, the turn's
+blockers, so the two cannot disagree about whether a prompt is still live. And the `step_done` refusal of §7 lives in
+`work.Operations.StepDone`, so the rule holds for every caller rather than for
+the one transport that happened to implement it.

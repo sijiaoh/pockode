@@ -481,6 +481,22 @@ func (t TurnState) BlockedOn(kind BlockerKind) bool {
 	return false
 }
 
+// AwaitingAnswerTo reports whether this prompt is still waiting for its answer.
+//
+// It is what makes an answer refusable: only the process that raised a prompt
+// can take its answer, so an answer naming a request this turn no longer lists
+// has arrived too late — the prompt expired, the agent withdrew it, or another
+// client answered first — and handing it to the CLI anyway would open a turn
+// that nothing is going to end.
+func (t TurnState) AwaitingAnswerTo(requestID string) bool {
+	for _, b := range t.Blockers {
+		if b.RequestID != "" && b.RequestID == requestID {
+			return true
+		}
+	}
+	return false
+}
+
 // AwaitingUserAnswer reports whether the turn is stuck on something only a
 // person can clear. This is what the session's old NeedsInput flag used to be
 // stored as, and deriving it is why that flag is gone: a stored copy had to be

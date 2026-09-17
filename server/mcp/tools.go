@@ -75,7 +75,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "work_delete",
-		Description: "Delete a work item. If the item is a story, all its child tasks are also deleted.",
+		Description: "Delete a work item. If the item is a story, all its child tasks are also deleted, and the agent sessions of everything deleted go with them.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{

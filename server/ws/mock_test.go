@@ -42,6 +42,18 @@ func (s *mockSession) SendMessage(prompt string) error {
 	}
 }
 
+// emit puts one event on the stream, the way a CLI would, outside the canned
+// replay Start does. It is how a test gets a session that is *actually* blocked
+// on a prompt: an answer to a request the session is not waiting on is refused
+// (process.ErrRequestNotPending), so fabricating the request id is no longer a
+// way to exercise answering.
+func (s *mockSession) emit(event agent.AgentEvent) {
+	select {
+	case s.events <- event:
+	case <-s.ctx.Done():
+	}
+}
+
 func (s *mockSession) SendPermissionResponse(data agent.PermissionRequestData, _ agent.PermissionChoice) error {
 	return nil
 }

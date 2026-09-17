@@ -101,68 +101,17 @@ func (h *rpcMethodHandler) handleWorkDelete(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
-	// Collect session IDs from the target and its children before deletion.
-	// The whole subtree shares the target's worktree (children inherit it), so
-	// its sessions all live in that one worktree.
-	sessionIDs := h.collectWorkSessionIDs(params.ID)
-	var worktree string
-	if target, found, err := h.workStore.Get(params.ID); err == nil && found {
-		worktree = target.Worktree
-	}
-
-	if err := h.workStore.Delete(ctx, params.ID); err != nil {
+	// The cascade onto sessions and their processes is part of the command, not
+	// of this transport: work_delete over MCP deletes exactly as much.
+	if err := h.workOps.DeleteWork(ctx, params.ID); err != nil {
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to delete work")
 		return
 	}
-
-	// Cascade delete: close processes and remove sessions (best-effort).
-	h.deleteWorkSessions(ctx, worktree, sessionIDs)
 
 	h.log.Info("work deleted", "workId", params.ID)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		h.log.Error("failed to send work delete response", "error", err)
-	}
-}
-
-// collectWorkSessionIDs returns non-empty session IDs from the target work and all its descendants.
-func (h *rpcMethodHandler) collectWorkSessionIDs(workID string) []string {
-	works, err := h.workStore.List()
-	if err != nil {
-		h.log.Warn("failed to list works for session cleanup", "workId", workID, "error", err)
-		return nil
-	}
-
-	descendantIDs := work.CollectDescendantIDs(works, workID)
-
-	var sessionIDs []string
-	for _, w := range works {
-		if descendantIDs[w.ID] && w.SessionID != "" {
-			sessionIDs = append(sessionIDs, w.SessionID)
-		}
-	}
-	return sessionIDs
-}
-
-// deleteWorkSessions closes processes and deletes sessions for the given IDs in
-// the work's worktree.
-func (h *rpcMethodHandler) deleteWorkSessions(ctx context.Context, worktree string, sessionIDs []string) {
-	if len(sessionIDs) == 0 {
-		return
-	}
-
-	wt, err := h.worktreeManager.Get(worktree)
-	if err != nil {
-		h.log.Warn("could not get worktree for session cleanup", "worktree", worktree, "error", err)
-		return
-	}
-	defer h.worktreeManager.Release(wt)
-
-	for _, sid := range sessionIDs {
-		wt.ProcessManager.Close(sid)
-		if err := wt.SessionStore.Delete(ctx, sid); err != nil {
-			h.log.Warn("failed to delete session during work cleanup", "sessionId", sid, "error", err)
-		}
 	}
 }
 

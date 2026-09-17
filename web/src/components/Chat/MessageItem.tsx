@@ -14,6 +14,7 @@ import { useWSStore } from "../../lib/wsStore";
 import type {
 	AskUserQuestionRequest,
 	ContentPart,
+	ExpiryReason,
 	Message,
 	PermissionRequest,
 	PermissionRuleValue,
@@ -238,6 +239,8 @@ type PermissionChoice = "deny" | "allow" | "always_allow";
 interface PermissionRequestItemProps {
 	request: PermissionRequest;
 	status: PermissionStatus;
+	/** Why it expired, when the server could say; see ExpiryReason. */
+	reason?: ExpiryReason;
 	isCodex?: boolean;
 	onRespond?: (request: PermissionRequest, choice: PermissionChoice) => void;
 	/** Why the last attempt to answer failed. */
@@ -317,9 +320,27 @@ function hasRules(
 	return "rules" in update;
 }
 
+// What an expired permission request says, per reason. Every one of them states
+// the same outcome — the tool did not run — because a permission that is not
+// granted is a denial whichever way the waiting ended; what differs is why
+// nobody was asked again (docs/lifecycle-ui.md §5.2).
+const PERMISSION_EXPIRY_COPY: Record<ExpiryReason, string> = {
+	process_ended:
+		"The agent's process ended before this was answered, so it counted as a denial and the tool did not run.",
+	timeout:
+		"This request was not answered in time, so it counted as a denial and the tool did not run.",
+	work_closed:
+		"This request was cancelled because the work was closed. The tool did not run.",
+};
+
+// Said when the reason is unknown, and true of all three.
+const PERMISSION_EXPIRY_FALLBACK =
+	"The agent stopped waiting for this request, so it counted as a denial and the tool did not run.";
+
 function PermissionRequestItem({
 	request,
 	status,
+	reason,
 	isCodex,
 	onRespond,
 	error,
@@ -396,12 +417,12 @@ function PermissionRequestItem({
 					{/* An expired permission can only have been a denial, and the card
 					    states that outcome rather than offering anything to press: the
 					    two expired cards are told apart by their affordances, not their
-					    chrome (docs/lifecycle-ui.md §5.2). Reason-neutral for now — the
-					    structured reason is not on the record yet. */}
+					    chrome (docs/lifecycle-ui.md §5.2). */}
 					{status === "expired" && (
 						<div className="mb-2 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
-							The agent stopped waiting for this request, so it counted as a
-							denial and the tool did not run.
+							{reason
+								? PERMISSION_EXPIRY_COPY[reason]
+								: PERMISSION_EXPIRY_FALLBACK}
 						</div>
 					)}
 					{planContent && <MarkdownContent content={planContent} />}
@@ -524,6 +545,7 @@ function ContentPartItem({
 			<PermissionRequestItem
 				request={part.request}
 				status={part.status}
+				reason={part.reason}
 				isCodex={isCodex}
 				onRespond={onPermissionRespond}
 				error={
@@ -539,6 +561,7 @@ function ContentPartItem({
 			<AskUserQuestionItem
 				request={part.request}
 				status={part.status}
+				reason={part.reason}
 				savedAnswers={part.answers}
 				onRespond={onQuestionRespond}
 				onSendAsMessage={onSendAsMessage}

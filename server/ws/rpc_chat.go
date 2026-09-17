@@ -7,6 +7,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chat"
+	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/worktree"
@@ -137,13 +138,18 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	log.Info("received prompt", "length", len(params.Content))
 
-	h.workEngine.HandleUserMessage(params.SessionID)
-
 	seq, err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier())
 	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
+
+	// After the send, and so in all three of these handlers: what resumes a work
+	// is the agent having been handed something to go on. A send that failed —
+	// no session, a CLI that would not start, an answer to a prompt nobody is
+	// waiting on any more — handed it nothing, and a work resumed for it would
+	// be left active with no turn coming to end it.
+	h.workEngine.HandleUserMessage(params.SessionID)
 
 	// This connection is the one excluded from the broadcast, so the reply is
 	// where it learns its own message's seq (see rpc.MessageResult).
@@ -196,12 +202,13 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 	}
 	choice := parsePermissionChoice(params.Choice)
 
-	h.workEngine.HandleUserMessage(params.SessionID)
-
 	if err := wt.ChatClient.SendPermissionResponse(ctx, params.SessionID, data, choice); err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
+
+	// After the send; see handleMessage.
+	h.workEngine.HandleUserMessage(params.SessionID)
 
 	log.Info("sent permission response", "choice", params.Choice)
 
@@ -224,12 +231,13 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 		ToolUseID: params.ToolUseID,
 	}
 
-	h.workEngine.HandleUserMessage(params.SessionID)
-
 	if err := wt.ChatClient.SendQuestionResponse(ctx, params.SessionID, data, params.Answers); err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
+
+	// After the send; see handleMessage.
+	h.workEngine.HandleUserMessage(params.SessionID)
 
 	log.Info("sent question response", "cancelled", params.Answers == nil)
 
@@ -244,12 +252,14 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 	if errors.Is(err, chat.ErrSessionNotFound) {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
 	} else if errors.Is(err, chat.ErrSessionNotRunning) ||
+		errors.Is(err, process.ErrRequestNotPending) ||
 		errors.Is(err, chat.ErrForkAnchorOutOfRange) ||
 		errors.Is(err, chat.ErrForkAnchorNoHistory) ||
 		errors.Is(err, chat.ErrForkUnsupported) {
 		// The request does not fit the session's history, state or agent — a prompt
-		// whose process is gone, a fork anchored past the end of the history or at
-		// the very first message, a fork of a session whose agent cannot be forked.
+		// whose process is gone or which is no longer being waited on, a fork
+		// anchored past the end of the history or at the very first message, a
+		// fork of a session whose agent cannot be forked.
 		// The message names what was wrong, and none of them is a server fault.
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {

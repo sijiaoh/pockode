@@ -87,6 +87,33 @@ func (m *Manager) RetireSession(worktree, sessionID string) {
 	}
 }
 
+// DeleteSessions implements work.SessionDeleter: the sessions of a deleted work
+// go with it, processes first.
+//
+// Unlike StopSession and RetireSession this one loads the worktree it is given,
+// because the records to remove are on disk whether or not anybody has the
+// worktree open — and a session left behind is unreachable, its work being the
+// only way into it.
+func (m *Manager) DeleteSessions(ctx context.Context, worktree string, sessionIDs []string) {
+	if len(sessionIDs) == 0 {
+		return
+	}
+
+	wt, err := m.Get(worktree)
+	if err != nil {
+		slog.Warn("could not get worktree for session cleanup", "worktree", worktree, "error", err)
+		return
+	}
+	defer m.Release(wt)
+
+	for _, sid := range sessionIDs {
+		wt.ProcessManager.Close(sid)
+		if err := wt.SessionStore.Delete(ctx, sid); err != nil {
+			slog.Warn("failed to delete session during work cleanup", "sessionId", sid, "error", err)
+		}
+	}
+}
+
 // SessionTurns implements work.TurnSource, so a work's activity can be derived
 // for a worktree nobody has opened.
 //

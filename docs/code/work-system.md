@@ -255,7 +255,21 @@ because somebody looked at a row is exactly what that avoids.
 Work items transition through `StepDone`; there is no intermediate `done` state.
 Any work item with remaining steps advances to the next step and stays `active`.
 When no steps remain, the work item closes. Waiting for child work is handled
-explicitly through `work_wait`, not `StepDone`. When a child closes, the engine
+explicitly through `work_wait`, not `StepDone`.
+
+**The closing step_done is refused while any subtask is still `active`**, and the
+refusal names them (`work.Operations.refuseIfChildrenActive`):
+
+> This story still has 2 active subtask(s): "…", "…". Call `work_wait` to pause
+> until they close, or stop them first. The step was not completed.
+
+Only the closing one: advancing through a story's own steps alongside running
+subtasks is ordinary. Finishing is not — the children would be left with a
+parent nobody is going to report to, and closing the story retires the session
+they report through. Nothing is cascaded, because stopping someone else's work
+is a decision rather than a side effect of finishing your own; the two ways out
+are both named in the error, which is the agent's only reading of this rule
+besides the tool description that states it up front. When a child closes, the engine
 tells the parent and clears a `child` wait; already closed parents are not
 reopened, preserving the intentional completion of coordinated work.
 
@@ -586,7 +600,7 @@ work a restart stops.
 
 ### Commands
 
-The six things a person or an agent can ask for live in `work.Operations`, and
+The seven things a person or an agent can ask for live in `work.Operations`, and
 both transports go through it — the WebSocket handler (user actions) and the MCP
 `Executor` (AI actions). A user-triggered command and an AI-triggered one are
 therefore the same command and cannot drift apart; before, stop and needs_input
@@ -598,9 +612,17 @@ the other.
 | `StartWork` | `Claim` (atomic restart/session decision) | `WorkStartHandler` creates the session and sends the kickoff; rolls back on failure |
 | `StopWork` | `Stop` | the process ends with the transition |
 | `ReopenWork` | `Reopen` | reopen nudge |
-| `StepDone` | `StepDone` | next-step prompt while steps remain |
+| `StepDone` | `StepDone` | next-step prompt while steps remain; refused when it would close a work whose subtasks are still active |
 | `NeedsInput` | `SetWait(user, reason)` | — |
 | `Wait` | `SetWait(child, reason)` | — |
+| `DeleteWork` | `Delete` (the subtree) | the subtree's sessions and their processes go with it |
+
+`DeleteWork`'s cascade is in `Operations` for the reason the table exists at all:
+it used to live in the WebSocket handler, so an agent's `work_delete` left
+behind the sessions a user's delete removed. A session whose work is gone cannot
+be reached — the work detail page is the way in — so leaving one is leaving
+something unreachable, and a process still running for it is working on a result
+nobody can read.
 
 Process termination is deliberately **not** in `Operations`: it belongs to the
 transition, not to the command that caused it (see

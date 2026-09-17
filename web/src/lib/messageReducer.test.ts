@@ -374,7 +374,34 @@ describe("messageReducer", () => {
 			expect(event).toEqual({
 				type: "request_cancelled",
 				requestId: "req-1",
+				reason: undefined,
 			});
+		});
+
+		// The reason decides which banner the card shows and, for work_closed,
+		// whether it can be answered at all — so it has to survive the wire.
+		it("carries the cancellation reason", () => {
+			expect(
+				normalizeEvent({
+					type: "request_cancelled",
+					request_id: "req-1",
+					reason: "timeout",
+				}),
+			).toMatchObject({ reason: "timeout" });
+		});
+
+		// A value this build does not know is no reason at all: the banner then
+		// says what is true of all of them, rather than a card rendering nothing.
+		it("drops a reason it does not know", () => {
+			expect(
+				// Typed as a bare record on purpose: the wire can carry a value the
+				// types here do not admit, which is the case under test.
+				normalizeEvent({
+					type: "request_cancelled",
+					request_id: "req-1",
+					reason: "abducted",
+				} as Record<string, unknown>),
+			).toMatchObject({ reason: undefined });
 		});
 	});
 
@@ -745,11 +772,77 @@ describe("messageReducer", () => {
 			const messages = applyServerEvent([initial], {
 				type: "request_cancelled",
 				requestId: "q-1",
+				reason: "work_closed",
 			});
 			const assistant = messages[0] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
 				type: "ask_user_question",
 				status: "expired",
+				// Why it expired travels with it: the card says which of the three
+				// things happened, and only this one makes it unanswerable.
+				reason: "work_closed",
+			});
+		});
+
+		// The same expiry reaches the client over two channels — the turn stops
+		// listing the blocker, and the record says why — in either order. The
+		// card that lost that race must not be stuck on the neutral banner.
+		it("fills in the reason on a card that already expired", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "ask_user_question",
+						request: {
+							requestId: "q-1",
+							toolUseId: "toolu_q_1",
+							questions: sampleQuestions,
+						},
+						status: "expired",
+					},
+				],
+				status: "complete",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], {
+				type: "request_cancelled",
+				requestId: "q-1",
+				reason: "timeout",
+			});
+			expect((messages[0] as AssistantMessage).parts[0]).toMatchObject({
+				status: "expired",
+				reason: "timeout",
+			});
+		});
+
+		// The first record to name one is the one that settled it.
+		it("does not overwrite a reason the card already has", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "ask_user_question",
+						request: {
+							requestId: "q-1",
+							toolUseId: "toolu_q_1",
+							questions: sampleQuestions,
+						},
+						status: "expired",
+						reason: "work_closed",
+					},
+				],
+				status: "complete",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], {
+				type: "request_cancelled",
+				requestId: "q-1",
+				reason: "process_ended",
+			});
+			expect((messages[0] as AssistantMessage).parts[0]).toMatchObject({
+				reason: "work_closed",
 			});
 		});
 
@@ -981,6 +1074,9 @@ describe("messageReducer", () => {
 			expect(assistant.parts[0]).toMatchObject({
 				type: "ask_user_question",
 				status: "expired",
+				// The record is the reason: every card still open when a process
+				// ends lost the only thing that could have taken its answer.
+				reason: "process_ended",
 			});
 		});
 

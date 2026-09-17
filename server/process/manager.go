@@ -88,6 +88,18 @@ type Manager struct {
 // ErrManagerClosed is returned when a process is requested after shutdown.
 var ErrManagerClosed = errors.New("process manager is shut down")
 
+// ErrRequestNotPending is returned when an answer names a prompt the session is
+// no longer waiting on: it expired with the process that raised it, the agent
+// withdrew it, or somebody else answered first.
+//
+// Refused rather than forwarded. A live process that is handed an answer to a
+// request it has forgotten does nothing with it, while Pockode would have
+// recorded a turn as started — leaving a session that claims to be running with
+// nothing coming to end it. Saying so instead is what lets the client put the
+// card back to Expired, where an unanswerable question can still be sent as an
+// ordinary message (docs/lifecycle-ui.md §5.1, §8).
+var ErrRequestNotPending = errors.New("this request is no longer waiting for an answer")
+
 // Process holds a running agent process. Do not cache references.
 type Process struct {
 	sessionID    string
@@ -124,6 +136,17 @@ type Process struct {
 	// toolActivity is what the calls still in flight are doing, for a client that
 	// subscribes after they said so. Its own lock; see toolActivity.
 	toolActivity toolActivity
+	// timedOut names the prompts this process's answer lease gave up on, which
+	// is what tells their expiry apart from every other kind: the wait was not
+	// abandoned by the agent or overtaken by the user, it ran out of time.
+	//
+	// By request id rather than a flag on the process, because the two are not
+	// the same claim. A CLI can answer the interrupt by withdrawing the prompt
+	// itself — Codex does exactly that — in which case nothing expires and a
+	// flag would still be set when some later, unrelated prompt did. An id
+	// cannot be misread that way: it names one prompt, and a prompt is answered
+	// or expires once. Guarded by mu; see Manager.enforce and recordExpiries.
+	timedOut map[string]struct{}
 	// retiring is set when the work this session belongs to has closed: the
 	// process may finish the turn it is in the middle of and nothing more. It is
 	// cleared by the next prompt, because that is somebody coming back to a
@@ -288,8 +311,15 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 			// reducing it at all leaves the session claiming a turn is running
 			// with no process behind it. The announcement below is the process's
 			// own, and is the one state the turn cannot express.
-			m.observeTurn(sessionID, proc.applyTurn(context.Background(),
-				session.TurnInput{Signal: session.SignalProcessEnded}))
+			endCtx := context.Background()
+			endTransition := proc.applyTurn(endCtx,
+				session.TurnInput{Signal: session.SignalProcessEnded})
+			m.observeTurn(sessionID, endTransition)
+			// The prompts this process was holding die with it here whenever the
+			// agent never got to send a process_ended of its own — which is every
+			// kill, the path that leaves a card on screen with nothing behind it.
+			proc.recordExpiries(endCtx, slog.With("sessionId", sessionID),
+				session.SignalProcessEnded, endTransition.Expired)
 			m.emitStateChange(sessionID, ProcessStateEnded)
 			slog.Info("process ended", "sessionId", sessionID)
 		}()
@@ -759,6 +789,12 @@ func (m *Manager) enforce(p *Process, lease session.Lease, now time.Time) {
 		// sent as an ordinary message afterwards, which is why an hour is a
 		// budget worth having (session.DefaultAnswerBudget); only a permission
 		// request is final, because a permission that expires is a denial.
+		//
+		// Noted before the stop is asked for, because the stop is what ends the
+		// prompts: whichever way the turn goes away from here, the cards it
+		// leaves behind expired for want of an answer in time, and that is what
+		// they say (recordExpiries).
+		p.noteAnswerTimeout()
 		m.requestStop(p, lease, now, log,
 			"No answer for %s, so Pockode withdrew the request and stopped waiting.", answerTimeoutCode)
 
@@ -903,12 +939,18 @@ func (p *Process) SendMessage(prompt string) error {
 // SendPermissionResponse answers a permission request, which clears the blocker
 // that request raised and lets the turn carry on.
 func (p *Process) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
+	if !p.turnState().AwaitingAnswerTo(data.RequestID) {
+		return ErrRequestNotPending
+	}
 	p.answerPrompt(data.RequestID)
 	return p.agentSession.SendPermissionResponse(data, choice)
 }
 
 // SendQuestionResponse answers a question, clearing that question's blocker.
 func (p *Process) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
+	if !p.turnState().AwaitingAnswerTo(data.RequestID) {
+		return ErrRequestNotPending
+	}
 	p.answerPrompt(data.RequestID)
 	return p.agentSession.SendQuestionResponse(data, answers)
 }
@@ -937,8 +979,102 @@ func (p *Process) signal(sig session.TurnSignal, requestID string) {
 	if p.closed.Load() {
 		return
 	}
+	ctx := context.Background()
 	in := session.TurnInput{Signal: sig, RequestID: requestID, At: time.Now()}
-	p.manager.emitTurn(p.sessionID, p.applyTurn(context.Background(), in))
+	transition := p.applyTurn(ctx, in)
+	p.manager.emitTurn(p.sessionID, transition)
+	p.recordExpiries(ctx, slog.With("sessionId", p.sessionID), in.Signal, transition.Expired)
+}
+
+// recordExpiries writes what became of each prompt this input ended without an
+// answer, as an ordinary request_cancelled record carrying the reason.
+//
+// It is the only record of a blocker's fate, and Pockode's own: the CLI is
+// killed with SIGKILL, so its transcript may not hold even the message that
+// raised the question, and a client that pages back through history would
+// otherwise replay a card as still pending long after nothing could answer it.
+//
+// Written directly rather than injected, for two reasons. The blocker is
+// already gone from the turn state, so there is nothing left to reduce — this
+// is a record of something that happened, not a signal that it should. And a
+// process on its way out is exactly when this has to be written, while inject
+// deliberately refuses to speak for one.
+func (p *Process) recordExpiries(ctx context.Context, log *slog.Logger, sig session.TurnSignal, expired []session.Blocker) {
+	for _, blocker := range expired {
+		if blocker.RequestID == "" {
+			// A background wait: nobody raised it with the user and nobody was
+			// going to answer it, so there is no card to settle.
+			continue
+		}
+		reason := p.expiryReason(sig, blocker.RequestID)
+		log.Info("blocker expired unanswered",
+			"kind", blocker.Kind, "requestId", blocker.RequestID,
+			"raisedAt", blocker.RaisedAt, "cause", sig, "reason", reason)
+
+		event := agent.RequestCancelledEvent{RequestID: blocker.RequestID, Reason: reason}
+		seq, err := p.sessionStore.AppendToHistory(ctx, p.sessionID, agent.NewEventRecord(event))
+		if err != nil {
+			// A deleted session is the ordinary case here: its process is torn
+			// down asynchronously, so an expiry can outlive the session it
+			// describes.
+			log.Debug("failed to record an expired request", "requestId", blocker.RequestID, "error", err)
+			continue
+		}
+		p.manager.EmitMessage(p.sessionID, event, seq)
+	}
+}
+
+// expiryReason says why this prompt was never answered, in the two cases
+// Pockode can tell apart from the outside.
+//
+// Everything else is left empty on purpose: a turn that simply ended, or a user
+// who sent a message instead of answering, leaves a card that cannot be
+// answered any more for a reason no one banner can state. The client says what
+// is true of all of them rather than guessing (docs/lifecycle-ui.md §5).
+//
+// SignalProcessStarted is not here even though it expires blockers too: that is
+// a successor clearing up after a process that died without saying so, and the
+// session store has already written a process_ended record for exactly that
+// case when it loaded the index (see abortTurnsTheLastRunLeftOpen).
+func (p *Process) expiryReason(sig session.TurnSignal, requestID string) agent.CancelReason {
+	if p.takeAnswerTimeout(requestID) {
+		return agent.ReasonTimeout
+	}
+	if sig == session.SignalProcessEnded {
+		return agent.ReasonProcessEnded
+	}
+	return ""
+}
+
+// noteAnswerTimeout marks every prompt currently on screen as one the answer
+// lease gave up on, so that whichever way the turn ends from here, the cards it
+// leaves behind say why.
+func (p *Process) noteAnswerTimeout() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, blocker := range p.turn.Blockers {
+		if blocker.RequestID == "" {
+			continue
+		}
+		if p.timedOut == nil {
+			p.timedOut = make(map[string]struct{})
+		}
+		p.timedOut[blocker.RequestID] = struct{}{}
+	}
+}
+
+// takeAnswerTimeout reports whether this prompt ran out of time, and forgets it
+// either way: a prompt expires once, so the answer is wanted once.
+//
+// A mark whose prompt was resolved rather than expired — the CLI withdrew it on
+// its own after the interrupt — is simply never taken. It cannot be misread by
+// anything else, request ids being unique, and it goes with the process.
+func (p *Process) takeAnswerTimeout(requestID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, marked := p.timedOut[requestID]
+	delete(p.timedOut, requestID)
+	return marked
 }
 
 // applyTurn folds one input into the session's stored turn state and caches the
@@ -972,14 +1108,10 @@ func (p *Process) applyTurn(ctx context.Context, in session.TurnInput) session.T
 	p.turn = transition.State
 	p.mu.Unlock()
 
-	for _, blocker := range transition.Expired {
-		// The only record of what happened to a blocker that was never answered.
-		// The CLI's transcript cannot supply one: it is killed with SIGKILL, so
-		// it may not hold so much as the message that raised the question.
-		slog.Info("blocker expired unanswered",
-			"sessionId", p.sessionID, "kind", blocker.Kind,
-			"requestId", blocker.RequestID, "raisedAt", blocker.RaisedAt, "cause", in.Signal)
-	}
+	// What became of an expired blocker is recorded by recordExpiries, which the
+	// callers that can announce things reach after this returns. Not here:
+	// process creation applies a turn under processesMu, and broadcasting from
+	// under that lock would deadlock against the listeners that take it.
 	return transition
 }
 
@@ -1265,4 +1397,12 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 
 	// Emit to listener (ChatMessagesWatcher)
 	p.manager.EmitMessage(p.sessionID, event, seq)
+
+	// Last, and after this event's own broadcast, so a subscriber sees the
+	// records in the order history holds them: the ending, then what that
+	// ending did to the prompts on screen. Announcing them first would hand a
+	// client a higher sequence number before the one below it.
+	if reduce {
+		p.recordExpiries(ctx, log, in.Signal, transition.Expired)
+	}
 }

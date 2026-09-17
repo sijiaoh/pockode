@@ -852,7 +852,44 @@ func TestWorkWait_StoryWithPendingChildWaits(t *testing.T) {
 	}
 }
 
-func TestStepDone_StoryWithPendingChildCloses(t *testing.T) {
+// A story does not finish while its subtasks are still running, and the refusal
+// has to be usable: it names the blockers, because an agent told only that some
+// exist will guess which (docs/lifecycle-ui.md §7).
+func TestStepDone_RefusesToCloseAStoryWithActiveSubtasks(t *testing.T) {
+	ts := newTestExec(t)
+
+	result := callTool(t, ts.exec, "work_create", map[string]string{
+		"type": "story", "title": "Test Story", "agent_role_id": ts.roleID,
+	})
+	storyID := extractID(t, toolText(result))
+
+	result = callTool(t, ts.exec, "work_create", map[string]string{
+		"type": "task", "title": "Reducer", "agent_role_id": ts.roleID, "parent_id": storyID,
+	})
+	taskID := extractID(t, toolText(result))
+
+	callTool(t, ts.exec, "work_start", map[string]string{"id": storyID})
+	callTool(t, ts.exec, "work_start", map[string]string{"id": taskID})
+
+	result = callTool(t, ts.exec, "step_done", map[string]string{"id": storyID})
+	if !result.IsError {
+		t.Fatalf("expected a refusal, got %q", toolText(result))
+	}
+	for _, want := range []string{`"Reducer"`, "work_wait", "The step was not completed"} {
+		if !strings.Contains(toolText(result), want) {
+			t.Errorf("refusal %q does not mention %q", toolText(result), want)
+		}
+	}
+
+	w, _, _ := ts.store.Get(storyID)
+	if w.Status != work.StatusActive {
+		t.Errorf("Status = %s, want active — a refused step_done moves nothing", w.Status)
+	}
+}
+
+// The other side of the same rule: a subtask that is no longer active is not a
+// blocker, so the story closes.
+func TestStepDone_ClosesAStoryWhoseSubtasksAreDone(t *testing.T) {
 	ts := newTestExec(t)
 
 	result := callTool(t, ts.exec, "work_create", map[string]string{
@@ -867,6 +904,7 @@ func TestStepDone_StoryWithPendingChildCloses(t *testing.T) {
 
 	callTool(t, ts.exec, "work_start", map[string]string{"id": storyID})
 	callTool(t, ts.exec, "work_start", map[string]string{"id": taskID})
+	callTool(t, ts.exec, "step_done", map[string]string{"id": taskID})
 
 	result = callTool(t, ts.exec, "step_done", map[string]string{"id": storyID})
 	if result.IsError {
@@ -1131,5 +1169,41 @@ func TestStepDone_SteplessRoleReportsOnlyTheClose(t *testing.T) {
 
 	if !strings.Contains(text, "closed") || strings.Contains(text, "Step") {
 		t.Errorf("result = %q, want it to report a close and no step", text)
+	}
+}
+
+// countingDeleter stands in for the worktree manager: what a delete cascades to.
+type countingDeleter struct{ sessionIDs []string }
+
+func (c *countingDeleter) DeleteSessions(_ context.Context, _ string, sessionIDs []string) {
+	c.sessionIDs = append(c.sessionIDs, sessionIDs...)
+}
+
+// The AI's work_delete deletes as much as the user's does. The cascade used to
+// live in the WebSocket handler, so the two entry points left different amounts
+// behind — a session with no work is unreachable, its work being the only way in.
+func TestWorkDelete_CascadesToSessionsLikeTheUsersDelete(t *testing.T) {
+	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{
+		Name: "Test Engineer", RolePrompt: "You are a test engineer.",
+	})
+	ops := work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore})
+	deleter := &countingDeleter{}
+	ops.SetSessionDeleter(deleter)
+	exec := NewExecutor(store, arStore, ops, settingsStore)
+
+	result := callTool(t, exec, "work_create", map[string]string{
+		"type": "story", "title": "Test Story", "agent_role_id": roleID,
+	})
+	storyID := extractID(t, toolText(result))
+	if _, err := store.Start(context.Background(), storyID, "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if result := callTool(t, exec, "work_delete", map[string]string{"id": storyID}); result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+
+	if len(deleter.sessionIDs) != 1 || deleter.sessionIDs[0] != "sess-1" {
+		t.Errorf("cascaded to %v, want [sess-1]", deleter.sessionIDs)
 	}
 }

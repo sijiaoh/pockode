@@ -318,7 +318,7 @@ func (e *Executor) workDelete(ctx context.Context, args json.RawMessage) (string
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	if err := e.workStore.Delete(ctx, params.ID); err != nil {
+	if err := e.workOps.DeleteWork(ctx, params.ID); err != nil {
 		return "", err
 	}
 

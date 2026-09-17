@@ -268,7 +268,12 @@ describe("an expired question", () => {
 		await user.click(screen.getByRole("radio", { name: /The web one/ }));
 		await user.click(screen.getByRole("button", { name: "Send as message" }));
 
-		expect(onSendAsMessage).toHaveBeenCalledWith("React");
+		// The question travels with the answer. The agent's own record of having
+		// asked is gone — a CLI resuming after its process died drops the dangling
+		// tool call — so a bare "React" would arrive as an answer to nothing.
+		const sent = onSendAsMessage.mock.calls[0][0] as string;
+		expect(sent).toContain("Which framework?");
+		expect(sent).toContain("React");
 	});
 
 	// Writing a late answer back onto the request would put live state into an
@@ -294,16 +299,64 @@ describe("an expired question", () => {
 		).not.toBeInTheDocument();
 	});
 
-	// Without a host that can send one, the offer would be a dead end.
+	// Which of the three endings this was decides both what the card says and,
+	// for one of them, whether it can be answered at all (docs/lifecycle-ui.md
+	// §5.1).
+	it("says which ending this was", async () => {
+		const user = setupUser();
+		render(
+			<AskUserQuestionItem
+				request={request}
+				status="expired"
+				reason="timeout"
+				onSendAsMessage={vi.fn()}
+			/>,
+		);
+
+		await openCard(user);
+		expect(screen.getByText(/not answered in time/)).toBeInTheDocument();
+	});
+
+	// A closed work is the one ending with nobody to pick the answer up: sending
+	// it as a message would start a turn on a session nobody is coming back to.
+	it("cannot be answered once the work is closed", async () => {
+		const user = setupUser();
+		render(
+			<AskUserQuestionItem
+				request={request}
+				status="expired"
+				reason="work_closed"
+				onSendAsMessage={vi.fn()}
+			/>,
+		);
+
+		await openCard(user);
+		expect(screen.getByText(/the work was closed/)).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Send as message" }),
+		).not.toBeInTheDocument();
+		expect(screen.getByRole("radio", { name: /The web one/ })).toBeDisabled();
+	});
+
+	// Without a host that can send one, the offer would be a dead end — but what
+	// happened is still known, and is still worth saying.
 	it("is read-only when nothing can carry the message", async () => {
 		const user = setupUser();
-		render(<AskUserQuestionItem request={request} status="expired" />);
+		render(
+			<AskUserQuestionItem
+				request={request}
+				status="expired"
+				reason="timeout"
+			/>,
+		);
 
 		await openCard(user);
 		expect(screen.getByRole("radio", { name: /The web one/ })).toBeDisabled();
 		expect(
 			screen.queryByRole("button", { name: "Send as message" }),
 		).not.toBeInTheDocument();
+		expect(screen.getByText(/not answered in time/)).toBeInTheDocument();
+		expect(screen.queryByText(/You can still answer/)).not.toBeInTheDocument();
 	});
 
 	// The server's own reason, shown where the user was looking when they

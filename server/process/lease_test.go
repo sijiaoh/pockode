@@ -164,8 +164,32 @@ func TestLease_UnansweredPromptIsWithdrawn(t *testing.T) {
 			// coming back is what ends it, the same as a user's own Stop.
 			sess.emit(t, agent.InterruptedEvent{})
 			waitUntil(t, "the turn to end", func() bool { return holdOf(proc) == session.LeaseIdle })
+
+			// And the card says which of the three things happened to it. The
+			// user is the one who ran out of time; a banner saying the process
+			// died would send them looking for a fault that was not there.
+			waitUntil(t, "the expiry to be recorded", func() bool {
+				return expiryReasonFor(t, store, "req-1") == agent.ReasonTimeout
+			})
 		})
 	}
+}
+
+// expiryReasonFor reports the reason on the last request_cancelled record for
+// this prompt, or the empty reason if nothing settled it.
+func expiryReasonFor(t *testing.T, store session.Store, requestID string) agent.CancelReason {
+	t.Helper()
+	var reason agent.CancelReason
+	found := false
+	for _, record := range historyRecords(t, store, "sess-1") {
+		if record.Type == agent.EventTypeRequestCancelled && record.RequestID == requestID {
+			reason, found = record.Reason, true
+		}
+	}
+	if !found {
+		return "unrecorded"
+	}
+	return reason
 }
 
 // A turn that outruns its budget is asked to stop, not taken away: a CLI winding
