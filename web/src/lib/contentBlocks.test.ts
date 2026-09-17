@@ -4,6 +4,7 @@ import {
 	contentBlocksText,
 	groupContentBlocks,
 	parseContentBlocks,
+	partitionFileBlocks,
 } from "./contentBlocks";
 
 describe("parseContentBlocks", () => {
@@ -60,6 +61,21 @@ describe("parseContentBlocks", () => {
 				omitted: "binary",
 			}),
 		});
+	});
+
+	// Every reason in `OmitReason` has to survive the boundary. `not_fetched`
+	// once did not, and the only producer of it is the background task log — so
+	// the block reached the UI claiming no reason at all, and the one place that
+	// tells a deliberately unread file from an unreadable one had nothing to
+	// read.
+	it("keeps every reason a block can carry", () => {
+		const blocks = parseContentBlocks([
+			{ type: "file", file: { mime: "text/plain", omitted: "not_fetched" } },
+			{ type: "file", file: { mime: "text/plain", omitted: "invented" } },
+		]);
+		expect(
+			blocks?.map((block) => block.type === "file" && block.file.omitted),
+		).toEqual(["not_fetched", undefined]);
 	});
 
 	// The tool call offers a chevron exactly when there is a body, so a block
@@ -194,5 +210,43 @@ describe("groupContentBlocks", () => {
 				{ type: "file", file: { mime: "image/png", attachment_id: "a" } },
 			]),
 		).toEqual([]);
+	});
+});
+
+describe("partitionFileBlocks", () => {
+	// The one reason that says nobody tried to read the content: the block is a
+	// pointer at a file, not the answer to the call, so it belongs beside the
+	// outcome in the body rather than in the strip.
+	it("treats a file nobody read as a reference", () => {
+		expect(
+			partitionFileBlocks([
+				{ mime: "text/plain", path: "/tmp/build.log", omitted: "not_fetched" },
+			]),
+		).toEqual({
+			attachments: [],
+			references: [
+				{ mime: "text/plain", path: "/tmp/build.log", omitted: "not_fetched" },
+			],
+		});
+	});
+
+	// Every other reason means the reader expected content and has to be told
+	// why there is none, which is what the strip says.
+	it("keeps the blocks that failed to deliver content in the strip", () => {
+		const files = [
+			{ mime: "image/png", omitted: "too_large" as const },
+			{ mime: "application/octet-stream", omitted: "binary" as const },
+			{ mime: "image/png", attachment_id: "a1" },
+		];
+		expect(partitionFileBlocks(files)).toEqual({
+			attachments: files,
+			references: [],
+		});
+	});
+
+	it("drops a reference that points at nothing", () => {
+		expect(
+			partitionFileBlocks([{ mime: "text/plain", omitted: "not_fetched" }]),
+		).toEqual({ attachments: [], references: [] });
 	});
 });

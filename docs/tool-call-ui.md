@@ -139,8 +139,8 @@ The glyph column is the single place status is stated:
 | `running` | `Spinner` (`variant="current"`, `size="h-3 w-3"`, with the tool name in its `srText`) | inherits | activity line when there is one | invocation + live output |
 | `background` | same spinner, plus a `background` chip after the name | inherits | activity line when there is one | invocation + live output |
 | `success` | `Check` | **`text-th-text-muted`** | second line only if it came from the background (below) | invocation + result |
-| `error` | `X` | `text-th-error` | `border border-th-error/40` on the container, detail text `text-th-error` | auto-expanded once |
-| `interrupted` | `Ban` | `text-th-text-muted` | — | invocation + whatever came back |
+| `error` | `X` | `text-th-error` | `border border-th-error/40` on the container, detail text `text-th-error`, second line = the last line of the output — or the outcome, when the run came from the background | closed, like every other row |
+| `interrupted` | `Ban` | `text-th-text-muted` | second line only if it came from the background (below) | invocation + whatever came back |
 
 Two of those are deliberate departures:
 
@@ -288,8 +288,9 @@ whose colour already means something.
 ## The second line (problem 1)
 
 Under line 1, while — and only while — the run has something to say there: its
-**activity** while it is live, and the **outcome** of a run that finished in the
-background. Ordinary settled runs have no second line.
+**activity** while it is live, the **outcome** of a run that finished in the
+background, and the **last line** of one that failed. A settled foreground run
+has a second line only when it failed.
 
 ```tsx
 <span aria-hidden={live} className={`block truncate text-th-text-muted ${mono ? "font-mono" : ""}`}>
@@ -304,6 +305,23 @@ background. Ordinary settled runs have no second line.
 2. the **last non-empty line** of `run.output` — Codex's
    `commandExecution/outputDelta`. Literal stdout, so mono.
 3. for a settled `fromBackground` run, the first line of the outcome. Prose.
+4. for a settled foreground **failure**, the **last non-empty line** of the
+   result. Literal output, so mono. Before this rung a collapsed failed row said
+   only *that* the call failed — the border and the glyph — and the reason was
+   behind the chevron, which is why the row used to open itself.
+
+Rung 3 is above rung 4 and the order is load-bearing: a backgrounded failure's
+outcome is the notification's own summary sentence, which says more than the
+tail of a log the user never asked for. The last line rather than the first,
+because it is the one rung 2 was already showing a moment earlier — the text
+does not jump to the other end of the output as the run settles — and because a
+build states its verdict at the end (`make: *** [build] Error 1`) while the head
+is noise (`> vite build`).
+
+It is drawn `text-th-text-muted` like every other second line, not red. The row
+already carries three reds; a fourth would dilute "red means failed" into "red
+means this row". The border and the glyph say the call failed, the second line
+says what it said.
 
 Nothing else. It is one line, it truncates, and the full text is in the body.
 
@@ -357,8 +375,9 @@ half an hour. So a background run does not lose its second line when it settles:
 Which is also the better row: a settled background call that reads *"Build
 succeeded in 4m12s"* without being opened is the thing the user went looking for.
 It replays correctly too, because the outcome is persisted while the activity is
-not. Only a run that finished in the foreground drops its line, and that row is
-at the tail by construction.
+not. Only a run that finished in the foreground drops its line — or hands it to
+rung 4, if it failed — and that row is at the tail by construction, so both
+changes of height fall to the tail-follow case above.
 
 **After a reconnect** the line survives exactly as far as the backend carries
 it. `tool_activity` is not persisted, so history replay has none of it; what
@@ -396,17 +415,29 @@ Returned to the agent
   Command running in background with ID: bash_1
 Outcome  ·  after the turn
   Build succeeded in 4m12s
-  📄 /work/repo/.pockode/logs/build-1.log        ← FileBlock chip, opens in Files
+  /work/repo/.pockode/logs/build-1.log                                    Open
+  Not fetched
 ```
 
-`output_file` is drawn as a path chip and offers to open in the Files tab when it
-is under the work directory — the same treatment `FileBlock.Path` gets elsewhere
-([agent-event.md](agent-event.md#eventrecord-serialization)). It is not inlined:
-a background log is unbounded, and the user asked for the outcome. The chip says
-`Not fetched` rather than "can't be previewed": nothing failed, the log was
-deliberately not read. The wording stops there and does not tell the reader to
-open it, because a CLI writes that log wherever it likes and a path outside the
-work directory has no Open to offer.
+`output_file` arrives as a `FileBlock` with `omitted: not_fetched`, and
+`partitionFileBlocks` sends it to the body rather than to the strip. There it is
+a **reference line**: the full path in mono at the weight of a line of body
+text, the reason under it, and the same Open the Files tab gets from
+`FileBlock.Path` elsewhere ([agent-event.md](agent-event.md#eventrecord-serialization))
+when the path is under the work directory. No card, no border, no icon — it is a
+pointer, not an answer.
+
+It used to be a `w-56` chip with a large glyph in the strip, on every
+backgrounded row, permanently. On the common half of them — a CLI writes its
+background log wherever it likes, often outside the work directory — there was
+no Open either, so it was a card-shaped thing that could not be tapped. The full
+path rather than the file name the block also carries: the body does not
+truncate, so the tail of the path is the name already.
+
+It is not inlined: a background log is unbounded, and the user asked for the
+outcome. The line says `Not fetched` rather than "can't be previewed" — nothing
+failed, the log was deliberately not read — and stops there rather than telling
+the reader to open something that may have no button.
 
 **When the outcome is one Pockode wrote.** A background task dies with the CLI
 process, and the outcome then delivered at the next session start carries
@@ -482,13 +513,41 @@ this order, each omitted when empty:
    - `WebFetch`: the result is Markdown, and `MarkdownContent` exists.
 4. **Background outcome**, as above.
 
-The attachment strip stays exactly where it is, between the row and the body: it
-is the one part of a result that is worth seeing without opening anything.
+The attachment strip stays between the row and the body, and what goes in it is
+what the result **is**: when a tool answers with a screenshot, the screenshot is
+the answer, and an answer folded behind a chevron has not been shown. A block
+marked `not_fetched` is not that — it is a *pointer* at a file nobody read — so
+it is drawn as a reference line in the body instead
+([above](#when-a-background-run-finishes)).
 
-**Auto-expand only on `error`, only once** — `TaskItem`'s rule and its
-`autoExpandedRef`, which lets the user's own decision to collapse it stand. A
-`background` run is never auto-expanded: a 30-minute task that unfolds itself
-would shove the transcript around long after the user stopped caring.
+**Nothing opens a tool call's body but the user.** Trial and error is how an
+agent works: a turn routinely contains several failed calls, and four bodies
+unfolding themselves bury the answer the user is reading. What replaced the
+auto-expand is rung 4 of the second line — a failed row now says how it failed
+without being opened.
+
+`TaskItem` keeps its auto-expand (`autoExpandedRef`, once, so the user's own
+decision to collapse it stands), because the two cases are not the same one: a
+subagent failing is rare rather than routine, and its report is the only account
+of what went wrong anywhere in the UI. For the same reason `TaskItem` passes
+`secondLine={failed ? null : toolSecondLine(run)}` — with the body already open,
+rung 4 would only be a second and worse copy of what is under it, the tail of a
+markdown report drawn in mono. That `null` covers rung 3 as well, so a
+backgrounded subagent that fails loses its outcome line too — one line of the
+same gap the next paragraph is about, and small beside the body opening above
+it.
+
+**A `background` run must not open itself** — a 30-minute task that unfolds
+itself shoves the transcript around long after the user stopped caring, and
+`MessageList` compensates for growth only at the tail, which a background row is
+by construction not at ([above](#the-second-line-problem-1)). It is also the one
+rule on this page the code does not keep: `TaskItem`'s `autoExpandedRef` keys on
+`run.status === "error"` alone and never reads `fromBackground`, so a
+backgrounded subagent that fails opens its report anyway, wherever in the
+transcript it sits. The gap predates rung 4 and is recorded rather than closed
+in passing, because closing it is a behavioural decision and not a typo: that
+report is still the only account of what went wrong, so the alternative to
+opening it has to be a way of reaching it, not silence.
 
 ## Width and pointer
 
@@ -539,8 +598,12 @@ decisions, and reachability is a CSS variant
 4. The same call after `task_notification`: glyph settles, chip stays, the
    second line becomes the outcome **without the row changing height**, and the
    body shows both the placeholder and the outcome under their own labels.
-   Scroll far away from it first — that is the case this rule exists for.
-5. A failed `Bash`: red `X`, red detail, bordered row, body already open.
+   Scroll far away from it first — that is the case this rule exists for. The
+   log it wrote is a reference line inside that body — full path, `Not fetched`,
+   no card above the body — with an Open only when the path is under the work
+   directory.
+5. A failed `Bash`: red `X`, red detail, bordered row, **closed**, with the last
+   line it printed under the title. Open it for the rest.
 6. A codex `commandExecution`: detail derived from `commandActions` when there is
    one, `durationMs` on the right, `exitCode` in the body.
 7. An approved `Bash`: **one** row, not two — the card takes the pending row's

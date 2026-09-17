@@ -11,9 +11,24 @@ function asNumber(value: unknown): number | undefined {
 		: undefined;
 }
 
+/**
+ * Every reason a block may carry, as a table rather than a chain of `===`.
+ *
+ * `Record<OmitReason, …>` is the point: adding a member to the union without
+ * adding it here is a type error. The chain this replaced had silently dropped
+ * `not_fetched` — the one reason a whole feature turns on — so a block reached
+ * the UI claiming no reason at all.
+ */
+const omitReasons: Record<OmitReason, true> = {
+	too_large: true,
+	binary: true,
+	unavailable: true,
+	not_fetched: true,
+};
+
 function asOmitReason(value: unknown): OmitReason | undefined {
-	return value === "too_large" || value === "binary" || value === "unavailable"
-		? value
+	return typeof value === "string" && value in omitReasons
+		? (value as OmitReason)
 		: undefined;
 }
 
@@ -110,7 +125,8 @@ function readFilePath(call: ToolCallRef): string | undefined {
 }
 
 /**
- * The file-like blocks, in order: what the attachment strip draws.
+ * The file-like blocks, in order. `partitionFileBlocks` then says which of them
+ * the strip draws and which the body does.
  *
  * `call` is the one that produced them, read for the file the agent left the
  * block without: an agent that hands over content inline says nothing about
@@ -135,10 +151,47 @@ export function contentBlockFiles(
 	return path ? [{ ...files[0], path }] : files;
 }
 
+/** A file block that survived `partitionFileBlocks` as a reference. */
+export type FileReference = FileBlock & { path: string };
+
+/**
+ * Splits file blocks into the ones a result *is* and the ones it merely points
+ * at.
+ *
+ * `not_fetched` is the one reason that says nobody ever tried to read the
+ * content: the server named the file instead of pushing it into the transcript,
+ * and the answer to the call is the prose beside it. Such a block is a pointer,
+ * so it belongs in the body next to the outcome rather than in the strip, whose
+ * contract is that what is in it *is* the answer.
+ *
+ * Every other reason — `too_large`, `binary`, `unavailable` — means the reader
+ * expected content and has to be told why there is none, which is the strip's
+ * job.
+ *
+ * A reference with no path points at nothing, so it is dropped rather than
+ * drawn as an empty line — which is what `FileReference` states, so the caller
+ * that draws the path does not have to stand in for one that cannot be there.
+ */
+export function partitionFileBlocks(files: FileBlock[]): {
+	attachments: FileBlock[];
+	references: FileReference[];
+} {
+	const attachments: FileBlock[] = [];
+	const references: FileReference[] = [];
+
+	for (const file of files) {
+		if (file.omitted !== "not_fetched") attachments.push(file);
+		else if (file.path) references.push({ ...file, path: file.path });
+	}
+
+	return { attachments, references };
+}
+
 /**
  * A run of blocks that render as one thing: prose, or a list of tool names.
- * File blocks are not here — they are drawn in the attachment strip above the
- * body, where they are visible without expanding anything.
+ * File blocks are not here — they are drawn by the attachment strip above the
+ * body or, for the ones that are only references, as a line beside the result
+ * (`partitionFileBlocks`).
  */
 export type ContentBlockGroup =
 	| { kind: "text"; text: string }

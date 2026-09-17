@@ -146,7 +146,9 @@ export function omittedLabel(file: { omitted?: OmitReason }): string | null {
 		// open it. A CLI writes a background log wherever it likes, which is
 		// often outside the work directory, and every route into a file takes a
 		// work-directory-relative path — so there is no Open beside a good half
-		// of these. The strip draws that button when there is one to draw.
+		// of these. The reference line that draws this one (`ToolCallItem`)
+		// offers that button only when there is one to offer; a block with this
+		// reason never reaches the strip at all (`partitionFileBlocks`).
 		case "not_fetched":
 			return "Not fetched";
 		default:

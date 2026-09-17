@@ -219,15 +219,19 @@ rather than half-rendered: the server forwards what it does not recognise as
 text, so an unreadable block here means the two ends disagree about a version,
 not that new content arrived.
 
-File blocks are drawn in a strip under the tool's header line and *outside* its
-collapsible body — when a tool answers with a screenshot, the screenshot is the
-answer, and an answer folded behind a chevron has not been shown. The body keeps
-the prose, which is what the chevron is gated on: a call whose whole result is
-an image has nothing left to expand. Content is fetched only once the strip
-scrolls into view, so paging back through a long session does not pull every
-image in it, and it is rendered through the same `FileContent` states the Files
-tab uses — which is why a decode failure, a file too large to send and a binary
-read the same in both places.
+A file block the result *is* — the screenshot a tool answered with — is drawn in
+a strip under the tool's header line and *outside* the collapsible body, because
+an answer folded behind a chevron has not been shown. A block marked
+`not_fetched` is not that: nobody read it, so it is a pointer at a file rather
+than an answer, and it is drawn beside the result inside the body
+(`partitionFileBlocks`, [tool-call-ui.md](tool-call-ui.md#the-body-problems-2-and-3)).
+The body keeps the prose — and opens whether or not there is any: a tool row's
+chevron is unconditional, because there is always at least the invocation to
+show ([tool-call-ui.md](tool-call-ui.md#the-row)).
+Content is fetched only once the strip scrolls into view, so paging back through
+a long session does not pull every image in it, and it is rendered through the
+same `FileContent` states the Files tab uses — which is why a decode failure, a
+file too large to send and a binary read the same in both places.
 
 ### Message Status Transitions
 

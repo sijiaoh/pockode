@@ -29,6 +29,12 @@ interface Props {
  * Outside the collapsible body on purpose: when a tool answers with a
  * screenshot, the screenshot *is* the answer, and an answer folded behind a
  * chevron has not been shown. The body keeps the prose.
+ *
+ * Which is also what decides what may be put here. A block marked `not_fetched`
+ * is not an answer — nobody read it — so it never reaches this strip; it is
+ * drawn beside the result as a reference line instead. `partitionFileBlocks`
+ * (`lib/contentBlocks.ts`) is where that split is made, and it is the one to
+ * extend rather than adding a second weight of entry to this row.
  */
 function AttachmentStrip({ files, sessionId, onOpenFile }: Props) {
 	const workDir = useWSStore((state) => state.workDir);
