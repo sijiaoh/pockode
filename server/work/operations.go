@@ -340,14 +340,19 @@ func (o *Operations) waitRefusal(id string) error {
 		situation = fmt.Sprintf("all %d subtask(s) of this work are already closed", total)
 		wayOut = "Create more with work_create and start them with work_start"
 	default:
-		// The number counts what the list then names. Introducing a list of one
-		// with the total ("none of 6 is running: \"Reducer\"") reads as a list
-		// that was cut short.
-		situation = fmt.Sprintf("none of this work's subtasks is running, and %d of them can be started: %s",
+		// The number counts what the list names, not every subtask: introducing
+		// a list of one with the total ("none of 6: \"Reducer\"") reads as a
+		// list that was cut short.
+		situation = fmt.Sprintf("none of this work's subtasks is running, though %d of them can be started: %s",
 			len(startable), strings.Join(startable, ", "))
 		wayOut = "Start them with work_start"
 	}
-	return fmt.Errorf("%w: %s, and only a subtask closing ends a wait on subtasks — so nothing would ever end this one. %s, or call work_needs_input if you are waiting on the user, or step_done if there is nothing left to do. The wait was not set",
+	// The rule comes first so that the situation — which in the third case ends
+	// in a list — is closed by the dash rather than by another comma clause,
+	// which would read as one more item. Same shape as refuseIfChildrenActive
+	// for the same reason: what is in the way, then the ways out, then the
+	// statement of no effect, last and unmissable.
+	return fmt.Errorf("%w: only a subtask closing ends a wait on subtasks, and %s — so nothing would ever end this one. %s, or call work_needs_input if you are waiting on the user, or step_done if there is nothing left to do. The wait was not set",
 		ErrInvalidWork, situation, wayOut)
 }
 

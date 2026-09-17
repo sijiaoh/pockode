@@ -70,7 +70,7 @@ lifecycle_rules: |
 
   If you still have work to do, keep doing it in this turn. A turn that ends without either of the above reads to Pockode as an agent that stopped by accident, so it sends you a message telling you to carry on; after {{.MaxNudges}} of those in a row it gives up and moves the work to `stopped`, where nothing happens until a person restarts it. Going quiet is not free: finish, or say what you are waiting for.
   {{if .IsStory}}
-  A story is not finished while its tasks are still running: wait for them with `work_wait`. Pockode rejects a `step_done` that would close a story with active subtasks.
+  A story is not finished while its tasks are still running: wait for them with `work_wait`. Pockode rejects a `step_done` that would close a story with active subtasks, and rejects a `work_wait` when none of them is running — the two are exact opposites, so whichever one you need is the one that is open to you.
   {{end}}
   ### Long waits belong to the work, short questions to the chat
 
@@ -141,7 +141,7 @@ stranded_wait_nudge: |
 
   None of your tasks is running now, so nothing is going to close and end the wait you declared. Pockode has cleared it — this work now has no wait, and will be nudged as usual if a turn ends without one.
 
-  Decide what happens next: {{if eq .Exit "deleted"}}create a replacement with work_create and start it{{else if eq .Exit "stopped"}}restart it with work_start using ID {{.ChildID}}{{else}}start it with work_start using ID {{.ChildID}}{{end}}, call work_needs_input with ID {{.ID}} if this needs the user, or call step_done with ID {{.ID}} if the work is finished. Do not call work_wait again until a task of yours is running — Pockode rejects a wait with nothing that could end it.
+  Decide what happens next: {{if eq .Exit "deleted"}}create a replacement with work_create and start it{{else if eq .Exit "stopped"}}restart it with work_start using ID {{.ChildID}}{{else}}start it with work_start using ID {{.ChildID}}{{end}}, call work_needs_input with ID {{.ID}} if this needs the user, or call step_done with ID {{.ID}} if the work is finished. Do not call work_wait again until a task of yours is running; the lifecycle section above says why.
 
 # Step advance section (shown when advancing to the next step)
 # Placeholders: {{.PrevStep}}, {{.TotalSteps}}, {{.CurrentStep}}, {{.StepPrompt}}, {{.ID}}

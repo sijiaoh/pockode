@@ -662,9 +662,11 @@ step's position does not change because a turn started.
 every step_done. A story's steps are its own workflow, and walking through them
 while subtasks run is what a story with subtasks does; what is not ordinary is
 finishing, because the children would be left with a parent nobody is going to
-report to, and closing the story retires the session they report through. The
-MCP tool description says exactly this, and is the only place an agent reads the
-rule before hitting it.
+report to, and closing the story retires the session they report through. Two
+things say so before an agent hits it: the MCP tool description, and the
+lifecycle section carried by every message the engine sends — which states this
+refusal and its complement (§7.1) in the same sentence that tells a story to
+wait for its tasks.
 
 The rejection is an agent-facing error, and the user sees it in two places that
 already exist. Nothing new is drawn.
@@ -708,18 +710,26 @@ Same three properties, same reason, and a fourth the other refusal does not
 need: the three situations have three different ways out, so they are three
 messages rather than one.
 
+Each is one sentence of what is in the way, then the ways out, then the
+statement of no effect — the shape the `step_done` refusal already has, ending
+on "The wait was not set" as that one ends on "The step was not completed". The
+rule itself leads, so that the third situation, which ends in a list, is closed
+by the dash rather than by another comma clause.
+
 | Situation | Copy |
 |---|---|
-| no subtasks at all | "…this work has no subtasks, and only a subtask closing ends a wait on subtasks — so nothing would ever end this one. **Create them with `work_create` and start them with `work_start`**, or call `work_needs_input`…, or `step_done`…. The wait was not set." |
-| all subtasks closed | "…all 3 subtask(s) of this work are already closed, and only… **Create more with `work_create` and start them…**" |
-| subtasks exist, none running | "…none of this work's subtasks is running, and 2 of them can be started: \"Reducer\" (stopped), \"Lease table\" (open), and only… **Start them with `work_start`**…" |
+| no subtasks at all | "only a subtask closing ends a wait on subtasks, and **this work has no subtasks** — so nothing would ever end this one. **Create them with `work_create` and start them with `work_start`**, or call `work_needs_input`…, or `step_done`…. The wait was not set" |
+| all subtasks closed | "…and **all 3 subtask(s) of this work are already closed** — so… **Create more with `work_create` and start them…**" |
+| subtasks exist, none running | "…and **none of this work's subtasks is running, though 2 of them can be started: \"Reducer\" (stopped), \"Lease table\" (open)** — so… **Start them with `work_start`**…" |
 
 The third names the subtasks *with their statuses*, because "nothing is running"
 and "you never started them" are the same sentence to an agent that has just
-created three of them, and the fix is different for each. Its number counts the
-subtasks it then lists rather than all of them: a story with four closed
-subtasks and two stopped ones would otherwise introduce a list of two with
-"none of 6", which reads as a list that was cut short.
+created three of them, and the fix is different for each. Two things keep that
+list from reading as one that was cut short: the number introducing it counts
+what it lists rather than every subtask — a story with four closed subtasks and
+two stopped ones would otherwise offer a list of two under "none of 6" — and
+what follows the list is a dash, not another "and", which is what would read as
+one more item.
 
 Nothing is drawn for this either, for the same reason: the UI has no `work_wait`
 button, and the story detail page already answers "why is this not moving" —

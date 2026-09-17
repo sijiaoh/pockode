@@ -400,6 +400,19 @@ func TestEngine_ClearsAWaitNothingCouldEnd(t *testing.T) {
 			wants:   []string{"was deleted", "create a replacement with work_create"},
 			unwants: []string{"work_start using ID"},
 		},
+		{
+			// A fresh start that failed puts the subtask back to `open`. It is
+			// startable by id like a stopped one, but it was never running, so
+			// "restart" would be describing something that did not happen.
+			name: "rolled back to open",
+			leave: func(t *testing.T, f *engineFixture, childID string) {
+				if err := f.store.RollbackStart(context.Background(), childID, "sess-child", false); err != nil {
+					t.Fatalf("RollbackStart the child: %v", err)
+				}
+			},
+			wants:   []string{"is not running", "start it with work_start"},
+			unwants: []string{"was deleted", "restart it"},
+		},
 	}
 
 	for _, tc := range cases {

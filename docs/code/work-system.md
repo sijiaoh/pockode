@@ -285,8 +285,9 @@ subtasks is ordinary. Finishing is not — the children would be left with a
 parent nobody is going to report to, and closing the story retires the session
 they report through. Nothing is cascaded, because stopping someone else's work
 is a decision rather than a side effect of finishing your own; the two ways out
-are both named in the error, which is the agent's only reading of this rule
-besides the tool description that states it up front. When a child closes, the engine
+are both named in the error, and the rule itself is stated up front in the two
+places an agent reads before it acts — the tool description and the lifecycle
+section every message carries. When a child closes, the engine
 tells the parent and clears a `child` wait; already closed parents are not
 reopened, preserving the intentional completion of coordinated work.
 
@@ -380,9 +381,10 @@ never sees the code for, so the descriptions carry the same vocabulary as
 `work_needs_input` says what it is preferred over and why, `work_wait` says that
 the news of a child closing clears the wait *and* that a wait with no subtask
 running is rejected, and `step_done` says it is not a way to pause. The two
-rejections are named in the descriptions rather than left to be discovered,
-because a tool description is the only place an agent reads a rule before
-hitting it. `mcp/tools_test.go` holds them to it.
+rejections are named rather than left to be discovered, and in both of the
+places a rule can be read *before* it is hit: here, and in the lifecycle section
+every engine message carries ([Prompt Format](#prompt-format)). `mcp/tools_test.go`
+holds these two descriptions to it.
 
 `agent_role_list` omits the role prompt, so that listing cannot pull someone
 else's instructions into the agent's context. That is a containment rule, not a
@@ -1165,9 +1167,16 @@ detail page), that exactly two things end a turn cleanly — `step_done`, or a
 declared wait — and what happens when neither is said: a nudge, and `stopped`
 once the allowance is spent. "I still have work to do" is deliberately not
 offered as a third way to end a turn; it is the nudged case, and listing it as an
-ending would have promised an agent a safety it does not have. Before it existed the same rules were restated in four
-per-type templates, which is exactly how the prompts came to describe a work
-model — `in_progress`, "needs_input" — that the store had stopped producing.
+ending would have promised an agent a safety it does not have. For a story it
+also names **both** subtask refusals, in the one sentence that already pairs the
+two tools: a `step_done` that would close a story with subtasks still running is
+rejected, and so is a `work_wait` with none of them running. Naming only the
+first is the trap, because that same sentence points the agent at `work_wait` —
+`prompt_test.go` holds both halves.
+
+Before it existed the same rules were restated in four per-type templates, which
+is exactly how the prompts came to describe a work model — `in_progress`,
+"needs_input" — that the store had stopped producing.
 
 Two of its numbers are rendered from the constants that govern the behaviour
 (`DefaultMaxNudges`, `session.DefaultAnswerBudget`) rather than typed into the

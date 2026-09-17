@@ -60,6 +60,23 @@ func TestBuildKickoffMessage_Story(t *testing.T) {
 		"the rule that a story waits for its tasks instead of closing over them")
 }
 
+// The lifecycle section is the *other* place a rule can be read before it is
+// hit, and unlike a tool description it rides on every message, including the
+// ones that land in a conversation with no memory of this work. The two
+// subtask refusals are complementary, so naming one without the other is worse
+// than naming neither: it tells a story to wait for its tasks a line above the
+// only sentence that would have said when it may not.
+func TestLifecycleRules_AnnounceBothSubtaskRefusals(t *testing.T) {
+	msg := BuildKickoffMessage(Work{
+		ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S",
+	})
+
+	assertContains(t, msg, "rejects a `step_done` that would close a story with active subtasks",
+		"the step_done refusal")
+	assertContains(t, msg, "rejects a `work_wait` when none of them is running",
+		"the work_wait refusal")
+}
+
 // The coordinator rules are the half of a story prompt that is not in the
 // lifecycle section, and they reached no story at all while they were built from
 // a package-level var (see storyBehaviorRules). Asserting the text itself is
