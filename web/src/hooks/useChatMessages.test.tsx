@@ -14,6 +14,8 @@ import { isForkableMessage } from "../utils/forkAnchor";
 import { useChatMessages } from "./useChatMessages";
 
 const mockState = vi.hoisted(() => ({
+	/** Drives a reconnect: see `reconnect` below. */
+	status: "connected",
 	chatMessagesSubscribe: vi.fn(),
 	chatMessagesHistory: vi.fn(),
 	chatMessagesUnsubscribe: vi.fn(async () => {}),
@@ -26,7 +28,9 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock("../lib/wsStore", () => {
 	const state = {
-		status: "connected",
+		get status() {
+			return mockState.status;
+		},
 		actions: {
 			chatMessagesSubscribe: mockState.chatMessagesSubscribe,
 			chatMessagesHistory: mockState.chatMessagesHistory,
@@ -94,6 +98,7 @@ function findSent(messages: Message[]): UserMessage {
 describe("useChatMessages", () => {
 	beforeEach(() => {
 		committed.length = 0;
+		mockState.status = "connected";
 		mockState.sendMessage.mockReset();
 		mockState.sendMessage.mockResolvedValue(undefined);
 		mockState.chatMessagesHistory.mockReset();
@@ -457,23 +462,40 @@ describe("useChatMessages", () => {
 			const state: {
 				messages: Message[];
 				hasMoreHistory: boolean;
+				isLoadingMore: boolean;
 				historyError: string | null;
 				loadMore: () => Promise<void>;
+				/** Drops the connection and brings it back, as a phone does. */
+				reconnect: () => Promise<void>;
 			} = {
 				messages: [],
 				hasMoreHistory: false,
+				isLoadingMore: false,
 				historyError: null,
 				loadMore: async () => {},
+				reconnect: async () => {},
 			};
 			function PageProbe() {
 				const chat = useChatMessages({ sessionId: "s1" });
 				state.messages = chat.messages;
 				state.hasMoreHistory = chat.hasMoreHistory;
+				state.isLoadingMore = chat.isLoadingMoreHistory;
 				state.historyError = chat.historyError;
 				state.loadMore = chat.loadMoreHistory;
 				return null;
 			}
-			render(<PageProbe />);
+			const { rerender } = render(<PageProbe />);
+			// The mocked store hands out whatever `status` says at read time and
+			// notifies nobody, so the re-render that lets the subscription see the
+			// change has to be asked for.
+			state.reconnect = async () => {
+				for (const status of ["reconnecting", "connected"]) {
+					mockState.status = status;
+					await act(async () => {
+						rerender(<PageProbe />);
+					});
+				}
+			};
 			return state;
 		}
 
@@ -492,6 +514,50 @@ describe("useChatMessages", () => {
 				},
 			}));
 		}
+
+		// A phone reconnects mid-page as a matter of course, and the request it
+		// interrupts learns it no longer speaks for this transcript and so skips
+		// its own clean-up. Whatever the reconnect does not reset stays set for
+		// good: the spinner would spin forever, and the transcript — which refuses
+		// to ask while a page is on its way — would never page again.
+		it("leaves paging usable when a reconnect interrupts a page in flight", async () => {
+			subscribeWith([{ type: "text", content: "tail" }]);
+			// The page the reconnect discards: it answers only after the fact.
+			let deliver: (page: unknown) => void = () => {};
+			mockState.chatMessagesHistory.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						deliver = resolve;
+					}),
+			);
+
+			const state = renderPager();
+			await waitFor(() => expect(state.hasMoreHistory).toBe(true));
+			act(() => {
+				state.loadMore();
+			});
+			await waitFor(() => expect(state.isLoadingMore).toBe(true));
+
+			await state.reconnect();
+			await act(async () => {
+				deliver({ history: [], has_more: false });
+			});
+
+			expect(state.isLoadingMore).toBe(false);
+
+			// And the next page is asked for rather than refused.
+			mockState.chatMessagesHistory.mockResolvedValue({
+				history: [{ type: "message", content: "Earlier question" }],
+				has_more: false,
+			});
+			await act(async () => {
+				await state.loadMore();
+			});
+			expect(state.messages[0]).toMatchObject({
+				role: "user",
+				content: "Earlier question",
+			});
+		});
 
 		it("asks for the page the server pointed at, not one it worked out itself", async () => {
 			// The page starts on a record with no seq of its own, so a cursor
