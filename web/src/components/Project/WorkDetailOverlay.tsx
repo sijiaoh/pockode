@@ -5,6 +5,7 @@ import {
 	Loader2,
 	MessageSquare,
 	Pencil,
+	Plus,
 	Trash2,
 	X,
 } from "lucide-react";
@@ -13,7 +14,7 @@ import TextareaAutosize from "react-textarea-autosize";
 import { useInlineEdit } from "../../hooks/useInlineEdit";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
 import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription";
-import { type Activity, needsUser } from "../../lib/activity";
+import type { Activity } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -21,19 +22,20 @@ import type { AgentRole } from "../../types/agentRole";
 import type { Comment, Work, WorkListItem, WorkType } from "../../types/work";
 import { formatStepCount, getStepProgress } from "../../utils/workSteps";
 import { MarkdownContent } from "../Chat/MarkdownContent";
-import { ActivityBadge, ActivityIcon } from "../ui";
+import { ActivityBadge } from "../ui";
 import BackButton from "../ui/BackButton";
 import BottomActionBar from "../ui/BottomActionBar";
 import { WorktreeBadge } from "../Worktree";
-import CreateWorkForm from "./CreateWorkForm";
+import CreateWorkSheet from "./CreateWorkSheet";
 import StepList from "./StepList";
-import WorkPrimaryAction, {
+import {
 	ACTION_ICON,
 	ACTION_LABEL,
 	countActiveChildren,
 	StopConfirm,
 	useWorkCommand,
 } from "./WorkPrimaryAction";
+import WorkRow from "./WorkRow";
 import WorkUsageSection from "./WorkUsageSection";
 
 interface Props {
@@ -208,7 +210,7 @@ function ActionBar({
 		confirmed,
 		cancel,
 	} = useWorkCommand(
-		{ id: work.id, status: work.status, activity },
+		{ id: work.id, status: work.status, activity, title: work.title },
 		countActiveChildren(tasks),
 	);
 	const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -633,6 +635,18 @@ function ChildrenSection({
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }) {
+	const [addingTask, setAddingTask] = useState(false);
+	// Created, then landed on: a task with a title and no brief is a task no
+	// agent can do, and the brief is written on the page this opens
+	// (docs/project-ui.md §4).
+	const handleCreated = useCallback(
+		(workId: string) => {
+			setAddingTask(false);
+			onOpenWorkDetail(workId);
+		},
+		[onOpenWorkDetail],
+	);
+
 	const closedTasks = tasks.filter((t) => t.status === "closed").length;
 	// The active count is what makes a rejected `step_done` legible without a
 	// second explanation: a story that will not finish says here how many
@@ -660,69 +674,42 @@ function ChildrenSection({
 			) : (
 				<div className="space-y-0.5">
 					{tasks.map((child) => (
-						<ChildRow
+						// The same row the project list draws, minus its parent slot:
+						// every row here is a task of the story on screen
+						// (docs/project-ui.md §3.1). Under the Tasks heading, so `h4`.
+						<WorkRow
 							key={child.id}
 							work={child}
-							roleNameMap={roleNameMap}
-							onOpenWorkDetail={onOpenWorkDetail}
-							onNavigateToSession={onNavigateToSession}
+							roleName={
+								child.agent_role_id
+									? roleNameMap.get(child.agent_role_id)
+									: undefined
+							}
+							headingLevel={4}
+							onOpen={onOpenWorkDetail}
+							onOpenChat={onNavigateToSession}
 						/>
 					))}
 				</div>
 			)}
 			<div className="mt-1">
-				<CreateWorkForm type="task" parentId={storyId} />
-			</div>
-		</div>
-	);
-}
-
-function ChildRow({
-	work,
-	roleNameMap,
-	onOpenWorkDetail,
-	onNavigateToSession,
-}: {
-	work: WorkListItem;
-	roleNameMap: Map<string, string>;
-	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string, worktree: string) => void;
-}) {
-	const roleName = work.agent_role_id
-		? (roleNameMap.get(work.agent_role_id) ?? null)
-		: null;
-	// Warning for any of the three ways a task can be waiting on the user, error
-	// for one the engine has let go of (docs/lifecycle-ui.md §6.1).
-	const isNeedsUser = needsUser(work.activity);
-	const isStopped = work.status === "stopped";
-
-	return (
-		<div
-			className={`group flex min-h-[44px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsUser ? "border-l-2 border-th-warning bg-th-warning/5" : isStopped ? "border-l-2 border-th-error bg-th-error/5" : ""}`}
-		>
-			<ActivityIcon activity={work.activity} />
-			<button
-				type="button"
-				onClick={() => onOpenWorkDetail(work.id)}
-				className="min-w-0 flex-1 truncate text-left text-sm text-th-text-primary hover:text-th-accent"
-			>
-				{work.title}
-			</button>
-			<span className="shrink-0 text-xs text-th-text-muted">
-				{roleName ?? "—"}
-			</span>
-			{work.session_id && (
 				<button
 					type="button"
-					onClick={() =>
-						onNavigateToSession(work.session_id ?? "", work.worktree ?? "")
-					}
-					className="flex min-h-[44px] shrink-0 items-center rounded-lg px-2 text-xs text-th-accent hover:bg-th-bg-tertiary"
+					onClick={() => setAddingTask(true)}
+					className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
 				>
-					Chat
+					<Plus className="size-4" />
+					Add Task
 				</button>
+			</div>
+			{addingTask && (
+				<CreateWorkSheet
+					type="task"
+					parentId={storyId}
+					onClose={() => setAddingTask(false)}
+					onCreated={handleCreated}
+				/>
 			)}
-			<WorkPrimaryAction work={work} iconOnly />
 		</div>
 	);
 }

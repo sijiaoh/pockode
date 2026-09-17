@@ -19,12 +19,19 @@ vi.mock("../Chat/MarkdownContent", () => ({
 	MarkdownContent: ({ content }: { content: string }) => <div>{content}</div>,
 }));
 
-vi.mock("./CreateWorkForm", () => ({
-	default: () => <div data-testid="create-work-form" />,
+// The sheet has its own tests; here it stands for "the create flow answered
+// with an id", which is the wiring this screen owns.
+vi.mock("./CreateWorkSheet", () => ({
+	default: ({ onCreated }: { onCreated: (workId: string) => void }) => (
+		<button type="button" onClick={() => onCreated("new-task")}>
+			Pretend to create
+		</button>
+	),
 }));
 
 vi.mock("../Worktree", () => ({
 	WorktreeBadge: () => null,
+	useWorktreeBadgeVisible: () => false,
 }));
 
 const createWork = (overrides: Partial<Work> = {}): Work => ({
@@ -194,8 +201,114 @@ describe("WorkDetailOverlay", () => {
 			screen.getByRole("heading", { name: "Tasks (0/1)" }),
 		).toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: "Wire it up" }));
+		// The shared row names its work and its state in one breath.
+		await user.click(screen.getByRole("button", { name: "Wire it up — Open" }));
 		expect(onOpenWorkDetail).toHaveBeenCalledWith("task-1");
+	});
+
+	// §4: a task lands on its own page too, where its brief gets written.
+	it("lands on the new task's detail page after adding one", async () => {
+		const user = userEvent.setup();
+		const onOpenWorkDetail = vi.fn();
+		mockUseWorkDetailSubscription.mockReturnValue({
+			work: createWork(),
+			activity: "idle",
+			comments: [],
+			loading: false,
+			error: null,
+		});
+
+		render(
+			<WorkDetailOverlay
+				workId="work-1"
+				onBack={vi.fn()}
+				onNavigateToSession={vi.fn()}
+				onOpenWorkDetail={onOpenWorkDetail}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Add Task" }));
+		await user.click(screen.getByRole("button", { name: "Pretend to create" }));
+
+		expect(onOpenWorkDetail).toHaveBeenCalledWith("new-task");
+		expect(
+			screen.queryByRole("button", { name: "Pretend to create" }),
+		).toBeNull();
+	});
+
+	// §8 check 6. Back has one job — undo the step that got here — and the step
+	// differs by what opened the page: a story is reached from the list, a task
+	// from its story's Tasks section. It was already right before the rewrite and
+	// nothing asserted it, which is the shape of thing a rewrite drops.
+	describe("going back", () => {
+		it("leaves a story for the project list", async () => {
+			const user = userEvent.setup();
+			const onBack = vi.fn();
+			const onOpenWorkDetail = vi.fn();
+			mockUseWorkDetailSubscription.mockReturnValue({
+				work: createWork(),
+				activity: "idle",
+				comments: [],
+				loading: false,
+				error: null,
+			});
+
+			render(
+				<WorkDetailOverlay
+					workId="work-1"
+					onBack={onBack}
+					onNavigateToSession={vi.fn()}
+					onOpenWorkDetail={onOpenWorkDetail}
+				/>,
+			);
+
+			await user.click(screen.getByRole("button", { name: "Back to project" }));
+			expect(onBack).toHaveBeenCalled();
+			expect(onOpenWorkDetail).not.toHaveBeenCalled();
+		});
+
+		it("leaves a task for the story it belongs to", async () => {
+			const user = userEvent.setup();
+			const onBack = vi.fn();
+			const onOpenWorkDetail = vi.fn();
+			useWorkStore.setState({
+				works: [
+					{
+						id: "story-1",
+						type: "story",
+						agent_role_id: "role-1",
+						title: "Cluster mode",
+						status: "active",
+						activity: "running",
+						updated_at: "2026-03-04T00:00:00Z",
+					},
+				],
+				isLoading: false,
+				error: null,
+			});
+			mockUseWorkDetailSubscription.mockReturnValue({
+				work: createWork({ type: "task", parent_id: "story-1" }),
+				activity: "idle",
+				comments: [],
+				loading: false,
+				error: null,
+			});
+
+			render(
+				<WorkDetailOverlay
+					workId="work-1"
+					onBack={onBack}
+					onNavigateToSession={vi.fn()}
+					onOpenWorkDetail={onOpenWorkDetail}
+				/>,
+			);
+
+			await user.click(
+				screen.getByRole("button", { name: "Back to parent story" }),
+			);
+			expect(onOpenWorkDetail).toHaveBeenCalledWith("story-1");
+			expect(onBack).not.toHaveBeenCalled();
+		});
 	});
 
 	// Usage rides on the detail subscription rather than on Work, so this is also

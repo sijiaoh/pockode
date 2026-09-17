@@ -6,25 +6,45 @@ import { isWorktreeBound, useWorkStore } from "../../lib/workStore";
 import { useIsGitRepo } from "../../lib/worktreeStore";
 import type { WorkListItem } from "../../types/work";
 
+/** What the badge reads off a work: its worktree, and whether that is settled. */
+export type WorktreeBadgeWork = Pick<
+	WorkListItem,
+	"id" | "parent_id" | "status" | "worktree"
+>;
+
 interface Props {
 	/** The work whose worktree assignment is shown. */
-	work: Pick<WorkListItem, "id" | "parent_id" | "status" | "worktree">;
+	work: WorktreeBadgeWork;
 	/** Extra classes for layout, e.g. `max-w-*` in dense list rows. */
 	className?: string;
 }
 
-function WorktreeBadge({ work, className }: Props) {
-	const { worktree } = work;
+/**
+ * Whether the badge renders anything at all for this work.
+ *
+ * Exported because a meta line that separates its parts has to know which parts
+ * there are before it draws the separators, and a caller re-deriving these two
+ * conditions is a caller that drifts from them.
+ */
+export function useWorktreeBadgeVisible(work: WorktreeBadgeWork): boolean {
 	const isGitRepo = useIsGitRepo();
-	const { displayName, isMain } = useWorktreeDisplay(worktree);
+	const { isMain } = useWorktreeDisplay(work.worktree);
 	const isBound = useWorkStore((s) => isWorktreeBound(s.works, work));
 
 	// A worktree that the backend can still rewrite would be misleading to show,
 	// so an undecided binding renders nothing rather than a provisional name.
-	if (!isBound) return null;
+	if (!isBound) return false;
 
 	// Non-git projects have no worktree concept, so the main badge is just noise.
-	if (isMain && !isGitRepo) return null;
+	return !(isMain && !isGitRepo);
+}
+
+function WorktreeBadge({ work, className }: Props) {
+	const { worktree } = work;
+	const { displayName, isMain } = useWorktreeDisplay(worktree);
+	const visible = useWorktreeBadgeVisible(work);
+
+	if (!visible) return null;
 
 	const label = isMain ? "Open main worktree" : `Open worktree ${displayName}`;
 
@@ -46,6 +66,11 @@ function WorktreeBadge({ work, className }: Props) {
 
 	// The dense meta rows only leave ~20px of visible height, so the transparent
 	// `before` pseudo-element expands the vertical hit target to WCAG's ≥44px.
+	// It is absolutely positioned inside this element, so a caller that clips —
+	// `WorkRow`'s meta line does, to truncate its slots from the right — gets the
+	// box height and not the 44. That is the caller's call to make: the reach
+	// leaves this element's own box, and only the caller knows what it lands on
+	// (docs/responsive-ui.md, blind spot 9).
 	return (
 		<Link
 			to={to}

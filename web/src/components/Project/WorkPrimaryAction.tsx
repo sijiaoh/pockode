@@ -77,8 +77,16 @@ export function countActiveChildren(children: WorkListItem[]): number {
 	return children.filter((child) => child.status === "active").length;
 }
 
-/** The part of a work a command needs: what to do to it, and what that costs. */
-export type CommandableWork = Pick<WorkListItem, "id" | "status" | "activity">;
+/**
+ * The part of a work a command needs: what to do to it, what that costs, and
+ * which work it is — the icon-only button says the last of those out loud,
+ * because a screen reader walking a list meets a column of identical verbs
+ * otherwise (docs/project-ui.md §3).
+ */
+export type CommandableWork = Pick<
+	WorkListItem,
+	"id" | "status" | "activity" | "title"
+>;
 
 /**
  * The work's primary command, from the button being pressed to the command
@@ -165,19 +173,21 @@ interface Props {
 	work: CommandableWork;
 	/** How many of its children are still active; 0 for a task. */
 	activeChildCount?: number;
-	/** A row has no room for a label; a story's meta line has. */
-	iconOnly?: boolean;
 }
 
 /**
- * The row's primary action: one button, whichever of the four the status calls
- * for. The detail page writes its own, wider, one — it sits beside Open Chat and
- * Delete there — from the same hook.
+ * The row's primary action: one icon button, whichever of the four the status
+ * calls for. The detail page writes its own, wider, labelled one — it sits
+ * beside Open Chat and Delete there — from the same hook.
+ *
+ * Icon-only on every row, whatever the row is and whichever group it is in
+ * (docs/lifecycle-ui.md §3): a control that wears a word in one group and a
+ * glyph in another is a control the user has to look for. It is why this states
+ * a box on both axes rather than leaving its height to a label.
  */
 export default function WorkPrimaryAction({
 	work,
 	activeChildCount = 0,
-	iconOnly,
 }: Props) {
 	const { action, busy, error, activate, confirm, confirmed, cancel } =
 		useWorkCommand(work, activeChildCount);
@@ -196,36 +206,25 @@ export default function WorkPrimaryAction({
 
 	return (
 		<>
-			{iconOnly ? (
-				<button
-					type="button"
-					onClick={handleClick}
-					disabled={busy}
-					className={`flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center disabled:opacity-50 ${error || danger ? "text-th-error" : "text-th-accent"}`}
-					aria-label={error ?? ACTION_LABEL[action]}
-				>
-					{busy ? (
-						<Loader2 className="size-3.5 animate-spin" />
-					) : (
-						<Icon className="size-3.5" />
-					)}
-				</button>
-			) : (
-				<button
-					type="button"
-					onClick={handleClick}
-					disabled={busy}
-					className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs disabled:opacity-50 ${error || danger ? "border border-th-error bg-th-error/10" : "border border-th-accent bg-th-accent/10"} text-th-text-primary`}
-					aria-label={error ?? undefined}
-				>
-					{busy ? (
-						<Loader2 className="size-3 animate-spin" />
-					) : (
-						<Icon className="size-3" />
-					)}
-					{error ? "Error" : ACTION_LABEL[action]}
-				</button>
-			)}
+			<button
+				type="button"
+				onClick={handleClick}
+				disabled={busy}
+				className={`flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center disabled:opacity-50 ${error || danger ? "text-th-error" : "text-th-accent"}`}
+				aria-label={error ?? `${ACTION_LABEL[action]} "${work.title}"`}
+				// A glyph has nowhere to print the failure, and the colour only says
+				// that there was one. The label carries it to a screen reader and
+				// this carries it to a pointer; the work's own page, where the same
+				// command writes its error out in full, is the route that needs
+				// neither.
+				title={error ?? undefined}
+			>
+				{busy ? (
+					<Loader2 className="size-3.5 animate-spin" />
+				) : (
+					<Icon className="size-3.5" />
+				)}
+			</button>
 			{confirm && (
 				<StopConfirm
 					message={confirm}

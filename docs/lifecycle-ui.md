@@ -411,10 +411,12 @@ aimed, and what they are about to lose depends on what is happening.
 
 Same table for the list and the detail page, out of one implementation
 (`primaryAction(status)`); only the shape differs with the room available. The
-detail page renders labels in `BottomActionBar`; a task row and a story's child
-rows render the button icon-only; a **story** row keeps the labelled chip Start
-has always had there, because its meta row has space for the word. Both shapes
-are held to the hit-area floors, by different halves of the rule (§10).
+detail page renders labels in `BottomActionBar`; **every work row renders the
+button icon-only, whatever the row is and whichever group it is in**
+([project-ui.md §3](project-ui.md#3-the-row)) — a control that wears a word in
+one group and a glyph in another is a control the user has to look for, and the
+row's second line holds facts rather than actions. Both shapes are held to the
+hit-area floors, by different halves of the rule (§10).
 `Start` and `Restart` are the same control
 with two labels, as today — the label is the honest difference, since one starts
 a fresh session and the other resumes a kept one.
@@ -453,8 +455,14 @@ needs_message`.
 | Surface | Condition |
 |---|---|
 | ProjectTab | any work in the list satisfies `needsUser` |
-| Story row | the story satisfies `needsUser`, or any of its tasks does |
 | Session row | the row's own activity (it *is* the leaf) — §2.1 |
+
+A work row carries **no** dot, and the story row's child rollup is gone with it
+([project-ui.md §3](project-ui.md#3-the-row)): a task that needs the user now
+has a row of its own in *Needs you*, so both halves of what the dot used to
+roll up are already on screen beside the story, and a dot would point at them.
+The ProjectTab dot is untouched, because it is read when the list is *not* on
+screen — which is the whole reason it exists.
 
 Deliberately outside the dot:
 
@@ -464,7 +472,9 @@ Deliberately outside the dot:
 - **`stopped`.** A stopped work needs a human, but it needs one *whenever the
   human gets to it*; a dot that only clears when someone restarts every stale
   work is permanent, and a permanent dot is not a signal. Stopped work is found
-  through its own list group, which is ordered above `open` for that reason.
+  through the list's *Not running* group, which is also why that group and not
+  *Needs you* is where it sits
+  ([project-ui.md §2.3](project-ui.md#23-three-groups-and-why-three)).
 
 ## 5. Expiry
 
@@ -594,37 +604,32 @@ distinction in a colour that neither card can afford to shout in.
 
 ### 6.1 List grouping
 
-Stories are grouped; tasks stay nested under their story exactly as today, so a
-task never leaves its parent to join a group of its own.
+Which groups the list has, which work gets a row and what a row holds is
+[project-ui.md §2](project-ui.md#2-the-project-screen), which owns the project
+page's information architecture. Only the part that is about *this* vocabulary
+is here.
 
-Five groups, in this order, each headed by a glyph and a label the way today's
-status groups are headed:
+**Grouping reads `status` plus the single `needsUser` predicate — never the full
+`Activity`.** A list that regrouped on every phase change would reorder itself
+while being read. A work moving in or out of *Needs you* is the one movement
+worth the disruption, since it is the one the user is waiting for. That one
+predicate is also enough to draw the whole list: the three groups are "is an
+engine driving this work, and if it is, is it blocked on the user", and the
+archive is `status == closed` and lives in its own segment rather than a group.
+*Needs you* is first, where the old status order put `in_progress` first: a list
+of work is a list of things to do, and the things needing a person come before
+the things running by themselves.
 
-| Group | Contains | Header glyph | Why here |
-|---|---|---|---|
-| Needs you | `status == active` and `needsUser(activity)` | `CirclePause` warning | the only group with a task for the user |
-| Active | every other `active` work | `CircleDot` accent | running, background, waiting, idle |
-| Stopped | `status == stopped` | `CircleStop` error | a human must act, but not now |
-| Open | `status == open` | `Circle` muted | not started |
-| Closed | `status == closed` | `CircleCheck` muted | sorted newest-first, collapsed by default, as today |
+**A group heading's glyph is fixed per group, not taken from the rows inside
+it.** *Needs you* holds three different leaves, and a heading that borrowed one
+of them would mislabel the other two. It is drawn `decorative` for the same
+reason — the written label is the honest name of the group. The rows keep their
+own precise leaf, which is where the distinction belongs.
 
-A header glyph is fixed per group, not taken from the rows inside it: *Needs you*
-holds three different leaves and a header that borrowed one of them would
-mislabel the other two. The rows keep their own precise leaf, which is where the
-distinction belongs.
-
-Grouping is by `status` plus the single `needsUser` predicate — never by the full
-`Activity`. A list that regrouped on every phase change would reorder itself
-while being read. A work moving between *Needs you* and *Active* is the one
-movement worth the disruption, since it is the one the user is waiting for.
-"Needs you" is first, where the old status order put `in_progress` first: a list of
-work is a list of things to do, and the things needing a person come before the
-things running by themselves.
-
-Within a row, nothing changes but the vocabulary: `StatusIcon` → `ActivityIcon`,
-`statusLabels[...]` → `ACTIVITY_VIEW[...].label` in the `aria-label`, and the
-task row's left bar keys off the new leaves — warning for any `needsUser` leaf,
-error for `stopped`, none otherwise (today: `needs_input`, `stopped`).
+Within a row the vocabulary is the row's own: `ActivityIcon` for the glyph,
+`ACTIVITY_VIEW[...].label` in the title's `aria-label` and in the row's first
+meta slot, and the left accent bar keyed off the leaves — warning for any
+`needsUser` leaf, error for `stopped`, none otherwise.
 
 ### 6.2 Detail page
 
@@ -775,7 +780,7 @@ a user who stopped one subtask restart two things.
 | Work closed while a question is pending | question → `cancelled`, reason `work_closed` (§5.1); the card explains it rather than sitting pending forever |
 | Server restart with a blocked turn | blockers expire on process death and are written to history, so on reconnect the cards read Expired and the composer is live |
 | `activity` the client does not know | normalised to `idle` at the wire boundary; an unknown state must not blank a row |
-| Story with children in several activities | the story shows its *own* activity; the rollup dot is the only thing children contribute to a story row |
+| Story with children in several activities | the story shows its *own* activity. What children contribute to a story row is counts, not a state: "{n} active" and "{closed}/{total} tasks" in its meta line |
 | Answer pressed on a card that expired a moment ago | the RPC fails with the server's own reason ("this request is no longer waiting for an answer"); the card flips to Expired with §5's banner and the error is shown inline under the buttons. A question card is then answerable again as a message, a permission card is not — the same two outcomes, reached a second later. The refusal is the session's turn speaking: a prompt it no longer lists as a blocker cannot be answered, which also covers an answer that arrives after another client's |
 | Session deleted while its work is `active` | the work moves to `stopped`. The delete confirmation says so: "Delete "{title}"? The work "{work}" will stop." — a session delete that silently stops work is the kind of silent failure this project forbids |
 | Work closed while its turn is still finishing (grace: 2 minutes) | the work row reads `Closed` immediately while its session row may still read `Running` for the length of the grace period. That is two layers telling the truth about themselves, not a contradiction: the engine has let go, the process has not finished speaking. Nothing waits for the other before it updates |
@@ -807,12 +812,10 @@ controls are what they will land on:
 - **Hit areas.** The blocker strip's trailing action ("Jump to question",
   "Details") and the list row's Restart button are interactive and must clear
   the floor in [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing).
-  The row's button is icon-only wherever it has no room for a label, so it owes
-  a box on both axes; the story row's labelled chip owes only its height, and is
-  the register's existing entry for "the labelled Start chip whose icon-only twin
-  above it is 44". The strip's action carries text, so it too owes only the
-  height — `touch-target` over a `text-xs` line, the way the pending question
-  pill does it.
+  The row's button is icon-only on every row (§3), so it owes a box on both
+  axes and never appears in the register's deferred list at all. The strip's
+  action carries text, so it too owes only the height — `touch-target` over a
+  `text-xs` line, the way the pending question pill does it.
 - **Indicators are not controls.** `ActivityIcon` and `ActivityDot` render no
   button and take no handler anywhere in this design; a 12px glyph that could be
   tapped is a 12px glyph somebody will try to tap.
@@ -837,9 +840,10 @@ controls are what they will land on:
 | `web/src/components/Chat/AskUserQuestionItem.tsx` | expired stays answerable; "Send as message"; three banners |
 | `web/src/components/Chat/MessageItem.tsx` | permission card's expired banners |
 | `web/src/hooks/useChatMessages.ts` | `isProcessRunning` bookkeeping replaced by §2.4 |
-| `web/src/components/Project/WorkListOverlay.tsx` | five groups, `ActivityIcon`, Restart in the row |
+| `web/src/components/Project/WorkListOverlay.tsx` | the groups of §6.1, headed by a fixed `ActivityIcon` per group |
+| `web/src/components/Project/WorkRow.tsx` | the row itself — `ActivityIcon`, the activity label in its meta line, the icon-only lifecycle control ([project-ui.md §3](project-ui.md#3-the-row)) |
 | `web/src/components/Project/WorkDetailOverlay.tsx` | `ActivityBadge`, wait line, four-status button table |
-| `web/src/components/Project/WorkPrimaryAction.tsx` | new — the four-status table and the Stop confirmation, shared by the row and the action bar. It absorbs `WorkListOverlay`'s exported `StartButton`, which was the second answer to "which button does this row get" |
+| `web/src/components/Project/WorkPrimaryAction.tsx` | new — the four-status table and the Stop confirmation. The row renders it; the action bar writes its own labelled button from the same hook and tables, which is why this has no labelled form of its own. It absorbs `WorkListOverlay`'s exported `StartButton`, which was the second answer to "which button does this row get" |
 | `web/src/components/Project/StepList.tsx` | §6.3 |
 | `web/src/components/Project/ProjectTab.tsx` | dot from `needsUser` |
 | `web/src/utils/systemMessage.ts` | the `wait_stranded` work event (§7.2), laid out like `child_done` |
@@ -849,8 +853,9 @@ controls are what they will land on:
 
 The work surfaces are on this vocabulary now. Rows, group headers and the detail
 heading all read an `Activity` and nothing else; `StatusIcon.tsx` and
-`StatusBadge.tsx` are gone, the list has the five groups of §6.1, and
-`ACTIVITY_VIEW` carries the `label` the badge and the rows' `aria-label` write.
+`StatusBadge.tsx` are gone, the list groups on `status` plus `needsUser` and
+nothing wider (§6.1), and `ACTIVITY_VIEW` carries the `label` the badge and the
+rows' `aria-label` write.
 Which buttons exist is `primaryAction(status)` in
 `web/src/components/Project/WorkPrimaryAction.tsx` — one table, one
 implementation, used by the icon-only button on a row and by the detail page's
