@@ -42,6 +42,14 @@ func (n *captureNotifier) last() json.RawMessage {
 	return n.params[len(n.params)-1]
 }
 
+func (n *captureNotifier) all() []json.RawMessage {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := make([]json.RawMessage, len(n.params))
+	copy(out, n.params)
+	return out
+}
+
 type mockWorkStore struct {
 	mu    sync.Mutex
 	works []work.Work

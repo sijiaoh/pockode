@@ -20,7 +20,13 @@ type Subscription struct {
 	// subscribers each watch one item instead of a whole list: a work_id for
 	// WorkDetailWatcher, a session_id for SessionDetailWatcher. Empty on list
 	// watchers, which notify every subscriber.
-	Key      string
+	Key string
+	// Filter is the narrowing this subscriber asked for, in whatever shape the
+	// watcher that created the subscription defines — it is the only thing that
+	// reads it. Held here rather than in a map beside the watcher so that a
+	// filter cannot outlive, or go missing before, the subscription it belongs
+	// to. Nil is "everything", which is every watcher that offers no filter.
+	Filter   any
 	Notifier Notifier
 }
 
@@ -131,18 +137,26 @@ func (b *BaseWatcher) NotifyForKey(key, method string, makeParams func(sub *Subs
 	}
 }
 
+// NotifyAll sends one notification per subscription and reports how many went
+// out. makeParams may return nil for a subscriber this change is not news to —
+// a watcher whose subscribers asked for different narrowings of one list — which
+// sends it nothing rather than an empty notification.
 func (b *BaseWatcher) NotifyAll(method string, makeParams func(sub *Subscription) any) int {
-	subs := b.GetAllSubscriptions()
-	for _, sub := range subs {
+	sent := 0
+	for _, sub := range b.GetAllSubscriptions() {
 		params := makeParams(sub)
+		if params == nil {
+			continue
+		}
 		n := Notification{Method: method, Params: params}
 		if err := sub.Notifier.Notify(b.ctx, n); err != nil {
 			slog.Debug("failed to notify subscriber",
 				"id", sub.ID,
 				"error", err)
 		}
+		sent++
 	}
-	return len(subs)
+	return sent
 }
 
 func (b *BaseWatcher) Context() context.Context { return b.ctx }

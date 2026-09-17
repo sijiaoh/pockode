@@ -76,11 +76,3 @@ function findRootWork(works: WorkListItem[], work: WorkNode): WorkNode {
 	}
 	return current;
 }
-
-export function collectWorkSessionIds(works: WorkListItem[]): Set<string> {
-	const ids = new Set<string>();
-	for (const w of works) {
-		if (w.session_id) ids.add(w.session_id);
-	}
-	return ids;
-}

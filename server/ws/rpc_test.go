@@ -146,6 +146,8 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	workEngine.SetSessionTerminator(worktreeManager)
 	workStore.AddOnChangeListener(workEngine)
 	worktreeManager.SetWorkEngine(workEngine)
+	worktreeManager.SetWorkStore(workStore)
+	workStore.AddOnChangeListener(worktreeManager)
 	worktreeManager.AddSessionChangeListener(workEngine)
 	t.Cleanup(workEngine.Stop)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
@@ -1051,6 +1053,65 @@ func TestHandler_SessionListSubscribe(t *testing.T) {
 	}
 }
 
+// The session list answers "which of these belong to work" itself, from the
+// relation stored on the work item. A client used to need the whole work list
+// to know, which made the sidebar wrong for as long as that list was
+// incomplete — and a paged work list is never complete.
+func TestHandler_SessionListSubscribe_RowsCarryTheirWorkID(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	env.getMainWorktree().SessionStore.Create(bgCtx, "plain-chat", session.CreateSpec{})
+	_, workSessionID := startWorkWaiting(t, env, work.WaitNone)
+
+	resp := env.call("session.list.subscribe", rpc.SessionListSubscribeParams{ID: "client-1"})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result rpc.SessionListSubscribeResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	byID := map[string]string{}
+	for _, item := range result.Sessions {
+		byID[item.ID] = item.WorkID
+	}
+	if byID[workSessionID] == "" {
+		t.Errorf("the work's session carries no work id: %+v", result.Sessions)
+	}
+	if byID["plain-chat"] != "" {
+		t.Errorf("a plain chat session carries work id %q", byID["plain-chat"])
+	}
+}
+
+func TestHandler_SessionListSubscribe_ExcludeWorkSessions(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	env.getMainWorktree().SessionStore.Create(bgCtx, "plain-chat", session.CreateSpec{})
+	_, workSessionID := startWorkWaiting(t, env, work.WaitNone)
+
+	resp := env.call("session.list.subscribe", rpc.SessionListSubscribeParams{
+		ID:                  "client-1",
+		ExcludeWorkSessions: true,
+	})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result rpc.SessionListSubscribeResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	if len(result.Sessions) != 1 || result.Sessions[0].ID != "plain-chat" {
+		t.Errorf("expected only the plain chat session, got %+v", result.Sessions)
+	}
+	for _, item := range result.Sessions {
+		if item.ID == workSessionID {
+			t.Errorf("the work's session survived the filter")
+		}
+	}
+}
+
 func TestHandler_SessionDetailSubscribe(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	store := env.getMainWorktree().SessionStore
@@ -1073,6 +1134,40 @@ func TestHandler_SessionDetailSubscribe(t *testing.T) {
 	// in the reply to learn it from.
 	if resp := env.call("session.detail.unsubscribe", unsubscribeParams{ID: "client-1"}); resp.Error != nil {
 		t.Errorf("unsubscribe failed: %s", resp.Error.Message)
+	}
+}
+
+// The session a client has open says which work item it runs — the same fact the
+// row carries, for the session whose row the sidebar filter is hiding.
+func TestHandler_SessionDetailSubscribe_CarriesTheWorkID(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	env.getMainWorktree().SessionStore.Create(bgCtx, "plain-chat", session.CreateSpec{})
+	workID, workSessionID := startWorkWaiting(t, env, work.WaitNone)
+
+	resp := env.call("session.detail.subscribe", rpc.SessionDetailSubscribeParams{ID: "client-1", SessionID: workSessionID})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+	var result rpc.SessionDetailSubscribeResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	if result.Session.WorkID != workID {
+		t.Errorf("work session's detail work_id = %q, want %q", result.Session.WorkID, workID)
+	}
+
+	resp = env.call("session.detail.subscribe", rpc.SessionDetailSubscribeParams{ID: "client-2", SessionID: "plain-chat"})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+	// A fresh value, because work_id is omitted rather than sent empty: decoding
+	// over the previous reply would leave the work session's id standing.
+	var plain rpc.SessionDetailSubscribeResult
+	if err := json.Unmarshal(resp.Result, &plain); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	if plain.Session.WorkID != "" {
+		t.Errorf("plain chat session's detail carries work_id %q, want none", plain.Session.WorkID)
 	}
 }
 

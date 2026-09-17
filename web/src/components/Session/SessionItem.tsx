@@ -1,7 +1,11 @@
 import { GitBranch } from "lucide-react";
 import { memo } from "react";
 import { isWorkActive, sessionActivity } from "../../lib/activity";
-import { useSessionStore } from "../../lib/sessionStore";
+import {
+	selectSessionTitle,
+	selectUnlistedSessionName,
+	useSessionStore,
+} from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
 import type { SessionListItem } from "../../types/message";
 import DeleteButton from "../common/DeleteButton";
@@ -41,16 +45,20 @@ const SessionItem = memo(function SessionItem({
 }: Props) {
 	const forkedFrom = session.forked_from?.session_id;
 	// Resolved against the list rather than copied onto the fork, so a rename
-	// shows through and a parent that is gone reads as gone.
+	// shows through. A parent with no row is not necessarily gone — what may be
+	// said about it is `selectUnlistedSessionName`'s call, not this row's.
 	const parentTitle = useSessionStore((s) =>
-		forkedFrom ? s.sessions.find((x) => x.id === forkedFrom)?.title : undefined,
+		forkedFrom ? selectSessionTitle(forkedFrom)(s) : null,
 	);
+	const unlistedName = useSessionStore(selectUnlistedSessionName);
 
-	// The work list is global and survives worktree switches while the session
-	// list is scoped to one worktree, so this lookup always resolves — never the
-	// other way round.
+	// The row names its own work, so this looks the item up by id rather than
+	// scanning the list for one that names this session: which sessions belong to
+	// work is the server's answer now, and the list is only asked what the item
+	// is waiting for (docs/code/subscription-system.md#which-sessions-belong-to-work).
+	const workId = session.work_id;
 	const work = useWorkStore((s) =>
-		s.works.find((w) => w.session_id === session.id),
+		workId ? s.works.find((w) => w.id === workId) : undefined,
 	);
 	const activity = sessionActivity(session.turn, work);
 	// Only a work the engine is still driving has anything to lose by this.
@@ -71,7 +79,7 @@ const SessionItem = memo(function SessionItem({
 						    than as the row's aria-label, which would replace the whole
 						    name and take the row's own state indicator down with it. */}
 						<span className="sr-only">
-							, forked from {parentTitle ?? "a deleted session"}
+							, forked from {parentTitle ?? unlistedName}
 						</span>
 					</>
 				) : (

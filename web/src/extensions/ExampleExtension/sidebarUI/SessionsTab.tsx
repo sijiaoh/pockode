@@ -13,7 +13,7 @@ export default function SessionsTab() {
 	const { worktree, sessionId: routeSessionId } = useRouteState();
 	const { onClose, isExpanded } = useSidebarContainer();
 	const {
-		filteredSessions,
+		sessions,
 		currentSessionId,
 		isLoading,
 		createSession,
@@ -70,7 +70,7 @@ export default function SessionsTab() {
 					<div className="p-4 text-center text-th-text-muted">Loading...</div>
 				) : (
 					<SessionList
-						sessions={filteredSessions}
+						sessions={sessions}
 						currentSessionId={currentSessionId}
 						onSelectSession={handleSelectSession}
 						onDeleteSession={deleteSession}

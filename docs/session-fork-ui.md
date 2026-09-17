@@ -454,8 +454,20 @@ line (`WorkEventItem`), with a `GitBranch` icon:
 Forked from "Refactor the session store"
 ```
 
-Tapping it navigates to the parent session. If the parent has been deleted, the
-same row renders as plain text, not a button: *"Forked from a deleted session"*.
+Tapping it navigates to the parent session. If the session list has no row for
+the parent, the same row renders as plain text, not a button — there is nowhere
+to go, and offering the tap would promise a session it cannot name.
+
+What it says in that case is the one thing the client is entitled to claim, and
+that depends on the task-session filter (`selectUnlistedSessionName`): with
+nothing hidden, an absent parent *has* been deleted — *"Forked from a deleted
+session"*. With task sessions hidden it has not necessarily, because the list is
+narrowed by the server and a work session is absent from it whether it exists or
+not
+([subscription-system.md](code/subscription-system.md#which-sessions-belong-to-work)).
+A fork of a work session has exactly that for a parent, so the row says only
+*"Forked from a session that is not in the list"*. The same rule spells the
+sidebar row's screen-reader text below.
 
 The transcript's top, not the chat header: the header belongs to the project
 title (`MainContainer title={projectTitle}`), and more to the point, "this

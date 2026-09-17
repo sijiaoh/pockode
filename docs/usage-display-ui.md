@@ -194,10 +194,12 @@ does not shuffle the ones beside it.
 The session has no detail page — its screen is the chat. What it gets instead is
 one more control on the session action bar, the strip that already holds this
 session's engine and mode: **an info button, whose panel is where facts about this
-session live.** Usage is the first of those facts and not the last, which is why
+session live.** Usage is one of those facts and not the only one, which is why
 the button is named after the session and not after tokens: a control labelled
 "usage" would have to be renamed or duplicated the first time anything else
-belongs in there.
+belongs in there — and something else does. A Work section, naming the work item
+this session runs, sits above Usage on the sessions that have one
+([work-system.md](code/work-system.md#session-to-work-navigation)).
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -252,9 +254,9 @@ must see), not a number bolted onto this button.
 **Tapping opens the panel** through `ResponsivePanel`, configured as
 `EngineSelector` configures its own — `title="Session info"`, `triggerRef`,
 `isExpanded` from `useIsExpanded()`, `desktopPosition="left"`,
-`desktopPlacement="above"`, the default `w-72` and the default heights (one
-section needs no more room than the Engine panel's three). It hangs off the same
-bar, so it gets the same drawer-below / dropdown-above treatment.
+`desktopPlacement="above"`, the default `w-72` and the default heights (the
+sections here need no more room than the Engine panel's three). It hangs off the
+same bar, so it gets the same drawer-below / dropdown-above treatment.
 
 Two facts about that container a section has to honour:
 
@@ -285,9 +287,16 @@ Two facts about that container a section has to honour:
 │  Cost                            $3.42     │
 │                                            │
 │ ─────────────────────────────────────────  │
-│  (the next section lands here)              │
+│  (a later section lands here)               │
 └────────────────────────────────────────────┘
 ```
+
+Usage is drawn here alone because this document is about usage, not because it
+is the panel's only section or its first: a Work section sits above it on a
+session a work item drives, and is absent on every other
+([work-system.md](code/work-system.md#session-to-work-navigation)). Order is the
+panel's to own — a section does not know where it sits, which is what keeps that
+true of this one as well.
 
 One section per heading, in the heading style this container already uses — the
 Engine panel's `legend`: `px-3 pt-3 pb-1 text-[11px] font-medium uppercase
@@ -307,9 +316,9 @@ empty state; the panel composes them and owns nothing but the order. That is the
 whole extension contract — a later feature adds a component and one line, and
 touches no usage code.
 
-The heading is there from the start, with one section under it. A lone unlabelled
-block would have to grow a heading later, and the diff that does it would be
-indistinguishable from a redesign.
+Every section wears its heading, the first one included. A lone unlabelled block
+would have to grow a heading the moment a second section arrives, and the diff
+that does it is indistinguishable from a redesign.
 
 Inside the Usage section, three blocks: **Context**, **Session total** with its
 breakdown, **Cost**. Each is a label row with the figure right-aligned; breakdown
@@ -343,7 +352,8 @@ nobody reads `Cache write 0` on an agent that has no cache.
 ### Session states
 
 The button has none: it is always there, always neutral, always opens. Every state
-below is a state of the Usage section inside the panel.
+below is a state of the Usage section inside the panel; the Work section above it
+has its own, and they do not interact — neither section can take the other down.
 
 | State | Usage section |
 | --- | --- |

@@ -24,7 +24,7 @@ func TestSessionListItemCarriesNoUsage(t *testing.T) {
 		},
 	}
 
-	row, err := json.Marshal(NewSessionListItem(meta))
+	row, err := json.Marshal(NewSessionListItem(meta, ""))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestSessionListItemCarriesNoUsage(t *testing.T) {
 // change, how it gets them live.
 func TestSessionDetailCarriesUsage(t *testing.T) {
 	cost := 0.5
-	result, err := json.Marshal(SessionDetailSubscribeResult{Session: session.SessionMeta{
+	result, err := json.Marshal(SessionDetailSubscribeResult{Session: NewSessionDetail(session.SessionMeta{
 		ID: "sess-1",
 		Usage: session.Usage{
 			TokenUsage:    session.TokenUsage{InputTokens: 1234, OutputTokens: 56},
@@ -49,7 +49,7 @@ func TestSessionDetailCarriesUsage(t *testing.T) {
 			ContextTokens: 9000,
 			ContextWindow: 200000,
 		},
-	}})
+	}, "")})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestSessionListItemCarriesTheTurn(t *testing.T) {
 		},
 	}
 
-	row, err := json.Marshal(NewSessionListItem(meta))
+	row, err := json.Marshal(NewSessionListItem(meta, ""))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

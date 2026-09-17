@@ -1,7 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	selectSessionDetail,
+	selectSessionDetailStatus,
 	useSessionDetailStore,
 } from "../lib/sessionDetailStore";
 import { resetWorktreeStore, worktreeActions } from "../lib/worktreeStore";
@@ -27,13 +29,22 @@ const mockSubscribe = vi.fn(
 	) => {
 		notificationCallback = callback;
 		const session = mockDetails[sessionId];
-		if (!session) throw new Error("session not found");
+		// Refused the way the server refuses it — a written reply carrying
+		// "invalid params" — because that code is the whole of what tells this
+		// hook the refusal is about the session and not about the connection.
+		if (!session) {
+			throw new JSONRPCErrorException(
+				"session not found",
+				JSONRPCErrorCode.InvalidParams,
+			);
+		}
 		return { id: `watch-${sessionId}`, initial: { session } };
 	},
 );
 const mockUnsubscribe = vi.fn();
 
-vi.mock("../lib/wsStore", () => ({
+vi.mock("../lib/wsStore", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/wsStore")>()),
 	useWSStore: vi.fn((selector) => {
 		const state = {
 			status: mockStatus,
@@ -48,6 +59,9 @@ vi.mock("../lib/wsStore", () => ({
 
 const detailOf = (sessionId: string) =>
 	selectSessionDetail(sessionId)(useSessionDetailStore.getState());
+
+const statusOf = (sessionId: string) =>
+	selectSessionDetailStatus(sessionId)(useSessionDetailStore.getState());
 
 describe("useSessionDetailSubscription", () => {
 	beforeEach(() => {
@@ -157,7 +171,7 @@ describe("useSessionDetailSubscription", () => {
 		expect(detailOf("s1")).toBeNull();
 	});
 
-	// A subscribe fails when the session has gone between the list naming it and
+	// A subscribe fails when the session has gone between the route naming it and
 	// this asking about it. Keeping the last snapshot would leave a deleted
 	// session's settings on screen, live-looking and unchangeable.
 	it("holds nothing when the subscribe is refused", async () => {
@@ -167,6 +181,91 @@ describe("useSessionDetailSubscription", () => {
 		renderHook(() => useSessionDetailSubscription("s1"));
 
 		await waitFor(() => expect(detailOf("s1")).toBeNull());
+	});
+
+	// Whether the open session exists is this subscription's answer to give — the
+	// session list cannot, because the task-session filter makes a hidden session
+	// look exactly like a deleted one
+	// (docs/code/subscription-system.md#which-sessions-belong-to-work). The app
+	// shell redirects off a `missing` session, so the three values have to stay
+	// apart.
+	describe("whether the session exists", () => {
+		it("is unknown until the snapshot lands, then settled", async () => {
+			expect(statusOf("s1")).toBe("loading");
+
+			renderHook(() => useSessionDetailSubscription("s1"));
+
+			await waitFor(() => expect(statusOf("s1")).toBe("ready"));
+		});
+
+		it("is missing once the subscribe is refused", async () => {
+			delete mockDetails.s1;
+
+			renderHook(() => useSessionDetailSubscription("s1"));
+
+			await waitFor(() => expect(statusOf("s1")).toBe("missing"));
+		});
+
+		it("is missing once the session is deleted", async () => {
+			renderHook(() => useSessionDetailSubscription("s1"));
+			await waitFor(() => expect(statusOf("s1")).toBe("ready"));
+
+			act(() => {
+				notificationCallback?.({ id: "watch-s1", deleted: true });
+			});
+
+			expect(statusOf("s1")).toBe("missing");
+		});
+
+		// A dropped connection is not news about the session, and reading it as
+		// one would navigate the user off the conversation they were in every
+		// time the socket blinked.
+		it("goes back to unknown, not missing, when the subscription ends", async () => {
+			const { rerender } = renderHook(
+				({ enabled }: { enabled: boolean }) =>
+					useSessionDetailSubscription("s1", enabled),
+				{ initialProps: { enabled: true } },
+			);
+			await waitFor(() => expect(statusOf("s1")).toBe("ready"));
+
+			rerender({ enabled: false });
+
+			expect(statusOf("s1")).toBe("loading");
+		});
+
+		// The socket dying with the subscribe still in flight rejects it exactly
+		// as a refusal does, minus the server's own error code. Reading that as
+		// "gone" would take the user off the conversation they are in every time
+		// the connection blinks — and for a session the sidebar filter hides,
+		// which is every session a work item drives, the list cannot put it back.
+		it("stays unknown when the subscribe fails with the connection", async () => {
+			mockSubscribe.mockRejectedValueOnce(
+				new JSONRPCErrorException("Connection lost", 0),
+			);
+
+			renderHook(() => useSessionDetailSubscription("s1"));
+
+			await waitFor(() => expect(mockSubscribe).toHaveBeenCalled());
+			await new Promise((r) => setTimeout(r, 20));
+			expect(statusOf("s1")).toBe("loading");
+		});
+
+		// A verdict about the session just left says nothing about the one just
+		// opened, and the two are a render apart.
+		it("says nothing about a session it has not been asked about", async () => {
+			delete mockDetails.s1;
+
+			const { rerender } = renderHook(
+				({ id }: { id: string }) => useSessionDetailSubscription(id),
+				{ initialProps: { id: "s1" } },
+			);
+			await waitFor(() => expect(statusOf("s1")).toBe("missing"));
+
+			rerender({ id: "s2" });
+			expect(statusOf("s2")).toBe("loading");
+
+			await waitFor(() => expect(statusOf("s2")).toBe("ready"));
+		});
 	});
 
 	it("unsubscribes on unmount", async () => {

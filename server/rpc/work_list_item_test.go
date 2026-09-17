@@ -48,9 +48,8 @@ func TestWorkListRowCarriesExactlyItsFields(t *testing.T) {
 	// id/type/title/activity draw the row; status decides which buttons exist and
 	// which group the row is in; wait puts it in "Needs you"; parent_id builds
 	// the story-task tree and walks a work up to its root; agent_role_id names
-	// the role; session_id is the Chat shortcut and the session list's work
-	// lookup; worktree is the badge the global list needs; updated_at orders the
-	// closed group.
+	// the role; session_id is the Chat shortcut; worktree is the badge the global
+	// list needs; updated_at orders the closed group.
 	want := []string{
 		"activity", "agent_role_id", "id", "parent_id", "session_id", "status",
 		"title", "type", "updated_at", "wait", "worktree",

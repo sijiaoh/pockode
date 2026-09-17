@@ -29,6 +29,9 @@ type Manager struct {
 	WorktreeWatcher *watch.WorktreeWatcher
 
 	workEngine *work.Engine
+	// workStore is read by every worktree's session list: a row names the work
+	// item its session runs, and that relation lives on the work item.
+	workStore work.Store
 	// sessionChangeListeners are registered on every worktree's session store,
 	// the ones already built and the ones built later.
 	sessionChangeListeners []session.OnChangeListener
@@ -63,6 +66,32 @@ func (m *Manager) Registry() *Registry {
 // this call reports its settled turn endings to it — the engine's main input.
 func (m *Manager) SetWorkEngine(e *work.Engine) {
 	m.workEngine = e
+}
+
+// SetWorkStore installs where a session's work item is looked up. Every worktree
+// built after this call resolves its rows' work ids through it.
+func (m *Manager) SetWorkStore(s work.Store) {
+	m.workStore = s
+}
+
+// OnWorkChange implements work.OnChangeListener: a session names the work item
+// it runs — on its list row and on its detail — and nothing about the session
+// moves when that relation does.
+//
+// Routed through the manager rather than each worktree's watcher registering on
+// the work store itself, because that store is global and keeps its listeners
+// for the life of the process, while worktrees are built and dropped as clients
+// come and go — a watcher registered there would outlive its worktree and hold
+// it alive.
+//
+// Only loaded worktrees are looked at: an unloaded one has no subscribers, so
+// there is nobody to notify, and building it here would defeat the cleanup that
+// unloaded it.
+func (m *Manager) OnWorkChange(event work.ChangeEvent) {
+	if wt, ok := m.loaded(event.Work.Worktree); ok {
+		wt.SessionListWatcher.HandleWorkChange(event)
+		wt.SessionDetailWatcher.HandleWorkChange(event)
+	}
 }
 
 // StopSession implements work.SessionTerminator: a work that stopped has no
@@ -348,8 +377,8 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	fsWatcher := watch.NewFSWatcher(workDir)
 	gitWatcher := watch.NewGitWatcher(workDir)
 	gitDiffWatcher := watch.NewGitDiffWatcher(workDir)
-	sessionListWatcher := watch.NewSessionListWatcher(sessionStore)
-	sessionDetailWatcher := watch.NewSessionDetailWatcher(sessionStore)
+	sessionListWatcher := watch.NewSessionListWatcher(sessionStore, m.workStore)
+	sessionDetailWatcher := watch.NewSessionDetailWatcher(sessionStore, m.workStore)
 	chatMessagesWatcher := watch.NewChatMessagesWatcher(sessionStore)
 	// The process manager's data dir is this worktree's own (wtDataDir), so agent
 	// session state lands next to the session store. MCP discovery still points at

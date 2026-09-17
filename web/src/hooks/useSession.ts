@@ -1,7 +1,10 @@
 import { useMutation } from "@tanstack/react-query";
 import { useCallback, useMemo, useRef } from "react";
+import {
+	selectSessionDetailStatus,
+	useSessionDetailStore,
+} from "../lib/sessionDetailStore";
 import { prependSession, useSessionStore } from "../lib/sessionStore";
-import { collectWorkSessionIds, useWorkStore } from "../lib/workStore";
 import { wsActions } from "../lib/wsStore";
 import type { SessionListItem } from "../types/message";
 import { useSessionSubscription } from "./useSessionSubscription";
@@ -22,22 +25,16 @@ export function useSession({
 	const isReloading = useSessionStore((s) => s.isReloading);
 	const showTaskSessions = useSessionStore((s) => s.showTaskSessions);
 	const updateSessions = useSessionStore((s) => s.updateSessions);
-	const works = useWorkStore((s) => s.works);
-	const { refresh } = useSessionSubscription(enabled);
-
-	const workSessionIds = useMemo(() => collectWorkSessionIds(works), [works]);
-
-	const filteredSessions = useMemo(
-		() =>
-			showTaskSessions
-				? sessions
-				: sessions.filter((s) => !workSessionIds.has(s.id)),
-		[sessions, showTaskSessions, workSessionIds],
-	);
+	// The filter is the server's, so the toggle is a subscription parameter
+	// rather than a predicate applied to what came back. Deciding it here would
+	// mean holding the whole work list to invert it, which makes this list wrong
+	// for as long as that list is incomplete — and a work list that pages is
+	// never complete (docs/code/subscription-system.md#which-sessions-belong-to-work).
+	const { refresh } = useSessionSubscription(enabled, !showTaskSessions);
 
 	const hasAnyUnread = useMemo(
-		() => filteredSessions.some((s) => s.unread),
-		[filteredSessions],
+		() => sessions.some((s) => s.unread),
+		[sessions],
 	);
 
 	const createMutation = useMutation({
@@ -76,21 +73,50 @@ export function useSession({
 	const currentSessionId = routeSessionId ?? null;
 	const currentSession = sessions.find((s) => s.id === currentSessionId);
 
+	// The list no longer answers "does the route's session exist". With the
+	// filter on it is missing every session that belongs to work — and a work's
+	// Chat link points at exactly one of those, so an absence here would read as
+	// "deleted" and bounce the user off the conversation they just opened.
+	// The session's own `session.detail` subscription says so instead, and this
+	// only reads what it left behind: the three fields below, and therefore
+	// `redirectSessionId` and `needsNewSession` with them, are answers for the
+	// caller that holds that subscription. `AppShell` is that caller, and the
+	// only one that reads them; a sidebar does not route.
+	const routeSessionStatus = useSessionDetailStore(
+		selectSessionDetailStatus(currentSessionId),
+	);
+	// A row in the list is proof in itself, and the fast path: a session the
+	// sidebar shows resolves the moment the list lands, without waiting on a
+	// second round trip. Only a session the filter hides pays for one.
+	const isRouteSessionResolved =
+		currentSession !== undefined || routeSessionStatus === "ready";
+	const isRouteSessionMissing =
+		currentSession === undefined && routeSessionStatus === "missing";
+
 	const redirectSessionId = (() => {
 		if (!isSuccess) return null;
-		if (currentSessionId && currentSession) return null;
-		if (filteredSessions.length > 0) return filteredSessions[0].id;
+		// `loading` is not a verdict: leaving the route alone while the session is
+		// still being resolved is what keeps a work session openable.
+		if (currentSessionId && !isRouteSessionMissing) return null;
+		if (sessions.length > 0) return sessions[0].id;
 		return null;
 	})();
 
-	const needsNewSession = isSuccess && sessions.length === 0;
+	// Only when there is nothing to show and nothing to wait for: a worktree
+	// whose every session is hidden by the filter still has the route's session
+	// to open, and creating one behind the user's back would be the filter
+	// inventing sessions.
+	const needsNewSession =
+		isSuccess &&
+		sessions.length === 0 &&
+		(currentSessionId === null || isRouteSessionMissing);
 
 	return {
 		sessions,
-		filteredSessions,
 		hasAnyUnread,
 		currentSessionId,
 		currentSession,
+		isRouteSessionResolved,
 		isLoading,
 		isSuccess,
 		isReloading,

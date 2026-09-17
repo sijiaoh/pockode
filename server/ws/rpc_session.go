@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/watch"
 	"github.com/pockode/server/worktree"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -29,7 +30,9 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 
 	h.log.Info("session created", "sessionId", sessionID)
 
-	result := rpc.NewSessionListItem(sess)
+	// A session created here belongs to no work item: a work's session is created
+	// by the work starter, under the id the work already claimed.
+	result := rpc.NewSessionListItem(sess, "")
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session create response", "error", err)
@@ -50,7 +53,9 @@ func (h *rpcMethodHandler) handleSessionFork(ctx context.Context, conn *jsonrpc2
 	}
 
 	// Not logged here: chat.Client already logged the fork with what it did.
-	result := rpc.NewSessionListItem(meta)
+	// A fork belongs to no work item either: the work still names the session it
+	// was forked from.
+	result := rpc.NewSessionListItem(meta, "")
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session fork response", "error", err)
@@ -266,13 +271,16 @@ func (h *rpcMethodHandler) handleSessionEfforts(ctx context.Context, conn *jsonr
 }
 
 func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
-	id, ok := h.subscriptionID(ctx, conn, req)
-	if !ok {
+	var params rpc.SessionListSubscribeParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
 		return
 	}
 
+	id := params.ID
 	notifier := h.state.getNotifier()
-	sessions, err := wt.SessionListWatcher.Subscribe(id, notifier)
+	filter := watch.SessionListFilter{ExcludeWorkSessions: params.ExcludeWorkSessions}
+	sessions, err := wt.SessionListWatcher.Subscribe(id, notifier, filter)
 	if err != nil {
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to session list")
 		return
@@ -301,7 +309,7 @@ func (h *rpcMethodHandler) handleSessionDetailSubscribe(ctx context.Context, con
 	}
 
 	notifier := h.state.getNotifier()
-	meta, err := wt.SessionDetailWatcher.Subscribe(params.ID, params.SessionID, notifier)
+	detail, err := wt.SessionDetailWatcher.Subscribe(params.ID, params.SessionID, notifier)
 	if err != nil {
 		if h.replySubscriptionIDError(ctx, conn, req.ID, err) {
 			return
@@ -317,7 +325,7 @@ func (h *rpcMethodHandler) handleSessionDetailSubscribe(ctx context.Context, con
 	h.log.Debug("subscribed", "watcher", "session detail", "watchId", params.ID, "sessionId", params.SessionID)
 
 	result := rpc.SessionDetailSubscribeResult{
-		Session: meta,
+		Session: detail,
 	}
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
