@@ -84,8 +84,42 @@ interface ScrollAnchor {
 	messageId: string;
 	offsetTop: number;
 	scrollTop: number;
-	/** The container's height when the page was asked for; see the restore. */
+	/** The container's height when this was last measured; see the restore. */
 	scrollHeight: number;
+	/** Where the anchored row sat in the list; see `madeProgress`. */
+	rowIndex: number;
+}
+
+/**
+ * Pins the view to a row that an incoming page cannot rewrite under it.
+ *
+ * The second row rather than the first: when the older page's last message and
+ * the loaded transcript's first one are two halves of one assistant turn they
+ * are spliced into a single bubble, and that bubble keeps the *first* one's
+ * identity (see `prependHistoryPage`). Holding its top edge still therefore
+ * holds nothing still — the older half grows inside it and pushes everything
+ * the reader was looking at down, which is the jump the anchor exists to
+ * prevent. Only `messages[0]` can be merged into that way, so the row below it
+ * is a fixed point, and holding that one holds the first row's own content
+ * still as well.
+ *
+ * A transcript of one message has no row below it and is pinned to that one
+ * instead. It is also far shorter than the viewport, so there is no view
+ * position for a merge to lose there.
+ */
+function measureAnchor(el: HTMLElement): ScrollAnchor | null {
+	const rows = el.querySelectorAll<HTMLElement>("[data-message-id]");
+	const rowIndex = rows.length > 1 ? 1 : 0;
+	const row = rows[rowIndex];
+	const messageId = row?.dataset.messageId;
+	if (!messageId) return null;
+	return {
+		messageId,
+		offsetTop: row.offsetTop,
+		scrollTop: el.scrollTop,
+		scrollHeight: el.scrollHeight,
+		rowIndex,
+	};
 }
 
 /**
@@ -109,13 +143,18 @@ function restoreToAnchor(el: HTMLElement, anchor: ScrollAnchor): boolean {
  * carries `min-h-full`) and nothing else moves either: the rows sit on the bottom
  * edge (`justify-end`), so a page fills space that was empty above them and
  * leaves every height and offset below it exactly as it was. The only thing that
- * changes there is which message is first — and the anchor was pinned to the one
- * that was, which an empty page leaves in place.
+ * changes there is how many rows sit above the anchored one, which an empty page
+ * leaves alone.
  */
 function madeProgress(el: HTMLElement, anchor: ScrollAnchor): boolean {
 	if (el.scrollHeight > el.clientHeight) return el.scrollTop > anchor.scrollTop;
-	const first = el.querySelector<HTMLElement>("[data-message-id]");
-	return !!first && first.dataset.messageId !== anchor.messageId;
+	const rows = [...el.querySelectorAll<HTMLElement>("[data-message-id]")];
+	// A row that is gone is not progress: the restore fell back to the height the
+	// container gained, which in this branch it gained none of.
+	return (
+		rows.findIndex((row) => row.dataset.messageId === anchor.messageId) >
+		anchor.rowIndex
+	);
 }
 
 function isAtBottom(el: HTMLElement): boolean {
@@ -220,9 +259,10 @@ function MessageList({
 	 * goes on scrolling long after the last `touchmove`.
 	 */
 	const userScrolledRef = useRef(false);
-	// Where the view sat when an older page was asked for, pinned to the message
-	// that was then at the top. A height difference would not do: the agent can
-	// go on writing at the bottom while the page is in flight, and that growth is
+	// Where the view sits over the transcript while an older page is on its way,
+	// pinned to a message (see `measureAnchor`) and re-taken on every scroll until
+	// the page lands. A height difference would not do: the agent can go on
+	// writing at the bottom while the page is in flight, and that growth is
 	// indistinguishable from the growth above that has to be compensated for.
 	const scrollAnchorRef = useRef<ScrollAnchor | null>(null);
 	// The anchor of the page that has landed but not settled yet, kept past the
@@ -333,6 +373,19 @@ function MessageList({
 		const handleScroll = () => {
 			const atBottom = isAtBottom(el);
 			setShowScrollButton(!atBottom);
+			// A page in flight is restored against the view as it is when the page
+			// lands, not as it was when it was asked for. Nothing stops the reader
+			// scrolling in between — a flick that reaches the top asks for the page
+			// and then goes on travelling — and restoring to where that flick started
+			// is a yank backwards over content they have already read past.
+			//
+			// The whole pin is taken again, not just the scroll offset. A late event
+			// can still grow a message above the pinned row while the page is on its
+			// way, and a scroll after that would otherwise pair a fresh offset with a
+			// stale one, counting that growth twice when the page lands. Free to
+			// re-measure here: `isAtBottom` above has already flushed layout, and
+			// nothing between the two writes to the DOM.
+			if (scrollAnchorRef.current) scrollAnchorRef.current = measureAnchor(el);
 			// Only the user's own scrolling moves the intent, because only it *is*
 			// the intent. Every programmatic scroll already carries one, declared
 			// where it is started, and would otherwise overwrite it on arrival: the
@@ -366,25 +419,32 @@ function MessageList({
 		};
 	}, [hasMessages, abandonRestoreWindow]);
 
-	// Every request that actually starts re-pins the anchor, so a page that failed
-	// cannot leave a stale one behind for the retry to restore to. A request that
-	// the hook drops because a page is already in flight must not re-pin: the page
-	// on its way will be restored against the view as it was when it was asked
-	// for, not as it is now.
+	// Every request that starts re-pins the anchor, so a page that failed cannot
+	// leave a stale one behind for the retry to restore to. Nothing is asked for
+	// while a page is in flight or still settling: the page on its way owns the
+	// anchor and would be restored against a view measured after it was asked
+	// for, and a page not yet judged has not earned the next one (see
+	// `closeRestoreWindow`).
+	//
+	// A second gate after the one-page-per-arming one below, because the pin is
+	// what is really being guarded here, not the request. The hook drops a request
+	// of its own accord too — it is already loading, or there is no cursor left —
+	// and a dropped request that had re-pinned on its way in would leave the page
+	// actually in flight restored against a view it was never measured over.
 	const requestOlderPage = useCallback(() => {
+		if (isLoadingMoreRef.current || restoreRef.current) return;
 		const scrollEl = scrollRef.current;
-		const first =
-			contentRef.current?.querySelector<HTMLElement>("[data-message-id]");
-		if (!isLoadingMoreRef.current && scrollEl && first?.dataset.messageId) {
-			scrollAnchorRef.current = {
-				messageId: first.dataset.messageId,
-				offsetTop: first.offsetTop,
-				scrollTop: scrollEl.scrollTop,
-				scrollHeight: scrollEl.scrollHeight,
-			};
-		}
+		if (scrollEl) scrollAnchorRef.current = measureAnchor(scrollEl);
 		onLoadMoreHistory?.();
 	}, [onLoadMoreHistory]);
+
+	// A page that failed never lands, so its anchor has nothing left to be
+	// restored against. Dropping it keeps "an anchor is pending" and "a page is on
+	// its way" the same fact, which is what the scroll handler above re-measures
+	// on; the retry pins a fresh one.
+	useEffect(() => {
+		if (historyError) scrollAnchorRef.current = null;
+	}, [historyError]);
 
 	// Re-created whenever paging is armed again — see `sentinelArmKey` — so a page
 	// that did not fill the viewport still leads to the next one; skipped entirely
@@ -398,7 +458,18 @@ function MessageList({
 
 		const observer = new IntersectionObserver(
 			(entries) => {
-				if (entries[0].isIntersecting) requestOlderPage();
+				if (!entries[0].isIntersecting) return;
+				// One page per arming. Left watching, this observer reports every
+				// later crossing of the top edge too — and the corrections a landing
+				// page makes while it settles move the sentinel across that edge
+				// repeatedly, each crossing asking for a page nothing has judged the
+				// need for. Re-arming is the only way on, and only a restore that got
+				// somewhere re-arms. Safe to drop even when the request below is
+				// refused: whatever refused it — a page in flight, a page still
+				// settling — re-arms or stalls on its own, and a stall ends at the
+				// reader's next gesture.
+				observer.disconnect();
+				requestOlderPage();
 			},
 			{ root: scrollEl, threshold: 0 },
 		);
@@ -410,11 +481,22 @@ function MessageList({
 	// Hold the view still over the messages that were already on screen after an
 	// older page is spliced in above them.
 	const prevTotalCountRef = useRef(totalCount);
+	const prevLoadedPagesRef = useRef(loadedHistoryPages);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: loadedHistoryPages is the trigger — it marks the commit that prepended a page
 	useLayoutEffect(() => {
+		const prevPages = prevLoadedPagesRef.current;
+		prevLoadedPagesRef.current = loadedHistoryPages;
 		const anchor = scrollAnchorRef.current;
 		const el = scrollRef.current;
 		scrollAnchorRef.current = null;
+		// Only a page count that went *up* is a page landing above the view.
+		// Paging can also start over: a reconnect re-subscribes and lands back on
+		// the newest page, replacing the transcript the anchor was measured
+		// against, and restoring against whatever took its place drops the reader
+		// at an offset that means nothing. A session switch cannot get here — this
+		// list is keyed on the session and remounts — so a reconnect is the whole
+		// of it.
+		if (loadedHistoryPages <= prevPages) return;
 		if (!anchor || !el) return;
 
 		// Runs before the follow-the-tail effect below, and tells it this commit
@@ -777,9 +859,16 @@ function MessageList({
 						</div>
 					) : (
 						hasMoreHistory && (
+							// A fixed height, not padding around the spinner: this row sits
+							// above everything the reader is looking at, so growing it as
+							// the spinner appears pushes the whole transcript down — a
+							// jump at the moment paging starts that no restore covers,
+							// because no page has landed yet. Fixed is the whole point,
+							// so nothing here has to track the spinner's size; h-8 is
+							// where that size and the py-2 this row used to add left it.
 							<div
 								ref={sentinelRef}
-								className="flex items-center justify-center py-2"
+								className="flex h-8 items-center justify-center"
 							>
 								{isLoadingMoreHistory && (
 									<Spinner

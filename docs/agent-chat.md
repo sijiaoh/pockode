@@ -156,18 +156,48 @@ Reconnecting re-subscribes and so lands back on the newest page: pages already
 scrolled in are dropped rather than stitched back together, since the cursor
 chain would have to be replayed from the bottom anyway.
 
-Scroll position is held by pinning to the message that was at the top when the
-page was asked for, not by comparing scroll heights before and after — the agent
-can go on writing at the bottom while the page is in flight, and that growth is
-indistinguishable from the growth above that has to be compensated for. Losing
-that message — it can only go missing if the seam above merged it away — is said
-out loud and falls back to the height difference. That fallback is the
-measurement just ruled out, and it is wrong in exactly the way described above:
-anything the agent wrote at the bottom while the page was in flight is counted
-as growth above. It is taken anyway because the alternative is restoring
-nothing, which leaves the view against the sentinel — the one state that asks
-for page after page — and because a view moved too far is a view the reader can
-see has moved.
+Scroll position is held by pinning to a message, not by comparing scroll heights
+before and after — the agent can go on writing at the bottom while the page is in
+flight, and that growth is indistinguishable from the growth above that has to be
+compensated for.
+
+The message pinned to is the *second* one loaded, not the first. The first is the
+one a seam can merge the incoming page into, and the merge keeps its identity,
+the bubble being keyed on it
+([code/frontend-state.md](code/frontend-state.md#turn-boundaries-and-late-events)).
+Holding its top edge still therefore holds nothing still: the older half grows
+*inside* it and carries everything the reader was looking at down the screen,
+which is the jump the pin exists to prevent. Only that one message can be merged
+into, so the one below it is a fixed point, and pinning it holds the first one's
+own content still as well — the older half having gone in above it. A transcript
+of a single message has no row below it and is pinned to that one; it is also far
+shorter than the viewport, so there is no view position there for a merge to
+lose.
+
+The pin is taken again on every scroll until the page lands, rather than once
+when it was asked for. A flick that brings the sentinel into view goes on
+travelling after the request leaves, and restoring to where that flick started is
+a yank backwards over content the reader has already gone past. The row's
+position is re-read along with the view's: a late event can still grow a message
+above it while the page is on its way, and a fresh view offset paired with a
+stale row position charges the restore for that growth twice.
+
+A page count that went *down* is not a page landing. Paging also starts over —
+a reconnect re-subscribes and so lands back on the newest page — and the view the
+pin was measured against is gone by then, so the page still in flight is dropped
+rather than restored against whatever replaced it. Re-subscribing clears "a page
+is loading" with it, the request it discards having learnt by the time it returns
+that it no longer speaks for this transcript and so cleaning up nothing: a flag
+left standing there would leave the transcript refusing to page for good, since
+refusing while a page is on its way is exactly how it stays down to one.
+
+Losing the pinned message is said out loud and falls back to the height
+difference. That fallback is the measurement just ruled out, and it is wrong in
+exactly the way described above: anything the agent wrote at the bottom while
+the page was in flight is counted as growth above. It is taken anyway because
+the alternative is restoring nothing, which leaves the view against the sentinel
+— the one state that asks for page after page — and because a view moved too far
+is a view the reader can see has moved.
 
 The restore is not a single measurement. It is computed the moment the page is
 committed, and what it measures is not final: syntax highlighting, a diagram and
@@ -193,12 +223,33 @@ one page per settled restore. A page that moved nothing, including an empty one
 whose records all rendered to nothing, stops paging where it is and says so; the
 reader's next gesture starts it again, one page at a time.
 
+Each arming buys one request, and the observer is dropped as it fires. Left
+watching, it reports every later crossing of the top edge as well — and the
+corrections a settling page makes carry the sentinel back over that edge again
+and again, so the loop returns in a second form, each correction asking for a
+page nothing judged the need for.
+
+Dropping it is safe rather than final because the request behind it is refused
+outright while a page is in flight or still settling, and each of those states
+ends by arming again or by stalling — a stall the reader's next gesture lifts.
+The refusal is also what keeps the pin single: a page on its way owns it, and
+re-pinning under that page would have it restored against a view measured after
+it was asked for. A page that *fails* gives the pin up instead, never landing to
+be restored against, so "a pin is held" and "a page is on its way" stay the same
+fact — which is the fact the scroll handler above re-measures on.
+
+The sentinel row keeps one height whether or not a page is loading, the spinner
+appearing inside space already reserved for it. The row sits above everything the
+reader is looking at, so growing it pushes the whole transcript down — a jump at
+the moment paging *starts*, which no restore covers, because no page has landed
+to be restored.
+
 "The view moved" is the wrong question in one state, and it is the state every
 short conversation starts in: until the transcript is taller than the viewport
 there is nothing to scroll (the content box is `min-h-full`), so no page can
 move the view however well it restored. There the rule asks instead whether the
-page put anything above the anchor — which an empty page still does not — so the
-filling that gets a short history onto the screen goes on working.
+page put any rows above the pinned one — which an empty page still does not — so
+the filling that gets a short history onto the screen goes on working.
 
 A page that fails replaces the sentinel with the reason and a Retry button, so
 nothing is left to ask for the next page until the user presses it. Saying nothing would
@@ -373,6 +424,12 @@ that covers half of one problem and adds a coordination problem is not a saving.
   doing: the next scroll up asks for the next page. A button for a state that
   should not occur buys a hypothetical with real interface complexity; the
   warning is there for the developer who does reach it.
+- **A page that fails moves the view once.** The sentinel row is held at one
+  height so the spinner cannot push the transcript down, but the row a failure
+  replaces it with carries the reason and a Retry button and is genuinely
+  taller. Reserving that much space for a failure that normally never comes
+  would put a gap above every conversation, and the jump lands on a reader who
+  is being told, in that same row, what just happened.
 - **A tap inside the list during a restore window counts as a gesture.**
   `pointerdown` cannot know in advance whether it will lead to a scroll, so the
   correction is cancelled and paging waits to be asked again. The cost is at
