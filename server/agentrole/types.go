@@ -2,6 +2,7 @@ package agentrole
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/pockode/server/session"
@@ -63,4 +64,26 @@ type ChangeEvent struct {
 // to avoid re-entrant deadlock.
 type OnChangeListener interface {
 	OnAgentRoleChange(event ChangeEvent)
+}
+
+// Steps adapts a Store to the "how many steps does this role define" question,
+// which is the only thing the work layer ever asks of a role. It satisfies
+// work.StepProvider and work.StepCounter structurally, so the work package does
+// not have to import this one.
+type Steps struct {
+	Store Store
+}
+
+// GetSteps returns the role's steps. A role that does not exist is an error and
+// not an empty list: a work whose role has been deleted must not quietly become
+// a stepless one, whose very first step_done would close it.
+func (s Steps) GetSteps(agentRoleID string) ([]string, error) {
+	role, found, err := s.Store.Get(agentRoleID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, agentRoleID)
+	}
+	return role.Steps, nil
 }

@@ -256,6 +256,7 @@ describe("ChatPanel", () => {
 				type: "task",
 				agent_role_id: "role-1",
 				title: "Ship the status bar",
+				activity: "idle",
 				session_id: "test-session",
 				updated_at: "2024-01-01T00:00:00Z",
 				...overrides,
@@ -1322,7 +1323,7 @@ describe("ChatPanel", () => {
 		it("opens the work detail from the event it happened to", async () => {
 			const user = userEvent.setup();
 			const onOpenWorkDetail = vi.fn();
-			seedWork({ status: "in_progress" }, ["a", "b", "c"]);
+			seedWork({ status: "active" }, ["a", "b", "c"]);
 			render(
 				<ChatPanel {...defaultProps} onOpenWorkDetail={onOpenWorkDetail} />,
 			);
@@ -1337,7 +1338,7 @@ describe("ChatPanel", () => {
 		});
 
 		it("leaves the work's status out of the chat entirely", async () => {
-			seedWork({ status: "in_progress" }, ["a", "b", "c"]);
+			seedWork({ status: "active" }, ["a", "b", "c"]);
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
@@ -1366,7 +1367,7 @@ describe("ChatPanel", () => {
 		});
 
 		it("lets the chat keep streaming after the work has closed", async () => {
-			seedWork({ status: "in_progress" }, ["a", "b", "c"]);
+			seedWork({ status: "active" }, ["a", "b", "c"]);
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 

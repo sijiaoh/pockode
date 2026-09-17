@@ -22,22 +22,24 @@ func (r *recordingStarter) HandleWorkStart(ctx context.Context, _ Work) error {
 
 type recordingNotifier struct {
 	reopened []Work
+	advanced []Work
 }
 
-func (n *recordingNotifier) NotifyReopen(w Work) { n.reopened = append(n.reopened, w) }
+func (n *recordingNotifier) NotifyReopen(w Work)   { n.reopened = append(n.reopened, w) }
+func (n *recordingNotifier) NotifyStepDone(w Work) { n.advanced = append(n.advanced, w) }
 
 func TestOperations_StartWork_ClaimsAndReturnsWork(t *testing.T) {
 	store := newTestStore(t)
 	story := createStory(t, store, "Build")
 	starter := &recordingStarter{}
-	ops := NewOperations(store, starter, nil)
+	ops := NewOperations(store, starter, nil, nil)
 
 	w, err := ops.StartWork(context.Background(), story.ID)
 	if err != nil {
 		t.Fatalf("StartWork: %v", err)
 	}
-	if w.Status != StatusInProgress {
-		t.Errorf("status = %q, want in_progress", w.Status)
+	if w.Status != StatusActive {
+		t.Errorf("status = %q, want active", w.Status)
 	}
 	if w.SessionID == "" {
 		t.Error("session_id should be set after start")
@@ -47,18 +49,18 @@ func TestOperations_StartWork_ClaimsAndReturnsWork(t *testing.T) {
 	}
 }
 
-// On restart (a stopped/needs_input work going back to in_progress) the existing
-// session must be reused so the agent's chat history is preserved.
+// On restart (a stopped work going back to active) the existing session must be
+// reused so the agent's chat history is preserved.
 func TestOperations_StartWork_RestartReusesSession(t *testing.T) {
 	store := newTestStore(t)
 	story := createStory(t, store, "Build")
-	ops := NewOperations(store, &recordingStarter{}, nil)
+	ops := NewOperations(store, &recordingStarter{}, nil, nil)
 
 	first, err := ops.StartWork(context.Background(), story.ID)
 	if err != nil {
 		t.Fatalf("first StartWork: %v", err)
 	}
-	if err := store.MarkNeedsInput(context.Background(), story.ID); err != nil {
+	if err := store.Stop(context.Background(), story.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -74,7 +76,7 @@ func TestOperations_StartWork_RestartReusesSession(t *testing.T) {
 func TestOperations_StartWork_RollsBackOnHandlerFailure(t *testing.T) {
 	store := newTestStore(t)
 	story := createStory(t, store, "Build")
-	ops := NewOperations(store, &recordingStarter{err: errors.New("kickoff failed")}, nil)
+	ops := NewOperations(store, &recordingStarter{err: errors.New("kickoff failed")}, nil, nil)
 
 	if _, err := ops.StartWork(context.Background(), story.ID); err == nil {
 		t.Fatal("expected error when handler fails")
@@ -96,7 +98,7 @@ func TestOperations_StartWork_MissingRole(t *testing.T) {
 	if err := store.Update(context.Background(), w.ID, UpdateFields{AgentRoleID: &empty}); err != nil {
 		t.Fatal(err)
 	}
-	ops := NewOperations(store, &recordingStarter{}, nil)
+	ops := NewOperations(store, &recordingStarter{}, nil, nil)
 
 	if _, err := ops.StartWork(context.Background(), w.ID); err == nil {
 		t.Fatal("expected error for work without agent_role_id")
@@ -113,7 +115,7 @@ func TestOperations_StartWork_DetachesCallerContext(t *testing.T) {
 	store := newTestStore(t)
 	story := createStory(t, store, "Build")
 	starter := &recordingStarter{}
-	ops := NewOperations(store, starter, nil)
+	ops := NewOperations(store, starter, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -122,8 +124,8 @@ func TestOperations_StartWork_DetachesCallerContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartWork with cancelled ctx: %v", err)
 	}
-	if w.Status != StatusInProgress {
-		t.Errorf("status = %q, want in_progress despite cancelled caller ctx", w.Status)
+	if w.Status != StatusActive {
+		t.Errorf("status = %q, want active despite cancelled caller ctx", w.Status)
 	}
 	if starter.gotCtx.Err() != nil {
 		t.Error("handler received a cancelled context; start should run detached")
@@ -140,16 +142,39 @@ func TestOperations_ReopenWork_NotifiesAfterReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	notifier := &recordingNotifier{}
-	ops := NewOperations(store, &recordingStarter{}, notifier)
+	ops := NewOperations(store, &recordingStarter{}, notifier, nil)
 
 	if err := ops.ReopenWork(context.Background(), story.ID); err != nil {
 		t.Fatalf("ReopenWork: %v", err)
 	}
 	got, _, _ := store.Get(story.ID)
-	if got.Status != StatusInProgress {
-		t.Errorf("status = %q, want in_progress after reopen", got.Status)
+	if got.Status != StatusActive {
+		t.Errorf("status = %q, want active after reopen", got.Status)
 	}
 	if len(notifier.reopened) != 1 {
 		t.Fatalf("NotifyReopen called %d times, want 1", len(notifier.reopened))
 	}
+}
+
+// A work whose role has been deleted has an unknown number of steps, not zero.
+// Reading it as zero would close the work on its first step_done — the agent
+// reporting one step's progress would finish the whole thing.
+func TestOperations_StepDone_RefusesAnUnknownStepCount(t *testing.T) {
+	store := newTestStore(t)
+	story := createStory(t, store, "Build")
+	startWork(t, store, story.ID)
+	ops := NewOperations(store, nil, nil, failingSteps{})
+
+	if _, _, err := ops.StepDone(context.Background(), story.ID); err == nil {
+		t.Fatal("StepDone succeeded with no step count; it must report the failure")
+	}
+	if got := getWork(t, store, story.ID); got.Status != StatusActive {
+		t.Errorf("status = %q, want the work left alone at %q", got.Status, StatusActive)
+	}
+}
+
+type failingSteps struct{}
+
+func (failingSteps) GetSteps(string) ([]string, error) {
+	return nil, errors.New("agent role not found")
 }

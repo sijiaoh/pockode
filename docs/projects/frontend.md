@@ -103,7 +103,7 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 **Display logic:**
 
 1. Stories are extracted from `works` (items with `type === "story"`)
-2. Stories are grouped by status in this order: **in_progress → waiting → needs_input → stopped → open → closed**
+2. Stories are grouped by status in this order: **active → stopped → open → closed**. (docs/lifecycle-ui.md §6.1 splits the first group into *Needs you* and *Active* once the rows draw their derived activity; the grouping predicate is the status plus `needsUser`, never the full activity, so the list does not reorder itself while it is being read.)
 3. Each group is a collapsible section (`StatusGroup`); `closed` group is collapsed by default
 4. Each group header shows: collapse toggle, status icon, status label, count badge
 5. Each story row shows: status icon, title, task progress (`closedTasks/totalTasks tasks`), and a `WorktreeBadge` marking which worktree the story (and its whole subtree) runs in — the list is global across worktrees, so the badge is what tells rows apart. Tasks normally share their story's worktree, so repeating the badge on every task row would only add noise. Stories still in `open` status show no badge, since their worktree is only fixed once they start.
@@ -130,22 +130,23 @@ Shows the detail view for a single work item (story or task). Sections:
 | Position | Action | Condition |
 |---|---|---|
 | Left (primary) | **Start/Restart** | `status === "open"` or `"stopped"` |
-| Left (primary) | **Stop** | `status === "in_progress"`, `"waiting"` or `"needs_input"` |
+| Left (primary) | **Stop** | `status === "active"` |
 | Left (primary) | **Reopen** | `status === "closed"` |
 | Left (primary) | **Open Chat** | `session_id` exists |
 | Right (secondary) | **Delete** (icon-only, 44x44px) | `status !== "closed"` |
 
-Every status therefore offers a way forward — `open` starts, the four live
-statuses either stop or restart, `closed` reopens — so no status leaves the bar
-empty. Keep it that way: a status with no button is a work item the user cannot
-act on at all.
+Every status therefore offers a way forward — `open` starts, `active` stops,
+`stopped` restarts, `closed` reopens — so no status leaves the bar empty. Keep it
+that way: a status with no button is a work item the user cannot act on at all.
 
-The conditions are deliberately narrower than what the server accepts
-(`Store.Stop` takes any live status, `ValidateStartable` additionally takes
-`waiting` and `needs_input`). Since Stop already covers every paused status,
-also offering Restart there would only ask the user to guess whether the session
-is still alive, and nothing would be reachable that Stop-then-Restart does not
-already reach.
+**Which buttons exist is decided by the status, never by the activity.** A button
+that appears and disappears as turns settle is a button the user cannot aim at,
+which is exactly how a work stuck in a stale live status became unstoppable.
+Stop is shown for every `active` work, including one waiting on the user and one
+parked on a background task: `active` means the engine is driving it, and Stop
+means stop driving it. What a *confirmation* says may read the activity — by then
+the user has aimed, and what they are about to lose depends on what is happening
+(docs/lifecycle-ui.md §3).
 
 The delete button uses a subtle style (`text-th-text-muted`) to avoid accidental taps, switching to red (`text-th-error`) on hover to confirm intent. Confirmation dialog appears before deletion.
 

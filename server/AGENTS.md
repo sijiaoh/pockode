@@ -57,8 +57,8 @@ settings/               # 设置存储
 startup/                # 启动横幅
 static/                 # 静态文件（构建后的前端资源）
 watch/                  # 实时订阅（WebSocket 通知的分发引擎）
-work/                   # Work 存储, 状态机, AutoResumer, 提示词构建器
-worktree/               # Worktree 管理, WorkStarter, WorkStopper
+work/                   # Work 存储, 状态机, 驱动引擎 (engine.go), 命令 (operations.go), activity 派生, 提示词构建器
+worktree/               # Worktree 管理, WorkStarter, session 终结与 turn 来源 (manager.go)
 ws/                     # WebSocket RPC 处理（rpc_*.go 按领域分割）
 ```
 

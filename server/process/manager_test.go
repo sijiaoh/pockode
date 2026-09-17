@@ -244,7 +244,7 @@ func waitForHistory(t *testing.T, store session.Store, sessionID string, n int) 
 // TestProcess_OutOfTurnEventsKeepProcessIdle covers events that reach the
 // process with no turn in flight. Codex emits a warning at startup when it
 // cannot resume the session's thread; treating that as agent output would leave
-// a session marked running with nothing running, which work.AutoResumer reads as
+// a session marked running with nothing running, which the work engine reads as
 // "the agent is working" and never corrects.
 func TestProcess_OutOfTurnEventsKeepProcessIdle(t *testing.T) {
 	tests := []struct {
@@ -283,30 +283,52 @@ func TestProcess_OutOfTurnEventsKeepProcessIdle(t *testing.T) {
 	}
 }
 
-// TestProcess_TurnStateTransitions locks the mapping from agent events to
-// process state changes for a turn that has been started by a message.
+// turnShape is what a session ends up saying after a scenario: the state change
+// event is narrow by design — "is output being produced" and nothing else — so
+// the facts the scenarios are about are asserted on the turn itself.
+type turnShape struct {
+	phase    session.TurnPhase
+	outcome  session.TurnOutcome
+	blockers int
+}
+
+func shapeOf(turn session.TurnState) turnShape {
+	return turnShape{phase: turn.Phase, outcome: turn.LastOutcome, blockers: len(turn.Blockers)}
+}
+
+// TestProcess_TurnStateTransitions locks the mapping from agent events to a
+// turn, and to the state changes it is narrowed to, for a turn that has been
+// started by a message.
 func TestProcess_TurnStateTransitions(t *testing.T) {
 	tests := []struct {
-		name   string
-		events []agent.AgentEvent
-		want   []StateChangeEvent
+		name     string
+		events   []agent.AgentEvent
+		want     []ProcessState
+		wantTurn turnShape
 	}{
 		{
-			name:   "done ends the turn",
-			events: []agent.AgentEvent{agent.TextEvent{Content: "hi"}, agent.DoneEvent{}},
-			want:   []StateChangeEvent{{State: ProcessStateIdle}},
+			name:     "done ends the turn",
+			events:   []agent.AgentEvent{agent.TextEvent{Content: "hi"}, agent.DoneEvent{}},
+			want:     []ProcessState{ProcessStateIdle},
+			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeCompleted},
 		},
 		{
 			// A failed turn stops the agent exactly like a completed one, which
-			// is what lets work.AutoResumer treat both as "the agent stopped".
+			// is what lets the work engine treat both as "the agent stopped".
 			name:   "error ends the turn like done",
 			events: []agent.AgentEvent{agent.ErrorEvent{Error: "is_error result"}},
-			want:   []StateChangeEvent{{State: ProcessStateIdle}},
+			want:   []ProcessState{ProcessStateIdle},
+			// Ended, but not the same ending: the outcome is what tells the work
+			// engine a failed turn from a completed one, and both from an abort.
+			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeFailed},
 		},
 		{
 			name:   "permission request pauses the turn",
 			events: []agent.AgentEvent{agent.PermissionRequestEvent{RequestID: "r1"}},
-			want:   []StateChangeEvent{{State: ProcessStateIdle, NeedsInput: true}},
+			// Narrowed to idle — nothing is being produced, so the session goes
+			// unread — while the turn itself says why, and that it is not over.
+			want:     []ProcessState{ProcessStateIdle},
+			wantTurn: turnShape{phase: session.PhaseBlocked, blockers: 1},
 		},
 		{
 			// The permission prompt is gone with the turn, so the pause has to be
@@ -317,18 +339,20 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 				agent.PermissionRequestEvent{RequestID: "r1"},
 				agent.InterruptedEvent{},
 			},
-			want: []StateChangeEvent{
-				{State: ProcessStateIdle, NeedsInput: true},
-				{State: ProcessStateIdle, Interrupted: true},
-			},
+			want:     []ProcessState{ProcessStateIdle, ProcessStateIdle},
+			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeAborted},
 		},
 		{
 			// Codex answers an aborted call itself while Pockode synthesizes a
 			// response for the same call, so both can arrive. A second stop would
-			// look like a second turn ending to work.AutoResumer.
+			// look like a second turn ending to the work engine.
 			name:   "a turn ends only once",
 			events: []agent.AgentEvent{agent.InterruptedEvent{}, agent.DoneEvent{}},
-			want:   []StateChangeEvent{{State: ProcessStateIdle, Interrupted: true}},
+			want:   []ProcessState{ProcessStateIdle},
+			// The second ending must not overwrite the first: an abort followed
+			// by a done still reads as aborted, which is what stops the work
+			// rather than nudging it.
+			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeAborted},
 		},
 		{
 			// Parking a turn is not ending it: no idle reaches the wire until the
@@ -345,11 +369,8 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 				agent.TextEvent{Content: "resumed"},
 				agent.DoneEvent{},
 			},
-			want: []StateChangeEvent{
-				{State: ProcessStateRunning},
-				{State: ProcessStateRunning},
-				{State: ProcessStateIdle},
-			},
+			want:     []ProcessState{ProcessStateRunning, ProcessStateRunning, ProcessStateIdle},
+			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeCompleted},
 		},
 		{
 			// Claude reports which messages stay queued after an interrupt; their
@@ -360,11 +381,8 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 				agent.TextEvent{Content: "queued"},
 				agent.DoneEvent{},
 			},
-			want: []StateChangeEvent{
-				{State: ProcessStateIdle, Interrupted: true},
-				{State: ProcessStateRunning},
-				{State: ProcessStateIdle},
-			},
+			want:     []ProcessState{ProcessStateIdle, ProcessStateRunning, ProcessStateIdle},
+			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeCompleted},
 		},
 	}
 
@@ -405,10 +423,12 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 				t.Fatalf("got %d state changes %v, want %d %v", len(got), got, len(tt.want), tt.want)
 			}
 			for i, want := range tt.want {
-				want.SessionID = "sess-1"
-				if got[i] != want {
-					t.Errorf("state change %d = %+v, want %+v", i, got[i], want)
+				if got[i] != (StateChangeEvent{SessionID: "sess-1", State: want}) {
+					t.Errorf("state change %d = %+v, want %q", i, got[i], want)
 				}
+			}
+			if shape := shapeOf(proc.turnState()); shape != tt.wantTurn {
+				t.Errorf("turn = %+v, want %+v", shape, tt.wantTurn)
 			}
 		})
 	}
@@ -490,7 +510,7 @@ func TestProcess_ConsecutiveTurns(t *testing.T) {
 
 	want := []StateChangeEvent{
 		{SessionID: "sess-1", State: ProcessStateRunning},
-		{SessionID: "sess-1", State: ProcessStateIdle, Interrupted: true},
+		{SessionID: "sess-1", State: ProcessStateIdle},
 		{SessionID: "sess-1", State: ProcessStateRunning},
 		{SessionID: "sess-1", State: ProcessStateIdle},
 	}
@@ -502,6 +522,12 @@ func TestProcess_ConsecutiveTurns(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("state change %d = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+	// The second turn's own ending, not the first one's leaking into it: an
+	// abort carried over would read downstream as "do not carry on" and stop the
+	// work the user had just started.
+	if got := proc.turnState().LastOutcome; got != session.OutcomeCompleted {
+		t.Errorf("last outcome = %q, want %q", got, session.OutcomeCompleted)
 	}
 }
 
@@ -1014,8 +1040,11 @@ func TestProcess_EmitsOnlyRealTurnChanges(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected the ending to be the only state change, got %v", events)
 	}
-	if events[0].State != ProcessStateIdle || events[0].Interrupted {
-		t.Errorf("expected a plain idle event for a completed turn, got %v", events)
+	if events[0].State != ProcessStateIdle {
+		t.Errorf("expected an idle event for a completed turn, got %v", events)
+	}
+	if got := proc.turnState().LastOutcome; got != session.OutcomeCompleted {
+		t.Errorf("last outcome = %q, want %q — a completed turn is not an abort", got, session.OutcomeCompleted)
 	}
 	rec.reset()
 
@@ -1028,8 +1057,9 @@ func TestProcess_EmitsOnlyRealTurnChanges(t *testing.T) {
 	}
 }
 
-// An interrupt is reported as one all the way through, because a turn that was
-// taken away must not be carried on from.
+// An interrupt is recorded as an abort on the turn, because a turn that was
+// taken away must not be carried on from — that outcome is what the work engine
+// reads to stop the work rather than nudge it.
 func TestProcess_InterruptEndsTheTurnAsAborted(t *testing.T) {
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
@@ -1048,9 +1078,11 @@ func TestProcess_InterruptEndsTheTurnAsAborted(t *testing.T) {
 
 	sess.emit(t, agent.InterruptedEvent{})
 	rec.waitForCount(t, 1)
-	events := rec.snapshot()
-	if events[0].State != ProcessStateIdle || !events[0].Interrupted {
-		t.Errorf("expected an interrupted idle event, got %v", events)
+	if events := rec.snapshot(); events[0].State != ProcessStateIdle {
+		t.Errorf("expected an idle event, got %v", events)
+	}
+	if got := shapeOf(proc.turnState()); got != (turnShape{phase: session.PhaseIdle, outcome: session.OutcomeAborted}) {
+		t.Errorf("turn = %+v, want an aborted, ended turn", got)
 	}
 }
 

@@ -137,7 +137,7 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	log.Info("received prompt", "length", len(params.Content))
 
-	wt.SessionListWatcher.HandleUserAction(params.SessionID)
+	h.workEngine.HandleUserMessage(params.SessionID)
 
 	seq, err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier())
 	if err != nil {
@@ -161,13 +161,12 @@ func (h *rpcMethodHandler) handleInterrupt(ctx context.Context, conn *jsonrpc2.C
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	// No HandleUserAction here, and that is the answer to "was interrupt
+	// No HandleUserMessage here, and that is the answer to "was interrupt
 	// forgotten?" — it was not. Interrupt takes the turn away instead of handing
-	// the session something to go on, and the interrupted state change it produces
-	// stops in_progress work, so resuming a paused work first would only walk it
-	// into stopped. The session's own side needs nothing: the InterruptedEvent
-	// ends the turn through the reducer, and every blocker it was holding expires
-	// with it.
+	// the session something to go on, and the aborted turn it produces stops the
+	// work, so resuming a waiting work first would only walk it into stopped. The
+	// session's own side needs nothing: the InterruptedEvent ends the turn
+	// through the reducer, and every blocker it was holding expires with it.
 	if err := wt.ChatClient.Interrupt(ctx, params.SessionID); err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
@@ -197,7 +196,7 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 	}
 	choice := parsePermissionChoice(params.Choice)
 
-	wt.SessionListWatcher.HandleUserAction(params.SessionID)
+	h.workEngine.HandleUserMessage(params.SessionID)
 
 	if err := wt.ChatClient.SendPermissionResponse(ctx, params.SessionID, data, choice); err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
@@ -225,7 +224,7 @@ func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jso
 		ToolUseID: params.ToolUseID,
 	}
 
-	wt.SessionListWatcher.HandleUserAction(params.SessionID)
+	h.workEngine.HandleUserMessage(params.SessionID)
 
 	if err := wt.ChatClient.SendQuestionResponse(ctx, params.SessionID, data, params.Answers); err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)

@@ -187,8 +187,10 @@ func BuildRestartMessage(w Work) string {
 	return base + "\n\n" + nudge
 }
 
-// BuildAutoContinuationMessage appends a nudge to the base message
-// when an agent process stops but its work item is still in_progress.
+// BuildAutoContinuationMessage appends a nudge to the base message when a turn
+// ended without the agent saying it was done or what it is waiting for. What the
+// nudge itself says is still written in the old vocabulary; bringing the
+// agent-facing wording to the new one is its own task in this redesign.
 func BuildAutoContinuationMessage(w Work) string {
 	base := buildBase(w)
 

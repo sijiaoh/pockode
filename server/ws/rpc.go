@@ -37,25 +37,29 @@ type RPCHandler struct {
 	workListWatcher      *watch.WorkListWatcher
 	workDetailWatcher    *watch.WorkDetailWatcher
 	workOps              *work.Operations
-	workStopper          *worktree.WorkStopper
+	workEngine           *work.Engine
 	agentRoleStore       agentrole.Store
 	agentRoleListWatcher *watch.AgentRoleListWatcher
 }
 
-func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workStopper *worktree.WorkStopper, agentRoleStore agentrole.Store) *RPCHandler {
+func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
-	workListWatcher := watch.NewWorkListWatcher(workStore)
+	// The worktree manager is the turn source: a work's activity is derived from
+	// the session it runs in, which may be in a worktree nobody has opened.
+	workListWatcher := watch.NewWorkListWatcher(workStore, worktreeManager)
 	workListWatcher.Start()
 
-	// The worktree manager is the usage source: a work item's subtree can reach
-	// into worktrees other than the one it runs in.
-	workDetailWatcher := watch.NewWorkDetailWatcher(workStore, worktreeManager)
+	// It is also the usage source: a work item's subtree can reach into
+	// worktrees other than the one it runs in.
+	workDetailWatcher := watch.NewWorkDetailWatcher(workStore, worktreeManager, worktreeManager)
 	workDetailWatcher.Start()
-	// Session usage changes without anything about the work item changing, so the
-	// detail subscription has to hear about it from the session stores directly.
-	worktreeManager.SetSessionChangeListener(workDetailWatcher)
+	// A session's usage and its turn both change without anything about the work
+	// item changing, so both subscriptions hear about it from the session stores
+	// directly.
+	worktreeManager.AddSessionChangeListener(workDetailWatcher)
+	worktreeManager.AddSessionChangeListener(workListWatcher)
 
 	agentRoleListWatcher := watch.NewAgentRoleListWatcher(agentRoleStore)
 	agentRoleListWatcher.Start()
@@ -72,7 +76,7 @@ func NewRPCHandler(token, version string, devMode bool, commandStore *command.St
 		workListWatcher:      workListWatcher,
 		workDetailWatcher:    workDetailWatcher,
 		workOps:              workOps,
-		workStopper:          workStopper,
+		workEngine:           workEngine,
 		agentRoleStore:       agentRoleStore,
 		agentRoleListWatcher: agentRoleListWatcher,
 	}

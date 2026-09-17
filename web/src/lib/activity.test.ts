@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTurn, TurnBlocker } from "../types/message";
-import type { WorkStatus } from "../types/work";
+import type { WorkStatus, WorkWait } from "../types/work";
 import {
 	ACTIVITY_VIEW,
 	type Activity,
@@ -24,50 +24,18 @@ function turn(
 	};
 }
 
-const work = (status: WorkStatus) => ({ status });
+const work = (status: WorkStatus, wait?: WorkWait) => ({ status, wait });
 
 describe("deriveActivity", () => {
-	it.each<[string, WorkStatus | undefined, SessionTurn | undefined, Activity]>([
-		["a work nobody has started", "open", undefined, "open"],
-		["a finished work", "closed", turn("running"), "closed"],
-		["a stopped work", "stopped", turn("running"), "stopped"],
-		["a session with no work at all", undefined, turn("running"), "running"],
-		["an untouched session", undefined, turn("idle"), "idle"],
-		["a live turn", "in_progress", turn("running"), "running"],
-		["a settled turn", "in_progress", turn("idle"), "idle"],
-	])("reads %s as %s", (_name, status, sessionTurn, expected) => {
-		expect(deriveActivity(status ? work(status) : undefined, sessionTurn)).toBe(
-			expected,
-		);
-	});
-
-	it.each<[TurnBlocker["kind"][], Activity]>([
-		[["permission"], "needs_permission"],
-		[["question"], "needs_answer"],
-		[["background"], "background"],
-		// Permission outranks question: it is the one that cannot degrade into a
-		// message, so its deadline is the one that costs something.
-		[["question", "permission"], "needs_permission"],
-		// The agent parked on a task and then asked; the person is the one waiting.
-		[["background", "question"], "needs_answer"],
-	])("names %s as %s", (blockers, expected) => {
-		expect(deriveActivity(work("in_progress"), turn("blocked", blockers))).toBe(
-			expected,
-		);
-	});
-
-	// The phase is a fact about this second; the wait is a standing intention. An
-	// agent that asks for input and then keeps writing is running, and the row
-	// should say so until the turn settles.
-	it("lets a running turn outrank a work that is waiting on the user", () => {
-		expect(deriveActivity(work("needs_input"), turn("running"))).toBe(
-			"running",
-		);
-		expect(deriveActivity(work("needs_input"), turn("idle"))).toBe(
-			"needs_message",
-		);
-		expect(deriveActivity(work("waiting"), turn("idle"))).toBe(
-			"waiting_children",
+	// The rule itself is checked against the table shared with the server, in
+	// tests/activityRule.test.ts. What is left here is the case that table cannot
+	// state, because it is about a surface the server does not draw: a session
+	// that belongs to no work at all.
+	it("draws a session with no work from its turn alone", () => {
+		expect(deriveActivity(undefined, turn("running"))).toBe("running");
+		expect(deriveActivity(undefined, turn("idle"))).toBe("idle");
+		expect(deriveActivity(undefined, turn("blocked", ["question"]))).toBe(
+			"needs_answer",
 		);
 	});
 });
@@ -87,10 +55,10 @@ describe("sessionActivity", () => {
 	// conversation, and it is what tells the user a session they are not looking
 	// at is waiting on them.
 	it("shows an active work's wait", () => {
-		expect(sessionActivity(turn("idle"), work("needs_input"))).toBe(
+		expect(sessionActivity(turn("idle"), work("active", "user"))).toBe(
 			"needs_message",
 		);
-		expect(sessionActivity(turn("idle"), work("waiting"))).toBe(
+		expect(sessionActivity(turn("idle"), work("active", "child"))).toBe(
 			"waiting_children",
 		);
 	});

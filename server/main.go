@@ -297,10 +297,14 @@ Flags:
 		slog.Warn("failed to start agent role store file watcher", "error", err)
 	}
 
-	workAutoResumer := work.NewAutoResumer(workStore, 3)
-	workAutoResumer.StopOrphanedWork()
-	workAutoResumer.SetStepProvider(&agentRoleStepAdapter{store: agentRoleStore})
-	workStore.AddOnChangeListener(workAutoResumer)
+	steps := agentrole.Steps{Store: agentRoleStore}
+	workEngine := work.NewEngine(workStore, work.DefaultMaxNudges)
+	workEngine.SetStepProvider(steps)
+	// Before anything can create a session: work the last run left active is
+	// dealt with by what it was waiting for, not by what its dead process was
+	// doing.
+	workEngine.RecoverStartup()
+	workStore.AddOnChangeListener(workEngine)
 
 	// Set PM as default agent role on first launch
 	if pmID := agentRoleStore.SeededPMRoleID(); pmID != "" {
@@ -323,15 +327,18 @@ Flags:
 		return settingsStore.Get().WorktreeBaseDir
 	})
 	worktreeManager := worktree.NewManager(registry, agents, dataDir, leaseBudgets)
-	worktreeManager.SetWorkAutoResumer(workAutoResumer)
-	// Route AutoResumer follow-up messages to each work's own worktree.
-	workAutoResumer.SetSenderResolver(worktreeManager)
-	worktreeManager.SetWorkStatusSyncer(work.NewStatusSyncer(workStore))
+	worktreeManager.SetWorkEngine(workEngine)
+	// Route the engine's follow-up messages to each work's own worktree, and its
+	// terminations to the process manager of that worktree.
+	workEngine.SetSenderResolver(worktreeManager)
+	workEngine.SetSessionTerminator(worktreeManager)
+	// A deleted session takes away the place every answer would have gone, which
+	// is one of the engine's five inputs.
+	worktreeManager.AddSessionChangeListener(workEngine)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
-	workStopper := worktree.NewWorkStopper(worktreeManager, workStore)
-	// Single implementation of the start/reopen transitions, shared by both the
-	// WebSocket handler (user actions) and the MCP Executor (AI actions).
-	workOps := work.NewOperations(workStore, workStarter, workAutoResumer)
+	// Single implementation of every work command, shared by the WebSocket
+	// handler (user actions) and the MCP Executor (AI actions).
+	workOps := work.NewOperations(workStore, workStarter, workEngine, steps)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
@@ -344,9 +351,9 @@ Flags:
 		slog.Error("failed to generate MCP token", "error", err)
 		os.Exit(1)
 	}
-	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, workAutoResumer, settingsStore), mcpToken)
+	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore), mcpToken)
 
-	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workStopper, agentRoleStore)
+	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 	handler := newHandler(token, devMode, wsHandler, mcpHandler, transferHandler)
 
@@ -420,7 +427,7 @@ Flags:
 			slog.Error("server shutdown error", "error", err)
 		}
 		wsHandler.Stop()
-		workAutoResumer.Stop()
+		workEngine.Stop()
 		worktreeManager.Shutdown()
 		settingsStore.StopWatching()
 		agentRoleStore.StopWatching()
@@ -478,22 +485,6 @@ func initStores(dataDir string) (*stores, error) {
 	}
 
 	return &stores{work: workStore, agentRole: agentRoleStore}, nil
-}
-
-// agentRoleStepAdapter adapts agentrole.Store to work.StepProvider.
-type agentRoleStepAdapter struct {
-	store agentrole.Store
-}
-
-func (a *agentRoleStepAdapter) GetSteps(agentRoleID string) ([]string, error) {
-	role, found, err := a.store.Get(agentRoleID)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, nil
-	}
-	return role.Steps, nil
 }
 
 func runMCP() {

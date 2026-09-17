@@ -1,5 +1,5 @@
 import { ListChecks, UserCog } from "lucide-react";
-import { deriveActivity, needsUser } from "../../lib/activity";
+import { needsUser } from "../../lib/activity";
 import { useWorkStore } from "../../lib/workStore";
 import { useSidebarRefresh } from "../Layout";
 import { ActivityDot } from "../ui";
@@ -15,11 +15,12 @@ export default function ProjectTab({
 }: Props) {
 	const { isActive } = useSidebarRefresh("project");
 	// One dot, one meaning: someone below this is waiting on the user
-	// (docs/lifecycle-ui.md §4). The turn is not passed — a work in a worktree
-	// this client has not loaded has none, and a dot that appeared only for the
-	// open worktree would be a dot that means two different things.
+	// (docs/lifecycle-ui.md §4). Read off the row rather than derived here: the
+	// server computed it, and it is the only value that holds for a work in a
+	// worktree this client has never loaded — a dot that lit only for the open
+	// worktree would be a dot that means two different things.
 	const hasNeedsUser = useWorkStore((s) =>
-		s.works.some((w) => needsUser(deriveActivity(w, undefined))),
+		s.works.some((w) => needsUser(w.activity)),
 	);
 
 	return (

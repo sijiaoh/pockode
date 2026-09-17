@@ -27,12 +27,22 @@ const (
 // short enough that a stuck agent cannot hold the server open.
 const shutdownDrainTimeout = 10 * time.Second
 
+// StateChangeEvent is a session's turn narrowed to the one value anything
+// outside this package still reads: is a process producing output or not.
+//
+// It used to carry three more facts — needs-input, interrupted, and whether this
+// was a process's first idle — and all three were for the work layer, which read
+// process states because it had nothing better. It reads the turn now (its
+// activity) and a settled turn ending (its engine), so what is left here is the
+// unread mark: a session goes unread when it falls idle and nobody is looking.
 type StateChangeEvent struct {
-	SessionID   string
-	State       ProcessState
-	NeedsInput  bool
-	IsInitial   bool // true only for the initial idle emitted on process creation
-	Interrupted bool // true when idle is caused by user interrupt
+	SessionID string
+	State     ProcessState
+	// IsInitial marks the idle a process emits on creation, which is the one
+	// idle no turn produced. Nothing reads it today; it is kept because "should
+	// merely starting a session mark it unread" is a product question, and
+	// deleting the flag would answer it by accident.
+	IsInitial bool
 }
 
 // Manager manages agent processes.
@@ -101,7 +111,7 @@ type Process struct {
 	turn session.TurnState
 	// closed is set when the process is explicitly terminated (Close/Shutdown/reap).
 	// Prevents stale buffered events from emitting state changes (e.g. running/idle)
-	// that would incorrectly interact with the AutoResumer.
+	// that would incorrectly interact with the work engine.
 	closed atomic.Bool
 	// activated mirrors the session's Activated flag so the store is written once,
 	// on the transition, rather than on every event the agent produces.
@@ -114,6 +124,11 @@ type Process struct {
 	// toolActivity is what the calls still in flight are doing, for a client that
 	// subscribes after they said so. Its own lock; see toolActivity.
 	toolActivity toolActivity
+	// retiring is set when the work this session belongs to has closed: the
+	// process may finish the turn it is in the middle of and nothing more. It is
+	// cleared by the next prompt, because that is somebody coming back to a
+	// session nobody was supposed to come back to. See Manager.RetireSession.
+	retiring atomic.Bool
 }
 
 // NewManager creates a new manager whose processes live under the given lease
@@ -161,9 +176,9 @@ func (m *Manager) SetOnTurnEnded(fn func(session.TurnEnd)) {
 	m.settler.SetListener(fn)
 }
 
-func (m *Manager) emitStateChange(sessionID string, state ProcessState, needsInput bool) {
+func (m *Manager) emitStateChange(sessionID string, state ProcessState) {
 	if m.onStateChange != nil {
-		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: state, NeedsInput: needsInput})
+		m.onStateChange(StateChangeEvent{SessionID: sessionID, State: state})
 	}
 }
 
@@ -255,7 +270,17 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 			if r := recover(); r != nil {
 				logger.LogPanic(r, "session crashed", "sessionId", sessionID)
 			}
-			m.remove(sessionID)
+			// Everything below speaks for the session, so a process that has
+			// already been replaced says none of it. Its successor's
+			// SignalProcessStarted has aborted whatever turn this one was
+			// carrying and taken the session over; repeating that here would
+			// abort the *successor's* turn instead — and with the work engine
+			// stopping work on an aborted turn, that is a work stopped for a
+			// process that died before it.
+			if m.dropProcess(proc) {
+				slog.Info("process ended after being replaced", "sessionId", sessionID)
+				return
+			}
 			// Belt and braces for the turn state: the stream normally carries a
 			// ProcessEndedEvent that reduces to the same thing, but an agent that
 			// fails on the way up, or a panic in the loop above, closes the
@@ -265,7 +290,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 			// own, and is the one state the turn cannot express.
 			m.observeTurn(sessionID, proc.applyTurn(context.Background(),
 				session.TurnInput{Signal: session.SignalProcessEnded}))
-			m.emitStateChange(sessionID, ProcessStateEnded, false)
+			m.emitStateChange(sessionID, ProcessStateEnded)
 			slog.Info("process ended", "sessionId", sessionID)
 		}()
 		proc.streamEvents(m.ctx)
@@ -358,16 +383,6 @@ func (m *Manager) HasProcess(sessionID string) bool {
 	return m.GetProcess(sessionID) != nil
 }
 
-// GetProcessState returns the state of a process for the given session.
-// Returns "ended" if no process exists.
-func (m *Manager) GetProcessState(sessionID string) string {
-	proc := m.GetProcess(sessionID)
-	if proc == nil {
-		return string(ProcessStateEnded)
-	}
-	return string(proc.State())
-}
-
 // GetToolActivity returns what each tool call still in flight last reported
 // doing, by tool_use_id. Nil when no process exists or nothing is in flight.
 func (m *Manager) GetToolActivity(sessionID string) map[string]string {
@@ -401,7 +416,37 @@ func (m *Manager) Touch(sessionID string) {
 	}
 }
 
-// remove removes a process from the manager and returns it.
+// dropProcess takes p out of the map and reports whether p has been *replaced* —
+// whether some other process now answers for this session.
+//
+// The distinction is the whole point, because "gone from the map" covers two
+// opposite cases. A process taken out by a deliberate close (Close, a lease, a
+// retirement) is simply ending, and everything the ending announces still speaks
+// for the session. A process whose successor is already in the map under the
+// same id must announce nothing: a session outlives its processes, one is
+// collected and the next message builds another moments later, so a predecessor
+// that removed "the process for this session" would evict the live successor,
+// and one that reduced `process_ended` would abort the successor's turn.
+//
+// The callback fires either way: a process did end, and what the listener does
+// with that (worktree cleanup) re-checks the state itself.
+func (m *Manager) dropProcess(p *Process) (replaced bool) {
+	m.processesMu.Lock()
+	current, present := m.processes[p.sessionID]
+	replaced = present && current != p
+	if present && !replaced {
+		delete(m.processes, p.sessionID)
+	}
+	callback := m.onProcessEnd
+	m.processesMu.Unlock()
+
+	if callback != nil {
+		go callback()
+	}
+	return replaced
+}
+
+// remove removes whatever process a session currently has and returns it.
 // The onProcessEnd callback is invoked asynchronously after removal.
 func (m *Manager) remove(sessionID string) *Process {
 	m.processesMu.Lock()
@@ -443,6 +488,116 @@ func (m *Manager) Close(sessionID string) {
 		<-proc.done
 		slog.Info("process closed", "sessionId", sessionID)
 	}
+}
+
+// workCloseGrace is how long a session gets to finish what it was saying after
+// the work above it closed.
+//
+// What it bounds is a sentence, not a task: the agent has already reported the
+// work done, and the turn still open is the one it is signing off in. A turn
+// that is still going a couple of minutes later is doing something the closed
+// work no longer covers — and nothing is lost by ending it, because the session
+// id and its transcript stay for Reopen.
+const workCloseGrace = 2 * time.Minute
+
+// RetireSession lets a session finish its current turn and then ends its
+// process. It is what a work closing does to the session beneath it: the engine
+// has let go, so there is no lease left, but the CLI may still be mid-sentence.
+//
+// Three things follow from "nobody is coming back to this session":
+//
+//   - Every prompt on screen is cancelled with ReasonWorkClosed, now and for as
+//     long as the retirement lasts. A question raised inside the grace would
+//     otherwise sit pending forever on a work the user has finished with.
+//   - A turn that ends inside the grace ends the process with it.
+//   - The grace is a deadline, not a budget that activity extends: a background
+//     task started on the way out does not buy the session another day.
+//
+// Calling it twice for the same session changes nothing — the work store
+// reports a change for reasons that have nothing to do with the session (a
+// retitle, an edit), and each of those must not restart the grace.
+func (m *Manager) RetireSession(sessionID string) {
+	p := m.GetProcess(sessionID)
+	if p == nil {
+		return
+	}
+	if p.retiring.Swap(true) {
+		return
+	}
+
+	log := slog.With("sessionId", sessionID, "grace", workCloseGrace)
+	log.Info("work closed, retiring its session")
+
+	// Applied to what is on screen right now; everything raised later is caught
+	// by the same call from handleEvent.
+	p.enforceRetirement()
+
+	time.AfterFunc(workCloseGrace, func() { m.endRetirement(p) })
+}
+
+// endRetirement ends the process the grace was armed for, and only that one.
+//
+// Identity rather than session id, and the case that needs it is ordinary: a
+// work can be reopened inside the grace, and the message that follows builds a
+// *new* process for the same session. Closing by name would kill that one — a
+// turn the user had just started, ended by a timer armed for its predecessor.
+//
+// removeWhere rather than remove, for the reason closeProcess gives: the stream
+// goroutine's defer announces the ending, and announcing it here as well would
+// report one death twice.
+func (m *Manager) endRetirement(p *Process) {
+	if !p.retiring.Load() {
+		return
+	}
+	if len(m.removeWhere(func(candidate *Process) bool { return candidate == p })) == 0 {
+		return
+	}
+	p.closed.Store(true)
+	p.agentSession.Close()
+	slog.Info("close grace expired, ending the session of a closed work", "sessionId", p.sessionID)
+}
+
+// enforceRetirement is what "the work is closed" means for one turn state:
+// withdraw every prompt nobody is coming back to answer, and end the process
+// once the turn is over.
+//
+// The withdrawals go in as ordinary events, so a cancelled prompt is recorded,
+// reduced and broadcast exactly like one the agent withdrew itself — the client
+// needs no second way to learn that a card is dead. Each one clears its own
+// blocker, so the recursion this produces is one level per prompt and ends.
+//
+// Two callers can read the same blocker at once — RetireSession and the stream
+// goroutine reaching this at the end of the event that raised it — and then the
+// same prompt is withdrawn twice. Left unlocked deliberately: the second
+// withdrawal removes a blocker that is already gone, the client's own handling
+// of a cancellation is idempotent, and the whole of the cost is one extra line
+// in the transcript file. A lock here would have to be re-entrant, because the
+// injection re-enters this function.
+func (p *Process) enforceRetirement() {
+	if !p.retiring.Load() {
+		return
+	}
+
+	turn := p.turnState()
+	for _, blocker := range turn.Blockers {
+		if blocker.RequestID == "" {
+			// A background wait: nobody raised it and nobody can answer it. It
+			// ends with the process at the grace deadline.
+			continue
+		}
+		p.inject(agent.RequestCancelledEvent{
+			RequestID: blocker.RequestID,
+			Reason:    agent.ReasonWorkClosed,
+		})
+		return // The injection re-enters here with the blocker already gone.
+	}
+
+	if p.turnState().InProgress() {
+		return
+	}
+	// Asynchronously, and by identity: this runs on the process's own event
+	// stream, which the close has to be able to finish without waiting for.
+	go p.manager.endRetirement(p)
 }
 
 // Shutdown closes all processes gracefully and returns once their streaming
@@ -731,7 +886,16 @@ func (p *Process) noteAgent(note string) {
 }
 
 // SendMessage sends a message to the agent and starts a turn.
+//
+// A prompt also cancels a retirement, and that is not a special case bolted on:
+// retirement means "nobody is coming back to this session", and somebody just
+// did. It happens for real — a work closed and reopened inside the grace sends
+// its restart message to this very process, and a user can type into a closed
+// work's chat at any time. Without this, the turn they started would be ended by
+// a timer armed before it existed. The work stays closed either way; what the
+// session's process is worth from then on is the ordinary idle lease's business.
 func (p *Process) SendMessage(prompt string) error {
+	p.retiring.Store(false)
 	p.startTurn()
 	return p.agentSession.SendMessage(prompt)
 }
@@ -844,30 +1008,27 @@ func (p *Process) getLastActive() time.Time {
 	return p.lastActive
 }
 
-// State is the session's turn seen through the three values the wire has always
-// used. It is a narrowing, not the state itself — see StateChangeEvent.
+// State is the session's turn seen through the two values a process has always
+// had. It is a narrowing, not the state itself — see StateChangeEvent.
 func (p *Process) State() ProcessState {
-	state, _ := viewTurn(p.turnState())
-	return state
+	return viewTurn(p.turnState())
 }
 
-// viewTurn narrows a TurnState down to the pair the session list and the chat
-// panel have always been sent: a process state and a "needs input" flag.
+// viewTurn narrows a TurnState down to "is this process producing output".
 //
-// Blocked on a person reads as idle-and-waiting, which is what it was before
-// this model existed. Blocked on background work reads as running, which is also
-// what it was — and is the one place this narrowing loses something real, since
-// the whole point of the new blocker is that the two are not the same. The wire
-// keeps the old shape until the client is changed to read the turn state
-// directly; nothing above this line is written in terms of these two values.
-func viewTurn(turn session.TurnState) (ProcessState, bool) {
+// Blocked on a person reads as idle: nothing is being produced, and that is what
+// makes the session go unread — the one thing that still reads this. Blocked on
+// background work reads as running, which is where the narrowing loses something
+// real, and is why nothing but the unread mark is allowed to be written in terms
+// of it.
+func viewTurn(turn session.TurnState) ProcessState {
 	if turn.AwaitingUserAnswer() {
-		return ProcessStateIdle, true
+		return ProcessStateIdle
 	}
 	if turn.InProgress() {
-		return ProcessStateRunning, false
+		return ProcessStateRunning
 	}
-	return ProcessStateIdle, false
+	return ProcessStateIdle
 }
 
 // observeTurn hands a transition to the settler, which is what decides whether
@@ -901,16 +1062,7 @@ func (m *Manager) emitTurn(sessionID string, transition session.TurnTransition) 
 		return
 	}
 	m.observeTurn(sessionID, transition)
-	state, needsInput := viewTurn(transition.State)
-	m.emitStateChangeEvent(StateChangeEvent{
-		SessionID:  sessionID,
-		State:      state,
-		NeedsInput: needsInput,
-		// Only an ending can be an abort, and only an abort means the turn was
-		// taken away rather than finished — a user interrupt, or a process that
-		// died carrying it. Downstream this is what says "do not carry on".
-		Interrupted: transition.Ended && transition.State.LastOutcome == session.OutcomeAborted,
-	})
+	m.emitStateChange(sessionID, viewTurn(transition.State))
 }
 
 // markActivated records that the agent has contributed to this session.
@@ -1097,6 +1249,12 @@ func (p *Process) handleEvent(ctx context.Context, log *slog.Logger, event agent
 		} else {
 			p.manager.emitTurn(p.sessionID, transition)
 		}
+	}
+
+	if reduce && transition.Changed {
+		// After the announcement, so that anything woken by the turn change sees
+		// the same state this decides on.
+		p.enforceRetirement()
 	}
 
 	if eventType.AwaitsUserInput() {

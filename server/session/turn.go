@@ -1,6 +1,13 @@
 package session
 
-import "time"
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"time"
+)
 
 // TurnPhase is what a session is doing right now, in three values that cover
 // everything: it is producing output, it is stuck on something only someone
@@ -512,4 +519,38 @@ func (t TurnState) InProgress() bool {
 // carry on disk is simply not read.
 func NormalizeTurn(state TurnState, now time.Time) TurnTransition {
 	return ReduceTurn(state, TurnInput{Signal: SignalProcessEnded, At: now})
+}
+
+// ReadTurns reports the turn state of every session in a data directory,
+// without building a store over it.
+//
+// It exists for the work list, which spans worktrees: a work's activity is
+// derived from the turn of the session it runs in, and most of those sessions
+// live in worktrees nobody has opened. Building a store for one would start
+// watchers, a process manager and git watches because somebody looked at a row.
+//
+// Every state is normalised on the way out (NormalizeTurn). A directory nobody
+// has opened has no processes, so a turn the file still reports as running is a
+// turn the last run left behind — the same repair FileStore does on load, minus
+// the writing, which belongs to whoever owns the file.
+func ReadTurns(dataDir string) (map[string]TurnState, error) {
+	data, err := os.ReadFile(indexPath(dataDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read session index: %w", err)
+	}
+
+	var idx indexData
+	if err := json.Unmarshal(data, &idx); err != nil {
+		return nil, fmt.Errorf("parse session index: %w", err)
+	}
+
+	now := time.Now()
+	turns := make(map[string]TurnState, len(idx.Sessions))
+	for _, meta := range idx.Sessions {
+		turns[meta.ID] = NormalizeTurn(meta.Turn, now).State
+	}
+	return turns, nil
 }

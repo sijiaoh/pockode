@@ -5,7 +5,7 @@ import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
 import { makeSessionListItem } from "../../test/sessionFixtures";
 import type { SessionTurn, TurnBlocker } from "../../types/message";
-import type { WorkListItem, WorkStatus } from "../../types/work";
+import type { WorkListItem, WorkStatus, WorkWait } from "../../types/work";
 import SessionItem from "./SessionItem";
 
 const AT = "2026-01-02T14:02:00Z";
@@ -26,12 +26,16 @@ function turn(
 	};
 }
 
-function seedWork(status: WorkStatus, sessionId = "s1") {
+function seedWork(status: WorkStatus, wait?: WorkWait, sessionId = "s1") {
 	const work: WorkListItem = {
 		id: "w1",
 		type: "task",
 		title: "Rewire the lifecycle",
 		status,
+		wait,
+		// A session row derives its own activity from the turn and the work's
+		// wait; the row the server computed is for the work list.
+		activity: "idle",
 		session_id: sessionId,
 		updated_at: AT,
 	};
@@ -77,7 +81,7 @@ describe("what a session row says it is waiting for", () => {
 	});
 
 	it("names a work waiting on the user, which the turn cannot say", () => {
-		seedWork("needs_input");
+		seedWork("active", "user");
 		renderRow({ turn: turn("idle") });
 		expect(
 			screen.getByLabelText("Waiting for your message"),
@@ -88,7 +92,7 @@ describe("what a session row says it is waiting for", () => {
 	// agent that asks for input and keeps writing is running, and the row says so
 	// until the turn settles (docs/lifecycle-ui.md §1.2).
 	it("lets a live turn outrank that wait", () => {
-		seedWork("needs_input");
+		seedWork("active", "user");
 		renderRow({ turn: turn("running") });
 		expect(screen.getByLabelText("Agent is running")).toBeInTheDocument();
 	});
@@ -120,7 +124,7 @@ describe("what a session row says it is waiting for", () => {
 describe("deleting a session", () => {
 	it("says which work it will stop", async () => {
 		const user = userEvent.setup();
-		seedWork("in_progress");
+		seedWork("active");
 		renderRow({ turn: turn("idle") });
 
 		await user.click(screen.getByRole("button", { name: /delete/i }));

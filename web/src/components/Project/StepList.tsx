@@ -11,13 +11,10 @@ interface StepItemProps {
 function StepItem({ step, index, currentStep, workStatus }: StepItemProps) {
 	const isClosed = workStatus === "closed";
 	const isCompleted = isClosed || index < currentStep;
-	// Show as current only for active states (not open or closed)
-	const isActiveState =
-		workStatus === "in_progress" ||
-		workStatus === "waiting" ||
-		workStatus === "needs_input" ||
-		workStatus === "stopped";
-	const isCurrent = isActiveState && index === currentStep;
+	// A step's position does not change because a turn started, so this reads the
+	// status and never the activity: highlighted for everything but the two
+	// statuses that sit outside the agent lifecycle.
+	const isCurrent = workStatus !== "open" && !isClosed && index === currentStep;
 
 	return (
 		<li

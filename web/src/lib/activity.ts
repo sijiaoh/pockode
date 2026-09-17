@@ -114,6 +114,24 @@ export const ACTIVITY_VIEW: Record<Activity, ActivityView> = {
 };
 
 /**
+ * An activity as it arrived from the server, folded to one this build knows.
+ *
+ * Applied at the wire boundary, the way `normalizeOrigin` folds legacy message
+ * origins: a client talking to a newer server must not blank a row over a leaf
+ * it has never heard of, and `idle` is the leaf that claims the least.
+ *
+ * `Object.hasOwn` and not `in`: `in` walks the prototype chain, so `"toString"`
+ * would pass for a leaf and then be looked up in the view map as a function —
+ * a row rendering a glyph that does not exist. The one job of this function is
+ * to not take the wire's word for it.
+ */
+export function normalizeActivity(raw: unknown): Activity {
+	return typeof raw === "string" && Object.hasOwn(ACTIVITY_VIEW, raw)
+		? (raw as Activity)
+		: "idle";
+}
+
+/**
  * Whether the user is the one being waited on. Exactly the three warning
  * leaves, and the whole of what an attention dot means anywhere in the app
  * (docs/lifecycle-ui.md §4).
@@ -138,20 +156,15 @@ export function needsUser(activity: Activity): boolean {
 export const IDLE_TURN: SessionTurn = { phase: "idle", open: false, since: "" };
 
 /** The part of a work this derivation reads. */
-export type ActivityWork = Pick<WorkListItem, "status">;
+export type ActivityWork = Pick<WorkListItem, "status" | "wait">;
 
 /**
- * Whether the engine is driving this work right now.
- *
- * Today's status enum collapses two facts into one value: whether the engine is
- * driving the work, and what it is waiting for while it does. These three
- * values are the "engine is driving" half — `waiting` and `needs_input` are an
- * active work with a wait on it, not a different kind of life.
+ * Whether the engine is driving this work right now — which is the whole of
+ * what `active` means. What it is waiting for while it does is `wait`, a
+ * separate field, because the two are separate facts.
  */
 export function isWorkActive(status: WorkStatus): boolean {
-	return (
-		status === "in_progress" || status === "needs_input" || status === "waiting"
-	);
+	return status === "active";
 }
 
 /**
@@ -172,8 +185,11 @@ export function isWorkActive(status: WorkStatus): boolean {
  * degrade into a message the way an expired question can, so it is the one whose
  * deadline costs something.
  *
- * The work's status is read in two places below. When the work layer splits that
- * enum into a status and a wait, those two reads change and this rule does not.
+ * The server evaluates this same rule for work rows, which is where a row's
+ * `activity` comes from (server/work/activity.go): a work list spans worktrees,
+ * and a client cannot hold the turn state of a session in a worktree it has not
+ * opened. The two implementations are checked against one shared table of cases,
+ * `server/work/testdata/activity_cases.json`, so the rule is written down once.
  */
 export function deriveActivity(
 	work: ActivityWork | undefined,
@@ -193,8 +209,8 @@ export function deriveActivity(
 		return "background";
 	}
 
-	if (work?.status === "needs_input") return "needs_message";
-	if (work?.status === "waiting") return "waiting_children";
+	if (work?.wait === "user") return "needs_message";
+	if (work?.wait === "child") return "waiting_children";
 	return "idle";
 }
 

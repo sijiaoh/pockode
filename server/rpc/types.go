@@ -614,16 +614,26 @@ type WorkListItem struct {
 	AgentRoleID string          `json:"agent_role_id,omitempty"`
 	Title       string          `json:"title"`
 	Status      work.WorkStatus `json:"status"`
-	SessionID   string          `json:"session_id,omitempty"`
-	Worktree    string          `json:"worktree,omitempty"`
+	// Activity is what the work is doing, derived on the server from this item
+	// and the turn of the session it runs in. It is the one thing a row draws
+	// that the row cannot compute: a work list spans worktrees while a session
+	// list is scoped to one, so a client does not hold the turn state of a
+	// session in a worktree it has not opened (docs/lifecycle-ui.md §1.3).
+	Activity work.Activity `json:"activity"`
+	// Wait is what an active work is waiting for; the reason the agent gave for
+	// it belongs to the detail, where there is room to show it.
+	Wait      work.WorkWait `json:"wait,omitempty"`
+	SessionID string        `json:"session_id,omitempty"`
+	Worktree  string        `json:"worktree,omitempty"`
 	// UpdatedAt is what the closed group is ordered by.
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // NewWorkListItem builds the row for a work item. Every producer of a row goes
 // through here so that narrowing work.Work down to a row is decided in one
-// place.
-func NewWorkListItem(w work.Work) WorkListItem {
+// place. The activity is passed in rather than derived here, because deriving
+// it reads the session layer — see watch.WorkListWatcher.
+func NewWorkListItem(w work.Work, activity work.Activity) WorkListItem {
 	return WorkListItem{
 		ID:          w.ID,
 		Type:        w.Type,
@@ -631,20 +641,12 @@ func NewWorkListItem(w work.Work) WorkListItem {
 		AgentRoleID: w.AgentRoleID,
 		Title:       w.Title,
 		Status:      w.Status,
+		Activity:    activity,
+		Wait:        w.Wait,
 		SessionID:   w.SessionID,
 		Worktree:    w.Worktree,
 		UpdatedAt:   w.UpdatedAt,
 	}
-}
-
-// NewWorkListItems narrows a whole list. An empty store yields an empty slice
-// rather than nil, so a client with no work items is sent [] and not null.
-func NewWorkListItems(works []work.Work) []WorkListItem {
-	items := make([]WorkListItem, len(works))
-	for i, w := range works {
-		items[i] = NewWorkListItem(w)
-	}
-	return items
 }
 
 type WorkListSubscribeResult struct {
@@ -675,6 +677,9 @@ type WorkDetailSubscribeResult struct {
 	Comments []work.Comment `json:"comments"`
 	// Usage is the detail's alone, never Work's — see work.Usage.
 	Usage work.Usage `json:"usage"`
+	// Activity rides here for the same reason Usage does: it is derived from
+	// something the work record knows nothing about — the turn of its session.
+	Activity work.Activity `json:"activity"`
 }
 
 // AgentRole namespace

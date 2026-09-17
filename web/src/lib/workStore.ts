@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { WorkListItem } from "../types/work";
+import { normalizeActivity } from "./activity";
 
 interface WorkState {
 	works: WorkListItem[];
@@ -20,11 +21,26 @@ export const useWorkStore = create<WorkStore>((set) => ({
 	works: [],
 	isLoading: true,
 	error: null,
-	setWorks: (works) => set({ works, isLoading: false, error: null }),
-	updateWorks: (updater) => set((state) => ({ works: updater(state.works) })),
+	setWorks: (works) =>
+		set({ works: works.map(normalizeWorkRow), isLoading: false, error: null }),
+	updateWorks: (updater) =>
+		set((state) => ({ works: updater(state.works).map(normalizeWorkRow) })),
 	setError: (error) => set({ isLoading: false, error }),
 	reset: () => set({ works: [], isLoading: true, error: null }),
 }));
+
+/**
+ * One row as it arrived from the server, with its activity folded to a leaf this
+ * build knows (see normalizeActivity).
+ *
+ * Both writers run it over what they are about to store, so the boundary is the
+ * store itself rather than each call site's memory of it — and a row it leaves
+ * alone is returned unchanged, so the rows React is diffing keep their identity.
+ */
+export function normalizeWorkRow(row: WorkListItem): WorkListItem {
+	const activity = normalizeActivity(row.activity);
+	return activity === row.activity ? row : { ...row, activity };
+}
 
 /** The only fields needed to walk a work up to its root. */
 type WorkNode = Pick<WorkListItem, "id" | "parent_id" | "status">;

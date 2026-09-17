@@ -104,10 +104,10 @@ func TestSetWorktree_NotFound(t *testing.T) {
 func TestUnclosedWorkByWorktree(t *testing.T) {
 	works := []Work{
 		{ID: "a", Title: "open on feature", Worktree: "feature", Status: StatusOpen},
-		{ID: "b", Title: "in progress on feature", Worktree: "feature", Status: StatusInProgress},
+		{ID: "b", Title: "in progress on feature", Worktree: "feature", Status: StatusActive},
 		{ID: "c", Title: "closed on feature", Worktree: "feature", Status: StatusClosed},
 		{ID: "d", Title: "open on other", Worktree: "other", Status: StatusOpen},
-		{ID: "e", Title: "open on main", Worktree: "", Status: StatusInProgress},
+		{ID: "e", Title: "open on main", Worktree: "", Status: StatusActive},
 	}
 
 	t.Run("returns only non-closed work on the target worktree, in order", func(t *testing.T) {

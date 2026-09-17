@@ -152,8 +152,8 @@ with no turn in flight — Codex emits a warning at startup when a restarted ses
 cannot recover its thread.
 
 There used to be a sharp asymmetry here: an event wrongly counted as activity
-left a session marked `running` forever, which `work.AutoResumer` reads as "the
-agent is working" and never corrects. **That is fixed at the reducer rather than
+left a session marked `running` forever, which everything downstream read as "the
+agent is working" and nothing corrected. **That is fixed at the reducer rather than
 at the list.** `SignalNoise` — what an event on this list becomes — moves no turn
 at all, so a type wrongly listed is inert rather than dangerous, and nothing can
 strand a session by merely describing itself. What the list still decides is the
@@ -1109,8 +1109,8 @@ on, and every surface can say which.
 **This replaces swallowing the ending**, which is what the adapter used to do so
 that the wait read as one long thought. It worked in the sense that nothing
 downstream had to know, and the cost was that nothing downstream *could* know: a
-spinner and a Stop button and an `in_progress` work item for hours of a turn
-nobody was running, with the reaper needing a hole cut in it to avoid killing the
+spinner and a Stop button and a work item claiming to be running for hours of a
+turn nobody was running, with the reaper needing a hole cut in it to avoid killing the
 tasks. The event is recorded like any other, so the wait is visible
 in the transcript where it happened.
 
@@ -1277,12 +1277,13 @@ record consumed before delivery would be a silent failure about a silent failure
 The CLI's own recovery path (`CLAUDE_CODE_RESUME_INTERRUPTED_TURN`, which reads
 `orphaned_background_tasks_pending_notification` on resume) was evaluated and not
 adopted: the same switch also replays or synthesizes a continuation prompt, which
-would collide with the AutoResumer's own nudge and corrupt its retry accounting,
+would collide with the work engine's own nudge and corrupt its accounting,
 and its benefit — telling the agent — is already covered by the queued note, while
 the user side would still be unexplained.
 
 What this means on the work side is covered there: why the work item stays
-`in_progress` and why nothing nudges it
+`active` with no wait, why its activity reads `background`, and why nothing
+nudges it
 ([Background Waits and the Work Item](work-system.md#background-waits-and-the-work-item)),
 and why messages sent through the other, non-idle paths are *not* deferred until
 the wait ends
@@ -2283,36 +2284,48 @@ stopped" is a guess, and an aborted turn is routinely followed by its replacemen
 a moment later. Raw state changes are unaffected — a client's spinner should stop
 immediately; only decisions taken *because* a turn ended need the settled answer.
 
-Nothing reads it yet: `work.AutoResumer` still keeps a settle delay of its own,
-and replacing it is part of the work-layer step. A settler with no listener arms
-no timers, so until then this costs nothing and announces nothing.
+**The work engine is its consumer**, and its only one: `process.Manager.SetOnTurnEnded`
+is where a worktree wires the two together, and a settled ending is the engine's
+main input ([work-system.md](work-system.md#input-1-a-turn-ended)). One listener,
+because two would be two consumers of a guess — which is how the guess ends up
+made twice with two answers, exactly what the old per-consumer settle delays
+were.
 
-#### What the Work Layer Still Sees
+#### What Is Left of the Narrowing
 
-The client is no longer one of the readers of this narrowing. `SessionListItem`
-and the chat subscription both carry the whole `TurnState`, and the frontend
-derives everything it draws from it in one pure function
-([lifecycle-ui.md](../lifecycle-ui.md)). What remains narrowed is the *work*
-layer: `StateChangeEvent` keeps the shape it has always had — a `ProcessState`
-and a `NeedsInput` flag — produced by `process.viewTurn`:
+Nothing outside this package reads a turn through a process state any more. The
+client carries the whole `TurnState` — on `SessionListItem` and on the chat
+subscription — and derives what it draws from it
+([lifecycle-ui.md](../lifecycle-ui.md)); the work layer derives its activity from
+the same state ([work-system.md](work-system.md#activity)) and hears turn
+*endings*, settled, from the settler.
 
-| Turn | State | NeedsInput |
-|---|---|---|
-| a `permission` or `question` blocker, whatever else is true | `idle` | true |
-| otherwise, a turn is open (running, or blocked on `background`) | `running` | false |
-| otherwise | `idle` | false |
+So `StateChangeEvent` has been narrowed to what its one remaining reader needs.
+It carried a `NeedsInput` flag, an `Interrupted` flag and the state; the first
+two existed because the work layer had nothing better to read, and both went with
+it. What is left is `process.viewTurn`:
 
-The second row is where the narrowing loses something real — a parked turn and a
-running one are the whole point of the new blocker, and here they are the same
-value — and it is deliberate: `AutoResumer` and `StatusSyncer` keep their old
-input until the work layer is rebuilt on the turn state directly. Nothing above
-that function is written in terms of these two values.
+| Turn | State |
+|---|---|
+| a `permission` or `question` blocker, whatever else is true | `idle` |
+| otherwise, a turn is open (running, or blocked on `background`) | `running` |
+| otherwise | `idle` |
 
-The session list no longer needs a notification of its own when this fires,
-either. A row's whole state is the session's turn, and the process writes that
-into the store before announcing anything — so the store's own change
-notification has already carried it, and `SessionListWatcher.HandleProcessStateChange`
-now only marks the session unread and drives the work item.
+and the reader is the unread mark: `SessionListWatcher.HandleProcessStateChange`
+marks a session unread when it falls idle and nobody is looking, and does nothing
+else. Blocked-on-a-person reading as `idle` is what that rule wants — nothing is
+being produced and the user has to look. Blocked on background work reading as
+`running` is where the narrowing still loses something real, which is why nothing
+but the unread mark may be written in terms of it.
+
+`IsInitial` — the idle a process emits on creation — is the one flag kept without
+a reader. Whether merely starting a session should mark it unread is a product
+question, and deleting the flag would answer it by accident.
+
+The session list needs no notification of its own when this fires, either. A
+row's whole state is the session's turn, and the process writes that into the
+store before announcing anything — so the store's own change notification has
+already carried it.
 
 #### A Prompt Belongs to the Process That Raised It
 
@@ -2352,18 +2365,19 @@ opposite directions for the same reason:
 - **Across a restart, the blocker expires and the transcript says so.** The
   session store reduces every stored turn with `SignalProcessEnded` when it loads
   the index, and appends the `process_ended` record the killed run never wrote
-  (see [Restart Repair](#restart-repair)). Startup also stops `needs_input` work
-  instead of preserving it ([work-system.md](work-system.md#triggers), Trigger
-  C): the process is gone, so the question is gone, and the status would be
-  promising a resumption that cannot arrive.
+  (see [Restart Repair](#restart-repair)), so the cards read Expired. The work
+  layer needs no rule of its own for this: a work waiting on the *user* is
+  waiting on `work_needs_input`, which nothing in the session knows about and
+  which a message answers whenever the user gets to it — while a work that was
+  merely being carried by the dead process is stopped at startup
+  ([work-system.md](work-system.md#input-5-startup)).
 
 **Both rules stand on this premise and have to be revisited if it changes.** The
 change to watch for is a CLI re-offering its outstanding prompts to a resumed
 session, or accepting an answer addressed by something more durable than a live
-request id. Either one makes the answer lease pointless — the process would no
+request id. Either one makes the answer lease pointless: the process would no
 longer be the only way back to the question, so holding it would be a plain
-resource cost — and turns a `needs_input` work preserved across a restart from a
-lie into the correct answer. Neither rule has a second reason to fall back on, which is why the
+resource cost. Neither rule has a second reason to fall back on, which is why the
 premise is written down once here instead of being re-derived at each of them.
 
 #### Restart Repair
@@ -2393,7 +2407,8 @@ Sessions that were idle are left completely alone, and so are sessions written b
 a build from before turn state existed: those read back with no turn, an absent
 phase means idle, and the repair is a no-op for them. That is the whole of the
 migration — there is no migration script, and the obsolete `needs_input` still on
-disk is simply never read.
+disk is simply never read. The work index is normalised the same way, on load and
+with no script ([work-system.md](work-system.md#four-statuses-and-a-wait)).
 
 ### Event Stream Handling
 
@@ -2524,7 +2539,7 @@ exactly like a real one.
 **What the work layer sees is an ordinary turn ending**, which is the point of
 routing expiries through the reducer rather than around it: an interrupted turn
 is `aborted`, so the work stops and waits for a person
-([work-system.md](work-system.md#triggers)); a background wait ended on the
+([work-system.md](work-system.md#input-1-a-turn-ended)); a background wait ended on the
 session's behalf is `completed`, so the work auto-continues exactly as it did
 before background waits existed. Neither needed a rule of its own.
 
@@ -2563,13 +2578,91 @@ inferring it from silence.
 defaulted to. Nothing is waiting on it, and the only cost of collecting it is the
 resume the next message pays for — history lives in the store, and
 `process_ended` reaches the client either way. What it costs the *work* bound to
-that session is "nothing it was not already exposed to": a collected process is
-an ordinary process death, so it stops `in_progress` work and leaves paused work
-alone ([work-system.md](work-system.md#triggers), Trigger A). That rule and this
-one are written against each other.
+that session is "nothing it was not already exposed to": a collected process
+aborts whatever turn it was carrying, and an aborted turn stops the work
+([work-system.md](work-system.md#input-1-a-turn-ended)) — but a process with no
+turn open, which is what an idle lease collects, ends no turn and so moves no
+work at all. A work waiting on a person or on its children is therefore
+untouched by collection, which is the whole reason the idle budget can be short.
 
 The reaper's own tick is a quarter of the shortest budget in the table, so the
 entry that matters soonest is not overshot by the entries measured in hours.
+
+### Retiring a Closed Work's Session
+
+A lease answers "what is this turn waiting for". Nothing it can see knows that
+the *work* above the session has been finished with — so when a work closes, the
+work layer says so directly: `Manager.RetireSession`
+([work-system.md](work-system.md#the-session-lease)).
+
+Retirement is not a kill. The CLI may be mid-sentence — an agent calls
+`step_done` and then signs off — and what it bounds is that sentence, not the
+work: the session id and the transcript stay for Reopen, so nothing is lost by
+ending the process. Three things follow from "nobody is coming back to this
+session":
+
+- **Every prompt on screen is cancelled**, with `reason: work_closed` on the
+  record. That holds for the whole retirement, not just its first instant: a
+  question raised inside the grace would otherwise sit pending forever on a work
+  the user has finished with. The withdrawal goes in as an ordinary
+  `request_cancelled` event, so it is recorded, reduced and broadcast exactly
+  like one the agent sent itself, and the client needs no second way to learn a
+  card is dead.
+- **A turn that ends inside the grace ends the process with it.**
+- **The grace is a deadline, not a budget activity extends.** A background task
+  started on the way out does not buy the session another day; `workCloseGrace`
+  (2 minutes) is measured from the close and nothing pushes it out.
+
+Calling it twice changes nothing. The work store reports a change for reasons
+that have nothing to do with the session — a retitle, an edit — and each of those
+reaches the engine as another "this work is closed"; restarting the grace on
+every one of them would make a closed work's process outlive an edited title.
+
+**A prompt cancels the retirement outright**, and that is not an exception to the
+deadline — it is the premise failing. Retirement means *nobody is coming back to
+this session*, and a prompt is somebody coming back: a work closed and reopened
+inside the two minutes sends its restart message to this very process, and a user
+can type into a closed work's chat whenever they like. Without it the turn they
+just started would be ended by a timer armed before it existed. The work stays
+closed either way — what the process is worth from then on is the ordinary idle
+lease's business, which is exactly what a session with no work above it gets.
+
+The deadline is also armed for **one process, not for a session id**. A work
+reopened inside the grace builds a *new* process under the same id, and a timer
+that closed by name would kill it; `endRetirement` closes only the process it was
+armed for.
+
+### A Process That Has Been Replaced
+
+A session outlives its processes: one is collected — by the idle lease, by a
+closed work's grace, by a Stop — and the next message builds another under the
+same id moments later. The predecessor's stream then ends *after* its successor
+is in the map, and everything the ending does is written in terms of the session.
+
+So the epilogue asks first whether this process is still the session's
+(`dropProcess`, by identity), and says nothing at all if it is not. Both halves
+of it are wrong once it has been replaced:
+
+- **Removing "the process for this session" evicts the live successor.** It keeps
+  running, unreachable and uncollectable — no lease can find it — while the
+  session reads as having no process and the next message starts a third.
+- **Reducing `process_ended` aborts the successor's turn.** The predecessor's own
+  abort has already been recorded, by the successor's `SignalProcessStarted`
+  ([Turn State](#turn-state)); repeating it here ends a turn that is running. With
+  the work engine stopping work on an aborted turn
+  ([work-system.md](work-system.md#input-1-a-turn-ended)), that is a work stopped
+  because a process that died before it got the last word.
+
+This is why every collection path removes by identity rather than by name, and
+why `Close(sessionID)` — which means "whatever process this session has now" —
+is the one that is allowed to be keyed on the id.
+
+`reason` is a field on the cancellation record, shared with expiry, because "why
+did this stop waiting for me" is one question:
+`process_ended` | `timeout` | `work_closed`. Only the last is produced today —
+it is the one the work layer owns — and the other two are what the session layer
+already has cases for; the client's per-reason copy lands with the code that
+fills them in.
 
 ## Session Management
 
@@ -2595,9 +2688,11 @@ type SessionMeta struct {
 `Unread` is set by every idle the session reports while nobody is viewing it,
 including the initial idle a process emits the moment it is created — so simply
 building a process marks the session unread, whether or not the agent said
-anything. `StateChangeEvent.IsInitial` distinguishes that first idle, but only
-`work.AutoResumer` reads it. Noted rather than fixed: what "unread" should mean
-for a session that was merely started is a product question.
+anything. `StateChangeEvent.IsInitial` distinguishes that first idle, and nothing reads it
+any more — the work engine acts on settled turn endings, and a process's first
+idle is not one. Noted rather than fixed: what "unread" should mean for a session
+that was merely started is a product question, and removing the flag would be
+answering it by accident.
 
 `Usage` is the one field here no user action sets and no RPC writes — it is
 accumulated from what the CLI reports, and [Usage
@@ -2954,6 +3049,7 @@ The following conditions send an `ErrorEvent` and end the session:
 | Chat client | `server/chat/client.go` |
 | Process management | `server/process/manager.go` |
 | Process lease table | `server/session/lease.go` (the table), `server/process/manager.go` (acting on one) |
+| Retiring a closed work's session | `server/process/manager.go` (`RetireSession`) |
 | Session storage | `server/session/store.go` |
 | Usage collection | `server/agent/usage.go`, `server/agent/claude/usage.go`, `server/agent/codex/usage.go` |
 | Session usage record | `server/session/usage.go` |

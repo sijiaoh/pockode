@@ -227,7 +227,13 @@ func TestSessionListWatcher_HandleProcessStateChange_NoSubscribers(t *testing.T)
 // growing a write it should not have.
 type recordingSessionStore struct {
 	mockSessionStore
-	turnInputs []session.TurnInput
+	turnInputs  []session.TurnInput
+	unreadCalls int
+}
+
+func (r *recordingSessionStore) SetUnread(context.Context, string, bool) error {
+	r.unreadCalls++
+	return nil
 }
 
 func (r *recordingSessionStore) ApplyTurn(_ context.Context, _ string, in session.TurnInput) (session.TurnTransition, error) {
@@ -235,116 +241,42 @@ func (r *recordingSessionStore) ApplyTurn(_ context.Context, _ string, in sessio
 	return session.TurnTransition{}, nil
 }
 
-type recordingSyncer struct {
-	promptsRaised []string
-	userActions   []string
-}
-
-func (r *recordingSyncer) HandlePromptRaised(_ context.Context, sessionID string) {
-	r.promptsRaised = append(r.promptsRaised, sessionID)
-}
-
-func (r *recordingSyncer) HandleUserAction(_ context.Context, sessionID string) {
-	r.userActions = append(r.userActions, sessionID)
-}
-
-func (r *recordingSyncer) callCount() int {
-	return len(r.promptsRaised) + len(r.userActions)
-}
-
-func TestHandleProcessStateChange_IdleNeedsInput_SyncsWork(t *testing.T) {
-	store := &mockSessionStore{}
-	w := NewSessionListWatcher(store)
-	syncer := &recordingSyncer{}
-	w.SetWorkStatusSyncer(syncer)
-
-	w.HandleProcessStateChange(process.StateChangeEvent{
-		SessionID:  "sess-1",
-		State:      process.ProcessStateIdle,
-		NeedsInput: true,
-	})
-
-	if len(syncer.promptsRaised) != 1 || syncer.promptsRaised[0] != "sess-1" {
-		t.Fatalf("expected one prompt-raised call for sess-1, got %v", syncer.promptsRaised)
-	}
-	if len(syncer.userActions) != 0 {
-		t.Errorf("expected no user-action calls, got %v", syncer.userActions)
-	}
-}
-
-func TestHandleProcessStateChange_IdleNoNeedsInput_NoSync(t *testing.T) {
-	store := &mockSessionStore{}
-	w := NewSessionListWatcher(store)
-	syncer := &recordingSyncer{}
-	w.SetWorkStatusSyncer(syncer)
-
-	w.HandleProcessStateChange(process.StateChangeEvent{
-		SessionID:  "sess-1",
-		State:      process.ProcessStateIdle,
-		NeedsInput: false,
-	})
-
-	if syncer.callCount() != 0 {
-		t.Errorf("expected no sync calls for idle without needsInput, got %d", syncer.callCount())
-	}
-}
-
-func TestHandleProcessStateChange_Running_TouchesNothing(t *testing.T) {
+// The work layer is not touched from here at all any more: the engine hears a
+// settled turn ending, which is the only thing about a session it acts on.
+// These two lock that down from the two sides it used to be wrong on.
+func TestHandleProcessStateChange_MarksUnreadAndNothingElse(t *testing.T) {
 	store := &recordingSessionStore{}
 	w := NewSessionListWatcher(store)
-	syncer := &recordingSyncer{}
-	w.SetWorkStatusSyncer(syncer)
 
 	w.HandleProcessStateChange(process.StateChangeEvent{
 		SessionID: "sess-1",
-		State:     process.ProcessStateRunning,
+		State:     process.ProcessStateIdle,
 	})
 
+	if store.unreadCalls != 1 {
+		t.Errorf("marked unread %d times, want once", store.unreadCalls)
+	}
 	if len(store.turnInputs) != 0 {
 		t.Errorf("the watcher must not write turn state; the process owns it, got %v", store.turnInputs)
 	}
-	if syncer.callCount() != 0 {
-		t.Errorf("expected no sync calls on Running, got %d", syncer.callCount())
-	}
 }
 
-// A dead process must not touch the work item. HandleUserAction moves
-// needs_input and waiting back to in_progress, and the AutoResumer's
-// process-ended stop — which runs a moment later on the same event — stops
-// in_progress work. Calling the syncer here chains the two together, so every
-// paused work ends up stopped as soon as its process dies, which the idle reaper
-// guarantees it eventually will.
-func TestHandleProcessStateChange_Ended_LeavesTheWorkAlone(t *testing.T) {
-	store := &recordingSessionStore{}
-	w := NewSessionListWatcher(store)
-	syncer := &recordingSyncer{}
-	w.SetWorkStatusSyncer(syncer)
+func TestHandleProcessStateChange_RunningAndEndedTouchNothing(t *testing.T) {
+	for _, state := range []process.ProcessState{process.ProcessStateRunning, process.ProcessStateEnded} {
+		t.Run(string(state), func(t *testing.T) {
+			store := &recordingSessionStore{}
+			w := NewSessionListWatcher(store)
 
-	w.HandleProcessStateChange(process.StateChangeEvent{
-		SessionID: "sess-1",
-		State:     process.ProcessStateEnded,
-	})
+			w.HandleProcessStateChange(process.StateChangeEvent{SessionID: "sess-1", State: state})
 
-	if syncer.callCount() != 0 {
-		t.Errorf("a dead process must not touch its work item, got %d sync calls", syncer.callCount())
+			if len(store.turnInputs) != 0 {
+				t.Errorf("the watcher must not write turn state, got %v", store.turnInputs)
+			}
+			if store.unreadCalls != 0 {
+				t.Errorf("only an idle process marks a session unread, got %d calls", store.unreadCalls)
+			}
+		})
 	}
-	// The blockers a dead process was holding expire through the reducer, on the
-	// process's own way out — not from here.
-	if len(store.turnInputs) != 0 {
-		t.Errorf("the watcher must not write turn state, got %v", store.turnInputs)
-	}
-}
-
-func TestHandleProcessStateChange_NoSyncer_NoPanic(t *testing.T) {
-	store := &mockSessionStore{}
-	w := NewSessionListWatcher(store)
-
-	// No syncer set — should not panic
-	w.HandleProcessStateChange(process.StateChangeEvent{
-		SessionID:  "sess-1",
-		State:      process.ProcessStateIdle,
-		NeedsInput: true,
-	})
 }
 
 func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
@@ -462,34 +394,4 @@ func TestSessionListWatcher_RowCarriesTheStoredTurn(t *testing.T) {
 		params.Session.Turn.Blockers[0].RequestID != "req-1" {
 		t.Errorf("row lost the blocker the card is answered through: %+v", params.Session.Turn)
 	}
-}
-
-func TestHandleUserAction_ResumesWorkAndLeavesTheSessionAlone(t *testing.T) {
-	store := &recordingSessionStore{}
-	w := NewSessionListWatcher(store)
-	syncer := &recordingSyncer{}
-	w.SetWorkStatusSyncer(syncer)
-
-	w.HandleUserAction("sess-1")
-
-	// The session's side of a user action is the answer clearing the blocker it
-	// names, which happens on the send path — not here, and not as a flag.
-	if len(store.turnInputs) != 0 {
-		t.Errorf("the watcher must not write turn state, got %v", store.turnInputs)
-	}
-
-	if len(syncer.userActions) != 1 || syncer.userActions[0] != "sess-1" {
-		t.Fatalf("expected one user-action call for sess-1, got %v", syncer.userActions)
-	}
-	if len(syncer.promptsRaised) != 0 {
-		t.Errorf("expected no prompt-raised calls, got %v", syncer.promptsRaised)
-	}
-}
-
-func TestHandleUserAction_NoSyncer_NoPanic(t *testing.T) {
-	store := &recordingSessionStore{}
-	w := NewSessionListWatcher(store)
-
-	// No syncer set — should not panic
-	w.HandleUserAction("sess-1")
 }

@@ -35,7 +35,8 @@ const createWork = (overrides: Partial<Work> = {}): Work => ({
 	type: "story",
 	title: "Story",
 	body: "Work description",
-	status: "in_progress",
+	status: "active",
+	activity: "idle",
 	agent_role_id: "role-1",
 	current_step: 0,
 	created_at: "2026-03-04T00:00:00Z",
@@ -59,6 +60,23 @@ function expectToAppearBefore(first: Node, second: Node) {
 	).toBeTruthy();
 }
 
+const renderWithWork = (work: Work) => {
+	mockUseWorkDetailSubscription.mockReturnValue({
+		work,
+		comments: [],
+		loading: false,
+		error: null,
+	});
+	return render(
+		<WorkDetailOverlay
+			workId="work-1"
+			onBack={vi.fn()}
+			onNavigateToSession={vi.fn()}
+			onOpenWorkDetail={vi.fn()}
+		/>,
+	);
+};
+
 describe("WorkDetailOverlay", () => {
 	beforeEach(() => {
 		mockUseWorkDetailSubscription.mockReset();
@@ -77,25 +95,8 @@ describe("WorkDetailOverlay", () => {
 	// The counter is shared with the chat top bar (utils/workSteps), so it has to
 	// stay pinned on this side too.
 	describe("step counter", () => {
-		const renderWithWork = (work: Work) => {
-			mockUseWorkDetailSubscription.mockReturnValue({
-				work,
-				comments: [],
-				loading: false,
-				error: null,
-			});
-			render(
-				<WorkDetailOverlay
-					workId="work-1"
-					onBack={vi.fn()}
-					onNavigateToSession={vi.fn()}
-					onOpenWorkDetail={vi.fn()}
-				/>,
-			);
-		};
-
 		it("counts the step an active work sits on", () => {
-			renderWithWork(createWork({ status: "in_progress", current_step: 1 }));
+			renderWithWork(createWork({ status: "active", current_step: 1 }));
 
 			expect(
 				screen.getByRole("heading", { name: "Steps (2/2)" }),
@@ -167,6 +168,7 @@ describe("WorkDetailOverlay", () => {
 					agent_role_id: "role-1",
 					title: "Wire it up",
 					status: "open",
+					activity: "open",
 					updated_at: "2026-03-04T00:00:00Z",
 				},
 			],
@@ -289,5 +291,59 @@ describe("WorkDetailOverlay", () => {
 		const stepsHeading = screen.getByRole("heading", { name: /Steps/ });
 
 		expectToAppearBefore(descriptionEditor, stepsHeading);
+	});
+});
+
+// The agent's own words for what it is waiting for. This page is the only place
+// they are shown, and before the work layer carried them the user could not read
+// what the agent wanted at all.
+describe("the wait line", () => {
+	beforeEach(() => {
+		mockUseWorkDetailSubscription.mockReset();
+		useWorkStore.setState({ works: [], isLoading: false, error: null });
+		useAgentRoleStore.setState({
+			roles: [createRole()],
+			isLoading: false,
+			error: null,
+		});
+	});
+
+	it("shows the agent's reason verbatim", () => {
+		renderWithWork(
+			createWork({
+				status: "active",
+				wait: "user",
+				wait_reason: "Which database should I use, Postgres or SQLite?",
+			}),
+		);
+
+		expect(
+			screen.getByText("Which database should I use, Postgres or SQLite?"),
+		).toBeInTheDocument();
+	});
+
+	it("says what a wait on subtasks is, which has no reason to show", () => {
+		renderWithWork(createWork({ status: "active", wait: "child" }));
+
+		expect(
+			screen.getByText(/Waiting for its subtasks to finish/),
+		).toBeInTheDocument();
+	});
+
+	it("says nothing about a work that is not waiting", () => {
+		const { container } = renderWithWork(createWork({ status: "active" }));
+
+		expect(container.textContent).not.toMatch(/Waiting/);
+	});
+
+	// A wait means nothing once the engine has let go of the work, and the store
+	// clears it — but a row that drew one anyway would promise a resumption
+	// nothing is going to deliver.
+	it("says nothing about a stopped work", () => {
+		const { container } = renderWithWork(
+			createWork({ status: "stopped", wait: "user", wait_reason: "answer me" }),
+		);
+
+		expect(container.textContent).not.toMatch(/answer me/);
 	});
 });

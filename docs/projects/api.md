@@ -22,6 +22,7 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | `work_delete` | `id` | — | Confirmation string |
 | `work_start` | `id` | — | Confirmation string with session ID |
 | `work_needs_input` | `id`, `reason` | — | Confirmation string |
+| `work_wait` | `id` | `reason` | Confirmation string |
 | `work_reopen` | `id` | — | Confirmation string |
 | `step_done` | `id` | — | Confirmation string |
 | `work_comment_add` | `work_id`, `body` | — | Confirmation string with comment ID |
@@ -40,11 +41,12 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 ### Behavior Notes
 
 - **`work_create`**: Requires `agent_role_id` (validated to exist). Stories are top-level; tasks require `parent_id`.
-- **`work_start`**: Requires the work item to have an `agent_role_id`. Atomically transitions to `in_progress` and attaches a session ID via `Store.Claim` (a fresh UUIDv7, or the existing session on restart), then creates the session and sends the kickoff via `WorkStartHandler` (in-process).
+- **`work_start`**: Requires the work item to have an `agent_role_id`. Atomically transitions to `active` and attaches a session ID via `Store.Claim` (a fresh UUIDv7, or the existing session on restart), then creates the session and sends the kickoff via `WorkStartHandler` (in-process).
 - **`step_done`**: Calls `Store.StepDone()`. Work items advance to the next configured step, or close when no steps remain. Use `work_wait`, not `step_done`, to pause while child work is still open.
-- **`work_needs_input`**: Calls `Store.MarkNeedsInput()`. Pauses the work at `needs_input`.
-- **`work_reopen`**: Calls `Store.Reopen()`. Transitions `closed → in_progress`. Use when you need to add more child work items or continue working on a completed item.
-- **Accepted statuses**: `step_done` / `work_wait` / `work_needs_input` only require that the work is started and not closed, so a stale liveness status (`stopped`, `needs_input`, `waiting`) never blocks the agent. `work_start` is the one with a different rule: it also accepts `open`, but rejects a work that is already `in_progress`. See [workflow-engine](workflow-engine.md#status-transitions).
+- **`work_needs_input`**: Calls `Operations.NeedsInput()`. The work stays `active` and records that it is waiting on the user, with the agent's `reason` shown verbatim on the detail page.
+- **`work_wait`**: Calls `Operations.Wait()`. The same wait, cleared by a child closing instead of by a person; its optional `reason` is shown the same way.
+- **`work_reopen`**: Calls `Operations.ReopenWork()`. Transitions `closed → active`. Use when you need to add more child work items or continue working on a completed item.
+- **Accepted statuses**: `step_done` / `work_wait` / `work_needs_input` only require that the work is started and not closed, so a stale `stopped` never blocks the agent. `work_start` is the one with a different rule: it also accepts `open`, but rejects a work that is already `active` — including one that is waiting, for which the user is offered Stop rather than Restart. See [workflow-engine](workflow-engine.md#status-transitions).
 - **`work_update`**: Uses pointer fields (`*string`) to distinguish "not provided" from "set to empty". Only updates data fields (title, body, agent_role_id).
 
 ## WebSocket RPC
@@ -62,7 +64,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.delete` | `WorkDeleteParams` | `{}` | Delete a work item (cascade-deletes children and sessions) |
 | `work.start` | `WorkStartParams` | `Work` (full object) | Atomic claim + session creation |
 | `work.stop` | `WorkStopParams` | `{}` | Stop a work item (any started, unclosed work → stopped) |
-| `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → in_progress) |
+| `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → active) |
 | `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
 | `work.comment.update` | `WorkCommentUpdateParams` | `Comment` | Update a comment's body |
 | `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage}` | Subscribe to a single work item + comments + the token usage of its subtree ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) |
@@ -136,10 +138,10 @@ does the same for the session list, for the same reason.
 
 `work.start` performs a two-phase operation:
 
-1. **Claim**: `Store.Claim` atomically transitions to `in_progress` and attaches a session ID under the store mutex — a fresh UUIDv7 for a fresh start, or the existing session ID on restart (any work that already owns a session, so the chat history survives). Deciding restart and session under the lock prevents concurrent claims from racing.
+1. **Claim**: `Store.Claim` atomically transitions to `active` and attaches a session ID under the store mutex — a fresh UUIDv7 for a fresh start, or the existing session ID on restart (any work that already owns a session, so the chat history survives). Deciding restart and session under the lock prevents concurrent claims from racing.
 2. **Session creation**: Calls `WorkStarter.HandleWorkStart()` to create the Claude session and send the kickoff (or restart) message.
 
-If step 2 fails, the handler calls `Store.RollbackStart` — fresh starts revert to `open` (clears sessionID); restarts revert to `stopped` (preserves sessionID).
+If step 2 fails, `Operations.StartWork` calls `Store.RollbackStart` with the sessionID it claimed — fresh starts revert to `open` (clears sessionID); restarts revert to `stopped` (preserves sessionID).
 
 ### `agent_role.update` Engine Fields
 

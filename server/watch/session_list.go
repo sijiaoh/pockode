@@ -15,22 +15,12 @@ type ViewingChecker interface {
 	IsViewing(sessionID string) bool
 }
 
-// WorkStatusSyncer moves a work item's status in response to session events.
-type WorkStatusSyncer interface {
-	HandlePromptRaised(ctx context.Context, sessionID string)
-	HandleUserAction(ctx context.Context, sessionID string)
-}
-
-// SessionListWatcher notifies subscribers when the session list changes.
-// Uses a channel-based async notification pattern to avoid blocking the session
-// store's mutex during network I/O.
 type SessionListWatcher struct {
 	*BaseWatcher
-	store            session.Store
-	viewingChecker   ViewingChecker
-	workStatusSyncer WorkStatusSyncer
-	eventCh          chan session.SessionChangeEvent
-	dirty            atomic.Bool // set when an event is dropped; triggers full sync
+	store          session.Store
+	viewingChecker ViewingChecker
+	eventCh        chan session.SessionChangeEvent
+	dirty          atomic.Bool // set when an event is dropped; triggers full sync
 }
 
 func NewSessionListWatcher(store session.Store) *SessionListWatcher {
@@ -45,10 +35,6 @@ func NewSessionListWatcher(store session.Store) *SessionListWatcher {
 
 func (w *SessionListWatcher) SetViewingChecker(vc ViewingChecker) {
 	w.viewingChecker = vc
-}
-
-func (w *SessionListWatcher) SetWorkStatusSyncer(s WorkStatusSyncer) {
-	w.workStatusSyncer = s
 }
 
 func (w *SessionListWatcher) Start() error {
@@ -170,8 +156,7 @@ type sessionListSyncParams struct {
 	Sessions  []rpc.SessionListItem `json:"sessions"`
 }
 
-// HandleProcessStateChange marks a session unread and lets the work layer know a
-// prompt was raised. Those two things and nothing else.
+// HandleProcessStateChange marks a session unread. That and nothing else.
 //
 // It notifies no subscriber. The process writes the session's turn before it
 // sends this event (process.Manager.emitTurn), so the store's own change
@@ -181,58 +166,18 @@ type sessionListSyncParams struct {
 // that used to set and clear a needs_input flag, each with its own rule for
 // when, are gone along with that flag.
 //
-// The work item is still driven from here, because a work is not a session and
-// has its own reason to move.
+// The work item is not touched from here at all any more. Every rule that used
+// to read a process state turned out to be a rule about a turn ending, which the
+// work engine hears directly and settled (session.TurnSettler).
 func (w *SessionListWatcher) HandleProcessStateChange(e process.StateChangeEvent) {
-	ctx := context.Background()
-
-	switch e.State {
-	case process.ProcessStateIdle:
-		if w.viewingChecker == nil || !w.viewingChecker.IsViewing(e.SessionID) {
-			if err := w.store.SetUnread(ctx, e.SessionID, true); err != nil {
-				slog.Warn("failed to set unread", "sessionId", e.SessionID, "error", err)
-			}
-		}
-		if e.NeedsInput && w.workStatusSyncer != nil {
-			w.workStatusSyncer.HandlePromptRaised(w.Context(), e.SessionID)
-		}
-	case process.ProcessStateRunning:
-		// Nothing: a session that has started producing output is not news to
-		// either the unread mark or the work item.
-	case process.ProcessStateEnded:
-		// The work item is deliberately left alone — a dead process is no
-		// evidence that the user answered, and waking the work here would hand
-		// the AutoResumer's process-ended stop an in_progress work to stop, which
-		// is how every paused work used to end up stopped. Work leaves
-		// needs_input/waiting on a user action instead (HandleUserAction).
+	if e.State != process.ProcessStateIdle {
+		return
 	}
-}
-
-// HandleUserAction records that the user just acted on this session: a work
-// paused on a prompt — or on child work — has the attention it was paused for,
-// so it resumes (work.StatusSyncer.HandleUserAction).
-//
-// Only the work layer is touched. The session's own side of this is the answer
-// clearing the blocker it names (process.Process.answerPrompt), which happens on
-// the send path whether the send came from here or from anywhere else.
-//
-// What counts is "the user handed this session something to go on": a message, a
-// permission answer, a question answer. Interrupt does not, even though a user
-// pressed it — it takes the turn away rather than handing something over, and
-// the interrupted state change it produces stops in_progress work, so resuming a
-// paused work here would only walk it into stopped (docs/code/work-system.md,
-// Trigger A).
-//
-// Two more paths are deliberately not this event. Deleting the session removes
-// the place an answer would go, so it stops the work instead of resuming it, and
-// lives where it happens (ws.rpcMethodHandler.stopWorkForDeletedSession). The
-// system-driven senders (restart, kickoff, step advance, reopen, child closure)
-// do put a message into a session, but this says a human has to look at the work
-// and they fire whether or not one is there — a work restarted through the MCP
-// API by another agent is the plain case.
-func (w *SessionListWatcher) HandleUserAction(sessionID string) {
-	if w.workStatusSyncer != nil {
-		w.workStatusSyncer.HandleUserAction(context.Background(), sessionID)
+	if w.viewingChecker != nil && w.viewingChecker.IsViewing(e.SessionID) {
+		return
+	}
+	if err := w.store.SetUnread(context.Background(), e.SessionID, true); err != nil {
+		slog.Warn("failed to set unread", "sessionId", e.SessionID, "error", err)
 	}
 }
 

@@ -26,6 +26,7 @@ const createWork = (overrides: Partial<WorkListItem>): WorkListItem => ({
 	type: "story",
 	title: "Story",
 	status: "open",
+	activity: "open",
 	updated_at: "2026-03-04T00:00:00Z",
 	...overrides,
 });
@@ -46,7 +47,7 @@ describe("WorkListOverlay", () => {
 					id: "story-in-progress",
 					type: "story",
 					title: "In Progress Story",
-					status: "in_progress",
+					status: "active",
 				}),
 				createWork({
 					id: "task-1",
@@ -92,7 +93,7 @@ describe("WorkListOverlay", () => {
 					id: "story-other-worktree",
 					type: "story",
 					title: "Story In Feature Worktree",
-					status: "in_progress",
+					status: "active",
 					worktree: "feature-x",
 					session_id: "session-abc",
 				}),

@@ -336,11 +336,11 @@ if changedPath != "" {
 
 ### Why Stop Waits Instead of Just Cancelling?
 
-Every watcher's `Stop` goes through `BaseWatcher.CancelAndWait`, which cancels the context *and* blocks until each loop started through `Go` has returned. Cancelling alone is the smaller implementation, and it is what the watchers did originally — as did `ProcessManager` and `AutoResumer`, both of which returned from teardown while their own goroutines were still running.
+Every watcher's `Stop` goes through `BaseWatcher.CancelAndWait`, which cancels the context *and* blocks until each loop started through `Go` has returned. Cancelling alone is the smaller implementation, and it is what the watchers did originally — as did `ProcessManager` and the work engine, both of which returned from teardown while their own goroutines were still running.
 
 The shortcut is hard to see as wrong from inside any one of those files: a cancelled context does stop the loop, just not before the caller moves on. It only reads as a bug once you look at what the caller does next. Stopping a worktree, deleting a session, or ending a test means the directory those goroutines write into is about to disappear, so anything outliving `Stop` writes into a tree already being torn down. That is how this surfaced — never as something a user could see, but as CI failing intermittently, when the event stream of a process that `Shutdown` had cancelled without waiting for wrote the session index into a `t.TempDir()` mid-cleanup.
 
-So teardown is synchronous on all three sides: watchers wait on their loops, the process manager on its event streams, the `AutoResumer` on its follow-ups. The process manager's wait is the one with a deadline, because it is the only one waiting on something outside the process: an agent CLI that refuses to close its output would otherwise hold the whole server's shutdown open, so it is reported and abandoned instead. FSWatcher's debounce timers are the one deliberate exception — `time.AfterFunc` callbacks are not tracked, so `Stop` can return with one still in flight. They are exempt because of what they do rather than for convenience: they only notify subscribers, never write to a store, and `notifyPath` re-checks the context before it does even that.
+So teardown is synchronous on all three sides: watchers wait on their loops, the process manager on its event streams, the work engine on its follow-ups *and* on the inputs it answers inline — a settled turn ending arrives on a timer of the session layer's, so nothing else is holding it open while the engine writes the work store for it. The process manager's wait is the one with a deadline, because it is the only one waiting on something outside the process: an agent CLI that refuses to close its output would otherwise hold the whole server's shutdown open, so it is reported and abandoned instead. FSWatcher's debounce timers are the one deliberate exception — `time.AfterFunc` callbacks are not tracked, so `Stop` can return with one still in flight. They are exempt because of what they do rather than for convenience: they only notify subscribers, never write to a store, and `notifyPath` re-checks the context before it does even that.
 
 ### Why a Session Is Two Subscriptions
 
@@ -412,11 +412,18 @@ detail must absorb too, or every burst would send detail alone into a full sync.
 
 A watcher's usual shape is one store, one kind of event: the work store changes,
 work detail goes out. That breaks as soon as a payload includes something the
-watcher's own store does not own. Work detail carries the usage of every session
-beneath the work item, and a session spending tokens changes no work item at all —
-so `WorkDetailWatcher` also subscribes to every worktree's session store and
-re-sends the affected details from there
-([work-system.md](work-system.md#usage-aggregation)).
+watcher's own store does not own. Two of the work watchers are in that position,
+for the same reason and with the same shape:
+
+- **Work detail** carries the usage of every session beneath the work item, and a
+  session spending tokens changes no work item at all
+  ([work-system.md](work-system.md#usage-aggregation)).
+- **Work rows and the detail alike** carry the work's derived `activity`, which
+  reads the turn state of the session it runs in — so a turn starting, blocking
+  on a question or settling changes what a row says while the work record itself
+  is untouched ([work-system.md](work-system.md#activity)).
+
+So both also subscribe to every worktree's session store and re-send from there.
 
 Two rules generalise out of it, and the case that produced them is written up
 where the aggregation is. Both are about the second source rather than about the
@@ -429,6 +436,13 @@ ran — and skips it silently, because the subscription still works and merely s
 hearing from that source. Registration therefore attaches to the existing
 instances as well, inside the same critical section that admits new ones, so a
 member created at that instant is registered exactly once.
+
+**Judge the re-send on everything the second source can move.** The detail
+suppressed a session-driven notification when the usage had not changed, which
+was the whole of what a session change used to mean to it; once the activity
+rode along, a turn starting — which spends nothing — became a change that has to
+go out. A dedup keyed on one half of the payload silently stops sending the
+other.
 
 **"Already sent" is a fact about a subscription, not about the entity.** A watcher
 that suppresses a re-send because nothing changed has to remember what *it sent to

@@ -42,7 +42,8 @@ const work = (id: string): Work => ({
 	id,
 	type: "story",
 	title: id,
-	status: "in_progress",
+	status: "active",
+	activity: "idle",
 	created_at: "2026-03-04T00:00:00Z",
 	updated_at: "2026-03-04T00:00:00Z",
 });
@@ -62,8 +63,18 @@ describe("useWorkDetailSubscription", () => {
 		vi.clearAllMocks();
 		notificationCallback = null;
 		mockDetails = {
-			"work-1": { work: work("work-1"), comments: [], usage: usageOf(1_000) },
-			"work-2": { work: work("work-2"), comments: [], usage: usageOf(50) },
+			"work-1": {
+				work: work("work-1"),
+				comments: [],
+				usage: usageOf(1_000),
+				activity: "idle",
+			},
+			"work-2": {
+				work: work("work-2"),
+				comments: [],
+				usage: usageOf(50),
+				activity: "idle",
+			},
 		};
 	});
 
@@ -88,6 +99,7 @@ describe("useWorkDetailSubscription", () => {
 				work: work("work-1"),
 				comments: [],
 				usage: usageOf(1_500),
+				activity: "idle",
 			});
 		});
 

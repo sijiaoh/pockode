@@ -88,97 +88,176 @@ On creation (`FileStore.Create` in `server/work/store.go`):
 
 ## State Machine
 
-### Six States
+### Four Statuses and a Wait
 
 ```
-                    ┌──────── live cluster ────────┐
-                    │  in_progress   needs_input   │
-open ──────────────►│         (all four mutually   │──────► closed
-                    │          reachable)          │          │
-                    │  waiting       stopped       │          ▼
-                    └──────────────────────────────┘     in_progress
-                                                          (via Reopen)
+                         ┌──── the engine drives it ────┐
+open ───── Start ───────►│            active            │──── StepDone ────► closed
+                         │   wait: none | user | child  │                      │
+                         └──────────────────────────────┘                      │
+                              ▲                  │                             │
+                              │                  │ Stop / abort / nudge limit  │
+                     Start ───┴──── stopped ◄────┘                             │
+                              ▲                                                │
+                              └──────────────── Reopen ◄──────────────────────┘
 ```
 
-**Only `open` and `closed` are gates.** The four live states reach each other
-freely, in both directions. They answer "might an agent session be running, and
-what is it doing" — and that answer comes from process events that go stale: a
-crashed CLI, an orphaned session, a dropped event. None of them says how far the
-work got; that is `CurrentStep`. Gating progress on them was how a work item
-that had merely gone `stopped` became impossible to advance or finish, locked
-for good.
+**Every status is an intention, and nothing else.**
 
-Two guards in `server/work/validation.go` say this directly, and there is
-deliberately no edge table beside them to drift out of sync:
+| Status | Means |
+|--------|-------|
+| `open` | Never started. No session, nothing to drive. |
+| `active` | The engine drives it. |
+| `stopped` | The engine does not touch it; a person has to act. |
+| `closed` | Finished. |
+
+**What the agent is *doing* is not here.** It is derived — see
+[Activity](#activity) — from this status, the wait below, and the turn state of
+the session the work runs in. The statuses this replaces (`in_progress`,
+`needs_input`, `waiting`) were a cache of process events that went stale every
+time one was missed, and four separate mechanisms existed to repair them.
+
+`Wait` is what an active work is waiting for, as its agent declared it:
+
+| Wait | Set by | Cleared by |
+|------|--------|------------|
+| none | every transition into active | — |
+| `user` | `work_needs_input` | a user message, a child closing the work's own run |
+| `child` | `work_wait` | a child work closing, or a user message |
+
+A wait is orthogonal to the status: a waiting work is still **active** — the
+engine still owns it — it simply must not be nudged to carry on. Both waits are
+cleared by something that arrives from *outside* the session, which is why they
+survive a server restart while a work with no wait does not
+([startup](#input-5-startup)).
+
+`WaitReason` rides with it: free text, in the agent's own words, shown verbatim
+on the work's detail page. It is the only place the user can read what the agent
+actually wants, and no fixed vocabulary could carry it.
+
+`NudgeCount` is the third field the engine keeps: how many times in a row it has
+told the agent to carry on without the work moving. Persisted rather than held
+in memory per session, so a restart does not hand a stuck agent a fresh
+allowance.
+
+**Only `open` and `closed` are gates.** Two guards in
+`server/work/validation.go` say this directly, and there is deliberately no edge
+table beside them to drift out of sync:
 
 - `ValidateProgress` — may the agent move this work along (`step_done`,
-  `work_wait`, `work_needs_input`, stop, liveness sync)? Every live status
-  qualifies; `open` and `closed` do not, and each names its way in.
+  `work_wait`, `work_needs_input`, stop, a liveness sync)? `active` and
+  `stopped` qualify; `open` and `closed` do not, and each names its way in.
+  A `stopped` work is admitted on purpose: an agent able to call `step_done` is
+  running whatever the status claims, and gating on it is how a work that had
+  merely gone stopped became impossible to advance or finish.
 - `ValidateStartable` — may a session be started for this work? Also admits
-  `open` (the fresh-start case) and rejects `in_progress`, so a running work is
-  never started twice — which is also what resolves concurrent `Claim`s to a
-  single winner.
+  `open` (the fresh-start case) and rejects `active`, so a running work is never
+  started twice — which is also what resolves concurrent `Claim`s to a single
+  winner. A work waiting on the user is `active`, so Restart is not offered for
+  it; Stop is (docs/lifecycle-ui.md §3).
 
-| State | Meaning | SessionID | CurrentStep |
-|-------|---------|-----------|-------------|
-| `open` | Not started | empty | 0 |
-| `in_progress` | AI session active | set | tracks current step |
-| `needs_input` | Waiting for user input | preserved | preserved |
-| `waiting` | Waiting for child work to complete | preserved | preserved |
-| `stopped` | Session ended unexpectedly | preserved | preserved |
-| `closed` | Work completed | preserved | preserved |
+| Status | SessionID | CurrentStep |
+|-------|-----------|-------------|
+| `open` | empty | 0 |
+| `active` | set | tracks current step |
+| `stopped` | preserved | preserved |
+| `closed` | preserved | preserved |
 
 ### Intent-Driven Transitions
 
-The API exposes intent methods rather than raw status updates. Each method encapsulates business logic and validates transitions.
+The store exposes intent methods rather than raw status updates. Each
+encapsulates its validation and its bookkeeping.
 
 | Method | Transition | Purpose |
 |--------|------------|---------|
-| `Start(id, sessionID)` | startable → in_progress | Launch AI session |
-| `Claim(id)` | startable → in_progress | Start plus atomic sessionID decision (a work that already owns a session is a restart and keeps it) |
-| `Stop(id)` | live → stopped | Terminate session |
-| `StepDone(id, totalSteps)` | live → in_progress/closed | Advance work step or close work |
-| `MarkNeedsInput(id)` | live → needs_input | Pause for user input |
-| `MarkWaiting(id)` | live → waiting | Pause for child work completion |
-| `MarkRunning(id)` | live → in_progress | Session is live again (user input, child closed, process detected running) |
-| `Reopen(id)` | closed → in_progress | Reopen a closed item to add children or continue |
-| `RollbackStart(id, wasRestart)` | in_progress → open/stopped | Undo failed start |
+| `Start(id, sessionID)` | startable → active | Launch AI session |
+| `Claim(id)` | startable → active | Start plus atomic sessionID decision (a work that already owns a session is a restart and keeps it) |
+| `Stop(id)` | live → stopped | Hand the work back to a person |
+| `StepDone(id, totalSteps)` | live → active/closed | Advance the step, or close |
+| `SetWait(id, wait, reason)` | live → active with that wait | Record what the agent is waiting for (`WaitNone` clears it) |
+| `Activate(id)` | live → active, wait and nudges cleared | Someone handed the work something to go on |
+| `RecordNudge(id)` | counts one nudge, returns the total | The engine compares it against its own limit |
+| `Reopen(id)` | closed → active | Reopen a closed item to add children or continue |
+| `RollbackStart(id, wasRestart)` | active → open/stopped | Undo a failed start |
 
-"live" is any of `in_progress` / `needs_input` / `waiting` / `stopped`;
-"startable" is what `ValidateStartable` admits — `open` plus every live status
-but `in_progress`.
+"live" is `active` or `stopped`; "startable" is what `ValidateStartable`
+admits — everything but `active` and `closed`.
 
-A `StepDone` from a stale live status also repairs it back to `in_progress`: the
-agent calling the tool is proof its session runs, and the next-step prompt only
-reaches `in_progress` work.
+**Every transition into or out of active clears the wait and the nudge count**
+(`Work.clearDrive`). There is no path that leaves a stale wait behind for the
+next one to trip over, and no status that means "waiting for a person" twice:
+`stopped` already says that, and a wait kept beside it would be a second way to
+say the same thing, disagreeing as soon as one went stale.
 
-Re-setting a live status a work already holds is a deliberate no-op rather than
-a redundant write. Liveness signals repeat — the same session is reported running
-more than once — and re-announcing an unchanged status would wake every
-subscriber with a change event that carries no news.
+A `StepDone` from a stale `stopped` repairs it back to `active`: the agent
+calling the tool is proof its session runs. The new step is a new context, so the
+nudge allowance starts over with it.
 
-`RollbackStart` is the one method inside the cluster that still names a single
-source status. It undoes the `in_progress` a failed start left behind, so if the
-agent has already moved the work on, the kickoff did not fail cleanly and rolling
-back would clobber live state — most visibly on a restart, where the rollback to
-`stopped` would erase a `needs_input` the agent had just set.
+Re-setting a status and wait a work already holds is a deliberate no-op rather
+than a redundant write. Liveness signals repeat, and re-announcing an unchanged
+record would wake every subscriber with a change event that carries no news.
 
-### Waiting vs NeedsInput
+`RollbackStart` is the one method that names what it is undoing: the session id
+the failed start claimed. The id is the identity of that start, and the status is
+what says nobody has taken the work somewhere a rollback would clobber — a work
+the agent has closed, or one already started again on a different session, is
+refused.
 
-Both `waiting` and `needs_input` pause the agent's work, but serve different purposes:
+`stopped` is admitted beside `active` there for a reason that is not
+hypothetical. A kickoff that fails deletes the session it created, and the engine
+stops the work of a deleted session ([input 4](#input-4-the-session-was-deleted))
+— so that stop and this rollback race, in either order. With the session id as
+the identity both orders converge: the stop lands first and the rollback still
+undoes it, or the rollback lands first and the stop finds no work owning that
+session at all.
 
-| State | Purpose | Resumed By |
-|-------|---------|------------|
-| `needs_input` | Agent needs user confirmation or clarification | User sending a message |
-| `waiting` | Agent waiting for child work to complete | Child work closure, or user message |
+### Activity
 
-**Key difference**: `waiting` is used when a coordinator agent has created child tasks and wants to pause until they complete, while `needs_input` is used when the agent genuinely needs user input to proceed. Both are recorded through `MarkNeedsInput` / `MarkWaiting` and left through `MarkRunning`, which is one method rather than three because "the session is live again" is one fact regardless of what it was waiting on.
+`Activity` is what a work is *doing*, as one value, and it is derived —
+never stored. Ten leaves; the rule, in full:
 
-Both states can be resumed by user messages, allowing users to interrupt the wait if needed.
+> The session says what is happening; the work's wait says what it is waiting
+> for when nothing is happening.
+
+```
+activity(work, turn):
+  status open / closed / stopped -> open / closed / stopped
+  turn.phase == running          -> running
+  turn.phase == blocked          -> permission > question > background
+  otherwise (idle, or no turn):
+    wait user  -> needs_message
+    wait child -> waiting_children
+    otherwise  -> idle
+```
+
+Phase outranks wait because a wait is a standing intention and a phase is a fact
+about this second: an agent that calls `work_needs_input` and then keeps writing
+for ten seconds *is* running. Permission outranks question because a permission
+request cannot be answered late — it expires as a denial.
+
+**It is computed on the server for work rows** (`server/work/activity.go`,
+carried on `rpc.WorkListItem.activity` and on the detail). The work list is
+global across worktrees while a session list is scoped to one, so a client does
+not hold the `TurnState` of a session in a worktree it has not opened. The client
+evaluates the same rule for *session* rows (`web/src/lib/activity.ts`), and the
+two are checked against one shared table of cases,
+`server/work/testdata/activity_cases.json` — the rule is written down once even
+though it is evaluated in two places. An `activity` the client does not
+recognise normalises to `idle` at the wire boundary.
+
+Reading the turn of a worktree nobody has opened is what `work.TurnSource`
+(implemented by `worktree.Manager`) is for: a loaded worktree answers from its
+session store, an unloaded one from its index on disk — building a worktree
+because somebody looked at a row is exactly what that avoids.
 
 ### Step Completion
 
-Work items transition through `StepDone`; there is no intermediate `done` state. Any work item with remaining steps advances to the next step and stays `in_progress`. When no steps remain, the work item closes. Waiting for child work is handled explicitly through `work_wait` / `MarkWaiting`, not `StepDone`. When a child task closes, the system automatically resumes its parent story only if the parent is `waiting`. Already closed parents are not reopened, preserving the intentional completion of coordinated work.
+Work items transition through `StepDone`; there is no intermediate `done` state.
+Any work item with remaining steps advances to the next step and stays `active`.
+When no steps remain, the work item closes. Waiting for child work is handled
+explicitly through `work_wait`, not `StepDone`. When a child closes, the engine
+tells the parent and clears a `child` wait; already closed parents are not
+reopened, preserving the intentional completion of coordinated work.
 
 ## File-Based Storage
 
@@ -306,12 +385,12 @@ itself):
 - **Single writer** — only the main server mutates work data, so there is no
   two-writer fsnotify sync to coordinate.
 - **Direct side effects** — `work_start`/`work_reopen` run through the shared
-  `work.Operations` (claim + kickoff, or reopen + nudge) and `step_done` sends its
-  follow-up via the AutoResumer (`NotifyStepDone`), so a transition takes effect
-  immediately instead of waiting for the main server to notice a file change.
+  `work.Operations`, which owns the store transition and its follow-up alike, so a
+  transition takes effect immediately instead of waiting for the main server to
+  notice a file change.
 - **One implementation per transport** — the WebSocket handler (user actions) and
-  the MCP Executor (AI actions) call the same `work.Operations`, so a user start/
-  reopen and an AI start/reopen behave identically.
+  the MCP Executor (AI actions) call the same `work.Operations`, so a
+  user-triggered command and an AI-triggered one behave identically.
 
 **Authentication**: the server generates a random token at startup and writes
 it to `server.json` alongside the port. Being a credential, it goes into a data
@@ -329,186 +408,199 @@ returned, to prevent prompt injection and ensure stable parsing. A tool whose
 handler fails comes back as an `isError` result (the AI sees it); transport or
 auth failures are surfaced to the AI rather than failing silently.
 
-## AutoResumer
+## The Work Engine
 
-The AutoResumer watches for state changes and automatically manages work lifecycle.
+`work.Engine` is the only thing that moves a work item without being told to by a
+person or by an agent. It has exactly five inputs, and no special cases beside
+them. What the old `AutoResumer` and `StatusSyncer` did with process state
+changes is gone: a process state is not a work state, and every rule that read
+one turned out to be a rule about a turn ending — which is what the engine reads
+instead.
 
-### Triggers
+| Input | Reached by |
+|---|---|
+| A turn ended | `session.TurnSettler` → `process.Manager.SetOnTurnEnded` |
+| The user handed the session something to go on | the three chat RPCs |
+| A child work closed | the work store's own change event |
+| The session was deleted | the session store's own change event |
+| The server started | `RecoverStartup`, before any session exists |
 
-**Trigger A: Process State Changes**
+### Input 1: a turn ended
 
-When an AI session's state changes, sync the work status:
+A turn ending is a fact; "this session has stopped" is a guess, because a
+session can start running again a moment later. The settler holds the ending for
+a moment and drops it if the session comes back
+([agent-integration.md](agent-integration.md#settling)) — so the engine never
+sees an ending that was immediately superseded, and needs no settle delay,
+activation counter or in-flight bookkeeping of its own.
 
-| Process State | Work Transition | Purpose |
-|---------------|-----------------|---------|
-| running | stopped → in_progress | User message to stopped session |
-| idle (first) | (ignored) | Initial process startup |
-| idle (normal) | in_progress → in_progress | Send auto-continuation |
-| idle (needs_input) | in_progress → needs_input | Agent raised a prompt. The AutoResumer ignores this idle; the transition is `StatusSyncer.HandlePromptRaised`'s, driven from `SessionListWatcher` |
-| interrupted | in_progress → stopped | Turn aborted (user interrupt, denied permission, replaced turn) |
-| ended | in_progress → stopped | Process exited |
-
-That row is the only one another component owns, and the only way a *session*
-puts a work into a paused status — the other way in, the MCP `work_needs_input`
-and `work_wait` tools, never touches session state at all. It is listed because
-the rows below deliberately leave paused work alone, and a table showing only
-those exits would not say where the status came from. The way back out is a user
-action rather than a process state, so it has no row here; it is the subject of
-the rest of this section.
-
-An aborted turn stops the work instead of continuing it, which is what makes a
-denied permission during an automated run end the run rather than nudge the agent
-to try again. Note what that purpose implies: the run it has to end is by
-definition an `in_progress` one, because auto-continuation only ever nudges
-`in_progress` work. So the two rows narrow together and the abort keeps doing
-exactly the job it was added for.
-
-**Only `in_progress` is stopped.** A dead process means the work is no longer
-being carried out; it says nothing about a work that had already paused on
-something the process was not going to settle anyway. `needs_input` still needs
-its answer and `waiting` still needs its child, and both are woken by events that
-outlive the process — a user action, a child closing.
-
-The lease table is what turns that from a nicety into a requirement. A work
-paused through MCP (`work_needs_input`, `work_wait`) is paused by the agent
-itself, in the work store: nothing about it is visible to the session, so no
-prompt is outstanding there and the session's lease is the plain idle one
-([agent-integration.md](agent-integration.md#the-lease-table), which also has the
-idle budget's default and why it can be short). Once that agent finishes its
-turn, its process is precisely what the reaper collects — so a
-rule that stopped paused work on process death would stop those work items a few
-minutes after they paused, with nothing on screen to explain it.
-
-The coupling runs through that timeout and only tightens as it shortens: the same
-mistake is just as wrong at an hours-long timeout, merely rare enough there to
-pass for bad luck. Narrowing what a death stops is what lets the timeout be
-chosen for the question it is actually about — how long an unused CLI may stay
-resident — instead of for how long a deliberately paused work has to survive.
-
-The same reasoning rules out the opposite shortcut on the way in. `needs_input`
-and `waiting` are *not* resumed when the process ends either, even though the
-session stops waiting on the user there — its blockers expire with the process
-that raised them
-([agent-integration.md](agent-integration.md#turn-state)). Resuming would put the
-work in `in_progress` moments before this trigger's own stop ran — which is
-exactly how paused work used to end up stopped regardless of what it was paused
-on. Work leaves `needs_input`/`waiting` on a user action, through
-`SessionListWatcher.HandleUserAction` — the single entry point for "the user
-acted on this session", and now the only thing that call does. The session's own
-side of a user action is the answer clearing the blocker it names, which happens
-on the send path whether or not the send came through an RPC; the three RPCs that
-hand the session something to go on (message, permission response, question
-response) all call `HandleUserAction` for the work's sake.
-
-`stopped` is the one status the process *does* speak for: it means the process
-died, so a process running again is itself the evidence that the work is live. A
-`needs_input` process is often still alive and still emitting — a Task subagent's
-last few sentences, a little output after an MCP call — so its running state
-proves nothing and must not resume the work.
-
-**Interrupt is not one of those actions, and that is deliberate.** It is followed
-by an `interrupted` event that stops `in_progress` work, so resuming a paused
-work first would only walk it into `stopped` — the same bypass the paragraph
-above rules out. Reading the handler cannot tell an omission from a decision, so
-the rest of the reason sits next to it there
-(`server/ws/rpc_chat.go` — `handleInterrupt`).
-
-**Deleting the session is a user action too, and the opposite one.**
-A work paused on a question survives its process dying because the question can
-still be answered; deleting the session takes the transcript, the pending
-question and the process all at once, so there is nothing left to answer into.
-`session.delete` therefore stops the work itself
-(`server/ws/rpc_session.go` — `stopWorkForDeletedSession`) before removing the session,
-rather than leaving it to the process-ended event that would only stop
-`in_progress` work. It stays out of `HandleUserAction`, whose other callers all
-resume. Deleting a *work* needs no such rule: it cascades into its sessions, so
-no work is left behind to lie about its status.
-
-**Trigger B: Child Closure**
-
-When a child work closes, the system notifies its parent based on the parent's status. The logic separates two concerns: *state transition* and *message sending*.
-
-| Parent Status | State Transition | Message Sent | Rationale |
-|---------------|------------------|--------------|-----------|
-| `open` | — | No | No agent session started yet |
-| `in_progress` | — | Yes | Agent is running; notify it of child completion |
-| `needs_input` | — | Yes | Agent is paused but active; deliver notification |
-| `waiting` | → `in_progress` | Yes | Resume the waiting coordinator |
-| `stopped` | — | Yes | Session can be restarted; preserve notification |
-| `closed` | — | No | Parent was explicitly closed; stay closed |
-
-```
-Task: closed ──► Parent (waiting) → in_progress
-                       │
-                       ▼
-            Send "Child completed" message
-
-Task: closed ──► Parent (in_progress/needs_input/stopped)
-                       │
-                       ▼
-            Send "Child completed" message (no state change)
-
-Task: closed ──► Parent (open/closed) → (no message)
-```
-
-**Key distinction**: Only `waiting` parents undergo a state transition. Other active parents (`in_progress`, `needs_input`, `stopped`) receive the notification without changing status. This enables coordinators to receive multiple child completion messages when running with parallel subtasks.
-
-**Trigger C: Server Startup**
-
-`StopOrphanedWork` runs once at startup, before any session exists, and stops the
-work left behind by the previous run. It stops a different set than Trigger A
-does, because a restart destroys a different set of things than a dead process:
-
-| Status at startup | Outcome | Why |
+| Outcome | Wait | What happens |
 |---|---|---|
-| `in_progress` | → `stopped` | Its process is gone; nothing is carrying it out |
-| `needs_input` | → `stopped` | The question is gone too — see below |
-| `waiting` | preserved | Its children are on disk and still wake it when they close |
+| `aborted` | any | → `stopped` |
+| `completed` / `failed` | `user` or `child` | nothing; its own event will wake it |
+| `completed` / `failed` | none | nudge; → `stopped` once the allowance is spent |
 
-`needs_input` is the one status treated more harshly here than on process death,
-and the reason is the same fact that gives a prompt a lease of its own: a CLI's
-permission request and ask-user-question live inside the process that raised them
-and are not restored when a new one starts
-([agent-integration.md](agent-integration.md#a-prompt-belongs-to-the-process-that-raised-it),
-which also records that both decisions expire if prompts ever become answerable
-across processes). Within one run of the server that lease keeps the process for
-an hour, so the card generally stays answerable and the work may go on saying
-`needs_input`; when the hour runs out the prompt is withdrawn and the turn ends,
-which moves the work through the ordinary abort path rather than leaving it
-claiming to wait. A restart removes the doubt entirely: the question is certainly
-gone, and leaving the work `needs_input` would promise a resumption that can
-never arrive.
+An aborted turn was taken away rather than finished — a user interrupt, a denied
+permission, the death of the process carrying it. Carrying on is the one thing
+nobody asked for, so the work stops. A *failed* turn is nudged like a completed
+one: an agent whose turn errored has usually lost a tool call, not the thread,
+and the nudge limit is what bounds the cost of being wrong about that.
 
-Each work this stops gets a comment saying so, since nobody asked for the stop
-and the background tasks the work may have been waiting on died with the server.
-A preserved `waiting` work gets no comment — nothing happened to it.
+`DefaultMaxNudges` is 3. A nudge is a guess that the agent stopped mid-task;
+three in a row with nothing to show is evidence the guess is wrong, and the work
+is handed to a person with a comment saying who stopped it — otherwise it is
+simply found stopped after a run of empty turns.
 
-A preserved `waiting` parent is not waiting on anything that is still moving:
-the same pass stopped every child that was being carried out or holding a
-question. What it keeps is the wiring —
-restart a child, let it close, and Trigger B resumes the parent exactly as it
-would have before the restart. Stopping the parent instead would throw that away
-to gain nothing, since the user has to restart the child either way.
+**The count lives on the work record**, not in a map keyed by session. It
+survives a restart (a stuck agent gets no fresh allowance) and it is reset by
+everything that counts as progress: a step advance, a user message, a reopen, a
+child closing, a start.
 
-### Step-Advance and Reopen Follow-ups
+### Input 2: a user message
 
-`work_start`, `step_done`, and `work_reopen` are driven in-process rather than by
-the AutoResumer reacting to a file change. `work_start` and `work_reopen` live in
-the shared `work.Operations`, called by both the WebSocket handler and the MCP
-`Executor`:
+A message, a permission answer, a question answer: the work goes back to
+`active` with its wait and its nudge count cleared. A person is the one thing
+every wait is defined to be woken by, and their attention is what the allowance
+was counting down to.
 
-- **work_start** — `Operations.StartWork` claims the work (`store.Claim`, which
-  decides restart/session reuse atomically under the store lock) and calls
-  `WorkStartHandler` to create the session and send the kickoff, rolling back the
-  claim on failure. Runs detached from the caller's context.
-- **work_reopen** — `Operations.ReopenWork` calls `store.Reopen`, then
-  `AutoResumer.NotifyReopen` to send the reopen nudge.
-- **step_done** (MCP-only) — after `store.StepDone` advances the step, the
-  `Executor` calls `AutoResumer.NotifyStepDone`, which sends the next-step prompt
-  (only while the work is still `in_progress`).
+The three RPCs that hand a session something to go on call
+`Engine.HandleUserMessage` (`server/ws/rpc_chat.go`). Two paths deliberately do
+not:
+
+- **Interrupt.** It takes the turn away rather than handing the session
+  something, and the aborted turn it produces stops the work; clearing the wait
+  first would only walk the work into `stopped`.
+- **The system-driven senders** (kickoff, restart, step advance, reopen, child
+  closure). They put a message into a session, but they are not a person looking
+  at the work, and each already clears what it means to clear.
+
+### Input 3: a child work closed
+
+The engine hears every work change, and a child closing is one of two things it
+reads off them (the other is [the session lease](#the-session-lease)).
+
+| Parent status | Wait | Transition | Message |
+|---|---|---|---|
+| `open` | — | — | No — no agent session started yet |
+| `active` | `child` | wait cleared | Yes |
+| `active` | `user` / none | — | Yes |
+| `stopped` | — | — | No — see below |
+| `closed` | — | — | No — a child closing is no reason to reopen it |
+
+Only a parent waiting on its *children* has been handed what it was waiting for.
+A parent waiting on the **user** has not, so its wait stands; the news reaches
+its transcript either way. That is what lets a coordinator receive several child
+completions while running parallel subtasks.
+
+**A stopped parent is told nothing, and that is stricter than the old rule.** A
+message is not a note left on a desk: it starts a turn, and a session whose
+process has been collected gets a new one built for it. Telling a stopped parent
+therefore spawns a CLI and lets it work on a story a person has taken back —
+which is the one thing `stopped` exists to prevent. Nothing is lost by waiting:
+the child's report is a comment on the work, its closure is in the store, and the
+restart prompt tells the agent to review its tasks before doing anything.
+
+The sender is resolved **before** the transition, so a resolve failure cannot
+leave a waiting parent resumed but un-nudged.
+
+### Input 4: the session was deleted
+
+A deleted session takes away the place every answer and every nudge would have
+gone, so the work above it stops — including one that was *waiting*, which is the
+case a dying process deliberately does not cover. The difference is the whole
+point: a process can die and be resumed, a deleted session cannot.
+
+It is reached through the session store's own deletion event
+(`Engine.OnSessionChange`), so it covers every way a session can be deleted
+rather than being a special case in one RPC handler. Deleting a *work* needs no
+such rule: it cascades into its sessions, so no work is left behind to lie about
+its status.
+
+### Input 5: startup
+
+`RecoverStartup` runs once, before any session exists.
+
+| At startup | Outcome | Why |
+|---|---|---|
+| `active`, no wait | → `stopped` + comment | Its process is gone and nothing will end the turn it was carrying |
+| `active`, waiting on the user | preserved | The answer comes from outside the session and still reaches it |
+| `active`, waiting on children | preserved | Its children are on disk and still wake it when they close |
+
+This is the difference the old model could not express, and why every paused work
+used to come back from a restart stopped. What a wait is waiting for outlives the
+process by construction; a work with no wait has nothing left to wake it.
+
+The stop gets a comment, since nobody asked for it and the background tasks the
+work may have been waiting on died with the server. A preserved work gets none —
+nothing happened to it.
+
+The prompts a restart destroys are the session layer's business, not the work
+layer's: a killed process's blockers expire through the reducer and a
+`process_ended` record lands in the transcript, so the cards read Expired
+([agent-integration.md](agent-integration.md#restart-repair)). A work waiting on
+the user is *not* waiting on one of those cards — it is waiting on
+`work_needs_input`, which nothing in the session knows about, and which a user
+message answers whenever they get to it.
+
+### The session lease
+
+**A work that has left `active` has no lease on its session's process.** The
+rule is hung on the transition (`Engine.enforceSessionLease`) rather than on each
+command, so it holds for the engine's own stops as much as for a user's Stop:
+
+| Status | What happens to the process |
+|---|---|
+| `stopped` | Ended now (`StopSession`). The user asked for the work to stop, and a turn still running is what they asked to be rid of |
+| `closed` | Retired (`RetireSession`): it may finish the turn it is in the middle of, and nothing more |
+
+What is terminated is the *process*. The session id and its transcript stay,
+which is what makes Restart and Reopen resume rather than start over.
+
+Retirement is `process.Manager.RetireSession`
+([agent-integration.md](agent-integration.md#retiring-a-closed-works-session)):
+every prompt on screen is cancelled with reason `work_closed` — now and for as
+long as the retirement lasts, so a question raised inside the grace does not sit
+pending forever on a work the user has finished with — the turn ending ends the
+process with it, and the grace is a deadline rather than a budget activity
+extends.
+
+A prompt cancels the retirement, because it falsifies its premise: somebody has
+come back to the session. That is the case a Reopen inside the grace lands on —
+the restart message goes to the very process the grace was armed for — and the
+case of a user typing into a closed work's chat. The work stays closed; the
+session's process is then governed by its own idle lease, like any session with
+no work above it.
+
+`worktree.Manager` implements both, and looks only at worktrees that are already
+loaded. That is exact rather than best-effort: a worktree holding a live process
+is never cleaned up, so an unloaded one provably has no process to stop —
+and building one would mean starting watchers and a process manager for every
+work a restart stops.
+
+### Commands
+
+The six things a person or an agent can ask for live in `work.Operations`, and
+both transports go through it — the WebSocket handler (user actions) and the MCP
+`Executor` (AI actions). A user-triggered command and an AI-triggered one are
+therefore the same command and cannot drift apart; before, stop and needs_input
+had an implementation each, and every bug found in one had to be found again in
+the other.
+
+| Command | Store transition | Side effect |
+|---|---|---|
+| `StartWork` | `Claim` (atomic restart/session decision) | `WorkStartHandler` creates the session and sends the kickoff; rolls back on failure |
+| `StopWork` | `Stop` | the process ends with the transition |
+| `ReopenWork` | `Reopen` | reopen nudge |
+| `StepDone` | `StepDone` | next-step prompt while steps remain |
+| `NeedsInput` | `SetWait(user, reason)` | — |
+| `Wait` | `SetWait(child, reason)` | — |
+
+Process termination is deliberately **not** in `Operations`: it belongs to the
+transition, not to the command that caused it (see
+[the session lease](#the-session-lease)).
 
 ```
-step_done ──► store.StepDone()
+step_done ──► Operations.StepDone()
                    │
                    ▼
             hasMoreSteps?
@@ -516,56 +608,51 @@ step_done ──► store.StepDone()
             yes        no
               │        │
               ▼        ▼
-       CurrentStep++   Close work ──► Trigger B (parent reactivation, if any)
-              │
+       CurrentStep++   Close work ──► the parent is told (input 3)
+              │                       the session is retired (the lease)
               ▼
-       Executor.NotifyStepDone() ──► send next-step prompt
+       Engine.NotifyStepDone() ──► send next-step prompt
 ```
 
-The reopen message instructs the agent to review its previous work and determine what additional changes are needed, then call `step_done` when complete.
+The reopen message instructs the agent to review its previous work and determine
+what additional changes are needed, then call `step_done` when complete.
 
 ### Background Waits and the Work Item
 
 A Claude turn that started a background task goes quiet for as long as the task
 runs. The session records that as a `background` blocker and the turn stays open
-([agent-integration.md](agent-integration.md#background-waits)). Nothing about
-that reaches the work layer yet, and as far as the work *status* goes nothing
-should: it stays `in_progress` because that is simply true — the turn is still
-under way and the job is not done. What the work layer cannot do yet is tell the
-user *waiting on a background task* from *thinking*, which is what reading the
-blocker will buy; that is a later step of the lifecycle redesign.
+([agent-integration.md](agent-integration.md#background-waits)). The work stays
+`active` with no wait, because that is simply true — the engine is driving it and
+the job is not done — and the user is told what is really happening by the
+derived activity, which reads the blocker: `background`, not `running` and not
+`idle`. That is the whole of what the work layer needs to know about it.
 
-Auto-continuation is not exempted from the wait; it is never triggered in the
-first place. Trigger A fires on process state changes, and a parked turn is
-still reported as `running` on the wire
-([agent-integration.md](agent-integration.md#what-the-wire-still-sees)), so
-`handleAutoContinuation` does not run, no nudge is sent, and `retries` does not
-move. This is the same code path a long tool call already takes, which is why a
-wait of any length needs no work state of its own.
+The nudge is not exempted from the wait; it is never triggered in the first
+place. The engine acts on a turn *ending*, and a parked turn has not ended. This
+is the same path a long tool call already takes, which is why a wait of any
+length needs no work state of its own.
 
-The two ways a wait ends both land back on existing behaviour:
+The two ways a wait ends both land back on ordinary behaviour:
 
-- **The fallback budget runs out.** The adapter ends the parked turn, the
-  session goes idle, and the AutoResumer runs the ordinary auto-continuation it
-  would have run when the wait began — except the agent also receives the
-  explanation queued by the adapter, so the nudge does not read as an unexplained
+- **The background lease runs out.** The reaper ends the parked turn
+  ([agent-integration.md](agent-integration.md#the-lease-table)), the turn ends,
+  and the engine runs the ordinary nudge — except the agent also receives the
+  explanation queued by the reaper, so the nudge does not read as an unexplained
   demand to continue.
-- **The process dies during the wait.** `ProcessEndedEvent` moves the work to
-  `stopped` through Trigger A, as for any other death. A death nobody is left to
-  observe — a server restart — reaches the same state by the other route,
-  `StopOrphanedWork` at startup (Trigger C), which leaves a comment on each work
-  it stops: otherwise the user comes back to a work stopped for no stated reason,
-  with the background tasks it was waiting for gone too.
+- **The process dies during the wait.** The turn is aborted by
+  `SignalProcessEnded`, which reaches the engine as an ordinary aborted ending
+  and stops the work. A death nobody is left to observe — a server restart —
+  reaches the same state by the other route, `RecoverStartup`.
 
 ### Follow-ups During a Background Wait
 
 During a wait the CLI has no active turn of its own, so any message Pockode sends
 opens a new one immediately.
 
-Only `handleAutoContinuation` is gated by the parking, because it is driven by
-the session going idle. Every other send is message-driven and reaches the CLI
-regardless of process state; three of them can land on an agent's *own* waiting
-session: step advance, reopen, and child-closure reactivation. (The worktree
+Only the nudge is gated by the parking, because it is driven by a turn ending.
+Every other send is message-driven and reaches the CLI regardless of what the
+turn is doing; three of them can land on an agent's *own* waiting session: step
+advance, reopen, and child-closure reactivation. (The worktree
 starter's kickoff and restart are unconditional too, but they target a work being
 started rather than a session already mid-wait.)
 
@@ -573,8 +660,8 @@ started rather than a session already mid-wait.)
 finish.** The alternative — queueing them until the wait ends — was considered
 and rejected:
 
-- **It would not work for `step_done`, the most likely of the three.** The MCP
-  handler calls `NotifyStepDone` from inside the tool call, i.e. while the turn
+- **It would not work for `step_done`, the most likely of the three.** The
+  command calls `NotifyStepDone` from inside the tool call, i.e. while the turn
   that invoked `step_done` is still running. The turn has not been parked yet and
   the wait is not armed, so a gate on "is a wait in progress" never sees it. The
   CLI simply queues the message and starts it the moment the turn ends.
@@ -603,8 +690,8 @@ host-side deferral queue.
 
 ### Per-Worktree Sender Routing
 
-Every follow-up the AutoResumer sends (auto-continuation, step-advance, reopen,
-child-done) must reach the worktree the target work runs in — not a single
+Every follow-up the engine sends (nudge, step-advance, reopen, child-done) must
+reach the worktree the target work runs in — not a single
 global sender. It therefore holds a `SenderResolver` rather than one
 `MessageSender`, and resolves per send from the work's `Worktree`:
 
@@ -614,41 +701,37 @@ resolver.ResolveSender(work.Worktree) → (sender, release, err)
 
 Production wires the worktree `Manager` as the resolver (`main.go`), so each
 message goes to that worktree's chat client. Because worktrees are
-reference-counted, `ResolveSender` returns a `release` func the AutoResumer
-**must** call once the send completes (always via `defer`) to drop the reference.
+reference-counted, `ResolveSender` returns a `release` func the engine **must**
+call once the send completes (always via `defer`) to drop the reference.
 
 - **Child-done routes to the parent's worktree**, not the child's. The subtree
   shares one worktree so they usually match, but the parent owns the session
   being nudged, making it authoritative.
 - **Resolve before mutating state** in parent reactivation: a waiting parent is
-  only transitioned to `in_progress` after its sender resolves, so a resolve
-  failure can't leave the parent resumed but un-nudged (all-or-nothing).
+  only activated after its sender resolves, so a resolve failure can't leave the
+  parent resumed but un-nudged (all-or-nothing).
 - `SetSender` remains for tests and callers that don't need routing — it installs
   a static resolver that maps every worktree to one sender. When no resolver is
-  installed the AutoResumer stays inert, the same gate as before.
+  installed the engine stays inert, the same gate as before.
 
-### Retry and Settle Delay
+### Why There Is No Settle Delay Here
 
-```go
-maxRetries = 3        // Stop work after 3 auto-continuation failures
-settleDelay = 2s      // Let an in-flight step_done's retry reset land first
-```
+The engine keeps no timer, no activation counter and no in-flight map. Both were
+in the old resumer for one reason — a session that stops and comes back inside a
+couple of seconds, which happens more easily than it looks: Codex aborts the
+running turn the moment a second message replaces it, and answering a prompt on a
+reaped session builds a new process. Acting on the older event would stop or
+nudge work whose agent is running right now.
 
-An agent typically calls `step_done` right before its turn ends. The settle
-delay gives that in-process transition's retry reset time to land before
-`handleAutoContinuation` reads the retry count, so the stop-after-N accounting
-stays correct (it does not by itself suppress a redundant continuation message —
-that remains a rare worst case).
+That guess is now made once, in the session layer, by `session.TurnSettler`
+([agent-integration.md](agent-integration.md#settling)), and every consumer gets
+the settled answer from there. The engine's inputs are facts by the time they
+arrive, so there is nothing left here to wait for.
 
-Both delayed follow-ups (stop after interrupt/end, and auto-continuation) drop
-their decision if the session started running again during the delay. A session
-comes back inside those two seconds more easily than it looks: Codex aborts the
-running turn the moment a second message replaces it, which arrives as an
-interrupt immediately followed by the replacement turn, and answering a prompt on
-a reaped session builds a new process. Acting on the older event would stop work
-whose agent is running right now, and nothing would restart it — `running` only
-reactivates work that is already `stopped`, so it fires before the stop lands and
-leaves the work stopped for good.
+The step-done race the old settle delay also covered is gone by construction
+rather than by timing: an agent calling `step_done` mid-turn resets the nudge
+count in the same store write that advances the step, and the ending that follows
+is judged against the record, not against a cached count.
 
 ## Worktree Deletion Protection
 
@@ -758,7 +841,7 @@ case — the rules are in
 
 - **The listener is registered on worktrees that already exist, not only on the
   ones built later.** Worktrees are created lazily by whoever needs one first,
-  and AutoResumer resolves senders for work it restarts while the server is still
+  and the engine resolves senders for work it restarts while the server is still
   wiring itself up — so the main worktree can predate the call. Missing it would
   freeze that worktree's work usage for the whole process, with nothing to show
   that it happened.
@@ -816,7 +899,7 @@ The split decides where each surface reads from:
   for one item, so those can only come from the list — and a row is all they
   need.
 - **The list side never wanted the dropped fields.** `WorkListOverlay`,
-  `ProjectTab`'s `needs_input` dot, `WorktreeBadge` / `isWorktreeBound` and
+  `ProjectTab`'s attention dot, `WorktreeBadge` / `isWorktreeBound` and
   `collectWorkSessionIds` read none of them, which is why narrowing the store
   changed no behaviour.
 
@@ -825,9 +908,10 @@ detail, they speak for the single item they acted on.
 
 ### One Vocabulary for Work Status
 
-Two surfaces paint a work's status — `WorkListOverlay` and `WorkDetailOverlay` — and they draw it from one set of sources so they cannot disagree: labels from `statusLabels` and the badge palette from `StatusBadge`, glyphs from `StatusIcon`, step arithmetic and wording from `web/src/utils/workSteps.ts` (`getStepProgress` / `formatStepProgress`), and the step markup from `StepList`. The chat transcript is deliberately not on that list — it shows no status at all, and borrows only the step wording (*Work Messages in Chat*). Two notes on the shared vocabulary:
+Two surfaces paint a work's state — `WorkListOverlay` and `WorkDetailOverlay` — and they draw it from one set of sources so they cannot disagree: labels from `statusLabels` and the badge palette from `StatusBadge`, glyphs from `StatusIcon`, step arithmetic and wording from `web/src/utils/workSteps.ts` (`getStepProgress` / `formatStepProgress`), and the step markup from `StepList`. The chat transcript is deliberately not on that list — it shows no status at all, and borrows only the step wording (*Work Messages in Chat*). Three notes on the shared vocabulary:
 
-- **`in_progress` is a static glyph, never a spinner.** A work that is `in_progress` with its process idle is an ordinary resting state, and it is also a transient one the user should not be alarmed by: `handleProcessEnded`'s settle delay leaves an interrupted work on `in_progress` for a couple of seconds, which a spinner would dramatize and a glyph does not.
+- **The value they paint is on its way to being the derived `Activity`.** The row already carries it (see *Activity*); the components still key off the four-value `status`, and `docs/lifecycle-ui.md` §1.4 is the map they move to — `ActivityIcon` / `ActivityBadge` replacing `StatusIcon` / `StatusBadge`. Until then the list cannot tell a work waiting on the user from one simply running.
+- **A work is a static glyph, never a spinner.** An `active` work with an idle process is an ordinary resting state, and a settle delay makes it a transient one too; a spinner would dramatize what a glyph states. The one place liveness is the question being asked is the session list (docs/lifecycle-ui.md §1.5).
 - **Colour does not have to tell every status apart.** `open` and `closed` share one muted colour, and in the list the icon often stands without its label — but they are different glyphs (`Circle` against `CircleCheck`), so the glyph carries the distinction and the colour only says "nothing to attend to here".
 
 ### Displaying a Work's Worktree
@@ -929,7 +1013,7 @@ Start (step 0)
      │        (→ closed; if parent is waiting, it resumes)
      │
      ▼
- AutoResumer sends
+  the engine sends
  next step prompt
      │
      └──────► (loop back to working)
@@ -1023,8 +1107,8 @@ Check if you have completed the current step:
 ### Design Notes
 
 - **Steps apply to both Stories and Tasks**: Any work item with an agent role that has steps defined will display step progress.
-- **Step state persists**: `CurrentStep` is preserved through `stopped`/`needs_input` transitions.
-- **Retry counter resets per step**: Each new step gets a fresh retry budget.
+- **Step state persists**: `CurrentStep` is preserved through every status change.
+- **Nudge counter resets per step**: Each new step gets a fresh allowance.
 - **Explicit step control**: Agents call `step_done` to advance steps, giving them control over when steps complete.
 - **step_done completion flow**:
   - All work items: increments `CurrentStep` while more steps remain.
@@ -1043,7 +1127,7 @@ it:
 > `workStore`, and no status is ever written into a message's `meta`.
 
 That rule is not academic. An interrupt stops a work through a pure state change
-(`AutoResumer`'s interrupted branch → `stopped`) and produces no message at all,
+(an aborted turn reaching the engine → `stopped`) and produces no message at all,
 so a transcript that inferred status from its last message would go on claiming
 the work was being nudged along after it had already stopped.
 
@@ -1057,10 +1141,10 @@ A work-driven prompt is byte-for-byte indistinguishable from a user-typed messag
 |---------|-----------|-------------|----------------|
 | `kickoff` | `WorkStarter` fresh start | Started | work title |
 | `restart` | `WorkStarter` restart | Restarted | work title |
-| `auto_continue` | `AutoResumer` auto-continuation | Continued | *(blank)* |
-| `step_advance` | `AutoResumer.NotifyStepDone` | Step N/M | work title |
-| `reopen` | `AutoResumer.NotifyReopen` | Reopened | work title |
-| `child_done` | `AutoResumer` parent reactivation | Subtask done | child title |
+| `auto_continue` | the engine's nudge | Continued | *(blank)* |
+| `step_advance` | `Engine.NotifyStepDone` | Step N/M | work title |
+| `reopen` | `Engine.NotifyReopen` | Reopened | work title |
+| `child_done` | the engine telling a parent | Subtask done | child title |
 | *(unknown or absent)* | — | System Message | work title |
 
 Every action word states a finished fact — something started, continued, reached step 2 — because by the time anyone reads it the event is over. Wording it that way is the cheapest guard there is against the rule at the top of this section: a word that can only describe a moment cannot be mistaken for a live status.
@@ -1195,13 +1279,15 @@ cached entry needs no additional locking.
 | Data types | `server/work/types.go` |
 | File store | `server/work/store.go` |
 | State validation | `server/work/validation.go` |
-| Auto resumer | `server/work/auto_resumer.go` |
+| Work engine | `server/work/engine.go` |
+| Commands (both transports) | `server/work/operations.go` |
+| Activity derivation | `server/work/activity.go`, `server/work/testdata/activity_cases.json` |
 | Usage aggregation | `server/work/usage.go` |
 | Per-worktree usage source | `server/worktree/manager.go` (`SessionUsages`), `server/session/usage.go` (`ReadUsages`) |
-| Worktree start/stop handlers | `server/worktree/work_starter.go`, `server/worktree/work_stopper.go` |
-| Worktree manager (sender resolver) | `server/worktree/manager.go` |
+| Worktree start handler | `server/worktree/work_starter.go` |
+| Worktree manager (sender resolver, session terminator, turn source) | `server/worktree/manager.go` |
+| Retiring a closed work's session | `server/process/manager.go` (`RetireSession`) |
 | Worktree delete protection | `server/ws/rpc_worktree.go` |
-| Session delete → work stop | `server/ws/rpc_session.go` |
 | Prompt builder | `server/work/prompt.go` |
 | Prompt templates | `server/work/prompts.yaml` |
 | MCP stdio proxy + client | `server/mcp/server.go`, `server/mcp/client.go` |
@@ -1209,5 +1295,6 @@ cached entry needs no additional locking.
 | MCP tool executor + HTTP API | `server/mcp/executor.go`, `server/mcp/handler.go` |
 | File I/O | `server/filestore/filestore.go`, `server/filestore/atomic.go` |
 | Frontend store | `web/src/lib/workStore.ts` |
+| Frontend activity map | `web/src/lib/activity.ts` |
 | Frontend step progress + list | `web/src/utils/workSteps.ts`, `web/src/components/Project/StepList.tsx` |
 | Frontend work-in-chat rendering | `web/src/lib/messageReducer.ts`, `web/src/components/Chat/MessageItem.tsx`, `web/src/utils/systemMessage.ts` |

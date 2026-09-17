@@ -4,43 +4,59 @@ The workflow engine manages work item lifecycles through status transitions and 
 
 ## Statuses
 
-| Status        | Meaning                                                  |
-| ------------- | -------------------------------------------------------- |
-| `open`        | Created, not yet started                                 |
-| `in_progress` | Agent session is actively working                        |
-| `needs_input` | Agent paused, waiting for user confirmation              |
-| `waiting`     | Agent paused, waiting for child work to complete         |
-| `stopped`     | Agent session ended (retry limit, interrupt, or orphan)  |
-| `closed`      | Work completed                                           |
+| Status    | Meaning                                       |
+| --------- | --------------------------------------------- |
+| `open`    | Created, not yet started                      |
+| `active`  | The engine drives it                          |
+| `stopped` | The engine does not touch it; a person must act |
+| `closed`  | Work completed                                |
+
+Every one of them is an intention. What the agent is *doing* — running, waiting
+on an answer, parked on a background task — is derived
+([work-system.md](../code/work-system.md#activity)) from the status, the wait
+below and the session's turn state, and is never stored.
+
+### Wait
+
+An active work may declare what it is waiting for. The wait is orthogonal to the
+status: a waiting work is still active — the engine still owns it — it simply
+must not be nudged.
+
+| Wait | Set by | Cleared by |
+|---|---|---|
+| none | every transition into active | — |
+| `user` | `work_needs_input` | a user message |
+| `child` | `work_wait` | a child work closing, or a user message |
+
+`WaitReason` is the agent's own words for why, shown verbatim on the detail
+page. `NudgeCount` is how many times in a row the engine has told the agent to
+carry on with nothing to show for it.
 
 ## Status Transitions
 
-`in_progress`, `needs_input`, `waiting` and `stopped` — the **live** statuses —
-form one mutually reachable cluster: they describe process liveness, not
-progress (progress is `CurrentStep`). Only `open` and `closed` gate anything, so
-a stale liveness status can never lock a work item out of being advanced or
-finished. See [work-system.md](../code/work-system.md#state-machine) for the
-state diagram and for why the cluster is shaped that way.
+`active` and `stopped` — the **live** statuses — reach each other freely. Only
+`open` and `closed` gate anything, so a stale status can never lock a work item
+out of being advanced or finished. See
+[work-system.md](../code/work-system.md#state-machine) for the diagram and for
+why the pair is shaped that way.
 
 ### Transition Table
 
-| From           | To             | Trigger                                    |
-| -------------- | -------------- | ------------------------------------------ |
-| `open`         | `in_progress`  | `Store.Claim` (fresh start — no session yet) |
-| `in_progress`  | `open`         | `Store.RollbackStart` (fresh start failed) |
-| `in_progress`  | `stopped`      | `Store.RollbackStart` (restart failed)     |
-| live           | `needs_input`  | `Store.MarkNeedsInput`                     |
-| live           | `waiting`      | `Store.MarkWaiting`                        |
-| live           | `stopped`      | `Store.Stop` (process ended/interrupted)   |
-| live           | `in_progress`  | `Store.MarkRunning` (user confirms, child completes, or process detected running) |
-| paused         | `in_progress`  | `Store.Claim` (restart — the work already owns a session, which is reused) |
-| live           | `in_progress`  | `Store.StepDone` (steps remain — the advance also repairs a stale status) |
-| live           | `closed`       | `Store.StepDone` (no steps remain)         |
-| `closed`       | `in_progress`  | `Store.Reopen` (reopen closed item)        |
+| From      | To        | Trigger                                    |
+| --------- | --------- | ------------------------------------------ |
+| `open`    | `active`  | `Store.Claim` (fresh start — no session yet) |
+| `active` / `stopped` | `open`    | `Store.RollbackStart` (fresh start failed) |
+| `active` / `stopped` | `stopped` | `Store.RollbackStart` (restart failed)     |
+| live      | `active` + wait | `Store.SetWait` (`work_needs_input` / `work_wait`) |
+| live      | `stopped` | `Store.Stop` (user Stop, aborted turn, nudge limit, deleted session, startup recovery) |
+| live      | `active`  | `Store.Activate` (a user message, a child closing) |
+| `stopped` | `active`  | `Store.Claim` (restart — the work already owns a session, which is reused) |
+| live      | `active`  | `Store.StepDone` (steps remain — the advance also repairs a stale status) |
+| live      | `closed`  | `Store.StepDone` (no steps remain)         |
+| `closed`  | `active`  | `Store.Reopen` (reopen closed item)        |
 
-"paused" is live minus `in_progress`: a work that is already running must not be
-started a second time, which is what makes concurrent `Claim`s resolve to one
-winner.
+Every transition into or out of `active` clears the wait and the nudge count, so
+no path leaves a stale wait for the next one to trip over.
 
 > Source: `server/work/validation.go` — `ValidateProgress` (may the agent move this work along?) and `ValidateStartable` (may a session be started for it?). The code holds no transition table of its own: with the live statuses mutually reachable, those two predicates say everything an edge list would, and a second copy would only be one more thing to keep in sync. The table above enumerates the *triggers*, which the predicates do not name.
 
@@ -49,90 +65,84 @@ winner.
 SessionID changes are encapsulated in intent-based Store methods:
 
 - **`Start`** — sets a new sessionID (fresh start or restart)
-- **`RollbackStart`** — clears sessionID on fresh-start failure; preserves on restart failure (→ `stopped`)
+- **`RollbackStart`** — clears sessionID on fresh-start failure; preserves on restart failure (→ `stopped`). It takes the sessionID the failed start claimed, because that is what identifies the start being undone: a failed kickoff deletes its session and the engine stops the work of a deleted session, so the stop and the rollback race and both orders have to converge ([work-system.md](../code/work-system.md#intent-driven-transitions))
 - **`Claim`** — reuses the work's existing sessionID when it has one (a restart preserves chat history); generates a fresh one otherwise
-- **`MarkRunning`** — preserves existing sessionID (used for process-running detection and resume-from-pause)
+- **`Activate`** — preserves the existing sessionID
 - All other transitions leave sessionID unchanged
+
+A work leaving `active` loses its session's *process*, never its session: the id
+and the transcript stay, which is what makes Restart and Reopen resume rather
+than start over. See
+[work-system.md](../code/work-system.md#the-session-lease).
 
 > Source: `server/work/store.go` — intent-based transition methods.
 
 ## Step Completion
 
-Work items transition through `StepDone`; there is no intermediate `done` state. Any work item with remaining steps advances to the next step and stays `in_progress`. When no steps remain, the work item closes. Waiting for child work is handled explicitly through `work_wait` / `Store.MarkWaiting`, not `StepDone`.
+Work items transition through `StepDone`; there is no intermediate `done` state.
+Any work item with remaining steps advances to the next step and stays `active`.
+When no steps remain, the work item closes. Waiting for child work is handled
+explicitly through `work_wait`, not `StepDone`.
 
-When a child work closes, its parent story is automatically resumed (if the parent is `waiting`), allowing the coordinator agent to review results and continue orchestration.
+When a child work closes, the engine tells its parent — and clears the parent's
+wait if it was waiting on its children — so the coordinator can review results
+and continue orchestration.
 
 > Source: `server/work/store.go` — `StepDone`.
 
-## AutoResumer
+## The Work Engine
 
-The `AutoResumer` listens to work change events and process state changes. It handles process lifecycle sync, parent-resume on child completion, and the step-advance / reopen follow-up messages the in-process MCP and WebSocket paths request.
+`work.Engine` is the only thing that moves a work item without being asked to. It
+has five inputs and no special cases beside them:
 
-### Process Lifecycle Sync
+| Input | What it does |
+|---|---|
+| A turn ended | aborted → `stopped`; otherwise nudge, unless the work declared a wait; `stopped` once the allowance runs out |
+| A user message | back to `active`, wait and nudges cleared |
+| A child work closed | tell an *active* parent, clear a `child` wait |
+| The session was deleted | → `stopped` |
+| Server startup | `active` with no wait → `stopped` + comment; a waiting work is preserved |
 
-`HandleProcessStateChange` syncs work status with process lifecycle:
+The full reasoning for each — including why a waiting work survives a restart and
+a driven one does not — is in
+[work-system.md](../code/work-system.md#the-work-engine). Two properties worth
+naming here:
 
-The per-state mapping is tabulated in
-[work-system.md](../code/work-system.md#triggers). It used to be repeated here
-too, which is how the two copies came to disagree with each other and with the
-code; what follows is only the auto-continuation policy, which this document
-owns.
+- **It hears a *settled* turn ending**, from `session.TurnSettler`, not a process
+  state change. Every rule that used to read a process state turned out to be a
+  rule about a turn ending.
+- **The nudge count lives on the work record**, so a restart does not hand a
+  stuck agent a fresh allowance. `DefaultMaxNudges` is 3, and the stop it ends in
+  leaves a comment saying so.
 
-**Auto-continuation details:**
-1. Wait **2 seconds** (settle delay) — lets an in-flight `step_done`'s in-process retry reset land first.
-2. Look up the work item by `sessionID`. If still `in_progress`, send a continuation message.
-3. Retry counter per session (configurable `maxRetries`). On limit, work transitions to `stopped`. Counter resets on `closed`/`stopped` transitions or deletion.
+> Source: `server/work/engine.go`.
 
-> Source: `server/work/auto_resumer.go` — `HandleProcessStateChange`, `handleAutoContinuation`.
+## Commands
 
-### Trigger B: Parent Resume on Child Completion
+The six things a person or an agent can ask for live in `work.Operations`, and
+both transports go through it — the WebSocket handler (user actions) and the MCP
+`Executor` (AI actions) — so a user-triggered command and an AI-triggered one
+have identical effects.
 
-**When:** A child work item transitions to `closed` and the parent is `waiting` with a `sessionID`.
+| Command | Store transition | Side effect |
+|---|---|---|
+| `StartWork` | `Claim` | `WorkStartHandler` creates the session and sends the kickoff; rolls back on failure. Detached context, so a caller timeout cannot orphan a half-created session |
+| `StopWork` | `Stop` | the process ends with the transition |
+| `ReopenWork` | `Reopen` | reopen nudge (`NotifyReopen`) |
+| `StepDone` | `StepDone` | next-step prompt while steps remain (`NotifyStepDone`) |
+| `NeedsInput` | `SetWait(user, reason)` | — |
+| `Wait` | `SetWait(child, reason)` | — |
 
-**Flow:**
-1. Child transitions to `closed`.
-2. Look up parent. If parent is `waiting` with a non-empty `sessionID`:
-   - `MarkRunning` transitions parent to `in_progress` and sends a child completion message.
+Process termination is deliberately not one of these side effects: it belongs to
+the transition rather than to the command that caused it, so the engine's own
+stops end a process exactly as a user's Stop does
+([work-system.md](../code/work-system.md#the-session-lease)).
 
-**Purpose:** Stories (coordinators) are automatically woken up when a child task completes, so they can review results and continue orchestration.
-
-> Source: `server/work/auto_resumer.go` — `handleParentReactivation`.
-
-### Work Start, Step Advance, and Reopen (in-process)
-
-`work_start`, `step_done`, and `work_reopen` are driven in-process rather than by
-reacting to file changes. `work_start` and `work_reopen` go through a single
-shared implementation, `work.Operations`, called by **both** the WebSocket
-handler (user actions) and the MCP `Executor` (AI actions) — so a user-triggered
-action and an AI-triggered action have identical effects:
-
-- **work_start** (`Operations.StartWork`) — atomically claims the work
-  (`Store.Claim`: `in_progress` + `sessionID`, deciding restart/session reuse
-  under the store lock) and invokes `WorkStartHandler.HandleWorkStart` to
-  create the session and send the kickoff. On failure the claim is rolled back to
-  `open` with an empty `sessionID`. Runs on a detached context so a caller
-  timeout/disconnect cannot orphan a half-created session.
-- **work_reopen** (`Operations.ReopenWork`) — after `Store.Reopen`
-  (`closed → in_progress`), calls `AutoResumer.NotifyReopen` to send the reopen
-  nudge.
-- **step_done** (MCP-only) — `Store.StepDone` advances `CurrentStep` if more steps
-  remain, otherwise it closes the work item. While the work stays `in_progress`,
-  the `Executor` calls `AutoResumer.NotifyStepDone`, which sends the next step's
-  instructions via `BuildStepAdvanceMessage`. On the last step no prompt is sent.
-  Work must be `in_progress` to call `step_done`.
-
-**Purpose:** Give the agent explicit control over step timing while keeping the
-main server the single writer; the follow-up messages are requested directly by
-the in-process caller instead of being detected from a file change. Routing
-start/reopen through one `Operations` type keeps the two transports behaviorally
-identical.
-
-> Source: `server/work/operations.go` — `StartWork`, `ReopenWork`;
-> `server/work/auto_resumer.go` — `NotifyStepDone`, `NotifyReopen`.
+> Source: `server/work/operations.go`.
 
 ## WorkStarter
 
-`WorkStarter` implements `WorkStartHandler` and performs the session initialization sequence for work items that have already been claimed (`status=in_progress`, `sessionID` set).
+`WorkStarter` implements `WorkStartHandler` and performs the session initialization sequence for work items that have already been claimed (`status=active`, `sessionID` set).
 
 **Fresh start sequence:**
 1. Validate `agent_role_id` exists.
@@ -201,28 +211,6 @@ an existing one.
 
 > Source: `server/worktree/work_starter.go`.
 
-## WorkStopper
-
-`WorkStopper` is the counterpart to `WorkStarter`. It transitions a work item to `stopped` and terminates the associated agent process.
-
-> Source: `server/worktree/work_stopper.go`.
-
-## StatusSyncer
-
-`StatusSyncer` moves a work item's status in response to what happens to the
-session it runs in. A session raising a prompt pauses its `in_progress` work into
-`needs_input`; the user acting on that session puts `needs_input` or `waiting`
-work back to `in_progress`. `stopped` is not resumed here — the AutoResumer owns
-that one, because the retry bookkeeping has to be reset with it.
-
-These are two events, not one flag being set and cleared. The session's own
-`needs_input` flag also drops when its process dies, and that is not a user
-acting: a work paused on a question outlives the process that raised it. See
-[work-system.md](../code/work-system.md#autoresumer) for why resuming it there
-would only walk it into `stopped`.
-
-> Source: `server/work/status_syncer.go`.
-
 ## Prompt Builders
 
 Six prompt builders generate messages for different lifecycle events. All share a common base structure:
@@ -264,6 +252,9 @@ Base + a restart nudge appropriate to the work type:
 Base + a nudge appropriate to the work type:
 - **Story:** "Your story is still in_progress but your session was interrupted. Review your tasks…"
 - **Task:** "Your task is still in_progress but your session was interrupted. Review what you've done…"
+
+(The prompt text still says `in_progress`; bringing the agent-facing wording to
+the new vocabulary is its own task in this redesign.)
 
 ### BuildAutoContinuationMessageWithSteps
 

@@ -86,7 +86,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "work_start",
-		Description: "Start a work item: launches an agent session and transitions the item to in_progress. A work item that already has a session is restarted and keeps its chat history.",
+		Description: "Start a work item: launches an agent session and transitions the item to active. A work item that already has a session is restarted and keeps its chat history.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
@@ -97,7 +97,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "work_needs_input",
-		Description: "Pause a work item to wait for user input, moving it to needs_input. Use when the agent needs user confirmation or clarification before continuing.",
+		Description: "Record that this work is waiting for user input. It keeps running; it just will not be nudged to carry on. Use when the agent needs user confirmation or clarification before continuing.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
@@ -109,7 +109,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "work_reopen",
-		Description: "Reopen a closed work item. Transitions from closed to in_progress. Use when you need to add more child work items or continue working on a completed item.",
+		Description: "Reopen a closed work item. Transitions from closed to active. Use when you need to add more child work items or continue working on a completed item.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
@@ -120,11 +120,15 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "work_wait",
-		Description: "Pause a work item to wait for child work to complete, moving it to waiting. Use when the agent has started child tasks and needs to wait for them to finish before continuing.",
+		Description: "Record that this work is waiting for its child work to complete. Use when the agent has started child tasks and needs to wait for them to finish before continuing.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
 				"id": {Type: "string", Description: "Work item ID to wait"},
+				// Optional, and the same field work_needs_input fills in: the two
+				// are one wait with two people clearing it. Shown to the user on
+				// the work's detail page.
+				"reason": {Type: "string", Description: "What it is waiting for, shown to the user"},
 			},
 			Required: []string{"id"},
 		},

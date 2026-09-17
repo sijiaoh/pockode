@@ -116,6 +116,7 @@ export default function WorkDetailOverlay({
 							<StatusBadge status={work.status} />
 							<WorktreeBadge work={work} className="max-w-[16rem]" />
 						</div>
+						<WaitLine work={work} />
 					</div>
 
 					<RoleSection work={work} />
@@ -251,10 +252,10 @@ function ActionBar({
 	}, [deleteWork, work.id, onBack]);
 
 	const showStart = work.status === "open" || work.status === "stopped";
-	const showStop =
-		work.status === "in_progress" ||
-		work.status === "waiting" ||
-		work.status === "needs_input";
+	// Shown for every active work, whatever is happening inside it: active means
+	// the engine is driving it, and Stop means "stop driving it". A button that
+	// appears and disappears as turns settle is one the user cannot aim at.
+	const showStop = work.status === "active";
 	const showReopen = work.status === "closed";
 	const showChat = !!work.session_id;
 	const canDelete = work.status !== "closed";
@@ -359,6 +360,25 @@ function ActionBar({
 			)}
 		</BottomActionBar>
 	);
+}
+
+/**
+ * What the work is waiting for, under the badges.
+ *
+ * For a wait on the user this is the agent's own words (`wait_reason`), shown
+ * verbatim: it is the only place in the app where the user can read what the
+ * agent actually wants, and no fixed vocabulary could carry it. Absent
+ * otherwise — an empty row would say "waiting" about a work that is not.
+ */
+function WaitLine({ work }: { work: Work }) {
+	if (work.status !== "active" || !work.wait) return null;
+
+	const text =
+		work.wait === "user"
+			? work.wait_reason || "Waiting for your message."
+			: "Waiting for its subtasks to finish.";
+
+	return <p className="mt-2 text-xs text-th-text-secondary">{text}</p>;
 }
 
 function InlineEditableTitle({ work }: { work: Work }) {
@@ -692,7 +712,7 @@ function ChildRow({
 	const roleName = work.agent_role_id
 		? (roleNameMap.get(work.agent_role_id) ?? null)
 		: null;
-	const isNeedsInput = work.status === "needs_input";
+	const isNeedsInput = work.wait === "user";
 	const isStopped = work.status === "stopped";
 
 	return (

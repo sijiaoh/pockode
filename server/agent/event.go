@@ -441,15 +441,42 @@ func (e PermissionRequestEvent) ToRecord() EventRecord {
 	}
 }
 
+// CancelReason says why a prompt stopped waiting for its answer, for the two
+// records that can report it — a request cancelled, and a request that expired
+// with the process that raised it. One field for both, because "why did this
+// stop waiting for me" is one question.
+//
+// Only ReasonWorkClosed is produced today; the other two are the shapes the
+// session layer already has cases for, and the client's copy for them lands
+// with the code that fills them in.
+type CancelReason string
+
+const (
+	// ReasonProcessEnded is the process that raised the prompt going away —
+	// reaped, crashed, or killed with the server.
+	ReasonProcessEnded CancelReason = "process_ended"
+	// ReasonTimeout is the answer lease running out (see session.LeaseAnswer).
+	ReasonTimeout CancelReason = "timeout"
+	// ReasonWorkClosed is the work above the session having been closed. Nobody
+	// is coming back to answer, so the prompt is withdrawn rather than left
+	// pending forever — and unlike the other two this one is a fact about the
+	// work layer, which is why the work engine is what produces it.
+	ReasonWorkClosed CancelReason = "work_closed"
+)
+
 type RequestCancelledEvent struct {
 	RequestID string
+	// Reason is empty when the agent itself withdrew the request: the CLI said
+	// it no longer needs an answer and did not say why, and inventing one would
+	// be worse than saying nothing.
+	Reason CancelReason
 }
 
 func (RequestCancelledEvent) EventType() EventType { return EventTypeRequestCancelled }
 func (RequestCancelledEvent) isAgentEvent()        {}
 
 func (e RequestCancelledEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), RequestID: e.RequestID}
+	return EventRecord{Type: e.EventType(), RequestID: e.RequestID, Reason: e.Reason}
 }
 
 type AskUserQuestionEvent struct {

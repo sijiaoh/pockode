@@ -1,0 +1,101 @@
+{
+  "about": [
+    "The activity derivation rule, as cases. The rule is evaluated twice — once",
+    "on the server for work rows (work.DeriveActivity) and once in the client for",
+    "session rows (web/src/lib/activity.ts) — so it is written down once, here,",
+    "and both test suites read this file. A change to the rule that is made in",
+    "only one of the two fails on the other side.",
+    "",
+    "A case with no turn is a work with no session, or one whose session sits",
+    "between turns: for a work item the two are the same nothing."
+  ],
+  "cases": [
+    {
+      "name": "an unstarted work",
+      "work": { "status": "open" },
+      "want": "open"
+    },
+    {
+      "name": "a closed work, whatever its old session is doing",
+      "work": { "status": "closed" },
+      "turn": { "phase": "running" },
+      "want": "closed"
+    },
+    {
+      "name": "a stopped work, whatever its old session is doing",
+      "work": { "status": "stopped" },
+      "turn": { "phase": "running" },
+      "want": "stopped"
+    },
+    {
+      "name": "an active work whose turn is producing output",
+      "work": { "status": "active" },
+      "turn": { "phase": "running" },
+      "want": "running"
+    },
+    {
+      "name": "a running turn outranks a declared wait",
+      "work": { "status": "active", "wait": "user" },
+      "turn": { "phase": "running" },
+      "want": "running"
+    },
+    {
+      "name": "a turn blocked on a question",
+      "work": { "status": "active" },
+      "turn": { "phase": "blocked", "blockers": ["question"] },
+      "want": "needs_answer"
+    },
+    {
+      "name": "a turn blocked on a permission request",
+      "work": { "status": "active" },
+      "turn": { "phase": "blocked", "blockers": ["permission"] },
+      "want": "needs_permission"
+    },
+    {
+      "name": "permission outranks question: it cannot be answered late",
+      "work": { "status": "active" },
+      "turn": { "phase": "blocked", "blockers": ["question", "permission"] },
+      "want": "needs_permission"
+    },
+    {
+      "name": "a turn parked on background work",
+      "work": { "status": "active" },
+      "turn": { "phase": "blocked", "blockers": ["background"] },
+      "want": "background"
+    },
+    {
+      "name": "a question outranks a background wait: one of them can be acted on",
+      "work": { "status": "active" },
+      "turn": { "phase": "blocked", "blockers": ["background", "question"] },
+      "want": "needs_answer"
+    },
+    {
+      "name": "an idle turn on a work waiting for the user",
+      "work": { "status": "active", "wait": "user" },
+      "turn": { "phase": "idle" },
+      "want": "needs_message"
+    },
+    {
+      "name": "an idle turn on a work waiting for its children",
+      "work": { "status": "active", "wait": "child" },
+      "turn": { "phase": "idle" },
+      "want": "waiting_children"
+    },
+    {
+      "name": "an active work between turns",
+      "work": { "status": "active" },
+      "turn": { "phase": "idle" },
+      "want": "idle"
+    },
+    {
+      "name": "an active work with no session at all",
+      "work": { "status": "active" },
+      "want": "idle"
+    },
+    {
+      "name": "a wait with no session is still a wait",
+      "work": { "status": "active", "wait": "user" },
+      "want": "needs_message"
+    }
+  ]
+}

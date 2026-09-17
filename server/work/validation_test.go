@@ -10,11 +10,12 @@ func TestValidateProgress(t *testing.T) {
 		allowed bool
 	}{
 		{StatusOpen, false},
-		{StatusInProgress, true},
-		{StatusNeedsInput, true},
-		{StatusWaiting, true},
+		{StatusActive, true},
 		{StatusStopped, true},
 		{StatusClosed, false},
+		// A value nobody recognises is admitted on purpose: a corrupted index
+		// must not be one more way to lock a work out of its own agent.
+		{WorkStatus("in_progress"), true},
 	}
 
 	for _, tt := range tests {
@@ -34,9 +35,7 @@ func TestValidateStartable(t *testing.T) {
 		allowed bool
 	}{
 		{StatusOpen, true},
-		{StatusInProgress, false}, // already running; must not start twice
-		{StatusNeedsInput, true},
-		{StatusWaiting, true},
+		{StatusActive, false}, // already running; must not start twice
 		{StatusStopped, true},
 		{StatusClosed, false},
 	}

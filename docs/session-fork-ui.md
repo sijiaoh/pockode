@@ -716,7 +716,7 @@ A fork of a session that belongs to a work is **not** linked to that work. The
 link is a single field on the work (`Work.session_id`), so a second session
 claiming the same work has nowhere to be recorded — and everything that goes
 from a work to *its* session would have two candidates and no rule for picking
-one: the work list's Chat shortcut, and `AutoResumer`, which sends the next
+one: the work list's Chat shortcut, and the work engine, which sends the next
 nudge to that id. The fork is an ordinary session.
 
 **3. Who can be forked at all.** The transcript has to know, before it reserves

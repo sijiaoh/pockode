@@ -28,9 +28,10 @@ type Manager struct {
 	leaseBudgets    session.LeaseBudgets
 	WorktreeWatcher *watch.WorktreeWatcher
 
-	workAutoResumer       *work.AutoResumer
-	workStatusSyncer      *work.StatusSyncer
-	sessionChangeListener session.OnChangeListener
+	workEngine *work.Engine
+	// sessionChangeListeners are registered on every worktree's session store,
+	// the ones already built and the ones built later.
+	sessionChangeListeners []session.OnChangeListener
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
@@ -58,13 +59,73 @@ func (m *Manager) Registry() *Registry {
 	return m.registry
 }
 
-func (m *Manager) SetWorkAutoResumer(ar *work.AutoResumer) {
-	m.workAutoResumer = ar
+// SetWorkEngine installs what drives work items. Every worktree built after
+// this call reports its settled turn endings to it — the engine's main input.
+func (m *Manager) SetWorkEngine(e *work.Engine) {
+	m.workEngine = e
+}
+
+// StopSession implements work.SessionTerminator: a work that stopped has no
+// lease left, so its process goes now.
+//
+// Only worktrees that are already loaded are looked at, and that is exact rather
+// than best-effort: a worktree holding a live process is never cleaned up (see
+// shouldCleanupLocked), so an unloaded worktree provably has no process to
+// stop. Building one here would mean starting watchers and a process manager
+// for every work a restart stops.
+func (m *Manager) StopSession(worktree, sessionID string) {
+	if wt, ok := m.loaded(worktree); ok {
+		wt.ProcessManager.Close(sessionID)
+	}
+}
+
+// RetireSession implements work.SessionTerminator: a closed work's session may
+// finish what it was saying and then ends. See process.Manager.RetireSession.
+func (m *Manager) RetireSession(worktree, sessionID string) {
+	if wt, ok := m.loaded(worktree); ok {
+		wt.ProcessManager.RetireSession(sessionID)
+	}
+}
+
+// SessionTurns implements work.TurnSource, so a work's activity can be derived
+// for a worktree nobody has opened.
+//
+// Loaded worktrees are answered from their store, which is the live value;
+// everything else is read off the index on disk, for the reason SessionUsages
+// gives — a row in a list must not build a worktree.
+func (m *Manager) SessionTurns(name string) (map[string]session.TurnState, error) {
+	if wt, ok := m.loaded(name); ok {
+		metas, err := wt.SessionStore.List()
+		if err != nil {
+			return nil, err
+		}
+		turns := make(map[string]session.TurnState, len(metas))
+		for _, meta := range metas {
+			turns[meta.ID] = meta.Turn
+		}
+		return turns, nil
+	}
+
+	// The name comes from a stored work item rather than from the registry, so
+	// it is checked before it becomes a path — see SessionUsages.
+	if name != "" && !filepath.IsLocal(name) {
+		return nil, fmt.Errorf("worktree name %q is not a directory name", name)
+	}
+	return session.ReadTurns(m.dataDirFor(name))
+}
+
+// loaded reports the worktree of that name only if it already exists, without
+// creating one or taking a reference.
+func (m *Manager) loaded(name string) (*Worktree, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	wt, ok := m.worktrees[name]
+	return wt, ok
 }
 
 // ResolveSender returns the named worktree's ChatClient as a message sender for
-// AutoResumer follow-ups, plus a release func that drops the worktree reference
-// once the send completes. Implements work.SenderResolver so each work's
+// the work engine's follow-ups, plus a release func that drops the worktree
+// reference once the send completes. Implements work.SenderResolver so each work's
 // automatic messages route to the worktree the work runs in.
 func (m *Manager) ResolveSender(name string) (work.MessageSender, func(), error) {
 	wt, err := m.Get(name)
@@ -74,31 +135,28 @@ func (m *Manager) ResolveSender(name string) (work.MessageSender, func(), error)
 	return wt.ChatClient, func() { m.Release(wt) }, nil
 }
 
-func (m *Manager) SetWorkStatusSyncer(s *work.StatusSyncer) {
-	m.workStatusSyncer = s
-}
-
-// SetSessionChangeListener registers a listener on every worktree's session
+// AddSessionChangeListener registers a listener on every worktree's session
 // store — the ones already built and the ones built later. For state that is
-// keyed by session but owned elsewhere: the work detail's usage aggregation,
-// which has to be told when a session it sums over changed.
+// keyed by session but owned elsewhere: the work detail's usage aggregation and
+// the work list's activity, which have to be told when a session they read
+// changed, and the work engine, which stops a work whose session was deleted.
 //
 // The already-built ones are not a formality. Worktrees are created lazily by
-// whoever needs one first, and AutoResumer resolves senders for work it restarts
+// whoever needs one first, and the engine resolves senders for work it restarts
 // while the server is still wiring itself up — so the main worktree can exist
 // before this call. Skipping it would leave that worktree's usage frozen for the
 // whole process, with nothing to show that it happened.
 //
-// One listener, set once while the server wires itself up. Calling it again would
-// leave the worktrees that already exist holding both.
-func (m *Manager) SetSessionChangeListener(l session.OnChangeListener) {
+// Each listener is added once, while the server wires itself up: a listener
+// registered twice would see every session change twice.
+func (m *Manager) AddSessionChangeListener(l session.OnChangeListener) {
 	// One lock covers both halves, and Get registers a new worktree inside the
 	// same critical section that inserts it into the map. Otherwise a worktree
 	// being created right now would be missed by both halves or taken by both.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.sessionChangeListener = l
+	m.sessionChangeListeners = append(m.sessionChangeListeners, l)
 	for _, wt := range m.worktrees {
 		wt.SessionStore.AddOnChangeListener(l)
 	}
@@ -147,9 +205,9 @@ func (m *Manager) Get(name string) (*Worktree, error) {
 	m.worktrees[name] = wt
 	wt.refCount = 1
 	// In the same critical section as the insertion, for the reason
-	// SetSessionChangeListener gives: the two halves must not overlap.
-	if m.sessionChangeListener != nil {
-		wt.SessionStore.AddOnChangeListener(m.sessionChangeListener)
+	// AddSessionChangeListener gives: the two halves must not overlap.
+	for _, l := range m.sessionChangeListeners {
+		wt.SessionStore.AddOnChangeListener(l)
 	}
 	slog.Info("worktree created", "name", name, "workDir", workDir)
 	m.mu.Unlock()
@@ -272,15 +330,16 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	processManager := process.NewManager(m.agents, workDir, wtDataDir, m.dataDir, sessionStore, m.leaseBudgets)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
-	if m.workStatusSyncer != nil {
-		sessionListWatcher.SetWorkStatusSyncer(m.workStatusSyncer)
+	processManager.SetOnStateChange(sessionListWatcher.HandleProcessStateChange)
+	if m.workEngine != nil {
+		// The engine hears a turn *ending*, not every state change: a settled
+		// ending is the only thing about a session it acts on, and the settling
+		// is the session layer's job (session.TurnSettler).
+		engine := m.workEngine
+		processManager.SetOnTurnEnded(func(end session.TurnEnd) {
+			engine.HandleTurnEnded(end.SessionID, end.Outcome)
+		})
 	}
-	processManager.SetOnStateChange(func(e process.StateChangeEvent) {
-		sessionListWatcher.HandleProcessStateChange(e)
-		if m.workAutoResumer != nil {
-			m.workAutoResumer.HandleProcessStateChange(e.SessionID, string(e.State), e.NeedsInput, e.IsInitial, e.Interrupted)
-		}
-	})
 
 	chatClient := chat.NewClient(sessionStore, processManager)
 	chatClient.SetBroadcaster(func(sessionID string, event agent.MessageEvent, seq session.HistorySeq, exclude any) {

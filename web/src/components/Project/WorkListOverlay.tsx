@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
-import { deriveActivity, needsUser } from "../../lib/activity";
+import { needsUser } from "../../lib/activity";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { WorkListItem, WorkStatus } from "../../types/work";
@@ -122,14 +122,7 @@ export default function WorkListOverlay({
 	);
 }
 
-const statusGroupOrder: WorkStatus[] = [
-	"in_progress",
-	"waiting",
-	"needs_input",
-	"stopped",
-	"open",
-	"closed",
-];
+const statusGroupOrder: WorkStatus[] = ["active", "stopped", "open", "closed"];
 
 interface StatusGroupProps {
 	status: WorkStatus;
@@ -260,8 +253,8 @@ function StoryRow({
 				</button>
 				{/* The rollup: the story itself, or any of its tasks
 				    (docs/lifecycle-ui.md §4). The rows keep their own precise leaf. */}
-				{(needsUser(deriveActivity(story, undefined)) ||
-					tasks?.some((t) => needsUser(deriveActivity(t, undefined)))) && (
+				{(needsUser(story.activity) ||
+					tasks?.some((t) => needsUser(t.activity))) && (
 					<ActivityDot className="mr-2" />
 				)}
 			</div>
@@ -331,7 +324,7 @@ function TaskRow({
 		? (roleNameMap.get(task.agent_role_id) ?? null)
 		: null;
 
-	const isNeedsInput = task.status === "needs_input";
+	const isNeedsInput = task.wait === "user";
 	const isStopped = task.status === "stopped";
 
 	return (

@@ -216,7 +216,7 @@ func (h *rpcMethodHandler) handleWorkStop(ctx context.Context, conn *jsonrpc2.Co
 		return
 	}
 
-	if err := h.workStopper.HandleWorkStop(ctx, params.ID); err != nil {
+	if err := h.workOps.StopWork(ctx, params.ID); err != nil {
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to stop work")
 		return
 	}
@@ -328,6 +328,7 @@ func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *
 		Work:     detail.Work,
 		Comments: detail.Comments,
 		Usage:    detail.Usage,
+		Activity: detail.Activity,
 	}
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {

@@ -1450,7 +1450,7 @@ type resultEvent struct {
 // Matched by prefix rather than against those two values because the distinction
 // reaches further than the transcript: an interrupted turn stops the running work
 // item, while a completed or failed one lets the work engine auto-continue (see
-// work.AutoResumer.HandleProcessStateChange). A new abort reason read as a
+// the work engine's aborted-turn rule). A new abort reason read as a
 // failure would carry on with a turn the user stopped.
 const abortTerminalReasonPrefix = "aborted"
 

@@ -131,13 +131,22 @@ cannot degrade (§5) and so is the one with a deadline that costs something.
   it already holds, §1.2) to an `Activity` with the pure function above. Chat
   needs `phase` and `blockers` in detail anyway, so sending the raw state and
   mapping locally costs nothing.
-- **Work rows carry a server-computed `activity` string.** The work list is
-  global across worktrees while the session list is worktree-scoped
+- **Work rows carry a server-computed `activity` string** (and so does the
+  detail). The work list is global across worktrees while the session list is
+  worktree-scoped
   ([work-system.md § Displaying a Work's Worktree](code/work-system.md#displaying-a-works-worktree)),
   so a client *cannot* derive a work's activity — it does not hold the
   `TurnState` of a session in another worktree. The server owns the function; the
   client owns the visual map. Those are the two single sources, and they are
   single because each lives where the data is.
+
+  The rule is therefore *evaluated* twice — `server/work/activity.go` for work,
+  `web/src/lib/activity.ts` for sessions — and *written down* once, as a table of
+  cases at `server/work/testdata/activity_cases.json` that both test suites read
+  (`work/activity_test.go`, `web/tests/activityRule.test.ts`). A change made on
+  one side and not the other fails on the other side. This is the one thing in
+  this document that could not be a single implementation, and the fixture is
+  what keeps "two implementations" from meaning "two rules".
 - An unrecognised `activity` value normalises to `idle` at the wire boundary, the
   same place `normalizeOrigin` folds legacy message origins. Old index values are
   normalised on load, not migrated.
@@ -614,7 +623,8 @@ machine noise.
 | Story with children in several activities | the story shows its *own* activity; the rollup dot is the only thing children contribute to a story row |
 | Answer pressed on a card that expired a moment ago | the RPC fails with the server's own reason ("the process that raised this request has ended"); the card flips to Expired with §5's banner and the error is shown inline under the buttons. A question card is then answerable again as a message, a permission card is not — the same two outcomes, reached a second later |
 | Session deleted while its work is `active` | the work moves to `stopped`. The delete confirmation says so: "Delete "{title}"? The work "{work}" will stop." — a session delete that silently stops work is the kind of silent failure this project forbids |
-| Work closed while its turn is still finishing | the work row reads `Closed` immediately while its session row may still read `Running` for the length of the grace period. That is two layers telling the truth about themselves, not a contradiction: the engine has let go, the process has not finished speaking. Nothing waits for the other before it updates |
+| Work closed while its turn is still finishing (grace: 2 minutes) | the work row reads `Closed` immediately while its session row may still read `Running` for the length of the grace period. That is two layers telling the truth about themselves, not a contradiction: the engine has let go, the process has not finished speaking. Nothing waits for the other before it updates |
+| Work reopened during the close grace | the reopen's restart message cancels the retirement outright — the premise of it was that nobody was coming back. The session keeps its process and its transcript, and the work is `active` again with no trace of the two minutes it spent closed |
 | Blocker raised *during* the close grace period | it never appears as `Closed` work needing input: a question raised then is cancelled with reason `work_closed` (§5.1), and the session's phase returns to idle |
 | 240px sidebar | every indicator is `shrink-0` and icon-only; the title is the one `flex-1 min-w-0` element ([sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule)) |
 | Reduced motion | the one spinner degrades the way the existing one does |
@@ -675,3 +685,26 @@ controls are what they will land on:
 | `web/src/components/Project/StepList.tsx` | §6.3 |
 | `web/src/components/Project/ProjectTab.tsx` | dot from `needsUser` |
 | `web/src/types/{message,work}.ts` | `turn`; `status` / `activity` / `wait` / `wait_reason` |
+
+### What has landed, and what the work-layer step left for the next one
+
+The work layer now sends everything this document asks for: the row and the
+detail carry `activity` and `wait`, the detail carries `wait_reason`, and
+`status` is the four-value enum §3's button table is written against. `StepList`
+(§6.3) and the Stop rule ("shown for every `active` work") are in.
+
+§6.2's wait line is in as well — the agent's own `wait_reason`, verbatim, under
+the badges — because it is the one thing in this document the user could not read
+*anywhere* before, and it needed no new component to show.
+
+Three things are deliberately still on the old vocabulary, because they are the
+*drawing* half and belong to the front-end step:
+
+- `StatusIcon` / `StatusBadge` still key off `status`, so a work waiting on the
+  user is drawn exactly like one simply running. §1.4's `ActivityIcon` /
+  `ActivityBadge` / `ActivityDot` — and deleting those two files — is what closes
+  that.
+- The work list has **four** status groups, not §6.1's five: *Needs you* needs
+  `needsUser(activity)`, which is the same step.
+- `ACTIVITY_VIEW` still has no `label`, for the reason recorded in §1.4: nothing
+  renders one yet, and a written label with no reader is dead code.
