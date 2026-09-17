@@ -27,8 +27,9 @@ export function lastOutputLines(output: string, count: number): string {
  * The run's latest word: one line under the title, or nothing.
  *
  * While the run is live that is what it reports doing. When a backgrounded run
- * settles the line hands over to the outcome and **stays** — the row must not
- * change height there, because a background row is by definition not at the
+ * settles the line hands over to the outcome, and a foreground failure hands it
+ * over to the last line of the output. Either way it **stays** — the row must
+ * not change height there, because a background row is by definition not at the
  * tail of the transcript, and `MessageList` only compensates for growth at the
  * tail or in a settling history page. A foreground run drops its line, and that
  * row is at the tail by construction.
@@ -51,11 +52,26 @@ export function toolSecondLine(run: ToolRun): ToolSecondLine | null {
 		const line = run.output ? lastNonEmptyLine(run.output) : "";
 		return line ? { text: line, mono: true, live: true } : null;
 	}
-	if (!run.fromBackground) return null;
-	const outcome = toolRunText(run)
-		.split("\n")
-		.find((line) => line.trim());
-	return outcome ? { text: outcome.trim(), mono: false, live: false } : null;
+	// Before the failure rung, not after: a backgrounded failure's outcome is the
+	// notification's own summary sentence, which says more than the tail of a log
+	// the user never asked for.
+	if (run.fromBackground) {
+		const outcome = toolRunText(run)
+			.split("\n")
+			.find((line) => line.trim());
+		return outcome ? { text: outcome.trim(), mono: false, live: false } : null;
+	}
+	// A failed row keeps a line, because nothing else on it says *how* it failed
+	// — the border and the glyph only say that it did. The last non-empty line
+	// rather than the first: it is the one the live line was already showing a
+	// moment earlier, so the text does not jump to the other end of the output as
+	// the run settles, and a build's verdict (`make: *** [build] Error 1`) is at
+	// the end while the head is noise.
+	if (run.status === "error") {
+		const line = lastNonEmptyLine(toolRunText(run));
+		return line ? { text: line, mono: true, live: false } : null;
+	}
+	return null;
 }
 
 /**

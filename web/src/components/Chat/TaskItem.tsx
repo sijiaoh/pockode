@@ -50,6 +50,11 @@ function TaskItem({ run }: Props) {
 	const failed = run.status === "error";
 	// A failure has to be read, but only pries the body open once — after that
 	// the user's own choice to collapse it stands.
+	//
+	// Kept here after the tool row dropped it, because the two are not the same
+	// case: a tool call failing is ordinary trial and error and its output is one
+	// line away on the row, while a subagent failing is rare and its report — the
+	// only account of what went wrong — exists nowhere but this body.
 	const autoExpandedRef = useRef(false);
 
 	useEffect(() => {
@@ -72,7 +77,12 @@ function TaskItem({ run }: Props) {
 				background={run.fromBackground}
 				detail={summary.detail}
 				meta={<ToolMeta run={run} />}
-				secondLine={toolSecondLine(run)}
+				// The shared second line ends a failed run with the last line of its
+				// text; here that text is the report, which this row has already
+				// opened in full below — so the line would be a worse second copy of
+				// something already on screen, drawn in mono because the shared rule
+				// expects machine output rather than markdown.
+				secondLine={failed ? null : toolSecondLine(run)}
 				error={failed}
 			/>
 

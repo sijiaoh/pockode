@@ -17,7 +17,6 @@
 package codex
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -748,12 +747,23 @@ func (s *appSession) writeRPC(method string, params interface{}) (int64, chan *r
 
 // runReadLoop reads JSON-RPC messages from stdout and dispatches them.
 func (s *appSession) runReadLoop(stdout io.Reader) {
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner := agent.NewLineScanner(stdout, agent.MaxLineBytes)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
+			continue
+		}
+
+		// A message too large to buffer is lost, but the stream is not: reading
+		// on is what lets the turn still be ended by the frames behind it. See
+		// agent.LineScanner.
+		if scanner.Truncated() {
+			s.log.Error("dropped a codex line too large to buffer", "lineLength", scanner.Len(), "limit", agent.MaxLineBytes)
+			s.emitEvent(agent.WarningEvent{
+				Message: fmt.Sprintf("Some output was too large to display (%d bytes) and was skipped", scanner.Len()),
+				Code:    "scanner_buffer_overflow",
+			})
 			continue
 		}
 

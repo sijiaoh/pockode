@@ -60,11 +60,29 @@ describe("TaskItem", () => {
 		expect(screen.getByText("explore the repo")).toBeVisible();
 	});
 
+	// Unlike a tool call, which fails as ordinary trial and error and prints its
+	// last line on the row: a subagent failing is rare, and this body is the only
+	// account of what went wrong.
 	it("opens itself when the Task fails, so the failure is not missed", () => {
 		render(
 			<TaskItem run={task("error", { result: "Agent type not found" })} />,
 		);
 		expect(screen.getByText("Agent type not found")).toBeVisible();
+	});
+
+	// Because the body is already open, the shared row's failure line would only
+	// be a second and worse copy of what is under it — the tail of a markdown
+	// report, drawn in mono.
+	it("does not repeat the report on the row of a failed Task", () => {
+		render(
+			<TaskItem
+				run={task("error", { result: "# Report\n\n- could not find it" })}
+			/>,
+		);
+		// The list item is in the body, rendered as markdown. The verbatim source
+		// line is what the row would have shown.
+		expect(screen.queryByText("- could not find it")).toBeNull();
+		expect(screen.getByText("could not find it")).toBeVisible();
 	});
 
 	// A Task that was just spawned can still be opened — the brief it was given

@@ -85,11 +85,23 @@ describe("ToolCallItem", () => {
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 	});
 
-	// A failed Bash and a successful one used to render identically.
-	it("opens a failure without being asked, and says so in colour", () => {
-		draw({ status: "error", result: "make: *** [build] Error 1" });
+	// Trial and error is how an agent works, so a turn routinely has several
+	// failed calls in it. Bodies that unfold themselves bury the answer the user
+	// is reading — but the row has to say more than "this went wrong", which is
+	// what the second line is for.
+	it("keeps a failure collapsed and says on the row how it failed", () => {
+		draw({
+			status: "error",
+			result:
+				"> vite build\nsrc/main.ts:3:1 - error TS2304\nmake: *** [build] Error 1",
+		});
+
+		expect(screen.getByRole("button", { expanded: false })).toBeVisible();
 		expect(screen.getByLabelText("failed")).toBeVisible();
-		expect(screen.getByText(/Error 1/)).toBeVisible();
+		// The last line, not the first: it is the one the live line was already
+		// showing, and a build's verdict is at the end while the head is noise.
+		expect(screen.getByText("make: *** [build] Error 1")).toBeVisible();
+		expect(screen.queryByText(/vite build/)).toBeNull();
 	});
 
 	describe("the second line", () => {
@@ -163,7 +175,8 @@ describe("ToolCallItem", () => {
 		// A background task's log can be arbitrarily large, so the server names
 		// the file rather than pushing it into the transcript — and the row has to
 		// say that is a choice, not a failure to read it.
-		it("offers the log it deliberately did not fetch", () => {
+		it("offers the log it deliberately did not fetch", async () => {
+			const user = userEvent.setup();
 			const onOpenFile = vi.fn();
 			render(
 				<ToolCallItem
@@ -188,19 +201,28 @@ describe("ToolCallItem", () => {
 				/>,
 			);
 
-			// Visible without expanding anything: it is what the user was waiting
-			// for, and the wording says nothing is wrong with it.
-			expect(screen.getByText("build-1.log")).toBeVisible();
+			// The outcome is what the user was waiting for and stays on the row.
+			// The log is only a pointer at a file nobody read, so it does not take
+			// a card in the strip above the body.
+			expect(screen.getByText("Build succeeded in 4m12s")).toBeVisible();
+			expect(screen.queryByText("Not fetched")).toBeNull();
+
+			await user.click(screen.getByRole("button", { expanded: false }));
+			// The full path, not the file name: the body does not truncate, so its
+			// tail is the name already.
+			expect(
+				screen.getByText(`${mockWorkDir.value}/.pockode/logs/build-1.log`),
+			).toBeVisible();
 			expect(screen.getByText("Not fetched")).toBeVisible();
 			expect(screen.getByRole("button", { name: "Open" })).toBeVisible();
-			expect(screen.getByText("Build succeeded in 4m12s")).toBeVisible();
 		});
 
 		// A CLI writes a background log wherever it likes, and every route into a
 		// file takes a work-directory-relative path — so this is the common half,
 		// not the edge. The entry must not tell the reader to open something that
 		// has no button.
-		it("does not offer to open a log that lives outside the work directory", () => {
+		it("does not offer to open a log that lives outside the work directory", async () => {
+			const user = userEvent.setup();
 			render(
 				<ToolCallItem
 					run={run({
@@ -224,6 +246,8 @@ describe("ToolCallItem", () => {
 				/>,
 			);
 
+			await user.click(screen.getByRole("button", { expanded: false }));
+			expect(screen.getByText("/tmp/claude-shell/build-1.log")).toBeVisible();
 			expect(screen.getByText("Not fetched")).toBeVisible();
 			expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
 		});
@@ -263,7 +287,6 @@ describe("ToolCallItem", () => {
 		it("puts a non-zero exit code in the body", async () => {
 			const user = userEvent.setup();
 			draw({ status: "error", result: "boom", exitCode: 2 });
-			await user.click(screen.getByRole("button", { expanded: true }));
 			await user.click(screen.getByRole("button", { expanded: false }));
 			expect(screen.getByText("Exit code 2")).toBeVisible();
 		});

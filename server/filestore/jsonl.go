@@ -12,9 +12,38 @@ import (
 )
 
 // DefaultMaxLineBytes bounds a single JSONL line while reading.
-// Where: matches the 1 MiB buffer the agent CLI stream-json readers use, which
-// is the upper bound on the size of a record we ever append.
-const DefaultMaxLineBytes = 1024 * 1024
+//
+// Where: it covers agent.MaxLineBytes (8 MiB), the ceiling on one CLI event and
+// therefore on the payload of one record we ever append — a reader smaller than
+// the writer would append history it then refuses to load back, and the loss
+// would surface much later, as "entries too large to load" on a session the
+// user reopens. Not equal to it but a megabyte past it: the record is the event
+// wrapped in EventRecord's own JSON, so it is the larger of the two by an
+// envelope, and two equal ceilings would leave exactly that envelope of
+// payloads writable and unreadable. Not imported from there either — this
+// package sits under the agent layer, not beside it — so
+// agent.TestLineLimitsCoverHistory holds the two together instead.
+//
+// The margin is free because this is a limit and not an allocation: ReadJSONL
+// assembles a line above a small read buffer (jsonlReadBuffer) rather than
+// buffering the whole ceiling.
+const DefaultMaxLineBytes = 9 * 1024 * 1024
+
+// jsonlReadBuffer is the read-ahead under ReadJSONL. Lines are assembled above
+// it, so it bounds one read rather than one line.
+//
+// Why not size the buffer to the ceiling, which is the obvious thing: the
+// ceiling is what one record may reach, not what one is, and a history of
+// few-kilobyte records is the normal case. Buffering the ceiling made reading
+// one cost the whole of it — measured at 20ms and 8.4 MB for an 8 KiB file,
+// against 1ms and 91 KB here — on a path the user waits on, since GetHistory
+// runs when a session is opened and again for every page scrolled back.
+//
+// Sizing the buffer to the *file* is the other obvious saving and is wrong:
+// GetHistory reads without a lock while a turn appends, so a record written
+// after the size was taken would be counted oversized and reported to the user,
+// in the chat, as history too large to load.
+const jsonlReadBuffer = 64 * 1024
 
 // JSONLStats reports records ReadJSONL could not return, so callers can
 // surface the loss instead of silently dropping history.
@@ -129,12 +158,24 @@ func ReadJSONL(path string, maxLineBytes int) ([]json.RawMessage, JSONLStats, er
 	defer f.Close()
 
 	records := []json.RawMessage{}
-	reader := bufio.NewReaderSize(f, maxLineBytes)
+	reader := bufio.NewReaderSize(f, jsonlReadBuffer)
+
+	// What has been read of the current line, while it is arriving in more than
+	// one piece. Empty whenever the last read finished a line.
+	var pending []byte
 
 	for {
-		line, err := reader.ReadSlice('\n')
+		chunk, err := reader.ReadSlice('\n')
+
 		if errors.Is(err, bufio.ErrBufferFull) {
+			if len(pending)+len(chunk) <= maxLineBytes {
+				pending = append(pending, chunk...)
+				continue
+			}
+			// Past the ceiling. Stop assembling and walk to the end of the line,
+			// so the next record is read as a record and not as this one's tail.
 			stats.Oversized++
+			pending = pending[:0]
 			err = discardLine(reader)
 			if err != nil && !errors.Is(err, io.EOF) {
 				return records, stats, err
@@ -148,16 +189,29 @@ func ReadJSONL(path string, maxLineBytes int) ([]json.RawMessage, JSONLStats, er
 			return records, stats, err
 		}
 
-		line = bytes.TrimRight(line, "\r\n")
-		if len(line) > 0 {
-			if json.Valid(line) {
-				record := make(json.RawMessage, len(line))
-				copy(record, line)
-				records = append(records, record)
-			} else {
-				stats.Corrupted++
+		line := chunk
+		if len(pending) > 0 {
+			pending = append(pending, chunk...)
+			line = pending
+		}
+
+		// The last chunk can still carry the line past the ceiling: only what
+		// was assembled before it was checked against one.
+		if len(line) > maxLineBytes {
+			stats.Oversized++
+		} else {
+			line = bytes.TrimRight(line, "\r\n")
+			if len(line) > 0 {
+				if json.Valid(line) {
+					record := make(json.RawMessage, len(line))
+					copy(record, line)
+					records = append(records, record)
+				} else {
+					stats.Corrupted++
+				}
 			}
 		}
+		pending = pending[:0]
 
 		if errors.Is(err, io.EOF) {
 			break

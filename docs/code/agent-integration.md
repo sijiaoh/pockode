@@ -553,17 +553,18 @@ namespace omits with, so one client code path renders both:
 | A PDF or other non-image | `binary` | the UI lists it rather than rendering it, and the read that produced it names the file on disk in the text block beside it, so half a megabyte of base64 would buy nothing. The file namespace omits non-image binaries for the same reason. On the Codex side this is also the boundary of the copy: the event says the file is an image and the path is the agent's, so what does not sniff as one is described where it lies rather than copied in on the strength of that claim |
 | An image over `contents.MaxFileSize` | `too_large` (+ `limit`) | it could not be sent back through one JSON-RPC message, so storing it would only defer the failure |
 | Content that could not be read, decoded or stored; a path the server cannot use | `unavailable` | there is nothing to keep |
+| A file the agent only named and Pockode deliberately did not read — a background task's log | `not_fetched` | nothing was attempted. The answer to that call is the prose beside the block, and the log can be arbitrarily large; the path is how it is still reached. A client draws such a block as a reference line in the body rather than as an attachment ([tool-call-ui.md](../tool-call-ui.md#the-body-problems-2-and-3)) |
 
-`unavailable` is the one of the three a client may get past. The other two are
-statements about the content — the same ceiling and the same refusal would come
-back from any route — while this one says only that the server could not keep
-it, so a block naming a file still in the work directory is read through
-`file.get` instead and the image appears after all. Claude's blocks carry no
-path of their own, but the call that produced one does, and its `file_path` is
-that file: the client fills it in for a lone file block, which is also what
-gives a Claude read the file name and the way over to the Files tab that a Codex
-read of the same file has. Two conditions on that, both about not stating
-something untrue: only a `Read`, whose contract is that the result *is* what is
+Of the three reasons that report a failed attempt, `unavailable` is the one a
+client may get past. The other two are statements about the content — the same
+ceiling and the same refusal would come back from any route — while this one
+says only that the server could not keep it, so a block naming a file still in
+the work directory is read through `file.get` instead and the image appears
+after all. Claude's blocks carry no path of their own, but the call that produced
+one does, and its `file_path` is that file: the client fills it in for a lone
+file block, which is also what gives a Claude read the file name and the way over
+to the Files tab that a Codex read of the same file has. Two conditions on that,
+both about not stating something untrue: only a `Read`, whose contract is that the result *is* what is
 in `file_path` — plenty of other tools take a path and answer with something
 else, and a chart drawn from a CSV is not the CSV — and only when the result
 holds exactly one file block, since one path cannot say which of several files
@@ -2983,9 +2984,20 @@ goes there, what only gets described, and what a fork does with it are in
   drop the not-yet-flushed tail.
 - The next append terminates an unterminated trailing line before writing, so a
   partial line left by a crash cannot swallow the following record.
-- Reads skip lines that are not valid JSON (or exceed the 1 MiB line limit),
-  keeping the rest of the conversation loadable, and report the count so the
-  session store can log it and surface a `warning` record in the chat.
+- Reads skip lines that are not valid JSON, or longer than the 9 MiB line limit.
+  That limit covers `agent.MaxLineBytes` (8 MiB) **plus an envelope**, so a
+  record we were able to append is never one we then refuse to load back: the
+  record is the CLI event wrapped in `EventRecord`'s own JSON, so two equal
+  ceilings would leave an envelope's worth of payloads writable and unreadable
+  (`agent.TestLineLimitsCoverHistory`). The rest of the conversation stays
+  loadable, and the count is reported so the session store can log it and
+  surface a `warning` record in the chat.
+- That ceiling is a limit and not an allocation: `ReadJSONL` assembles a line
+  above a 64 KiB read buffer rather than buffering the whole of it. Buffering
+  the ceiling made reading an 8 KiB history cost the whole ceiling — measured at
+  20ms and 8.4 MB, against 1ms and 91 KB — on a path the user waits on, since
+  `GetHistory` runs when a session is opened and again for every page scrolled
+  back.
 
 The session index (`sessions/index.json`) is a whole-file rewrite instead, and
 uses `filestore.WriteFileAtomic`. If it is nonetheless found corrupt at startup,
@@ -3108,16 +3120,53 @@ if err := json.Unmarshal(line, &event); err != nil {
 }
 ```
 
-**Buffer overflow**:
+**A line too large to buffer**:
 
-```go
-if errors.Is(err, bufio.ErrTooLong) {
-    events <- agent.WarningEvent{
-        Message: "Some output was too large to display",
-        Code:    "scanner_buffer_overflow",
-    }
-}
-```
+One stdout line is one event, and `agent.MaxLineBytes` (8 MiB) caps how much of
+one Pockode holds in memory. The lines that push on that ceiling are tool
+results — an image's base64, the text of a large `Read`, a command's output —
+which arrive whole, on one line. The limit was 1 MiB until it was hit in
+practice; 8 MiB is sized for a screenshot handed over as base64 — a few MB of it
+— with room left over rather than sitting just above the case that failed. That
+is deliberately generous against what was measured of claude itself
+([Why the Bytes Are Not in the Event](#why-the-bytes-are-not-in-the-event): it
+re-encodes what it sends inline, and the largest base64 seen from it was
+~650 KB) — the headroom is there for everything else a tool can return. What
+still overflows is an outlier, and the rest of this section is what happens when
+one does.
+
+`bufio.Scanner` cannot be used for this. It stops for good on `bufio.ErrTooLong`,
+and stdout is a session's only channel — so one oversized line took every later
+event with it, including the `result` that ends the turn. Nothing was left to
+report any outcome, and the transcript spun on a tool call whose result was never
+coming. `agent.LineScanner` reads the same lines and keeps going instead,
+returning the head of an oversized one with `Truncated()` set.
+
+Both CLIs report the gap rather than swallowing it. Claude does one more thing:
+the head of a line is still readable, and two frame types are somebody's *only*
+ending, so it answers in their place rather than leaving that somebody waiting.
+
+| Truncated frame | Answered with | Why |
+|---|---|---|
+| `tool_result` | `ToolResultEvent{IsError: true}` on **every** `tool_use_id` in the head | The result is lost and not coming; without one the call runs forever. Every id, because parallel calls come back as one message holding a `tool_result` each and the whole line is gone — the one that overflowed is the last block in the head, so taking only the first would fail a readable call and leave the real culprit spinning |
+| `control_request` | `decline(request_id, ...)` | The CLI is blocked on the answer — unanswered, the turn stops dead |
+| anything else | the warning alone | Nothing is waiting on it |
+
+`ReadStderr` reads with the same scanner, for the same reason in a different
+place: stderr is the CLI's own account of why it died, and a stack trace printed
+on one long line used to stop that collection for good. An over-long line there
+is kept up to the ceiling and carries a note of how much was dropped. That
+ceiling is its own and much lower — `agent.MaxStderrLineBytes`, 64 KiB — because
+stderr carries no payload, only prose: sizing it for base64 that cannot arrive
+would just hand a bigger buffer to a process that is already failing.
+
+The recovery reads those fields with a regexp, not a decoder: the line stops
+mid-value, so nothing will parse it. That is safe against a false match inside
+prose because JSON escapes a quote in a string value as `\"`, which the patterns
+do not accept. The `tool_result` type is checked as well as the id, because
+`tool_use_id` also rides on frames that say nothing about a call being over —
+ending a still-running call on an oversized progress frame would be a new bug in
+place of the old one.
 
 ### Fatal Errors
 
@@ -3131,6 +3180,7 @@ The following conditions send an `ErrorEvent` and end the session:
 | Module | Path |
 |--------|------|
 | Agent interface | `server/agent/agent.go` |
+| Line reading (oversized-line tolerance) | `server/agent/lines.go` |
 | Event types | `server/agent/event.go` |
 | Event serialization | `server/agent/history.go` |
 | Subprocess lifecycle | `server/agent/process.go`, `server/internal/proctree/` |

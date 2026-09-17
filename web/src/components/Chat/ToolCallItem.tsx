@@ -1,10 +1,15 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { contentBlockFiles } from "../../lib/contentBlocks";
+import { memo, useMemo, useState } from "react";
+import {
+	contentBlockFiles,
+	type FileReference,
+	partitionFileBlocks,
+} from "../../lib/contentBlocks";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { lastOutputLines, toolSecondLine } from "../../lib/toolRun";
 import { toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { ToolRun } from "../../types/message";
+import { omittedLabel } from "../../utils/attachment";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { relativeToWorkDir } from "../../utils/path";
 import { CollapsibleBody, ScrollableContent } from "../ui";
@@ -62,6 +67,38 @@ function PathLine({
 					Open
 				</button>
 			)}
+		</div>
+	);
+}
+
+/**
+ * A file the result points at rather than contains: a background task's log,
+ * named but deliberately never read.
+ *
+ * At the weight of a line of body text — no card, no border, no icon — because
+ * it is a pointer and not an answer. The one that used to sit in the attachment
+ * strip was a `w-56` card with a large glyph on every backgrounded row, and on
+ * the common half of them, where the CLI wrote its log outside the work
+ * directory, it had no button either: a card-shaped thing that could not be
+ * tapped.
+ *
+ * The full path, not the file name the block also carries: the body does not
+ * truncate, so the tail of the path *is* the name and a second copy of it would
+ * only take a line.
+ */
+function ReferenceLine({
+	file,
+	onOpenFile,
+}: {
+	file: FileReference;
+	onOpenFile?: (path: string) => void;
+}) {
+	const reason = omittedLabel(file);
+
+	return (
+		<div className="space-y-0.5">
+			<PathLine path={file.path} onOpenFile={onOpenFile} />
+			{reason && <p className="text-th-text-muted">{reason}</p>}
 		</div>
 	);
 }
@@ -180,25 +217,26 @@ const ToolCallItem = memo(function ToolCallItem({
 		() => toolSummary(run.name, run.input, workDir),
 		[run.name, run.input, workDir],
 	);
+	// Nothing opens this body but the user. A failure used to pry it open once,
+	// back when a failed row said only *that* it failed; now it says how, on its
+	// second line. Trial and error is how an agent works, so a turn with four
+	// failed calls in it is ordinary — and four bodies unfolding themselves bury
+	// the answer the user is actually reading.
 	const failed = run.status === "error";
-	// A failure has to be read, but only pries the body open once — after that
-	// the user's own choice to collapse it stands. A background run is never
-	// auto-expanded: a 30-minute task that unfolds itself would shove the
-	// transcript around long after the user stopped caring.
-	const autoExpandedRef = useRef(false);
 
-	useEffect(() => {
-		if (failed && !autoExpandedRef.current) {
-			autoExpandedRef.current = true;
-			setExpanded(true);
-		}
-	}, [failed]);
-
-	const files = useMemo(
+	// Partitioned after `contentBlockFiles`, never before: that is where a lone
+	// block borrows the Read's path, and a block with no path is not drawn as a
+	// reference.
+	const { attachments, references } = useMemo(
 		() =>
-			run.contents
-				? contentBlockFiles(run.contents, { name: run.name, input: run.input })
-				: [],
+			partitionFileBlocks(
+				run.contents
+					? contentBlockFiles(run.contents, {
+							name: run.name,
+							input: run.input,
+						})
+					: [],
+			),
 		[run.contents, run.name, run.input],
 	);
 
@@ -225,9 +263,9 @@ const ToolCallItem = memo(function ToolCallItem({
 				secondLine={toolSecondLine(run)}
 				error={failed}
 			/>
-			{files.length > 0 && (
+			{attachments.length > 0 && (
 				<AttachmentStrip
-					files={files}
+					files={attachments}
 					sessionId={sessionId}
 					onOpenFile={onOpenFile}
 				/>
@@ -270,6 +308,15 @@ const ToolCallItem = memo(function ToolCallItem({
 								contents={run.contents}
 								onOpenFile={onOpenFile}
 							/>
+							{/* No condition of its own: a reference can only have come
+							    from `run.contents`, which is half of `hasResult`. */}
+							{references.map((file) => (
+								<ReferenceLine
+									key={file.path}
+									file={file}
+									onOpenFile={onOpenFile}
+								/>
+							))}
 						</Section>
 					)}
 					{run.exitCode !== undefined && run.exitCode !== 0 && (
