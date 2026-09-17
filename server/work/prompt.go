@@ -23,6 +23,10 @@ const (
 	MessageSubtypeStepAdvance  = "step_advance"
 	MessageSubtypeReopen       = "reopen"
 	MessageSubtypeChildDone    = "child_done"
+	// MessageSubtypeWaitStranded is the counterpart of child_done for the case
+	// where nothing is going to close: the parent's wait on its subtasks has
+	// nothing left that could end it.
+	MessageSubtypeWaitStranded = "wait_stranded"
 )
 
 // NewMessageMeta builds the summary metadata for a system message.
@@ -62,6 +66,7 @@ type promptTemplates struct {
 	TaskAutoContinueNudge  string `yaml:"task_auto_continue_nudge"`
 	StepAutoContinueNudge  string `yaml:"step_auto_continue_nudge"`
 	ChildCompletionNudge   string `yaml:"child_completion_nudge"`
+	StrandedWaitNudge      string `yaml:"stranded_wait_nudge"`
 	StepAdvanceSection     string `yaml:"step_advance_section"`
 	CurrentStepSection     string `yaml:"current_step_section"`
 }
@@ -282,6 +287,27 @@ func BuildChildCompletionMessage(parent Work, childTitle, childID string, waitCl
 		"ChildID":     childID,
 		"ID":          parent.ID,
 		"WaitCleared": waitCleared,
+	})
+
+	return base + "\n\n" + nudge
+}
+
+// BuildStrandedWaitMessage tells a parent that its wait on its subtasks has
+// nothing left that could end it, and what became of the last one.
+//
+// exit is a parameter for the same reason waitCleared is one above: only the
+// caller knows which of the three shapes it was, and the three differ in the way
+// back — a stopped or unstarted subtask is restarted, a deleted one is replaced.
+// Collapsing them into "the subtask is gone" would send the agent looking for
+// work_start on an ID that no longer exists.
+func BuildStrandedWaitMessage(parent Work, childTitle, childID string, exit childExit) string {
+	base := buildBase(parent)
+
+	nudge := render(prompts.StrandedWaitNudge, map[string]any{
+		"ChildTitle": childTitle,
+		"ChildID":    childID,
+		"ID":         parent.ID,
+		"Exit":       string(exit),
 	})
 
 	return base + "\n\n" + nudge

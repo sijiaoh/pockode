@@ -363,6 +363,197 @@ func TestEngine_ChildClosureLeavesAParentWaitingOnTheUser(t *testing.T) {
 	}
 }
 
+// --- input 3, the other half: a child left active without closing ---
+
+// A `child` wait is ended by a subtask closing and by nothing else, so a subtask
+// that leaves active without closing can strand it. The engine clears the wait
+// and tells the agent rather than deciding for it: only the agent knows whether
+// the subtask should be restarted, replaced, or was never needed — and once the
+// wait is gone the ordinary nudge allowance is the backstop.
+func TestEngine_ClearsAWaitNothingCouldEnd(t *testing.T) {
+	cases := []struct {
+		name string
+		// leave takes the last subtask out of active without closing it.
+		leave func(t *testing.T, f *engineFixture, childID string)
+		// The ways back differ, so the message has to differ: a stopped subtask
+		// is restarted by ID, a deleted one no longer has an ID to restart.
+		wants   []string
+		unwants []string
+	}{
+		{
+			name: "stopped",
+			leave: func(t *testing.T, f *engineFixture, childID string) {
+				if err := f.store.Stop(context.Background(), childID); err != nil {
+					t.Fatalf("Stop the child: %v", err)
+				}
+			},
+			wants:   []string{"was stopped instead of closing", "restart it with work_start"},
+			unwants: []string{"was deleted"},
+		},
+		{
+			name: "deleted",
+			leave: func(t *testing.T, f *engineFixture, childID string) {
+				if err := f.store.Delete(context.Background(), childID); err != nil {
+					t.Fatalf("Delete the child: %v", err)
+				}
+			},
+			wants:   []string{"was deleted", "create a replacement with work_create"},
+			unwants: []string{"work_start using ID"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newEngineFixture(t)
+			story := f.startedStory(t, "sess-parent")
+			task := createTask(t, f.store, story.ID, "T")
+			startWorkWithSession(t, f.store, task.ID, "sess-child")
+			if err := f.store.SetWait(context.Background(), story.ID, WaitChild, "waiting on T"); err != nil {
+				t.Fatalf("SetWait: %v", err)
+			}
+
+			tc.leave(t, f, task.ID)
+
+			waitFor(t, func() bool { return f.sender.count() > 0 })
+			if got := f.sender.subtypes(); len(got) != 1 || got[0] != MessageSubtypeWaitStranded {
+				t.Fatalf("sent %v, want one stranded-wait message", got)
+			}
+			got := getWork(t, f.store, story.ID)
+			if got.Status != StatusActive || got.Wait != WaitNone {
+				t.Errorf("parent = %q/%q, want active with its wait cleared", got.Status, got.Wait)
+			}
+			content := f.sender.contents()[0]
+			for _, want := range append(tc.wants, "None of your tasks is running now") {
+				if !strings.Contains(content, want) {
+					t.Errorf("message does not mention %q", want)
+				}
+			}
+			for _, unwanted := range tc.unwants {
+				if strings.Contains(content, unwanted) {
+					t.Errorf("message mentions %q, which is the other kind of disappearance", unwanted)
+				}
+			}
+		})
+	}
+}
+
+// Only the *last* one strands the wait. A subtask stopping while another still
+// runs is ordinary, and the wait still has something that can end it properly.
+func TestEngine_LeavesAWaitAloneWhileAnotherSubtaskRuns(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	stopped := createTask(t, f.store, story.ID, "T1")
+	startWorkWithSession(t, f.store, stopped.ID, "sess-child-1")
+	running := createTask(t, f.store, story.ID, "T2")
+	startWorkWithSession(t, f.store, running.ID, "sess-child-2")
+	if err := f.store.SetWait(context.Background(), story.ID, WaitChild, "waiting on both"); err != nil {
+		t.Fatalf("SetWait: %v", err)
+	}
+
+	if err := f.store.Stop(context.Background(), stopped.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	// Asserted through a second change that *does* strand it: waiting on the
+	// absence of a message would pass just as well if the engine were broken.
+	if err := f.store.Stop(context.Background(), running.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	waitFor(t, func() bool { return f.sender.count() > 0 })
+	if got := f.sender.count(); got != 1 {
+		t.Errorf("sent %d messages, want only the one for the last subtask", got)
+	}
+}
+
+// lostTheRace answers every stranded-wait clear with "somebody else ended this
+// wait". That is the interleaving two subtasks leaving active at once produce —
+// both follow-ups read a parent that is still waiting, and only one of them can
+// be the caller that clears it — and real goroutines cannot be made to reproduce
+// it on demand, which is why the store's answer is a test double here.
+type lostTheRace struct{ *FileStore }
+
+func (lostTheRace) ClearChildWaitIfStranded(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+// The store's answer is the whole permission to speak: a follow-up that did not
+// end the wait has no news, and sending anyway is how one story gets told twice
+// that its subtasks stopped.
+func TestEngine_OnlyTheCallerThatClearedTheWaitSends(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	task := createTask(t, f.store, story.ID, "T")
+	startWorkWithSession(t, f.store, task.ID, "sess-child")
+	if err := f.store.SetWait(context.Background(), story.ID, WaitChild, "waiting on T"); err != nil {
+		t.Fatalf("SetWait: %v", err)
+	}
+	loser := NewEngine(lostTheRace{f.store}, DefaultMaxNudges)
+	loser.SetSender(f.sender)
+	t.Cleanup(loser.Stop)
+
+	loser.OnWorkChange(ChangeEvent{Op: OperationUpdate, Work: Work{
+		ID: task.ID, ParentID: story.ID, Status: StatusStopped, Title: "T",
+	}})
+
+	loser.Stop() // Waits for the follow-up rather than for a message never sent.
+	if got := f.sender.count(); got != 0 {
+		t.Errorf("sent %d messages, want none: this caller did not end the wait", got)
+	}
+}
+
+// A parent waiting on the *user* has not been stranded by anything: its wait is
+// cleared by a person, who is always reachable. Clearing it would drop the one
+// record telling the user they are the one being waited for.
+func TestEngine_LeavesAParentNotWaitingOnChildrenAlone(t *testing.T) {
+	for _, wait := range []WorkWait{WaitUser, WaitNone} {
+		t.Run(string("wait="+wait), func(t *testing.T) {
+			f := newEngineFixture(t)
+			story := f.startedStory(t, "sess-parent")
+			task := createTask(t, f.store, story.ID, "T")
+			startWorkWithSession(t, f.store, task.ID, "sess-child")
+			if wait != WaitNone {
+				if err := f.store.SetWait(context.Background(), story.ID, wait, "which database?"); err != nil {
+					t.Fatalf("SetWait: %v", err)
+				}
+			}
+
+			if err := f.store.Stop(context.Background(), task.ID); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+
+			waitFor(t, func() bool { return len(f.terminator.snapshot()) > 0 })
+			if got := f.sender.count(); got != 0 {
+				t.Errorf("sent %d messages, want none", got)
+			}
+			if got := getWork(t, f.store, story.ID); got.Wait != wait {
+				t.Errorf("parent wait = %q, want it left at %q", got.Wait, wait)
+			}
+		})
+	}
+}
+
+// Deleting a story emits a delete for every task under it, so the parent lookup
+// runs against a store the parent has already left. It must not panic, message
+// anybody, or resurrect anything.
+func TestEngine_DeletingAWholeStoryStrandsNobody(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	task := createTask(t, f.store, story.ID, "T")
+	startWorkWithSession(t, f.store, task.ID, "sess-child")
+	if err := f.store.SetWait(context.Background(), story.ID, WaitChild, "waiting on T"); err != nil {
+		t.Fatalf("SetWait: %v", err)
+	}
+
+	if err := f.store.Delete(context.Background(), story.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	f.engine.Stop() // Waits for the follow-ups the deletes spawned.
+	if got := f.sender.count(); got != 0 {
+		t.Errorf("sent %d messages, want none — there is no parent left to tell", got)
+	}
+}
+
 // --- input 4: the session was deleted ---
 
 func TestEngine_StopsAWorkWhoseSessionWasDeleted(t *testing.T) {

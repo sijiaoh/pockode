@@ -28,11 +28,19 @@ must not be nudged.
 |---|---|---|
 | none | every transition into active | — |
 | `user` | `work_needs_input` | a user message |
-| `child` | `work_wait` | a child work closing, or a user message |
+| `child` | `work_wait` | a child work closing, or a user message — or the engine, when no child is left that could close |
 
 `WaitReason` is the agent's own words for why, shown verbatim on the detail
 page. `NudgeCount` is how many times in a row the engine has told the agent to
 carry on with nothing to show for it.
+
+A wait on children is ended by a child closing and by nothing else, so it is
+checked at both ends: `work_wait` is refused when no child of the work is
+running, and a wait whose last running child leaves *without* closing is cleared
+by the engine with a message saying what became of it. Either case would
+otherwise leave a coordinator waiting forever, and waiting quietly — the engine
+does not nudge a waiting work
+([work-system.md](../code/work-system.md#input-3-a-child-work-left-active)).
 
 ## Status Transitions
 
@@ -49,9 +57,11 @@ why the pair is shaped that way.
 | `open`    | `active`  | `Store.Claim` (fresh start — no session yet) |
 | `active` / `stopped` | `open`    | `Store.RollbackStart` (fresh start failed) |
 | `active` / `stopped` | `stopped` | `Store.RollbackStart` (restart failed)     |
-| live      | `active` + wait | `Store.SetWait` (`work_needs_input` / `work_wait`) |
+| live      | `active` + wait | `Store.SetWait` (`work_needs_input`) |
+| live with an active child | `active` + `child` | `Store.SetChildWait` (`work_wait`; refused when no child is running) |
 | live      | `stopped` | `Store.Stop` (user Stop, aborted turn, nudge limit, deleted session, startup recovery) |
 | live      | `active`  | `Store.Activate` (a user message, a child closing) |
+| `active` + `child` | `active`  | `Store.ClearChildWaitIfStranded` (the last child that could close left active without closing) |
 | `stopped` | `active`  | `Store.Claim` (restart — the work already owns a session, which is reused) |
 | live      | `active`  | `Store.StepDone` (steps remain — the advance also repairs a stale status) |
 | live      | `closed`  | `Store.StepDone` (no steps remain)         |
@@ -250,6 +260,16 @@ Step 1 of N
 ```
 
 Used when a work item's agent role has `steps` defined. Falls back to `BuildKickoffMessage` if no steps.
+
+### BuildStrandedWaitMessage
+
+Base + the news that the wait on children has nothing left that could end it,
+and what became of the last child: deleted (create a replacement — there is no
+id left), stopped (restart it by id), or never started (start it by id). The
+wait is already cleared by the time this
+arrives, and the message says so — the work has no wait now and is nudged as
+usual. It never left `active`; a waiting work is active, which is what the
+lifecycle section in the same message says.
 
 ### BuildRestartMessage
 

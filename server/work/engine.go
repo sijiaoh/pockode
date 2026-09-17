@@ -71,7 +71,8 @@ const DefaultMaxNudges = 3
 //
 //   - HandleTurnEnded — a turn of the work's session settled.
 //   - HandleUserMessage — the user handed the session something to go on.
-//   - OnWorkChange (a child closing) — a subtask of this work finished.
+//   - OnWorkChange (a child leaving active) — a subtask finished, or stopped
+//     being something its parent's wait could be waiting for.
 //   - OnSessionChange (a deletion) — the work's session was deleted.
 //   - RecoverStartup — the server started with work left over from a previous run.
 //
@@ -386,26 +387,59 @@ func (e *Engine) HandleUserMessage(sessionID string) {
 		"workId", w.ID, "from", w.Status, "wait", w.Wait, "sessionId", sessionID)
 }
 
-// --- Input 3: a child work closed ---
+// --- Input 3: a child work left active ---
 
 // OnWorkChange implements OnChangeListener. Two things are read off a work
-// changing: a child closing, which its parent has to be told about, and a work
-// leaving active, which takes its session's lease away.
+// changing: a child leaving active, which its parent may have to be told about,
+// and a work leaving active, which takes its session's lease away.
 func (e *Engine) OnWorkChange(event ChangeEvent) {
-	// Only an update: a work is born open with no session, and a deleted one
-	// takes its sessions with it (the delete cascades).
-	if event.Op != OperationUpdate {
-		return
-	}
-
-	e.enforceSessionLease(event.Work)
-
-	if event.Work.Status != StatusClosed || event.Work.ParentID == "" || e.getResolver() == nil {
+	// A work is born open with no session and nothing to report, so a create is
+	// news to nobody.
+	if event.Op == OperationCreate {
 		return
 	}
 	child := event.Work
-	e.goFollowUp(func() { e.notifyParentOfChild(child) })
+	if event.Op == OperationUpdate {
+		e.enforceSessionLease(child)
+	}
+	if child.ParentID == "" || e.getResolver() == nil {
+		return
+	}
+
+	// What the parent is owed depends on how the child left, and a child that is
+	// still active owes it nothing — which is why there is no case for it.
+	//
+	// Every branch below tests a *condition* rather than a transition, so an
+	// ordinary edit to a subtask that stopped some time ago re-checks a parent
+	// that may be stuck. That is deliberate: it is one more chance to notice,
+	// and on a parent that is fine it costs a store read.
+	switch {
+	case event.Op == OperationDelete:
+		e.goFollowUp(func() { e.notifyParentOfStrandedWait(child, childDeleted) })
+	case child.Status == StatusClosed:
+		// A closing child has a report to deliver, so its parent is told whether
+		// or not other subtasks are still running.
+		e.goFollowUp(func() { e.notifyParentOfChild(child) })
+	case child.Status == StatusStopped:
+		e.goFollowUp(func() { e.notifyParentOfStrandedWait(child, childStopped) })
+	case child.Status == StatusOpen:
+		e.goFollowUp(func() { e.notifyParentOfStrandedWait(child, childNotStarted) })
+	}
 }
+
+// childExit is how a child stopped being something a parent's wait could be
+// waiting for: deleted, stopped short of closing, or never started (a claim
+// rolled back). The three are kept apart rather than flattened into "gone",
+// because the way back differs and the parent is the one choosing it: a stopped
+// or unstarted child is started by id, a deleted one has no id left and has to
+// be replaced.
+type childExit string
+
+const (
+	childDeleted    childExit = "deleted"
+	childStopped    childExit = "stopped"
+	childNotStarted childExit = "not_started"
+)
 
 // enforceSessionLease is the whole of "a work that has left active has no
 // lease". It is hung on the change event rather than on each command so that
@@ -489,6 +523,83 @@ func (e *Engine) notifyParentOfChild(child Work) {
 		return
 	}
 	slog.Info("child completion message sent to parent", "parentId", parent.ID, "childId", child.ID, "parentStatus", parent.Status)
+}
+
+// notifyParentOfStrandedWait wakes a parent whose wait on its subtasks has
+// nothing left that could end it.
+//
+// A `child` wait is cleared by exactly one event — a subtask closing — so a
+// parent waiting with no subtask running is waiting for something that is never
+// going to happen. The engine does not nudge a waiting work (that is what a wait
+// means), its process is collected by the idle lease minutes later, and
+// `waiting_children` is deliberately outside the attention dot
+// (docs/lifecycle-ui.md §4). Nothing else would ever look at it again.
+//
+// So the wait is cleared and the agent is told, and the engine does not decide
+// what should happen instead: only the agent knows whether the subtask should be
+// restarted, replaced, or was never needed. Once the wait is gone the ordinary
+// nudge allowance applies again, which is the backstop if the agent does nothing
+// with the news.
+//
+// Deciding and clearing are one store call. A check followed by a write would
+// send this news twice when two subtasks leave at once, and would send it at all
+// when a person starts another subtask in between.
+//
+// Waking is deliberately *not* stopping the parent. Stopping would take away the
+// one recovery that costs nobody anything — the agent restarting the subtask
+// itself — and would make a user who stopped one subtask restart two things.
+func (e *Engine) notifyParentOfStrandedWait(child Work, exit childExit) {
+	parent, found, err := e.store.Get(child.ParentID)
+	if err != nil {
+		slog.Warn("failed to get parent work for a child leaving active", "parentId", child.ParentID, "error", err)
+		return
+	}
+	// Not found is the ordinary case of a deleted story: the cascade emits the
+	// children too, and by then the parent is gone with them.
+	if !found || parent.SessionID == "" {
+		return
+	}
+	if parent.Status != StatusActive || parent.Wait != WaitChild {
+		return
+	}
+
+	// Resolved before the transition for the reason notifyParentOfChild gives:
+	// a resolve failure must not leave the parent resumed but un-nudged — and
+	// here it would be resumed with nothing having told it why.
+	sender, release, ok := e.resolveSender(parent.Worktree)
+	if !ok {
+		return
+	}
+	defer release()
+
+	// The store takes the whole decision — is this wait stranded, and am I the
+	// one ending it — under its own lock, and the answer is what says there is
+	// news to deliver. The checks above are only a cheap way not to reach for a
+	// sender for the parents that plainly have nothing to hear.
+	cleared, err := e.store.ClearChildWaitIfStranded(e.ctx, parent.ID)
+	if err != nil {
+		if e.ctx.Err() != nil {
+			return
+		}
+		slog.Warn("failed to clear a wait nothing could end", "parentId", parent.ID, "error", err)
+		return
+	}
+	if !cleared {
+		return
+	}
+
+	msg := BuildStrandedWaitMessage(parent, child.Title, child.ID, exit)
+	meta := NewMessageMeta(parent, parent.CurrentStep+1, e.stepCount(parent))
+	meta.Child = &agent.ChildInfo{ID: child.ID, Title: child.Title}
+	if err := sender.SendSystemMessage(e.ctx, parent.SessionID, msg, MessageSubtypeWaitStranded, meta); err != nil {
+		if e.ctx.Err() != nil {
+			return
+		}
+		slog.Warn("failed to tell a parent its wait had nothing left to end it",
+			"parentId", parent.ID, "childId", child.ID, "error", err)
+		return
+	}
+	slog.Info("cleared a wait nothing could end", "parentId", parent.ID, "childId", child.ID, "exit", exit)
 }
 
 // --- Input 4: the session was deleted ---

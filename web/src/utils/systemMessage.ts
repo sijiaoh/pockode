@@ -12,6 +12,7 @@ const SYSTEM_MESSAGE_LABELS: Record<string, string> = {
 	step_advance: "Next step",
 	reopen: "Reopened",
 	child_done: "Subtask done",
+	wait_stranded: "Wait cleared",
 };
 
 /** How one work event reads in the stream. */
@@ -42,9 +43,9 @@ export function workEventWording(
 			summary: meta.title ?? "",
 		};
 	}
-	// This message went to the parent but reports on the child; the parent's own
+	// These messages went to the parent but report on a child; the parent's own
 	// title is noise next to it.
-	if (subtype === "child_done") {
+	if (subtype === "child_done" || subtype === "wait_stranded") {
 		return { label, summary: meta?.child?.title ?? "" };
 	}
 	// Auto-continues repeat, and repeating one title is the least informative

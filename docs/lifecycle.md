@@ -213,7 +213,8 @@ declare, with free text of its own saying why. A waiting work is still
 `active`: the engine still
 owns it, it simply must not be nudged to carry on. Both waits are cleared by
 something that arrives from *outside* the session, which is what lets them
-survive a restart when a work with no wait cannot.
+survive a restart when a work with no wait cannot — and is also why a wait is
+only accepted while something that could end it still exists (below).
 
 **Every transition into or out of `active` clears the wait and the nudge count.**
 No path leaves a stale wait for the next one to trip over, and no status says
@@ -221,9 +222,22 @@ No path leaves a stale wait for the next one to trip over, and no status says
 beside it would be a second way to say the same thing, free to disagree as soon
 as one went stale.
 
+**A wait must have something that could still end it, and that is checked at
+both ends.** A `child` wait is ended by one event only — a subtask closing — so
+`work_wait` is refused when no subtask is running, and a wait whose last running
+subtask leaves *without* closing is cleared by the engine, which tells the agent
+what became of it. Neither half is optional, because the failure is silent: a
+work stuck `active` on a wait nothing can end is never nudged (that is what a
+wait means), its process goes at the idle lease, and `waiting_children` is
+deliberately outside the attention dot — it would wait forever and tell nobody.
+The refusal is the exact complement of the `step_done` that would close a work
+whose subtasks are still running, so the way out each of those two errors names
+is one the other admits. A `user` wait needs no such check: a person can always
+be asked.
+
 **The engine has five inputs and no special cases beside them**: a turn ended, a
-user handed the session something to go on, a child work closed, a session was
-deleted, the server started. Everything the old `AutoResumer` and `StatusSyncer`
+user handed the session something to go on, a child work left `active`, a session
+was deleted, the server started. Everything the old `AutoResumer` and `StatusSyncer`
 did with process state changes turned out to be a rule about a turn ending,
 which is what the engine reads instead.
 

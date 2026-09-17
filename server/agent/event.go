@@ -560,8 +560,9 @@ type StepInfo struct {
 	Total   int `json:"total"`
 }
 
-// ChildInfo identifies the child work whose completion triggered a child_done
-// system message.
+// ChildInfo identifies the child work a system message reports on: the one that
+// closed (child_done), or the one whose leaving left its parent's wait with
+// nothing that could end it (wait_stranded).
 type ChildInfo struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -571,8 +572,8 @@ type ChildInfo struct {
 // can render it without parsing the prompt body.
 type MessageMeta struct {
 	// WorkID is the work that owns the session this message was delivered to —
-	// the receiver, never the subject. A child_done message is delivered to the
-	// parent's session, so its WorkID is the parent's. The frontend opens this
+	// the receiver, never the subject. A message about a child is delivered to
+	// the parent's session, so its WorkID is the parent's. The frontend opens this
 	// work from the message; a subject id here would send the reader somewhere
 	// the message was never delivered.
 	WorkID string `json:"work_id,omitempty"`

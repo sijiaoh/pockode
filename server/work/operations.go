@@ -271,8 +271,84 @@ func (o *Operations) NeedsInput(ctx context.Context, id, reason string) error {
 
 // Wait parks a work on its children. Same shape as NeedsInput and deliberately
 // so: the two differ in who clears the wait, not in what waiting is.
+//
+// Unlike NeedsInput it can be refused, because the two waits differ in one
+// thing besides who clears them: a person can always be asked, but a subtask
+// has to exist and be running before it can close. A wait on subtasks that are
+// not running is a wait nothing will ever end — the engine stops nudging by
+// design, so the work sits `active` forever and `waiting_children` is
+// deliberately outside the attention dot (docs/lifecycle-ui.md §4), which means
+// nobody is told either.
 func (o *Operations) Wait(ctx context.Context, id, reason string) error {
-	return o.store.SetWait(ctx, id, WaitChild, reason)
+	// The store decides, under its own lock, because deciding and setting must
+	// not come apart (Store.SetChildWait). What is left here is saying why — in
+	// the agent's terms, which is the one thing the store has no business
+	// knowing.
+	set, err := o.store.SetChildWait(ctx, id, reason)
+	if err != nil {
+		return err
+	}
+	if !set {
+		return o.waitRefusal(id)
+	}
+	return nil
+}
+
+// waitRefusal explains a work_wait the store would not set, and it is the mirror
+// of refuseIfChildrenActive: the two gates are exactly complementary, so a
+// work_wait is accepted precisely when the step_done that would close the work
+// is refused. That is what makes the way out each error names reachable — "call
+// work_wait instead" would be a lie if the wait could be refused for the same
+// work.
+//
+// Same three properties as that refusal (docs/lifecycle-ui.md §7): it names what
+// is in the way whenever there is anything to name, it names the ways out, and
+// it says the wait was not set. What it names is the subtasks that could be
+// *started*, because "no subtask is running" and "you have not started them" are
+// the same sentence to an agent that has just created three of them.
+//
+// It always returns an error: the refusal has already happened and this only
+// describes it. A child going active between the store's decision and this read
+// therefore makes the wording momentarily generous, never the outcome wrong —
+// and the agent's retry is then accepted.
+func (o *Operations) waitRefusal(id string) error {
+	works, err := o.store.List()
+	if err != nil {
+		return err
+	}
+
+	// Nothing here was active when the store refused, so "not closed" is the
+	// same set as "could be started".
+	var startable []string
+	total := 0
+	for _, child := range works {
+		if child.ParentID != id {
+			continue
+		}
+		total++
+		if child.Status != StatusClosed {
+			startable = append(startable, fmt.Sprintf("%s (%s)", strconv.Quote(child.Title), child.Status))
+		}
+	}
+
+	var situation, wayOut string
+	switch {
+	case total == 0:
+		situation = "this work has no subtasks"
+		wayOut = "Create them with work_create and start them with work_start"
+	case len(startable) == 0:
+		situation = fmt.Sprintf("all %d subtask(s) of this work are already closed", total)
+		wayOut = "Create more with work_create and start them with work_start"
+	default:
+		// The number counts what the list then names. Introducing a list of one
+		// with the total ("none of 6 is running: \"Reducer\"") reads as a list
+		// that was cut short.
+		situation = fmt.Sprintf("none of this work's subtasks is running, and %d of them can be started: %s",
+			len(startable), strings.Join(startable, ", "))
+		wayOut = "Start them with work_start"
+	}
+	return fmt.Errorf("%w: %s, and only a subtask closing ends a wait on subtasks — so nothing would ever end this one. %s, or call work_needs_input if you are waiting on the user, or step_done if there is nothing left to do. The wait was not set",
+		ErrInvalidWork, situation, wayOut)
 }
 
 // stepCount reports how many steps the work's role defines. A work whose role

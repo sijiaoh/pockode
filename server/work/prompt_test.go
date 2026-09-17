@@ -414,8 +414,8 @@ func TestBuildReopenMessage_ContainsBaseAndNudge(t *testing.T) {
 
 // Every message the engine sends carries the lifecycle section, and none of them
 // may carry the vocabulary it replaced: an agent told its work is "in_progress"
-// will go looking for a status the store cannot produce. Checked over all six
-// send sites rather than over prompts.yaml, because a stale word can just as
+// will go looking for a status the store cannot produce. Checked over every
+// send site rather than over prompts.yaml, because a stale word can just as
 // easily be appended in Go.
 func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
@@ -434,6 +434,9 @@ func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 	}
 	messages["child_done"] = BuildChildCompletionMessage(story, "Child", "c1", true)
 	messages["child_done, wait standing"] = BuildChildCompletionMessage(story, "Child", "c1", false)
+	for _, exit := range []childExit{childDeleted, childStopped, childNotStarted} {
+		messages["wait_stranded, "+string(exit)] = BuildStrandedWaitMessage(story, "Child", "c1", exit)
+	}
 
 	for name, msg := range messages {
 		for _, retired := range []string{"in_progress", "needs_input state", "still in_progress"} {

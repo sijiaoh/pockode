@@ -1718,6 +1718,135 @@ func TestStepDone_ClosesFromStaleLiveStatus(t *testing.T) {
 	}
 }
 
+// SetChildWait is where the "a wait must have something that could end it" rule
+// is actually applied, so the interesting cases are the store's, not the
+// caller's: it must refuse without writing, and it must still admit a stale
+// `stopped` — an agent able to call work_wait is running whatever status says.
+func TestSetChildWait(t *testing.T) {
+	t.Run("refuses, and writes nothing, with no active child", func(t *testing.T) {
+		store := newTestStore(t)
+		story := createStory(t, store, "S")
+		startWork(t, store, story.ID)
+		createTask(t, store, story.ID, "never started")
+
+		set, err := store.SetChildWait(context.Background(), story.ID, "on my tasks")
+		if err != nil || set {
+			t.Fatalf("set = %v/%v, want false/nil", set, err)
+		}
+		if got := getWork(t, store, story.ID); got.Wait != WaitNone || got.WaitReason != "" {
+			t.Errorf("wait = %q/%q; a refused wait writes nothing", got.Wait, got.WaitReason)
+		}
+	})
+
+	t.Run("sets it, and repairs a stale stopped", func(t *testing.T) {
+		store := newTestStore(t)
+		story := createStory(t, store, "S")
+		startWork(t, store, story.ID)
+		child := createTask(t, store, story.ID, "T")
+		startWork(t, store, child.ID)
+		if err := store.Stop(context.Background(), story.ID); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+
+		set, err := store.SetChildWait(context.Background(), story.ID, "on T")
+		if err != nil || !set {
+			t.Fatalf("set = %v/%v, want true/nil", set, err)
+		}
+		got := getWork(t, store, story.ID)
+		if got.Status != StatusActive || got.Wait != WaitChild || got.WaitReason != "on T" {
+			t.Errorf("story = %q/%q/%q, want active/child/\"on T\"", got.Status, got.Wait, got.WaitReason)
+		}
+	})
+
+	t.Run("reports a closed work as an error, not a refusal", func(t *testing.T) {
+		store := newTestStore(t)
+		story := createStory(t, store, "S")
+		doneWork(t, store, story.ID)
+
+		if _, err := store.SetChildWait(context.Background(), story.ID, ""); !errors.Is(err, ErrInvalidWork) {
+			t.Errorf("err = %v, want ErrInvalidWork: a closed work is reopened, not waited on", err)
+		}
+	})
+
+	t.Run("reports a missing work as not found", func(t *testing.T) {
+		store := newTestStore(t)
+		if _, err := store.SetChildWait(context.Background(), "nope", ""); !errors.Is(err, ErrWorkNotFound) {
+			t.Errorf("err = %v, want ErrWorkNotFound", err)
+		}
+	})
+}
+
+// ClearChildWaitIfStranded is the one transition whose condition spans the work
+// and its children, and it answers rather than just acting: the engine sends a
+// message on the strength of that answer, so a `true` that two callers can both
+// get, or that is given while a subtask is running, is a message that lies.
+// Tested here rather than through the engine because the lock is what holds it.
+func TestClearChildWaitIfStranded(t *testing.T) {
+	newWaitingStory := func(t *testing.T) (*FileStore, Work, Work) {
+		t.Helper()
+		store := newTestStore(t)
+		story := createStory(t, store, "S")
+		startWork(t, store, story.ID)
+		child := createTask(t, store, story.ID, "T")
+		startWork(t, store, child.ID)
+		if err := store.SetWait(context.Background(), story.ID, WaitChild, "on T"); err != nil {
+			t.Fatalf("SetWait: %v", err)
+		}
+		return store, getWork(t, store, story.ID), child
+	}
+
+	t.Run("clears once and says so once", func(t *testing.T) {
+		store, story, child := newWaitingStory(t)
+		if err := store.Stop(context.Background(), child.ID); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+
+		first, err := store.ClearChildWaitIfStranded(context.Background(), story.ID)
+		if err != nil || !first {
+			t.Fatalf("first call = %v/%v, want true/nil", first, err)
+		}
+		// The second caller is the other subtask's follow-up. It must come away
+		// empty-handed, or the same news is delivered twice.
+		second, err := store.ClearChildWaitIfStranded(context.Background(), story.ID)
+		if err != nil || second {
+			t.Errorf("second call = %v/%v, want false/nil", second, err)
+		}
+		if got := getWork(t, store, story.ID); got.Status != StatusActive || got.Wait != WaitNone {
+			t.Errorf("story = %q/%q, want active with no wait", got.Status, got.Wait)
+		}
+	})
+
+	t.Run("refuses while a subtask is still active", func(t *testing.T) {
+		store, story, _ := newWaitingStory(t)
+
+		cleared, err := store.ClearChildWaitIfStranded(context.Background(), story.ID)
+		if err != nil || cleared {
+			t.Fatalf("cleared = %v/%v, want false/nil; the wait can still end properly", cleared, err)
+		}
+		if got := getWork(t, store, story.ID); got.Wait != WaitChild {
+			t.Errorf("wait = %q, want it left alone", got.Wait)
+		}
+	})
+
+	t.Run("leaves a wait on the user alone", func(t *testing.T) {
+		store, story, child := newWaitingStory(t)
+		if err := store.SetWait(context.Background(), story.ID, WaitUser, "which database?"); err != nil {
+			t.Fatalf("SetWait: %v", err)
+		}
+		if err := store.Stop(context.Background(), child.ID); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+
+		cleared, err := store.ClearChildWaitIfStranded(context.Background(), story.ID)
+		if err != nil || cleared {
+			t.Fatalf("cleared = %v/%v, want false/nil", cleared, err)
+		}
+		if got := getWork(t, store, story.ID); got.Wait != WaitUser {
+			t.Errorf("wait = %q; a person is always reachable, so that wait is never stranded", got.Wait)
+		}
+	})
+}
+
 // work_wait / work_needs_input must not be lockable by a stale stopped either:
 // the agent reporting what it is waiting on is running, whatever status says.
 func TestLiveStatusSetters_AcceptStoppedSource(t *testing.T) {

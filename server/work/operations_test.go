@@ -209,6 +209,102 @@ func TestOperations_StepDone_RefusesToCloseWhileChildrenAreActive(t *testing.T) 
 	}
 }
 
+// The mirror of the refusal above, and the two are exactly complementary: a
+// work_wait is accepted precisely when the closing step_done is refused. If it
+// were not, one of the two errors would be naming a way out that is itself shut.
+func TestOperations_Wait_AcceptedWhileASubtaskRuns(t *testing.T) {
+	store := newTestStore(t)
+	story := createStory(t, store, "Build")
+	startWork(t, store, story.ID)
+	child := createTask(t, store, story.ID, "Reducer")
+	startWork(t, store, child.ID)
+	ops := NewOperations(store, nil, nil, nil)
+
+	if err := ops.Wait(context.Background(), story.ID, "for Reducer"); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if got := getWork(t, store, story.ID); got.Wait != WaitChild || got.WaitReason != "for Reducer" {
+		t.Errorf("wait = %q/%q, want child/\"for Reducer\"", got.Wait, got.WaitReason)
+	}
+}
+
+// A wait on subtasks is ended by exactly one event — a subtask closing — so with
+// none running it is a wait nothing would ever end: the engine stops nudging by
+// design and `waiting_children` is outside the attention dot, so the work would
+// sit active forever with nobody told. Each shape names a different way out,
+// which is the whole reason they are not one message.
+func TestOperations_Wait_RefusesWhenNothingCouldEndIt(t *testing.T) {
+	cases := []struct {
+		name    string
+		setup   func(t *testing.T, store *FileStore, storyID string)
+		wants   []string
+		unwants []string
+	}{
+		{
+			name:  "no subtasks at all",
+			setup: func(*testing.T, *FileStore, string) {},
+			wants: []string{"no subtasks", "work_create"},
+		},
+		{
+			name: "every subtask already closed",
+			setup: func(t *testing.T, store *FileStore, storyID string) {
+				doneWork(t, store, createTask(t, store, storyID, "Reducer").ID)
+			},
+			wants: []string{"already closed", "work_create"},
+		},
+		{
+			// The closed one is what makes this case worth its own setup: the
+			// number introducing the list has to count the list, not every
+			// subtask, or a list of two under "none of 3" reads as truncated.
+			name: "subtasks exist but none is running",
+			setup: func(t *testing.T, store *FileStore, storyID string) {
+				stopped := createTask(t, store, storyID, "Reducer")
+				startWork(t, store, stopped.ID)
+				if err := store.Stop(context.Background(), stopped.ID); err != nil {
+					t.Fatalf("Stop: %v", err)
+				}
+				createTask(t, store, storyID, "Lease table")
+				doneWork(t, store, createTask(t, store, storyID, "Settling").ID)
+			},
+			// Named with their statuses: "none is running" and "you never
+			// started them" are the same sentence to the agent that made them.
+			wants:   []string{`2 of them can be started`, `"Reducer" (stopped)`, `"Lease table" (open)`, "work_start"},
+			unwants: []string{"Settling", "3"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			story := createStory(t, store, "Build")
+			startWork(t, store, story.ID)
+			tc.setup(t, store, story.ID)
+			ops := NewOperations(store, nil, nil, nil)
+
+			err := ops.Wait(context.Background(), story.ID, "for my tasks")
+			if !errors.Is(err, ErrInvalidWork) {
+				t.Fatalf("err = %v, want an ErrInvalidWork refusal", err)
+			}
+			// The three properties of docs/lifecycle-ui.md §7, plus what is in
+			// the way: the other ways out and the plain statement of no effect.
+			wants := append(tc.wants, "work_needs_input", "step_done", "The wait was not set")
+			for _, want := range wants {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("refusal %q does not mention %q", err, want)
+				}
+			}
+			for _, unwanted := range tc.unwants {
+				if strings.Contains(err.Error(), unwanted) {
+					t.Errorf("refusal %q mentions %q, which it must not", err, unwanted)
+				}
+			}
+			if got := getWork(t, store, story.ID); got.Wait != WaitNone {
+				t.Errorf("wait = %q; a refused work_wait sets nothing", got.Wait)
+			}
+		})
+	}
+}
+
 // Only the closing one is refused. A story's steps are its own workflow, and
 // walking through them while subtasks run is what a story with subtasks does.
 func TestOperations_StepDone_AdvancesAStepWhileChildrenAreActive(t *testing.T) {

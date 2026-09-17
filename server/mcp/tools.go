@@ -120,7 +120,7 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name:        "work_wait",
-		Description: "Record that this work is waiting for its child tasks, and end your turn. The work stays active and Pockode stops nudging it; when a child closes, Pockode messages you with the news and clears the wait — so if other children are still running and you still have nothing to do, call this again. Only a story has children; a task waiting on a person wants work_needs_input instead.",
+		Description: "Record that this work is waiting for its child tasks, and end your turn. The work stays active and Pockode stops nudging it; when a child closes, Pockode messages you with the news and clears the wait — so if other children are still running and you still have nothing to do, call this again. Only a story has children; a task waiting on a person wants work_needs_input instead. Rejected when none of the work's subtasks is running — a subtask closing is the only thing that ends this wait, so with none running nothing would ever end it; start them first, or use work_needs_input.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{

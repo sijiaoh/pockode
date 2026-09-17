@@ -639,8 +639,9 @@ error for `stopped`, none otherwise (today: `needs_input`, `stopped`).
   header below, next to the children being counted, where it can be checked
   rather than taken on faith.
 - Children section header gains an active count — "{n} active" — whenever any
-  child is `active`. This is what makes the `step_done` rejection in §7 legible
-  without a second explanation.
+  child is `active`. This is what makes both §7 rejections legible without a
+  second explanation: it is the same count each of them turns on, and "0 active"
+  is the whole reason a `work_wait` was refused.
 
 ### 6.3 StepList
 
@@ -655,7 +656,7 @@ Same behaviour as today's four-value `isActiveState` check, one less thing to
 keep in sync with the status enum. `StepList` takes `status`, not `activity`: a
 step's position does not change because a turn started.
 
-## 7. `step_done` with active subtasks
+## 7. The two refusals about subtasks
 
 **The step_done that would *close* the work is the one that is refused**, not
 every step_done. A story's steps are its own workflow, and walking through them
@@ -688,6 +689,60 @@ No toast, no dialog, no comment on the work. The UI never calls `step_done` — 
 has no such button — so there is no user action to report a failure for, and a
 comment for every rejected attempt would bury the story's real comments under
 machine noise.
+
+### 7.1 `work_wait` with no subtask running
+
+**The two gates are exactly complementary**: a `work_wait` is accepted precisely
+when the closing `step_done` is refused. That is what makes each error's way out
+real — "call `work_wait` to pause until they close" would be a lie if the wait
+could be refused for the same story.
+
+A `child` wait is ended by one event and no other: a subtask closing. So a story
+waiting with nothing running waits forever — the engine does not nudge a waiting
+work by design, its process goes at the idle lease, and `waiting_children` is
+deliberately outside the attention dot (§4). It is the one state in this model
+that can be stuck with **nobody told**, which is why it is refused at the source
+rather than drawn somewhere.
+
+Same three properties, same reason, and a fourth the other refusal does not
+need: the three situations have three different ways out, so they are three
+messages rather than one.
+
+| Situation | Copy |
+|---|---|
+| no subtasks at all | "…this work has no subtasks, and only a subtask closing ends a wait on subtasks — so nothing would ever end this one. **Create them with `work_create` and start them with `work_start`**, or call `work_needs_input`…, or `step_done`…. The wait was not set." |
+| all subtasks closed | "…all 3 subtask(s) of this work are already closed, and only… **Create more with `work_create` and start them…**" |
+| subtasks exist, none running | "…none of this work's subtasks is running, and 2 of them can be started: \"Reducer\" (stopped), \"Lease table\" (open), and only… **Start them with `work_start`**…" |
+
+The third names the subtasks *with their statuses*, because "nothing is running"
+and "you never started them" are the same sentence to an agent that has just
+created three of them, and the fix is different for each. Its number counts the
+subtasks it then lists rather than all of them: a story with four closed
+subtasks and two stopped ones would otherwise introduce a list of two with
+"none of 6", which reads as a list that was cut short.
+
+Nothing is drawn for this either, for the same reason: the UI has no `work_wait`
+button, and the story detail page already answers "why is this not moving" —
+the children section says how many are active (§6.2) and the story's own
+activity says `idle`.
+
+### 7.2 A wait that becomes unendable is not refused, it is cleared
+
+The refusal only covers a wait that could never have ended. The mirror case is a
+wait that was legitimate and then lost what it was waiting for: the last running
+subtask is deleted, stopped, or rolled back before it closes.
+
+There the engine clears the wait and tells the agent what became of the subtask
+([work-system.md](code/work-system.md#a-wait-nothing-could-end)). It appears in
+the transcript as one more work event — subtype `wait_stranded`, drawn exactly
+like `child_done` and carrying the subtask's title on its secondary line
+([work-system.md § Work Messages in Chat](code/work-system.md#work-messages-in-chat))
+— and the story's own activity goes back to `idle`, or to whatever its turn is
+doing, which is the truth: it is being driven again.
+
+It is deliberately **not** a stop. Stopping would take away the recovery that
+costs nobody anything — the agent restarting the subtask itself — and would make
+a user who stopped one subtask restart two things.
 
 ## 8. Edge cases
 
@@ -769,6 +824,7 @@ controls are what they will land on:
 | `web/src/components/Project/WorkPrimaryAction.tsx` | new — the four-status table and the Stop confirmation, shared by the row and the action bar. It absorbs `WorkListOverlay`'s exported `StartButton`, which was the second answer to "which button does this row get" |
 | `web/src/components/Project/StepList.tsx` | §6.3 |
 | `web/src/components/Project/ProjectTab.tsx` | dot from `needsUser` |
+| `web/src/utils/systemMessage.ts` | the `wait_stranded` work event (§7.2), laid out like `child_done` |
 | `web/src/types/{message,work}.ts` | `turn`; `status` / `activity` / `wait` / `wait_reason` |
 
 ### What has landed
@@ -801,6 +857,7 @@ Answer a moment too late true rather than hopeful — before it, a stale answer 
 handed to a CLI that had forgotten the request, and Pockode recorded a turn as
 started that nothing would ever end. The client's own rule for which unanswered
 state to fall back to reads the same thing the server refused on, the turn's
-blockers, so the two cannot disagree about whether a prompt is still live. And the `step_done` refusal of §7 lives in
-`work.Operations.StepDone`, so the rule holds for every caller rather than for
-the one transport that happened to implement it.
+blockers, so the two cannot disagree about whether a prompt is still live. And
+both refusals of §7 live in `work.Operations` — `StepDone` and `Wait` — so each
+rule holds for every caller rather than for the one transport that happened to
+implement it.

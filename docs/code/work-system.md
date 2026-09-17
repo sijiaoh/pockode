@@ -128,7 +128,7 @@ time one was missed, and four separate mechanisms existed to repair them.
 |------|--------|------------|
 | none | every transition into active | — |
 | `user` | `work_needs_input` | a user message |
-| `child` | `work_wait` | a child work closing, or a user message |
+| `child` | `work_wait` | a child work closing, or a user message — or the engine, when no child is left that could close ([input 3](#input-3-a-child-work-left-active)) |
 
 A wait is orthogonal to the status: a waiting work is still **active** — the
 engine still owns it — it simply must not be nudged to carry on. Both waits are
@@ -180,13 +180,25 @@ encapsulates its validation and its bookkeeping.
 | `Stop(id)` | live → stopped | Hand the work back to a person |
 | `StepDone(id, totalSteps)` | live → active/closed | Advance the step, or close |
 | `SetWait(id, wait, reason)` | live → active with that wait | Record what the agent is waiting for (`WaitNone` clears it) |
+| `SetChildWait(id, reason)` | live with an active child → active + `child` | The same for a wait on subtasks, which is refused — *reported*, not an error — when no subtask is running |
 | `Activate(id)` | live → active, wait and nudges cleared | Someone handed the work something to go on |
+| `ClearChildWaitIfStranded(id)` | `active` + `child` with no active child → active, wait and nudges cleared | The same, for a wait nothing could end — and it *reports* whether this call was the one that ended it, which is what it is for ([input 3](#a-wait-nothing-could-end)) |
 | `RecordNudge(id)` | counts one nudge, returns the total | The engine compares it against its own limit |
 | `Reopen(id)` | closed → active | Reopen a closed item to add children or continue |
 | `RollbackStart(id, wasRestart)` | active → open/stopped | Undo a failed start |
 
 "live" is `active` or `stopped`; "startable" is what `ValidateStartable`
 admits — everything but `active` and `closed`.
+
+`SetChildWait` and `ClearChildWaitIfStranded` are the only two here **not**
+written through `setLiveStatus`, and for one reason: their condition is about the
+work *and its children*, while `setLiveStatus` hands a mutate func the single
+record it is changing. Written that way each would have to read the children
+outside the lock, and that read is the bug they exist to remove — see
+[input 3](#a-wait-nothing-could-end). They share one predicate,
+`work.HasActiveChild`: "is there still something that could close" is one
+question, and a wait set on one answer and cleared on another would be a wait
+that argues with itself.
 
 **Every transition into or out of active clears the wait and the nudge count**
 (`Work.clearDrive`). There is no path that leaves a stale wait behind for the
@@ -346,7 +358,7 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_delete` | Delete (cascades to children) | `id` |
 | `work_start` | Begin execution | `id` |
 | `work_needs_input` | Pause for user input | `id`, `reason` |
-| `work_wait` | Pause for child work completion | `id` |
+| `work_wait` | Pause for child work completion | `id`, `reason?` |
 | `work_reopen` | Reopen a closed work item | `id` |
 | `step_done` | Advance work step or close work | `id` |
 | `work_comment_add` | Add progress note | `work_id`, `body` |
@@ -366,8 +378,11 @@ Two of these return less than their name suggests: `work_list` omits the body an
 never sees the code for, so the descriptions carry the same vocabulary as
 `lifecycle_rules`: `work_list` glosses the four statuses it returns,
 `work_needs_input` says what it is preferred over and why, `work_wait` says that
-the news of a child closing clears the wait, and `step_done` says it is not a way
-to pause. `mcp/tools_test.go` holds them to it.
+the news of a child closing clears the wait *and* that a wait with no subtask
+running is rejected, and `step_done` says it is not a way to pause. The two
+rejections are named in the descriptions rather than left to be discovered,
+because a tool description is the only place an agent reads a rule before
+hitting it. `mcp/tools_test.go` holds them to it.
 
 `agent_role_list` omits the role prompt, so that listing cannot pull someone
 else's instructions into the agent's context. That is a containment rule, not a
@@ -447,7 +462,7 @@ instead.
 |---|---|
 | A turn ended | `session.TurnSettler` → `process.Manager.SetOnTurnEnded` |
 | The user handed the session something to go on | the three chat RPCs |
-| A child work closed | the work store's own change event |
+| A child work left active | the work store's own change event |
 | The session was deleted | the session store's own change event |
 | The server started | `RecoverStartup`, before any session exists |
 
@@ -500,10 +515,15 @@ not:
   closure). They put a message into a session, but they are not a person looking
   at the work, and each already clears what it means to clear.
 
-### Input 3: a child work closed
+### Input 3: a child work left active
 
-The engine hears every work change, and a child closing is one of two things it
-reads off them (the other is [the session lease](#the-session-lease)).
+The engine hears every work change, and a child leaving `active` is one of two
+things it reads off them (the other is
+[the session lease](#the-session-lease)). Two quite different things are read
+off it, and which one depends on whether the child *closed*.
+
+**A closing child has a report to deliver**, so its parent is told whether or
+not other subtasks are still running.
 
 | Parent status | Wait | Transition | Message |
 |---|---|---|---|
@@ -528,6 +548,58 @@ restart prompt tells the agent to review its tasks before doing anything.
 
 The sender is resolved **before** the transition, so a resolve failure cannot
 leave a waiting parent resumed but un-nudged.
+
+#### A wait nothing could end
+
+A child that left `active` **without** closing — deleted, stopped, or rolled
+back to `open` — has no report to deliver, and is news only in one case: it was
+the last thing its parent's wait could have been waiting for.
+
+A `child` wait is ended by exactly one event, a subtask closing. So a parent
+waiting with no subtask running is waiting for something that will never happen,
+and nothing would look at it again: the engine does not nudge a waiting work
+(that is what a wait means), the idle lease collects its process minutes later,
+and `waiting_children` is deliberately outside the attention dot
+(lifecycle-ui.md §4). It is the one shape in this model that can be stuck with
+nobody told.
+
+So the engine clears the wait and tells the agent — it does not decide what
+should happen instead. Only the agent knows whether the subtask should be
+restarted, replaced, or was never needed, and once the wait is gone the ordinary
+nudge allowance applies again, which is the backstop if the agent does nothing
+with the news. **Stopping the parent instead would be worse than the bug**: it
+takes away the recovery that costs nobody anything — the agent restarting the
+subtask itself — and makes a user who stopped one subtask restart two things.
+
+Three ways a child can leave without closing, and the message names which,
+because the way back differs:
+
+| How it left | What the parent is told to consider |
+|---|---|
+| deleted | create a replacement with `work_create` — there is no id left to restart |
+| stopped | restart it with `work_start`, by id |
+| rolled back to `open` | start it with `work_start`, by id — and that the start it already had did not take |
+
+**The whole decision is one store call.** `Store.ClearChildWaitIfStranded` asks
+both halves of the question — is this wait stranded, and am I the one ending it
+— under the store lock, and only the caller it answers `true` sends the message.
+It is the one transition here not written through `setLiveStatus`, because its
+condition spans the work *and its children* and `setLiveStatus` hands a mutate
+func the single record it is changing.
+
+Splitting it into a read and a write fails in both directions, and neither is
+hypothetical: several subtasks can leave `active` at once — a user stopping two,
+a delete cascade — and each follow-up would read a parent that is still waiting
+and send the same news twice; and a person can start another subtask while the
+check runs, so the message would go out claiming nothing is running when
+something is. The engine's own status and wait checks before the call are only a
+cheap way to avoid reaching for a sender it will not use.
+
+The refusal in [`Operations.Wait`](#commands) closes the same gap from the other
+end: this input covers a wait that *became* unendable, the refusal covers one
+that never could have ended. Both decisions are taken in the store, by the same
+predicate, for the same reason — neither may be assembled from a read and a
+write.
 
 ### Input 4: the session was deleted
 
@@ -619,7 +691,7 @@ the other.
 | `ReopenWork` | `Reopen` | reopen nudge |
 | `StepDone` | `StepDone` | next-step prompt while steps remain; refused when it would close a work whose subtasks are still active |
 | `NeedsInput` | `SetWait(user, reason)` | — |
-| `Wait` | `SetWait(child, reason)` | — |
+| `Wait` | `SetChildWait` | refused when no subtask of the work is running |
 | `DeleteWork` | `Delete` (the subtree) | the subtree's sessions and their processes go with it |
 
 `DeleteWork`'s cascade is in `Operations` for the reason the table exists at all:
@@ -628,6 +700,28 @@ behind the sessions a user's delete removed. A session whose work is gone cannot
 be reached — the work detail page is the way in — so leaving one is leaving
 something unreachable, and a process still running for it is working on a result
 nobody can read.
+
+**The two refusals are exactly complementary**: `Wait` is accepted precisely
+when the `StepDone` that would close the work is refused. That is not symmetry
+for its own sake — each error names the other as a way out, and "call `work_wait`
+instead" would be a lie if the wait could be refused for the same work.
+
+What `Wait` refuses is a wait that nothing could ever end: a `child` wait is
+ended by a subtask closing, and a work with no subtask running has none coming.
+The error names the subtasks that could be *started* rather than counting them,
+because "nothing is running" and "you never started them" are the same sentence
+to an agent that has just created three — and names what to do when there are no
+subtasks to start, which is a different answer again (docs/lifecycle-ui.md §7).
+
+**The refusal is the store's decision; only the wording is here.** `Wait` calls
+`SetChildWait`, which checks and sets under one lock and answers whether it set
+anything; `Operations` turns a `false` into a sentence. Checking here and setting
+afterwards leaves a window in which the last active subtask stops, the engine
+looks at a parent that is not waiting yet and rightly does nothing, and the wait
+then lands with nothing left that could ever end it — the exact failure this
+whole rule exists to prevent, rebuilt out of two correct halves.
+
+`NeedsInput` has no such refusal and needs none: a person can always be asked.
 
 Process termination is deliberately **not** in `Operations`: it belongs to the
 transition, not to the command that caused it (see
@@ -1231,11 +1325,13 @@ A work-driven prompt is byte-for-byte indistinguishable from a user-typed messag
 | `step_advance` | `Engine.NotifyStepDone` | Step N/M | work title |
 | `reopen` | `Engine.NotifyReopen` | Reopened | work title |
 | `child_done` | the engine telling a parent | Subtask done | child title |
+| `wait_stranded` | the engine clearing a wait nothing could end | Wait cleared | child title |
 | *(unknown or absent)* | — | System Message | work title |
 
 Every action word states a finished fact — something started, continued, reached step 2 — because by the time anyone reads it the event is over. Wording it that way is the cheapest guard there is against the rule at the top of this section: a word that can only describe a moment cannot be mistaken for a live status.
 
 - **`step_advance`'s action word *is* the step**: reaching step 2 is the whole of what happened, so a separate "Next step" label in front of it would only push the fact aside. It is formatted through `formatStepProgress(recordedStepProgress(...))` like every other step in the UI, so step wording has one source; a message that recorded no `step` falls back to "Next step".
+- **`wait_stranded` takes the child title for the same reason `child_done` does**: both are delivered to the parent's session and report on a subtask, so the parent's own title would be the noise beside it. Its action word is what *Pockode* did — cleared the wait — rather than what happened to the subtask, because the three events that produce it (deleted, stopped, rolled back) have nothing in common except what they left behind, and naming any one of them would be wrong two times in three. "No subtasks running" was the obvious alternative and is the trap this section is about: the user restarts the subtask and the line is a lie, while "wait cleared" is over the moment it is written and stays true.
 - **`auto_continue` says nothing else.** It is the one subtype that repeats, and repeating the same title is the least informative line there is; blank keeps it visually weightless.
 - **`child_done` names the child.** The message is delivered to the parent but reports on the subtask, so the parent's own title is noise next to it.
 

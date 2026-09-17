@@ -127,6 +127,22 @@ child_completion_nudge: |
   This message cleared your wait. If other tasks of yours are still running and you have nothing to do until they finish, call work_wait with ID {{.ID}} again.
   {{- end}}
 
+# Sent to a parent whose wait on its subtasks has nothing left that could end
+# it: the last one left active without closing. The wait is cleared by this
+# message, because a `child` wait is ended by a subtask closing and no subtask
+# is going to.
+#
+# Exit is how that subtask left, and the three branches are the whole reason it
+# is a parameter: a stopped or unstarted subtask is restarted by ID, a deleted
+# one no longer has an ID to restart.
+# Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ID}}, {{.Exit}}
+stranded_wait_nudge: |
+  {{if eq .Exit "deleted"}}Task "{{.ChildTitle}}" (ID: {{.ChildID}}) was deleted, so no report is coming from it.{{else if eq .Exit "stopped"}}Task "{{.ChildTitle}}" (ID: {{.ChildID}}) was stopped instead of closing, so it has not reported back and no agent is running for it.{{else}}Task "{{.ChildTitle}}" (ID: {{.ChildID}}) is not running: it was never started, or its start did not take.{{end}}
+
+  None of your tasks is running now, so nothing is going to close and end the wait you declared. Pockode has cleared it — this work now has no wait, and will be nudged as usual if a turn ends without one.
+
+  Decide what happens next: {{if eq .Exit "deleted"}}create a replacement with work_create and start it{{else if eq .Exit "stopped"}}restart it with work_start using ID {{.ChildID}}{{else}}start it with work_start using ID {{.ChildID}}{{end}}, call work_needs_input with ID {{.ID}} if this needs the user, or call step_done with ID {{.ID}} if the work is finished. Do not call work_wait again until a task of yours is running — Pockode rejects a wait with nothing that could end it.
+
 # Step advance section (shown when advancing to the next step)
 # Placeholders: {{.PrevStep}}, {{.TotalSteps}}, {{.CurrentStep}}, {{.StepPrompt}}, {{.ID}}
 step_advance_section: |
