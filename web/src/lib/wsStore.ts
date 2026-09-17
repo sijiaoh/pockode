@@ -1,6 +1,7 @@
 import {
 	createJSONRPCErrorResponse,
 	JSONRPCClient,
+	JSONRPCErrorCode,
 	JSONRPCErrorException,
 	type JSONRPCID,
 	type JSONRPCRequester,
@@ -116,8 +117,14 @@ export interface WatchActions {
 	gitDiffUnsubscribe: (id: string) => Promise<void>;
 	worktreeSubscribe: (callback: () => void) => Promise<WatchSubscribeResult>;
 	worktreeUnsubscribe: (id: string) => Promise<void>;
+	/**
+	 * @param excludeWorkSessions Drops every session that belongs to a work item,
+	 * from the snapshot and from every notification after it. The filter belongs
+	 * to the subscription, so changing it means resubscribing.
+	 */
 	sessionListSubscribe: (
 		callback: (params: SessionListChangedNotification) => void,
+		excludeWorkSessions?: boolean,
 	) => Promise<WatchSubscribeResult<SessionListItem[]>>;
 	sessionListUnsubscribe: (id: string) => Promise<void>;
 	sessionDetailSubscribe: (
@@ -333,6 +340,28 @@ function listenForRecovery(): void {
  */
 function isAuthRejection(error: unknown): boolean {
 	return error instanceof JSONRPCErrorException && error.code !== 0;
+}
+
+/**
+ * Whether the server refused a request as being about something it does not
+ * have, rather than failing to answer it.
+ *
+ * Only a reply the server actually wrote carries a real JSON-RPC code: a dead
+ * socket rejects everything still pending with the same exception type but
+ * DefaultErrorCode (0), and so does our own timeout (see isAuthRejection). Of
+ * the codes the server does write, "invalid params" is the one that says the
+ * request named something wrong; an internal error means it could not answer,
+ * which is a reason to ask again and not a verdict on what was asked about.
+ *
+ * Use it wherever a failed request would otherwise be read as a fact about the
+ * thing it named — a session that is not there, say — because a blinking
+ * connection would then keep announcing that fact.
+ */
+export function isInvalidParamsRejection(error: unknown): boolean {
+	return (
+		error instanceof JSONRPCErrorException &&
+		error.code === JSONRPCErrorCode.InvalidParams
+	);
 }
 
 function getClient(): JSONRPCRequester<void> | null {
@@ -902,10 +931,13 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 		sessionListSubscribe: async (
 			callback: (params: SessionListChangedNotification) => void,
+			excludeWorkSessions = false,
 		) => {
 			const { id, result } = await openSubscription(
 				"session.list.subscribe",
-				{},
+				// Omitted when off so the request is the one every older client
+				// sends; the server's default is "send everything" either way.
+				excludeWorkSessions ? { exclude_work_sessions: true } : {},
 				sessionListWatchCallbacks,
 				callback,
 			);

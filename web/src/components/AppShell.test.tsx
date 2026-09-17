@@ -6,8 +6,10 @@ import {
 } from "@tanstack/react-router";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "../lib/authStore";
+import { useSessionDetailStore } from "../lib/sessionDetailStore";
 import { useSessionStore } from "../lib/sessionStore";
 import { useWorkStore } from "../lib/workStore";
 import {
@@ -17,7 +19,10 @@ import {
 } from "../lib/worktreeStore";
 import { wsActions } from "../lib/wsStore";
 import { routeTree } from "../router";
-import { makeSessionListItem } from "../test/sessionFixtures";
+import {
+	makeSessionDetail,
+	makeSessionListItem,
+} from "../test/sessionFixtures";
 import type { SessionListChangedNotification } from "../types/message";
 
 // ChatPanel is the attach point; render the session it was handed and whether
@@ -92,34 +97,69 @@ vi.mock("../hooks/useAgentRoleSubscription", () => ({
 	useAgentRoleSubscription: () => {},
 }));
 
-const session = (id: string) => makeSessionListItem({ id, title: id });
+const session = (id: string, workId?: string) =>
+	makeSessionListItem({ id, title: id, work_id: workId });
 
 // Session lists are worktree-scoped. B's target session "x" is intentionally NOT
-// first so a redirect leaking across the worktree switch would land on "b1".
+// first so a redirect leaking across the worktree switch would land on "b1"; it
+// belongs to a work item, which is what the sidebar filter hides.
 const worktreeSessions: Record<string, ReturnType<typeof session>[]> = {
 	A: [session("a1")],
-	B: [session("b1"), session("x")],
+	B: [session("b1"), session("x", "w1")],
 };
 
+// The filter is the server's, so the stub applies it rather than handing back
+// the whole list for the client to narrow (see useSessionSubscription).
 const mockSubscribe = vi.fn(
-	async (_cb: (p: SessionListChangedNotification) => void) => {
+	async (
+		_cb: (p: SessionListChangedNotification) => void,
+		excludeWorkSessions?: boolean,
+	) => {
 		const wt = worktreeActions.getCurrent();
-		return { id: `watch-${wt}`, initial: worktreeSessions[wt] ?? [] };
+		const all = worktreeSessions[wt] ?? [];
+		return {
+			id: `watch-${wt}`,
+			initial: excludeWorkSessions ? all.filter((s) => !s.work_id) : all,
+		};
 	},
 );
 const mockUnsubscribe = vi.fn(async () => {});
+
+// `session.detail.subscribe` is what tells the shell whether the open session
+// exists — the filtered list above cannot. It answers from the worktree's whole
+// list, and refuses a session that is not in it, which is what the server does.
+const mockDetailSubscribe = vi.fn(async (sessionId: string, _cb: unknown) => {
+	const wt = worktreeActions.getCurrent();
+	if (!(worktreeSessions[wt] ?? []).some((s) => s.id === sessionId)) {
+		// Refused with the server's own code: only a reply the server wrote is
+		// evidence the session is gone, so anything else here would stop the shell
+		// redirecting and make this case untestable.
+		throw new JSONRPCErrorException(
+			"session not found",
+			JSONRPCErrorCode.InvalidParams,
+		);
+	}
+	return {
+		id: `detail-${sessionId}`,
+		initial: { session: makeSessionDetail({ id: sessionId }) },
+	};
+});
+const mockDetailUnsubscribe = vi.fn(async () => {});
 const mockListModels = vi.fn(async () => ({ claude: [], codex: [] }));
 const mockListEfforts = vi.fn(async () => ({ claude: [], codex: [] }));
 
 const ws = vi.hoisted(() => ({ status: "connected" }));
 
-vi.mock("../lib/wsStore", () => ({
+vi.mock("../lib/wsStore", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/wsStore")>()),
 	useWSStore: (selector: (s: unknown) => unknown) =>
 		selector({
 			status: ws.status,
 			actions: {
 				sessionListSubscribe: mockSubscribe,
 				sessionListUnsubscribe: mockUnsubscribe,
+				sessionDetailSubscribe: mockDetailSubscribe,
+				sessionDetailUnsubscribe: mockDetailUnsubscribe,
 				listModels: mockListModels,
 				listEfforts: mockListEfforts,
 			},
@@ -158,6 +198,7 @@ describe("AppShell when the server is unreachable", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
 		useSessionStore.setState({
 			sessions: [],
 			isLoading: true,
@@ -185,6 +226,7 @@ describe("AppShell when the automatic session create fails", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
 		useSessionStore.setState({
 			sessions: [],
 			isLoading: true,
@@ -247,6 +289,7 @@ describe("AppShell cross-worktree navigation", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
 		useSessionStore.setState({
 			sessions: [],
 			isLoading: true,
@@ -291,25 +334,11 @@ describe("AppShell cross-worktree navigation", () => {
 	});
 
 	// The chat link on a work points at that work's own task session, and the
-	// task-session filter — on by default — hides exactly those from the sidebar
-	// list. Resolving the destination against that filtered list would leave it
-	// permanently unresolved and then redirect away from it, for the very links
-	// this navigation exists to serve.
+	// task-session filter — on by default — hides exactly those from the list
+	// the server sends. Resolving the destination against that list would leave
+	// it permanently unresolved and then redirect away from it, for the very
+	// links this navigation exists to serve.
 	it("opens a task session that the sidebar filter hides", async () => {
-		useWorkStore.setState({
-			works: [
-				{
-					id: "w1",
-					type: "task",
-					title: "a task",
-					status: "active",
-					activity: "idle",
-					session_id: "x",
-					updated_at: "2024-01-01T00:00:00Z",
-				},
-			],
-		});
-
 		const router = renderAppShell("/w/A/s/a1");
 
 		await waitFor(() => {
@@ -344,12 +373,16 @@ describe("AppShell cross-worktree navigation", () => {
 		// Delay the new worktree's session list so the switch stays mid-flight and
 		// we can observe what the shell renders during the transition.
 		let releaseSubscribe: () => void = () => {};
-		mockSubscribe.mockImplementationOnce(async (_cb) => {
+		mockSubscribe.mockImplementationOnce(async (_cb, excludeWorkSessions) => {
 			await new Promise<void>((resolve) => {
 				releaseSubscribe = resolve;
 			});
 			const wt = worktreeActions.getCurrent();
-			return { id: `watch-${wt}`, initial: worktreeSessions[wt] ?? [] };
+			const all = worktreeSessions[wt] ?? [];
+			return {
+				id: `watch-${wt}`,
+				initial: excludeWorkSessions ? all.filter((s) => !s.work_id) : all,
+			};
 		});
 
 		await router.navigate({
@@ -396,6 +429,7 @@ describe("AppShell sidebar form and its switch", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
 		useSessionStore.setState({
 			sessions: [],
 			isLoading: true,

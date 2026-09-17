@@ -66,12 +66,7 @@ const mockState = vi.hoisted(() => ({
 	listAgents: vi.fn(() =>
 		Promise.resolve([{ type: "claude", fork_support: "any_message" }]),
 	),
-	sessionDetailSubscribe: vi.fn(),
-	sessionDetailUnsubscribe: vi.fn(() => Promise.resolve()),
 	onNotification: null as ((notification: ServerNotification) => void) | null,
-	onDetailNotification: null as
-		| ((params: { id: string; session: SessionDetail }) => void)
-		| null,
 	sessionDetail: null as SessionDetail | null,
 	mockHistory: [] as unknown[],
 	uuidCounter: 0,
@@ -93,14 +88,6 @@ vi.mock("../../lib/wsStore", () => {
 			return mockState.chatMessagesSubscribe(_sessionId, listener);
 		},
 		chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
-		sessionDetailSubscribe: (
-			sessionId: string,
-			listener: (params: { id: string; session: SessionDetail }) => void,
-		) => {
-			mockState.onDetailNotification = listener;
-			return mockState.sessionDetailSubscribe(sessionId, listener);
-		},
-		sessionDetailUnsubscribe: mockState.sessionDetailUnsubscribe,
 		markSessionRead: vi.fn(() => Promise.resolve()),
 		setSessionMode: mockState.setSessionMode,
 		setSessionAgentType: mockState.setSessionAgentType,
@@ -133,9 +120,13 @@ vi.mock("../../utils/uuid", () => ({
 }));
 
 /**
- * What `session.detail.subscribe` answers with — the only source of the
+ * What `session.detail.subscribe` has put in the store — the only source of the
  * session's agent, model, effort, mode and activation, and of where it was
  * forked from.
+ *
+ * Written straight to the store because the subscription is the app shell's:
+ * whether the session exists is what it answers, and the shell does not mount
+ * the panel until it knows (see AppShell). The panel only ever reads.
  */
 const seedSessionDetail = (overrides: Partial<SessionDetail> = {}) => {
 	mockState.sessionDetail = makeSessionDetail({
@@ -143,10 +134,9 @@ const seedSessionDetail = (overrides: Partial<SessionDetail> = {}) => {
 		title: "Test Chat",
 		...overrides,
 	});
-	mockState.sessionDetailSubscribe.mockImplementation(async () => ({
-		id: "detail-1",
-		initial: { session: mockState.sessionDetail },
-	}));
+	useSessionDetailStore
+		.getState()
+		.setDetail(mockState.sessionDetail.id, mockState.sessionDetail);
 };
 
 /**
@@ -157,10 +147,9 @@ const seedSessionDetail = (overrides: Partial<SessionDetail> = {}) => {
 const acceptSetting = (overrides: Partial<SessionDetail>) => {
 	if (!mockState.sessionDetail) throw new Error("no session detail seeded");
 	mockState.sessionDetail = { ...mockState.sessionDetail, ...overrides };
-	mockState.onDetailNotification?.({
-		id: "detail-1",
-		session: mockState.sessionDetail,
-	});
+	useSessionDetailStore
+		.getState()
+		.setDetail(mockState.sessionDetail.id, mockState.sessionDetail);
 };
 
 describe("ChatPanel", () => {
@@ -178,7 +167,6 @@ describe("ChatPanel", () => {
 		mockState.uuidCounter = 0;
 		mockState.mockHistory = [];
 		useSessionDetailStore.getState().clear();
-		mockState.onDetailNotification = null;
 		seedSessionDetail();
 		mockState.setSessionMode.mockImplementation(async (_id, mode) =>
 			acceptSetting({ mode }),
@@ -204,7 +192,6 @@ describe("ChatPanel", () => {
 		);
 		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
 		mockState.forkSession.mockReset();
-		mockState.sessionDetailUnsubscribe.mockResolvedValue(undefined);
 		useSessionStore.setState({ sessions: [] });
 		useInputStore.setState({ inputs: {} });
 		useWorkStore.getState().reset();
@@ -872,9 +859,7 @@ describe("ChatPanel", () => {
 		// Naming a placeholder would describe the session wrongly and then correct
 		// itself a round trip later.
 		it("names nothing until the session's own snapshot arrives", async () => {
-			mockState.sessionDetailSubscribe.mockImplementation(
-				() => new Promise(() => {}),
-			);
+			useSessionDetailStore.getState().clear();
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();

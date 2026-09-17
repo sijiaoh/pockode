@@ -1044,18 +1044,25 @@ interface WorkStore {
     setError: (error: string) => void;
     reset: () => void;
 }
-
-// Collect active session IDs for routing
-export function collectWorkSessionIds(works: WorkListItem[]): Set<string> {
-    const ids = new Set<string>();
-    for (const w of works) {
-        if (w.session_id) ids.add(w.session_id);
-    }
-    return ids;
-}
 ```
 
-The frontend subscribes to work changes via WebSocket and updates the Zustand store. Session IDs are collected to route chat messages to the correct work context.
+The frontend subscribes to work changes via WebSocket and updates the Zustand store.
+
+**This store does not answer which sessions belong to work.** That relation is
+resolved server-side and arrives on the session itself — a list row and a
+session detail each carry their own `work_id`, and `session.list.subscribe`
+narrows the list when asked to
+([subscription-system.md](subscription-system.md#which-sessions-belong-to-work)).
+Inverting the work list to answer it here is the arrangement that section
+argues against, and the reason is the store above: a list that pages cannot
+answer a question about a session it has not reached.
+
+What a session row does read from this store is what its work is *waiting for*
+— `sessionActivity` in `web/src/lib/activity.ts`, and only the `wait` of a work
+that is `active`. That is a lookup by the id the row carries, not a scan for an
+item that names the row, so a work the store has not paged in costs the row its
+wait and nothing else: the row is still in the right list, still says what its
+own turn is doing, and still links to the right work.
 
 ### The List Holds Rows, the Detail Page Holds the Item
 
@@ -1077,8 +1084,8 @@ The split decides where each surface reads from:
   for one item, so those can only come from the list — and a row is all they
   need.
 - **The list side never wanted the dropped fields.** `WorkListOverlay`,
-  `ProjectTab`'s attention dot, `WorktreeBadge` / `isWorktreeBound` and
-  `collectWorkSessionIds` read none of them, which is why narrowing the store
+  `ProjectTab`'s attention dot, `WorktreeBadge` / `isWorktreeBound` and the
+  session row's wait lookup read none of them, which is why narrowing the store
   changed no behaviour.
 
 `work.create` and `work.start` still answer with a whole `Work`: like the
@@ -1160,6 +1167,50 @@ clears the error (which is what lets the effect run again). Retries are never
 automatic: a `session.create` that merely timed out may well have succeeded
 ([Request Timeout](websocket-rpc.md#request-timeout)), so each silent retry
 risks leaving an orphan session behind.
+
+### Session to Work Navigation
+
+The reverse direction of the shortcut above: from a conversation back to the
+work item that drives it. It is one row, `SessionWorkSection`, at the top of the
+session info panel on the chat action bar — above Usage, because what this
+session *is* comes before what it has spent. A session that runs no work draws
+no section at all: `WorkStarter` creates the session from the work's own
+`SessionID`, and a restart reuses it, so a work never attaches itself to a
+session a user made — a session without one will never grow one later, and a
+disabled row would be claiming otherwise.
+
+The row reads `work_id` off the **open session's detail**
+(`sessionDetailStore`), never off the session list and never by scanning the
+work list for a work that names this session. Both of those fail exactly here:
+the sidebar filter hides the sessions that have a work, so the open session
+usually has no row to read, and an inverted lookup goes silently wrong the
+moment the work list is incomplete
+([subscription-system.md](subscription-system.md#which-sessions-belong-to-work)).
+No detail yet — loading, disconnected, or held for a session the route has just
+left — draws nothing rather than a skeleton: this section's whole content is one
+link, and a placeholder for it would advertise a destination that may not exist.
+
+It is pure navigation. No activity icon, no `Step n/m`, no status colour: chat
+gave up answering "is my work still running" on purpose ([Work Messages in
+Chat](#work-messages-in-chat), [lifecycle-ui.md](../lifecycle-ui.md) §9), and
+this row lives in chat. Its existence depends on the binding alone — never on
+the work's `status`, and never on its `activity`.
+
+The label is the session's own title, which is the work's title as it stood when
+the work started: `WorkStarter` names the session after the work once, at
+creation, which is why the protocol carries the binding and not a second copy of
+the title. The two can drift —
+renaming the work does not rename its session, and the user can rename the
+session — and the row says the session's name deliberately, because that is the
+string the user sees in the sidebar and above the conversation; the work's
+current title is on the page the row opens.
+
+The jump does not depend on the work list at either end: `WorkDetailOverlay`
+subscribes to the work by id (`useWorkDetailSubscription`), so an id no page of
+the list has reached still opens its page. Opening the work changes nothing about
+coming back: `WorkDetailOverlay`'s back button is the same one every other entry
+point gets, and the URL still names the session, so the browser's Back lands in
+this conversation.
 
 ## Multi-Step Execution
 

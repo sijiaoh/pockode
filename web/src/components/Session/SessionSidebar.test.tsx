@@ -29,7 +29,7 @@ vi.mock("../../hooks/useGitChangeCount", () => ({
 vi.mock("../../hooks/useSession", () => ({
 	useSession: () => ({
 		hasAnyUnread: false,
-		filteredSessions: [],
+		sessions: [],
 		isLoading: false,
 		refresh: vi.fn(),
 	}),

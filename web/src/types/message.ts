@@ -50,13 +50,23 @@ export interface SessionUsage extends TokenUsage {
  * open; the list goes to every client on every change, and a model chosen in one
  * session is not news to a client reading another.
  *
- * Two fields are also on `SessionDetail`, and neither can drift: both are read
- * straight off the session the server stores, so the row and the detail are two
- * narrowings of one record rather than two accounts of it.
+ * Three fields are also on `SessionDetail`, and none of them can drift: `turn`
+ * and `forked_from` are read straight off the session the server stores, so the
+ * row and the detail are two narrowings of one record rather than two accounts
+ * of it, and `work_id` is stored on neither — each side derives it from the work
+ * item that names this session.
  */
 export interface SessionListItem {
 	id: string;
 	title: string;
+	/**
+	 * The work item this session runs, absent on a plain chat session. It is both
+	 * the row's link to the work page and the whole of what tells a client the
+	 * session belongs to work — the question used to be answered by inverting the
+	 * work list, which made this list wrong for as long as that one was
+	 * incomplete (docs/code/subscription-system.md#which-sessions-belong-to-work).
+	 */
+	work_id?: string;
 	/** The row's subtitle, and what the list is ordered by. */
 	updated_at: string;
 	/**
@@ -507,6 +517,14 @@ export interface SessionDetail {
 	unread: boolean;
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
+	/**
+	 * The work item this session runs, absent on a plain chat session — the same
+	 * field `SessionListItem` carries, and the reason it is on both is the
+	 * sidebar filter: it hides exactly the sessions that have one, so the open
+	 * session usually has no row to read it off
+	 * (docs/code/subscription-system.md#which-sessions-belong-to-work).
+	 */
+	work_id?: string;
 	/**
 	 * Always present: a session that has spent nothing carries an empty usage,
 	 * not a missing one, which is what "nothing reported yet" is keyed on.

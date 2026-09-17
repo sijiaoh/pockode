@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionDetailStore } from "../lib/sessionDetailStore";
 import { useSessionStore } from "../lib/sessionStore";
 import { makeSessionListItem } from "../test/sessionFixtures";
 import type {
@@ -74,8 +75,17 @@ describe("useSession", () => {
 			sessions: [],
 			isLoading: true,
 			isSuccess: false,
+			showTaskSessions: true,
 		});
+		useSessionDetailStore.getState().clear();
 	});
+
+	/** What `useSessionDetailSubscription` records when the server refuses. */
+	const reportSessionMissing = (sessionId: string) => {
+		act(() => {
+			useSessionDetailStore.getState().setMissing(sessionId);
+		});
+	};
 
 	afterEach(() => {
 		queryClient.clear();
@@ -142,7 +152,27 @@ describe("useSession", () => {
 				expect(result.current.redirectSessionId).toBeNull();
 			});
 
-			it("returns first session when routeSessionId is invalid", async () => {
+			// A session the list has no row for is not thereby gone: with the
+			// task-session filter on, that is exactly how every work session
+			// looks, and a work's Chat link points at one. Redirecting on the
+			// absence alone would bounce the user off the chat they just opened.
+			it("stays put while a session the list has no row for is resolving", async () => {
+				mockSessions = [mockSession("1")];
+
+				const { result } = renderHook(
+					() => useSession({ routeSessionId: "hidden-work-session" }),
+					{ wrapper: createWrapper(queryClient) },
+				);
+
+				await waitFor(() => {
+					expect(result.current.isSuccess).toBe(true);
+				});
+
+				expect(result.current.redirectSessionId).toBeNull();
+				expect(result.current.isRouteSessionResolved).toBe(false);
+			});
+
+			it("returns first session once the route's session is reported missing", async () => {
 				mockSessions = [mockSession("1")];
 
 				const { result } = renderHook(
@@ -154,7 +184,11 @@ describe("useSession", () => {
 					expect(result.current.isSuccess).toBe(true);
 				});
 
-				expect(result.current.redirectSessionId).toBe("1");
+				reportSessionMissing("invalid");
+
+				await waitFor(() => {
+					expect(result.current.redirectSessionId).toBe("1");
+				});
 			});
 
 			it("updates when current session is deleted", async () => {
@@ -176,6 +210,9 @@ describe("useSession", () => {
 						sessionId: "1",
 					});
 				});
+				// The row going is not the news; the session's own subscription
+				// saying it is gone is, and that is what a delete reports too.
+				reportSessionMissing("1");
 
 				await waitFor(() => {
 					expect(result.current.redirectSessionId).toBe("2");
@@ -196,6 +233,43 @@ describe("useSession", () => {
 				});
 
 				expect(result.current.needsNewSession).toBe(true);
+			});
+
+			// The route still has somewhere to go, so there is nothing to create:
+			// with the filter on, a worktree whose every session belongs to work
+			// has an empty list and a perfectly openable conversation.
+			it("is false while the route's session is still resolving", async () => {
+				mockSessions = [];
+
+				const { result } = renderHook(
+					() => useSession({ routeSessionId: "hidden-work-session" }),
+					{ wrapper: createWrapper(queryClient) },
+				);
+
+				await waitFor(() => {
+					expect(result.current.isSuccess).toBe(true);
+				});
+
+				expect(result.current.needsNewSession).toBe(false);
+			});
+
+			it("is true once the route's session is reported missing", async () => {
+				mockSessions = [];
+
+				const { result } = renderHook(
+					() => useSession({ routeSessionId: "invalid" }),
+					{ wrapper: createWrapper(queryClient) },
+				);
+
+				await waitFor(() => {
+					expect(result.current.isSuccess).toBe(true);
+				});
+
+				reportSessionMissing("invalid");
+
+				await waitFor(() => {
+					expect(result.current.needsNewSession).toBe(true);
+				});
 			});
 
 			it("is false when sessions exist", async () => {

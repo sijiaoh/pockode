@@ -18,7 +18,10 @@ let mockSessions: SessionListItem[] = [];
 let mockStatus = "connected";
 
 const mockSubscribe = vi.fn(
-	async (callback: (p: SessionListChangedNotification) => void) => {
+	async (
+		callback: (p: SessionListChangedNotification) => void,
+		_excludeWorkSessions?: boolean,
+	) => {
 		notificationCallback = callback;
 		return { id: "watch-1", initial: mockSessions };
 	},
@@ -57,7 +60,7 @@ describe("useSessionSubscription", () => {
 		it("subscribes when enabled and connected", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			renderHook(() => useSessionSubscription(true));
+			renderHook(() => useSessionSubscription(true, false));
 
 			await waitFor(() => {
 				expect(mockSubscribe).toHaveBeenCalled();
@@ -66,7 +69,7 @@ describe("useSessionSubscription", () => {
 		});
 
 		it("does not subscribe when disabled", async () => {
-			renderHook(() => useSessionSubscription(false));
+			renderHook(() => useSessionSubscription(false, false));
 
 			await new Promise((r) => setTimeout(r, 50));
 
@@ -76,7 +79,7 @@ describe("useSessionSubscription", () => {
 		it("does not subscribe when disconnected", async () => {
 			mockStatus = "disconnected";
 
-			renderHook(() => useSessionSubscription(true));
+			renderHook(() => useSessionSubscription(true, false));
 
 			await new Promise((r) => setTimeout(r, 50));
 
@@ -86,7 +89,7 @@ describe("useSessionSubscription", () => {
 		it("unsubscribes on unmount", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			const { unmount } = renderHook(() => useSessionSubscription(true));
+			const { unmount } = renderHook(() => useSessionSubscription(true, false));
 
 			await waitFor(() => {
 				expect(mockSubscribe).toHaveBeenCalled();
@@ -102,7 +105,7 @@ describe("useSessionSubscription", () => {
 		it("handles create notification", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			renderHook(() => useSessionSubscription(true));
+			renderHook(() => useSessionSubscription(true, false));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions.length).toBe(1);
@@ -123,7 +126,7 @@ describe("useSessionSubscription", () => {
 		it("handles update notification", async () => {
 			mockSessions = [mockSessionItem("1", "Old")];
 
-			renderHook(() => useSessionSubscription(true));
+			renderHook(() => useSessionSubscription(true, false));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions[0].title).toBe("Old");
@@ -143,7 +146,7 @@ describe("useSessionSubscription", () => {
 		it("reflects server-side unread flag from update notification", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			renderHook(() => useSessionSubscription(true));
+			renderHook(() => useSessionSubscription(true, false));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions.length).toBe(1);
@@ -163,7 +166,7 @@ describe("useSessionSubscription", () => {
 		it("handles delete notification", async () => {
 			mockSessions = [mockSessionItem("1"), mockSessionItem("2")];
 
-			renderHook(() => useSessionSubscription(true));
+			renderHook(() => useSessionSubscription(true, false));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions.length).toBe(2);
@@ -184,7 +187,7 @@ describe("useSessionSubscription", () => {
 		it("handles update notification with a turn change", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			renderHook(() => useSessionSubscription(true));
+			renderHook(() => useSessionSubscription(true, false));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions[0].turn.phase).toBe("idle");
@@ -213,7 +216,7 @@ describe("useSessionSubscription", () => {
 		it("keeps previous sessions during switch and swaps in the new list", async () => {
 			mockSessions = [mockSessionItem("old")];
 
-			renderHook(() => useSessionSubscription(true));
+			renderHook(() => useSessionSubscription(true, false));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions).toHaveLength(1);
@@ -244,11 +247,62 @@ describe("useSessionSubscription", () => {
 		});
 	});
 
+	// The filter lives on the subscription, so the only way to change it is to
+	// open a new one. Filtering what came back instead is what this replaced, and
+	// that needed the whole work list to do it
+	// (docs/code/subscription-system.md#which-sessions-belong-to-work).
+	describe("the task-session filter", () => {
+		it("asks the server for it, rather than narrowing the answer", async () => {
+			mockSessions = [mockSessionItem("1")];
+
+			renderHook(() => useSessionSubscription(true, true));
+
+			await waitFor(() => {
+				expect(mockSubscribe).toHaveBeenCalledWith(expect.any(Function), true);
+			});
+		});
+
+		it("resubscribes when it is flipped, keeping the list on screen", async () => {
+			mockSessions = [mockSessionItem("1")];
+
+			const { rerender } = renderHook(
+				({ exclude }: { exclude: boolean }) =>
+					useSessionSubscription(true, exclude),
+				{ initialProps: { exclude: false } },
+			);
+
+			await waitFor(() => {
+				expect(useSessionStore.getState().sessions.length).toBe(1);
+			});
+			expect(mockSubscribe).toHaveBeenLastCalledWith(
+				expect.any(Function),
+				false,
+			);
+
+			mockSessions = [mockSessionItem("2")];
+			rerender({ exclude: true });
+
+			await waitFor(() => {
+				expect(mockSubscribe).toHaveBeenLastCalledWith(
+					expect.any(Function),
+					true,
+				);
+			});
+			await waitFor(() => {
+				expect(useSessionStore.getState().sessions[0].id).toBe("2");
+			});
+			// Never blanked on the way: a flipped filter is not a reason to empty
+			// the sidebar and lose where the user was in it.
+			expect(useSessionStore.getState().isLoading).toBe(false);
+			expect(useSessionStore.getState().isSuccess).toBe(true);
+		});
+	});
+
 	describe("refresh", () => {
 		it("re-subscribes and gets fresh data", async () => {
 			mockSessions = [mockSessionItem("1")];
 
-			const { result } = renderHook(() => useSessionSubscription(true));
+			const { result } = renderHook(() => useSessionSubscription(true, false));
 
 			await waitFor(() => {
 				expect(useSessionStore.getState().sessions.length).toBe(1);

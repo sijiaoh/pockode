@@ -4,7 +4,6 @@ import { useChatMessages } from "../../hooks/useChatMessages";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
-import { useSessionDetailSubscription } from "../../hooks/useSessionDetailSubscription";
 import { inputActions } from "../../lib/inputStore";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import {
@@ -93,12 +92,17 @@ interface Props {
 	 * false. Empty when the route names no session.
 	 */
 	sessionId: string;
+	/**
+	 * The session's name as its list row carries it, and empty for a session the
+	 * list has no row for — one the task-session filter hides. The panel falls
+	 * back to the detail for those.
+	 */
 	sessionTitle: string;
 	/**
-	 * Whether `sessionId` has been found in the session list of the worktree the
-	 * connection is bound to. Until then nothing about the session is known but
-	 * its id, so the panel shows the destination as an empty shell rather than
-	 * anything belonging to the session the user came from.
+	 * Whether `sessionId` is known to exist in the worktree the connection is
+	 * bound to. Until then nothing about the session is known but its id, so the
+	 * panel shows the destination as an empty shell rather than anything
+	 * belonging to the session the user came from.
 	 */
 	isSessionResolved: boolean;
 	onUpdateTitle: (title: string) => void;
@@ -148,15 +152,18 @@ function ChatPanel({
 	const InputBar = CustomInputBar ?? DefaultInputBar;
 	const Engine = CustomEngineSelector ?? EngineSelector;
 
-	// The panel holds the session's own subscription, and everything below —
-	// `useChatMessages`' settings included — reads what it puts in the store. One
-	// holder for one session: the settings and where the conversation was forked
-	// from are the same snapshot, and two subscriptions would be two of it.
-	//
-	// Gated on the same flag as the chat subscription below, so a worktree switch
-	// ends both at once.
-	useSessionDetailSubscription(sessionId, isSessionResolved);
+	// Read, not held: `AppShell` owns the session's detail subscription, because
+	// whether the session exists is what that subscription answers and the shell
+	// will not mount this panel until it does. Everything below —
+	// `useChatMessages`' settings included — reads the same store entry, so the
+	// settings and where the conversation was forked from stay one snapshot.
 	const sessionDetail = useSessionDetailStore(selectSessionDetail(sessionId));
+
+	// The row is the fast source — it is on screen before the detail lands — but
+	// there is no row for a session the task-session filter hides, which is every
+	// session a work item drives. The detail speaks for the session itself and
+	// covers those.
+	const resolvedTitle = sessionTitle || sessionDetail?.title || "";
 
 	const {
 		messages,
@@ -218,7 +225,7 @@ function ChatPanel({
 
 	const handleSend = useCallback(
 		(content: string) => {
-			if (sessionTitle === "New Chat") {
+			if (resolvedTitle === "New Chat") {
 				const title =
 					content.length > 30
 						? `${content.slice(0, 30).replace(/\n/g, " ")}...`
@@ -228,7 +235,7 @@ function ChatPanel({
 
 			sendUserMessage(content);
 		},
-		[sessionTitle, onUpdateTitle, sendUserMessage],
+		[resolvedTitle, onUpdateTitle, sendUserMessage],
 	);
 
 	// An answer only reaches the process that raised the prompt, so a card whose
@@ -353,10 +360,10 @@ function ChatPanel({
 			clearForkError();
 			setForkTarget({
 				messageId,
-				defaultTitle: buildForkTitle(sessionTitle, titles),
+				defaultTitle: buildForkTitle(resolvedTitle, titles),
 			});
 		},
-		[sessionTitle, clearForkError],
+		[resolvedTitle, clearForkError],
 	);
 
 	const handleCloseFork = useCallback(() => {
@@ -577,8 +584,10 @@ function ChatPanel({
 						    session to describe when the route names none. */}
 						{sessionId !== "" && (
 							<SessionInfoButton
+								sessionId={sessionId}
 								usage={sessionDetail?.usage}
 								isForked={sessionDetail?.forked_from !== undefined}
+								onOpenWorkDetail={onOpenWorkDetail}
 							/>
 						)}
 					</div>

@@ -7,7 +7,7 @@ import SessionsTab from "./SessionsTab";
 
 const mockRefresh = vi.fn();
 const sessionState = {
-	filteredSessions: [] as SessionListItem[],
+	sessions: [] as SessionListItem[],
 	isLoading: false,
 	isReloading: false,
 };
@@ -37,7 +37,7 @@ function tab(refreshSignal: number, isSwitchingWorktree: boolean) {
 describe("SessionsTab", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		sessionState.filteredSessions = [session("a1")];
+		sessionState.sessions = [session("a1")];
 		sessionState.isLoading = false;
 		sessionState.isReloading = false;
 	});

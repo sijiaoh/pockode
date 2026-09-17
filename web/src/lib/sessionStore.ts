@@ -8,6 +8,13 @@ function loadShowTaskSessions(): boolean {
 }
 
 interface SessionState {
+	/**
+	 * The list as the server sent it, already narrowed by `showTaskSessions`.
+	 * Nothing filters it again on the way to the screen, and nothing may treat a
+	 * session's absence from it as proof the session is gone — with the filter on
+	 * it is also how a hidden work session looks
+	 * (docs/code/subscription-system.md#which-sessions-belong-to-work).
+	 */
 	sessions: SessionListItem[];
 	isLoading: boolean;
 	isSuccess: boolean;
@@ -18,6 +25,15 @@ interface SessionState {
 	 * cleared so redirect/new-session logic waits for the new worktree's list.
 	 */
 	isReloading: boolean;
+	/**
+	 * Whether the list should include the sessions that work items drive.
+	 *
+	 * A subscription parameter, not a predicate: the server applies it, so
+	 * `sessions` is already narrowed to what the sidebar shows and flipping this
+	 * resubscribes (`useSessionSubscription`). It lives here rather than in the
+	 * filter button because the toggle outlives that button — it is persisted,
+	 * and the subscription is opened somewhere else entirely.
+	 */
 	showTaskSessions: boolean;
 }
 
@@ -61,6 +77,34 @@ export const useSessionStore = create<SessionStore>((set) => ({
 			isReloading: false,
 		}),
 }));
+
+/**
+ * The title of the session with this id, and null for one the list has no row
+ * for. Null rather than undefined so a caller has to answer for the absence.
+ */
+export function selectSessionTitle(sessionId: string) {
+	return (s: SessionStore): string | null =>
+		s.sessions.find((x) => x.id === sessionId)?.title ?? null;
+}
+
+/**
+ * What a surface may call a session the list has no row for.
+ *
+ * "Deleted" is only warranted while nothing is being hidden. The list is
+ * narrowed by the server, so with the task-session filter on a work session is
+ * absent from it for a reason that has nothing to do with whether the session
+ * exists (docs/code/subscription-system.md#which-sessions-belong-to-work) — and
+ * a fork of a work session is an ordinary session whose parent is exactly that,
+ * which is how both callers reach this.
+ *
+ * One home for the rule because both callers state it to the user in words, and
+ * a claim about what an absence means is the kind that goes quietly stale.
+ */
+export function selectUnlistedSessionName(s: SessionStore): string {
+	return s.showTaskSessions
+		? "a deleted session"
+		: "a session that is not in the list";
+}
 
 /**
  * Prepend a session to the list, removing any existing session with the same ID.

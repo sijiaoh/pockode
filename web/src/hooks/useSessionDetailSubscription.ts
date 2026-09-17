@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
-import { useWSStore } from "../lib/wsStore";
+import { isInvalidParamsRejection, useWSStore } from "../lib/wsStore";
 import type {
 	SessionDetailChangedNotification,
 	SessionDetailSubscribeResult,
@@ -10,9 +10,13 @@ import { useSubscription } from "./useSubscription";
 /**
  * Follows one session's metadata into `sessionDetailStore`.
  *
- * @param enabled Subscribe only once `sessionId` is known to belong to the
- * worktree the connection is bound to — the server has no such session before
- * that, and would refuse the subscription.
+ * It is also what decides whether the open session exists at all — the store's
+ * `status`. That is why `enabled` is not gated on the session being resolved:
+ * this subscription is how it gets resolved.
+ *
+ * @param enabled Subscribe only once the connection is bound to the worktree
+ * the route names. Before that the server is answering for a different
+ * worktree, where a refusal would say nothing about the session.
  */
 export function useSessionDetailSubscription(
 	sessionId: string,
@@ -26,6 +30,7 @@ export function useSessionDetailSubscription(
 	);
 
 	const setDetail = useSessionDetailStore((s) => s.setDetail);
+	const setMissing = useSessionDetailStore((s) => s.setMissing);
 	const clear = useSessionDetailStore((s) => s.clear);
 
 	const subscribe = useCallback(
@@ -36,12 +41,36 @@ export function useSessionDetailSubscription(
 
 	const handleNotification = useCallback(
 		(params: SessionDetailChangedNotification) => {
-			// A deleted session has no metadata to show. Navigating away from it is
-			// not this hook's call: the session list drives that, and it is the one
-			// that knows where to go instead.
+			// A deleted session has no metadata to show, and recording that is how
+			// the route learns to move on: the session list cannot tell a deleted
+			// session from one its filter hides, so this is the one report of it
+			// that means only one thing.
 			setDetail(sessionId, params.deleted ? null : params.session);
 		},
 		[setDetail, sessionId],
+	);
+
+	// Reached when the subscribe fails, which is not by itself news about the
+	// session. Only the server refusing this request is: for this subscription
+	// that means "session not found" — deleted between the route naming it and
+	// this asking about it, or a URL that named one which never existed.
+	//
+	// Anything else leaves the question open. A socket that dies with the request
+	// still in flight rejects it just the same, and reading that as "gone" would
+	// take the user off the conversation they are in every time the connection
+	// blinks; a server that could not read the session is asking to be asked
+	// again, not answering. Both clear what is held — the subscription is down
+	// either way — without claiming there is nothing there.
+	const handleError = useCallback(
+		(err: unknown) => {
+			console.error("Failed to subscribe to session detail:", err);
+			if (isInvalidParamsRejection(err)) {
+				setMissing(sessionId);
+				return;
+			}
+			clear();
+		},
+		[setMissing, clear, sessionId],
 	);
 
 	const handleSubscribed = useCallback(
@@ -63,11 +92,11 @@ export function useSessionDetailSubscription(
 		// session subscribes on its own once the list resolves it.
 		resubscribeOnWorktreeChange: false,
 		onSubscribed: handleSubscribed,
-		// A failed subscribe clears the detail, and no error is surfaced: the way
-		// this one fails is "session not found", which happens when the session was
-		// deleted between the list naming it and this asking about it. The
-		// controls going dead is the whole of the story, and the list is already
-		// navigating away from a session that is not there.
+		// Nothing is known any more, which is not the same as "it is not there":
+		// this fires on disable, disconnect and worktree switch, none of which are
+		// news about the session. Going back to `loading` is what keeps a dropped
+		// connection from navigating the user off the session they were on.
 		onReset: clear,
+		onError: handleError,
 	});
 }

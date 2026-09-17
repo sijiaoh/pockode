@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionDetailStore } from "../../lib/sessionDetailStore";
+import { makeSessionDetail } from "../../test/sessionFixtures";
 import type { SessionUsage } from "../../types/message";
 import SessionInfoButton from "./SessionInfoButton";
 
@@ -23,11 +25,25 @@ const spent: SessionUsage = {
 
 async function open(usage?: SessionUsage, isForked = false) {
 	const user = userEvent.setup();
-	render(<SessionInfoButton usage={usage} isForked={isForked} />);
+	render(
+		<SessionInfoButton
+			sessionId="s1"
+			usage={usage}
+			isForked={isForked}
+			onOpenWorkDetail={vi.fn()}
+		/>,
+	);
 	await user.click(screen.getByRole("button", { name: "Session info" }));
 }
 
+/** The panel's sections, in the order they are drawn. */
+const sectionTitles = () =>
+	screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+
 describe("SessionInfoButton", () => {
+	beforeEach(() => {
+		useSessionDetailStore.getState().clear();
+	});
 	it("opens before anything has been reported, and says so", async () => {
 		await open(empty);
 
@@ -128,5 +144,27 @@ describe("SessionInfoButton", () => {
 		expect(
 			screen.queryByText("Since this session was forked."),
 		).not.toBeInTheDocument();
+	});
+
+	// What this session is comes before what it has spent, and the sections
+	// themselves know nothing about where they sit.
+	it("puts the work this session runs above its usage", async () => {
+		useSessionDetailStore
+			.getState()
+			.setDetail("s1", makeSessionDetail({ id: "s1", work_id: "work-1" }));
+
+		await open(spent);
+
+		expect(sectionTitles()).toEqual(["Work", "Usage"]);
+	});
+
+	it("leaves usage first on a session that runs no work", async () => {
+		useSessionDetailStore
+			.getState()
+			.setDetail("s1", makeSessionDetail({ id: "s1" }));
+
+		await open(spent);
+
+		expect(sectionTitles()).toEqual(["Usage"]);
 	});
 });

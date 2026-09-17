@@ -6,6 +6,7 @@ import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
 import { useFileDropGuard } from "../hooks/useFileDropGuard";
 import { useRouteState } from "../hooks/useRouteState";
 import { useSession } from "../hooks/useSession";
+import { useSessionDetailSubscription } from "../hooks/useSessionDetailSubscription";
 import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
 import { useWorkSubscription } from "../hooks/useWorkSubscription";
 import { useWorktree } from "../hooks/useWorktree";
@@ -123,9 +124,11 @@ function AppShell() {
 	const activeCommitHash = overlay?.type === "commit" ? overlay.hash : null;
 
 	const {
-		filteredSessions,
+		sessions,
 		currentSessionId,
 		currentSession,
+		isRouteSessionResolved,
+		isSuccess: isSessionListLoaded,
 		isReloading,
 		redirectSessionId,
 		needsNewSession,
@@ -136,18 +139,32 @@ function AppShell() {
 		updateTitle,
 	} = useSession({ enabled: hasAuthToken, routeSessionId });
 
-	// The destination is known from the URL the moment a switch starts; only its
-	// title and history are not. It counts as resolved once it is found in the
-	// session list of the worktree the connection is actually bound to —
-	// worktreeSwitchInFlight alone is not enough, because the store syncs before
-	// the list does. Looked up in the unfiltered list on purpose: a work's chat
-	// link points at a task session, which is missing from filteredSessions
-	// whenever the task-session filter is on.
-	const isSessionResolved =
+	// Whether the server is in a position to answer about this session at all:
+	// the connection is bound to the worktree the URL names, and its session
+	// list has landed. worktreeSwitchInFlight alone is not enough, because the
+	// store syncs before the list does — and until then the server would be
+	// answering for the worktree being left, where a refusal would say nothing
+	// about the session.
+	const canLoadSession =
 		!worktreeSwitchInFlight &&
 		!isReloading &&
-		currentSessionId !== null &&
-		currentSession !== undefined;
+		isSessionListLoaded &&
+		currentSessionId !== null;
+
+	// The destination is known from the URL the moment a switch starts; only its
+	// title and history are not. It counts as resolved once the session is known
+	// to exist — from its row in the list, or, for a session the task-session
+	// filter hides, from its own detail subscription. The list alone can no
+	// longer say: a work's Chat link points at a session that filter removes, so
+	// "not in the list" and "not there" are the same absence to it.
+	const isSessionResolved = canLoadSession && isRouteSessionResolved;
+
+	// Held here rather than in ChatPanel, which is where it used to live: it is
+	// what tells the shell whether the open session exists, and the shell does
+	// not mount the panel until it knows. Leaving it down there deadlocked every
+	// session the list has no row for — the panel that would resolve it was
+	// behind the resolution.
+	useSessionDetailSubscription(currentSessionId ?? "", canLoadSession);
 
 	// Once the shell has been on screen, keep it there through a switch: falling
 	// back to the full-screen "Loading..." would blank the whole app between two
@@ -158,12 +175,12 @@ function AppShell() {
 		hasRenderedShell.current = true;
 	}
 
-	// filteredSessions/currentSessionId get a fresh identity on every session-store
+	// sessions/currentSessionId get a fresh identity on every session-store
 	// update (new message, state change over WebSocket). Read them from a ref inside
 	// handleDeleteSession so its identity stays stable and doesn't defeat the memo on
 	// every SessionItem row.
-	const deleteSessionCtxRef = useRef({ filteredSessions, currentSessionId });
-	deleteSessionCtxRef.current = { filteredSessions, currentSessionId };
+	const deleteSessionCtxRef = useRef({ sessions, currentSessionId });
+	deleteSessionCtxRef.current = { sessions, currentSessionId };
 
 	// A switch resolves through several transient renders (worktree store sync →
 	// session list reload → redirect/create). Treat all of them as "in transition"
@@ -294,10 +311,9 @@ function AppShell() {
 
 	const handleDeleteSession = useCallback(
 		async (id: string) => {
-			const { filteredSessions, currentSessionId } =
-				deleteSessionCtxRef.current;
+			const { sessions, currentSessionId } = deleteSessionCtxRef.current;
 			const isCurrentSession = id === currentSessionId;
-			const remaining = filteredSessions.filter((s) => s.id !== id);
+			const remaining = sessions.filter((s) => s.id !== id);
 
 			await deleteSession(id);
 

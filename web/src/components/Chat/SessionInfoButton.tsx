@@ -4,18 +4,24 @@ import { useCallback, useRef, useState } from "react";
 import type { SessionUsage } from "../../types/message";
 import ResponsivePanel from "../ui/ResponsivePanel";
 import SessionUsageSection from "./SessionUsageSection";
+import SessionWorkSection from "./SessionWorkSection";
 
 interface Props {
+	/** Which session the panel describes; its sections read their own data. */
+	sessionId: string;
 	/** Undefined until the session's detail arrives; the panel says so. */
 	usage?: SessionUsage;
 	isForked: boolean;
+	/** Absent when the embedder has no work pages to open. */
+	onOpenWorkDetail?: (workId: string) => void;
 }
 
 /**
- * Facts about this session, behind one button on the action bar. Usage is the
- * first of them and deliberately not the last, which is why the button is named
- * after the session rather than after tokens: a control labelled "usage" would
- * have to be renamed or duplicated the first time anything else belongs in here.
+ * Facts about this session, behind one button on the action bar. Usage is one of
+ * them and deliberately not the only one — the work this session runs sits above
+ * it — which is why the button is named after the session rather than after
+ * tokens: a control labelled "usage" would have to be renamed or duplicated the
+ * first time anything else belongs in here.
  *
  * It carries no number, no percentage, no badge and no colour. The bar is the
  * session's controls and is already full at 360px, and a figure parked here
@@ -24,7 +30,12 @@ interface Props {
  * rather than a glance; announcing that without a tap is its own signal's job
  * (an inline warning above the input bar), not this button's.
  */
-function SessionInfoButton({ usage, isForked }: Props) {
+function SessionInfoButton({
+	sessionId,
+	usage,
+	isForked,
+	onOpenWorkDetail,
+}: Props) {
 	const [isOpen, setIsOpen] = useState(false);
 	const triggerRef = useRef<HTMLButtonElement>(null);
 	const isExpanded = useIsExpanded();
@@ -64,6 +75,13 @@ function SessionInfoButton({ usage, isForked }: Props) {
 				    its own `px-3`. Sections are listed here and nowhere else — this
 				    component owns their order and nothing about their contents. */}
 				<div className="overflow-y-auto pb-2">
+					{/* Before Usage: what this session is comes before what it has
+					    spent. */}
+					<SessionWorkSection
+						sessionId={sessionId}
+						onOpenWorkDetail={onOpenWorkDetail}
+						onClose={handleClose}
+					/>
 					<SessionUsageSection usage={usage} isForked={isForked} />
 				</div>
 			</ResponsivePanel>

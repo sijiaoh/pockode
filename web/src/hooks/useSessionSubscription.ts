@@ -10,8 +10,16 @@ import { useSubscription } from "./useSubscription";
 /**
  * Manages WebSocket subscription to the session list.
  * Handles subscribe/unsubscribe lifecycle and notification processing.
+ *
+ * @param excludeWorkSessions Whether to ask the server for the list without the
+ * sessions that belong to work items. The filter lives on the subscription, so
+ * flipping it resubscribes; the list already on screen stays there until the new
+ * snapshot replaces it, which is what keeps the sidebar from blanking.
  */
-export function useSessionSubscription(enabled: boolean) {
+export function useSessionSubscription(
+	enabled: boolean,
+	excludeWorkSessions: boolean,
+) {
 	const sessionListSubscribe = useWSStore(
 		(s) => s.actions.sessionListSubscribe,
 	);
@@ -23,6 +31,12 @@ export function useSessionSubscription(enabled: boolean) {
 	const updateSessions = useSessionStore((s) => s.updateSessions);
 	const reset = useSessionStore((s) => s.reset);
 	const beginReload = useSessionStore((s) => s.beginReload);
+
+	const subscribe = useCallback(
+		(onNotification: (params: SessionListChangedNotification) => void) =>
+			sessionListSubscribe(onNotification, excludeWorkSessions),
+		[sessionListSubscribe, excludeWorkSessions],
+	);
 
 	const handleNotification = useCallback(
 		(params: SessionListChangedNotification) => {
@@ -49,7 +63,7 @@ export function useSessionSubscription(enabled: boolean) {
 	const { refresh } = useSubscription<
 		SessionListChangedNotification,
 		SessionListItem[]
-	>(sessionListSubscribe, sessionListUnsubscribe, handleNotification, {
+	>(subscribe, sessionListUnsubscribe, handleNotification, {
 		enabled,
 		onSubscribed: setSessions,
 		onReset: reset,

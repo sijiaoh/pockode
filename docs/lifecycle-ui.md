@@ -97,7 +97,7 @@ one subtle call in this document:
 
 ```
 sessionActivity(session):
-  work = the work whose session_id is this session, from workStore
+  work = the work the row names, looked up by session.work_id in workStore
   activity(work?.status == "active" ? work : undefined, session.turn)
 ```
 
@@ -110,9 +110,17 @@ cannot act on it. Passing the work only while it is `active` gets both halves
 from one expression, because the three status leaves are unreachable by
 construction once `active` is the only status that arrives.
 
-The lookup is always available: the work list is global and survives worktree
-switches, while the session list is scoped to one worktree — so every session on
-screen has its work in the store, never the other way round.
+**The row names its own work; nothing scans the work list for one that names the
+row.** Which sessions belong to work is the server's answer, carried on the row
+as `work_id`
+([subscription-system.md](code/subscription-system.md#which-sessions-belong-to-work)),
+and this lookup is the only thing the row still asks the work list for. What it
+asks for is the `wait` — and that is why the direction matters: a work the store
+has not paged in costs the row its `wait` and nothing else. The row is still in
+the right list, still says what its own `turn` is doing, and still links to the
+right work. Inverting the list instead would make *membership* depend on the
+list being complete, and that is a wrong row rather than a row missing one
+field.
 
 Why phase outranks `wait` rather than the other way round: a `wait` is a standing
 intention, a phase is a fact about this second. An agent that calls
@@ -823,7 +831,7 @@ controls are what they will land on:
 | `web/src/components/ui/Activity{Icon,Badge,Dot}.tsx` | new — replace `StatusIcon` / `StatusBadge` |
 | `web/src/components/ui/StatusIcon.tsx`, `StatusBadge.tsx` | deleted |
 | `web/src/components/common/SidebarListItem.tsx` | `activity` + `unread` replace three booleans. It is a `web` component, not a `@pockode/shared` one — `web-cluster` has no sessions and no work, so nothing here is shared code |
-| `web/src/components/Session/SessionItem.tsx` | resolves the session's work from `workStore` and passes `sessionActivity` (§1.2) |
+| `web/src/components/Session/SessionItem.tsx` | looks the row's own `work_id` up in `workStore` and passes `sessionActivity` (§1.2) |
 | `web/src/components/Chat/ChatPanel.tsx` | `turn.phase` replaces `isStreaming`; mounts the blocker strip |
 | `web/src/components/Chat/BlockerStrip.tsx` | new — §2.2 |
 | `web/src/components/Chat/AskUserQuestionItem.tsx` | expired stays answerable; "Send as message"; three banners |

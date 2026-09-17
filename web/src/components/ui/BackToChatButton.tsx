@@ -1,6 +1,9 @@
 import { MessageSquare } from "lucide-react";
 import { useRouteState } from "../../hooks/useRouteState";
-import { useSessionStore } from "../../lib/sessionStore";
+import {
+	selectSessionDetail,
+	useSessionDetailStore,
+} from "../../lib/sessionDetailStore";
 import BadgeDot from "./BadgeDot";
 
 interface Props {
@@ -12,9 +15,13 @@ const buttonClass =
 
 export default function BackToChatButton({ onClick }: Props) {
 	const { sessionId } = useRouteState();
-	const hasUnread = useSessionStore(
-		(s) => s.sessions.find((sess) => sess.id === sessionId)?.unread ?? false,
-	);
+	// From the open session's own metadata, not from the list: the list is
+	// narrowed server-side and leaves out exactly the session a work item drives
+	// (docs/code/subscription-system.md#which-sessions-belong-to-work), so
+	// reading it there would silently never light the dot for those. The detail
+	// is the session this button goes back to, which is the one it is about.
+	const detail = useSessionDetailStore(selectSessionDetail(sessionId));
+	const hasUnread = detail?.unread ?? false;
 
 	return (
 		<button

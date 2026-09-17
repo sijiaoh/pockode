@@ -23,7 +23,7 @@ function SessionsTab({
 	onDeleteSession,
 	isSwitchingWorktree,
 }: Props) {
-	const { filteredSessions, isLoading, isReloading, refresh } = useSession();
+	const { sessions, isLoading, isReloading, refresh } = useSession();
 
 	// The list on screen belongs to the worktree the user is leaving. Selecting a
 	// row from it would navigate to a session that doesn't exist in the new
@@ -74,7 +74,7 @@ function SessionsTab({
 					// a session that doesn't exist in the worktree being entered.
 					<div inert={isStale}>
 						<SessionList
-							sessions={filteredSessions}
+							sessions={sessions}
 							currentSessionId={currentSessionId}
 							onSelectSession={onSelectSession}
 							onDeleteSession={onDeleteSession}

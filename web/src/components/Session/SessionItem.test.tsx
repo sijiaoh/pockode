@@ -26,9 +26,11 @@ function turn(
 	};
 }
 
-function seedWork(status: WorkStatus, wait?: WorkWait, sessionId = "s1") {
+const WORK_ID = "w1";
+
+function seedWork(status: WorkStatus, wait?: WorkWait) {
 	const work: WorkListItem = {
-		id: "w1",
+		id: WORK_ID,
 		type: "task",
 		title: "Rewire the lifecycle",
 		status,
@@ -36,7 +38,7 @@ function seedWork(status: WorkStatus, wait?: WorkWait, sessionId = "s1") {
 		// A session row derives its own activity from the turn and the work's
 		// wait; the row the server computed is for the work list.
 		activity: "idle",
-		session_id: sessionId,
+		session_id: "s1",
 		updated_at: AT,
 	};
 	useWorkStore.getState().setWorks([work]);
@@ -47,7 +49,14 @@ function renderRow(
 ) {
 	return render(
 		<SessionItem
-			session={makeSessionListItem({ id: "s1", title: "Chat", ...overrides })}
+			session={makeSessionListItem({
+				id: "s1",
+				title: "Chat",
+				// The row names its own work; nothing scans the work list for one
+				// that names this session any more.
+				work_id: WORK_ID,
+				...overrides,
+			})}
 			isActive={false}
 			onSelect={vi.fn()}
 			onDelete={vi.fn()}
@@ -107,6 +116,16 @@ describe("what a session row says it is waiting for", () => {
 		seedWork(status);
 		renderRow({ turn: turn("idle"), unread: true });
 		expect(screen.queryByLabelText(/Waiting|Stopped|Closed|Open/)).toBeNull();
+	});
+
+	// Which sessions belong to work is the server's answer, carried on the row.
+	// A plain chat session reads nothing off the work list even when an item in
+	// it still names the session — a stale `session_id` on a work the engine has
+	// moved on from used to put that work's wait on an unrelated row.
+	it("ignores a work that names it when the row claims none", () => {
+		seedWork("active", "user");
+		renderRow({ turn: turn("idle"), work_id: undefined });
+		expect(screen.queryByLabelText(/Waiting/)).toBeNull();
 	});
 
 	// Precedence collapses to two lines: anything but idle is the activity, and

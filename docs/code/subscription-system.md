@@ -388,12 +388,27 @@ it to draw a branch icon on a row, the chat panel uses it to know the open
 session's own origin. A setting cannot pass that test; a birth fact cannot fail
 it.
 
-`title` and `unread` also appear on both sides, and they are mutable — but
-detail's copies have no reader: the frontend takes both from the list, where the
-row that displays them lives. Removing them would mean a second wire type for
-detail beside `SessionMeta`, which is a larger change than the duplication is a
-problem. Worth knowing before adding a reader for detail's copy, because that is
-the moment it becomes a second source.
+`work_id` passes the same test from the other direction: it is mutable, and it is
+on both, but it is stored on neither — each side resolves it from
+`work.Work.SessionID` as it builds the message, so there is one source and two
+readings of it. Why the detail needs its own reading at all is
+[above](#which-sessions-belong-to-work).
+
+`title` and `unread` are on both sides and read from both, and they pass on the
+same terms as `turn`: stored with the session, so both watchers read one record
+and send one value. Each reader takes the copy that is about the thing it is
+about — a row displays the row's, while the back-to-chat dot reads the detail's,
+because the session that button is about is the one the list is allowed not to
+have a row for ([above](#which-sessions-belong-to-work)). The chat's title does
+choose between the two copies — the row first, the detail when there is no row —
+and that is sound here for the reason `turn` is: two narrowings of one stored
+record, not two accounts of it. A field that cannot say that much has to stay on
+one side.
+
+Detail's wire type carries them without listing them: `rpc.SessionDetail`
+*embeds* `SessionMeta` rather than re-stating its fields, which is what keeps a
+field added to a session from having to be added here too. Dropping a single
+field would mean giving that up and listing them all.
 
 **A deletion has to be said out loud.** A subscriber whose session is removed is
 told `deleted: true`, rather than simply hearing nothing more — silence is
@@ -452,6 +467,147 @@ and the first one is never told. Per subscription id, then, and deleted on
 
 Suppression is worth having only where the trigger is noisier than the news, and
 never for the watcher's own store — there the payload *is* the news.
+
+### Which Sessions Belong to Work
+
+A session list row carries `work_id`: the work item that session runs, absent for
+a plain chat session. It is what the sidebar links to the work page with, and
+what the "hide task sessions" filter is decided from.
+
+It used to be neither. The relation is stored on the work item
+(`work.Work.SessionID`), so the client answered the question by holding the
+*whole* work list and inverting it — every session id any work named was a work
+session. That makes the session list wrong for exactly as long as the work list
+is incomplete, and a work list that pages is never complete. It also put a
+sidebar's correctness at the mercy of a subscription it has no other use for.
+
+Two things follow, and they are one decision each:
+
+**The row derives its work id; it does not store one.** `work.Work.SessionID`
+*is* the relation. A copy of it on the session would be a second one, and the
+copy is what a rollback or a cascade delete leaves behind — the session outlives
+the work item in every failure path that matters. So `SessionListWatcher` looks
+it up while it builds the row, from the work store, and re-resolves it on every
+event rather than remembering an answer. The whole-list paths index the work
+store once instead of once per row.
+
+**The filter is the server's.** `session.list.subscribe` takes
+`exclude_work_sessions`; the subscription keeps it and it governs the snapshot
+and every notification after it. Where one subscriber is sent the row, a
+subscriber that asked not to see work sessions is sent a *removal* — the only
+way to retract a row already on its screen, which is what a session joining a
+work item has to do. Only the first such push sends it: a running work session
+is touched several times a turn, and none of those can put back a row that has
+already gone, so the rest are not sent to that subscriber at all. "Already gone"
+is read off the work id last broadcast for the session, and unknown counts as
+maybe — a removal for a row the client never had is one it drops, the same as
+any delete it cannot place.
+
+The retraction is one-way, at both ends: the server sends the row back as an
+`update`, and the client applies an update by replacing a row it already has.
+Nothing reaches that path today — deleting a work deletes its sessions
+(`worktree.Manager.DeleteSessions`), so a session does not outlive its work
+except when that cleanup itself fails — but a feature that detaches a work from a
+live session would need a `create` on one side and an upsert on the other.
+
+The filter defaults to off, which is what this list did before it existed: a
+client that says nothing gets every session, so the field could be added without
+a client change landing first.
+
+**And the re-send is judged on the relation, not on the work item.** A work is
+written many times while it runs — a wait declared, a nudge counted, a step
+advanced — and none of it moves the one thing a row takes from it. So the
+watcher remembers the work id it last broadcast per session and skips an event
+that would repeat it; otherwise every work transition re-pushes an unchanged row
+to every subscriber, and to one filtering work sessions out, each is a
+retraction of a row it never had. Per session rather than per subscription — the
+exception to the rule above — and only sound because the record is written
+solely with values that went to *every* subscriber: a snapshot built for one new
+subscriber must not be recorded there, or it suppresses the notification that
+would have told all the others.
+
+**Both sides of a session carry it, because the filter hides one of them.**
+`session.detail.subscribe` answers with `rpc.SessionDetail` — the whole of
+`session.SessionMeta`, embedded so a field added to a session reaches the client
+without being listed twice, plus the same derived `work_id`. That is not a
+second copy of the relation: neither side stores it, both resolve it from
+`work.Work.SessionID`, and a wrong answer on one is a wrong answer on the other.
+The reason it has to be on both is the filter above: the sessions it hides are
+exactly the ones that have a work id, so the session a client most needs the id
+for — the one it has open — is the one with no row to read it off.
+
+The detail is live on the same terms as the row, and by the same route: the
+worktree manager hands a work change to both watchers, both re-resolve the
+relation from the store rather than reading it off the event, and both skip an
+event that would repeat the work id already sent for that session. The
+bookkeeping is one type shared by the two (`watch.sessionWorkIndex`), because
+"the work id last put on the wire for this session" is one piece of knowledge.
+
+What the detail has to do differently is the subscribe. Its record of what was
+sent is per session, and sound only while it names what *every* subscriber of
+that session holds — so a new subscriber **drops** the entry rather than writing
+its own snapshot into it. A relation that changed while nobody had that session
+open was pushed to nobody, and recording the snapshot would let the next
+identical work event be skipped, leaving an older subscriber holding a work id
+nothing will ever correct. Forgetting costs one redundant push after a
+subscribe; recording costs a push that never comes.
+
+A snapshot that cannot resolve the relation is refused, not answered without it
+— a detail with no `work_id` says the session belongs to no work, and a
+subscriber has no reason to ask a second time. Mid-stream, the same failure
+sends nothing at all: the client keeps what it had, and the next change to
+either side resolves it again.
+
+#### What the Client Gives Up by Letting the Server Filter
+
+The "hide task sessions" toggle is a subscription parameter, so flipping it
+resubscribes (`useSessionSubscription`). The list already on screen is kept
+until the new snapshot replaces it — a filter the user flipped is not a reason to
+blank the sidebar and lose their place in it.
+
+The cost is paid somewhere else, and it is the interesting part: **`sessionStore`
+can no longer be asked whether a session exists.** With the filter on, a session
+missing from it is either deleted or merely hidden, and those are the same
+absence. The app shell asked exactly that question twice — whether to redirect
+off the session in the URL, and whether a worktree is empty enough to create one
+in — and a work's *Chat* link points at precisely the session the filter hides,
+so answering either from the list would bounce the user off the conversation the
+link just opened.
+
+So the question moved to the only source that speaks for one session:
+`session.detail.subscribe`. `sessionDetailStore` carries a three-way `status`
+alongside the detail, and each value earns its keep:
+
+- **`ready`** — the snapshot arrived. The session exists.
+- **`missing`** — positive evidence, and nothing weaker: the server pushed
+  `deleted`, or answered the subscribe with a refusal of its own. Only this
+  redirects.
+- **`loading`** — nothing is known. A disconnect returns here rather than to
+  `missing`, because the list subscription drops with it and a dropped
+  connection must not navigate the user anywhere.
+
+A failed subscribe is *not* by itself the middle case. A socket that dies with
+the request in flight rejects it exactly as a refusal does, and so does a server
+that could not read the session; only a reply the server wrote carries a
+JSON-RPC code of its own, and only "invalid params" — which is what
+`session.detail.subscribe` answers a session it does not have — says the request
+was wrong about its subject. Anything else clears what is held and leaves the
+question open, because a blinking connection would otherwise keep announcing
+that the open session is gone.
+
+Two consequences worth stating, because both are easy to undo by accident:
+
+**A row in the list is still proof, and still the fast path.** A session the
+sidebar shows resolves the moment the list lands; only a session the filter
+hides waits a second round trip. Resolving everything through the detail would
+put that round trip on every session switch.
+
+**`AppShell` holds the detail subscription, not `ChatPanel`.** It used to be the
+panel's, gated on the session having resolved — which, once resolution came from
+the subscription itself, deadlocked every session the list has no row for: the
+shell will not mount the panel until the session resolves, and the subscription
+that would resolve it was inside the panel. The panel still reads the store and
+nothing else, so there is still one holder for one session.
 
 ## Frontend
 
@@ -570,7 +726,7 @@ beginReload: () => set({ isSuccess: false, isReloading: true }),
 
 `AppShell` treats `isReloading` — together with `worktreeSwitchInFlight`, a pending `redirectSessionId`, or `needsNewSession` — as an "in transition" state and, once a shell has been on screen, keeps it mounted through the transition instead of dropping to the loading blank. The same path smooths other transient renders, such as jumping to the next session after deleting the current one.
 
-**What the placeholder may and may not be.** Only the *shell* is retained; the previous session's content is not. The destination's id is known from the URL from the first frame of a switch, so `AppShell` hands `ChatPanel` that id straight away, along with `isSessionResolved` — false until the id is found in the session list of the worktree the connection is actually bound to (`!worktreeSwitchInFlight && !isReloading`, looked up in the unfiltered `sessions`, because a work's chat link points at a task session that `filteredSessions` may hide). While it is false the panel shows `ChatSkeleton` and disables the input.
+**What the placeholder may and may not be.** Only the *shell* is retained; the previous session's content is not. The destination's id is known from the URL from the first frame of a switch, so `AppShell` hands `ChatPanel` that id straight away, along with `isSessionResolved` — false until the connection is bound to the worktree the URL names and that session is known to exist there ([how it is known](#what-the-client-gives-up-by-letting-the-server-filter)). While it is false the panel shows `ChatSkeleton` and disables the input.
 
 Retaining the previous *session* instead was the original implementation, and it meant a cross-worktree chat link showed the conversation the user had just left — including a send box wired to it — until the new list arrived. The retained sidebar list is stale in the same way, so for the duration it is barred from interaction — keyboard included, not just the pointer — then swapped for `SessionListSkeleton`, and its highlight follows the destination id rather than the list it is drawn from. Creating a session is blocked for the same stretch, since the connection is still bound to the worktree being left.
 
@@ -588,14 +744,21 @@ This is why wsStore separates its callback maps into two groups and, on switch, 
 
 ### Why the Open Session's Metadata Is Keyed by Session Id
 
-`sessionDetailStore` holds `{ sessionId, detail }` together and is read only
-through `selectSessionDetail(sessionId)`, which returns the detail solely when
-the id matches. Both halves exist for the same instant: the route changes, so the
-open session's id changes immediately, but its snapshot is a round trip behind.
-A store holding the detail alone would spend that instant answering the new
-session's name with the previous session's model and effort — and nothing about
-the value would reveal it. Keeping the id beside the data turns that instant into
-`null`, which is the truth: nothing is known about this session yet.
+`sessionDetailStore` holds `{ sessionId, detail, status }` together and is read
+only through `selectSessionDetail(sessionId)` / `selectSessionDetailStatus(...)`,
+which answer solely when the id matches. Both halves exist for the same instant:
+the route changes, so the open session's id changes immediately, but its snapshot
+is a round trip behind. A store holding the detail alone would spend that instant
+answering the new session's name with the previous session's model and effort —
+and nothing about the value would reveal it. Keeping the id beside the data turns
+that instant into `null`, which is the truth: nothing is known about this session
+yet.
+
+The same instant is why `status` is keyed the same way, and it matters more than
+the detail does: `missing` is what the app shell redirects off, so a verdict
+about the session just left, read under the id of the one just opened, would
+navigate the user away from a session that is perfectly fine. Asked about any
+other id, the store says `loading`.
 
 That the store holds exactly one session is not a cache decision, it is the
 subject. One session is open at a time; this is what is on screen, not a record
@@ -615,20 +778,32 @@ local handlers must go with it; leaving them would be the same leak described in
 in the other direction.
 
 The hook flag answers what happens *after* the switch, and the answer is
-nothing, because the switch takes the session with it. `ChatPanel` holds this
+nothing, because the switch takes the session with it. `AppShell` holds this
 subscription: settings and fork origin are one snapshot of the session itself,
-so one holder fills the store and everything below it — `useChatMessages`
-included — reads from there. The panel passes `isSessionResolved` as that
-subscription's `enabled`, the same flag that gates the chat subscription, so by
-the time the new worktree is bound both have already ended. Resubscribing would
-ask the new worktree about a session id it has never heard of, and buy a
-"session not found" for it. The session the user lands on subscribes on its own
-once the new list resolves it.
+so one holder fills the store and everything below it — `ChatPanel` and
+`useChatMessages` included — reads from there. The shell passes `canLoadSession`
+as that subscription's `enabled` — the connection is bound to the worktree the
+URL names and its session list has landed — and that drops at the start of a
+switch just as the chat subscription's `isSessionResolved` does, so by the time
+the new worktree is bound both have already ended. Resubscribing would ask the
+new worktree about a session id it has never heard of, and buy a "session not
+found" for it. The session the user lands on subscribes on its own once the new
+worktree's list has landed.
+
+**Why the shell and not the panel, which is where it used to live.** Whether the
+open session exists is this subscription's answer to give
+([above](#what-the-client-gives-up-by-letting-the-server-filter)), and the shell
+does not mount the panel until it knows. Gating it on `isSessionResolved` inside
+the panel — which was the arrangement, and was sound while the session list
+could still be asked — deadlocks every session the list has no row for: the
+subscription that would resolve it sits behind the resolution. `canLoadSession`
+is the weaker flag that breaks the cycle, and it is weaker in exactly one way:
+it does not ask whether the session exists.
 
 ### Why the Controls Wait for the Session to Describe Itself
 
 Until the first `session.detail` snapshot arrives, `useChatMessages` — reading
-the store the panel's subscription fills — reports placeholder settings; they
+the store the shell's subscription fills — reports placeholder settings; they
 are type fillers, not claims, and `isSessionDetailLoaded` is what says so.
 `ChatPanel` combines it into
 `hasSessionSettings = isSessionResolved && isSessionDetailLoaded` and passes it

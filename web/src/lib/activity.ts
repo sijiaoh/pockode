@@ -240,9 +240,12 @@ export function deriveActivity(
  * business in a list that cannot act on it. Withholding the work unless it is
  * active makes those three leaves unreachable by construction.
  *
- * The lookup is always available: the work list is global and survives worktree
- * switches, while the session list is scoped to one worktree — so every session
- * on screen has its work in the store, never the other way round.
+ * The caller looks the work up by the id its row carries, never by scanning for
+ * a work that names the session: which sessions belong to work is the server's
+ * answer now (docs/code/subscription-system.md#which-sessions-belong-to-work),
+ * and the `wait` is the one thing a row still asks the work list for. So a work
+ * the store has not paged in costs the row its `wait` and nothing else — it is
+ * still in the right list and still says what its own turn is doing.
  */
 export function sessionActivity(
 	turn: SessionTurn | undefined,

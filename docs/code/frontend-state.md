@@ -44,8 +44,8 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | Store | Purpose | Key Pattern |
 |-------|---------|-------------|
 | wsStore | WebSocket, RPC, subscriptions | Single hub for all communication |
-| sessionStore | Chat session list | State/Actions interface split |
-| sessionDetailStore | The open session's own metadata | One session at a time, read through a selector that checks whose it is |
+| sessionStore | Chat session list, as the server narrowed it | State/Actions interface split; an absence in it is not proof a session is gone ([why](subscription-system.md#what-the-client-gives-up-by-letting-the-server-filter)) |
+| sessionDetailStore | The open session's own metadata, and whether it exists at all | One session at a time, read through a selector that checks whose it is |
 | workStore | Work list rows | State/Actions interface split |
 | agentRoleStore | AI roles | State/Actions interface split |
 | agentOptionsStore | Selectable models and effort levels per agent | Fetched once per connection, not subscribed |

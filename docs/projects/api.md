@@ -120,7 +120,7 @@ needs:
 | `parent_id` | builds that tree; also walks a work up to its root |
 | `agent_role_id` | the role name shown on the row |
 | `title`, `status` | the row itself |
-| `session_id` | the row's **Chat** shortcut, and how the session list learns which sessions belong to work |
+| `session_id` | the row's **Chat** shortcut |
 | `worktree` | the row's worktree badge (the list spans every worktree) |
 | `updated_at` | orders the closed group |
 
@@ -133,6 +133,19 @@ which carries the full `Work`.
 The narrowing lives in one place, `rpc.NewWorkListItem`, so that what a row
 carries is decided once rather than at each producer. `rpc.NewSessionListItem`
 does the same for the session list, for the same reason.
+
+Nothing on the session side reads this list to find out which of its sessions
+belong to work. Both of a session's subscriptions carry the relation themselves,
+derived from `Work.SessionID` and stored on neither side:
+
+| Where | Field | Why it is there |
+|-------|-------|-----------------|
+| `SessionListItem` | `work_id` | the row's link to the work page, and what `exclude_work_sessions` drops rows by |
+| `SessionDetail` (`session.detail.subscribe`) | `work_id` | the open session's own link — the filter above hides exactly the sessions that have one, so the open session often has no row to read it off |
+
+Why the relation is resolved on this side rather than inverted out of the work
+list by the client is in
+[code/subscription-system.md](../code/subscription-system.md#which-sessions-belong-to-work).
 
 ### `work.start` Atomicity
 
