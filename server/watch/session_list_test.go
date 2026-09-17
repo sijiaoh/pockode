@@ -9,6 +9,7 @@ import (
 
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/work"
 )
 
 type mockSessionStore struct {
@@ -122,9 +123,9 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 			{ID: "sess-2", Title: "Session 2"},
 		},
 	}
-	w := NewSessionListWatcher(store)
+	w := NewSessionListWatcher(store, nil)
 
-	sessions, err := w.Subscribe("client-1", nil)
+	sessions, err := w.Subscribe("client-1", nil, SessionListFilter{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -148,9 +149,9 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 
 func TestSessionListWatcher_Unsubscribe(t *testing.T) {
 	store := &mockSessionStore{}
-	w := NewSessionListWatcher(store)
+	w := NewSessionListWatcher(store, nil)
 
-	w.Subscribe("client-1", nil)
+	w.Subscribe("client-1", nil, SessionListFilter{})
 
 	if !w.HasSubscriptions() {
 		t.Error("expected HasSubscriptions to be true")
@@ -165,7 +166,7 @@ func TestSessionListWatcher_Unsubscribe(t *testing.T) {
 
 func TestSessionListWatcher_OnSessionChange_NoSubscribers(t *testing.T) {
 	store := &mockSessionStore{}
-	w := NewSessionListWatcher(store)
+	w := NewSessionListWatcher(store, nil)
 
 	// Should not panic
 	w.OnSessionChange(session.SessionChangeEvent{
@@ -176,7 +177,7 @@ func TestSessionListWatcher_OnSessionChange_NoSubscribers(t *testing.T) {
 
 func TestSessionListWatcher_ListenerRegistered(t *testing.T) {
 	store := &mockSessionStore{}
-	w := NewSessionListWatcher(store)
+	w := NewSessionListWatcher(store, nil)
 
 	if !store.hasListener(w) {
 		t.Error("expected watcher to be registered as listener")
@@ -185,7 +186,7 @@ func TestSessionListWatcher_ListenerRegistered(t *testing.T) {
 
 func TestSessionListWatcher_OnSessionChange_AfterStop(t *testing.T) {
 	store := &mockSessionStore{}
-	w := NewSessionListWatcher(store)
+	w := NewSessionListWatcher(store, nil)
 	w.Start()
 	w.Stop()
 
@@ -198,9 +199,9 @@ func TestSessionListWatcher_OnSessionChange_AfterStop(t *testing.T) {
 
 func TestSessionListWatcher_Subscribe_ListError(t *testing.T) {
 	store := &mockSessionStoreWithError{err: errors.New("list failed")}
-	w := NewSessionListWatcher(store)
+	w := NewSessionListWatcher(store, nil)
 
-	_, err := w.Subscribe("client-1", nil)
+	_, err := w.Subscribe("client-1", nil, SessionListFilter{})
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -212,7 +213,7 @@ func TestSessionListWatcher_Subscribe_ListError(t *testing.T) {
 
 func TestSessionListWatcher_HandleProcessStateChange_NoSubscribers(t *testing.T) {
 	store := &mockSessionStore{}
-	w := NewSessionListWatcher(store)
+	w := NewSessionListWatcher(store, nil)
 
 	// Should not panic when no subscribers
 	w.HandleProcessStateChange(process.StateChangeEvent{
@@ -246,7 +247,7 @@ func (r *recordingSessionStore) ApplyTurn(_ context.Context, _ string, in sessio
 // These two lock that down from the two sides it used to be wrong on.
 func TestHandleProcessStateChange_MarksUnreadAndNothingElse(t *testing.T) {
 	store := &recordingSessionStore{}
-	w := NewSessionListWatcher(store)
+	w := NewSessionListWatcher(store, nil)
 
 	w.HandleProcessStateChange(process.StateChangeEvent{
 		SessionID: "sess-1",
@@ -265,7 +266,7 @@ func TestHandleProcessStateChange_RunningAndEndedTouchNothing(t *testing.T) {
 	for _, state := range []process.ProcessState{process.ProcessStateRunning, process.ProcessStateEnded} {
 		t.Run(string(state), func(t *testing.T) {
 			store := &recordingSessionStore{}
-			w := NewSessionListWatcher(store)
+			w := NewSessionListWatcher(store, nil)
 
 			w.HandleProcessStateChange(process.StateChangeEvent{SessionID: "sess-1", State: state})
 
@@ -289,12 +290,13 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 	w := &SessionListWatcher{
 		BaseWatcher: NewBaseWatcher(),
 		store:       store,
-		eventCh:     make(chan session.SessionChangeEvent, 1),
+		eventCh:     make(chan sessionListEvent, 1),
+		works:       newSessionWorkIndex(nil),
 	}
 	store.AddOnChangeListener(w)
 
 	notifier := &captureNotifier{}
-	w.Subscribe("client-1", notifier)
+	w.Subscribe("client-1", notifier, SessionListFilter{})
 
 	// Simulate the dirty flag being set (as if events were dropped)
 	w.dirty.Store(true)
@@ -303,10 +305,10 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 	defer w.Stop()
 
 	// Send a single event — eventLoop sees dirty=true and sends sync instead
-	w.eventCh <- session.SessionChangeEvent{
+	w.eventCh <- sessionListEvent{session: &session.SessionChangeEvent{
 		Op:      session.OperationUpdate,
 		Session: session.SessionMeta{ID: "sess-1"},
-	}
+	}}
 
 	waitFor(t, func() bool { return notifier.count() >= 1 })
 
@@ -337,9 +339,9 @@ func TestHandleProcessStateChange_PushesNoRowOfItsOwn(t *testing.T) {
 	store := &mockSessionStore{
 		sessions: []session.SessionMeta{{ID: "sess-1", Title: "Session 1"}},
 	}
-	w := NewSessionListWatcher(store)
+	w := NewSessionListWatcher(store, nil)
 	notifier := &captureNotifier{}
-	if _, err := w.Subscribe("client-1", notifier); err != nil {
+	if _, err := w.Subscribe("client-1", notifier, SessionListFilter{}); err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
 
@@ -368,9 +370,9 @@ func TestSessionListWatcher_RowCarriesTheStoredTurn(t *testing.T) {
 		},
 	}
 	store := &mockSessionStore{sessions: []session.SessionMeta{blocked}}
-	w := NewSessionListWatcher(store)
+	w := NewSessionListWatcher(store, nil)
 	notifier := &captureNotifier{}
-	if _, err := w.Subscribe("client-1", notifier); err != nil {
+	if _, err := w.Subscribe("client-1", notifier, SessionListFilter{}); err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
 	w.Start()
@@ -393,5 +395,355 @@ func TestSessionListWatcher_RowCarriesTheStoredTurn(t *testing.T) {
 	if len(params.Session.Turn.Blockers) != 1 ||
 		params.Session.Turn.Blockers[0].RequestID != "req-1" {
 		t.Errorf("row lost the blocker the card is answered through: %+v", params.Session.Turn)
+	}
+}
+
+// stubWorkSource is the work index as the session list reads it: session id →
+// work id, and nothing else.
+type stubWorkSource struct {
+	works   []work.Work
+	listErr error
+}
+
+func (s *stubWorkSource) List() ([]work.Work, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.works, nil
+}
+
+func (s *stubWorkSource) FindBySessionID(sessionID string) (work.Work, bool, error) {
+	for _, w := range s.works {
+		if w.SessionID == sessionID {
+			return w, true, nil
+		}
+	}
+	return work.Work{}, false, nil
+}
+
+// failingWorkSource fails the lookup for one session, which is the read a
+// notification for that session depends on. Fixed at construction: the watcher
+// reads it from its own goroutine.
+type failingWorkSource struct {
+	*stubWorkSource
+	failFor string
+}
+
+func (f *failingWorkSource) FindBySessionID(sessionID string) (work.Work, bool, error) {
+	if sessionID == f.failFor {
+		return work.Work{}, false, errors.New("index unreadable")
+	}
+	return f.stubWorkSource.FindBySessionID(sessionID)
+}
+
+func sessionsWithOneWorkSession() (*mockSessionStore, *stubWorkSource) {
+	store := &mockSessionStore{
+		sessions: []session.SessionMeta{
+			{ID: "sess-chat", Title: "Chat"},
+			{ID: "sess-work", Title: "Work"},
+		},
+	}
+	works := &stubWorkSource{
+		works: []work.Work{{ID: "work-1", SessionID: "sess-work"}},
+	}
+	return store, works
+}
+
+// A row says which work item its session runs. That is what a client used to
+// need the whole work list to find out, which is why it could not be right
+// until the whole of that list had arrived.
+func TestSessionListWatcher_Subscribe_RowsCarryTheirWorkID(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	w := NewSessionListWatcher(store, works)
+
+	items, err := w.Subscribe("client-1", nil, SessionListFilter{})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	byID := map[string]string{}
+	for _, item := range items {
+		byID[item.ID] = item.WorkID
+	}
+	if byID["sess-work"] != "work-1" {
+		t.Errorf("work session's row work_id = %q, want %q", byID["sess-work"], "work-1")
+	}
+	if byID["sess-chat"] != "" {
+		t.Errorf("plain chat session's row carries work_id %q, want none", byID["sess-chat"])
+	}
+}
+
+func TestSessionListWatcher_Subscribe_ExcludeWorkSessions(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	w := NewSessionListWatcher(store, works)
+
+	items, err := w.Subscribe("client-1", nil, SessionListFilter{ExcludeWorkSessions: true})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	if len(items) != 1 || items[0].ID != "sess-chat" {
+		t.Fatalf("expected only the plain chat session, got %+v", items)
+	}
+}
+
+// The filter is refused rather than half-applied: a work index that cannot be
+// read is not the same as a project with no work in it, and answering as if it
+// were would show the user every task session at once.
+func TestSessionListWatcher_Subscribe_WorkIndexError(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	works.listErr = errors.New("index unreadable")
+	w := NewSessionListWatcher(store, works)
+
+	if _, err := w.Subscribe("client-1", nil, SessionListFilter{ExcludeWorkSessions: true}); err == nil {
+		t.Error("expected an error")
+	}
+	if w.HasSubscriptions() {
+		t.Error("expected no subscription left behind after the error")
+	}
+}
+
+// Two subscribers of the same list, one of which asked not to see work
+// sessions: the row is news to one and must not exist for the other.
+func TestSessionListWatcher_Change_IsFilteredPerSubscriber(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	w := NewSessionListWatcher(store, works)
+	all := &captureNotifier{}
+	plain := &captureNotifier{}
+	if _, err := w.Subscribe("all", all, SessionListFilter{}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if _, err := w.Subscribe("plain", plain, SessionListFilter{ExcludeWorkSessions: true}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	w.Start()
+	defer w.Stop()
+
+	w.OnSessionChange(session.SessionChangeEvent{
+		Op:      session.OperationUpdate,
+		Session: session.SessionMeta{ID: "sess-work", Title: "Work"},
+	})
+
+	waitFor(t, func() bool { return all.count() >= 1 && plain.count() >= 1 })
+
+	var kept sessionListChangedParams
+	if err := json.Unmarshal(all.last(), &kept); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if kept.Session == nil || kept.Session.WorkID != "work-1" {
+		t.Errorf("unfiltered subscriber got %+v, want the row with its work id", kept)
+	}
+
+	var dropped sessionListChangedParams
+	if err := json.Unmarshal(plain.last(), &dropped); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if dropped.Operation != string(session.OperationDelete) || dropped.SessionID != "sess-work" {
+		t.Errorf("filtering subscriber got %+v, want the row retracted", dropped)
+	}
+}
+
+// A work item changing is the only thing that can put a work id on a row: the
+// session itself does not move when the relation does.
+func TestSessionListWatcher_HandleWorkChange_PushesTheSessionsRow(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	w := NewSessionListWatcher(store, works)
+	notifier := &captureNotifier{}
+	if _, err := w.Subscribe("client-1", notifier, SessionListFilter{}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	w.Start()
+	defer w.Stop()
+
+	w.HandleWorkChange(work.ChangeEvent{
+		Op:   work.OperationUpdate,
+		Work: work.Work{ID: "work-1", SessionID: "sess-work"},
+	})
+
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+
+	var params sessionListChangedParams
+	if err := json.Unmarshal(notifier.last(), &params); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if params.Session == nil || params.Session.ID != "sess-work" {
+		t.Fatalf("expected the work's session row, got %+v", params)
+	}
+	if params.Session.WorkID != "work-1" {
+		t.Errorf("row work_id = %q, want %q", params.Session.WorkID, "work-1")
+	}
+}
+
+// A deleted work leaves its session — for as long as it is still there — a
+// plain chat session, so the row is rebuilt from the store rather than from the
+// event, which still carries the relation as it was.
+func TestSessionListWatcher_HandleWorkChange_DeleteClearsTheRowsWorkID(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	w := NewSessionListWatcher(store, works)
+	notifier := &captureNotifier{}
+	if _, err := w.Subscribe("client-1", notifier, SessionListFilter{}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	w.Start()
+	defer w.Stop()
+
+	deleted := works.works[0]
+	works.works = nil
+
+	w.HandleWorkChange(work.ChangeEvent{Op: work.OperationDelete, Work: deleted})
+
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+
+	var params sessionListChangedParams
+	if err := json.Unmarshal(notifier.last(), &params); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if params.Session == nil || params.Session.WorkID != "" {
+		t.Errorf("expected a row with no work id, got %+v", params.Session)
+	}
+}
+
+// A work is given its session id before that session exists: the claim happens
+// first, the session is created after. There is no row to push yet, and the
+// session's own create event carries the relation.
+func TestSessionListWatcher_HandleWorkChange_IgnoresWorkWithoutASession(t *testing.T) {
+	for _, event := range []work.ChangeEvent{
+		{Op: work.OperationCreate, Work: work.Work{ID: "work-2"}},
+		{Op: work.OperationUpdate, Work: work.Work{ID: "work-3", SessionID: "sess-missing"}},
+	} {
+		store, works := sessionsWithOneWorkSession()
+		w := NewSessionListWatcher(store, works)
+		notifier := &captureNotifier{}
+		if _, err := w.Subscribe("client-1", notifier, SessionListFilter{}); err != nil {
+			t.Fatalf("subscribe: %v", err)
+		}
+		w.Start()
+
+		w.HandleWorkChange(event)
+		// Nothing arrives for the event above, so a second event that does notify
+		// is what says the first has been handled — the loop takes them in order.
+		w.OnSessionChange(session.SessionChangeEvent{
+			Op:      session.OperationUpdate,
+			Session: session.SessionMeta{ID: "sess-chat"},
+		})
+
+		waitFor(t, func() bool { return notifier.count() >= 1 })
+		if notifier.count() != 1 {
+			t.Errorf("work %+v notified a row of its own: %s", event.Work, notifier.last())
+		}
+		w.Stop()
+	}
+}
+
+func TestSessionListWatcher_Sync_IsFilteredPerSubscriber(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	w := &SessionListWatcher{
+		BaseWatcher: NewBaseWatcher(),
+		store:       store,
+		works:       newSessionWorkIndex(works),
+		eventCh:     make(chan sessionListEvent, 1),
+	}
+	store.AddOnChangeListener(w)
+
+	all := &captureNotifier{}
+	plain := &captureNotifier{}
+	w.Subscribe("all", all, SessionListFilter{})
+	w.Subscribe("plain", plain, SessionListFilter{ExcludeWorkSessions: true})
+
+	w.dirty.Store(true)
+	w.Start()
+	defer w.Stop()
+
+	w.eventCh <- sessionListEvent{session: &session.SessionChangeEvent{
+		Op:      session.OperationUpdate,
+		Session: session.SessionMeta{ID: "sess-chat"},
+	}}
+
+	waitFor(t, func() bool { return all.count() >= 1 && plain.count() >= 1 })
+
+	var full, filtered sessionListSyncParams
+	if err := json.Unmarshal(all.last(), &full); err != nil {
+		t.Fatalf("unmarshal sync params: %v", err)
+	}
+	if err := json.Unmarshal(plain.last(), &filtered); err != nil {
+		t.Fatalf("unmarshal sync params: %v", err)
+	}
+	if len(full.Sessions) != 2 {
+		t.Errorf("unfiltered sync carried %d sessions, want 2", len(full.Sessions))
+	}
+	if len(filtered.Sessions) != 1 || filtered.Sessions[0].ID != "sess-chat" {
+		t.Errorf("filtered sync carried %+v, want only the plain chat session", filtered.Sessions)
+	}
+}
+
+// A work index that cannot be read is not news about the session, and there is
+// nothing truthful to say about it: answering "belongs to no work" would put a
+// task session into the list of every subscriber that asked not to see one.
+func TestSessionListWatcher_Change_SkipsWhenTheWorkIndexCannotBeRead(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	failing := &failingWorkSource{stubWorkSource: works, failFor: "sess-work"}
+	w := NewSessionListWatcher(store, failing)
+	notifier := &captureNotifier{}
+	if _, err := w.Subscribe("client-1", notifier, SessionListFilter{ExcludeWorkSessions: true}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	w.Start()
+	defer w.Stop()
+
+	w.OnSessionChange(session.SessionChangeEvent{
+		Op:      session.OperationUpdate,
+		Session: session.SessionMeta{ID: "sess-work", Title: "Work"},
+	})
+	// Nothing arrives for that one, so an event whose lookup works is the barrier
+	// saying it has been handled — the loop takes them in order.
+	w.OnSessionChange(session.SessionChangeEvent{
+		Op:      session.OperationUpdate,
+		Session: session.SessionMeta{ID: "sess-chat", Title: "Chat"},
+	})
+
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+
+	var params sessionListChangedParams
+	if err := json.Unmarshal(notifier.last(), &params); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if notifier.count() != 1 || params.Session == nil || params.Session.ID != "sess-chat" {
+		t.Errorf("the unreadable lookup put something on the wire: %d notifications, all %s",
+			notifier.count(), notifier.all())
+	}
+}
+
+// A running work session is touched several times a turn. The first push tells
+// a filtering subscriber to drop the row in case it still has one; the rest
+// cannot put back a row that has already gone, so they are not sent at all —
+// while the subscriber that wants those rows keeps getting every one of them.
+func TestSessionListWatcher_Change_RetractsAWorkSessionOnce(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	w := NewSessionListWatcher(store, works)
+	all := &captureNotifier{}
+	plain := &captureNotifier{}
+	if _, err := w.Subscribe("all", all, SessionListFilter{}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if _, err := w.Subscribe("plain", plain, SessionListFilter{ExcludeWorkSessions: true}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	w.Start()
+	defer w.Stop()
+
+	for range 3 {
+		w.OnSessionChange(session.SessionChangeEvent{
+			Op:      session.OperationUpdate,
+			Session: session.SessionMeta{ID: "sess-work", Title: "Work"},
+		})
+	}
+
+	waitFor(t, func() bool { return all.count() >= 3 })
+
+	if got := plain.count(); got != 1 {
+		t.Errorf("filtering subscriber was sent %d notifications, want 1: %s", got, plain.all())
+	}
+	if got := all.count(); got != 3 {
+		t.Errorf("unfiltered subscriber was sent %d notifications, want 3", got)
 	}
 }

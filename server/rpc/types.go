@@ -348,12 +348,25 @@ type FSSubscribeParams struct {
 // every change, and a model chosen in one session is not news to a client
 // reading another.
 //
-// Two fields appear on both sides, and neither can drift: Turn and ForkedFrom
-// are both read straight off the stored SessionMeta, so the list and the detail
-// are two narrowings of one record rather than two accounts of it.
+// Three fields appear on both sides, and none of them can drift: Turn and
+// ForkedFrom are both read straight off the stored SessionMeta, so the list and
+// the detail are two narrowings of one record rather than two accounts of it,
+// and WorkID is resolved on both sides from work.Work.SessionID, which is the
+// relation itself.
 type SessionListItem struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
+	// WorkID names the work item this session runs, absent for a plain chat
+	// session. It is the row's link to the work page, and the only thing that
+	// tells a client the session belongs to work at all.
+	//
+	// Derived, never stored: work.Work.SessionID is the relation, and a copy of
+	// it on the session would be a second one — left behind by every rollback
+	// and every deletion that missed it.
+	//
+	// SessionDetail carries the same field, for the session a client has open,
+	// which under the "hide task sessions" filter has no row here to read.
+	WorkID string `json:"work_id,omitempty"`
 	// UpdatedAt is the row's subtitle, and what the list is ordered by.
 	UpdatedAt time.Time `json:"updated_at"`
 	// Turn is what the session is doing, whole: the client derives everything a
@@ -370,15 +383,37 @@ type SessionListItem struct {
 // NewSessionListItem builds the row for a session. Every producer of a row goes
 // through here so that narrowing SessionMeta down to a row is decided in one
 // place.
-func NewSessionListItem(meta session.SessionMeta) SessionListItem {
+//
+// workID is the work item the session runs, empty for a plain chat session. It
+// is passed in rather than looked up here because resolving it reads the work
+// layer — see watch.SessionListWatcher.
+func NewSessionListItem(meta session.SessionMeta, workID string) SessionListItem {
 	return SessionListItem{
 		ID:         meta.ID,
+		WorkID:     workID,
 		Title:      meta.Title,
 		UpdatedAt:  meta.UpdatedAt,
 		Turn:       meta.Turn,
 		Unread:     meta.Unread,
 		ForkedFrom: meta.ForkedFrom,
 	}
+}
+
+// SessionListSubscribeParams is a session list subscription, plus the narrowing
+// that holds for as long as it lives: the snapshot it returns and every
+// notification it is sent afterwards obey the same filter.
+type SessionListSubscribeParams struct {
+	// ID is the subscription id; see SubscribeParams.
+	ID string `json:"id"`
+	// ExcludeWorkSessions drops every session that belongs to a work item.
+	//
+	// The filter is the server's because a client cannot do it: deciding it
+	// client-side means holding the whole work list, which makes the session
+	// list wrong for as long as that list is incomplete — and a paged work list
+	// is never complete.
+	//
+	// Absent means "send everything", which is what this list always was.
+	ExcludeWorkSessions bool `json:"exclude_work_sessions,omitempty"`
 }
 
 type SessionListSubscribeResult struct {
@@ -393,8 +428,32 @@ type SessionDetailSubscribeParams struct {
 	SessionID string `json:"session_id"`
 }
 
+// SessionDetail is the whole of one session's stored metadata plus the one
+// thing that is not stored on it: the work item it runs.
+//
+// Embedded rather than copied field by field, so that a field added to
+// SessionMeta reaches the client without being listed again here — the detail
+// is deliberately everything the list narrows away, and a narrowing here would
+// leave a session's own settings with no subscription that carries them.
+type SessionDetail struct {
+	session.SessionMeta
+	// WorkID names the work item this session runs, absent for a plain chat
+	// session. Same field, same source and same rule as SessionListItem.WorkID:
+	// derived from work.Work.SessionID, never stored on the session.
+	//
+	// It is on both because the list and the detail answer for different
+	// sessions: the sidebar's filter hides exactly the work sessions, so the one
+	// session whose work id a client most needs — the open one — is the one with
+	// no row to read it off.
+	WorkID string `json:"work_id,omitempty"`
+}
+
+func NewSessionDetail(meta session.SessionMeta, workID string) SessionDetail {
+	return SessionDetail{SessionMeta: meta, WorkID: workID}
+}
+
 type SessionDetailSubscribeResult struct {
-	Session session.SessionMeta `json:"session"`
+	Session SessionDetail `json:"session"`
 }
 
 // Chat messages watch (subscription for chat messages)
@@ -603,10 +662,12 @@ type WorkReopenParams struct {
 //
 // Several fields that stayed are not drawn on the row they arrive on. ParentID
 // and Status build the story/task tree and answer whether a work's worktree is
-// still free to change, which is what decides if its badge may be shown at all;
-// SessionID is how the session list learns which of its sessions belong to work.
-// Both rules need the *whole* list to resolve one item, so they can only be
+// still free to change, which is what decides if its badge may be shown at all.
+// That rule needs the *whole* list to resolve one item, so it can only be
 // answered here (web/src/lib/workStore.ts, docs/projects/api.md#work-list-rows-vs-work-detail).
+// SessionID is the row's Chat shortcut and nothing else now: the session list
+// carries its own work id (SessionListItem.WorkID), so it no longer reads this
+// list to find out which of its sessions belong to work.
 type WorkListItem struct {
 	ID          string          `json:"id"`
 	Type        work.WorkType   `json:"type"`

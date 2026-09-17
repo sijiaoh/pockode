@@ -334,6 +334,10 @@ Flags:
 	})
 	worktreeManager := worktree.NewManager(registry, agents, dataDir, leaseBudgets)
 	worktreeManager.SetWorkEngine(workEngine)
+	// A session list row names the work item its session runs: the store is where
+	// that is read, and the listener is what keeps a row up with it.
+	worktreeManager.SetWorkStore(workStore)
+	workStore.AddOnChangeListener(worktreeManager)
 	// Route the engine's follow-up messages to each work's own worktree, and its
 	// terminations to the process manager of that worktree.
 	workEngine.SetSenderResolver(worktreeManager)
