@@ -2,17 +2,16 @@
 package claude
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -498,12 +497,22 @@ func (s *cliSession) writeStdin(data []byte) error {
 }
 
 func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, usage *usageObserver, decline declineFunc, store attachments.Store) {
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner := agent.NewLineScanner(stdout, agent.MaxLineBytes)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
+			continue
+		}
+
+		if scanner.Truncated() {
+			for _, ev := range oversizedLineEvents(log, line, scanner.Len(), decline) {
+				select {
+				case events <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
 			continue
 		}
 
@@ -536,20 +545,88 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 
 	if err := scanner.Err(); err != nil {
 		log.Error("stdout scanner error", "error", err)
-		msg := "Some output could not be read"
-		code := "scanner_error"
-		if errors.Is(err, bufio.ErrTooLong) {
-			msg = "Some output was too large to display"
-			code = "scanner_buffer_overflow"
-		}
 		select {
 		case events <- agent.WarningEvent{
-			Message: msg,
-			Code:    code,
+			Message: "Some output could not be read",
+			Code:    "scanner_error",
 		}:
 		case <-ctx.Done():
 		}
 	}
+}
+
+// What can still be read out of a truncated line. Regexps rather than a JSON
+// decode because the line stops mid-value and no decoder will take it; the CLI
+// writes compact JSON, and each of these fields sits ahead of the payload that
+// did the overflowing, so they survive in the head.
+//
+// A bare quote is what keeps this from matching prose that merely talks about
+// these fields: inside a JSON string value every quote arrives escaped as \",
+// which none of these patterns accept.
+var (
+	controlRequestPattern = regexp.MustCompile(`"type"\s*:\s*"control_request"`)
+	toolResultPattern     = regexp.MustCompile(`"type"\s*:\s*"tool_result"`)
+	requestIDPattern      = regexp.MustCompile(`"request_id"\s*:\s*"([^"]+)"`)
+	toolUseIDPattern      = regexp.MustCompile(`"tool_use_id"\s*:\s*"([^"]+)"`)
+)
+
+// oversizedLineEvents reports a CLI line too large to buffer, and answers in
+// its place whatever was waiting on it.
+//
+// The warning is for the user, who is owed an explanation for the gap in their
+// transcript. What follows is for the turn: the two frames that are somebody's
+// only ending leave that somebody waiting forever if they simply vanish.
+func oversizedLineEvents(log *slog.Logger, head []byte, size int, decline declineFunc) []agent.AgentEvent {
+	log.Error("dropped a CLI line too large to buffer", "lineLength", size, "limit", agent.MaxLineBytes)
+
+	warn := func(format string, args ...any) []agent.AgentEvent {
+		return []agent.AgentEvent{agent.WarningEvent{
+			Message: fmt.Sprintf(format, args...),
+			Code:    "scanner_buffer_overflow",
+		}}
+	}
+
+	// A control_request is the CLI blocked on an answer — a permission prompt,
+	// a question. Unanswered, it never reads anything else and the turn stops
+	// dead, which is why an unreadable one is declined rather than dropped
+	// (the same call parseControlRequest makes for a request it cannot parse).
+	if controlRequestPattern.Match(head) {
+		m := requestIDPattern.FindSubmatch(head)
+		if m == nil {
+			log.Error("cannot answer an unreadable control request, the turn may hang")
+			return warn("A request from Claude was too large to read (%d bytes); the turn may not continue", size)
+		}
+		log.Warn("declining a control request too large to read", "requestId", string(m[1]))
+		decline(string(m[1]), "Pockode could not read this request: it was too large")
+		return warn("A request from Claude was too large to read (%d bytes) and was declined", size)
+	}
+
+	msg := fmt.Sprintf("Some output was too large to display (%d bytes) and was skipped", size)
+	events := warn("%s", msg)
+
+	// A tool_result is a call's only ending, and the lost one is not coming
+	// back, so the call is answered as failed instead of spinning forever.
+	//
+	// Guarded on the block type rather than on the id alone: tool_use_id also
+	// rides on frames that say nothing about a call being over — a progress
+	// frame carrying a megabyte of output is one — and answering on one of
+	// those would end a call that is still running.
+	//
+	// Every id in the head, not the first: parallel calls come back as one user
+	// message holding a tool_result per call, and the whole line is gone, so
+	// each of them lost its ending. Taking only the first would fail a call
+	// whose result was readable and leave the one that actually overflowed —
+	// the last block in the head — spinning.
+	if toolResultPattern.Match(head) {
+		for _, m := range toolUseIDPattern.FindAllSubmatch(head, -1) {
+			events = append(events, agent.ToolResultEvent{
+				ToolUseID:  string(m[1]),
+				ToolResult: msg,
+				IsError:    true,
+			})
+		}
+	}
+	return events
 }
 
 // --- Resume state ---

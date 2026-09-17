@@ -110,6 +110,55 @@ func TestReadJSONL_SkipsOversizedLine(t *testing.T) {
 	}
 }
 
+// A record larger than one read still has to come back whole. The reader
+// buffers far less than the ceiling, so anything past a single read is
+// assembled across several — the path a multi-megabyte tool result takes, and
+// one no line under the old buffer-the-whole-ceiling reader ever went down.
+func TestReadJSONL_AssemblesALineLargerThanOneRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	big := fmt.Sprintf(`{"text":%q}`, strings.Repeat("x", 3*jsonlReadBuffer))
+	writeRaw(t, path, `{"n":0}`+"\n"+big+"\n"+`{"n":2}`+"\n")
+
+	records, stats, err := ReadJSONL(path, 4*jsonlReadBuffer)
+	if err != nil {
+		t.Fatalf("ReadJSONL failed: %v", err)
+	}
+	if stats.Damaged() {
+		t.Errorf("a record under the ceiling was reported damaged: %+v", stats)
+	}
+	if len(records) != 3 {
+		t.Fatalf("got %d records, want 3", len(records))
+	}
+	if string(records[1]) != big {
+		t.Errorf("the assembled record is %d bytes, want %d", len(records[1]), len(big))
+	}
+	if string(records[2]) != `{"n":2}` {
+		t.Errorf("reading did not resume after the long line, got %s", records[2])
+	}
+}
+
+// The same line once it is over the ceiling: assembly stops, and the reader
+// walks to the end of it rather than reading its tail as the next record.
+func TestReadJSONL_SkipsALineOversizedAcrossReads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	huge := fmt.Sprintf(`{"text":%q}`, strings.Repeat("x", 4*jsonlReadBuffer))
+	writeRaw(t, path, `{"n":0}`+"\n"+huge+"\n"+`{"n":2}`+"\n")
+
+	records, stats, err := ReadJSONL(path, 2*jsonlReadBuffer)
+	if err != nil {
+		t.Fatalf("ReadJSONL failed: %v", err)
+	}
+	if stats.Oversized != 1 || stats.Corrupted != 0 {
+		t.Errorf("stats = %+v, want exactly one oversized record", stats)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records around the oversized one, want 2", len(records))
+	}
+	if string(records[1]) != `{"n":2}` {
+		t.Errorf("reading did not resume after the oversized line, got %s", records[1])
+	}
+}
+
 func TestAppendJSONL_ConcurrentAppendsStayIntact(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.jsonl")
 

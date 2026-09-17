@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -265,9 +264,16 @@ func ReadStderr(stderr io.Reader, agentName string) <-chan string {
 			}
 			ch <- content.String()
 		}()
-		scanner := bufio.NewScanner(stderr)
+		// LineScanner rather than bufio.Scanner for the reason given there: a
+		// stack trace printed on one long line would otherwise stop the read
+		// for good, and this is the output that explains why the CLI died.
+		// Its own, much smaller ceiling: see MaxStderrLineBytes.
+		scanner := NewLineScanner(stderr, MaxStderrLineBytes)
 		for scanner.Scan() {
-			content.WriteString(scanner.Text())
+			content.Write(scanner.Bytes())
+			if scanner.Truncated() {
+				fmt.Fprintf(&content, " ... (%d more bytes on this line)", scanner.Len()-MaxStderrLineBytes)
+			}
 			content.WriteString("\n")
 		}
 		if err := scanner.Err(); err != nil {
