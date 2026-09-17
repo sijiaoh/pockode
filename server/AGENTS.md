@@ -192,6 +192,8 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `--git-user-email` | git时 | — | commit 邮箱 |
 | `--version` | | — | 输出版本号并退出 |
 
+四个 `*-timeout` 是同一张租约表的四行，不是四个独立开关：进程活多久完全由它所属 session 的 turn 状态决定，所以 `--idle-timeout=0` 只是关掉 idle 那一行，另外三行照常回收（要什么都不收得四个都设 0）。每个默认值为什么是这个数，见 [docs/lifecycle.md](../docs/lifecycle.md#process-a-lease-table)。
+
 上表为默认（server）模式。此外还有两个子命令（`flag.Parse()` 前分发，见 `main.go`）：
 
 - `pockode cluster` — 多项目节点编排模式，注册并按需启停多个项目，参数与实现见 [docs/cluster.md](../docs/cluster.md)

@@ -1,10 +1,10 @@
 # Lifecycle UI
 
 How the three-layer lifecycle (process → session → work) is presented to the
-user. The model itself — `TurnState`, leases, work `status` + `wait` — belongs to
-`docs/lifecycle.md`; this document is only the presentation layer, and it is
-written to be implemented from: every state has one glyph, one tone, one label
-and one rule for when its buttons exist.
+user. The model itself — `TurnState`, leases, work `status` + `wait` — is
+[lifecycle.md](lifecycle.md), and this document does not restate it: it is only
+the presentation layer, and it is written to be implemented from — every state
+has one glyph, one tone, one label and one rule for when its buttons exist.
 
 It replaces the presentation half of
 [work-system.md § One Vocabulary for Work Status](code/work-system.md#one-vocabulary-for-work-status)
@@ -214,7 +214,7 @@ the glyph and the dot.
 | Component | Shape | Used by |
 |---|---|---|
 | `ActivityIcon` | glyph only, `size-3.5` (`size-3` at `sm`) | work rows, session rows, group headers |
-| `ActivityBadge` | pill: glyph + label | work detail heading, story child rows on wide layouts |
+| `ActivityBadge` | pill: glyph + label | the work detail heading, which is the one surface with room for the word |
 | `ActivityDot` | 8px dot, warning, `aria-hidden` | ProjectTab, story rollup (§4) |
 
 `ActivityBadge` keeps `StatusBadge`'s existing shape — hue on the border, tint
@@ -265,11 +265,13 @@ is arriving is the one thing a spinner has always been honest about.
 ### 2.1 Session list row
 
 `SidebarListItem`'s `isRunning` / `needsInput` / `hasChanges` props become
-`activity: Activity` / `unread: boolean`. The `<output aria-label="AI
-responding">` spinner keeps its markup and becomes one branch of the indicator
-slot; every other leaf renders `ActivityIcon` with `aria-label` from
-`ACTIVITY_VIEW` (a 12px glyph reads as an indicator, not as an action, so it
-needs no hit area).
+`activity: Activity` / `unread: boolean`. The existing `<output>` spinner keeps
+its markup and becomes one branch of the indicator slot; every other leaf renders
+`ActivityIcon` (a 12px glyph reads as an indicator, not as an action, so it needs
+no hit area). Every `aria-label` in the table below, the spinner's included,
+comes from `ACTIVITY_VIEW` — the spinner is the one element here that had a
+hand-written label, and leaving it hand-written would have kept one row of the
+vocabulary outside the map that owns it.
 
 | Activity | Row indicator | aria |
 |---|---|---|
@@ -326,6 +328,11 @@ Expanded copy, verbatim:
 
 > Waiting on background tasks since 14:02. The agent resumes on its own when they
 > finish. Stopping ends the turn and loses the tasks.
+
+The clock is dropped rather than faked when `turn.since` is missing or
+unreadable — "Waiting on background tasks." and then the same two sentences. The
+two things the copy exists to say do not depend on the time, and a made-up one
+would be the only false thing on the line.
 
 No countdown to the 24h lease. A number the user cannot change, counting down to
 an outcome they would not recognise, is worse than the sentence above; the lease
@@ -394,11 +401,15 @@ aimed, and what they are about to lose depends on what is happening.
 | `stopped` | — | ✓ | — | — | if `session_id` | ✓ |
 | `closed` | — | — | — | ✓ | if `session_id` | — |
 
-Same table for the list and the detail page; the list renders the primary one
-icon-only (`StartButton`'s existing shape, extended to Restart) and the detail
-page renders labels in `BottomActionBar`. `Start` and `Restart` are the same
-control with two labels, as today — the label is the honest difference, since
-one starts a fresh session and the other resumes a kept one.
+Same table for the list and the detail page, out of one implementation
+(`primaryAction(status)`); only the shape differs with the room available. The
+detail page renders labels in `BottomActionBar`; a task row and a story's child
+rows render the button icon-only; a **story** row keeps the labelled chip Start
+has always had there, because its meta row has space for the word. Both shapes
+are held to the hit-area floors, by different halves of the rule (§10).
+`Start` and `Restart` are the same control
+with two labels, as today — the label is the honest difference, since one starts
+a fresh session and the other resumes a kept one.
 
 **Stop is shown for every `active` work, including `idle` and every blocked
 leaf.** Today it is hidden unless the status is one of three live values, which
@@ -515,12 +526,13 @@ A: React
 ```
 
 That is not politeness. The agent's own record of having asked is gone — a CLI
-resuming after its process died drops the dangling tool call when it rebuilds
-the API request, which was measured rather than assumed — so a bare "React"
-arrives as an answer to nothing and is answered as such. The question text comes
-from Pockode's own history, because the CLI's transcript cannot be relied on to
-hold it: a SIGKILL can land before even the message that raised the question is
-written.
+resuming after its process died drops the dangling tool call when it rebuilds the
+API request, which was measured rather than assumed
+([lifecycle.md](lifecycle.md#what-was-measured-rather-than-assumed)) — so a bare
+"React" arrives as an answer to nothing and is answered as such. The question text
+comes from Pockode's own history, because the CLI's transcript cannot be relied
+on to hold it: a SIGKILL can land before even the message that raised the
+question is written.
 
 The card itself records **nothing** afterwards. It stays `Expired` with no answer
 summary, and the answer is visible as the message directly below it. That is the
@@ -540,10 +552,18 @@ non-change.
 
 ### 5.2 An expired permission can only be a denial
 
-Chip `Expired`, muted, and the card is **read-only with no buttons at all** — its
-existing `pending` branch already gates the button row on `isPending`, so the
-only change is the banner. Glyph stays `X` muted, against the expired question's
-`CircleHelp` muted: one is still a question, the other is closed.
+The card is **read-only with no buttons at all** — its existing `pending` branch
+already gates the button row on `isPending`, so the only change is the banner.
+Glyph stays `X` muted, against the expired question's `CircleHelp` muted: one is
+still a question, the other is closed.
+
+**There is no `Expired` chip here**, unlike the question card, and that is a
+known gap rather than a shipped decision: a permission request is drawn as a tool
+row, whose one chip slot is already the tool's own summary, so the card has
+nowhere to put a state chip without giving every tool row a second slot. Expired
+and denied are told apart today by the glyph's colour — muted against error — as
+they were before this redesign. What this section owes the card — the banner
+that states the outcome — is there.
 
 | `reason` | Banner |
 |---|---|
@@ -589,7 +609,7 @@ Grouping is by `status` plus the single `needsUser` predicate — never by the f
 `Activity`. A list that regrouped on every phase change would reorder itself
 while being read. A work moving between *Needs you* and *Active* is the one
 movement worth the disruption, since it is the one the user is waiting for.
-"Needs you" is first, where today's order puts `in_progress` first: a list of
+"Needs you" is first, where the old status order put `in_progress` first: a list of
 work is a list of things to do, and the things needing a person come before the
 things running by themselves.
 
@@ -601,12 +621,23 @@ error for `stopped`, none otherwise (today: `needs_input`, `stopped`).
 ### 6.2 Detail page
 
 - Heading row: `ActivityBadge` beside `WorktreeBadge`, unchanged in layout.
-- **Under the badge, one muted line for a wait that has a reason.** For
-  `needs_message`: the agent's own `wait_reason` — this is the only place the
-  user can read *what* the agent wants, and today it is nowhere. For
-  `waiting_children`: "Waiting on {n} subtask(s)". For `background`: "Waiting on
-  a background task since {HH:MM}" with Open Chat as the way to see it.
-  Absent otherwise; no empty row.
+- **Under the badge, one muted line for the work's own `wait`.** For `user`: the
+  agent's own `wait_reason` verbatim — this is the only place in the app the user
+  can read *what* the agent wants, and before this it was nowhere ("Waiting for
+  your message." if the agent supplied none). For `child`: "Waiting for its
+  subtasks to finish." Absent otherwise; no empty row.
+
+  The line reads the **wait**, not the activity, and that is the reason
+  `background` gets no line of its own: a background wait is a blocker on the
+  session's turn rather than something the work declared, the badge above already
+  says `Background task`, and the place it can actually be looked at is the chat.
+  Repeating it here would mean the detail page deriving a sentence from a state
+  it does not own — and then owning a second copy of §1.2's precedence to decide
+  when to print it.
+
+  The subtask count is not in this line either. It is on the children section
+  header below, next to the children being counted, where it can be checked
+  rather than taken on faith.
 - Children section header gains an active count — "{n} active" — whenever any
   child is `active`. This is what makes the `step_done` rejection in §7 legible
   without a second explanation.
@@ -703,10 +734,12 @@ controls are what they will land on:
 - **Hit areas.** The blocker strip's trailing action ("Jump to question",
   "Details") and the list row's Restart button are interactive and must clear
   the floor in [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing).
-  Restart is icon-only in a row, so it owes a box on both axes and takes
-  `StartButton`'s existing shape; the strip's action carries text, so it owes
-  only the height — `touch-target` over a `text-xs` line, the way the pending
-  question pill does it.
+  The row's button is icon-only wherever it has no room for a label, so it owes
+  a box on both axes; the story row's labelled chip owes only its height, and is
+  the register's existing entry for "the labelled Start chip whose icon-only twin
+  above it is 44". The strip's action carries text, so it too owes only the
+  height — `touch-target` over a `text-xs` line, the way the pending question
+  pill does it.
 - **Indicators are not controls.** `ActivityIcon` and `ActivityDot` render no
   button and take no handler anywhere in this design; a 12px glyph that could be
   tapped is a 12px glyph somebody will try to tap.
@@ -733,7 +766,7 @@ controls are what they will land on:
 | `web/src/hooks/useChatMessages.ts` | `isProcessRunning` bookkeeping replaced by §2.4 |
 | `web/src/components/Project/WorkListOverlay.tsx` | five groups, `ActivityIcon`, Restart in the row |
 | `web/src/components/Project/WorkDetailOverlay.tsx` | `ActivityBadge`, wait line, four-status button table |
-| `web/src/components/Project/WorkPrimaryAction.tsx` | new — the four-status table and the Stop confirmation, shared by the row and the action bar |
+| `web/src/components/Project/WorkPrimaryAction.tsx` | new — the four-status table and the Stop confirmation, shared by the row and the action bar. It absorbs `WorkListOverlay`'s exported `StartButton`, which was the second answer to "which button does this row get" |
 | `web/src/components/Project/StepList.tsx` | §6.3 |
 | `web/src/components/Project/ProjectTab.tsx` | dot from `needsUser` |
 | `web/src/types/{message,work}.ts` | `turn`; `status` / `activity` / `wait` / `wait_reason` |

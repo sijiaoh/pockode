@@ -2,6 +2,8 @@
 
 The workflow engine manages work item lifecycles through status transitions and automatic session management.
 
+The work item is the topmost of three layers that each own part of "what is going on", and the other two — the session's turn state and the process's lease — are what this engine reads. The model all three share is [lifecycle.md](../lifecycle.md).
+
 ## Statuses
 
 | Status    | Meaning                                       |

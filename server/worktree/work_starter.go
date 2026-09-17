@@ -28,7 +28,7 @@ func NewWorkStarter(wm *Manager, ars agentrole.Store, ss *settings.Store) *WorkS
 }
 
 // HandleWorkStart creates a session and sends the kickoff message for a
-// work item that has already been claimed (status=in_progress, sessionID set).
+// work item that has already been claimed (status=active, sessionID set).
 // If a session with the same ID already exists (restart case), it skips
 // session creation and sends a restart message instead.
 func (s *WorkStarter) HandleWorkStart(ctx context.Context, w work.Work) error {

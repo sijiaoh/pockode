@@ -2201,6 +2201,11 @@ that escaped the tree entirely (e.g. by starting a new session).
 
 ### Turn State
 
+This section and the ones under it are the process and session halves of the
+three-layer lifecycle. The model itself — which layer owns what, which way the
+dependencies run, and what the design it replaces got wrong — is
+[lifecycle.md](../lifecycle.md); what follows is how it is built here.
+
 A process has no state of its own beyond existing — not even a lifetime, which
 is read off the session too ([The Lease Table](#the-lease-table)). What a session
 is doing lives on the session, as one `session.TurnState`, and is written by one
@@ -2219,25 +2224,21 @@ type TurnState struct {
 func ReduceTurn(state TurnState, in TurnInput) TurnTransition
 ```
 
-**The phase is derived, never assigned.** `phaseFor` reads the blockers first —
-anything in the way is `blocked`, whatever else is true, so nothing drawing this
-has to look past `phase` to find out — and `Open` separates the other two. That
-is why answering a prompt mid-turn simply resumes the turn: the blocker goes and
-the phase follows. The old model had to walk the process back through `idle` and
-then forward again, because it was writing the two facts by hand.
-
-**`Open` is the one thing a phase cannot say on its own**, and the case that
-needs it is real: a CLI can raise a prompt *after* the turn it belonged to has
-already reported its end. That session is blocked — somebody has to answer — with
-no turn behind the prompt, so withdrawing it leaves the session `idle` rather
-than inventing one. Reading a withdrawal as "the turn carries on" instead would
-leave a session running with nothing left to end it, and a process the reaper can
-never collect. The old model kept this as a second flag on the process for
-exactly the same reason; what has changed is that it is an input to one rule
+**The phase is derived, never assigned**, by `phaseFor`: blockers first —
+anything in the way is `blocked`, whatever else is true — and `Open` separates
+the other two. `Open` is there because a CLI can raise a prompt *after* the turn
+it belonged to reported its end, and a session blocked with no turn behind the
+prompt has to land back on `idle` when that prompt is withdrawn. Both choices are
+argued in [lifecycle.md](../lifecycle.md#session-one-reducer); what matters here
+is that neither fact is ever written by hand, so no code path can set one and
+forget the other. The old model kept `Open` as a second flag on the process for
+the same reason it exists now; what changed is that it is an input to one rule
 rather than a rule of its own.
 
-Three blockers, because three things can stand in a turn's way and each is
-cleared by something different:
+Three blockers, one per thing that can stand in a turn's way. The two prompts
+share a way out and differ in what expiring one costs
+([lifecycle.md](../lifecycle.md#session-one-reducer)); the background one shares
+neither:
 
 | Blocker | Raised by | Cleared by |
 |---|---|---|
@@ -2387,11 +2388,11 @@ every turn it was carrying was aborted — but the stored state still says
 otherwise, because a run killed with `SIGKILL` had no chance to write anything on
 the way out.
 
-**The authoritative record is Pockode's own, not the CLI's.** Measured on claude
-2.1.263 and codex-cli 0.153.0, a CLI killed mid-prompt may leave a dangling
-`tool_use` with no result, a last line written half way, or — if the kill lands
-within a second of the prompt — no trace of the question at all. All three resume
-cleanly, and none of them can be asked what happened.
+**The authoritative record is Pockode's own, not the CLI's.** A CLI killed
+mid-prompt may leave a dangling `tool_use` with no result, a last line written
+half way, or no trace of the question at all; all three resume cleanly, and none
+of them can be asked what happened
+([lifecycle.md § What was measured](../lifecycle.md#what-was-measured-rather-than-assumed)).
 
 So `session.FileStore` repairs it at load, in two parts:
 
@@ -2584,13 +2585,13 @@ it than be surprised by a machine held overnight.
 
 **A prompt waits an hour.** Not because an answer stops being useful — it does
 not. Killing the process costs one cold resume and nothing else, and that was
-measured rather than assumed: both CLIs resume cleanly from a `SIGKILL` that left
-a dangling `tool_use` in the transcript, and a late answer sent as an ordinary
-message is understood. What the hour buys is the other side of the trade: a
-person who has not answered within an hour is not in the middle of answering, and
-until they do the process is a CLI holding memory to wait. It is deliberately not
-day-scale — the resume behaviour was verified across a process death, not across
-a day of one, so a longer budget would assume something nobody checked.
+measured rather than assumed
+([lifecycle.md](../lifecycle.md#what-was-measured-rather-than-assumed)). What the
+hour buys is the other side of the trade: a person who has not answered within an
+hour is not in the middle of answering, and until they do the process is a CLI
+holding memory to wait. It is deliberately not day-scale — the resume behaviour
+was verified across a process death, not across a day of one, so a longer budget
+would assume something nobody checked.
 
 **A parked turn waits a day.** Running out costs more here: an unanswered prompt
 can still be answered afterwards, while background work that is killed is gone.
@@ -2753,10 +2754,10 @@ is the one that is allowed to be keyed on the id.
 
 `reason` is a field on the cancellation record, shared with expiry, because "why
 did this stop waiting for me" is one question:
-`process_ended` | `timeout` | `work_closed`. Only the last is produced today —
-it is the one the work layer owns — and the other two are what the session layer
-already has cases for; the client's per-reason copy lands with the code that
-fills them in.
+`process_ended` | `timeout` | `work_closed`. All three are produced, each by
+exactly one place — the process ending, the answer lease, and the work layer's
+retirement — and a fourth case, where none of them can be named, writes no
+reason at all ([What Becomes of an Expired Prompt](#what-becomes-of-an-expired-prompt)).
 
 ## Session Management
 

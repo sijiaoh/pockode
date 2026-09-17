@@ -221,8 +221,8 @@ const REOPEN_TO_CARRY_ON = "Reopen the work to carry on with it.";
  * agent made is gone from its side of the conversation — a CLI resuming after
  * its process died drops the dangling tool call when it rebuilds the API
  * request — so a bare option label arrives as an answer to nothing and is
- * answered as such. Measured, not assumed; see the story's resume-prerequisite
- * findings.
+ * answered as such. Measured, not assumed (docs/lifecycle.md, "What was measured
+ * rather than assumed").
  */
 function degradedAnswer(
 	entries: { question: AskUserQuestion; selection: QuestionSelection }[],

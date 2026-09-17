@@ -88,6 +88,11 @@ On creation (`FileStore.Create` in `server/work/store.go`):
 
 ## State Machine
 
+The work item is the topmost of the three lifecycle layers. What belongs to the
+two below it — how a turn state changes, how long a process may live — is linked
+to rather than repeated here; the model all three share is
+[lifecycle.md](../lifecycle.md).
+
 ### Four Statuses and a Wait
 
 ```

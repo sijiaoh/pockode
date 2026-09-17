@@ -32,8 +32,8 @@ function glyphClass(tone: ActivityTone): string {
 }
 
 /**
- * An activity as a glyph and nothing else. Session rows today; work rows and
- * group headers when the work layer sends an activity of its own.
+ * An activity as a glyph and nothing else: session rows, work rows, and the work
+ * list's group headers.
  *
  * It renders no button and takes no handler, here or anywhere. A 12px glyph that
  * could be tapped is a 12px glyph somebody will try to tap
