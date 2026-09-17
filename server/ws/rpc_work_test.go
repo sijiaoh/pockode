@@ -381,7 +381,7 @@ func TestHandler_WorkStart_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandler_WorkStart_AlreadyInProgress(t *testing.T) {
+func TestHandler_WorkStart_AlreadyActive(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
 	// Create and start a story

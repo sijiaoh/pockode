@@ -642,9 +642,13 @@ const (
 		"running any more, and Pockode could not reach its agent session to say so. Check its subtasks and " +
 		"restart the work to continue."
 
+	// It deliberately does not say whether other subtasks are still running. One
+	// of the two paths that use it — a send that failed after the wait was
+	// already cleared — is reached with another subtask alive, so the claim
+	// would be false there.
 	childReportUndelivered = "Stopped automatically: a subtask of this work finished, but Pockode could not reach " +
-		"this work's agent session to deliver the report, and no other subtask was left running. The subtask's " +
-		"own report is on the subtask itself. Restart the work to continue."
+		"this work's agent session to deliver the report. The subtask's own report is on the subtask itself. " +
+		"Check this work's subtasks and restart it to continue."
 )
 
 // failedToReach is what the engine does with a parent it owes news to and cannot

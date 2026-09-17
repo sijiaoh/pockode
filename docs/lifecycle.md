@@ -247,12 +247,13 @@ Two of them decide more than the rest:
   up to a bounded allowance kept on the work record itself, so a restart hands a
   stuck agent no fresh allowance. An aborted turn was taken away rather than
   finished, and carrying on is the one thing nobody asked for.
-- **At startup, a work with a wait is preserved and a work without one is
-  stopped.** What a wait is waiting for — a person, a child work — outlives the
-  process by construction; a work with no wait was being carried by a process
-  that no longer exists, and nothing is left to end its turn. This is the
-  distinction the old model had no way to draw, which is why every paused work
-  used to come back from a restart stopped.
+- **At startup, a work is preserved when something that outlives the dead
+  process can still end its wait, and stopped when nothing can.** A person can —
+  so a work waiting on the user is kept — and so can a child work that is itself
+  still `active`; a work with no wait was being carried by a process that no
+  longer exists, and nothing is left to end its turn. This is the distinction the
+  old model had no way to draw, which is why every paused work used to come back
+  from a restart stopped.
 
   Those stops are also what can empty a `child` wait, since the subtask they
   stop may be the last one running — so **startup re-examines the waits as a
@@ -412,6 +413,13 @@ reader recognises a decision rather than a gap.
 - **There is no cap on how many processes may exist.** Both available rules for
   what to do at the cap are worse than the problem
   ([agent-integration.md](code/agent-integration.md#why-there-is-no-cap-on-how-many-processes-exist)).
+- **The message that ends a stranded wait can name the wrong subtask**, in one
+  race: a *closed* subtask being deleted and the last *active* one leaving at the
+  same instant both ask the store to end the wait, and whichever wins supplies
+  the wording. If the deletion wins, the first sentence says a subtask that
+  already reported has none coming. Everything after that sentence is still
+  right, and the alternative — ignoring the deletion of a closed subtask — throws
+  away one of the re-checks that catch a parent an earlier failure left stuck.
 - **An expired permission card has no `Expired` chip**, only the muted glyph that
   distinguishes it from a denial, because a tool row's one chip slot is already
   the tool's summary ([lifecycle-ui.md § 5.2](lifecycle-ui.md#52-an-expired-permission-can-only-be-a-denial)).

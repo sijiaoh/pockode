@@ -441,7 +441,7 @@ func TestWorkStart_NotFound(t *testing.T) {
 	}
 }
 
-func TestWorkStart_AlreadyInProgress(t *testing.T) {
+func TestWorkStart_AlreadyActive(t *testing.T) {
 	ts := newTestExec(t)
 
 	createResult := callTool(t, ts.exec, "work_create", map[string]string{
@@ -502,7 +502,7 @@ func TestWorkNeedsInput(t *testing.T) {
 
 	w, found, err := ts.store.Get(id)
 	if err != nil || !found {
-		t.Fatal("work not found after needs_input")
+		t.Fatal("work not found after work_needs_input")
 	}
 	if w.Status != work.StatusActive || w.Wait != work.WaitUser {
 		t.Errorf("status/wait = %q/%q, want active/user", w.Status, w.Wait)
@@ -514,7 +514,7 @@ func TestWorkNeedsInput(t *testing.T) {
 	}
 }
 
-func TestWorkNeedsInput_NotInProgress(t *testing.T) {
+func TestWorkNeedsInput_NotActive(t *testing.T) {
 	ts := newTestExec(t)
 
 	createResult := callTool(t, ts.exec, "work_create", map[string]string{
@@ -526,7 +526,7 @@ func TestWorkNeedsInput_NotInProgress(t *testing.T) {
 		"id": id, "reason": "some reason",
 	})
 	if !result.IsError {
-		t.Error("expected error for needs_input from open status")
+		t.Error("expected error for work_needs_input from open status")
 	}
 }
 

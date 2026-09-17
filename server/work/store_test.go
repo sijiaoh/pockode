@@ -303,7 +303,7 @@ func TestClaim_RejectsAWaitingWork(t *testing.T) {
 	}
 }
 
-func TestClaim_RejectsAlreadyInProgress(t *testing.T) {
+func TestClaim_RejectsAlreadyActive(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	if _, _, err := s.Claim(context.Background(), story.ID); err != nil {
@@ -438,7 +438,7 @@ func TestDelete_NotFound(t *testing.T) {
 
 // --- Status transitions ---
 
-func TestTransition_OpenToInProgress(t *testing.T) {
+func TestTransition_OpenToActive(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -449,7 +449,7 @@ func TestTransition_OpenToInProgress(t *testing.T) {
 	}
 }
 
-func TestTransition_InProgressToClosed(t *testing.T) {
+func TestTransition_ActiveToClosed(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -525,7 +525,7 @@ func TestStart_ClearsTheWaitAndTheNudges(t *testing.T) {
 	}
 }
 
-func TestStart_InvalidFromInProgress(t *testing.T) {
+func TestStart_InvalidFromActive(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -580,10 +580,10 @@ func TestMarkRunning_FromAnyLiveStatus(t *testing.T) {
 		pause func(*FileStore, string) error
 	}{
 		{"stopped", func(s *FileStore, id string) error { return s.Stop(context.Background(), id) }},
-		{"needs_input", func(s *FileStore, id string) error {
+		{"wait_on_user", func(s *FileStore, id string) error {
 			return s.SetWait(context.Background(), id, WaitUser, "waiting on the user")
 		}},
-		{"waiting", func(s *FileStore, id string) error { return s.SetWait(context.Background(), id, WaitChild, "") }},
+		{"wait_on_children", func(s *FileStore, id string) error { return s.SetWait(context.Background(), id, WaitChild, "") }},
 		{"active", func(*FileStore, string) error { return nil }},
 	}
 
@@ -606,7 +606,7 @@ func TestMarkRunning_FromAnyLiveStatus(t *testing.T) {
 	}
 }
 
-func TestReopen_ClosedToInProgress(t *testing.T) {
+func TestReopen_ClosedToActive(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -652,7 +652,7 @@ func TestReopen_RejectsNonClosedStatus(t *testing.T) {
 			status: StatusStopped,
 		},
 		{
-			name:   "needs_input",
+			name:   "wait_on_user",
 			setup:  func(id string) { startWork(t, s, id); s.SetWait(ctx, id, WaitUser, "waiting on the user") },
 			status: StatusActive,
 		},
@@ -683,9 +683,9 @@ func TestReopen_NotFound(t *testing.T) {
 	}
 }
 
-// --- needs_input transitions ---
+// --- wait transitions ---
 
-func TestTransition_InProgressToNeedsInput(t *testing.T) {
+func TestTransition_ActiveToWaitOnUser(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -699,7 +699,7 @@ func TestTransition_InProgressToNeedsInput(t *testing.T) {
 	}
 }
 
-func TestTransition_NeedsInputToStopped(t *testing.T) {
+func TestTransition_WaitOnUserToStopped(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -707,7 +707,7 @@ func TestTransition_NeedsInputToStopped(t *testing.T) {
 	s.SetWait(context.Background(), story.ID, WaitUser, "waiting on the user")
 
 	if err := s.Stop(context.Background(), story.ID); err != nil {
-		t.Fatalf("needs_input → stopped: %v", err)
+		t.Fatalf("waiting on the user → stopped: %v", err)
 	}
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusStopped {
@@ -715,16 +715,16 @@ func TestTransition_NeedsInputToStopped(t *testing.T) {
 	}
 }
 
-func TestTransition_Invalid_OpenToNeedsInput(t *testing.T) {
+func TestTransition_Invalid_OpenToWaitOnUser(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 
 	if err := s.SetWait(context.Background(), story.ID, WaitUser, "waiting on the user"); err == nil {
-		t.Fatal("expected error for open → needs_input")
+		t.Fatal("expected error for open → waiting on the user")
 	}
 }
 
-func TestTransition_InProgressToWaiting(t *testing.T) {
+func TestTransition_ActiveToWaitOnChildren(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -738,7 +738,7 @@ func TestTransition_InProgressToWaiting(t *testing.T) {
 	}
 }
 
-func TestTransition_WaitingToStopped(t *testing.T) {
+func TestTransition_WaitOnChildrenToStopped(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
@@ -754,12 +754,12 @@ func TestTransition_WaitingToStopped(t *testing.T) {
 	}
 }
 
-func TestTransition_Invalid_OpenToWaiting(t *testing.T) {
+func TestTransition_Invalid_OpenToWaitOnChildren(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 
 	if err := s.SetWait(context.Background(), story.ID, WaitChild, ""); err == nil {
-		t.Fatal("expected error for open → waiting")
+		t.Fatal("expected error for open → waiting on children")
 	}
 }
 
@@ -770,11 +770,11 @@ func TestParentCanWaitWhenChildNotClosed(t *testing.T) {
 	startWork(t, s, story.ID)
 	startWork(t, s, task.ID)
 
-	// Task enters waiting
+	// Task starts waiting on children of its own
 	s.SetWait(context.Background(), task.ID, WaitChild, "")
 
 	if err := s.SetWait(context.Background(), story.ID, WaitChild, ""); err != nil {
-		t.Fatalf("story should be able to enter waiting: %v", err)
+		t.Fatalf("story should be able to wait on its children: %v", err)
 	}
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusActive || got.Wait != WaitChild {
@@ -782,19 +782,19 @@ func TestParentCanWaitWhenChildNotClosed(t *testing.T) {
 	}
 }
 
-func TestParentWaiting_WhenChildNeedsInput(t *testing.T) {
+func TestParentCanWaitWhenChildWaitsOnUser(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
 	startWork(t, s, story.ID)
 	startWork(t, s, task.ID)
 
-	// Put task in needs_input
+	// Put the task on a wait of its own
 	s.SetWait(context.Background(), task.ID, WaitUser, "waiting on the user")
 
-	// Parent should use waiting to wait for child, not done
+	// Parent should wait on its children rather than close
 	if err := s.SetWait(context.Background(), story.ID, WaitChild, ""); err != nil {
-		t.Fatalf("story should be able to enter waiting: %v", err)
+		t.Fatalf("story should be able to wait on its children: %v", err)
 	}
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusActive || got.Wait != WaitChild {
@@ -814,7 +814,7 @@ func TestParentWaiting_WhenChildStopped(t *testing.T) {
 
 	// Parent should use waiting to wait for child
 	if err := s.SetWait(context.Background(), story.ID, WaitChild, ""); err != nil {
-		t.Fatalf("story should be able to enter waiting: %v", err)
+		t.Fatalf("story should be able to wait on its children: %v", err)
 	}
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusActive || got.Wait != WaitChild {
@@ -1658,12 +1658,12 @@ func TestStepDone_AdvancesFromStaleLiveStatus(t *testing.T) {
 				t.Fatalf("Stop: %v", err)
 			}
 		}},
-		{"needs_input", func(s *FileStore, id string) {
+		{"wait_on_user", func(s *FileStore, id string) {
 			if err := s.SetWait(context.Background(), id, WaitUser, "waiting on the user"); err != nil {
-				t.Fatalf("MarkNeedsInput: %v", err)
+				t.Fatalf("SetWait: %v", err)
 			}
 		}},
-		{"waiting", func(s *FileStore, id string) {
+		{"wait_on_children", func(s *FileStore, id string) {
 			if err := s.SetWait(context.Background(), id, WaitChild, ""); err != nil {
 				t.Fatalf("SetWait: %v", err)
 			}
@@ -1855,10 +1855,10 @@ func TestLiveStatusSetters_AcceptStoppedSource(t *testing.T) {
 		mark func(*FileStore, string) error
 		want WorkWait
 	}{
-		{"needs_input", func(s *FileStore, id string) error {
+		{"wait_on_user", func(s *FileStore, id string) error {
 			return s.SetWait(context.Background(), id, WaitUser, "waiting on the user")
 		}, WaitUser},
-		{"waiting", func(s *FileStore, id string) error { return s.SetWait(context.Background(), id, WaitChild, "") }, WaitChild},
+		{"wait_on_children", func(s *FileStore, id string) error { return s.SetWait(context.Background(), id, WaitChild, "") }, WaitChild},
 		{"running", func(s *FileStore, id string) error { return s.Activate(context.Background(), id) }, WaitNone},
 	}
 

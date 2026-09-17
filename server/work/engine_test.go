@@ -675,6 +675,80 @@ func TestEngine_LeavesAnUnreachableParentThatStillHasASubtask(t *testing.T) {
 	}
 }
 
+// failingSender resolves — the worktree is there — and then fails to deliver.
+// That is a different dead end from failingResolver: the wait has already been
+// cleared by the time the send is attempted, so the parent is left waiting for
+// nothing with nobody told.
+type failingSender struct{}
+
+func (failingSender) SendSystemMessage(context.Context, string, string, string, *agent.MessageMeta) error {
+	return errors.New("session unreachable")
+}
+
+// The branch that fires after the wait is gone. It is the one case where another
+// subtask may still be running, and the comment must not claim otherwise — a
+// user sent to look for subtasks that "were not left running" would find one.
+func TestEngine_StopsAParentWhoseChildReportCouldNotBeSent(t *testing.T) {
+	f := newEngineFixture(t)
+	f.engine.SetSender(failingSender{})
+	story := f.startedStory(t, "sess-parent")
+	closing := createTask(t, f.store, story.ID, "T1")
+	startWorkWithSession(t, f.store, closing.ID, "sess-1")
+	running := createTask(t, f.store, story.ID, "T2")
+	startWorkWithSession(t, f.store, running.ID, "sess-2")
+	if _, err := f.store.SetChildWait(context.Background(), story.ID, "waiting on both"); err != nil {
+		t.Fatalf("SetChildWait: %v", err)
+	}
+
+	if _, err := f.store.StepDone(context.Background(), closing.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+
+	waitFor(t, func() bool { return len(f.commentBodies(t, story.ID)) > 0 })
+	got := getWork(t, f.store, story.ID)
+	if got.Status != StatusStopped || got.Wait != WaitNone {
+		t.Errorf("parent = %q + wait %q, want %q with no wait — its wait was cleared and the news never landed",
+			got.Status, got.Wait, StatusStopped)
+	}
+	bodies := f.commentBodies(t, story.ID)
+	if len(bodies) != 1 || !strings.Contains(bodies[0], "could not reach") {
+		t.Fatalf("comments = %v, want one saying the agent could not be reached", bodies)
+	}
+	if strings.Contains(bodies[0], "no other subtask") {
+		t.Errorf("comment = %q, but %q is still active — it must not claim otherwise", bodies[0], running.Title)
+	}
+	if got := getWork(t, f.store, running.ID); got.Status != StatusActive {
+		t.Errorf("%q = %q, want it left alone — stopping a parent does not stop its subtasks",
+			running.Title, got.Status)
+	}
+}
+
+// The same dead end on the other message: the wait was cleared because nothing
+// could end it, and the agent could not be told.
+func TestEngine_StopsAParentWhoseStrandedWaitNewsCouldNotBeSent(t *testing.T) {
+	f := newEngineFixture(t)
+	f.engine.SetSender(failingSender{})
+	story := f.startedStory(t, "sess-parent")
+	task := createTask(t, f.store, story.ID, "T")
+	startWorkWithSession(t, f.store, task.ID, "sess-child")
+	if _, err := f.store.SetChildWait(context.Background(), story.ID, "waiting on T"); err != nil {
+		t.Fatalf("SetChildWait: %v", err)
+	}
+
+	if err := f.store.Stop(context.Background(), task.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	waitFor(t, func() bool { return len(f.commentBodies(t, story.ID)) > 0 })
+	got := getWork(t, f.store, story.ID)
+	if got.Status != StatusStopped || got.Wait != WaitNone {
+		t.Errorf("parent = %q + wait %q, want %q with no wait", got.Status, got.Wait, StatusStopped)
+	}
+	if bodies := f.commentBodies(t, story.ID); !strings.Contains(bodies[0], "none of them is running any more") {
+		t.Errorf("comment = %q, want the wording for a wait nothing could end", bodies[0])
+	}
+}
+
 // --- input 4: the session was deleted ---
 
 func TestEngine_StopsAWorkWhoseSessionWasDeleted(t *testing.T) {

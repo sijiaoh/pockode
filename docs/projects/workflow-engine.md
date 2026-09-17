@@ -111,12 +111,13 @@ has five inputs and no special cases beside them:
 |---|---|
 | A turn ended | aborted → `stopped`; otherwise nudge, unless the work declared a wait; `stopped` once the allowance runs out |
 | A user message | back to `active`, wait and nudges cleared |
-| A child work closed | tell an *active* parent, clear a `child` wait |
+| A child work left `active` | a child that *closed*: tell an *active* parent and clear a `child` wait; a child that left any other way: clear a `child` wait nothing is left to end, and wake the parent to decide |
 | The session was deleted | → `stopped` |
-| Server startup | `active` with no wait → `stopped` + comment; a waiting work is preserved |
+| Server startup | `active` with no wait → `stopped` + comment; a work waiting on the user is preserved; a work waiting on children is preserved only while one of them is still `active`, and otherwise `stopped` + comment |
 
-The full reasoning for each — including why a waiting work survives a restart and
-a driven one does not — is in
+The full reasoning for each — including why a work waiting on the user survives a
+restart and a driven one does not, and why startup *stops* the parent that a
+running server would *wake* — is in
 [work-system.md](../code/work-system.md#the-work-engine). Two properties worth
 naming here:
 

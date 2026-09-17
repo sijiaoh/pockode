@@ -14,8 +14,10 @@ func TestValidateProgress(t *testing.T) {
 		{StatusStopped, true},
 		{StatusClosed, false},
 		// A value nobody recognises is admitted on purpose: a corrupted index
-		// must not be one more way to lock a work out of its own agent.
-		{WorkStatus("in_progress"), true},
+		// must not be one more way to lock a work out of its own agent. It is
+		// deliberately not a retired status — those are recognised, by
+		// Work.Normalize, and never reach a guard.
+		{WorkStatus("scribbled-on"), true},
 	}
 
 	for _, tt := range tests {
