@@ -127,7 +127,7 @@ time one was missed, and four separate mechanisms existed to repair them.
 | Wait | Set by | Cleared by |
 |------|--------|------------|
 | none | every transition into active | — |
-| `user` | `work_needs_input` | a user message, a child closing the work's own run |
+| `user` | `work_needs_input` | a user message |
 | `child` | `work_wait` | a child work closing, or a user message |
 
 A wait is orthogonal to the status: a waiting work is still **active** — the

@@ -441,8 +441,16 @@ func (s *FileStore) setLiveStatus(id string, action string, mutate func(*Work) b
 
 // clearDrive drops everything that only means something while the engine is
 // driving this work: what it was waiting for, and how many nudges it has had.
-// Every transition into or out of active goes through it, so there is no path
-// that leaves a stale wait behind for the next one to trip over.
+//
+// Every transition into or out of active goes through it, with one deliberate
+// exception: SetWait, whose whole purpose is to *state* a wait and which
+// therefore assigns it instead. So no path leaves a stale wait behind for the
+// next one to trip over — each one either clears the wait or says what it is.
+//
+// SetWait leaves the nudge count where it is, and nothing can spend it there: a
+// work with a wait is never nudged (Engine.HandleTurnEnded returns on it), and
+// every other way a wait ends comes back through clearDrive, which zeroes the
+// count in the same breath.
 func (w *Work) clearDrive() {
 	w.Wait, w.WaitReason, w.NudgeCount = WaitNone, "", 0
 }
@@ -580,6 +588,11 @@ func (s *FileStore) RollbackStart(_ context.Context, id string, sessionID string
 		w.Status = StatusOpen
 		w.SessionID = ""
 	}
+	// Leaving active goes through clearDrive here as everywhere else. Claim has
+	// already cleared it, so today this undoes nothing; keeping the rule without
+	// exceptions is what stops the next status written here from being the one
+	// that leaves a wait behind.
+	w.clearDrive()
 	w.UpdatedAt = time.Now()
 
 	modified := map[string]bool{id: true}

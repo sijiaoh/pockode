@@ -84,9 +84,15 @@ type Work struct {
 	// free text, because no fixed vocabulary could carry it.
 	WaitReason string `json:"wait_reason,omitempty"`
 	// NudgeCount is how many times in a row the engine has told this work's agent
-	// to carry on without the agent moving the work along. Reset by anything that
-	// counts as progress (a step advance, a user message, a reopen, a child
-	// closing); when it runs out the work is stopped rather than nudged forever.
+	// to carry on without the agent moving the work along. When it runs out the
+	// work is stopped rather than nudged forever.
+	//
+	// It is cleared by every transition into or out of active (clearDrive), which
+	// is exactly what counts as progress here: a step advance, a user message, a
+	// reopen, a child closing under a parent that was waiting for one. A child
+	// closing under a parent that was *not* waiting for it is deliberately not on
+	// that list — the parent is told, but it was already being nudged for going
+	// quiet, and the news does not answer the question the allowance is counting.
 	//
 	// Persisted rather than kept in memory per session, so that a server restart
 	// does not hand a stuck agent a fresh allowance.

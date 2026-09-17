@@ -82,6 +82,29 @@ func TestWorkListWatcher_Subscribe(t *testing.T) {
 	}
 }
 
+// A client with no work items must be sent `[]`, which it can iterate, and not
+// `null`, which it cannot. The guarantee used to live on rpc.NewWorkListItems;
+// that function is gone, and the one place left that builds a whole list is
+// here.
+func TestWorkListWatcher_SubscribeToAnEmptyStoreSendsAnEmptyList(t *testing.T) {
+	w := NewWorkListWatcher(&mockWorkStore{}, nil)
+
+	items, err := w.Subscribe("client-1", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Asserted on the wire shape rather than on `items != nil`: the wire is what
+	// the contract is about, and a nil slice is only wrong once it is marshalled.
+	encoded, err := json.Marshal(workListSyncParams{Works: items})
+	if err != nil {
+		t.Fatalf("marshal items: %v", err)
+	}
+	if !bytes.Contains(encoded, []byte(`"works":[]`)) {
+		t.Errorf("empty work list marshalled as %s, want an empty array", encoded)
+	}
+}
+
 func TestWorkListWatcher_Unsubscribe(t *testing.T) {
 	store := &mockWorkStore{}
 	w := NewWorkListWatcher(store, nil)

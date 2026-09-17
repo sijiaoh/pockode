@@ -36,9 +36,10 @@ type TurnEnd struct {
 // keeping its own timer and its own idea of how long to wait.
 //
 // A settler with no listener arms nothing at all, which is what makes it free to
-// construct before anything is reading it — and today nothing is: the work
-// engine is what will, and until it does the settled ending is simply not
-// announced. The raw state changes every current consumer reads are unaffected
+// construct before anything is reading it. The listener is the work engine, wired
+// through process.Manager.SetOnTurnEnded; a manager built without one — the shape
+// most tests want — simply never announces a settled ending. The raw state changes
+// the other consumers read are a separate path and unaffected
 // (process.Manager.emitTurn).
 type TurnSettler struct {
 	delay time.Duration

@@ -195,6 +195,10 @@ func (w *WorkListWatcher) notifySync() {
 
 // listRows reads the whole list and derives each row's activity, reading every
 // worktree's turn state at most once.
+//
+// Allocated to length rather than appended to, so an empty store yields an empty
+// slice and not nil: a client with no work items is sent `[]`, which it can
+// iterate, rather than `null`, which it cannot.
 func (w *WorkListWatcher) listRows() ([]rpc.WorkListItem, error) {
 	works, err := w.store.List()
 	if err != nil {
