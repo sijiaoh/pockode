@@ -218,10 +218,18 @@ Six prompt builders generate messages for different lifecycle events. All share 
 **Base (`buildBase`):**
 - Agent role reference (instructs agent to fetch its role via `agent_role_get`)
 - Work context (title, ID, instruction to read full details via `work_get`)
-- Behavior rules (vary by work type):
-  - **Story:** Coordinator rules — break work into tasks, call `work_wait` after starting child tasks to wait for completion reports, do not implement anything, do not call `step_done` on children, and call `step_done` when a step is complete or when story work with no steps is complete.
-  - **Task with parent:** Check parent comments and report results via `work_comment_add`; call `step_done` when a step is complete or when task work with no steps is complete.
-  - **Task without parent:** Call `step_done` when a step is complete or when task work with no steps is complete.
+- What differs by work type, and only that:
+  - **Story:** Coordinator rules — break the story into tasks, start them, do not implement anything yourself, do not call `step_done` on a child, read a child's report as a comment on the story.
+  - **Task with parent:** Read the parent's comments before starting, and report results back with `work_comment_add`, because the story agent does not read this chat.
+  - **Task without parent:** nothing extra.
+- The lifecycle rules (`lifecycle_rules`), identical for every work Pockode
+  drives: what the four statuses mean, that `work_needs_input` / `work_wait` are
+  the only ways to declare a wait, that a turn ends with one of those or
+  `step_done`, that a turn ending with neither is nudged and stops the work after
+  the allowance, and that a long wait belongs to `work_needs_input` rather than to
+  a question holding the process open. It is written once here so no send site
+  can drift into its own version of the rules — see
+  [work-system.md](../code/work-system.md#prompt-format).
 
 ### BuildKickoffMessage
 
@@ -244,17 +252,15 @@ Used when a work item's agent role has `steps` defined. Falls back to `BuildKick
 ### BuildRestartMessage
 
 Base + a restart nudge appropriate to the work type:
-- **Story:** "Your story was stopped and is now being restarted. Review your tasks…"
-- **Task:** "Your task was stopped and is now being restarted. Review what you've done…"
+- **Story:** "Your story was stopped and is now being restarted. While a story is stopped Pockode sends it nothing…" — the story has to re-read `work_list` and `work_comment_list`, because a stopped parent is never told that a child closed.
+- **Task:** "Your task was stopped and is now being restarted. Review what you have done so far…"
 
 ### BuildAutoContinuationMessage
 
-Base + a nudge appropriate to the work type:
-- **Story:** "Your story is still in_progress but your session was interrupted. Review your tasks…"
-- **Task:** "Your task is still in_progress but your session was interrupted. Review what you've done…"
-
-(The prompt text still says `in_progress`; bringing the agent-facing wording to
-the new vocabulary is its own task in this redesign.)
+Base + a nudge appropriate to the work type, which names the three things the
+engine was looking for and did not get:
+- **Story:** "Your last turn ended without moving this story along: no step_done, no work_needs_input, no work_wait…"
+- **Task:** "Your last turn ended without moving this task along: no step_done, no work_needs_input…"
 
 ### BuildAutoContinuationMessageWithSteps
 
@@ -267,9 +273,10 @@ Step N of M
 
 <step instructions>
 
-Your session was interrupted while working on step N of M.
+That turn ended on step N of M without saying where the work stands.
 Check if you have completed the current step:
 - If YES: Call step_done with ID xxx to proceed to the next step or close the work.
+- If NO and you are blocked: Say what you are waiting for with work_needs_input or work_wait.
 - If NO: Continue working on this step.
 ```
 

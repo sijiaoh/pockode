@@ -343,6 +343,13 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `agent_role_reset_defaults` | Reset to default roles |
 
 Two of these return less than their name suggests: `work_list` omits the body and
+**A tool description is a prompt.** It is all an agent knows about a status it
+never sees the code for, so the descriptions carry the same vocabulary as
+`lifecycle_rules`: `work_list` glosses the four statuses it returns,
+`work_needs_input` says what it is preferred over and why, `work_wait` says that
+the news of a child closing clears the wait, and `step_done` says it is not a way
+to pause. `mcp/tools_test.go` holds them to it.
+
 `agent_role_list` omits the role prompt, so that listing cannot pull someone
 else's instructions into the agent's context. That is a containment rule, not a
 size one, and it is stated with the rest of the tool shapes in
@@ -1024,7 +1031,59 @@ Start (step 0)
 
 ### Prompt Format
 
-Base prompts tell the agent to fetch its agent role and use that role's instructions. They also state the lifecycle rule in one place: call `step_done` when a step is complete, or when the work is done if the work item has no steps. Tasks with a parent story report results to that parent with `work_comment_add`. Story prompts tell coordinators to call `work_wait` after starting child tasks so the story waits for task completion reports.
+Every message the engine sends is the same base plus one nudge. The base is: the
+MCP prefix, the agent role reference, the work context, the one section that
+differs by type — a story's coordinator rules, a task's "report to your parent
+with `work_comment_add`" — and then `lifecycle_rules`, which every work driven by
+Pockode gets verbatim.
+
+**`lifecycle_rules` is the single place the agent-facing lifecycle is written.**
+It says what the four statuses mean, that a wait is something only the agent can
+declare (`work_needs_input` / `work_wait`, both reasons shown to the user on the
+detail page), that exactly two things end a turn cleanly — `step_done`, or a
+declared wait — and what happens when neither is said: a nudge, and `stopped`
+once the allowance is spent. "I still have work to do" is deliberately not
+offered as a third way to end a turn; it is the nudged case, and listing it as an
+ending would have promised an agent a safety it does not have. Before it existed the same rules were restated in four
+per-type templates, which is exactly how the prompts came to describe a work
+model — `in_progress`, "needs_input" — that the store had stopped producing.
+
+Two of its numbers are rendered from the constants that govern the behaviour
+(`DefaultMaxNudges`, `session.DefaultAnswerBudget`) rather than typed into the
+YAML, so a prompt cannot promise an allowance the engine does not give.
+`humanDuration` writes the budget as "an hour" rather than `1h0m0s`, because the
+agent may repeat it to the user. The answer budget is quoted **as the default**,
+not as the deadline in force: it is an operator flag (`--answer-timeout`, `0`
+disabling it entirely) and prompt building has no access to the running
+configuration, so a bare number here would be false on any server that changed
+it. The nudge allowance has no flag, so it is stated flatly.
+
+`IsStory` gates the two paragraphs about children: only a story can have any, so
+a task is never offered `work_wait`.
+
+**Long waits versus short questions.** The section closes by telling the agent
+where a wait belongs. A question asked in the chat blocks the turn and holds the
+process open; unanswered past the answer budget it is cancelled on the user's
+behalf, and the aborted turn *stops the work*. `work_needs_input` costs none of
+that — the process can be collected, and the answer counts whenever it arrives.
+The agent cannot derive this from anywhere else: nothing about `AskUserQuestion`
+says it is holding a CLI open.
+
+**The story restart nudge sends the agent to re-read its tasks**, and that is
+load-bearing rather than politeness: a stopped parent is deliberately not told
+when a child closes (*A Child Closing*), so re-reading `work_list` and
+`work_comment_list` is the only way it learns what happened while it was stopped.
+
+**The child-done nudge says that it cleared the wait — when it did.** Being told
+about one child resumes a parent that was waiting on its children, so a story
+with other tasks still running has to call `work_wait` again, otherwise its next
+silent turn reads as an agent that stopped by accident. A parent waiting on the
+*user* keeps its wait (*A Child Closing*) and is told none of this: an agent that
+believed its wait was gone would replace a wait on a person with one on its
+subtasks, and the user would stop being shown as the one being waited for. Which
+of the two happened is passed to `BuildChildCompletionMessage` by the engine
+rather than re-derived from `parent.Wait`, so the message and the transition are
+decided once.
 
 Every follow-up repeats this base rather than assuming the agent remembers an
 earlier turn, which is why a nudge still works when the agent has no memory of the
@@ -1225,17 +1284,16 @@ work_context: |
 | `role_reference` | All messages | `AgentRoleID` |
 | `work_context` | All messages | `Title`, `ID` |
 | `story_behavior_rules` | Story kickoff | (none) |
-| `story_rules_suffix` | Story kickoff | `ID` |
-| `task_rules_with_parent` | Task with parent | `ParentID`, `ID` |
-| `task_rules_without_parent` | Standalone task | `ID` |
-| `story_restart_nudge` | Story restart | `ID` |
-| `task_restart_nudge` | Task restart | `ID` |
-| `story_auto_continue_nudge` | Story auto-continuation | `ID` |
-| `task_auto_continue_nudge` | Task auto-continuation | `ID` |
+| `task_rules_with_parent` | Task with parent | `ParentID` |
+| `lifecycle_rules` | All messages | `ID`, `IsStory`, `MaxNudges`, `AnswerBudget` |
+| `story_restart_nudge` | Story restart | (none) |
+| `task_restart_nudge` | Task restart | (none) |
+| `story_auto_continue_nudge` | Story auto-continuation | (none) |
+| `task_auto_continue_nudge` | Task auto-continuation | (none) |
 | `step_auto_continue_nudge` | Step auto-continuation | `CurrentStep`, `TotalSteps`, `ID` |
 | `child_completion_nudge` | Waiting parent resume | `ChildTitle`, `ChildID`, `ID` |
-| `story_reopen_nudge` | Story reopen | `ID` |
-| `task_reopen_nudge` | Task reopen | `ID` |
+| `story_reopen_nudge` | Story reopen | (none) |
+| `task_reopen_nudge` | Task reopen | (none) |
 | `step_advance_section` | Step advance | `PrevStep`, `TotalSteps`, `CurrentStep`, `StepPrompt`, `ID` |
 | `current_step_section` | Initial step display | `CurrentStep`, `TotalSteps`, `StepPrompt`, `ID` |
 

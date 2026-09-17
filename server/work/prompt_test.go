@@ -1,14 +1,18 @@
 package work
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/pockode/server/session"
 )
 
 func assertContains(t *testing.T, msg, substr, label string) {
 	t.Helper()
 	if !strings.Contains(msg, substr) {
-		t.Errorf("expected %s in message, got %q", label, msg)
+		t.Errorf("expected %s (%q) in message:\n%s", label, substr, msg)
 	}
 }
 
@@ -26,12 +30,16 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 	assertContains(t, msg, "agent_role_get", "agent_role_get instruction")
 	assertContains(t, msg, "Fix the bug", "task title")
 	assertContains(t, msg, "task-1", "work ID")
-	assertContains(t, msg, "agent role instructions", "agent-role-driven lifecycle instruction")
-	assertContains(t, msg, "when a step is complete", "step completion instruction")
-	assertContains(t, msg, "when the task work is done if this task has no steps", "completion without steps instruction")
+	assertContains(t, msg, "agent role", "agent-role-driven lifecycle instruction")
+	assertContains(t, msg, "`step_done` with ID task-1", "step_done instruction")
+	assertContains(t, msg, "`work_needs_input` with ID task-1", "needs-input instruction")
 
-	if strings.Contains(msg, "coordinate") {
+	if strings.Contains(msg, "COORDINATOR") {
 		t.Error("task message should not contain story coordination rules")
+	}
+	// A task has no children, so the tool it would wait on is not offered to it.
+	if strings.Contains(msg, "work_wait") {
+		t.Error("task message should not mention work_wait")
 	}
 }
 
@@ -46,10 +54,61 @@ func TestBuildKickoffMessage_Story(t *testing.T) {
 	msg := BuildKickoffMessage(w)
 
 	assertContains(t, msg, "Big feature", "story title")
-	assertContains(t, msg, storyBehaviorRules, "story behavior rules")
-	assertContains(t, msg, "work_wait", "work_wait instruction")
-	assertContains(t, msg, "when a step is complete", "step completion instruction")
-	assertContains(t, msg, "when the story work is done if this story has no steps", "completion without steps instruction")
+	assertContains(t, msg, "`work_wait` with ID story-1", "work_wait instruction")
+	assertContains(t, msg, "`step_done` with ID story-1", "step_done instruction")
+	assertContains(t, msg, "rejects a `step_done` that would close a story with active subtasks",
+		"the rule that a story waits for its tasks instead of closing over them")
+}
+
+// The coordinator rules are the half of a story prompt that is not in the
+// lifecycle section, and they reached no story at all while they were built from
+// a package-level var (see storyBehaviorRules). Asserting the text itself is
+// what makes that a failure rather than a comparison against "".
+func TestBuildKickoffMessage_StoryCarriesTheCoordinatorRules(t *testing.T) {
+	msg := BuildKickoffMessage(Work{
+		ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S",
+	})
+
+	assertContains(t, msg, "You are a COORDINATOR for this story", "coordinator opening")
+	assertContains(t, msg, "work_create", "task breakdown instruction")
+	assertContains(t, msg, "Do NOT call step_done on child tasks", "child lifecycle rule")
+}
+
+// Every number the lifecycle section quotes at the agent is a promise about what
+// the server does, so each is read from the constant that governs it.
+func TestLifecycleRules_QuoteTheLimitsTheServerActuallyKeeps(t *testing.T) {
+	msg := BuildKickoffMessage(Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"})
+
+	assertContains(t, msg, "after "+strconv.Itoa(DefaultMaxNudges)+" of those in a row", "the nudge allowance")
+	assertContains(t, msg, "("+humanDuration(session.DefaultAnswerBudget)+" by default)", "the answer budget")
+}
+
+func TestHumanDuration(t *testing.T) {
+	for _, tc := range []struct {
+		in   time.Duration
+		want string
+	}{
+		{time.Hour, "an hour"},
+		{3 * time.Hour, "3 hours"},
+		{time.Minute, "a minute"},
+		{90 * time.Second, "1m30s"},
+		{30 * time.Minute, "30 minutes"},
+	} {
+		if got := humanDuration(tc.in); got != tc.want {
+			t.Errorf("humanDuration(%s) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The chat-versus-work guidance is the one piece of the redesign an agent can
+// only learn from the prompt: nothing about AskUserQuestion tells it that the
+// question holds a process open.
+func TestLifecycleRules_SendLongWaitsToWorkNeedsInput(t *testing.T) {
+	msg := BuildKickoffMessage(Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"})
+
+	assertContains(t, msg, "AskUserQuestion", "the tool the guidance is about")
+	assertContains(t, msg, "a turn ended that way stops the work", "the cost of an unanswered question")
+	assertContains(t, msg, "call `work_needs_input` and end the turn", "what to do instead")
 }
 
 func TestBuildKickoffMessage_RoleRefComesFirst(t *testing.T) {
@@ -73,12 +132,12 @@ func TestBuildAutoContinuationMessage_ContainsBaseAndNudge(t *testing.T) {
 		{
 			"task",
 			Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"},
-			"Your task is still in_progress",
+			"Your last turn ended without moving this task along",
 		},
 		{
 			"story",
 			Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"},
-			"Your story is still in_progress",
+			"Your last turn ended without moving this story along",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -107,9 +166,7 @@ func TestBuildKickoffMessage_TaskWithParent_ReportViaComment(t *testing.T) {
 	assertContains(t, msg, "work_comment_list", "work_comment_list instruction for parent comments")
 	assertContains(t, msg, "work_comment_add", "work_comment_add instruction")
 	assertContains(t, msg, "story-1", "parent work ID")
-	assertContains(t, msg, "agent role instructions", "agent-role-driven lifecycle instruction")
-	assertContains(t, msg, "when a step is complete", "step completion instruction")
-	assertContains(t, msg, "when the task work is done if this task has no steps", "completion without steps instruction")
+	assertContains(t, msg, "`step_done` with ID task-1", "step_done instruction")
 }
 
 func TestBuildKickoffMessage_TaskWithoutParent_NoCommentInstruction(t *testing.T) {
@@ -295,7 +352,7 @@ func TestBuildAutoContinuationMessageWithSteps_WithSteps(t *testing.T) {
 	assertContains(t, msg, "## Current Step", "step header")
 	assertContains(t, msg, "Step 2 of 3", "step number")
 	assertContains(t, msg, "Write tests", "step content")
-	assertContains(t, msg, "interrupted while working on step 2 of 3", "interrupt context")
+	assertContains(t, msg, "ended on step 2 of 3", "step context")
 	assertContains(t, msg, "If YES and this is NOT the last step: Call step_done", "step_done instruction")
 	assertContains(t, msg, "If YES and this IS the last step: Call step_done", "step_done instruction")
 	assertContains(t, msg, "If NO: Continue working", "no instruction")
@@ -309,7 +366,7 @@ func TestBuildAutoContinuationMessageWithSteps_Story(t *testing.T) {
 
 	assertContains(t, msg, "## Current Step", "step header")
 	assertContains(t, msg, "Step 1 of 2", "step number")
-	assertContains(t, msg, "interrupted while working on step 1 of 2", "interrupt context")
+	assertContains(t, msg, "ended on step 1 of 2", "step context")
 }
 
 func TestBuildAutoContinuationMessageWithSteps_InvalidIndex(t *testing.T) {
@@ -353,4 +410,75 @@ func TestBuildReopenMessage_ContainsBaseAndNudge(t *testing.T) {
 			assertContains(t, reopen, tc.nudge, "nudge")
 		})
 	}
+}
+
+// Every message the engine sends carries the lifecycle section, and none of them
+// may carry the vocabulary it replaced: an agent told its work is "in_progress"
+// will go looking for a status the store cannot produce. Checked over all six
+// send sites rather than over prompts.yaml, because a stale word can just as
+// easily be appended in Go.
+func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
+	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+	task := Work{ID: "t1", Type: WorkTypeTask, ParentID: "s1", AgentRoleID: testRoleID, Title: "T"}
+	steps := []string{"Do A", "Do B"}
+
+	messages := map[string]string{}
+	for _, w := range []Work{story, task} {
+		prefix := string(w.Type)
+		messages[prefix+" kickoff"] = BuildKickoffMessageWithSteps(w, steps, 0)
+		messages[prefix+" restart"] = BuildRestartMessage(w)
+		messages[prefix+" auto_continue"] = BuildAutoContinuationMessage(w)
+		messages[prefix+" auto_continue with steps"] = BuildAutoContinuationMessageWithSteps(w, steps, 0)
+		messages[prefix+" step_advance"] = BuildStepAdvanceMessage(w, "Do B", 2, 2)
+		messages[prefix+" reopen"] = BuildReopenMessage(w)
+	}
+	messages["child_done"] = BuildChildCompletionMessage(story, "Child", "c1", true)
+	messages["child_done, wait standing"] = BuildChildCompletionMessage(story, "Child", "c1", false)
+
+	for name, msg := range messages {
+		for _, retired := range []string{"in_progress", "needs_input state", "still in_progress"} {
+			if strings.Contains(msg, retired) {
+				t.Errorf("%s message still says %q", name, retired)
+			}
+		}
+		// The rules are what makes a message survive an agent that has lost all
+		// memory of this work, so every send site has to carry them.
+		assertContains(t, msg, "How Pockode drives this work", name+" lifecycle section")
+	}
+}
+
+// A parent's wait is cleared by the very message telling it a child closed, so
+// a story with two running tasks has to ask again or be nudged for going quiet.
+func TestBuildChildCompletionMessage_TellsTheParentItsWaitIsGone(t *testing.T) {
+	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+
+	msg := BuildChildCompletionMessage(story, "Write the parser", "c1", true)
+
+	assertContains(t, msg, "Write the parser", "child title")
+	assertContains(t, msg, "This message cleared your wait", "the cleared wait")
+	assertContains(t, msg, "call work_wait with ID s1 again", "how to wait again")
+
+	// A parent waiting on the *user* keeps its wait (Engine.notifyParentOfChild),
+	// and must not be told to replace it with a wait on its subtasks: the user
+	// would stop being shown as the one being waited for.
+	standing := BuildChildCompletionMessage(story, "Write the parser", "c1", false)
+	if strings.Contains(standing, "cleared your wait") {
+		t.Error("a parent whose wait still stands is told it was cleared")
+	}
+	if strings.Contains(standing, "call work_wait with ID s1 again") {
+		t.Error("a parent whose wait still stands is told to wait again")
+	}
+	if strings.HasSuffix(standing, "\n") {
+		t.Error("the omitted paragraph left a trailing blank line")
+	}
+}
+
+// A stopped story is told nothing while it is stopped — child closures included —
+// so the restart message is the only thing that can send it to look.
+func TestBuildRestartMessage_SendsAStoryToRereadItsTasks(t *testing.T) {
+	msg := BuildRestartMessage(Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"})
+
+	assertContains(t, msg, "While a story is stopped Pockode sends it nothing", "why re-reading is needed")
+	assertContains(t, msg, "work_list", "how to re-read the tasks")
+	assertContains(t, msg, "work_comment_list", "how to read the reports")
 }

@@ -40,6 +40,19 @@ func (r *recordingSender) subtypes() []string {
 	return out
 }
 
+// contents is for the assertions about what a message *says*: the wording of
+// the child-done nudge depends on whether the closure cleared the parent's wait,
+// and getting that backwards is invisible in the subtype.
+func (r *recordingSender) contents() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.sent))
+	for i, m := range r.sent {
+		out[i] = m.content
+	}
+	return out
+}
+
 func (r *recordingSender) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -316,6 +329,11 @@ func TestEngine_ChildClosureWakesAParentWaitingOnIt(t *testing.T) {
 	if got.Wait != WaitNone || got.Status != StatusActive {
 		t.Errorf("parent = %q/%q, want active with its wait cleared", got.Status, got.Wait)
 	}
+	// The parent has to be told, or a story with a second task still running has
+	// no reason to ask for the wait again and is nudged for going quiet.
+	if !strings.Contains(f.sender.contents()[0], "This message cleared your wait") {
+		t.Error("the parent was not told its wait is gone")
+	}
 }
 
 // A parent waiting on the *user* has not been handed what it was waiting for, so
@@ -336,6 +354,12 @@ func TestEngine_ChildClosureLeavesAParentWaitingOnTheUser(t *testing.T) {
 	waitFor(t, func() bool { return f.sender.count() > 0 })
 	if got := getWork(t, f.store, story.ID); got.Wait != WaitUser {
 		t.Errorf("parent wait = %q, want it still waiting on the user", got.Wait)
+	}
+	// And is not told otherwise: a parent that believed its wait was cleared
+	// would call work_wait and overwrite a wait on a person with one on its
+	// subtasks, so the user would stop being shown as the one being waited for.
+	if strings.Contains(f.sender.contents()[0], "cleared your wait") {
+		t.Error("a parent still waiting on the user was told its wait was cleared")
 	}
 }
 

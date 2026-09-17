@@ -1307,7 +1307,7 @@ describe("ChatPanel", () => {
 
 		const autoContinue: ServerNotification = {
 			type: "message",
-			content: "Your session went idle but the work is still in_progress.",
+			content: "Your last turn ended without moving this task along.",
 			origin: "system",
 			subtype: "auto_continue",
 			meta: {

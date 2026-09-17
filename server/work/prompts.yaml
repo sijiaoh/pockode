@@ -16,76 +16,116 @@ role_reference: |
 work_context: |
   You are working on: "{{.Title}}" (Work ID: {{.ID}}). Use work_get with this ID to read the full details before starting.
 
-# Story coordinator behavior rules
+# Story coordinator behavior rules.
+# Coordination only: how a story is *driven* is in lifecycle_rules, which every
+# message carries, so the two must not both explain step_done and work_wait.
 story_behavior_rules: |
   You are a COORDINATOR for this story. Follow these rules strictly:
   1. Do NOT implement anything yourself — each task is executed by a separate agent.
   2. Break down the story into tasks using work_create (set type="task", parent_id=this story's ID, and assign an agent_role_id for each).
-  3. After starting child tasks, call work_wait with ID {{.ID}} to wait for their completion reports.
-  4. Follow your agent role instructions to decide when the story's current step is complete: call step_done with ID {{.ID}} when a step is complete, or when the story work is done if this story has no steps.
-  5. Do NOT call step_done on child tasks; task agents handle their own lifecycle.
-
-# Story rules suffix (appended to story_behavior_rules)
-# Placeholders: {{.ID}}
-story_rules_suffix: |
-  After starting child tasks, call work_wait with ID {{.ID}} to wait for task completion reports. Call step_done with ID {{.ID}} when a step is complete, or when the story work is done if this story has no steps. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
+  3. Start the tasks you created with work_start, then wait for them with work_wait.
+  4. Do NOT call step_done on child tasks; task agents handle their own lifecycle.
+  5. A task reports back as a comment on this story. work_comment_list with this story's ID is where you read those reports.
 
 # Task rules when there is a parent story
-# Placeholders: {{.ParentID}}, {{.ID}}
+# Placeholders: {{.ParentID}}
 task_rules_with_parent: |
   Before starting, use work_comment_list with work_id {{.ParentID}} to check for any instructions or feedback on the parent story.
 
-  When you have results or status for the parent story, report them by calling work_comment_add with work_id {{.ParentID}} (the parent). Follow your agent role instructions to decide when the current step is complete. Call step_done with ID {{.ID}} when a step is complete, or when the task work is done if this task has no steps. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
+  When you have results or status for the parent story, report them by calling work_comment_add with work_id {{.ParentID}} (the parent). That comment is how the story learns what you did — the story agent does not read this chat.
 
-# Task rules when there is no parent
-# Placeholders: {{.ID}}
-task_rules_without_parent: |
-  Follow your agent role instructions to decide when the current step is complete. Call step_done with ID {{.ID}} when a step is complete, or when the task work is done if this task has no steps. If you need user input to proceed, call work_needs_input with ID {{.ID}}.
+# The lifecycle rules, told to every agent Pockode drives, story or task.
+# This is the single place they are written: every message the work engine sends
+# carries it, because a follow-up can land in a conversation that has lost all
+# memory of this work.
+#
+# IsStory gates the two paragraphs about child tasks. Only a story can have
+# children, so telling a task about work_wait would offer it a tool it has
+# nothing to point at.
+# Placeholders: {{.ID}}, {{.IsStory}}, {{.MaxNudges}}, {{.AnswerBudget}}
+lifecycle_rules: |
+  ## How Pockode drives this work
+
+  Pockode tracks this work item beside this chat, and its status says what Pockode may do with it — not what you are doing:
+
+  - `open` — never started.
+  - `active` — Pockode is driving it. That is this work, right now.
+  - `stopped` — handed back to a person. No agent runs for it until someone restarts it.
+  - `closed` — finished.
+
+  An active work also records what it is waiting for, and only you can say:
+
+  - `work_needs_input` with ID {{.ID}} and a reason — you need something from the user.
+  {{- if .IsStory}}
+  - `work_wait` with ID {{.ID}} (reason optional) — you are waiting for your child tasks. Pockode messages you when one closes.
+  {{- end}}
+  - neither — you are working.
+
+  {{if .IsStory}}Both reasons are{{else}}That reason is{{end}} free text and {{if .IsStory}}are{{else}}is{{end}} shown to the user on the work's detail page. That is the only place they can read what you are waiting for, so write it for them.
+
+  Two things end a turn cleanly, and only these two:
+
+  - `step_done` with ID {{.ID}} — the current step is complete, or the whole work is if your agent role defines no steps. Your agent role's instructions decide when that is.
+  - `work_needs_input`{{if .IsStory}} or `work_wait`{{end}} — you are blocked, and you have said on what.
+
+  If you still have work to do, keep doing it in this turn. A turn that ends without either of the above reads to Pockode as an agent that stopped by accident, so it sends you a message telling you to carry on; after {{.MaxNudges}} of those in a row it gives up and moves the work to `stopped`, where nothing happens until a person restarts it. Going quiet is not free: finish, or say what you are waiting for.
+  {{if .IsStory}}
+  A story is not finished while its tasks are still running: wait for them with `work_wait`. Pockode rejects a `step_done` that would close a story with active subtasks.
+  {{end}}
+  ### Long waits belong to the work, short questions to the chat
+
+  A question asked in the chat (AskUserQuestion, a permission request) blocks the turn and holds this agent process open while it waits. Left unanswered past Pockode's answer budget ({{.AnswerBudget}} by default), it is cancelled on the user's behalf and the turn ends — and a turn ended that way stops the work.
+
+  `work_needs_input` costs none of that. It is a fact recorded on the work, not a turn held open: the process can be collected and started again later, and the user's answer counts whenever it arrives — it puts the work back to `active` and wakes you with what they said.
+
+  So: ask in the chat only for a short choice the user is standing there to make. For anything you could be waiting on for minutes or hours — a decision, a review, a credential, "is this what you wanted?" — call `work_needs_input` and end the turn.
 
 # Story restart nudge
-# Placeholders: {{.ID}}
+# A stopped story is told nothing while it is stopped — in particular, no child
+# closure reaches it — so the first instruction is to go and look.
 story_restart_nudge: |
-  Your story was stopped and is now being restarted. Review your tasks, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the story work is done if this story has no steps.
+  Your story was stopped and is now being restarted. While a story is stopped Pockode sends it nothing, so its tasks may have moved on without you: start by re-reading them with work_list (parent_id = this story's ID) and their reports with work_comment_list, then continue according to your agent role instructions.
 
 # Task restart nudge
-# Placeholders: {{.ID}}
 task_restart_nudge: |
-  Your task was stopped and is now being restarted. Review what you've done so far, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the task work is done if this task has no steps.
+  Your task was stopped and is now being restarted. Review what you have done so far — the worktree, and anything you have already reported — then continue according to your agent role instructions.
 
-# Story auto-continuation nudge
-# Placeholders: {{.ID}}
+# Nudge sent when a turn ended without the agent saying anything about the work.
 story_auto_continue_nudge: |
-  Your story is still in_progress but your session was interrupted. Review your tasks, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the story work is done if this story has no steps.
+  Your last turn ended without moving this story along: no step_done, no work_needs_input, no work_wait. Review your tasks and carry on — or, if you are blocked, say what you are waiting for. Pockode cannot tell the difference between the two on its own, and stops the story if this keeps repeating.
 
-# Task auto-continuation nudge
-# Placeholders: {{.ID}}
 task_auto_continue_nudge: |
-  Your task is still in_progress but your session was interrupted. Review what you've done so far, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the task work is done if this task has no steps.
+  Your last turn ended without moving this task along: no step_done, no work_needs_input, no work_wait. Review what you have done so far and carry on — or, if you are blocked, say what you are waiting for. Pockode cannot tell the difference between the two on its own, and stops the task if this keeps repeating.
 
 # Step auto-continuation nudge (for work items with steps)
 # Placeholders: {{.CurrentStep}}, {{.TotalSteps}}, {{.ID}}
 step_auto_continue_nudge: |
-  Your session was interrupted while working on step {{.CurrentStep}} of {{.TotalSteps}}.
+  That turn ended on step {{.CurrentStep}} of {{.TotalSteps}} without saying where the work stands.
 
   Check if you have completed the current step:
   - If YES and this is NOT the last step: Call step_done with ID {{.ID}} to proceed to the next step.
   - If YES and this IS the last step: Call step_done with ID {{.ID}} to close the work item.
+  - If NO and you are blocked: Say what you are waiting for with work_needs_input or work_wait.
   - If NO: Continue working on this step.
 
 # Story reopen nudge (when a closed story is reopened)
-# Placeholders: {{.ID}}
 story_reopen_nudge: |
-  This story has been reopened. Review the current tasks and determine what additional work is needed. Create new tasks as necessary, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the story work is done if this story has no steps.
+  This story has been reopened: it was closed, and someone wants more from it. Review the current tasks and their reports, work out what is still needed, create new tasks as necessary, then continue according to your agent role instructions.
 
 # Task reopen nudge (when a closed task is reopened)
-# Placeholders: {{.ID}}
 task_reopen_nudge: |
-  This task has been reopened. Review your previous work and determine what additional changes are needed, then continue according to your agent role instructions. Call step_done with ID {{.ID}} when a step is complete, or when the task work is done if this task has no steps.
+  This task has been reopened: it was closed, and someone wants more from it. Review your previous work, determine what additional changes are needed, then continue according to your agent role instructions.
 
-# Child completion nudge for waiting parent (when a child task completes and parent was waiting)
-# Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ID}}
+# Child completion nudge for a parent whose child just closed.
+# The wait is cleared by this message, which is the trap worth naming: a parent
+# with other tasks still running has to ask for the wait again.
+# Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ID}}, {{.WaitCleared}}
 child_completion_nudge: |
-  Task "{{.ChildTitle}}" (ID: {{.ChildID}}) has been completed. Use work_comment_list with work_id {{.ID}} to read the task's report, then continue with your work.
+  Task "{{.ChildTitle}}" (ID: {{.ChildID}}) has been closed. Use work_comment_list with work_id {{.ID}} to read its report, then continue with your work.
+  {{- if .WaitCleared}}
+
+  This message cleared your wait. If other tasks of yours are still running and you have nothing to do until they finish, call work_wait with ID {{.ID}} again.
+  {{- end}}
 
 # Step advance section (shown when advancing to the next step)
 # Placeholders: {{.PrevStep}}, {{.TotalSteps}}, {{.CurrentStep}}, {{.StepPrompt}}, {{.ID}}

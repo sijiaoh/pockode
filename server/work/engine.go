@@ -462,7 +462,8 @@ func (e *Engine) notifyParentOfChild(child Work) {
 	// A parent waiting on its children has been handed what it was waiting for.
 	// A parent waiting on the *user* has not, so its wait stands — the child's
 	// news arrives in the transcript either way.
-	if parent.Wait == WaitChild {
+	waitCleared := parent.Wait == WaitChild
+	if waitCleared {
 		if err := e.store.Activate(e.ctx, parent.ID); err != nil {
 			if e.ctx.Err() != nil {
 				return
@@ -472,7 +473,10 @@ func (e *Engine) notifyParentOfChild(child Work) {
 		}
 	}
 
-	msg := BuildChildCompletionMessage(parent, child.Title, child.ID)
+	// The message says whether the wait is gone, so the parent knows whether it
+	// has to ask for one again; the same decision governs both, which is why it
+	// is taken once here.
+	msg := BuildChildCompletionMessage(parent, child.Title, child.ID, waitCleared)
 	// Addressed to the parent's session, so the meta describes the parent; the
 	// child rides along in its own field.
 	meta := NewMessageMeta(parent, parent.CurrentStep+1, e.stepCount(parent))
