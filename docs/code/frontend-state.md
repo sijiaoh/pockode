@@ -18,6 +18,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ inputStore (localStorage)                               │   │
 │  ├─ filesSearchStore (localStorage)                         │   │
 │  ├─ gitPanelStore                                           │   │
+│  ├─ projectPanelStore                                       │   │
 │  ├─ gitSyncStore                                            │   │
 │  └─ worktreeStore + listeners                               │   │
 ├─────────────────────────────────────────────────────────────────┤
@@ -54,6 +55,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | inputStore | Draft text, per session | persist middleware |
 | filesSearchStore | File search options | localStorage init |
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
+| projectPanelStore | Which segment of the project list is shown | Outlives the screen, which unmounts into a work detail |
 | gitSyncStore | The fetch/pull/push in flight in each worktree, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
 | worktreeStore | Current worktree, and whether the server can run the setup hook | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |
@@ -156,6 +158,17 @@ It is deliberately **not** persisted. The default is derived from the working
 tree, which is where the answer usually comes from; a stale choice restored
 across restarts would outlive the situation that produced it. See
 [git-ui.md](../git-ui.md#history).
+
+`projectPanelStore` is the same argument with the remount guaranteed rather
+than conditional: it holds which segment of the project list — `Current` or
+`Closed` — is on screen, and the list unmounts every time a row is opened, so
+component state would hand a user browsing the archive back to `Current` on the
+way out of every work they looked at. The URL is the other tempting home and is
+worse: the segment filters one screen rather than naming a place, and as a route
+every tap would become a history entry, so Back would walk the user through
+their own filter changes instead of leaving the list. Not persisted either — a
+user who reloads is starting over, and `Current` is where starting over belongs
+(see [project-ui.md](../project-ui.md#5-where-the-segment-is-remembered)).
 
 ### Why Scroll State Is Neither a Store nor State
 

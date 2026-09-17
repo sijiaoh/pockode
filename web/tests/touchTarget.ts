@@ -187,6 +187,22 @@ const BLOCKIFIES =
 const WIDTH_PREFIXED = /(?:^|:)(?:max-)?(?:sm|md|lg|xl|2xl):/;
 
 /**
+ * Variants that move a token off the control's own box and onto a pseudo-element.
+ *
+ * Every other reader here strips variant prefixes before matching, which is
+ * right for a state or a media query — `hover:h-11` is still a height this
+ * element can have — and wrong for these: `after:inset-0` sizes the `::after`
+ * box, and the button it hangs off may be 20px tall. Reading it as the
+ * control's own size is worse than generous, because a stretch credits *both*
+ * axes with the floor: the control would drop out of the height check and out
+ * of the deferred register in the same breath, silently. A pseudo-element
+ * overlay that really is the hit area is spelled `touch-target`, which is read
+ * by name and not by arithmetic.
+ */
+const PSEUDO_ELEMENT_PREFIXED =
+	/(?:^|:)(?:before|after|placeholder|marker|selection|backdrop|file|first-letter|first-line):/;
+
+/**
  * The px a sizing token asks for, or null if it is not one.
  *
  * A size behind a width prefix does not count. `sm:size-11` promises 44px to a
@@ -288,7 +304,13 @@ interface Measured {
 
 /** Every box number one class list states. Shared by the fault and the census. */
 function measure(classes: string): Measured {
-	const tokens = classes.split(/\s+/).filter(Boolean);
+	// Dropped here rather than in each matcher: `tokens` is what the census and
+	// the line-box reader walk too, and a pseudo-element's padding or font size
+	// is no more this control's than its inset is.
+	const tokens = classes
+		.split(/\s+/)
+		.filter(Boolean)
+		.filter((t) => !PSEUDO_ELEMENT_PREFIXED.test(t));
 	const best = { h: { fine: 0, coarse: 0 }, w: { fine: 0, coarse: 0 } };
 	const declared = { h: false, w: false };
 	const stretched = { h: false, w: false };

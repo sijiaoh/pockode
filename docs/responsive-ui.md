@@ -538,22 +538,18 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-57 controls render text, state no height of their own and carry no touch-target.
+52 controls render text, state no height of their own and carry no touch-target.
 
-32 state their own font size, so the height below is exact: 16–40px.
-25 inherit it, so the height below is an upper bound — the ancestor that
+28 state their own font size, so the height below is exact: 16–40px.
+24 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
-15 are under the 36px fine-pointer floor.
+11 are under the 36px fine-pointer floor.
 6 reach the 44px coarse floor, 0 of them on a read height.
 0 state type this scan cannot read, listed as 0px and `unread`.
 
   16px  exact  web/src/components/Project/WorkDetailOverlay.tsx
-  16px  exact  web/src/components/Project/WorkListOverlay.tsx
   20px  exact  web/src/components/Project/AgentRoleListOverlay.tsx
-  20px  exact  web/src/components/Project/WorkDetailOverlay.tsx
-  20px  exact  web/src/components/Project/WorkListOverlay.tsx
-  20px  exact  web/src/components/Project/WorkPrimaryAction.tsx
   20px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx
   24px  bound  web/src/components/Settings/sections/AppearanceSections.tsx
   28px  bound  web/src/components/Chat/MessageItem.tsx
@@ -571,7 +567,6 @@ noticed. One representation with a test on it is the only thing that ends that.
   40px  bound  web/src/components/Chat/ForkOriginBanner.tsx
   40px  bound  web/src/components/Chat/MessageItem.tsx ×4
   40px  bound  web/src/components/Chat/TaskItem.tsx
-  40px  bound  web/src/components/Project/WorkListOverlay.tsx
   40px  bound  web/src/components/Worktree/WorktreeSwitcher.tsx
   40px  bound  web/src/components/common/SidebarListItem.tsx
   40px  bound  web/src/extensions/ExampleExtension/settings/AboutSection.tsx
@@ -628,12 +623,17 @@ name does not say what a control is for:
   Allow and Deny on a permission request; Cancel and Submit on a question; the
   Details link out to a work item. Answering the agent is the most consequential
   thing either screen does, and none of these clears the fine floor.
-- **`Project/WorkDetailOverlay`** — the link up to the parent work.
-- **`Project/WorkListOverlay`** — a task title in a `min-h-[36px]` row; the
-  labelled Start chip whose icon-only twin above it is 44; and, with
-  `WorkDetailOverlay` and `AgentRoleListOverlay`, list titles **inside a
-  `min-h-[44px]` row** — the row is 44, the target in it is 20, because
-  `items-center` centres the text rather than stretching it.
+- **`Project/WorkDetailOverlay`** — the link up to the parent work, under the
+  heading of a task. The header's Back button on that same screen goes to the
+  same place and is already 44 (`onBack={() => onOpenWorkDetail(parent.id)}`,
+  labelled "Back to parent story"), so this is a second route rather than the
+  route.
+- **`Project/AgentRoleListOverlay`** — a list title **inside a `min-h-[44px]`
+  row**: the row is 44, the target in it is 20, because `items-center` centres
+  the text rather than stretching it. `Project/WorkRow`, the row the project
+  list and the story detail share, is the one of this shape that states its 44
+  instead of centring in it, which is why it is not here — and why
+  `WorkListOverlay`, which now draws no row of its own, has left this list.
 - **`Settings/sections/AppearanceSections`** — the theme card, which is the
   over-report described above and needs nothing done to it.
 - **`ui/ContentView`** — the path button at the top of a file or diff view, the
@@ -743,15 +743,22 @@ Written down so the next reader does not grade it again.
 
 - **Batch 2 — R0, the chat transcript.** `MessageItem`'s Deny, Always Allow and
   Allow; `AskUserQuestionItem`'s Cancel and Submit. All R0 (b).
-- **Batch 3 — R1, text targets centred in a tall row.** `WorkDetailOverlay` ×2,
-  `WorkListOverlay` ×2, `AgentRoleListOverlay`, `MessageItem`'s Details link,
-  `ContentView`'s path button. They share a *structural* cause — a 44px row
-  using `items-center` to centre a 20px text target rather than stretch it — so
-  they are worth one answer between them rather than one each.
-- **Nothing to raise.** `WorkListOverlay`'s labelled Start chip (R2; the
-  icon-only twin above it is already 44), `WorktreeCreateSheet`'s setup-script
-  link (R2), and the `AppearanceSections` theme card, which is the register's
-  known over-report and not a defect.
+- **Batch 3 — R1, text targets centred in a tall row.** `AgentRoleListOverlay`,
+  `MessageItem`'s Details link, `ContentView`'s path button. They share a
+  *structural* cause — a 44px row using `items-center` to centre a 20px text
+  target rather than stretch it — so they are worth one answer between them
+  rather than one each. `WorkListOverlay` and `WorkDetailOverlay` were in this
+  batch for their row titles and are out of it: both screens now list work
+  through `WorkRow`, which states its 44. What is left in the register under
+  `WorkDetailOverlay` is the 16px link up to the parent work — a plain text
+  link, not a centred row title, and graded below rather than here.
+- **Nothing to raise.** `WorkDetailOverlay`'s parent link (**R2**: its
+  same-screen twin, the header's Back button, already clears the floor and goes
+  to the same work — the link is the one you tap when you are reading the title
+  it is under, and missing it costs one tap on a 44px control four lines
+  above), `WorktreeCreateSheet`'s setup-script link (R2), and the
+  `AppearanceSections` theme card, which is the register's known over-report and
+  not a defect.
 
 #### What batch 1 did to the phone layout
 
@@ -935,6 +942,43 @@ Known blind spots, recorded as they are rather than as they should be:
    its classes only indirectly would stop being followed, and its callers would
    be asked to state a box they already get from it. That fails loudly rather
    than quietly, and no such helper exists today.
+
+8. **A token behind a pseudo-element variant is dropped before anything reads
+   it.** Closed, and recorded because the hole it closed was invisible from
+   both sides. Variant prefixes are stripped before a token is matched, which
+   is right for a state or a media query — `hover:h-11` is a height this
+   element can have — and wrong for `after:inset-0`, which sizes an `::after`
+   overlay and says nothing about the button it hangs off. Crediting it was
+   worse than generous: a stretch credits *both* axes under blind spot 5, so
+   the control left the height check and the register in the same breath,
+   silently. `before:` / `after:` / `placeholder:` / `marker:` / `selection:` /
+   `backdrop:` / `file:` / `first-letter:` / `first-line:` tokens are now
+   dropped at tokenisation, so the census and the line-box reader never see
+   them either — a pseudo-element's padding or font size is no more the
+   control's than its inset is. A pseudo-element overlay that really *is* the
+   hit area is still expressible: it is spelled `touch-target`, which is read
+   by name rather than by arithmetic. Verified by mutation: deleting
+   `min-h-[44px]` from `WorkRow`'s title button, which lays an `after:inset-0`
+   overlay over the whole row, left the old scan green with the register
+   unchanged, and now puts that button back in the register at 20px.
+
+9. **A control rendered by a component tag is not a control as far as the scan
+   is concerned, and a reaching overlay can be clipped away by a caller.** The
+   scan matches `<button>`, `<a>` and `role="button"` in source, so a router
+   `<Link>` — capitalised, an `<a>` only at runtime — is never measured and
+   never reaches the register. `WorktreeBadge` is today's one: `px-1.5 py-0.5`
+   around `text-[11px]` is a 20px box, lifted to 44 by a transparent `before:`
+   overlay. That overlay is absolutely positioned *inside* the badge, so any
+   caller with `overflow` clipping between itself and the badge takes it back
+   — and `WorkRow`'s meta line clips, because clipping its slots from the right
+   is how the line truncates. The badge is ~26px in a work row for that reason
+   (the box plus the line's padding), **deliberately**: 11px below it is 5px inside the next row, whose whole area
+   is another work's tap target, so the reach would have invented a band where
+   aiming at one work switches worktree. That is re-check 2 above answering
+   *no*, and the graceful failure is what makes it affordable — a miss opens
+   the work, which is where its worktree is written. **R2**: the header's
+   worktree switcher is the same-screen route that clears the floor. On the
+   work detail page nothing clips at that distance, so the badge is 44 there.
 
 ### The manual check that cannot be automated
 

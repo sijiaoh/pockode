@@ -1,14 +1,19 @@
-import { AlertCircle, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { AlertCircle, Loader2, Plus } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
-import { ACTIVITY_VIEW, type Activity, needsUser } from "../../lib/activity";
+import { type Activity, needsUser } from "../../lib/activity";
+import {
+	projectPanelActions,
+	useProjectPanelStore,
+	type WorkSegment,
+} from "../../lib/projectPanelStore";
 import { useWorkStore } from "../../lib/workStore";
 import type { WorkListItem } from "../../types/work";
-import { ActivityDot, ActivityIcon } from "../ui";
+import { ActivityIcon } from "../ui";
 import BackToChatButton from "../ui/BackToChatButton";
-import { WorktreeBadge } from "../Worktree";
-import CreateWorkForm from "./CreateWorkForm";
-import WorkPrimaryAction, { countActiveChildren } from "./WorkPrimaryAction";
+import BottomActionBar from "../ui/BottomActionBar";
+import CreateWorkSheet from "./CreateWorkSheet";
+import WorkRow from "./WorkRow";
 
 interface Props {
 	onBack: () => void;
@@ -16,6 +21,15 @@ interface Props {
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }
 
+/**
+ * The project list: one column of the work that needs a person or is under way,
+ * and a second segment holding the archive (docs/project-ui.md §2).
+ *
+ * Nothing here expands. A story's tasks are listed in exactly one place, the
+ * story's detail page, and the only tasks that appear here are the ones nobody
+ * else is coming for — which is why a group can promise that what is in it is
+ * for the user to do.
+ */
 export default function WorkListOverlay({
 	onBack,
 	onOpenWorkDetail,
@@ -25,6 +39,16 @@ export default function WorkListOverlay({
 	const isLoading = useWorkStore((s) => s.isLoading);
 	const error = useWorkStore((s) => s.error);
 	const roleNameMap = useRoleNameMap();
+	const segment = useProjectPanelStore((s) => s.segment);
+	const [creating, setCreating] = useState(false);
+
+	const handleCreated = useCallback(
+		(workId: string) => {
+			setCreating(false);
+			onOpenWorkDetail(workId);
+		},
+		[onOpenWorkDetail],
+	);
 
 	const tasksByParentId = useMemo(() => {
 		const map = new Map<string, WorkListItem[]>();
@@ -41,11 +65,16 @@ export default function WorkListOverlay({
 		return map;
 	}, [works]);
 
-	const storyGroups = useMemo(() => {
+	const titleById = useMemo(
+		() => new Map(works.map((w) => [w.id, w.title])),
+		[works],
+	);
+
+	const groups = useMemo(() => {
 		const byGroup = new Map<WorkGroup, WorkListItem[]>();
 		for (const w of works) {
-			if (w.type !== "story") continue;
-			const group = workGroup(w);
+			const group = rowGroup(w);
+			if (!group) continue;
 			const list = byGroup.get(group);
 			if (list) {
 				list.push(w);
@@ -53,18 +82,46 @@ export default function WorkListOverlay({
 				byGroup.set(group, [w]);
 			}
 		}
-		return GROUP_ORDER.filter((g) => byGroup.has(g)).map((group) => ({
-			group,
-			stories:
-				group === "closed"
-					? [...(byGroup.get(group) as WorkListItem[])].sort((a, b) =>
-							b.updated_at.localeCompare(a.updated_at),
-						)
-					: (byGroup.get(group) as WorkListItem[]),
-		}));
+		// A group with no rows is not rendered, header and all; the rows inside
+		// keep the order the list arrived in, so a work that starts or blocks
+		// while the list is being read only moves if it changed group.
+		return GROUP_ORDER.flatMap((group) => {
+			const rows = byGroup.get(group);
+			return rows ? [{ group, rows }] : [];
+		});
 	}, [works]);
 
-	const hasStories = storyGroups.length > 0;
+	const closedStories = useMemo(
+		() =>
+			works
+				.filter((w) => w.type === "story" && w.status === "closed")
+				// The one list sorted by anything: "when did this finish" is the only
+				// question the archive is asked.
+				.sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
+		[works],
+	);
+
+	const renderRow = (work: WorkListItem) => (
+		<WorkRow
+			key={work.id}
+			work={work}
+			tasks={work.type === "story" ? tasksByParentId.get(work.id) : undefined}
+			// Slot 2 is the list's, not the row's: a task is here because it left
+			// its story, and without the story's name it is a title with no
+			// context (docs/project-ui.md §3.1).
+			parentTitle={
+				work.type === "task" && work.parent_id
+					? titleById.get(work.parent_id)
+					: undefined
+			}
+			roleName={
+				work.agent_role_id ? roleNameMap.get(work.agent_role_id) : undefined
+			}
+			showUpdatedAt={segment === "closed"}
+			onOpen={onOpenWorkDetail}
+			onOpenChat={onNavigateToSession}
+		/>
+	);
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
@@ -75,11 +132,11 @@ export default function WorkListOverlay({
 				</h1>
 			</header>
 
-			<div className="min-h-0 flex-1 overflow-auto p-2">
-				<div className="mb-2">
-					<CreateWorkForm type="story" />
-				</div>
+			{/* Outside the scroll area on purpose: the archive is one tap away from
+			    wherever the list has been scrolled to. */}
+			<SegmentedControl segment={segment} />
 
+			<div className="min-h-0 flex-1 overflow-auto p-2">
 				{isLoading ? (
 					<div className="flex items-center justify-center py-8">
 						<Loader2 className="size-5 animate-spin text-th-text-muted" />
@@ -89,316 +146,181 @@ export default function WorkListOverlay({
 						<AlertCircle className="size-5" />
 						<p>{error}</p>
 					</div>
-				) : !hasStories ? (
+				) : segment === "closed" ? (
+					closedStories.length === 0 ? (
+						// No action to offer here, so none is written.
+						<p className="py-8 text-center text-sm text-th-text-muted">
+							Nothing finished yet.
+						</p>
+					) : (
+						<div className="space-y-0.5">{closedStories.map(renderRow)}</div>
+					)
+				) : groups.length === 0 ? (
 					<div className="py-8 text-center text-sm text-th-text-muted">
-						No items yet
+						<p>Nothing on the go.</p>
+						<p>Start with a story — the button below.</p>
 					</div>
 				) : (
 					<div className="space-y-2">
-						{storyGroups.map(({ group, stories }) => (
-							<WorkGroupSection
-								key={group}
-								group={group}
-								stories={stories}
-								tasksByParentId={tasksByParentId}
-								roleNameMap={roleNameMap}
-								onOpenWorkDetail={onOpenWorkDetail}
-								onNavigateToSession={onNavigateToSession}
-							/>
+						{groups.map(({ group, rows }) => (
+							<section key={group}>
+								<GroupHeading group={group} count={rows.length} />
+								<div className="space-y-0.5">{rows.map(renderRow)}</div>
+							</section>
 						))}
 					</div>
 				)}
 			</div>
+
+			{/* Fixed, and in both segments: creating is the most frequent action on
+			    this screen, it does not depend on the list having loaded, and the
+			    top-of-list form it replaces scrolled away exactly when a long list
+			    made it most useful (docs/project-ui.md §4). */}
+			<BottomActionBar>
+				<button
+					type="button"
+					onClick={() => setCreating(true)}
+					className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-th-accent text-sm font-medium text-th-accent-text"
+				>
+					<Plus className="size-4" />
+					New Story
+				</button>
+			</BottomActionBar>
+
+			{creating && (
+				<CreateWorkSheet
+					type="story"
+					onClose={() => setCreating(false)}
+					onCreated={handleCreated}
+				/>
+			)}
 		</div>
 	);
 }
 
-/**
- * The five groups of the work list (docs/lifecycle-ui.md §6.1).
- *
- * Membership is `status` plus the single `needsUser` predicate, never the full
- * activity: a list that regrouped on every phase change would reorder itself
- * while being read. A work moving between *Needs you* and *Active* is the one
- * movement worth that disruption, since it is the one the user is waiting for.
- */
-type WorkGroup = "needs_you" | "active" | "stopped" | "open" | "closed";
-
-/**
- * "Needs you" first, where the status order used to put the running work: a
- * list of work is a list of things to do, and the things needing a person come
- * before the things running by themselves. `stopped` above `open` because a
- * stopped work is something the user already started.
- */
-const GROUP_ORDER: WorkGroup[] = [
-	"needs_you",
-	"active",
-	"stopped",
-	"open",
-	"closed",
-];
-
-const GROUP_LABEL: Record<WorkGroup, string> = {
-	needs_you: "Needs you",
-	active: "Active",
-	stopped: "Stopped",
-	open: "Open",
+const SEGMENT_LABEL: Record<WorkSegment, string> = {
+	current: "Current",
 	closed: "Closed",
 };
 
 /**
- * The leaf each header borrows its glyph and tone from.
+ * Two segments, and the words are chosen against the state vocabulary rather
+ * than for brevity: "Closed" is exactly the status of what is in it, while
+ * "Current" names nothing in the vocabulary on purpose — "Open" and "Active"
+ * are both status values, and a segment wearing either would claim a
+ * membership it does not have (docs/project-ui.md §2.1).
  *
- * A header glyph is fixed per group and never taken from the rows inside it:
- * *Needs you* holds three different leaves, and a header wearing one of them
- * would mislabel the other two. The rows keep their own precise leaf, which is
- * where the distinction belongs — so these glyphs are drawn `decorative`, with
- * the group's written label as the only thing announced.
+ * Neither segment carries a count: a count is a signal to act, the group
+ * headings inside `Current` already carry the ones that are, and a running
+ * total of finished work is a number nobody acts on.
+ */
+function SegmentedControl({ segment }: { segment: WorkSegment }) {
+	return (
+		// A group and not a tablist: the tab pattern promises a panel per tab and
+		// an arrow-key walk between them, and this is one list under a filter.
+		<fieldset
+			aria-label="Which work to list"
+			// `min-w-0` against the one thing a fieldset does that a div does not:
+			// its `min-inline-size: min-content` would stop the two segments
+			// sharing the width of a narrow phone.
+			className="flex min-w-0 gap-1 border-b border-th-border bg-th-bg-secondary p-1"
+		>
+			{(["current", "closed"] as const).map((value) => (
+				<button
+					key={value}
+					type="button"
+					aria-pressed={segment === value}
+					onClick={() => projectPanelActions.setSegment(value)}
+					className={`min-h-[44px] flex-1 rounded-md px-3 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent ${
+						segment === value
+							? "bg-th-bg-tertiary font-medium text-th-text-primary"
+							: "text-th-text-muted hover:text-th-text-primary"
+					}`}
+				>
+					{SEGMENT_LABEL[value]}
+				</button>
+			))}
+		</fieldset>
+	);
+}
+
+/**
+ * The three groups of the `Current` segment (docs/project-ui.md §2.3).
+ *
+ * Two questions decide the group, asked in this order: is an engine driving
+ * this work, and if it is, is it blocked on the user? Membership never reads
+ * the full activity beyond that one predicate — a list that regrouped on every
+ * phase change would reorder itself while being read.
+ */
+type WorkGroup = "needs_you" | "in_progress" | "not_running";
+
+/** The things to do come before the things running by themselves. */
+const GROUP_ORDER: WorkGroup[] = ["needs_you", "in_progress", "not_running"];
+
+const GROUP_LABEL: Record<WorkGroup, string> = {
+	needs_you: "Needs you",
+	in_progress: "In progress",
+	not_running: "Not running",
+};
+
+/**
+ * The leaf each heading borrows its glyph and tone from.
+ *
+ * Fixed per group and never taken from the rows inside it: *Needs you* holds
+ * three different leaves, and a heading wearing one of them would mislabel the
+ * other two. The rows keep their own precise leaf, which is where the
+ * distinction belongs — so these are drawn `decorative`, with the written label
+ * as the only thing announced.
  */
 const GROUP_GLYPH: Record<WorkGroup, Activity> = {
 	needs_you: "needs_message",
-	active: "running",
-	stopped: "stopped",
-	open: "open",
-	closed: "closed",
+	in_progress: "running",
+	not_running: "open",
 };
 
-function workGroup(work: WorkListItem): WorkGroup {
-	if (work.status !== "active") return work.status;
-	return needsUser(work.activity) ? "needs_you" : "active";
+/**
+ * Which group a work is a row in, or `null` when it gets no row of its own.
+ *
+ * A row exists for every story, and for every task that needs a person —
+ * `needsUser` or `stopped`, the two ways a task can be stuck with nobody coming
+ * for it. Everything else about a task is rolled up into its story's row
+ * (docs/project-ui.md §2.2). `stopped` stays out of *Needs you* deliberately:
+ * it needs a human whenever the human gets to it, and a stale stopped work at
+ * the top of that group would teach the user its count is not a number of
+ * things to do.
+ */
+function rowGroup(work: WorkListItem): WorkGroup | null {
+	if (work.status === "closed") return null;
+	if (work.status === "active") {
+		if (needsUser(work.activity)) return "needs_you";
+		return work.type === "story" ? "in_progress" : null;
+	}
+	// `open` and `stopped` differ in how they got there, not in what the user
+	// does about them: the row's own control is Start or Restart, one control
+	// under two labels, and the row's glyph already tells them apart.
+	if (work.status === "stopped") return "not_running";
+	return work.type === "story" ? "not_running" : null;
 }
 
-interface WorkGroupSectionProps {
-	group: WorkGroup;
-	stories: WorkListItem[];
-	tasksByParentId: Map<string, WorkListItem[]>;
-	roleNameMap: Map<string, string>;
-	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string, worktree: string) => void;
-}
-
-function WorkGroupSection({
-	group,
-	stories,
-	tasksByParentId,
-	roleNameMap,
-	onOpenWorkDetail,
-	onNavigateToSession,
-}: WorkGroupSectionProps) {
-	const [collapsed, setCollapsed] = useState(group === "closed");
-
+/**
+ * Inert: a glyph, a label, a count, and no toggle. Collapsing was for getting
+ * the archive out of the way, and the archive is a segment now; a heading is
+ * also what lets a screen reader jump between groups, which the buttons never
+ * offered.
+ */
+function GroupHeading({ group, count }: { group: WorkGroup; count: number }) {
 	return (
-		<div>
-			<button
-				type="button"
-				onClick={() => setCollapsed(!collapsed)}
-				aria-expanded={!collapsed}
-				className="flex min-h-[44px] w-full items-center gap-2 px-3 text-xs font-medium text-th-text-muted"
-			>
-				{collapsed ? (
-					<ChevronRight className="size-3.5 shrink-0" />
-				) : (
-					<ChevronDown className="size-3.5 shrink-0" />
-				)}
-				<ActivityIcon activity={GROUP_GLYPH[group]} decorative />
-				<span className="flex-1 text-left">{GROUP_LABEL[group]}</span>
-				<span className="rounded-full bg-th-bg-tertiary px-1.5 py-0.5 text-xs tabular-nums text-th-text-muted">
-					{stories.length}
-				</span>
-			</button>
-			{!collapsed && (
-				<div className="space-y-0.5">
-					{stories.map((story) => (
-						<StoryRow
-							key={story.id}
-							story={story}
-							tasks={tasksByParentId.get(story.id)}
-							roleNameMap={roleNameMap}
-							onOpenWorkDetail={onOpenWorkDetail}
-							onNavigateToSession={onNavigateToSession}
-						/>
-					))}
-				</div>
-			)}
-		</div>
-	);
-}
-
-function StoryRow({
-	story,
-	tasks,
-	roleNameMap,
-	onOpenWorkDetail,
-	onNavigateToSession,
-}: {
-	story: WorkListItem;
-	tasks: WorkListItem[] | undefined;
-	roleNameMap: Map<string, string>;
-	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string, worktree: string) => void;
-}) {
-	const storySessionId = story.session_id;
-	const totalTasks = tasks?.length ?? 0;
-	const closedTasks = tasks?.filter((t) => t.status === "closed").length ?? 0;
-	const roleName = story.agent_role_id
-		? (roleNameMap.get(story.agent_role_id) ?? null)
-		: null;
-	const hasTasks = totalTasks > 0;
-	const isTaskListCollapsible = story.status === "closed";
-	const [tasksExpanded, setTasksExpanded] = useState(
-		() => !isTaskListCollapsible,
-	);
-	const isTaskListExpanded = isTaskListCollapsible ? tasksExpanded : true;
-
-	return (
-		<div className="rounded-lg">
-			{/* Title row */}
-			<div className="flex min-h-[44px] items-center px-1">
-				{hasTasks ? (
-					isTaskListCollapsible ? (
-						<button
-							type="button"
-							onClick={() => setTasksExpanded(!tasksExpanded)}
-							className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-th-text-muted"
-							aria-expanded={isTaskListExpanded}
-							aria-label={
-								isTaskListExpanded ? "Collapse tasks" : "Expand tasks"
-							}
-						>
-							{isTaskListExpanded ? (
-								<ChevronDown className="size-3.5" />
-							) : (
-								<ChevronRight className="size-3.5" />
-							)}
-						</button>
-					) : (
-						<div
-							className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-th-text-muted"
-							aria-hidden="true"
-						>
-							<ChevronDown className="size-3.5" />
-						</div>
-					)
-				) : (
-					<div className="min-h-[44px] min-w-[44px] shrink-0" />
-				)}
-				{/* Decorative: the title button below names the leaf in the same
-				    breath, and a glyph repeating it announces the row twice. */}
-				<ActivityIcon activity={story.activity} decorative />
-				<button
-					type="button"
-					onClick={() => onOpenWorkDetail(story.id)}
-					className="ml-2 min-w-0 flex-1 truncate text-left text-sm text-th-text-primary hover:text-th-accent"
-					aria-label={`${story.title} — ${ACTIVITY_VIEW[story.activity].label}`}
-				>
-					{story.title}
-				</button>
-				{/* The rollup: the story itself, or any of its tasks
-				    (docs/lifecycle-ui.md §4). The rows keep their own precise leaf. */}
-				{(needsUser(story.activity) ||
-					tasks?.some((t) => needsUser(t.activity))) && (
-					<ActivityDot className="mr-2" />
-				)}
-			</div>
-
-			{/* Meta info row — always visible */}
-			<div className="flex items-center gap-2 px-3 pb-1 pl-[4.375rem] text-xs text-th-text-muted">
-				<WorktreeBadge work={story} className="max-w-[8rem] shrink" />
-				<span className="min-w-0 shrink truncate">{roleName ?? "—"}</span>
-				{totalTasks > 0 && (
-					<>
-						<span aria-hidden="true">&middot;</span>
-						<span>
-							{closedTasks}/{totalTasks} tasks
-						</span>
-					</>
-				)}
-				{storySessionId && (
-					<>
-						<span aria-hidden="true">&middot;</span>
-						<button
-							type="button"
-							onClick={() =>
-								onNavigateToSession(storySessionId, story.worktree ?? "")
-							}
-							className="-my-2 py-2 text-th-accent"
-						>
-							Chat
-						</button>
-					</>
-				)}
-				<WorkPrimaryAction
-					work={story}
-					activeChildCount={countActiveChildren(tasks ?? [])}
-				/>
-			</div>
-
-			{/* Task list — collapsible */}
-			{isTaskListExpanded && hasTasks && (
-				<div className="pb-1 pl-[3rem] pr-2">
-					{tasks?.map((task) => (
-						<TaskRow
-							key={task.id}
-							task={task}
-							roleNameMap={roleNameMap}
-							onOpenWorkDetail={onOpenWorkDetail}
-							onNavigateToSession={onNavigateToSession}
-						/>
-					))}
-				</div>
-			)}
-		</div>
-	);
-}
-
-function TaskRow({
-	task,
-	roleNameMap,
-	onOpenWorkDetail,
-	onNavigateToSession,
-}: {
-	task: WorkListItem;
-	roleNameMap: Map<string, string>;
-	onOpenWorkDetail: (workId: string) => void;
-	onNavigateToSession: (sessionId: string, worktree: string) => void;
-}) {
-	const taskSessionId = task.session_id;
-	const roleName = task.agent_role_id
-		? (roleNameMap.get(task.agent_role_id) ?? null)
-		: null;
-
-	// The bar keys off the leaves, not off one of the fields behind them: warning
-	// for any of the three ways a task can be waiting on the user, error for a
-	// task the engine has let go of (docs/lifecycle-ui.md §6.1).
-	const isNeedsUser = needsUser(task.activity);
-	const isStopped = task.status === "stopped";
-
-	return (
-		<div
-			className={`flex min-h-[36px] items-center gap-2 rounded-lg px-2 hover:bg-th-bg-tertiary ${isNeedsUser ? "border-l-2 border-th-warning bg-th-warning/5" : isStopped ? "border-l-2 border-th-error bg-th-error/5" : ""}`}
-		>
-			<ActivityIcon activity={task.activity} size="sm" />
-			<button
-				type="button"
-				onClick={() => onOpenWorkDetail(task.id)}
-				className="min-w-0 flex-1 truncate text-left text-xs text-th-text-primary hover:text-th-accent"
-			>
-				{task.title}
-			</button>
-			<span className="shrink-0 text-xs text-th-text-muted">
-				{roleName ?? "—"}
+		// Above the rows rather than level with them: a row lifts its own
+		// controls to `z-10`, and a Stop button sliding over the heading it is
+		// scrolling under would be drawn on top of it at the same level.
+		<h2 className="sticky top-0 z-20 flex min-h-[32px] items-center gap-2 bg-th-bg-primary px-3 text-xs font-medium text-th-text-muted">
+			<ActivityIcon activity={GROUP_GLYPH[group]} decorative />
+			<span className="flex-1">{GROUP_LABEL[group]}</span>
+			{/* Rows in the group, not work items in a tree: the tasks folded into a
+			    story row are counted in that row's own meta line. */}
+			<span className="rounded-full bg-th-bg-tertiary px-1.5 py-0.5 tabular-nums">
+				{count}
 			</span>
-			{taskSessionId && (
-				<button
-					type="button"
-					onClick={() =>
-						onNavigateToSession(taskSessionId, task.worktree ?? "")
-					}
-					className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-xs text-th-accent"
-				>
-					Chat
-				</button>
-			)}
-			<WorkPrimaryAction work={task} iconOnly />
-		</div>
+		</h2>
 	);
 }
