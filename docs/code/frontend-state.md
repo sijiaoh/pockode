@@ -189,6 +189,13 @@ Both are keyed by worktree for the same reason: switching worktrees mid-run is
 reachable, and a single record would show A's outcome under B, or let A's run
 disable B's controls.
 
+Keying is not the whole answer for `gitWriteStore`, though, because a queued
+write is not yet a request: the server applies a `git.*` write to whatever
+worktree the connection is bound to, so one whose turn comes after a switch
+would write into the tree the user has just left. It is dropped at the moment it
+would have been sent (`WorktreeChangedError`), which is the only moment its
+destination is known.
+
 Why not react-query, which already tracks in-flight mutations? Because these
 stores are not caching a result — they are **ordering the requests**.
 `gitWriteStore` is a serial queue: one write per worktree at a time, because the

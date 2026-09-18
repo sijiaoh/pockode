@@ -13,6 +13,7 @@ import { useGitStatus } from "../../hooks/useGitStatus";
 import { useGitWriteRunner } from "../../hooks/useGitWrites";
 import { useRouteState } from "../../hooks/useRouteState";
 import { useDiffSettings } from "../../lib/diffSettingsStore";
+import { WorktreeChangedError } from "../../lib/gitWriteStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { flattenGitStatus, stageFailureSummary } from "../../types/git";
 import { describeGitFailure, type GitFailure } from "../../utils/gitErrors";
@@ -91,7 +92,9 @@ function DiffView({ path, staged, onBack }: Props) {
 			);
 		} catch (e) {
 			// The view stays where it is: the file did not move, so neither does
-			// the diff the user is reading.
+			// the diff the user is reading. A write dropped by a worktree switch
+			// says nothing about this file at all, so it says nothing here.
+			if (e instanceof WorktreeChangedError) return;
 			setError(describeGitFailure(e, () => stageFailureSummary(staged)));
 		}
 	};

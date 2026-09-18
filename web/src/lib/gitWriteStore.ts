@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { worktreeActions } from "./worktreeStore";
 
 /**
  * Which pending set a write shows up in. Stage and unstage share one: both
@@ -56,6 +57,26 @@ interface GitWriteState {
  */
 export const useGitWriteStore = create<GitWriteState>(() => ({ writes: {} }));
 
+/**
+ * A queued write that was dropped because the user left the worktree it was
+ * queued for.
+ *
+ * A git write names no worktree of its own: the server applies it to whichever
+ * one this connection is bound to, and `worktree.switch` rebinds it. An
+ * unstarted write therefore stops meaning what it meant when it was tapped —
+ * it would stage or discard a same-named path in the tree the user has just
+ * moved to. Sending it immediately was what used to make that impossible, since
+ * one connection answers in order; a queue is what gives the switch room to
+ * land in between, so the queue is what has to check. uploadStore cancels a
+ * queued upload on the same reasoning.
+ */
+export class WorktreeChangedError extends Error {
+	constructor() {
+		super("Cancelled — worktree changed");
+		this.name = "WorktreeChangedError";
+	}
+}
+
 /** A worktree nothing has been written in, as a stable identity for selectors. */
 const IDLE: GitWrites = { toggling: new Set(), discarding: new Set() };
 
@@ -93,7 +114,10 @@ export const gitWriteActions = {
 	 *
 	 * Rejects with the request's own error, so the caller reports its own
 	 * failure; a failure never stops what is queued behind it, which belongs to
-	 * a tap the user made separately.
+	 * a tap the user made separately. A write whose turn comes after the user
+	 * has left the worktree is not sent at all and rejects with
+	 * WorktreeChangedError, which the panel drops rather than reports — its
+	 * banners deliberately do not cross a switch.
 	 *
 	 * Paths that already have a write pending are left out: that request is
 	 * doing this one's job, and the pending sets count a path once. A call left
@@ -123,6 +147,12 @@ export const gitWriteActions = {
 		// has seen this settle is looking at rows that are no longer pending.
 		const settled = previous.then(async () => {
 			try {
+				// Checked here rather than when the write was queued: this is the
+				// moment the request is actually sent, and the only one at which
+				// the worktree it will reach is known.
+				if (worktreeActions.getCurrent() !== worktree) {
+					throw new WorktreeChangedError();
+				}
 				await action(paths);
 			} finally {
 				setPending(worktree, kind, paths, false);

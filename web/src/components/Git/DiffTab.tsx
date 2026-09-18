@@ -6,6 +6,7 @@ import { useGitLog } from "../../hooks/useGitLog";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useGitWriteRunner } from "../../hooks/useGitWrites";
 import { gitPanelActions, useHistoryExpanded } from "../../lib/gitPanelStore";
+import { WorktreeChangedError } from "../../lib/gitWriteStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import {
 	describeDiscard,
@@ -88,6 +89,7 @@ function DiffTab({
 				await toggle(paths, staged);
 				setActionError((prev) => clearedBy(prev, paths));
 			} catch (e) {
+				if (e instanceof WorktreeChangedError) return;
 				setActionError({
 					...describeGitFailure(e, () => stageFailureSummary(staged)),
 					paths,
@@ -127,6 +129,9 @@ function DiffTab({
 					onCloseFile();
 				}
 			} catch (e) {
+				// Nothing was written and the banner belongs to a worktree that is
+				// no longer on screen — the same reason a switch clears it above.
+				if (e instanceof WorktreeChangedError) return;
 				setActionError({
 					...describeGitFailure(e, () => describeDiscard(files).failureSummary),
 					paths,
