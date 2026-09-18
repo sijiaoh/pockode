@@ -78,15 +78,11 @@ export function countActiveChildren(children: WorkListItem[]): number {
 }
 
 /**
- * The part of a work a command needs: what to do to it, what that costs, and
- * which work it is — the icon-only button says the last of those out loud,
- * because a screen reader walking a list meets a column of identical verbs
- * otherwise (docs/project-ui.md §3).
+ * The part of a work a command needs: which work it is, what to do to it, and
+ * what that would cost. Not its title — the title is what the *control* is
+ * announced under, and each surface passes that to its own button.
  */
-export type CommandableWork = Pick<
-	WorkListItem,
-	"id" | "status" | "activity" | "title"
->;
+type CommandableWork = Pick<WorkListItem, "id" | "status" | "activity">;
 
 /**
  * The work's primary command, from the button being pressed to the command
@@ -105,13 +101,18 @@ export function useWorkCommand(
 	const { run, busy, error, clearError } = useWorkAction(work.id, action);
 	const [confirm, setConfirm] = useState<string | null>(null);
 
-	// A confirmation belongs to the action that raised it. The work can leave
-	// `active` while the dialog is open — the engine stops it, an agent closes
-	// it — and `run` follows the status, so a dialog kept across that change
-	// would start the work when the user pressed the button labelled Stop.
+	// A confirmation and a failure both belong to the action that raised them.
+	// The work can leave `active` while either is on screen — the engine stops
+	// it, an agent closes it — and `run` follows the status, so a dialog kept
+	// across that change would start the work when the user pressed the button
+	// labelled Stop, and a message kept across it would explain a button that no
+	// longer exists. A failure that leaves the action untouched is not cleared
+	// here: a Stop that failed on a work still `active` is still about Stop.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: action is the trigger, not a value the body reads
 	useEffect(() => {
-		if (action !== "stop") setConfirm(null);
-	}, [action]);
+		setConfirm(null);
+		clearError();
+	}, [action, clearError]);
 
 	const activate = useCallback(() => {
 		// The confirmation may read the activity, unlike the button: by now the
@@ -170,9 +171,19 @@ export function StopConfirm({
 }
 
 interface Props {
-	work: CommandableWork;
-	/** How many of its children are still active; 0 for a task. */
-	activeChildCount?: number;
+	action: WorkAction;
+	busy: boolean;
+	/** Whether the last attempt at this command failed. */
+	failed: boolean;
+	/**
+	 * Id of the element the row wrote that failure into, and undefined while
+	 * nothing has failed — never an id with nothing behind it, which resolves to
+	 * the same silence as no description at all.
+	 */
+	errorId?: string;
+	/** Named out loud, because the glyph is the same in every row. */
+	workTitle: string;
+	onActivate: () => void;
 }
 
 /**
@@ -184,55 +195,52 @@ interface Props {
  * (docs/lifecycle-ui.md §3): a control that wears a word in one group and a
  * glyph in another is a control the user has to look for. It is why this states
  * a box on both axes rather than leaving its height to a label.
+ *
+ * It says nothing about a failure beyond the colour: a glyph has nowhere to
+ * print one, and the row writes the message out below (docs/project-ui.md §3).
+ * The label stays the verb even then — a screen reader walking a column of
+ * identical verbs loses the row it was aiming at if the button stops saying
+ * what it does exactly when the user needs to know which button it was. The
+ * message is attached as the button's description instead: `role="alert"`
+ * speaks it once, and someone jumping by button or heading afterwards would
+ * otherwise never meet it again, because the line is part of no element's
+ * accessible name.
  */
 export default function WorkPrimaryAction({
-	work,
-	activeChildCount = 0,
+	action,
+	busy,
+	failed,
+	errorId,
+	workTitle,
+	onActivate,
 }: Props) {
-	const { action, busy, error, activate, confirm, confirmed, cancel } =
-		useWorkCommand(work, activeChildCount);
-
 	const handleClick = useCallback(
 		(e: React.MouseEvent) => {
 			// The row around this button opens the work; the command is not that.
 			e.stopPropagation();
-			activate();
+			onActivate();
 		},
-		[activate],
+		[onActivate],
 	);
 
 	const Icon = ACTION_ICON[action];
 	const danger = action === "stop";
 
 	return (
-		<>
-			<button
-				type="button"
-				onClick={handleClick}
-				disabled={busy}
-				className={`flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center disabled:opacity-50 ${error || danger ? "text-th-error" : "text-th-accent"}`}
-				aria-label={error ?? `${ACTION_LABEL[action]} "${work.title}"`}
-				// A glyph has nowhere to print the failure, and the colour only says
-				// that there was one. The label carries it to a screen reader and
-				// this carries it to a pointer; the work's own page, where the same
-				// command writes its error out in full, is the route that needs
-				// neither.
-				title={error ?? undefined}
-			>
-				{busy ? (
-					<Loader2 className="size-3.5 animate-spin" />
-				) : (
-					<Icon className="size-3.5" />
-				)}
-			</button>
-			{confirm && (
-				<StopConfirm
-					message={confirm}
-					onConfirm={confirmed}
-					onCancel={cancel}
-				/>
+		<button
+			type="button"
+			onClick={handleClick}
+			disabled={busy}
+			className={`flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center disabled:opacity-50 ${failed || danger ? "text-th-error" : "text-th-accent"}`}
+			aria-label={`${ACTION_LABEL[action]} "${workTitle}"`}
+			aria-describedby={errorId}
+		>
+			{busy ? (
+				<Loader2 className="size-3.5 animate-spin" />
+			) : (
+				<Icon className="size-3.5" />
 			)}
-		</>
+		</button>
 	);
 }
 

@@ -1,11 +1,15 @@
 import { MessageSquare } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useId } from "react";
 import { ACTIVITY_VIEW, needsUser } from "../../lib/activity";
 import type { WorkListItem } from "../../types/work";
 import { formatRelativeDate } from "../../utils/relativeTime";
 import { ActivityIcon } from "../ui";
 import { useWorktreeBadgeVisible, WorktreeBadge } from "../Worktree";
-import WorkPrimaryAction, { countActiveChildren } from "./WorkPrimaryAction";
+import WorkPrimaryAction, {
+	countActiveChildren,
+	StopConfirm,
+	useWorkCommand,
+} from "./WorkPrimaryAction";
 
 interface Props {
 	work: WorkListItem;
@@ -38,7 +42,11 @@ interface Props {
 
 /**
  * One work as a row: line 1 is what you can do to it, line 2 is what is true of
- * it (docs/project-ui.md §3).
+ * it, and line 3 — when it is there — is what happened when the user last tried
+ * (docs/project-ui.md §3).
+ *
+ * The command lives here rather than inside the button because a failure has to
+ * be written outside a glyph.
  *
  * The same component draws the project list and the story detail's children
  * section — the two places a work is ever listed — so the glyph, the two
@@ -63,6 +71,9 @@ export default function WorkRow({
 	const closedTasks = tasks?.filter((t) => t.status === "closed").length ?? 0;
 	const activeTasks = tasks ? countActiveChildren(tasks) : 0;
 	const hasWorktreeBadge = useWorktreeBadgeVisible(work);
+	const { action, busy, error, activate, confirm, confirmed, cancel } =
+		useWorkCommand(work, activeTasks);
+	const errorId = useId();
 
 	// The bar keys off the leaves rather than the fields behind them: warning for
 	// any of the three ways a work waits on the user, error for one the engine
@@ -156,7 +167,8 @@ export default function WorkRow({
 				<ActivityIcon activity={work.activity} decorative />
 				<Heading className="min-w-0 flex-1 text-sm font-normal">
 					{/* The whole row is the tap target — the overlay reaches the
-					    padding and line 2 — while staying one button a keyboard can
+					    padding and every line under this one, growing with the card
+					    when line 3 appears — while staying one button a keyboard can
 					    reach; the controls beside it lift themselves above it. The
 					    height is stated as well as covered: the overlay is the
 					    `::after` box and not this one, so it is the `min-h` that
@@ -183,7 +195,14 @@ export default function WorkRow({
 							<MessageSquare className="size-3.5" />
 						</button>
 					)}
-					<WorkPrimaryAction work={work} activeChildCount={activeTasks} />
+					<WorkPrimaryAction
+						action={action}
+						busy={busy}
+						failed={!!error}
+						errorId={error ? errorId : undefined}
+						workTitle={work.title}
+						onActivate={activate}
+					/>
 				</div>
 			</div>
 
@@ -204,6 +223,30 @@ export default function WorkRow({
 						</span>
 					))}
 				</div>
+			)}
+
+			{error && (
+				// Wrapping rather than clamping: the list is the only place this is
+				// ever written — the detail page holds its own command state and this
+				// row unmounts on the way there — so a clamp would lose the text with
+				// nowhere left to read it. Not lifted above the row's overlay, and no
+				// dismiss control: tapping it opens the work, like the rest of the
+				// card.
+				<p
+					id={errorId}
+					className="pb-1.5 text-xs break-words text-th-error"
+					role="alert"
+				>
+					{error}
+				</p>
+			)}
+
+			{confirm && (
+				<StopConfirm
+					message={confirm}
+					onConfirm={confirmed}
+					onCancel={cancel}
+				/>
 			)}
 		</div>
 	);

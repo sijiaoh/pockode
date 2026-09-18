@@ -213,12 +213,14 @@ did this finish" is the only question the archive is asked.
 
 ## 3. The row
 
-Two lines, and the split between them is the point: **line one is what you can
-do, line two is what is true.**
+Two lines, and a third that is not about the work at all: **line one is what you
+can do, line two is what is true, and line three — when it is there — is what
+happened when you last tried.**
 
 ```
 line 1:  [glyph]  Title, truncated to one line        [💬]  [⏹]
 line 2:  Needs answer · in: Story name · main · Engineer · 1 active · 2/5 tasks
+line 3:  invalid work: work is already running
 ```
 
 **Line 1** — the activity glyph (`ActivityIcon`, the row's own precise leaf), the
@@ -274,6 +276,92 @@ any word is read — and it is why slot 1 does not need a "Stopped" label to go
 with it. The bar says someone is blocked; slot 1 says what kind of answer is
 wanted, which only the `needsUser` leaves have.
 
+**Line 3 — the command that failed.** Present only while the row's own lifecycle
+command has failed and nothing has been done about it since: one line of
+`text-th-error` with `role="alert"`, the server's message verbatim — word for
+word what the detail page's action bar prints, because the same hook builds it
+on both surfaces — wrapping rather than truncating.
+
+It is a third line rather than an eighth slot on line 2, and two reasons decide
+that, either of them alone. Line 2 is a fixed sequence of facts *about the
+work*, while a command that failed is a fact about the user's last tap: it
+belongs to this session, and it is not true for the next person to read the row,
+which no other slot can say. And line 2 is built to shed information — it never
+wraps and it clips from the right, which is how the slots truncate — so a
+sentence put there arrives as its first two words. The line that fixes "the
+failure has no words" cannot be the line whose job is to drop them. **Nothing
+about line 2 is relaxed to make room: the error never goes there.**
+
+It wraps because the list is the only place it is ever written. The row and the
+detail page hold separate command state, and the list unmounts on the way into a
+detail page, so opening the work does not carry the message there — unlike the
+title, which truncates because the detail page has the whole of it. A long
+message makes a tall row, and that is the accepted cost: it is rare, it clears
+itself, and a clamp would lose the text with nowhere left to read it.
+
+It goes when any one of three things happens: the user runs the command again
+(which clears the failure before trying), the work's status changes under it so
+the button is now a different verb, or the screen is left, which unmounts the
+row. The second is the rule that already drops a pending Stop confirmation when
+the work leaves `active` — a dialog and a message both belong to the action that
+raised them — and a failure that leaves the action untouched survives it,
+because a Stop that failed on a work still `active` is still about Stop.
+
+There is no dismiss control: it would be one more thing on the row to aim at,
+owing 44 × 44 and a `z-10` lift above the row's own overlay, and those three
+rules already cover everything the user does next. Line 3 itself is text and not
+a control, so it takes no lift: the row's overlay covers it, and tapping it
+opens the work like the rest of the card.
+
+The lifecycle control keeps its error tint, but the tint is a hint and never the
+message — Stop is drawn in the error colour to begin with, because the action
+itself is the destructive one, so a Stop that failed changes nothing about the
+button. What ties the failure to the control that produced it is position: line
+3 is under it, on its row. It no longer carries the message itself:
+the `title` tooltip that used to hold it is unreachable on the pointer this
+platform is built for, and an `aria-label` replaced by the error took the verb
+off the button exactly when the user most needs to know which button it was — a
+screen reader walking a column of identical verbs loses the row it was aiming
+at. `role="alert"` says it once, to everyone, and the button goes on being
+Start.
+
+**The message is the button's description as well**, by an `aria-describedby`
+from the control to line 3 — the accessible *name* is untouched. `role="alert"`
+speaks the message once, and after that the line belongs to no element's name:
+it sits outside both the heading and the button. Someone moving by button or by
+heading would come back to a control saying only `Start "<title>"` and never
+meet the failure again; with the description they get the verb *and* what
+happened, at the control they returned to.
+
+This is what makes "the button only says the verb" safe to keep. The name was
+the contested channel because it was the only one that reached a screen reader
+at that control at all — which is why overwriting it with the error looked
+reasonable once. The failure now has a channel of its own on the same button, so
+there is nothing left for the name to compete with.
+
+The attribute is there only while the message is: an id pointing at nothing
+resolves to the same silence as no description at all, so one left behind would
+be a fix that reads as done and is not.
+
+The detail page's action bar deliberately does not do the same. Its one
+`role="alert"` paragraph carries `actionError ?? deleteError`, so pointing the
+action button at it would announce a failed *Delete* as that button's
+description, and a failure attributed to the wrong control is worse than one
+with no description. A row can do this because a row offers one command.
+
+There is no toast, here or anywhere: feedback appears where the action started
+([git-ui.md](git-ui.md)), and a toast starts somewhere else and leaves on a
+timer the user did not set. That rule's other half — an outcome stored in the
+panel survives leaving the tab and coming back — is **not** claimed here: line 3
+goes with the row, and the third clearing rule above is exactly that. What it
+does instead is last as long as the screen it belongs to, which is longer than
+any toast and is the whole window in which the user can still act on it.
+
+**Nothing about this line differs by pointer**, and that is the point of it. The
+arrangement it replaces had one channel only a fine pointer could reach, and a
+failure message that needs a pointer test to explain itself is a failure message
+that is still broken.
+
 **No chevrons, anywhere.** No row expands, no group collapses, and the three
 different meanings a chevron had on a story row are gone because the affordance
 is gone. Children are listed in exactly one place, the story's detail page,
@@ -289,8 +377,9 @@ screen, which is the whole reason it exists.
 Hit areas follow [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing) and
 nothing here relaxes them: the two icon controls owe a 44 × 44 box on both axes
 under a coarse pointer, and the title — which is the row's own target, covering
-it — states `min-h-[44px]` rather than letting two lines of content add up to
-one (§8 has the reason that is not a belt-and-braces).
+the card and growing with it when line 3 appears — states `min-h-[44px]` rather
+than letting whatever lines happen to be there add up to one (§8 has the reason
+that is not a belt-and-braces).
 
 Slot 3 is the row's third interactive thing and the one that is **not** 44px.
 The badge reaches its 44 with a transparent overlay that leaves its own box, and
@@ -421,6 +510,8 @@ isolate itself, following `gitPanelStore`'s shape; no app code calls it.
 | A work in another worktree | Badge in slot 3; the Chat control switches worktree, exactly as the old row's did. |
 | A title too long for one line | Truncates. The detail page is one tap away and has the whole of it. |
 | A work with no role | Slot 4 is omitted, not drawn as `—`. An empty slot is not a fact. |
+| Two rows' commands both fail | Each row carries its own line 3. The failure lives in the row's own command state, and two rows are two works. |
+| A command fails, then the work's status changes anyway — the engine stopped it, an agent closed it | Line 3 goes with the status change: by the row remounting if the work changed group, and by the command's own reset if it did not. The button is a different verb now, and the message was about the old one. |
 
 ## 7. Deliberately not done
 
@@ -451,6 +542,9 @@ The checks, in the order they would fail, and where each one is now:
 | 7 | Both row controls are 44 × 44 under a coarse pointer | `web/tests/touchTarget.test.ts`, which reads every icon-only control |
 | 8 | The list and the story detail's Tasks section render the same row component, and only Tasks drops the parent slot | `WorkRow.test.tsx` (the slot), by construction elsewhere |
 | 9 | Creating with no agent role opens the sheet on its message rather than doing nothing | `CreateWorkSheet.test.tsx`, which also separates that message from *loading* and *failed* |
+| 10 | A failed row command prints its message on the row, and the control keeps its own action label rather than wearing the error | `WorkRow.test.tsx` for the message and the label together, `WorkPrimaryAction.test.tsx` for the button on its own |
+| 11 | The message goes when the work's status changes under it without the row changing group | `WorkRow.test.tsx` |
+| 12 | The message is the control's accessible description while it is there, and the attribute is *absent* — not pointing at nothing — while it is not | `WorkRow.test.tsx`, in the same case as check 10. It asserts the missing attribute rather than an empty description, because a dangling id and no attribute compute the same empty description: assert the description and a dangling id passes |
 
 Check 6 was the one that reached the end of the rewrite untested. It had been
 written down as the behaviour that was already right and could be lost while the
