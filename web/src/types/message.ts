@@ -711,6 +711,14 @@ export type ServerNotification =
 			tool_name: string;
 			tool_input: unknown;
 			tool_use_id: string;
+			/**
+			 * The earlier call this one is about, when the input can only name it
+			 * by something else: Claude's `TaskOutput` fetches a task's output by
+			 * `task_id`, and only the adapter can turn that into a `tool_use_id`.
+			 * Absent whenever it could not be resolved, which is ordinary — such a
+			 * call simply stands alone. See docs/tool-call-model.md.
+			 */
+			origin_tool_use_id?: string;
 	  }
 	| {
 			type: "tool_result";

@@ -211,3 +211,85 @@ func TestParseTaskEvent_EveryFinishedTaskIsForgotten(t *testing.T) {
 		t.Errorf("backgrounded calls left behind: %v", tracker.backgroundedCalls)
 	}
 }
+
+// The frames a fetch of a task's output is read out of. `TaskOutput` names only
+// the task, which is the whole reason the adapter has to answer for it.
+const (
+	bgFetch      = `{"type":"assistant","uuid":"u-fetch","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_fetch","name":"TaskOutput","input":{"task_id":"b6h7boemy","block":false}}]}}`
+	bgFetchOther = `{"type":"assistant","uuid":"u-fetch","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_fetch","name":"TaskOutput","input":{"task_id":"never-started"}}]}}`
+	ambientFetch = `{"type":"assistant","uuid":"u-fetch","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_fetch","name":"TaskOutput","input":{"task_id":"amb1"}}]}}`
+	bashCall     = `{"type":"assistant","uuid":"u-bash","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_bash","name":"Bash","input":{"task_id":"b6h7boemy"}}]}}`
+)
+
+// toolCallOnly reads the one tool call a line was expected to produce.
+func toolCallOnly(t *testing.T, events []agent.AgentEvent) agent.ToolCallEvent {
+	t.Helper()
+	if len(events) != 1 {
+		t.Fatalf("expected exactly one event, got %#v", events)
+	}
+	call, ok := events[0].(agent.ToolCallEvent)
+	if !ok {
+		t.Fatalf("expected a ToolCallEvent, got %#v", events[0])
+	}
+	return call
+}
+
+// A fetch says which task it reads; only this process knows which call that task
+// belongs to, so only this process can answer — and the answer has to survive
+// into the record, because a replay has no tracker at all.
+func TestParseAssistantEvent_FetchCarriesTheCallItReads(t *testing.T) {
+	tracker := &backgroundTaskTracker{}
+	parseTestLineWithTracker(testLogger(), []byte(bgTaskStarted), tracker)
+
+	call := toolCallOnly(t, parseTestLineWithTracker(testLogger(), []byte(bgFetch), tracker))
+	if call.OriginToolUseID != "toolu_bg" {
+		t.Errorf("fetch resolved to %q, want the call that started the task", call.OriginToolUseID)
+	}
+
+	if got := agent.NewEventRecord(call).OriginToolUseID; got != "toolu_bg" {
+		t.Errorf("record carries %q, want the join to be persisted", got)
+	}
+}
+
+// Unresolvable is the ordinary case, not a failure: the entry is dropped the
+// moment the task reports its outcome and never outlives the process. The field
+// is simply absent, and nothing else about the call changes.
+func TestParseAssistantEvent_UnresolvableFetchCarriesNothing(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		setup []string
+		fetch string
+	}{
+		{"task already settled", []string{bgTaskStarted, bgNotified}, bgFetch},
+		{"task started by an earlier process", nil, bgFetch},
+		{"task nobody in this process started", []string{bgTaskStarted}, bgFetchOther},
+		{"task the CLI asked hosts to hide", []string{ambientTaskStarted}, ambientFetch},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tracker := &backgroundTaskTracker{}
+			for _, line := range tt.setup {
+				parseTestLineWithTracker(testLogger(), []byte(line), tracker)
+			}
+
+			call := toolCallOnly(t, parseTestLineWithTracker(testLogger(), []byte(tt.fetch), tracker))
+			if call.OriginToolUseID != "" {
+				t.Errorf("fetch resolved to %q, want no join at all", call.OriginToolUseID)
+			}
+			if call.ToolUseID != "toolu_fetch" || call.ToolName != "TaskOutput" {
+				t.Errorf("the call itself changed: %#v", call)
+			}
+		})
+	}
+}
+
+// The join belongs to the one tool whose input cannot express it. A task_id
+// somewhere in another tool's input means nothing.
+func TestParseAssistantEvent_OtherToolsAreNotJoined(t *testing.T) {
+	tracker := &backgroundTaskTracker{}
+	parseTestLineWithTracker(testLogger(), []byte(bgTaskStarted), tracker)
+
+	call := toolCallOnly(t, parseTestLineWithTracker(testLogger(), []byte(bashCall), tracker))
+	if call.OriginToolUseID != "" {
+		t.Errorf("a Bash call resolved to %q, want no join", call.OriginToolUseID)
+	}
+}

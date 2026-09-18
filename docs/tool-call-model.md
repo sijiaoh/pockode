@@ -166,12 +166,14 @@ the adapter doc linked above):
 engines, it already was, and nothing here needs a second one.
 
 A tool run is described by three kinds of record — one of which comes in four
-flavours — split on the rule the project applies everywhere: *an event says what
-was true at one moment, state says what is true now.*
+flavours, and one of which can also point at another run — split on the rule the
+project applies everywhere: *an event says what was true at one moment, state
+says what is true now.*
 
 | Record | Persisted | Says |
 |---|---|---|
 | `tool_call` | yes | the agent asked for this, with this input |
+| `tool_call` + `origin_tool_use_id` | yes | …and what it asked for is the output of *that* earlier call |
 | `tool_result` | yes | this came back to the agent |
 | `tool_result` + `subtype: "background_started"` | yes | …and it is a placeholder; the work is still running |
 | `tool_result` + `subtype: "background_result"` | yes | the real outcome of that work, as the CLI reported it |
@@ -207,6 +209,13 @@ interface ToolRun {
 }
 
 type ToolRunStatus = 'running' | 'background' | 'success' | 'error' | 'interrupted'
+
+interface ToolFetch {
+    id: string                 // the tool_use_id of the call that fetched this
+    result?: string            // read exactly as a run's own outcome is: contents first
+    contents?: ContentBlock[]  // both absent = the fetch never returned at all
+    isError?: boolean          // the fetch failed, not the task it was reading
+}
 ```
 
 Status is derived from the records, never sent:

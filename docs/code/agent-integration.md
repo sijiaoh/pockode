@@ -397,6 +397,7 @@ type EventRecord struct {
     ToolName              string             `json:"tool_name,omitempty"`
     ToolInput             json.RawMessage    `json:"tool_input,omitempty"`
     ToolUseID             string             `json:"tool_use_id,omitempty"`
+    OriginToolUseID       string             `json:"origin_tool_use_id,omitempty"`
     ToolResult            string             `json:"tool_result,omitempty"`
     Contents              []ContentBlock     `json:"contents,omitempty"`
     IsError               bool               `json:"is_error,omitempty"`
@@ -441,6 +442,13 @@ have to be one, and the consequences of the coarser grain are Codex's to state
 ([Forking a Thread](#forking-a-thread)). The search for the last record carrying
 one is shared — `agent.LastProviderMessageID` — because skipping the trailing
 records Pockode wrote itself is the same job for both.
+
+`OriginToolUseID` is the earlier call a `tool_call` record is *about*, for the
+one call whose input cannot name it: Claude's `TaskOutput` identifies the task it
+reads by the CLI's own `task_id`, and only this process holds the map from that
+to a `tool_use_id` ([The Task Lifecycle](#the-task-lifecycle)). Empty whenever it
+could not be resolved, which is ordinary rather than a failure — a fetch made
+after its task settled has no answer, and never will.
 
 `IsError` is best-effort and is only ever set from what the CLI itself reports —
 Claude's `is_error` on a `tool_result` block, and the `status` Codex puts on a
@@ -1239,6 +1247,16 @@ produced anything** — the cleanup is deferred at the top of the handler, so th
 resolve below still finds the task while a dropped one is forgotten just the
 same. Without that, an hours-long process starting ambient watchers leaks an
 entry per task.
+
+The join is also read in the other direction, at one tool call: `TaskOutput`
+fetches a task's output and names the task by `task_id`, which nothing outside
+this process can turn into the `tool_use_id` the transcript joins on. So the
+adapter resolves it while parsing the call and sends the answer along as
+`origin_tool_use_id` (`originOfCall`). A fetch made after its task settled — or
+by a process that did not start it — resolves to nothing and the field is simply
+absent, which the client is required to treat as ordinary; the reasoning, and why
+the output is not recorded as a second `tool_result` on the original call, is in
+[tool-call-model.md](../tool-call-model.md#a-call-about-an-earlier-call).
 
 What the records mean once they reach the client, and why the placeholder is kept
 beside the outcome, is [tool-call-model.md](../tool-call-model.md#background-lives-on-tool_result-twice).

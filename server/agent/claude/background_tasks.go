@@ -315,6 +315,49 @@ func (t *backgroundTaskTracker) callIsBackgrounded(toolUseID string) bool {
 	return t.backgroundedCalls[toolUseID]
 }
 
+// The tool the CLI offers for reading a task's output after the fact. Its input
+// names a task_id and nothing else, so on its own it cannot be joined to the
+// call whose task it reads — the transcript's join key is the tool_use_id.
+const taskOutputTool = "TaskOutput"
+
+// originOfCall answers which earlier call a tool call is about, for the calls
+// whose input identifies their target by something other than a tool_use_id.
+//
+// Today that is only TaskOutput. Answering it here is the point: task_started
+// carried both ids, this process kept them together, and nothing downstream
+// ever sees the pair. A client would have to read the id back out of the CLI's
+// English placeholder sentence or out of an output file's path — both are
+// string-mining, and both break when the CLI rewords or relocates.
+//
+// "" means the question has no answer, which is ordinary rather than
+// exceptional: an entry lives only as long as its task (finishTask drops it on
+// the outcome) and never outlives the process, so a fetch against a task that
+// already settled — or that a previous process started — resolves to nothing.
+func (t *backgroundTaskTracker) originOfCall(name string, input json.RawMessage) string {
+	if name != taskOutputTool {
+		return ""
+	}
+	var call struct {
+		TaskID string `json:"task_id"`
+	}
+	// A malformed or absent task_id is the same answer as an unknown one: no
+	// join. Nothing here is worth failing the tool call over.
+	if err := json.Unmarshal(input, &call); err != nil || call.TaskID == "" {
+		return ""
+	}
+
+	t.tasksMu.Lock()
+	defer t.tasksMu.Unlock()
+	// Excluded tasks are read for consistency with resolveTask and answered the
+	// same way: the CLI asked hosts to keep that work out of the transcript, so
+	// there is no row to point at.
+	known, ok := t.tasks[call.TaskID]
+	if !ok || known.excluded {
+		return ""
+	}
+	return known.toolUseID
+}
+
 // parseTaskEvent reads one frame of Claude's task lifecycle.
 //
 // None of the four is a transcript entry. Two only tell this tracker something;

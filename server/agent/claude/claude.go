@@ -1025,7 +1025,7 @@ type declineFunc func(requestID, message string)
 func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc, store attachments.Store) []agent.AgentEvent {
 	switch event.Type {
 	case "assistant":
-		return parseAssistantEvent(log, line, event)
+		return parseAssistantEvent(log, line, event, backgroundTasks)
 	case "user":
 		return parseUserEvent(log, event, backgroundTasks, store)
 	case "result":
@@ -1355,7 +1355,7 @@ func syntheticNotice(log *slog.Logger, line []byte, msg cliMessage) []agent.Agen
 	}}
 }
 
-func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent) []agent.AgentEvent {
+func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgroundTasks *backgroundTaskTracker) []agent.AgentEvent {
 	if event.Message == nil {
 		log.Warn("assistant event message is nil", "subtype", event.Subtype)
 		return nil
@@ -1387,9 +1387,14 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent) []agent.
 				textParts = nil
 			}
 			events = append(events, agent.ToolCallEvent{
-				ToolUseID:         block.ID,
-				ToolName:          block.Name,
-				ToolInput:         block.Input,
+				ToolUseID: block.ID,
+				ToolName:  block.Name,
+				ToolInput: block.Input,
+				// A fetch names the task it reads, not the call that started
+				// it, and only this process holds the two together — so the
+				// join is resolved now, while the task is still tracked, and
+				// travels with the record.
+				OriginToolUseID:   backgroundTasks.originOfCall(block.Name, block.Input),
 				ProviderMessageID: event.UUID,
 			})
 		}

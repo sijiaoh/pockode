@@ -247,6 +247,10 @@ type ToolCallEvent struct {
 	ToolName  string
 	ToolInput json.RawMessage
 	ToolUseID string
+	// OriginToolUseID names an earlier call this one is about, when the input
+	// only identifies it by something Pockode's join key cannot be recovered
+	// from. See EventRecord.OriginToolUseID.
+	OriginToolUseID string
 	// ProviderMessageID names the part of the agent's own conversation this call
 	// came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
@@ -262,6 +266,7 @@ func (e ToolCallEvent) ToRecord() EventRecord {
 		ToolName:          e.ToolName,
 		ToolInput:         e.ToolInput,
 		ToolUseID:         e.ToolUseID,
+		OriginToolUseID:   e.OriginToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
 	}
 }
