@@ -193,7 +193,8 @@ Three representations of the same data, each serving a different purpose:
 
 Events do not map one-to-one onto parts. Several events can describe the same
 tool use, and the reducer folds them into the one part that renders it, matching
-on `tool_use_id`:
+on `tool_use_id` — every entry below but the last, which is the one case where an
+event folds into a part its own id does not name:
 
 - `tool_result` merges into its `tool_call` part, carrying its content blocks
   with it — so a returned image is shown against the call that produced it
@@ -212,6 +213,18 @@ on `tool_use_id`:
   `tool_call` → `ask_user_question` → `question_response` → `tool_result`. The
   question card renders the questions and the answers, and the trailing
   `tool_result` matches no `tool_call` and is dropped as an orphan.
+- `tool_call` **carrying `origin_tool_use_id`** folds into the part that *other*
+  id names instead of drawing one of its own. Claude's `TaskOutput` is a call
+  whose whole content is an earlier call's output, so a row of its own would sit
+  a screenful below the work it describes with an opaque `task_id` as the only
+  thing tying the two together. Two things are unique to it: it is matched on
+  someone else's id, and it is the only event that can fold into a part in an
+  *earlier message* rather than the one being streamed. Its `tool_result`
+  follows it there — the entry the fold leaves on the run is what gives a result
+  naming a row that no longer exists somewhere to go. When the named part is not
+  loaded the call falls through and draws an ordinary row, which is the common
+  case rather than a fallback
+  ([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)).
 
 Blocks are read into a narrowed union at the wire boundary
 (`web/src/lib/contentBlocks.ts`), where one the client cannot read is dropped

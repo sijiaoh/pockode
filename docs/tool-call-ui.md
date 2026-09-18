@@ -11,7 +11,8 @@ The surfaces are `ToolCallItem.tsx`, `TaskItem.tsx` (the subagent category) and
 `PermissionRequestItem` in `MessageItem.tsx` — all three drawing their row
 through `ToolRow.tsx`, which is where the grammar below lives — plus
 `ToolResultDisplay.tsx` for the body and `ToolOutcomeSections.tsx` for the
-labelled blocks the two tool renderers share, all under `web/src/components/Chat/`. The transcript around them
+labelled blocks the two tool renderers share, all under
+`web/src/components/Chat/`. The transcript around them
 is [agent-chat.md](agent-chat.md); the width ladder and the pointer gates are
 [responsive-ui.md](responsive-ui.md) and are used here, never re-derived.
 
