@@ -33,23 +33,29 @@ func Discard(dir string, paths []string) error {
 		}
 	}
 
-	submodules := getSubmodulePaths(dir)
-	status, err := statusWithSubmodules(dir, submodules)
-	if err != nil {
-		return fmt.Errorf("failed to read status: %w", err)
-	}
+	// The status read is inside the lock with the deletions it decides: which
+	// branch a path takes is chosen from it, and an operation staging that path
+	// in between would make the choice wrong in the one direction that destroys
+	// work.
+	return withLock(dir, opDiscard, func() error {
+		submodules := getSubmodulePaths(dir)
+		status, err := statusWithSubmodules(dir, submodules)
+		if err != nil {
+			return fmt.Errorf("failed to read status: %w", err)
+		}
 
-	groups, err := groupForDiscard(status, submodules, dir, paths)
-	if err != nil {
-		return err
-	}
-
-	for _, group := range groups {
-		if err := group.run(); err != nil {
+		groups, err := groupForDiscard(status, submodules, dir, paths)
+		if err != nil {
 			return err
 		}
-	}
-	return nil
+
+		for _, group := range groups {
+			if err := group.run(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // discardPath is one file of a group, in the three forms the operation needs.

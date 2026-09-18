@@ -671,9 +671,23 @@ func (h *rpcMethodHandler) replyInternalError(ctx context.Context, conn *jsonrpc
 }
 
 func (h *rpcMethodHandler) replyError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, code int64, message string) {
+	h.replyErrorData(ctx, conn, id, code, message, nil)
+}
+
+// replyErrorData is replyError with a data member, for the errors a client is
+// expected to act on rather than only display. The message still says the whole
+// thing: data is the machine-readable half, not the only half.
+//
+// data has to be marshalable — SetError panics otherwise — which is why every
+// caller passes a type declared in the rpc package rather than something
+// assembled here.
+func (h *rpcMethodHandler) replyErrorData(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, code int64, message string, data any) {
 	err := &jsonrpc2.Error{
 		Code:    code,
 		Message: message,
+	}
+	if data != nil {
+		err.SetError(data)
 	}
 	if replyErr := conn.ReplyWithError(ctx, id, err); replyErr != nil {
 		h.log.Error("failed to send error response", "error", replyErr)

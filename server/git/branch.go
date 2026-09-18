@@ -237,8 +237,10 @@ func Checkout(dir, branch string) error {
 
 	// The trailing "--" marks branch as a ref, so a file of the same name cannot
 	// turn the switch into a file restore.
-	_, err := execGit(dir, "checkout", branch, "--")
-	return err
+	return withLock(dir, opCheckout, func() error {
+		_, err := execGit(dir, "checkout", branch, "--")
+		return err
+	})
 }
 
 // CreateBranch creates a branch at the current HEAD and switches to it.
@@ -247,8 +249,10 @@ func CreateBranch(dir, name string) error {
 		return err
 	}
 
-	_, err := execGit(dir, "checkout", "-b", name, "--")
-	return err
+	return withLock(dir, opBranchCreate, func() error {
+		_, err := execGit(dir, "checkout", "-b", name, "--")
+		return err
+	})
 }
 
 // validateBranchName rejects names git would read as an option before reading

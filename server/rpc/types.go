@@ -323,6 +323,26 @@ type GitPushParams struct {
 	Force bool `json:"force"`
 }
 
+// CodeGitBusy answers a git request refused because another git operation is
+// already running in the same worktree (git.BusyError). It is not an internal
+// error: nothing failed, the request was never started, and repeating it once
+// the named operation ends will work.
+//
+// The value is in JSON-RPC's implementation-defined range (-32000 to -32099),
+// avoiding -32000 itself because that is where libraries put their own
+// unspecified "server error". A code of its own, rather than a message a client
+// would have to pattern-match, is what lets the panel say which operation to
+// wait for in the user's language.
+const CodeGitBusy = -32001
+
+// GitBusyData is the data member of a CodeGitBusy error.
+type GitBusyData struct {
+	// Operation is what holds the worktree, in git.BusyError's vocabulary:
+	// "stage", "unstage", "discard", "commit", "checkout", "branch-create",
+	// "fetch", "pull", "push".
+	Operation string `json:"operation"`
+}
+
 // Command namespace
 
 type CommandListResult struct {
