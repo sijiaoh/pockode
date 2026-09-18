@@ -1,8 +1,14 @@
-import type { ToolRun } from "../types/message";
+import type { ToolFetch, ToolRun } from "../types/message";
 import { contentBlocksText } from "./contentBlocks";
 
-/** The result as prose, wherever the agent put it. */
-export function toolRunText(run: ToolRun): string {
+/**
+ * The result as prose, wherever the agent put it.
+ *
+ * Takes a fetch as readily as a run: a fetch carries the outcome of a call in
+ * the same two fields, and the rule for which of them to read is one rule, not
+ * one per caller.
+ */
+export function toolRunText(run: ToolRun | ToolFetch): string {
 	if (run.contents) return contentBlocksText(run.contents);
 	return run.result ?? "";
 }
@@ -21,6 +27,82 @@ export function lastNonEmptyLine(text: string): string {
 export function lastOutputLines(output: string, count: number): string {
 	const lines = output.split("\n");
 	return lines.length <= count ? output : lines.slice(-count).join("\n");
+}
+
+/**
+ * What a fetch brought back, for the renderers that draw it.
+ *
+ * `fetchedOutputs` keeps only the fetches that came back at all: an entry with
+ * neither field never returned, because the turn was cut short, and there is
+ * nothing to draw for it — which is a different sentence from a fetch that
+ * returned and had nothing to say.
+ */
+export interface FetchedOutput {
+	/** The `tool_use_id` of the call that fetched it, for a stable key. */
+	id: string;
+	text: string;
+	/** The fetch failed. Says nothing about the task it was reading. */
+	isError: boolean;
+	/**
+	 * The fetch answered and had nothing to say: an empty result, and no blocks
+	 * either. Not the same as blocks that hold no prose — that one answered with
+	 * something this body has no way to draw, and calling it "no output yet"
+	 * would be the very mistake the two fields are kept apart to prevent.
+	 */
+	isEmpty: boolean;
+}
+
+export function fetchedOutputs(run: ToolRun): FetchedOutput[] {
+	if (!run.fetches) return [];
+	const arrived = run.fetches.filter(
+		(fetch) => fetch.result !== undefined || fetch.contents !== undefined,
+	);
+	return arrived.map((fetch) => ({
+		id: fetch.id,
+		text: toolRunText(fetch),
+		isError: fetch.isError === true,
+		isEmpty: !fetch.contents && !fetch.result?.trim(),
+	}));
+}
+
+/**
+ * The task's own output, out of the envelope the fetch brought it in.
+ *
+ * A fetch does not answer with bare output. Claude's `TaskOutput` answers with
+ * a small document — `retrieval_status`, `task_id`, `task_type`, `status`, and
+ * then the task's output inside `output` (measured against claude 2.1.263) — so
+ * the last line of the answer as a whole is the closing tag and says nothing at
+ * all. The row's second line is supposed to be the task's latest word, so it
+ * reads what the envelope carries rather than the envelope.
+ *
+ * Only the one-line summary unwraps. The body draws the answer as it arrived,
+ * because that block is the record of what a later call read, and a record that
+ * has been tidied up is no longer one.
+ *
+ * Matching a tag is not the string-mining this model refuses elsewhere — that
+ * rule is about reading facts out of the CLI's English sentences. A shape this
+ * does not recognise falls through to the whole text, which is what it read
+ * before and is never worse than a lone tag.
+ */
+const FETCH_ENVELOPE = /<output>\n?([\s\S]*?)\n?<\/output>/;
+
+function fetchedPayload(text: string): string {
+	return FETCH_ENVELOPE.exec(text)?.[1] ?? text;
+}
+
+/**
+ * The newest fetch that has something to show, as text, or "".
+ *
+ * A failed fetch does not count and neither does one whose envelope came back
+ * carrying nothing: the row's second line is this *run's* latest word, and a
+ * fetch that failed is news about the call that did the fetching.
+ */
+function latestFetchedText(run: ToolRun): string {
+	const usable = fetchedOutputs(run)
+		.filter((fetched) => !fetched.isError)
+		.map((fetched) => fetchedPayload(fetched.text))
+		.filter((text) => text.trim());
+	return usable.length > 0 ? usable[usable.length - 1] : "";
 }
 
 /**
@@ -49,6 +131,12 @@ export interface ToolSecondLine {
 export function toolSecondLine(run: ToolRun): ToolSecondLine | null {
 	if (run.status === "running" || run.status === "background") {
 		if (run.activity) return { text: run.activity, mono: false, live: true };
+		// A fetch comes before the output it was fetched from: both are this
+		// call's machine output, and the fetch is the later word on it. `live:
+		// false` though this rung sits in the running branch — the flag is about
+		// the text, and a fetched line does not move again until the next fetch.
+		const fetched = lastNonEmptyLine(latestFetchedText(run));
+		if (fetched) return { text: fetched, mono: true, live: false };
 		const line = run.output ? lastNonEmptyLine(run.output) : "";
 		return line ? { text: line, mono: true, live: true } : null;
 	}

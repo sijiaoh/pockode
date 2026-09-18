@@ -437,6 +437,56 @@ never from the result text. So `error` means the *call* failed — an unknown
 reported that it could not do the job is `success`, and the report says the
 rest; the UI does not get to grade it.
 
+#### A fetch filed under the call it reads
+
+Claude's `TaskOutput` is a call whose whole content is an earlier call's output.
+Left as a row of its own it lands a screenful below the work it describes, with
+an opaque `task_id` as the only thing tying the two together. So when the server
+could say which call it reads — `origin_tool_use_id`, resolved in the adapter
+because only it holds the map
+([tool-call-model.md](../tool-call-model.md#a-call-about-an-earlier-call)) — the
+fetch takes no row at all, and what it brought back is recorded on that call's
+run as an entry in `fetches`.
+
+Four rules, and each of them is the answer to a way of getting this wrong:
+
+- **Decided when the `tool_call` arrives, once, and never re-decided.** The call
+  comes first and its result seconds later, so a rule like "absorb it if the
+  fetch succeeded" would draw a row and then take it away again — and a row
+  disappearing under the user is what the transcript may never do
+  ([tool-call-ui.md](../tool-call-ui.md)). The origin being loaded is the only
+  condition known at that moment, which is why it is the only condition. By the
+  same token, a fetch that kept its own row keeps it: paging backwards can bring
+  the origin row into view afterwards, and the row above it does not then move.
+- **Not loaded is the ordinary case, not a fallback.** The adapter forgets a
+  task once it settles, so a fetch against a finished task resolves to nothing;
+  and even a resolved one may name a row on a page of history nobody has pulled
+  in. Either way the fetch is an ordinary row, and `toolSummary` names it
+  (`TaskOutput`, the task id in mono) rather than leaving it to the fallback.
+- **The entry is the reducer's whole memory of the absorbed call.** Its
+  `tool_result` names only its own `tool_use_id`, which by then belongs to no
+  row; the entry, keyed by that id, is what gives the result somewhere to go.
+  Keyed rather than appended, because paging backwards replays every result over
+  each older page it pulls in, and appending would draw one fetch twice.
+- **Nothing about the run itself changes.** Not its status — the fetch read the
+  task, it did not end it, and a failed *fetch* says nothing about the task at
+  all — and not its `result`, which is what this call handed the agent. A fetch
+  whose result never arrives (an interrupted turn) leaves an entry carrying
+  nothing, and a renderer draws nothing for it. An entry holds its text under
+  the same two names a run does — `result` and `contents` — and `toolRunText`
+  reads either, so which of the two is the answer stays one rule rather than one
+  per caller.
+
+Unlike `activity` and `output` below, `fetches` is derived from persisted
+`tool_result` records, so it replays. That is the difference the two halves of
+this document keep coming back to: a fetch is the event "at this moment, this
+much had been produced", while a progress line is the state "this is what it is
+doing now".
+
+What the renderers make of the list — where it lands on the row and in the body,
+why each fetch keeps its own block, and what a failed or empty one says — is
+[tool-call-ui.md](../tool-call-ui.md#a-fetch-reads-on-the-row-it-came-from).
+
 #### Live state on a run
 
 Two of a run's fields do not come from history and cannot: `activity` (the

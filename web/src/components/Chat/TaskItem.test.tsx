@@ -116,4 +116,93 @@ describe("TaskItem", () => {
 			screen.getByText("Returned after the turn was interrupted."),
 		).toBeVisible();
 	});
+
+	describe("a subagent that went to the background", () => {
+		// No `result` while it is still running: the outcome only arrives with
+		// the notification, and the helper's default report is not one.
+		const background = {
+			fromBackground: true,
+			result: undefined,
+			placeholderResult: "Agent running in background with ID: bsbvhgo40",
+		};
+
+		// The body used to draw this text as the subagent's own report, which
+		// asserts the agent read something it never did: what arrived is the
+		// notification that said how the task ended, and the subagent's report
+		// never reached this client at all.
+		it("labels the outcome instead of passing it off as the report", async () => {
+			const user = userEvent.setup();
+			render(
+				<TaskItem
+					run={task("success", {
+						...background,
+						result: "Background agent completed (exit code 0)",
+					})}
+				/>,
+			);
+
+			await user.click(screen.getByRole("button", { expanded: false }));
+			expect(screen.getByText("Outcome · after the turn")).toBeVisible();
+			// Twice over: the settled row hands its second line to the outcome,
+			// and the body is where it is labelled.
+			expect(
+				screen.getAllByText("Background agent completed (exit code 0)"),
+			).toHaveLength(2);
+			// Not "the subagent reported nothing": its report does not come back
+			// here at all once the call handed the agent a placeholder.
+			expect(
+				screen.getByText(
+					"A backgrounded subagent's own report does not come back to the transcript.",
+				),
+			).toBeVisible();
+		});
+
+		// It is what the agent actually read when the call returned, and it was
+		// drawn nowhere at all before.
+		it("shows what it handed the agent while it carried on", async () => {
+			const user = userEvent.setup();
+			render(<TaskItem run={task("background", background)} />);
+
+			await user.click(screen.getByRole("button", { expanded: false }));
+			expect(screen.getByText("Returned to the agent")).toBeVisible();
+			expect(screen.getByText(/bsbvhgo40/)).toBeVisible();
+		});
+
+		// A background row is by definition not at the tail of the transcript,
+		// and this body has a `useEffect` that opens itself on failure — the one
+		// place somebody could plausibly hang "and when a fetch arrives" too.
+		it("does not open itself when a fetch arrives", () => {
+			const { rerender } = render(
+				<TaskItem run={task("background", background)} />,
+			);
+			rerender(
+				<TaskItem
+					run={task("background", {
+						...background,
+						fetches: [{ id: "f1", result: "explored 12 files" }],
+					})}
+				/>,
+			);
+			expect(screen.getByRole("button", { expanded: false })).toBeVisible();
+			expect(screen.queryByText("Fetched output")).toBeNull();
+		});
+
+		// The same account of the same thing as on an ordinary tool row: one
+		// shared section, not a second way of saying it per renderer.
+		it("reads what a later call fetched of it", async () => {
+			const user = userEvent.setup();
+			render(
+				<TaskItem
+					run={task("background", {
+						...background,
+						fetches: [{ id: "f1", result: "explored 12 files" }],
+					})}
+				/>,
+			);
+
+			expect(screen.getByText("explored 12 files")).toBeVisible();
+			await user.click(screen.getByRole("button", { expanded: false }));
+			expect(screen.getByText("Fetched output")).toBeVisible();
+		});
+	});
 });

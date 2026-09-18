@@ -5,11 +5,19 @@ import "encoding/json"
 // EventRecord is the serialized form of an AgentEvent.
 // Used for persistence (history storage) and notifications (WebSocket).
 type EventRecord struct {
-	Type                  EventType          `json:"type"`
-	Content               string             `json:"content,omitempty"`
-	ToolName              string             `json:"tool_name,omitempty"`
-	ToolInput             json.RawMessage    `json:"tool_input,omitempty"`
-	ToolUseID             string             `json:"tool_use_id,omitempty"`
+	Type      EventType       `json:"type"`
+	Content   string          `json:"content,omitempty"`
+	ToolName  string          `json:"tool_name,omitempty"`
+	ToolInput json.RawMessage `json:"tool_input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	// OriginToolUseID is the call an ordinary tool_call record is *about*: a
+	// fetch like Claude's TaskOutput names its target by task_id, and the map
+	// from that to a tool_use_id lives only in the adapter, for as long as the
+	// task does. Resolved where the answer is known and recorded here so a
+	// replay still has it; absent whenever it could not be resolved, which is
+	// ordinary (see ToolCallEvent.OriginToolUseID). What a client does with the
+	// join — or nothing at all — is the client's decision.
+	OriginToolUseID       string             `json:"origin_tool_use_id,omitempty"`
 	ToolResult            string             `json:"tool_result,omitempty"`
 	Contents              []ContentBlock     `json:"contents,omitempty"`
 	IsError               bool               `json:"is_error,omitempty"`

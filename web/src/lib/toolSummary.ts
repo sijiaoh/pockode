@@ -244,6 +244,20 @@ export function toolSummary(
 	if (toolName === "Bash") return bashSummary(input, workDir);
 	if (toolName === "TodoWrite") return todoSummary(input);
 
+	// The call that reads a task's output, on the rows where it could not be
+	// filed under the call it reads. The fallback lands on the same field today,
+	// but by the order `Object.values` happens to return — one more string in the
+	// input and it would name something else. Mono because a task id is not
+	// prose.
+	if (toolName === "TaskOutput") {
+		return {
+			title: "TaskOutput",
+			detail: str(obj.task_id) ?? "",
+			detailTail: "",
+			mono: true,
+		};
+	}
+
 	// Before the path branch: a scope is not the thing the call is about, and a
 	// `Grep` identified by the directory it searched says nothing about what it
 	// searched for.
