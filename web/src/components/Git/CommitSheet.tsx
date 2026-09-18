@@ -1,6 +1,7 @@
 import { TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { StagedSubmodule } from "../../types/git";
+import { describeGitFailure, type GitFailure } from "../../utils/gitErrors";
 import { Sheet, Spinner } from "../ui";
 import GitOutput from "./GitOutput";
 
@@ -53,7 +54,7 @@ function CommitSheet({
 	const [message, setMessage] = useState(
 		startsAmending && lastCommit ? lastCommit.message : "",
 	);
-	const [error, setError] = useState<string | null>(null);
+	const [error, setError] = useState<GitFailure | null>(null);
 	const [isCommitting, setIsCommitting] = useState(false);
 	const messageRef = useRef<HTMLTextAreaElement>(null);
 	const messageId = useId();
@@ -107,8 +108,9 @@ function CommitSheet({
 			await onCommit(trimmed, amend);
 		} catch (err) {
 			// The sheet stays open with the message intact: a rejected commit-msg
-			// hook or a missing identity is fixed and retried from right here.
-			setError(err instanceof Error ? err.message : String(err));
+			// hook, a missing identity or a worktree that was busy is fixed or
+			// waited out and retried from right here.
+			setError(describeGitFailure(err, summarize));
 		} finally {
 			setIsCommitting(false);
 		}
@@ -151,8 +153,10 @@ function CommitSheet({
 				    push the message box out of view either. */}
 				{error && (
 					<div className="space-y-1" role="alert">
-						<p className="text-sm text-th-error">{summarize(error)}</p>
-						<GitOutput>{error}</GitOutput>
+						<p className="text-sm text-th-error">{error.summary}</p>
+						{/* Absent when the server refused before running git: there is
+						    no output to quote, only the sentence above. */}
+						{error.detail && <GitOutput>{error.detail}</GitOutput>}
 					</div>
 				)}
 

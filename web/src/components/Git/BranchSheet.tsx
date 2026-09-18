@@ -1,6 +1,11 @@
 import { Check, Plus } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import type { GitBranches } from "../../types/git";
+import {
+	describeGitFailure,
+	type GitFailure,
+	gitBusySummary,
+} from "../../utils/gitErrors";
 import { Sheet, Spinner } from "../ui";
 import BranchName from "./BranchName";
 import GitOutput from "./GitOutput";
@@ -33,10 +38,7 @@ const rowClass = (disabled: boolean) =>
 function BranchSheet({ branches, onClose, onCheckout, onNewBranch }: Props) {
 	const [filter, setFilter] = useState("");
 	const [switchingTo, setSwitchingTo] = useState<string | null>(null);
-	const [error, setError] = useState<{
-		branch: string;
-		message: string;
-	} | null>(null);
+	const [error, setError] = useState<GitFailure | null>(null);
 	const filterId = useId();
 
 	const { local, remote } = useMemo(() => {
@@ -62,10 +64,19 @@ function BranchSheet({ branches, onClose, onCheckout, onNewBranch }: Props) {
 		try {
 			await onCheckout(branch);
 		} catch (err) {
-			setError({
-				branch,
-				message: err instanceof Error ? err.message : String(err),
-			});
+			const busy = gitBusySummary(err);
+			setError(
+				busy
+					? // A refusal explains itself, but not which row it was about, and
+						// the list is taller than the sheet: the branch that was tapped
+						// has usually scrolled away by the time this is read.
+						{ summary: `Could not switch to ${branch}. ${busy}`, detail: null }
+					: describeGitFailure(err, (detail) =>
+							OVERWRITE_REFUSAL.test(detail)
+								? `Could not switch to ${branch}. Commit or discard these changes first.`
+								: `Could not switch to ${branch}.`,
+						),
+			);
 		} finally {
 			setSwitchingTo(null);
 		}
@@ -116,12 +127,10 @@ function BranchSheet({ branches, onClose, onCheckout, onNewBranch }: Props) {
 
 				{error && (
 					<div className="space-y-1 px-4 py-3" role="alert">
-						<p className="text-sm text-th-error">
-							Could not switch to {error.branch}.
-							{OVERWRITE_REFUSAL.test(error.message) &&
-								" Commit or discard these changes first."}
-						</p>
-						<GitOutput>{error.message}</GitOutput>
+						<p className="text-sm text-th-error">{error.summary}</p>
+						{/* Absent when the server refused before running git: there is
+						    no output to quote, only the sentence above. */}
+						{error.detail && <GitOutput>{error.detail}</GitOutput>}
 					</div>
 				)}
 			</div>

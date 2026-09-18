@@ -125,9 +125,9 @@ function BranchBar() {
 				)}
 			</div>
 
-			{/* Its own banner rather than a shared slot: the discard banner DiffTab
-			    renders below this one is a different unacknowledged failure, and
-			    hiding either of them would be hiding a failure. */}
+			{/* Its own banner rather than a shared slot: the banner DiffTab renders
+			    below this one for its inline actions is a different unacknowledged
+			    failure, and hiding either of them would be hiding a failure. */}
 			{syncError && (
 				<ErrorBanner
 					summary={syncError.summary}

@@ -6,18 +6,23 @@ import GitOutput from "./GitOutput";
 interface Props {
 	/** One line of plain language: what failed. */
 	summary: string;
-	/** git's own output, shown verbatim behind the disclosure. */
-	details: string;
+	/**
+	 * git's own output, shown verbatim behind the disclosure. Null when git
+	 * never ran — a refusal is the server's own sentence, and there is nothing
+	 * to quote.
+	 */
+	details: string | null;
 	onDismiss: () => void;
 }
 
 /**
  * Where an inline action reports its failure.
  *
- * Sheets keep their errors inside themselves, but discard has no sheet to hold
- * the outcome, so the panel carries a banner under the branch bar instead. The
- * summary does not replace git's text: the reader is a developer who needs the
- * path git could not write, not a paraphrase of it.
+ * Sheets keep their errors inside themselves, but the actions taken straight
+ * from a row — stage, unstage, discard — have no sheet to hold the outcome, so
+ * the panel carries a banner under the branch bar instead. The summary does not
+ * replace git's text: the reader is a developer who needs the path git could
+ * not write, not a paraphrase of it.
  */
 function ErrorBanner({ summary, details, onDismiss }: Props) {
 	const [showDetails, setShowDetails] = useState(false);

@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { JSONRPCErrorException } from "json-rpc-2.0";
 import { describe, expect, it, vi } from "vitest";
 import { makeHead, makeSync } from "../../test/gitFixtures";
 import type { GitBranches } from "../../types/git";
@@ -128,5 +129,31 @@ describe("BranchSheet", () => {
 		expect(alert).toHaveTextContent("Could not switch to topic.");
 		expect(alert).toHaveTextContent("Commit or discard these changes first.");
 		expect(alert).toHaveTextContent("docs/git.md");
+	});
+
+	// A refusal is the server's own sentence about a request that never ran, so
+	// there is no git output under it — but it also cannot name the row it was
+	// about, and in a list taller than the sheet that row has scrolled away.
+	it("names the branch a refused switch was about", async () => {
+		const user = userEvent.setup();
+		renderSheet({
+			onCheckout: vi
+				.fn()
+				.mockRejectedValue(
+					new JSONRPCErrorException(
+						"another git operation is running in this worktree: pull",
+						-32001,
+						{ operation: "pull" },
+					),
+				),
+		});
+
+		await user.click(screen.getByRole("button", { name: /topic/ }));
+
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent(
+			"Could not switch to topic. This worktree is busy pulling. Try again once it finishes.",
+		);
+		expect(alert).not.toHaveTextContent("another git operation");
 	});
 });
