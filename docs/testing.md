@@ -118,6 +118,32 @@ That last move generalises: when a fix's safety rests on a relationship between
 two values twenty lines apart, assert the relationship. Otherwise the flake comes
 back silently the first time someone edits one of them.
 
+## Red on macOS or Windows only
+
+A fifth shape, and the one this document's "run it again" advice cannot touch:
+green on every local run and on Linux CI, red on the other two runners. The
+first thing to suspect is a path, because the temporary directory a test works
+in is the one thing that is spelled differently on each platform: macOS hands
+out `/var/folders/...`, which is a symlink to `/private/var/folders/...`, and
+Windows hands out an 8.3 short path such as `C:\Users\RUNNER~1\...`. Code that
+compares or keys on path strings, and code that resolves them on one route but
+not the other, then has two names for one directory — a difference Linux's
+`/tmp` never shows, because nothing about it needs resolving.
+
+**That is reproducible locally, and cheaply.** Point `TMPDIR` at a symlink and
+Linux behaves like macOS for every `t.TempDir()` in the run:
+
+```sh
+mkdir -p /tmp/realtmp && ln -sfn /tmp/realtmp /tmp/linktmp
+TMPDIR=/tmp/linktmp go test ./... -count=1
+```
+
+This is how the per-worktree git lock keyed by an unresolved path
+([git.md](git.md#serialising-writes)) was reproduced and then proven fixed,
+after failing on macOS and Windows alone. Reach for it before reading the code
+for platform differences by eye: a red run on the machine in front of you tells
+you which of your guesses was the right one.
+
 ## Shell: a suite neither entry point runs
 
 `go test ./...` and `pnpm run test` do not reach every test in the repository.

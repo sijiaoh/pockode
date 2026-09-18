@@ -2,6 +2,8 @@ package git
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -177,6 +179,37 @@ func TestBusy_IsPerWorktree(t *testing.T) {
 	writeTestFile(t, otherDir, "other.txt", "unrelated\n")
 	if err := Add(otherDir, "other.txt"); err != nil {
 		t.Errorf("Add() in an unrelated worktree: %v", err)
+	}
+}
+
+// The converse, and the one that fails quietly: one worktree reached by two
+// spellings is still one worktree. A lock keyed by the raw path lets both
+// operations through, and only where the spellings differ — so on Linux this
+// needs the symlink below, while macOS (/var) and Windows (8.3 paths) hit it
+// with nothing but a temporary directory.
+func TestBusy_IsPerWorktreeNotPerSpelling(t *testing.T) {
+	dir, cleanup := setupCommitRepo(t)
+	defer cleanup()
+
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(dir, alias); err != nil {
+		// Windows grants symlink creation by privilege, and the spelling that
+		// differs there is a short path rather than a link.
+		t.Skipf("cannot symlink this worktree: %v", err)
+	}
+
+	release, done := blockedCommit(t, dir)
+	defer func() {
+		release()
+		if err := <-done; err != nil {
+			t.Errorf("the blocked commit failed: %v", err)
+		}
+	}()
+
+	writeTestFile(t, dir, "staged.txt", "staged through the alias\n")
+	var busy *BusyError
+	if err := Add(alias, "staged.txt"); !errors.As(err, &busy) {
+		t.Fatalf("Add() through a symlinked path during a commit: error = %v, want a *BusyError", err)
 	}
 }
 

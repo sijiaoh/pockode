@@ -3,6 +3,7 @@ package git
 import (
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -89,8 +90,8 @@ var (
 // reasoning for both halves is in docs/git.md#serialising-writes.
 const lockWait = 2 * time.Second
 
-// worktreeLocks holds each worktree's pair of locks, keyed by the directory
-// every operation in this package is already given.
+// worktreeLocks holds each worktree's pair of locks, keyed by the canonical
+// form of the directory every operation in this package is already given.
 //
 // The key is that directory rather than the worktree name because this package
 // is the narrowest place every git command passes through — the RPC handlers
@@ -142,12 +143,30 @@ func newWorktreeLock(which string) *worktreeLock {
 }
 
 func locksFor(dir string) *lockPair {
-	if l, ok := worktreeLocks.Load(dir); ok {
+	key := lockKey(dir)
+	if l, ok := worktreeLocks.Load(key); ok {
 		return l.(*lockPair)
 	}
 	fresh := &lockPair{index: newWorktreeLock("index"), refs: newWorktreeLock("refs")}
-	l, _ := worktreeLocks.LoadOrStore(dir, fresh)
+	l, _ := worktreeLocks.LoadOrStore(key, fresh)
 	return l.(*lockPair)
+}
+
+// lockKey is which worktree a directory names, as opposed to how it was
+// spelled: two spellings of one directory getting two locks is not weaker
+// exclusion but none, and it fails only where the spellings differ. See
+// docs/git.md#serialising-writes.
+//
+// EvalSymlinks because it is what worktree.Registry resolves the paths it hands
+// out with, so a directory that came from there is already its own key. A path
+// that cannot be resolved — the worktree is gone, or a permission denies the
+// walk — falls back to a key no worse than the raw path: being unable to
+// canonicalise is not a reason to fail the git command.
+func lockKey(dir string) string {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		return resolved
+	}
+	return filepath.Clean(dir)
 }
 
 // withLock runs fn holding the locks op needs, waiting briefly for one that is
