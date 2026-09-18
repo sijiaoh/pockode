@@ -293,6 +293,15 @@ export interface DiscardPrompt {
 
 const CANNOT_BE_UNDONE = "This cannot be undone.";
 
+/**
+ * Summary line when a stage or unstage fails, worded like DiscardPrompt's: the
+ * paths are already on screen in the rows the failure came from, and git's own
+ * message sits right below this line.
+ */
+export function stageFailureSummary(staged: boolean): string {
+	return staged ? "Unstage failed." : "Stage failed.";
+}
+
 /** "1 file" / "3 files". Verb agreement is the caller's, since it varies. */
 function plural(count: number, noun: string): string {
 	return `${count} ${noun}${count === 1 ? "" : "s"}`;

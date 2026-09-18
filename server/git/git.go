@@ -660,39 +660,55 @@ func extractHost(repoURL string) (string, error) {
 	return parsed.Host, nil
 }
 
-// Add stages a file to the git index.
+// Add stages files to the git index.
 // For submodule paths (e.g., "submodule/path/to/file"), it runs git add inside the submodule.
-func Add(dir, path string) error {
-	if err := validatePath(path); err != nil {
+//
+// The whole request is one locked operation rather than one per path: a commit
+// slipping between two of them would record half of what the user staged.
+func Add(dir string, paths ...string) error {
+	return stagingOp(dir, opStage, paths, func(actualDir, pathspec string) error {
+		_, err := execGit(actualDir, "add", "--", pathspec)
 		return err
-	}
-
-	actualDir, relativePath := resolveSubmodulePath(dir, path)
-	pathspec, err := literalPathspec(relativePath)
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, path)
-	}
-
-	_, err = execGit(actualDir, "add", "--", pathspec)
-	return err
+	})
 }
 
-// Reset unstages a file from the git index.
+// Reset unstages files from the git index.
 // For submodule paths (e.g., "submodule/path/to/file"), it runs git reset inside the submodule.
 // Uses "git restore --staged" which handles both existing and newly added files correctly.
-func Reset(dir, path string) error {
-	if err := validatePath(path); err != nil {
+func Reset(dir string, paths ...string) error {
+	return stagingOp(dir, opUnstage, paths, func(actualDir, pathspec string) error {
+		_, err := execGit(actualDir, "restore", "--staged", "--", pathspec)
 		return err
+	})
+}
+
+// stagingOp is Add and Reset, which differ only in the command they run per
+// path. Each path is resolved against the submodule it may live in and run
+// there; every one is validated before any of them runs, so a rejected path
+// stops the request rather than leaving half of it applied.
+func stagingOp(dir string, op operation, paths []string, run func(actualDir, pathspec string) error) error {
+	if len(paths) == 0 {
+		return fmt.Errorf("no paths to %s", op.name)
+	}
+	for _, path := range paths {
+		if err := validatePath(path); err != nil {
+			return err
+		}
 	}
 
-	actualDir, relativePath := resolveSubmodulePath(dir, path)
-	pathspec, err := literalPathspec(relativePath)
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, path)
-	}
-
-	_, err = execGit(actualDir, "restore", "--staged", "--", pathspec)
-	return err
+	return withLock(dir, op, func() error {
+		for _, path := range paths {
+			actualDir, relativePath := resolveSubmodulePath(dir, path)
+			pathspec, err := literalPathspec(relativePath)
+			if err != nil {
+				return fmt.Errorf("%w: %s", err, path)
+			}
+			if err := run(actualDir, pathspec); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // validatePath checks that a repository-relative path stays inside the

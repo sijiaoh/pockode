@@ -1,9 +1,10 @@
 import { create } from "zustand";
+import { describeGitFailure, type GitFailure } from "../utils/gitErrors";
 
 export type SyncOperation = "fetch" | "pull" | "push";
 
 export type SyncOutcome =
-	| { kind: "error"; summary: string; detail: string }
+	| ({ kind: "error" } & GitFailure)
 	| { kind: "success"; message: string };
 
 export interface SyncRun {
@@ -47,7 +48,9 @@ function setRun(worktree: string, patch: Partial<SyncRun>) {
 export const gitSyncActions = {
 	/**
 	 * @param action resolves to the sentence shown on success.
-	 * @param summarize turns git's own message into one line of plain language.
+	 * @param summarize turns git's own message into one line of plain language;
+	 * a request the server refused never reaches it, since there is no git
+	 * output to read (see describeGitFailure).
 	 */
 	start: async (
 		worktree: string,
@@ -55,9 +58,10 @@ export const gitSyncActions = {
 		action: () => Promise<string>,
 		summarize: (detail: string) => string,
 	) => {
-		// The only guard against a second run: neither react-query nor the server
-		// deduplicates, and two concurrent pulls end with the loser reporting an
-		// index.lock error that means nothing to the user.
+		// Still the only thing that stops a second run of the same operation: the
+		// server refuses one that collides, but "this worktree is busy pulling"
+		// is a poor answer to a second tap on Pull, and a refusal arrives only
+		// after the two seconds it waits first.
 		if (useGitSyncStore.getState().runs[worktree]?.running) return;
 
 		setRun(worktree, { running: operation, outcome: null });
@@ -68,10 +72,9 @@ export const gitSyncActions = {
 				outcome: { kind: "success", message },
 			});
 		} catch (err) {
-			const detail = err instanceof Error ? err.message : String(err);
 			setRun(worktree, {
 				running: null,
-				outcome: { kind: "error", summary: summarize(detail), detail },
+				outcome: { kind: "error", ...describeGitFailure(err, summarize) },
 			});
 		}
 	},

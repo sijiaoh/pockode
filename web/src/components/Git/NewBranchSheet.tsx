@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { gitBusySummary } from "../../utils/gitErrors";
 import { Sheet, Spinner } from "../ui";
 
 interface Props {
@@ -29,7 +30,12 @@ function NewBranchSheet({ base, onClose, onCreate }: Props) {
 		try {
 			await onCreate(trimmed);
 		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
+			// git's refusal is the message here — it names the rule the name broke
+			// — but a busy worktree is the server's own sentence, not git's.
+			setError(
+				gitBusySummary(err) ??
+					(err instanceof Error ? err.message : String(err)),
+			);
 		} finally {
 			setIsCreating(false);
 		}

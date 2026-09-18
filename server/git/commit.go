@@ -30,6 +30,9 @@ func CreateCommit(dir, message string, amend bool) error {
 
 	// Hooks stay in force and their verdict is passed up: a commit-msg hook
 	// rejecting a message is something the user has to see, not something to
-	// route around with --no-verify.
-	return execGitVerbose(dir, args...)
+	// route around with --no-verify. The lock is held for as long as they take,
+	// which is as long as they like.
+	return withLock(dir, opCommit, func() error {
+		return execGitVerbose(dir, args...)
+	})
 }

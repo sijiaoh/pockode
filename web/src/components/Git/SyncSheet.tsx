@@ -100,7 +100,9 @@ function SyncSheet({ sync, onClose }: Props) {
 				{outcome?.kind === "error" && (
 					<div className="space-y-1" role="alert">
 						<p className="text-sm text-th-error">{outcome.summary}</p>
-						<GitOutput>{outcome.detail}</GitOutput>
+						{/* Absent when the server refused before running git: there is
+						    no output to quote, only the sentence above. */}
+						{outcome.detail && <GitOutput>{outcome.detail}</GitOutput>}
 					</div>
 				)}
 

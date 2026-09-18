@@ -20,6 +20,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ gitPanelStore                                           │   │
 │  ├─ projectPanelStore                                       │   │
 │  ├─ gitSyncStore                                            │   │
+│  ├─ gitWriteStore                                           │   │
 │  └─ worktreeStore + listeners                               │   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Domain Data Layer                                              │
@@ -57,6 +58,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
 | projectPanelStore | Which segment of the project list is shown | Outlives the screen, which unmounts into a work detail |
 | gitSyncStore | The fetch/pull/push in flight in each worktree, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
+| gitWriteStore | Each worktree's serial queue of stage/unstage/discard writes, and the paths they have pending | Keyed by worktree; one write at a time, so two taps cannot race |
 | worktreeStore | Current worktree, and whether the server can run the setup hook | External listener pattern |
 | themeStore | Theme mode/name | Registry subscription |
 
@@ -170,6 +172,36 @@ their own filter changes instead of leaving the list. Not persisted either — a
 user who reloads is starting over, and `Current` is where starting over belongs
 (see [project-ui.md](../project-ui.md#5-where-the-segment-is-remembered)).
 
+### Why a Run in Flight Is a Store
+
+`gitSyncStore` and `gitWriteStore` hold neither server data nor a user
+preference: they hold **a request that is already on its way**, and they are
+stores for a reason the section above does not cover. A run outlives the
+component that started it, and not as an accident of layout — it outlives it *by
+definition*. Staging from an open diff and navigating away unmounts that view
+while the request is in flight; closing the sync sheet mid-push is a documented
+interaction rather than an edge case ([git-ui.md](../git-ui.md#remote-sync)).
+Component state would lose the outcome of something that is still happening —
+a silent failure — and there is nothing to ask again, because the request has
+already been made.
+
+Both are keyed by worktree for the same reason: switching worktrees mid-run is
+reachable, and a single record would show A's outcome under B, or let A's run
+disable B's controls.
+
+Why not react-query, which already tracks in-flight mutations? Because these
+stores are not caching a result — they are **ordering the requests**.
+`gitWriteStore` is a serial queue: one write per worktree at a time, because the
+server will not run two of *these* writes in a worktree at once either — stage,
+unstage and discard all touch its index, and it refuses a second one that has
+waited too long ([git.md](../git.md#serialising-writes)). Tapping two files in a
+row does not deserve an error. react-query deduplicates and caches; it does not
+serialise, and nothing per-component could, since the whole point is that taps
+in two different components have to get in line behind each other.
+
+They are stores rather than the refs the next section argues for, because what
+they hold is *drawn*: which rows show a spinner, and which button says `Pushing…`.
+
 ### Why Scroll State Is Neither a Store nor State
 
 The transcript's scroll decisions — whether the tail is being followed, whether
@@ -182,8 +214,9 @@ They are not in a store because **they must not outlive the component**. The
 list is keyed by the session id and remounts on every switch, and every one of
 these values describes a view that no longer exists once it does; a store would
 carry "the user had scrolled up" into a session they have not looked at yet.
-Where `gitPanelStore` holds a decision the user made, these hold facts about a
-layout.
+Where `gitPanelStore` holds a decision the user made and the two stores above
+hold a run that is still going, these hold facts about a layout that no longer
+exists.
 
 They are refs rather than `useState` because **nothing should re-render when
 they change**, and more than that: they are read at moments a render cannot
@@ -707,6 +740,7 @@ Key features:
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |
 | `web/src/lib/gitPanelStore.ts` | Git panel UI state that must outlive remounts |
+| `web/src/lib/gitWriteStore.ts` | The Git panel's serial queue per worktree, for writes that outlive the view that started them |
 | `web/src/lib/worktreeQuery.ts` | Worktree list query key + fetcher, kept together |
 | `web/src/hooks/useSubscription.ts` | Subscription lifecycle hook |
 | `web/src/lib/valueState.ts` | Stored / still coming / not coming, named once for every control that waits on a snapshot ([why three states](subscription-system.md#why-the-controls-wait-for-the-session-to-describe-itself)) |

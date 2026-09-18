@@ -160,7 +160,9 @@ func lastFetchTime(dir string) (*time.Time, error) {
 // --prune keeps the branch sheet honest: without it, branches deleted on the
 // remote stay in the remote-only list forever and offer a checkout that fails.
 func Fetch(dir string) error {
-	return execGitNetwork(dir, "fetch", "--all", "--prune")
+	return withLock(dir, opFetch, func() error {
+		return execGitNetwork(dir, "fetch", "--all", "--prune")
+	})
 }
 
 // Pull fast-forwards the current branch onto its upstream and reports how many
@@ -176,21 +178,29 @@ func Fetch(dir string) error {
 // pull fetches first, so it can bring in commits pushed since the chip's
 // numbers were last read.
 func Pull(dir string) (int, error) {
-	// Empty for an unborn HEAD, which has nothing to fast-forward — the pull
-	// below is what says so, in git's own words.
-	before, _ := execGit(dir, "rev-parse", "HEAD")
+	var commits int
+	err := withLock(dir, opPull, func() error {
+		// Empty for an unborn HEAD, which has nothing to fast-forward — the pull
+		// below is what says so, in git's own words.
+		before, _ := execGit(dir, "rev-parse", "HEAD")
 
-	if err := execGitNetwork(dir, "pull", "--ff-only"); err != nil {
+		if err := execGitNetwork(dir, "pull", "--ff-only"); err != nil {
+			return err
+		}
+
+		after, err := execGit(dir, "rev-parse", "HEAD")
+		// The pull succeeded; failing to count afterwards must not turn it into a
+		// failure. An unreported count is a smaller loss than a wrong outcome.
+		if err != nil || before == "" || before == after {
+			return nil
+		}
+		commits = commitCount(dir, before, after)
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
-
-	after, err := execGit(dir, "rev-parse", "HEAD")
-	// The pull succeeded; failing to count afterwards must not turn it into a
-	// failure. An unreported count is a smaller loss than a wrong outcome.
-	if err != nil || before == "" || before == after {
-		return 0, nil
-	}
-	return commitCount(dir, before, after), nil
+	return commits, nil
 }
 
 // commitCount counts the commits in from..to, reporting 0 when it cannot tell.
@@ -211,36 +221,42 @@ func commitCount(dir, from, to string) int {
 // force uses --force-with-lease, never a bare --force: a push that races with
 // someone else's fails loudly instead of destroying their work. The UI offers
 // it only where a plain push cannot succeed, after a confirmation.
+//
+// The lock covers the reads as well as the push: which branch and which remote
+// this publishes to is decided from them, and a checkout landing in between
+// would send the answer to those reads somewhere else.
 func Push(dir string, force bool) error {
-	head, err := Head(dir)
-	if err != nil {
-		return err
-	}
-	if head.Detached || head.Branch == "" {
-		return fmt.Errorf("cannot push a detached HEAD")
-	}
-
-	args := []string{"push"}
-	if force {
-		args = append(args, "--force-with-lease")
-	}
-
-	// Read here rather than trusting the caller: the client's copy of the
-	// upstream can be seconds old, and pushing to the wrong place is not the
-	// kind of mistake to make on stale data.
-	ref, _, err := upstreamOf(dir, head.Branch)
-	if err != nil {
-		return err
-	}
-	if ref == "" {
-		remote, err := defaultRemote(dir)
+	return withLock(dir, opPush, func() error {
+		head, err := Head(dir)
 		if err != nil {
 			return err
 		}
-		args = append(args, "--set-upstream", remote, head.Branch)
-	}
+		if head.Detached || head.Branch == "" {
+			return fmt.Errorf("cannot push a detached HEAD")
+		}
 
-	return execGitNetwork(dir, args...)
+		args := []string{"push"}
+		if force {
+			args = append(args, "--force-with-lease")
+		}
+
+		// Read here rather than trusting the caller: the client's copy of the
+		// upstream can be seconds old, and pushing to the wrong place is not the
+		// kind of mistake to make on stale data.
+		ref, _, err := upstreamOf(dir, head.Branch)
+		if err != nil {
+			return err
+		}
+		if ref == "" {
+			remote, err := defaultRemote(dir)
+			if err != nil {
+				return err
+			}
+			args = append(args, "--set-upstream", remote, head.Branch)
+		}
+
+		return execGitNetwork(dir, args...)
+	})
 }
 
 // defaultRemote picks the remote a branch with no upstream is published to.

@@ -1,12 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitPanelActions } from "../../lib/gitPanelStore";
+import { gitWriteActions } from "../../lib/gitWriteStore";
 import type { GitCommit, GitStatus } from "../../types/git";
 import DiffTab from "./DiffTab";
 
 const discard = vi.fn();
+const stage = vi.fn();
+const unstage = vi.fn();
 let status: GitStatus | undefined;
 let commits: GitCommit[] = [];
 
@@ -18,8 +22,8 @@ vi.mock("../../hooks/useGitLog", () => ({
 }));
 vi.mock("../../hooks/useGitStage", () => ({
 	useGitStage: () => ({
-		stageMutation: { mutateAsync: vi.fn() },
-		unstageMutation: { mutateAsync: vi.fn() },
+		stageMutation: { mutateAsync: stage },
+		unstageMutation: { mutateAsync: unstage },
 	}),
 }));
 vi.mock("../../hooks/useGitDiscard", () => ({
@@ -67,13 +71,20 @@ function renderTab(
 const confirmButton = (name: string) =>
 	screen.getByRole("button", { name, hidden: false });
 
+function resetWrites() {
+	gitPanelActions.reset();
+	gitWriteActions.reset();
+	for (const rpc of [discard, stage, unstage]) {
+		rpc.mockReset();
+		rpc.mockResolvedValue(undefined);
+	}
+}
+
 describe("DiffTab discard", () => {
 	beforeEach(() => {
 		status = STATUS;
 		commits = [];
-		gitPanelActions.reset();
-		discard.mockReset();
-		discard.mockResolvedValue(undefined);
+		resetWrites();
 	});
 
 	// Staged rows have no discard button: unstaging first is what the button
@@ -245,6 +256,82 @@ describe("DiffTab discard", () => {
 	});
 });
 
+const stageButtons = () =>
+	screen.getAllByRole("button", { name: "Stage file" });
+
+describe("DiffTab staging", () => {
+	beforeEach(() => {
+		status = STATUS;
+		commits = [];
+		resetWrites();
+	});
+
+	// Tapping two rows in a row used to put two git.add requests in flight at
+	// once, racing each other for this worktree's index.lock.
+	it("does not send a second stage while the first is in flight", async () => {
+		const user = userEvent.setup();
+		let finishFirst!: () => void;
+		stage.mockReturnValueOnce(
+			new Promise<void>((resolve) => {
+				finishFirst = resolve;
+			}),
+		);
+		renderTab();
+
+		const [first, second] = stageButtons();
+		await user.click(first);
+		await user.click(second);
+
+		expect(stage).toHaveBeenCalledTimes(1);
+
+		finishFirst();
+
+		await waitFor(() => expect(stage).toHaveBeenCalledTimes(2));
+		expect(stage).toHaveBeenNthCalledWith(1, ["src/foo.ts"]);
+		expect(stage).toHaveBeenNthCalledWith(2, ["notes.txt"]);
+	});
+
+	// The refusal is the server's own sentence about a request that never ran:
+	// there is no git output to put behind Details, and the error code is not
+	// something to show a user.
+	it("says what the worktree is busy with when the server refuses", async () => {
+		const user = userEvent.setup();
+		stage.mockRejectedValue(
+			new JSONRPCErrorException(
+				"another git operation is running in this worktree: push",
+				-32001,
+				{ operation: "push" },
+			),
+		);
+		renderTab();
+
+		await user.click(stageButtons()[0]);
+
+		const banner = await screen.findByRole("alert");
+		expect(banner).toHaveTextContent(
+			"This worktree is busy pushing. Try again once it finishes.",
+		);
+		expect(
+			screen.queryByRole("button", { name: "Details" }),
+		).not.toBeInTheDocument();
+	});
+
+	// git failing is the other path, and it keeps its own words.
+	it("keeps git's message when the stage itself failed", async () => {
+		const user = userEvent.setup();
+		stage.mockRejectedValue(new Error("fatal: pathspec did not match"));
+		renderTab();
+
+		await user.click(stageButtons()[0]);
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("Stage failed.");
+		await user.click(screen.getByRole("button", { name: "Details" }));
+		expect(
+			screen.getByText("fatal: pathspec did not match"),
+		).toBeInTheDocument();
+	});
+});
+
 const COMMITS: GitCommit[] = [
 	{
 		hash: "9692fc9aaaaaaaa",
@@ -265,7 +352,7 @@ const historyToggle = () => screen.getByRole("button", { name: /History/i });
 describe("DiffTab history", () => {
 	beforeEach(() => {
 		commits = COMMITS;
-		gitPanelActions.reset();
+		resetWrites();
 	});
 
 	// The diff is the subject whenever there is one; history is what is left to
@@ -302,7 +389,7 @@ describe("DiffTab amend", () => {
 	beforeEach(() => {
 		status = { staged: [], unstaged: [] };
 		commits = COMMITS;
-		gitPanelActions.reset();
+		resetWrites();
 	});
 
 	// Amend belongs to the commit it replaces, and that commit is HEAD — the

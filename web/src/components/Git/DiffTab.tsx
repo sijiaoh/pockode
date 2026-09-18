@@ -2,17 +2,18 @@ import { ConfirmDialog } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { invalidateGitQueries } from "../../hooks/gitQueries";
-import { useGitDiscard } from "../../hooks/useGitDiscard";
 import { useGitLog } from "../../hooks/useGitLog";
-import { useGitStage } from "../../hooks/useGitStage";
 import { useGitStatus } from "../../hooks/useGitStatus";
+import { useGitWriteRunner } from "../../hooks/useGitWrites";
 import { gitPanelActions, useHistoryExpanded } from "../../lib/gitPanelStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import {
 	describeDiscard,
 	type FileStatus,
 	flattenGitStatus,
+	stageFailureSummary,
 } from "../../types/git";
+import { describeGitFailure, type GitFailure } from "../../utils/gitErrors";
 import { useSidebarRefresh } from "../Layout";
 import { PullToRefresh, Spinner } from "../ui";
 import BranchBar from "./BranchBar";
@@ -49,22 +50,12 @@ function DiffTab({
 	);
 
 	const { isActive } = useSidebarRefresh("git", refreshAll);
-	const { stageMutation, unstageMutation } = useGitStage();
-	const discardMutation = useGitDiscard();
-	const [togglingPaths, setTogglingPaths] = useState<Set<string>>(new Set());
-	const [discardingPaths, setDiscardingPaths] = useState<Set<string>>(
-		new Set(),
-	);
+	const { toggle, discard, writes } = useGitWriteRunner();
 	// The files a confirmation is currently open for; null when none is.
 	const [pendingDiscard, setPendingDiscard] = useState<FileStatus[] | null>(
 		null,
 	);
-	const [discardError, setDiscardError] = useState<{
-		summary: string;
-		details: string;
-		/** What failed, so only a retry of it can clear the banner. */
-		paths: string[];
-	} | null>(null);
+	const [actionError, setActionError] = useState<ActionError | null>(null);
 
 	// A failure names a path in the workspace it happened in, so carrying the
 	// banner across a switch would point at a file that is not in this one.
@@ -74,7 +65,7 @@ function DiffTab({
 	const [bannerWorktree, setBannerWorktree] = useState(currentWorktree);
 	if (bannerWorktree !== currentWorktree) {
 		setBannerWorktree(currentWorktree);
-		setDiscardError(null);
+		setActionError(null);
 	}
 
 	// Opened from the HEAD row's amend action; the commit bar owns its own.
@@ -93,22 +84,17 @@ function DiffTab({
 
 	const togglePaths = useCallback(
 		async (paths: string[], staged: boolean) => {
-			setTogglingPaths((prev) => new Set([...prev, ...paths]));
 			try {
-				if (staged) {
-					await unstageMutation.mutateAsync(paths);
-				} else {
-					await stageMutation.mutateAsync(paths);
-				}
-			} finally {
-				setTogglingPaths((prev) => {
-					const next = new Set(prev);
-					for (const p of paths) next.delete(p);
-					return next;
+				await toggle(paths, staged);
+				setActionError((prev) => clearedBy(prev, paths));
+			} catch (e) {
+				setActionError({
+					...describeGitFailure(e, () => stageFailureSummary(staged)),
+					paths,
 				});
 			}
 		},
-		[stageMutation, unstageMutation],
+		[toggle],
 	);
 
 	const handleToggleStage = useCallback(
@@ -128,15 +114,9 @@ function DiffTab({
 		async (files: FileStatus[]) => {
 			const paths = files.map((f) => f.path);
 			setPendingDiscard(null);
-			setDiscardingPaths((prev) => new Set([...prev, ...paths]));
 			try {
-				await discardMutation.mutateAsync(paths);
-				// Only a retry of what failed clears the banner. Another file
-				// succeeding says nothing about the one that did not, and dropping
-				// its message would leave that failure with no explanation on screen.
-				setDiscardError((prev) =>
-					prev?.paths.some((p) => paths.includes(p)) ? null : prev,
-				);
+				await discard(paths);
+				setActionError((prev) => clearedBy(prev, paths));
 				// The open diff no longer exists — the file is either back to its
 				// staged content or gone altogether.
 				if (
@@ -147,20 +127,13 @@ function DiffTab({
 					onCloseFile();
 				}
 			} catch (e) {
-				setDiscardError({
-					summary: describeDiscard(files).failureSummary,
-					details: e instanceof Error ? e.message : String(e),
+				setActionError({
+					...describeGitFailure(e, () => describeDiscard(files).failureSummary),
 					paths,
-				});
-			} finally {
-				setDiscardingPaths((prev) => {
-					const next = new Set(prev);
-					for (const p of paths) next.delete(p);
-					return next;
 				});
 			}
 		},
-		[discardMutation, activeFile, onCloseFile],
+		[discard, activeFile, onCloseFile],
 	);
 
 	const handleDiscard = useCallback(
@@ -187,11 +160,11 @@ function DiffTab({
 		>
 			<BranchBar />
 
-			{discardError && (
+			{actionError && (
 				<ErrorBanner
-					summary={discardError.summary}
-					details={discardError.details}
-					onDismiss={() => setDiscardError(null)}
+					summary={actionError.summary}
+					details={actionError.detail}
+					onDismiss={() => setActionError(null)}
 				/>
 			)}
 
@@ -223,7 +196,7 @@ function DiffTab({
 									onToggleStage={handleToggleStage}
 									onToggleAll={handleToggleAllStaged}
 									activeFile={activeFile}
-									togglingPaths={togglingPaths}
+									togglingPaths={writes.toggling}
 								/>
 								<DiffFileList
 									title="Changes"
@@ -235,8 +208,8 @@ function DiffTab({
 									onDiscard={handleDiscard}
 									onDiscardAll={handleDiscardAll}
 									activeFile={activeFile}
-									togglingPaths={togglingPaths}
-									discardingPaths={discardingPaths}
+									togglingPaths={writes.toggling}
+									discardingPaths={writes.discarding}
 								/>
 							</>
 						)}
@@ -285,6 +258,23 @@ function DiffTab({
 			)}
 		</div>
 	);
+}
+
+interface ActionError extends GitFailure {
+	/** What failed, so only a retry of it can clear the banner. */
+	paths: string[];
+}
+
+/**
+ * Only a retry of what failed clears the banner. Another file succeeding says
+ * nothing about the one that did not, and dropping its message would leave that
+ * failure with no explanation on screen.
+ */
+function clearedBy(
+	prev: ActionError | null,
+	paths: string[],
+): ActionError | null {
+	return prev?.paths.some((p) => paths.includes(p)) ? null : prev;
 }
 
 /**
