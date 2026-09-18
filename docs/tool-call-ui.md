@@ -4,13 +4,14 @@ How a tool call is drawn, on a phone first.
 [tool-call-model.md](tool-call-model.md) decides what a tool run **is**; this one
 decides how one looks and behaves. Read it first — every field named here
 (`status`, `activity`, `output`, `placeholderResult`, `fromBackground`,
-`durationMs`, `exitCode`, `seenAt`) is its `ToolRun`, and nothing below asks for
-data it does not define.
+`fetches`, `durationMs`, `exitCode`, `seenAt`) is its `ToolRun`, and nothing
+below asks for data it does not define.
 
 The surfaces are `ToolCallItem.tsx`, `TaskItem.tsx` (the subagent category) and
 `PermissionRequestItem` in `MessageItem.tsx` — all three drawing their row
 through `ToolRow.tsx`, which is where the grammar below lives — plus
-`ToolResultDisplay.tsx` for the body, all under `web/src/components/Chat/`. The transcript around them
+`ToolResultDisplay.tsx` for the body and `ToolOutcomeSections.tsx` for the
+labelled blocks the two tool renderers share, all under `web/src/components/Chat/`. The transcript around them
 is [agent-chat.md](agent-chat.md); the width ladder and the pointer gates are
 [responsive-ui.md](responsive-ui.md) and are used here, never re-derived.
 
@@ -137,7 +138,7 @@ The glyph column is the single place status is stated:
 | Status | Glyph | Colour | Row | Body |
 |---|---|---|---|---|
 | `running` | `Spinner` (`variant="current"`, `size="h-3 w-3"`, with the tool name in its `srText`) | inherits | activity line when there is one | invocation + live output |
-| `background` | same spinner, plus a `background` chip after the name | inherits | activity line when there is one | invocation + live output |
+| `background` | same spinner, plus a `background` chip after the name | inherits | activity line when there is one, else the last line fetched of it | invocation + live output + whatever has been fetched |
 | `success` | `Check` | **`text-th-text-muted`** | second line only if it came from the background (below) | invocation + result |
 | `error` | `X` | `text-th-error` | `border border-th-error/40` on the container, detail text `text-th-error`, second line = the last line of the output — or the outcome, when the run came from the background | closed, like every other row |
 | `interrupted` | `Ban` | `text-th-text-muted` | second line only if it came from the background (below) | invocation + whatever came back |
@@ -240,11 +241,21 @@ afterwards cannot word the same call differently.
 | `WebFetch` / `WebSearch` | the name | host + path / the query | right |
 | `TodoWrite` | `TodoWrite` | `n done / m` | — |
 | `Task` / `Agent` (the CLI renamed it; history holds both) | the name | `description`, with `subagent_type` as a chip | right |
+| `TaskOutput` | `TaskOutput` | the `task_id`, in mono | right |
 | `server:tool` (Codex MCP) or `mcp__server__tool` (Claude MCP) | the tool half | the server half as a chip, then the first scalar argument, else compact JSON | right |
 | anything else | the name | first non-empty scalar in `input` | right |
 
-Four decisions inside that table:
+Five decisions inside that table:
 
+- **`TaskOutput` is in the table although many of them never draw a row.** A
+  fetch of a task's output is filed under the call it reads and takes no row at
+  all whenever that call is loaded ([below](#a-fetch-reads-on-the-row-it-came-from));
+  the row is what is left otherwise, which on a transcript long enough to page
+  is common rather than exceptional. The fallback happens to name the same field
+  today — `task_id` is the first string in the input — but by the order
+  `Object.values` returns rather than by any rule, so one more string in the
+  input would silently rename the row. Mono because a task id is a machine key,
+  not prose.
 - **`Bash`'s detail is the command, not `description`.** The description used to
   win whenever Claude supplied one, and a paraphrase — *"Build the web package"* —
   is not what ran. On a phone this row is frequently the only audit a user
@@ -288,7 +299,8 @@ whose colour already means something.
 ## The second line (problem 1)
 
 Under line 1, while — and only while — the run has something to say there: its
-**activity** while it is live, the **outcome** of a run that finished in the
+**activity** while it is live, the **last line fetched** of a live run nobody is
+reporting progress on, the **outcome** of a run that finished in the
 background, and the **last line** of one that failed. A settled foreground run
 has a second line only when it failed.
 
@@ -302,13 +314,42 @@ has a second line only when it failed.
 
 1. `run.activity` — Claude's `task_progress` line, Codex's
    `mcpToolCall/progress.message`. Prose, so no mono.
-2. the **last non-empty line** of `run.output` — Codex's
-   `commandExecution/outputDelta`. Literal stdout, so mono.
+2. the **last non-empty line** of this call's machine output, from either of two
+   sources: the newest **fetch** of it that came back with something
+   ([below](#a-fetch-reads-on-the-row-it-came-from)) — read out of the envelope
+   the fetch carries it in, see there — and failing that `run.output` — Codex's
+   `commandExecution/outputDelta`. Literal output either way, so mono.
 3. for a settled `fromBackground` run, the first line of the outcome. Prose.
 4. for a settled foreground **failure**, the **last non-empty line** of the
    result. Literal output, so mono. Before this rung a collapsed failed row said
    only *that* the call failed — the border and the glyph — and the reason was
    behind the chevron, which is why the row used to open itself.
+
+**Rung 2's two sources are one rung, not two.** Both are this call's own machine
+output, and either one is the same sentence to a reader — *this is the last thing
+that came out of it*. Two rungs would only be two ways of writing that down. On
+today's engines they cannot even collide: `output` accumulates from Codex's
+`outputDelta`, and only Claude has work that outlives a turn for anything to
+fetch. So the order between them is written for a future engine that has both,
+and the fetch wins on the principle that decides every other rung here — it is
+the later word on the thing, a reading somebody deliberately took, and it is also
+the only one of the two that survives a reload, `output` being live-only. A fetch
+that **failed**, or that came back with nothing, does not reach this rung at all
+— the second line is this *run's* latest word, and a fetch that failed is news
+about the call that did the fetching, not about the task. And although the rung
+sits inside the live branch, a fetched line is `live: false`, so it stays in the
+row's accessible name: the flag describes the *text*, not the run, and this text
+does not move again until the next fetch. Same reasoning as rung 3.
+
+Rung 1 still outranks it, for the reason it outranks the raw output: a
+`task_progress` line is the CLI's account of the present, and a fetch is a tail
+of the past. **When rung 2 is therefore visible at all** was worth measuring, and
+the answer is: on every backgrounded `Bash`. Claude emits `task_progress` for
+`local_agent` and `local_workflow` runs and for a backgrounded `mcp_task`, and
+for nothing else — shell tasks have no progress sender anywhere in the CLI
+(measured against claude 2.1.263). So a backgrounded shell row has no rung 1 ever,
+and a fetch of it is exactly what the user reads on the row. On a backgrounded
+subagent the opposite holds while it is live, and the fetch is in the body.
 
 Rung 3 is above rung 4 and the order is load-bearing: a backgrounded failure's
 outcome is the notification's own summary sentence, which says more than the
@@ -394,30 +435,57 @@ a future engine stops reporting progress at all.
 not the individual deltas, so a delta dropped under load costs a moment of
 liveness and nothing more.
 
-**A replayed background run that is still going shows no second line at all**
-and still reads correctly, because `status` alone carries it: spinner +
-`background` chip = still going. That is the whole reason status is derived from
-persisted records and activity is not. A replayed background run that has
-finished does have its second line, because that one came from the outcome.
+**A replayed background run that is still going may show no second line at all**
+— rungs 1 and 2's `output` half are both live-only — **and still reads
+correctly**, because `status` alone carries it: spinner + `background` chip =
+still going. That is the whole reason status is derived from persisted records
+and activity is not. The two things that do replay onto that row are the outcome,
+once it has finished, and any fetch of it: a fetch is a persisted `tool_result`,
+so a reloaded page shows the fetched line from its first frame and never changes
+height there.
 
 ### When a background run finishes
 
 `task_notification` supersedes the placeholder. The row settles to
 `success` / `error` (glyph and colour from the table), keeps the chip, keeps its
-second line — now the first line of `summary` — and the body gains a second
+second line — now the first line of `summary` — and the body gains another
 section. The body must not simply replace the placeholder text: the placeholder
 is what the **agent** read, the notification is what
 **happened**, and a body that shows only the second asserts the agent saw
-something it never did. Two labelled blocks, in this order:
+something it never did. Labelled blocks, in this order:
 
 ```
 Returned to the agent
   Command running in background with ID: bash_1
+Fetched output
+  tick 418 at 2026-09-17T14:07:11Z
 Outcome  ·  after the turn
   Build succeeded in 4m12s
   /work/repo/.pockode/logs/build-1.log                                    Open
   Not fetched
 ```
+
+The middle block is the next section; the order of the three is **a reading
+order, not a clock**, and it is fixed — what the agent was handed, then what was
+fetched of the work, then how it ended. Nothing could make it a clock even if
+that were wanted: a history record carries no timestamp at all
+([tool-call-model.md](tool-call-model.md#toolrun)), so any heading claiming a
+time would be inventing one. It is also the true order in all but the contrived
+case of a fetch made after the notification arrived.
+
+**The three blocks are one component**, `ToolOutcomeSections.tsx`, used by both
+`ToolCallItem` and `TaskItem` — the same reason `ToolRow` and `toolSummary` are
+shared: one account of one thing, so the two renderers cannot word it
+differently. It is named for the outcome rather than for the background because
+the last block is drawn for foreground calls too, where its label is simply
+`Result`. It draws nothing at all when all three are empty, which is the common
+case, and it takes a `block` switch for the one difference between its two hosts:
+`ToolCallItem`'s body is a single 60vh scroller that it sits inside, while
+`TaskItem`'s is a stack of bordered blocks that each carry their own ceiling, so
+there it is one of those. A scroller nested in a scroller would swallow the drag
+meant for the transcript ([the body](#the-body-problems-2-and-3)); no ceiling at
+all in `TaskItem` would let one fetch of a chatty task push the transcript down
+by thousands of pixels.
 
 `output_file` arrives as a `FileBlock` with `omitted: not_fetched`, and
 `partitionFileBlocks` sends it to the body rather than to the strip. There it is
@@ -444,10 +512,127 @@ process, and the outcome then delivered at the next session start carries
 `background_lost` instead ([tool-call-model.md](tool-call-model.md#a-third-subtype-with-a-different-author)).
 It draws like any other background outcome — `error` glyph, chip kept, the same
 *Outcome · after the turn* block — because that is what it is. What must not
-happen is for it to land in the *Returned to the agent* half, or in a plain
+happen is for it to land in the *Returned to the agent* block, or in a plain
 `Result` block: the agent never read it, and no CLI ever said it. The record's
 own text names its author, so a reader of the transcript is told where the claim
 came from and not only that the work ended.
+
+### A fetch reads on the row it came from
+
+Claude's `TaskOutput` fetches what a task has produced so far. Drawn as a row of
+its own it lands a screenful below the work it is about, carrying an opaque
+`task_id` as the only thing tying the two together — the user is left to do the
+join by eye. So it takes no row: when the server could say which call it reads,
+the fetched text is drawn on **that** row, as rung 2 of its second line and as
+the middle block of its body.
+
+Whether it is absorbed at all is not a drawing decision — it is decided once,
+when the `tool_call` arrives, by the reducer, and the reasons (including why a
+row that did keep its own is never taken away afterwards) are in
+[code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads).
+What is decided here is everything after that.
+
+**A row of its own is not the rare case.** Absorption needs the call it reads to
+be in the loaded transcript, and a transcript long enough to page is routinely
+cut between the two: measured on a real session, reloading after four more turns
+put the page boundary above the backgrounded `Bash`, and two fetches that had
+been read on its row before the reload came back as rows of their own. That is
+the rule working, not failing — but *every fetch is on the row it reads* is not
+a sentence this page can promise, and the layout below is what the user sees
+either way.
+
+**A fetch answers in an envelope, and only the row unwraps it.** `TaskOutput`
+does not reply with bare output; it replies with a small document — against
+claude 2.1.263, `retrieval_status`, `task_id`, `task_type`, `status`, and then
+the task's own output inside `output`. So the last line of the reply as a whole
+is a closing tag, which as rung 2 of the second line put the literal string
+`</output>` on the row of every backgrounded shell call. The second line reads
+what the envelope carries; the **body draws the reply as it arrived**, because
+that block is the record of what a later call read and a tidied record is not
+one. A reply in a shape this does not recognise is read whole, which is what it
+did before and is never worse than a tag.
+
+**Every fetch gets a block, in the order they arrived — oldest first, newest at
+the bottom.** Not merged, not thinned to the newest one. `TaskOutput` does not
+say whether it returns the whole output or only what is new since the last read,
+and each of the two shortcuts is wrong under one of those readings: keeping the
+newest alone loses text if the tool is incremental, and concatenating repeats an
+entire log if it is not. Separate blocks are honest under both. In the ordinary
+case of one fetch this costs nothing — the sub-headings appear only from two:
+
+```
+Fetched output  ·  3 fetches
+  Fetch 1
+    tick 1 …
+  Fetch 2
+    tick 207 …
+  Fetch 3
+    tick 418 …
+```
+
+They are numbered by position and keyed by the fetching call's own
+`tool_use_id`: two fetches of one task very often carry the same text, and text
+is no key.
+
+One of the two readings has since been measured, for one of the three kinds of
+task `TaskOutput` serves: a `local_bash` task answers with **everything printed
+so far**, so a second fetch repeats the first one's lines in full and the blocks
+above really do stack up copies of a growing log. The other two — `local_agent`
+and `remote_session` — have not been measured, so this stays as it is: thinning
+to the newest is only safe once all three are known to be cumulative, and
+deciding that on the strength of one is how a body starts dropping text.
+
+**The heading carries the count, or the one fetch's degenerate state:**
+
+| The fetch | Heading | Body |
+|---|---|---|
+| came back with output | `Fetched output` | the text, in mono |
+| came back empty | `Fetched output · nothing yet` | *The task has produced no output yet.* |
+| failed | `Fetched output · fetch failed` | the error text, `text-th-error` |
+| never came back | — | the block is not drawn at all |
+
+Those suffixes are for a single fetch only; from two, the count wins and each
+block says its own state. "Came back empty" means **neither prose nor blocks** —
+a fetch that answered in content blocks this body cannot draw has answered, and
+calling that "no output yet" would be a statement about the task that is simply
+false. "Never came back" is an interrupted turn: the fetch was absorbed, its
+result never arrived, and an empty heading would be the body inventing a section
+for something that does not exist.
+
+Three things a fetch must not do to the row it lands on:
+
+- **Not change its status, and not turn it red.** A fetch read the task; it did
+  not end it. A fetch that *failed* says something about the call that did the
+  fetching and nothing whatever about the task, which may be running perfectly —
+  so the red lives in the block, where it refers to the thing that actually
+  failed, and the row keeps the glyph and colour it already had. This is the
+  general rule with a new chance to break it: the renderer infers nothing, and
+  whether the task is still running is the reducer's to say.
+- **Not add a badge, and not count itself on the row.** The `background` chip
+  already says this work outlived the turn, and a fetch is part of that work
+  rather than a second fact beside it. The count is in the body's heading, which
+  is a place someone is reading; on the row it would cost a slot permanently, on
+  every backgrounded row.
+- **Not open the body.** Same rule as a background run finishing, and the same
+  reason: a fetch can arrive half an hour later, with the row far above the
+  reader. Neither renderer opens itself for one today; this is written down so
+  that nobody adds it.
+
+Nothing on the row says a fetch is *in flight*, either. `TaskOutput` blocks for
+30 seconds by default, and for those seconds the row is unchanged — the row's
+status is the task's, and painting another call's progress onto it is the
+inference this page forbids. Nothing else in the transcript moves either: a
+message whose only part was the absorbed fetch has nothing left to draw, and it
+is dropped outright once the turn closes, the same as any turn that never got a
+first token. The cost is a transcript that looks idle for those seconds, and it
+is accepted for the reason above — the agent fetched the output in order to do
+something with it, and its next message is where that shows up.
+
+The fetch's own invocation — `block`, `timeout` — is drawn nowhere. It is how the
+reading was taken, not part of what the task produced, and the `task_id` is
+already this row's identity. The fetched text is not truncated either: the 50-line
+cap on live output exists because that block is redrawn as the output moves, and
+a fetch is one record that the CLI has already cut to its own limit.
 
 ## Elapsed and duration (meta)
 
@@ -498,8 +683,14 @@ this order, each omitted when empty:
    thousand of them does not become ten thousand DOM nodes in a row nobody has
    finished reading. The body does not auto-scroll either; the row's second line
    is the live glance, and the body is where someone reads at their own pace.
-3. **Result**: `ToolResultDisplay`, unchanged in structure, with three cheap
-   additions that close problem 3 and need nothing from the new model:
+3. **What became of the call**: the three shared blocks in their fixed order —
+   *Returned to the agent*, *Fetched output*, and then *Result* or, when the run
+   came from the background, *Outcome · after the turn*
+   ([above](#when-a-background-run-finishes)). The first two are drawn whole by
+   `ToolOutcomeSections`; the last is a slot, because what a result looks like is
+   this renderer's knowledge. Here it is `ToolResultDisplay`, unchanged in
+   structure, with three cheap additions that close problem 3 and need nothing
+   from the new model:
    - `Grep` / `Glob`: the result is a file list — rendered as one, paths through
      `formatFilePath`, each with an *Open* into the Files tab, capped at 100 with
      a count of the rest. A repo-wide `Glob` answers with thousands, and it used
@@ -511,7 +702,8 @@ this order, each omitted when empty:
    - MCP and unknown tools whose result parses as JSON: pretty-print and
      highlight instead of printing it flat.
    - `WebFetch`: the result is Markdown, and `MarkdownContent` exists.
-4. **Background outcome**, as above.
+4. **Exit code**, when Codex reported a non-zero one, and — for a call whose
+   result outlived the turn it was cut off in — one line saying so.
 
 The attachment strip stays between the row and the body, and what goes in it is
 what the result **is**: when a tool answers with a screenshot, the screenshot is
@@ -549,6 +741,34 @@ in passing, because closing it is a behavioural decision and not a typo: that
 report is still the only account of what went wrong, so the alternative to
 opening it has to be a way of reaching it, not silence.
 
+### The subagent body
+
+`TaskItem` draws a different body, because a subagent answers in prose rather
+than in output: its report as Markdown, then the three shared blocks, then the
+prompt it was given behind a disclosure of its own. The blocks sit between the
+two deliberately — the report is the subagent's conclusion, and the raw output a
+later call fetched is the evidence for it, so it belongs under the conclusion and
+above the question.
+
+Until those blocks arrived this body had a hole in it, and the hole told a lie:
+
+- A backgrounded subagent's own report **never comes back to this transcript**.
+  The call handed the agent a placeholder and the agent moved on; what arrives
+  later is `task_notification`'s summary. `TaskItem` drew that text unlabelled,
+  in the place a report goes — so a summary written after the turn was over read
+  as the subagent's own account of its work, which is exactly what the
+  *Returned to the agent* / *Outcome · after the turn* pair exists to prevent.
+  The outcome now goes under its own label like everywhere else.
+- The placeholder itself was drawn nowhere, so the text the agent actually read
+  was the one thing missing from the body.
+
+With the outcome moved out, a settled backgrounded subagent has no report to
+show, and the sentence in its place has to say so without blaming the subagent
+for silence: *"A backgrounded subagent's own report does not come back to the
+transcript."* The other empty-report sentences — still working, failed, cut
+short — are unchanged and are still the answer everywhere else, including a
+backgrounded subagent that has not settled yet: that one really is still working.
+
 ## Width and pointer
 
 Almost nothing here is width-dependent, and that is the design rather than an
@@ -583,7 +803,8 @@ decisions, and reachability is a CSS variant
   settled, so the row's accessible name stays put while stdout moves and still
   carries the outcome afterwards (see above). What a screen reader is told is the
   spinner while it runs, the glyph when it settles, and the whole output on
-  request, in the body.
+  request, in the body. A fetched line is exposed even on a still-running row,
+  because that text is standing still — the flag follows the text, not the run.
 - The `background` chip is real text, so it is read as part of the row.
 
 ## What a reviewer should check
@@ -612,6 +833,29 @@ decisions, and reachability is a CSS variant
    call first, Codex may ask first.
 8. An MCP tool returning one long line of JSON, on a phone: readable without
    dragging sideways. That is what the bare `<pre>` fallback used to do.
+9. A `TaskOutput` against a live backgrounded `Bash`: **no new row anywhere** in
+   the transcript, and no empty bubble where it would have been. The `Bash` row
+   still spins, still wears its chip, and its second line is now the last line
+   fetched, in mono. Open it: *Returned to the agent*, *Fetched output*,
+   no *Outcome* yet. It did **not** open by itself.
+10. Fetch the same task twice more: `Fetched output · 3 fetches` with `Fetch 1`
+    to `Fetch 3`, newest last, nothing merged and nothing dropped. Then let it
+    finish — the fetched blocks stay where they are and the outcome appears under
+    them.
+11. A fetch that fails: still no new row, the origin row **not** red and not
+    settled, `Fetched output · fetch failed` with the error text red inside the
+    body, and the second line still whatever it was.
+12. A `TaskOutput` against a task that already settled — the adapter has
+    forgotten it, so nothing resolves: an ordinary row of its own, titled
+    `TaskOutput` with the task id in mono. Then page backwards until the origin
+    row loads: that row **stays where it is**.
+13. A backgrounded subagent after its notification: the summary is under
+    *Outcome · after the turn*, not passed off as the subagent's report, and the
+    report area says that a backgrounded subagent's report does not come back
+    here. A fetch of it is readable in the same body, inside its own scroll box.
+14. Reload the page on any of the above: every fetched block is still there and
+    the row's second line is present from the first frame — a fetch is persisted,
+    unlike the activity line.
 
 ## Out of scope
 
@@ -624,3 +868,12 @@ decisions, and reachability is a CSS variant
   ([usage-display-ui.md](usage-display-ui.md)) and a row is not it.
 - **Re-theming.** Every colour here is an existing `th-` token; no new one is
   introduced, and none is needed.
+- **`BashOutput` and `KillShell`.** They are the same shape as `TaskOutput` and
+  the rules above would apply to them unchanged, but whether they should be
+  absorbed is a decision about each of them, not a consequence of this one.
+- **A fetch's content blocks reaching the attachment strip.** The strip is
+  partitioned from `run.contents`, so a file block that arrived inside a fetch
+  stays in the body. `TaskOutput` answering with an image does not happen in
+  practice, and wiring a fetch into the attachment system is its own decision.
+  What matters is that the body never calls such a fetch empty
+  ([above](#a-fetch-reads-on-the-row-it-came-from)).

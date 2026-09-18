@@ -267,6 +267,161 @@ describe("ToolCallItem", () => {
 			expect(screen.getByText(/bash_1/)).toBeVisible();
 			expect(screen.getByText("Outcome · after the turn")).toBeVisible();
 		});
+
+		describe("what a later call fetched of it", () => {
+			// The whole point of the feature: the fetched output reads inside the
+			// row it belongs to, so nothing has to be matched up by task id.
+			it("reads on the row and in the body of the call it belongs to", async () => {
+				const user = userEvent.setup();
+				draw({
+					...background,
+					fetches: [{ id: "f1", result: "tick 417\ntick 418\n" }],
+				});
+
+				// On the row, and in its accessible name: a fetch does not move
+				// again until the next one.
+				const line = screen.getByText("tick 418");
+				expect(line).toHaveAttribute("aria-hidden", "false");
+				expect(screen.getByRole("button", { name: /tick 418/ })).toBeVisible();
+
+				await user.click(screen.getByRole("button", { expanded: false }));
+				expect(screen.getByText("Fetched output")).toBeVisible();
+				expect(screen.getByText(/tick 417/)).toBeVisible();
+			});
+
+			// A reading order, not a clock: nothing here carries a timestamp, so
+			// the one order the body can honestly claim is what the agent read
+			// first, what was fetched of it, and how it ended.
+			it("sits between what the agent read and how it ended", async () => {
+				const user = userEvent.setup();
+				draw({
+					...background,
+					status: "success",
+					result: "Build succeeded",
+					fetches: [{ id: "f1", result: "tick 418" }],
+				});
+
+				await user.click(screen.getByRole("button", { expanded: false }));
+				const labels = screen
+					.getAllByText(
+						/Returned to the agent|Fetched output|Outcome · after the turn/,
+					)
+					.map((node) => node.textContent);
+				expect(labels).toEqual([
+					"Returned to the agent",
+					"Fetched output",
+					"Outcome · after the turn",
+				]);
+			});
+
+			// `TaskOutput` does not say whether it returns the whole output or
+			// only what is new, so neither merging the text nor keeping the newest
+			// alone can be done without lying under one of the two readings.
+			it("keeps every fetch under its own number, oldest first", async () => {
+				const user = userEvent.setup();
+				draw({
+					...background,
+					fetches: [
+						{ id: "f1", result: "tick 1" },
+						{ id: "f2", result: "tick 207" },
+						{ id: "f3", result: "tick 418" },
+					],
+				});
+
+				await user.click(screen.getByRole("button", { expanded: false }));
+				expect(screen.getByText("Fetched output · 3 fetches")).toBeVisible();
+				expect(
+					screen.getAllByText(/^Fetch \d$/).map((node) => node.textContent),
+				).toEqual(["Fetch 1", "Fetch 2", "Fetch 3"]);
+				expect(screen.getByText("tick 1")).toBeVisible();
+				expect(screen.getByText("tick 207")).toBeVisible();
+				// Twice: the newest is on the row as well as in its own block.
+				expect(screen.getAllByText("tick 418")).toHaveLength(2);
+			});
+
+			// What failed is the call that did the fetching; the task it was
+			// reading may be running perfectly, so the row says nothing of it.
+			it("says a fetch failed without failing the call it read", async () => {
+				const user = userEvent.setup();
+				draw({
+					...background,
+					output: "tick 2\n",
+					fetches: [
+						{ id: "f1", result: "Task bsbvhgo40 not found", isError: true },
+					],
+				});
+
+				expect(
+					screen.getByRole("status", { name: "Bash running" }),
+				).toBeVisible();
+				expect(screen.queryByLabelText("failed")).toBeNull();
+				// The second line is this run's latest word, and a failed fetch is
+				// news about somebody else.
+				expect(screen.getByText("tick 2")).toBeVisible();
+
+				await user.click(screen.getByRole("button", { expanded: false }));
+				expect(screen.getByText("Fetched output · fetch failed")).toBeVisible();
+				expect(screen.getByText("Task bsbvhgo40 not found")).toBeVisible();
+			});
+
+			it("says so when the fetch came back with nothing", async () => {
+				const user = userEvent.setup();
+				draw({ ...background, fetches: [{ id: "f1", result: "" }] });
+
+				await user.click(screen.getByRole("button", { expanded: false }));
+				expect(screen.getByText("Fetched output · nothing yet")).toBeVisible();
+			});
+
+			// An empty `result` beside blocks is how every non-prose result is
+			// shaped, so reading emptiness off the text alone would report a fetch
+			// that answered with an image as one that answered with nothing.
+			it("does not call a fetch that answered in blocks an empty one", async () => {
+				const user = userEvent.setup();
+				draw({
+					...background,
+					fetches: [
+						{
+							id: "f1",
+							result: "",
+							contents: [{ type: "file", file: { mime: "image/png" } }],
+						},
+					],
+				});
+
+				await user.click(screen.getByRole("button", { expanded: false }));
+				expect(screen.getByText("Fetched output")).toBeVisible();
+				expect(screen.queryByText(/nothing yet/)).toBeNull();
+			});
+
+			// Neither field: the fetch never returned, because the turn was cut
+			// short. An empty heading would be noise about nothing.
+			it("draws nothing for a fetch that never returned", async () => {
+				const user = userEvent.setup();
+				draw({ ...background, fetches: [{ id: "f1" }] });
+
+				await user.click(screen.getByRole("button", { expanded: false }));
+				expect(screen.queryByText(/Fetched output/)).toBeNull();
+			});
+
+			// A background row is by definition not at the tail of the transcript,
+			// so nothing about it may unfold itself under a reader.
+			it("does not open the body when a fetch arrives", () => {
+				const { rerender } = render(
+					<ToolCallItem run={run(background)} sessionId="session-1" />,
+				);
+				rerender(
+					<ToolCallItem
+						run={run({
+							...background,
+							fetches: [{ id: "f1", result: "tick" }],
+						})}
+						sessionId="session-1"
+					/>,
+				);
+				expect(screen.getByRole("button", { expanded: false })).toBeVisible();
+				expect(screen.queryByText(/Fetched output/)).toBeNull();
+			});
+		});
 	});
 
 	describe("figures an engine reported", () => {

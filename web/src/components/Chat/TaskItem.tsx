@@ -2,9 +2,10 @@ import { ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toolRunText, toolSecondLine } from "../../lib/toolRun";
 import { taskPrompt, toolSummary } from "../../lib/toolSummary";
-import type { ToolRun, ToolRunStatus } from "../../types/message";
+import type { ToolRun } from "../../types/message";
 import { CollapsibleBody, ScrollableContent } from "../ui";
 import { MarkdownContent } from "./MarkdownContent";
+import { ToolOutcomeSections } from "./ToolOutcomeSections";
 import { ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
 
 interface Props {
@@ -16,9 +17,17 @@ interface Props {
  * failed or was cut short reported nothing either, and telling the reader it
  * "is still working" is the same lie the spinner used to tell — the row above
  * has already settled.
+ *
+ * A settled backgrounded subagent gets its own sentence, because the others
+ * would all put the silence down to the subagent: its report never comes back
+ * here once the call has handed a placeholder to the agent, and what did arrive
+ * is the outcome under its own label below.
  */
-function emptyReport(status: ToolRunStatus): string {
-	switch (status) {
+function emptyReport(run: ToolRun): string {
+	if (run.fromBackground && run.status !== "background") {
+		return "A backgrounded subagent's own report does not come back to the transcript.";
+	}
+	switch (run.status) {
 		case "running":
 		case "background":
 			return "No report yet — the subagent is still working.";
@@ -46,7 +55,14 @@ function TaskItem({ run }: Props) {
 	// there is no path in it for one to shorten.
 	const summary = toolSummary(run.name, run.input, "");
 	const prompt = taskPrompt(run.input);
-	const report = toolRunText(run);
+	// A backgrounded Task's text is not its report: the subagent's own account
+	// never reached this client, and what did arrive is the notification that
+	// said how it ended. Drawing that as the report — which is what this body
+	// used to do — asserts the agent read something it never did, so it goes
+	// under its own label below instead.
+	const text = toolRunText(run);
+	const outcome = run.fromBackground ? text : "";
+	const report = run.fromBackground ? "" : text;
 	const failed = run.status === "error";
 	// A failure has to be read, but only pries the body open once — after that
 	// the user's own choice to collapse it stands.
@@ -101,8 +117,16 @@ function TaskItem({ run }: Props) {
 							<MarkdownContent content={report} />
 						</ScrollableContent>
 					) : (
-						<p className="p-2 text-th-text-muted">{emptyReport(run.status)}</p>
+						<p className="p-2 text-th-text-muted">{emptyReport(run)}</p>
 					)}
+					{/* After the report, before the prompt: the report is the
+					    subagent's conclusion, and what a later call fetched of its raw
+					    output is evidence for it. */}
+					<ToolOutcomeSections
+						run={run}
+						outcome={outcome && <MarkdownContent content={outcome} />}
+						block
+					/>
 					{prompt && (
 						<div className="border-t border-th-border">
 							<button

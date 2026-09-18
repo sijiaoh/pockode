@@ -14,6 +14,7 @@ import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { relativeToWorkDir } from "../../utils/path";
 import { CollapsibleBody, ScrollableContent } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
+import { Section, ToolOutcomeSections } from "./ToolOutcomeSections";
 import ToolResultDisplay from "./ToolResultDisplay";
 import { ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
 
@@ -25,21 +26,6 @@ interface Props {
 	/** The session whose attachment store holds this call's file blocks. */
 	sessionId: string;
 	onOpenFile?: (path: string) => void;
-}
-
-function Section({
-	label,
-	children,
-}: {
-	label: string;
-	children: React.ReactNode;
-}) {
-	return (
-		<div className="space-y-1">
-			<p className="text-th-text-muted">{label}</p>
-			{children}
-		</div>
-	);
 }
 
 /** A path in full, with the way over to the Files tab when there is one. */
@@ -287,38 +273,31 @@ const ToolCallItem = memo(function ToolCallItem({
 							</pre>
 						</Section>
 					)}
-					{run.placeholderResult && (
-						// What the agent read, kept beside the outcome below: showing
-						// only the outcome would assert the agent saw something it never
-						// did.
-						<Section label="Returned to the agent">
-							<pre className="whitespace-pre-wrap text-th-text-muted">
-								{run.placeholderResult}
-							</pre>
-						</Section>
-					)}
-					{hasResult && (
-						<Section
-							label={run.fromBackground ? "Outcome · after the turn" : "Result"}
-						>
-							<ToolResultDisplay
-								toolName={run.name}
-								toolInput={run.input}
-								result={run.result ?? ""}
-								contents={run.contents}
-								onOpenFile={onOpenFile}
-							/>
-							{/* No condition of its own: a reference can only have come
-							    from `run.contents`, which is half of `hasResult`. */}
-							{references.map((file) => (
-								<ReferenceLine
-									key={file.path}
-									file={file}
-									onOpenFile={onOpenFile}
-								/>
-							))}
-						</Section>
-					)}
+					<ToolOutcomeSections
+						run={run}
+						outcome={
+							hasResult && (
+								<>
+									<ToolResultDisplay
+										toolName={run.name}
+										toolInput={run.input}
+										result={run.result ?? ""}
+										contents={run.contents}
+										onOpenFile={onOpenFile}
+									/>
+									{/* No condition of its own: a reference can only have come
+									    from `run.contents`, which is half of `hasResult`. */}
+									{references.map((file) => (
+										<ReferenceLine
+											key={file.path}
+											file={file}
+											onOpenFile={onOpenFile}
+										/>
+									))}
+								</>
+							)
+						}
+					/>
 					{run.exitCode !== undefined && run.exitCode !== 0 && (
 						<p className="text-th-text-muted">Exit code {run.exitCode}</p>
 					)}
