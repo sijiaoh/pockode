@@ -134,6 +134,20 @@ One work as a row, and the only component that draws one: the project list and
 the story detail's Tasks section both render it, so the glyph, the two icon
 controls and the seven meta slots are decided once ([project-ui.md §3](../project-ui.md#3-the-row)).
 
+`WorkRow` owns the row's lifecycle command: `useWorkCommand` is called here
+rather than inside `WorkPrimaryAction`, because a failure has to be written
+somewhere a glyph has no room for. The button is a pure control given
+`{ action, busy, failed, errorId, workTitle }` and an `onActivate` — `workTitle`
+because the name it is announced under is the only thing telling two rows'
+identical glyphs apart, and `errorId` (the row's `useId`, passed only while
+there is a message) because the button describes itself with a line the row
+owns. The row renders both things the command can raise: the Stop confirmation,
+and the error line that §3 calls line 3. The hook, the four-status table and
+`StopConfirm` still live in `WorkPrimaryAction.tsx`, which `WorkDetailOverlay`
+imports them from to write its own wider, labelled button — the hook itself
+takes no title, because the title belongs to whichever control is being
+announced rather than to the command.
+
 The whole row opens the work — the title button covers it with an
 `after:inset-0` overlay rather than the row taking an `onClick`, which would be
 a second target over the same pixels and two `biome-ignore`s for the a11y rules

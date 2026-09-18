@@ -210,7 +210,7 @@ function ActionBar({
 		confirmed,
 		cancel,
 	} = useWorkCommand(
-		{ id: work.id, status: work.status, activity, title: work.title },
+		{ id: work.id, status: work.status, activity },
 		countActiveChildren(tasks),
 	);
 	const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
