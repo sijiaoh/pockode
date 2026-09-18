@@ -79,11 +79,13 @@ export default Dialog;
 
 ### Zustand
 
-**领域数据**用 Zustand，**UI 状态**用 React —— 除非该状态的寿命必须长于组件：
-需要持久化，或者代表「用户已经做过的选择」而组件何时卸载不由它自己决定的 UI 状态，
-放 store。如 `filesSearchStore`（持久化）、`gitPanelStore`（用户手动展开/收起 History
-的选择，不能因为布局换了挂载方式就被悄悄推翻，理由见
-[docs/code/frontend-state.md](../docs/code/frontend-state.md#why-a-store-for-panel-ui-state)）。
+**领域数据**用 Zustand，**UI 状态**用 React —— 除非该状态的寿命必须长于组件。三类：
+需要持久化；代表「用户已经做过的选择」而组件何时卸载不由它自己决定；以及**已经发出去
+的请求**——它的寿命由请求本身决定，组件卸载了请求还在跑。如 `filesSearchStore`（持久化）、
+`gitPanelStore`（用户手动展开/收起 History 的选择，不能因为布局换了挂载方式就被悄悄推翻，
+理由见 [docs/code/frontend-state.md](../docs/code/frontend-state.md#why-a-store-for-panel-ui-state)）、
+`gitSyncStore` / `gitWriteStore`（正在跑的 git 写操作及其排队，理由见
+[同一文档](../docs/code/frontend-state.md#why-a-run-in-flight-is-a-store)）。
 
 - 按领域划分 store，组件只调用 action 不处理业务逻辑
 - 选择器订阅具体字段，多字段用 `useShallow`

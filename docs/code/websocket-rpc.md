@@ -562,12 +562,32 @@ process) becomes a client error, and anything else is logged there and forwarded
 as the cause — a failing agent start has to leave a trace even when the client
 stopped waiting for the reply.
 
+**A refusal that is nobody's failure gets a code of its own.** `git.*` write
+methods answer `-32001` (`rpc.CodeGitBusy`) when a git operation they would
+collide with already holds that worktree: the request was never started, nothing
+failed, and repeating it once the named operation ends will work
+([git.md](../git.md#serialising-writes)). It is the first code here outside the
+JSON-RPC standard set, and it is in the implementation-defined range
+(-32000..-32099), avoiding -32000 itself because that is where libraries put
+their own unspecified "server error". It travels through `replyErrorData` — the
+one reply helper that carries a `data` member — because a code alone would say
+"busy" and not *what to wait for*, and naming that in the user's own language is
+the entire reason the code exists rather than a sentence to pattern-match. `data`
+is the machine-readable half of the answer, never the only half: the message
+still says the whole thing, for a client that only displays it.
+
 A server's error message is therefore text to put in front of a user, never a
 value to branch on — it embeds an arbitrary error string, and its fixed half is
 free to be reworded. Nothing on the client matches text against a server reply:
 `isAuthRejection` ([above](#auto-reconnect)) reads the code alone, and
 `isRPCTimeout` ([above](#request-timeout)) compares text only after code 0 has
-established that the error never came from the server at all.
+established that the error never came from the server at all. The git panel's
+`web/src/utils/gitErrors.ts` is where that rule pays off: a refusal is
+recognised by `-32001` and never by its wording, so a git command that really
+ran and failed with prose that happens to read the same is still shown as what
+it is. Code 0 and `-32001` are the two ends of the same distinction — 0 means
+the client gave up and the request may yet be running on the server, `-32001`
+means the server never started it.
 
 ## Code Paths
 
